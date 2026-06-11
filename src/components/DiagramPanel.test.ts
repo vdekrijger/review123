@@ -42,10 +42,11 @@ vi.mock('../lib/diagram/mermaidInit', () => ({
 function makeResult(opts: {
   beforeNodes?: number
   afterNodes?: number
+  withChangeMap?: boolean
 } = {}): GraphResult {
-  const { beforeNodes = 2, afterNodes = 2 } = opts
+  const { beforeNodes = 2, afterNodes = 2, withChangeMap = false } = opts
 
-  return {
+  const result: GraphResult = {
     kind: 'flow',
     before: {
       nodes: Array.from({ length: beforeNodes }, (_, i) => ({ id: `b${i}`, label: `Before ${i}` })),
@@ -56,6 +57,23 @@ function makeResult(opts: {
       edges: afterNodes >= 2 ? [{ from: 'a0', to: 'a1' }] : [],
     },
   }
+
+  if (withChangeMap) {
+    result.changeMap = {
+      nodes: [
+        { id: 'x0', label: 'Added Node', status: 'added' },
+        { id: 'x1', label: 'Removed Node', status: 'removed' },
+        { id: 'x2', label: 'Changed Node', status: 'changed' },
+        { id: 'x3', label: 'Same Node', status: 'unchanged' },
+      ],
+      edges: [
+        { from: 'x0', to: 'x2', status: 'added' },
+        { from: 'x1', to: 'x3', status: 'removed' },
+      ],
+    }
+  }
+
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +267,120 @@ describe('EC-14k — overlay open and close', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: /diagram full screen/i })).not.toBeInTheDocument()
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// D1: change-map rendering + legend
+// ---------------------------------------------------------------------------
+
+describe('D1 — change-map rendering', () => {
+  it('renders Change Map section when result.changeMap is present', async () => {
+    const result = makeResult({ withChangeMap: true })
+    render(DiagramPanel, { props: { result, panelState: 'idle' } })
+
+    // The change-map container should be present
+    expect(screen.getByRole('button', { name: /view change map full screen/i })).toBeInTheDocument()
+  })
+
+  it('renders legend chips: Added, Removed, Changed, Unchanged', () => {
+    const result = makeResult({ withChangeMap: true })
+    render(DiagramPanel, { props: { result, panelState: 'idle' } })
+
+    expect(screen.getByText('Added')).toBeInTheDocument()
+    expect(screen.getByText('Removed')).toBeInTheDocument()
+    expect(screen.getByText('Changed')).toBeInTheDocument()
+    expect(screen.getByText('Unchanged')).toBeInTheDocument()
+  })
+
+  it('renders "Before / After" toggle button when changeMap is present', () => {
+    const result = makeResult({ withChangeMap: true })
+    render(DiagramPanel, { props: { result, panelState: 'idle' } })
+
+    expect(screen.getByRole('button', { name: /before \/ after/i })).toBeInTheDocument()
+  })
+
+  it('before/after panels are NOT shown initially when changeMap is present', () => {
+    const result = makeResult({ withChangeMap: true })
+    render(DiagramPanel, { props: { result, panelState: 'idle' } })
+
+    expect(screen.queryByText('Before')).not.toBeInTheDocument()
+    expect(screen.queryByText('After')).not.toBeInTheDocument()
+  })
+
+  it('clicking the toggle reveals the Before/After section', async () => {
+    const user = userEvent.setup()
+    const result = makeResult({ withChangeMap: true })
+    render(DiagramPanel, { props: { result, panelState: 'idle' } })
+
+    const toggleBtn = screen.getByRole('button', { name: /before \/ after/i })
+    await user.click(toggleBtn)
+
+    expect(screen.getByText('Before')).toBeInTheDocument()
+    expect(screen.getByText('After')).toBeInTheDocument()
+  })
+
+  it('toggle button text changes to "Hide Before / After" when expanded', async () => {
+    const user = userEvent.setup()
+    const result = makeResult({ withChangeMap: true })
+    render(DiagramPanel, { props: { result, panelState: 'idle' } })
+
+    const toggleBtn = screen.getByRole('button', { name: /before \/ after/i })
+    await user.click(toggleBtn)
+
+    expect(screen.getByRole('button', { name: /hide before \/ after/i })).toBeInTheDocument()
+  })
+
+  it('clicking toggle again hides Before/After', async () => {
+    const user = userEvent.setup()
+    const result = makeResult({ withChangeMap: true })
+    render(DiagramPanel, { props: { result, panelState: 'idle' } })
+
+    const toggleBtn = screen.getByRole('button', { name: /before \/ after/i })
+    await user.click(toggleBtn)
+    expect(screen.getByText('Before')).toBeInTheDocument()
+
+    const hideBtn = screen.getByRole('button', { name: /hide before \/ after/i })
+    await user.click(hideBtn)
+    expect(screen.queryByText('Before')).not.toBeInTheDocument()
+  })
+
+  it('v3 fallback: no changeMap → shows before/after layout without legend or toggle', () => {
+    const result = makeResult({ withChangeMap: false })
+    render(DiagramPanel, { props: { result, panelState: 'idle' } })
+
+    // Before/After labels are shown directly (no toggle needed)
+    expect(screen.getByText('Before')).toBeInTheDocument()
+    expect(screen.getByText('After')).toBeInTheDocument()
+    // No legend chips
+    expect(screen.queryByText('Added')).not.toBeInTheDocument()
+    // No toggle button
+    expect(screen.queryByRole('button', { name: /before \/ after/i })).not.toBeInTheDocument()
+  })
+
+  it('mermaid.render called for changemap when changeMap is present', async () => {
+    const result = makeResult({ withChangeMap: true })
+    render(DiagramPanel, { props: { result, panelState: 'idle' } })
+
+    await waitFor(() => expect(mockRender).toHaveBeenCalled())
+    // Change-map render should be called
+    expect(mockRender).toHaveBeenCalledWith(
+      expect.stringContaining('changemap'),
+      expect.any(String)
+    )
+  })
+
+  it('overlay works for change-map diagram', async () => {
+    const user = userEvent.setup()
+    const result = makeResult({ withChangeMap: true })
+    render(DiagramPanel, { props: { result, panelState: 'idle' } })
+
+    await waitFor(() => expect(mockRender).toHaveBeenCalled())
+
+    const changeMapBtn = screen.getByRole('button', { name: /view change map full screen/i })
+    await user.click(changeMapBtn)
+
+    expect(screen.getByRole('dialog', { name: /diagram full screen/i })).toBeInTheDocument()
   })
 })
 

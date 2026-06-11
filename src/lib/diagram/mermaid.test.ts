@@ -363,3 +363,188 @@ describe('kind parameter', () => {
     expect(mermaid).toMatch(/^flowchart TD/)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Status-aware serialization (D1: change-map)
+// ---------------------------------------------------------------------------
+
+describe('graphToMermaid — status-aware', () => {
+  it('statusless graph emits NO classDefs (backward compat)', () => {
+    const { mermaid } = graphToMermaid({
+      nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+      edges: [{ from: 'a', to: 'b' }],
+    })
+    expect(mermaid).not.toContain('classDef')
+    expect(mermaid).not.toContain('class n')
+    // Arrow style unchanged
+    expect(mermaid).toContain('n0 --> n1')
+  })
+
+  it('status graph emits classDefs for statuses present', () => {
+    const { mermaid } = graphToMermaid({
+      nodes: [
+        { id: 'a', label: 'A', status: 'added' },
+        { id: 'b', label: 'B', status: 'removed' },
+      ],
+      edges: [],
+    })
+    expect(mermaid).toContain('classDef added fill:#1a4731,stroke:#2ea44f,color:#7ee2a8')
+    expect(mermaid).toContain('classDef removed fill:#4a1a1a,stroke:#d73a49,color:#f0a3a3,stroke-dasharray: 5 5')
+    // Only used statuses emitted
+    expect(mermaid).not.toContain('classDef changed')
+    expect(mermaid).not.toContain('classDef unchanged')
+  })
+
+  it('emits all four classDefs when all statuses present', () => {
+    const { mermaid } = graphToMermaid({
+      nodes: [
+        { id: 'a', label: 'A', status: 'added' },
+        { id: 'b', label: 'B', status: 'removed' },
+        { id: 'c', label: 'C', status: 'changed' },
+        { id: 'd', label: 'D', status: 'unchanged' },
+      ],
+      edges: [],
+    })
+    expect(mermaid).toContain('classDef added')
+    expect(mermaid).toContain('classDef removed')
+    expect(mermaid).toContain('classDef changed')
+    expect(mermaid).toContain('classDef unchanged')
+  })
+
+  it('emits class assignment lines for nodes with status', () => {
+    const { mermaid } = graphToMermaid({
+      nodes: [
+        { id: 'a', label: 'A', status: 'added' },
+        { id: 'b', label: 'B', status: 'changed' },
+      ],
+      edges: [],
+    })
+    expect(mermaid).toContain('class n0 added')
+    expect(mermaid).toContain('class n1 changed')
+  })
+
+  it('removed edge uses dashed arrow syntax (-.->) without label', () => {
+    const { mermaid } = graphToMermaid({
+      nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+      edges: [{ from: 'a', to: 'b', status: 'removed' }],
+    })
+    expect(mermaid).toContain('n0 -.-> n1')
+    expect(mermaid).not.toContain('n0 --> n1')
+  })
+
+  it('added edge uses thick arrow syntax (==>) without label', () => {
+    const { mermaid } = graphToMermaid({
+      nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+      edges: [{ from: 'a', to: 'b', status: 'added' }],
+    })
+    expect(mermaid).toContain('n0 ==> n1')
+    expect(mermaid).not.toContain('n0 --> n1')
+  })
+
+  it('removed edge with label uses dashed labeled form', () => {
+    const { mermaid } = graphToMermaid({
+      nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+      edges: [{ from: 'a', to: 'b', label: 'calls', status: 'removed' }],
+    })
+    expect(mermaid).toContain('n0 -. "calls" .-> n1')
+  })
+
+  it('added edge with label uses thick labeled form', () => {
+    const { mermaid } = graphToMermaid({
+      nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+      edges: [{ from: 'a', to: 'b', label: 'new', status: 'added' }],
+    })
+    expect(mermaid).toContain('n0 == "new" ==> n1')
+  })
+
+  it('changed/unchanged edges use normal arrow', () => {
+    const { mermaid: mChanged } = graphToMermaid({
+      nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+      edges: [{ from: 'a', to: 'b', status: 'changed' }],
+    })
+    expect(mChanged).toContain('n0 --> n1')
+
+    const { mermaid: mUnchanged } = graphToMermaid({
+      nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+      edges: [{ from: 'a', to: 'b', status: 'unchanged' }],
+    })
+    expect(mUnchanged).toContain('n0 --> n1')
+  })
+
+  it('mixed statuses: nodes and edges all correctly emitted', () => {
+    const { mermaid, dropped } = graphToMermaid({
+      nodes: [
+        { id: 'a', label: 'Added node', status: 'added' },
+        { id: 'b', label: 'Removed node', status: 'removed' },
+        { id: 'c', label: 'Changed node', status: 'changed' },
+      ],
+      edges: [
+        { from: 'a', to: 'b', status: 'added' },
+        { from: 'b', to: 'c', status: 'removed' },
+        { from: 'a', to: 'c' },
+      ],
+    })
+    expect(dropped).toEqual([])
+    expect(mermaid).toContain('classDef added')
+    expect(mermaid).toContain('classDef removed')
+    expect(mermaid).toContain('classDef changed')
+    expect(mermaid).toContain('class n0 added')
+    expect(mermaid).toContain('class n1 removed')
+    expect(mermaid).toContain('class n2 changed')
+    expect(mermaid).toContain('n0 ==> n1')
+    expect(mermaid).toContain('n1 -.-> n2')
+    expect(mermaid).toContain('n0 --> n2')
+  })
+
+  it('edge-only status triggers classDef emission (no node status needed)', () => {
+    const { mermaid } = graphToMermaid({
+      nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+      edges: [{ from: 'a', to: 'b', status: 'added' }],
+    })
+    expect(mermaid).toContain('classDef added')
+  })
+
+  it('classDefs emitted in deterministic order: added, removed, changed, unchanged', () => {
+    const { mermaid } = graphToMermaid({
+      nodes: [
+        { id: 'd', label: 'D', status: 'unchanged' },
+        { id: 'c', label: 'C', status: 'changed' },
+        { id: 'b', label: 'B', status: 'removed' },
+        { id: 'a', label: 'A', status: 'added' },
+      ],
+      edges: [],
+    })
+    const addedIdx = mermaid.indexOf('classDef added')
+    const removedIdx = mermaid.indexOf('classDef removed')
+    const changedIdx = mermaid.indexOf('classDef changed')
+    const unchangedIdx = mermaid.indexOf('classDef unchanged')
+    expect(addedIdx).toBeLessThan(removedIdx)
+    expect(removedIdx).toBeLessThan(changedIdx)
+    expect(changedIdx).toBeLessThan(unchangedIdx)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Adversarial label invariants extended for status graphs
+// ---------------------------------------------------------------------------
+
+describe('EC-14c adversarial — status graph structural invariants', () => {
+  for (const label of ADVERSARIAL_LABELS) {
+    it(`status graph handles adversarial label: ${JSON.stringify(label)}`, () => {
+      const { mermaid } = graphToMermaid({
+        nodes: [
+          { id: 'a', label, status: 'added' },
+          { id: 'b', label: 'safe', status: 'removed' },
+        ],
+        edges: [{ from: 'a', to: 'b', label, status: 'changed' }],
+      })
+      // classDefs must be present
+      expect(mermaid).toContain('classDef added')
+      expect(mermaid).toContain('classDef removed')
+      // No raw backticks
+      expect(mermaid).not.toContain('`')
+      // Labels still quoted
+      expect(mermaid).toMatch(/\["[^"]*"\]/)
+    })
+  }
+})
