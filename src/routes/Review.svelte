@@ -6,6 +6,7 @@
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
   import { createDraftStore, draftKey } from '../lib/drafts/drafts.svelte'
   import { track } from '../lib/analytics/analytics'
+  import VerdictStep from '../components/VerdictStep.svelte'
 
   const RETURN_KEY = 'review123:returnTo'
 
@@ -105,7 +106,12 @@
         {/each}
       {/if}
     {:else}
-      <p class="muted">Review submission arrives in the next milestone. For now, submit on GitHub.</p>
+      <VerdictStep
+        prRef={{ owner, repo, number }}
+        commitId={load.state.meta.headSha}
+        store={draftStore ?? createDraftStore(`${owner}/${repo}#${number}`)}
+        prUrl={`https://github.com/${owner}/${repo}/pull/${number}`}
+      />
     {/if}
   {/if}
 </section>
