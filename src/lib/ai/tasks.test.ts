@@ -13,6 +13,8 @@ import {
   attentionPrompt,
   diagramsPrompt,
   verdictPrompt,
+  testInsightPrompt,
+  coachPrompt,
   parseReadingOrder,
   stripReadingOrder,
 } from './tasks'
@@ -194,14 +196,45 @@ describe('diagramsPrompt', () => {
     expect(system).toContain('"edges"')
   })
 
-  it('system prompt instructs max 12 nodes per graph', () => {
+  it('system prompt instructs max 14 nodes for changeMap (D1)', () => {
     const { system } = diagramsPrompt(makeCtx())
-    expect(system).toMatch(/12\s+nodes|12 nodes/i)
+    expect(system).toMatch(/14\s+nodes|14 nodes/i)
   })
 
   it('system prompt instructs labels ≤ 3 words', () => {
     const { system } = diagramsPrompt(makeCtx())
     expect(system).toMatch(/3 words|three words/i)
+  })
+
+  // D1: changeMap instructions
+  it('system prompt mentions changeMap field (D1)', () => {
+    const { system } = diagramsPrompt(makeCtx())
+    expect(system).toContain('changeMap')
+  })
+
+  it('system prompt mentions all four status enum values (D1)', () => {
+    const { system } = diagramsPrompt(makeCtx())
+    expect(system).toContain('"added"')
+    expect(system).toContain('"removed"')
+    expect(system).toContain('"changed"')
+    expect(system).toContain('"unchanged"')
+  })
+
+  it('system prompt instructs that every node and edge in changeMap must carry a status (D1)', () => {
+    const { system } = diagramsPrompt(makeCtx())
+    // Should instruct status is required on all nodes and edges in changeMap
+    expect(system).toMatch(/every node.*status|every edge.*status|must carry a status/i)
+  })
+
+  it('few-shot example contains status field on a node (D1)', () => {
+    const { system } = diagramsPrompt(makeCtx())
+    // The FEW_SHOT_EXAMPLE_START block must demonstrate statuses
+    const fewShotStart = system.indexOf('FEW_SHOT_EXAMPLE_START')
+    const fewShotEnd = system.indexOf('FEW_SHOT_EXAMPLE_END')
+    expect(fewShotStart).toBeGreaterThan(-1)
+    const fewShotBlock = system.slice(fewShotStart, fewShotEnd)
+    expect(fewShotBlock).toContain('"status"')
+    expect(fewShotBlock).toContain('"added"')
   })
 })
 
@@ -567,5 +600,160 @@ src/routes/Review.svelte
     const result = stripReadingOrder(text)
     expect(result).toContain('It has many features.')
     expect(result).toContain('And some more text.')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PROMPT_VERSION v4 (D1/D2/D4 bump)
+// ---------------------------------------------------------------------------
+
+describe('PROMPT_VERSION v4', () => {
+  it('is at least 4 (bumped for changeMap, testInsight, and coach prompts)', () => {
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(4)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// testInsightPrompt (D2)
+// ---------------------------------------------------------------------------
+
+describe('testInsightPrompt', () => {
+  it('returns object with system and user strings', () => {
+    const { system, user } = testInsightPrompt(makeCtx())
+    expect(typeof system).toBe('string')
+    expect(typeof user).toBe('string')
+  })
+
+  it('user prompt contains ctx.text', () => {
+    const ctx = makeCtx('test-insight-context-abc')
+    const { user } = testInsightPrompt(ctx)
+    expect(user).toContain('test-insight-context-abc')
+  })
+
+  it('system prompt instructs JSON output', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system.toLowerCase()).toContain('json')
+  })
+
+  it('system prompt mentions covered field', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system).toContain('covered')
+  })
+
+  it('system prompt mentions gaps field', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system).toContain('gaps')
+  })
+
+  it('system prompt instructs analyzing CHANGED test files', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system.toLowerCase()).toMatch(/changed test file|changed.*test/i)
+  })
+
+  it('system prompt instructs up to 10 behaviors in covered', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system).toMatch(/10 behavior|up to 10/i)
+  })
+
+  it('system prompt states test mapping is inferred not measured', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system.toLowerCase()).toContain('inferred')
+  })
+
+  it('system prompt mentions behavior, test, and file sub-fields', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system).toContain('"behavior"')
+    expect(system).toContain('"test"')
+    expect(system).toContain('"file"')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// coachPrompt (D4)
+// ---------------------------------------------------------------------------
+
+describe('coachPrompt', () => {
+  const drafts = [
+    { index: 0, path: 'src/auth.ts', line: 42, body: 'This variable name is confusing.' },
+    { index: 1, path: 'src/api.ts', line: 10, body: 'You should never do it this way.' },
+  ]
+
+  it('returns object with system and user strings', () => {
+    const { system, user } = coachPrompt(drafts)
+    expect(typeof system).toBe('string')
+    expect(typeof user).toBe('string')
+  })
+
+  it('user prompt embeds the draft bodies', () => {
+    const { user } = coachPrompt(drafts)
+    expect(user).toContain('This variable name is confusing.')
+    expect(user).toContain('You should never do it this way.')
+  })
+
+  it('user prompt embeds the draft indices', () => {
+    const { user } = coachPrompt(drafts)
+    // Indices should appear in the JSON payload
+    expect(user).toContain('"index"')
+    expect(user).toContain('0')
+    expect(user).toContain('1')
+  })
+
+  it('system prompt instructs JSON output', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system.toLowerCase()).toContain('json')
+  })
+
+  it('system prompt mentions reviews field', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toContain('reviews')
+  })
+
+  it('system prompt mentions clarity field with 1–5 range', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toContain('clarity')
+    expect(system).toMatch(/1[–-]5|1 to 5/i)
+  })
+
+  it('system prompt mentions actionable field', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toContain('actionable')
+  })
+
+  it('system prompt mentions tone enum values', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toContain('"ok"')
+    expect(system).toContain('"blunt"')
+    expect(system).toContain('"harsh"')
+  })
+
+  it('system prompt mentions biasQuestion field', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toContain('biasQuestion')
+  })
+
+  it('system prompt mentions suggestion field', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toContain('suggestion')
+  })
+
+  it('system prompt instructs biasQuestion only when preference stated as defect', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system.toLowerCase()).toMatch(/preference.*defect|defect.*preference/i)
+  })
+
+  it('user prompt is valid JSON containing all draft entries', () => {
+    const { user } = coachPrompt(drafts)
+    const parsed = JSON.parse(user)
+    expect(Array.isArray(parsed)).toBe(true)
+    expect(parsed).toHaveLength(2)
+    expect(parsed[0].body).toBe('This variable name is confusing.')
+    expect(parsed[1].body).toBe('You should never do it this way.')
+  })
+
+  it('handles empty drafts array gracefully', () => {
+    const { system, user } = coachPrompt([])
+    expect(typeof system).toBe('string')
+    const parsed = JSON.parse(user)
+    expect(parsed).toEqual([])
   })
 })

@@ -12,7 +12,7 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
-export const PROMPT_VERSION = 3
+export const PROMPT_VERSION = 4
 
 // ---------------------------------------------------------------------------
 // summarizePrompt — streaming plain-text summary + reading order
@@ -103,9 +103,9 @@ Do not include any text outside the JSON object.`
 // The few-shot marker is intentional so tests can assert its presence.
 // DIAGRAMS_FEW_SHOT_MARKER is not exported but the string appears verbatim.
 const FEW_SHOT_EXAMPLE = `/* FEW_SHOT_EXAMPLE_START */
-Example input sketch (three files touched: api.ts, router.ts, handler.ts):
+Example input sketch (three files touched: api.ts, router.ts, handler.ts — handler.ts is new):
 
-Example valid output JSON:
+Example valid output JSON (note status fields on every node and edge in changeMap):
 {
   "kind": "flow",
   "before": {
@@ -126,6 +126,18 @@ Example valid output JSON:
     "edges": [
       { "from": "router", "to": "handler", "label": "calls" },
       { "from": "handler", "to": "api", "label": "delegates" }
+    ]
+  },
+  "changeMap": {
+    "nodes": [
+      { "id": "api", "label": "api.ts", "status": "unchanged" },
+      { "id": "router", "label": "router.ts", "status": "changed" },
+      { "id": "handler", "label": "handler.ts", "status": "added" }
+    ],
+    "edges": [
+      { "from": "router", "to": "api", "label": "calls", "status": "removed" },
+      { "from": "router", "to": "handler", "label": "calls", "status": "added" },
+      { "from": "handler", "to": "api", "label": "delegates", "status": "added" }
     ]
   }
 }
@@ -161,6 +173,10 @@ Mermaid syntax. Your response must be valid JSON matching this shape exactly:
   "after": {
     "nodes": [{ "id": "<unique-id>", "label": "<display-label>" }, ...],
     "edges": [{ "from": "<node-id>", "to": "<node-id>", "label": "<optional-label>" }, ...]
+  },
+  "changeMap": {
+    "nodes": [{ "id": "<unique-id>", "label": "<display-label>", "status": "added"|"removed"|"changed"|"unchanged" }, ...],
+    "edges": [{ "from": "<node-id>", "to": "<node-id>", "label": "<optional-label>", "status": "added"|"removed"|"changed"|"unchanged" }, ...]
   }
 }
 
@@ -175,10 +191,19 @@ and after the PR (after). Node ids must be unique strings without spaces. Labels
 human-readable display names. Edges reference node ids in the same graph; do not reference ids \
 that do not exist in the same graph's nodes array.
 
+changeMap (PRIMARY OUTPUT — this is what the UI renders first):
+- Emit a SINGLE merged graph combining all nodes from before and after.
+- Every node and every edge in changeMap MUST carry a status field:
+  "added" — present only in after; "removed" — present only in before;
+  "changed" — present in both but behavior/signature changed;
+  "unchanged" — present in both, unaffected by this PR.
+- Statuses must reflect this PR's actual effect, not guesses.
+- before and after remain for the toggle view (compact is fine — mirror the changeMap nodes).
+
 DO NOT write any Mermaid syntax. The downstream serializer converts your graph data to Mermaid.
 
 Graph size constraints (IMPORTANT):
-- At most 12 nodes per graph (before and after combined). If more files are touched, \
+- changeMap: at most 14 nodes total. If more files are touched, \
   only include nodes whose relationships CHANGED or are needed for context.
 - Node labels must be ≤ 3 words — prefer module/file names over sentences (e.g. \
   "router.ts" not "The router module that handles requests").
@@ -189,6 +214,110 @@ ${FEW_SHOT_EXAMPLE}
 Do not include any text outside the JSON object.`
 
   return { system, user: ctx.text }
+}
+
+// ---------------------------------------------------------------------------
+// testInsightPrompt — JSON TestInsight (D2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build prompts for the test insight task.
+ *
+ * Output must be JSON-only, matching TestInsight:
+ *   {
+ *     covered: { behavior: string; test: string; file: string }[],
+ *     gaps: string[]
+ *   }
+ *
+ * Analyzes the CHANGED TEST FILES in the context and infers:
+ * - covered: up to 10 plain-language behaviors with the test name + file
+ * - gaps: behavior-changing files that lack corresponding test changes
+ *
+ * NOTE: coverage is inferred by reading code, not measured instrumentation.
+ */
+export function testInsightPrompt(ctx: PackedContext): { system: string; user: string } {
+  const system = `You are an expert code reviewer assistant. Analyze the changed test files in \
+the pull request and respond with JSON ONLY — no explanation, no markdown, no code fences. \
+Your response must be valid JSON that exactly matches this shape:
+
+{
+  "covered": [
+    { "behavior": "<plain-language description of what is tested>", "test": "<test name or describe block>", "file": "<test file path>" }
+  ],
+  "gaps": ["<plain-language description of a behavior that changed without test coverage>", ...]
+}
+
+Field rules:
+- covered: list up to 10 behaviors actually covered by CHANGED test files in this PR. \
+  Each entry must describe the behavior in plain language (not just the test name), name the \
+  test function or describe block, and reference the file path. Infer from reading the test code.
+- gaps: behaviors in behavior-changing (non-test) files that have NO corresponding test change \
+  in this PR. Be specific — name the file and describe the untested behavior. \
+  IMPORTANT: coverage is inferred by reading the code — it is NOT measured instrumentation data. \
+  Do not speculate about behaviors not visible in the diff.
+
+Do not include any text outside the JSON object.`
+
+  return { system, user: ctx.text }
+}
+
+// ---------------------------------------------------------------------------
+// coachPrompt — JSON CoachResult (D4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build prompts for the comment coach task.
+ *
+ * Output must be JSON-only, matching CoachResult:
+ *   {
+ *     reviews: CommentReview[]
+ *   }
+ *
+ * Per review comment: clarity 1–5, actionable boolean, tone, optional anti-bias
+ * question when the comment states preference as defect, optional suggestion.
+ */
+export function coachPrompt(
+  drafts: { index: number; path: string; line: number; body: string }[],
+): { system: string; user: string } {
+  const system = `You are a code review coach. Evaluate each draft review comment and respond \
+with JSON ONLY — no explanation, no markdown, no code fences. Your response must be valid JSON \
+that exactly matches this shape:
+
+{
+  "reviews": [
+    {
+      "index": <integer matching the draft index>,
+      "clarity": <integer 1–5 where 1=very unclear, 5=crystal clear>,
+      "actionable": <true if the comment tells the author what to do, false otherwise>,
+      "tone": "ok" | "blunt" | "harsh",
+      "biasQuestion": "<a single probing question to surface reviewer bias, or null>",
+      "suggestion": "<a reworded version of the comment that is clearer or kinder, or null>"
+    }
+  ]
+}
+
+Field rules:
+- index: must exactly match the index from the input draft.
+- clarity: integer 1–5 only. 1 = vague or confusing, 5 = clear, specific, and complete.
+- actionable: true only if the comment contains a concrete ask or next step for the author.
+- tone: "ok" = professional and constructive; "blunt" = abrupt but not hostile; \
+  "harsh" = dismissive, condescending, or aggressive.
+- biasQuestion: include ONLY when the comment states a preference as if it were a universal \
+  defect (e.g. "this is wrong" when it is a style choice). Phrase as a brief, direct question \
+  (e.g. "Is this a preference or a defect? Would you block a colleague's PR over this?"). \
+  Otherwise null.
+- suggestion: include ONLY when a reword would materially improve clarity or tone. \
+  Keep it concise. Otherwise null.
+
+Be brief and concrete. Do not pad. Do not include any text outside the JSON object.`
+
+  const draftsJson = JSON.stringify(
+    drafts.map((d) => ({ index: d.index, path: d.path, line: d.line, body: d.body })),
+    null,
+    2,
+  )
+
+  return { system, user: draftsJson }
 }
 
 // ---------------------------------------------------------------------------
