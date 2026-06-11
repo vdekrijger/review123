@@ -6,7 +6,7 @@ VERIFICATION_REPORT:
   criteria: docs/superpowers/specs/2026-06-11-review123-criteria-matrix.md
   scope: Plan A must-haves only (REQ-01, REQ-04 subset, REQ-05, REQ-06 subset, REQ-18, REQ-20 subset)
   branch: feat/plan-a-foundation
-  run_at: 2026-06-11 (Europe/Amsterdam)
+  run_at: 2026-06-11 (Europe/Amsterdam), re-sealed post-hardening: 87 tests, swarm grade A
   script: scripts/verify-review123-plan-a.sh
   status: PARTIAL  # all testable must-haves pass; 1 deferred-vacuous item
 
