@@ -1,6 +1,7 @@
 <script lang="ts">
   import DiagramPanel from './DiagramPanel.svelte'
   import { track } from '../lib/analytics/analytics'
+  import { stripReadingOrder } from '../lib/ai/tasks'
   import type { AiRun } from '../lib/ai/run.svelte'
   import type { AttentionResult, GraphResult, VerdictResult } from '../lib/ai/schemas'
 
@@ -51,11 +52,15 @@
 
   {#if !collapsed}
     <div class="rail-body">
-      <!-- Summary -->
+      <!-- Summary — strip reading order for display; InspectStep uses parsed order -->
       {#if run.summary.status === 'done' || run.summary.status === 'streaming'}
         <details class="rail-section" open>
           <summary>Summary</summary>
-          <p class="rail-summary-text">{run.summary.value as string}</p>
+          <p class="rail-summary-text">
+            {run.summary.status === 'done'
+              ? stripReadingOrder(run.summary.value as string)
+              : (run.summary.value as string)}
+          </p>
         </details>
       {:else if run.summary.status === 'loading'}
         <div class="rail-section">
