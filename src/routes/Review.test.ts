@@ -15,6 +15,7 @@ import Review from './Review.svelte'
 import { jsonResponse } from '../test-helpers'
 import { track } from '../lib/analytics/analytics'
 import { getHistory } from '../lib/history/history'
+import { lastVisit } from '../lib/visits/visits'
 
 // Stub analytics
 vi.mock('../lib/analytics/analytics', () => ({
@@ -277,5 +278,224 @@ describe('Review adds PR to history on load (history.ts)', () => {
     const entry = history.find((e) => e.owner === 'alice' && e.repo === 'widgets' && e.number === 42)
     expect(entry).toBeDefined()
     expect(entry?.title).toBe('Test PR')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Since-last-visit interdiff (Task D6)
+// ---------------------------------------------------------------------------
+
+describe('Since-last-visit — visit recording', () => {
+  it('records a visit with the current headSha when the PR loads', async () => {
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/files')) return Promise.resolve(jsonResponse([]))
+      return Promise.resolve(jsonResponse(makePrMeta('sha-first-visit')))
+    }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 100 } })
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    const entry = lastVisit('a/b#100')
+    expect(entry).not.toBeNull()
+    expect(entry!.headSha).toBe('sha-first-visit')
+  })
+})
+
+describe('Since-last-visit — banner visibility', () => {
+  it('does NOT show banner on first visit (no prior visit recorded)', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal('fetch', makeFetchStub())
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 200 } })
+
+    await vi.waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+
+    // Navigate to step 2
+    await user.click(screen.getByRole('button', { name: /next step/i }))
+
+    // No banner should exist
+    expect(screen.queryByText(/changed since your last visit/i)).not.toBeInTheDocument()
+  })
+
+  it('does NOT show banner when headSha is the same as last visit', async () => {
+    const user = userEvent.setup()
+    // Seed a previous visit with the same sha
+    localStorage.setItem('review123:visits', JSON.stringify({
+      'a/b#300': { headSha: 'abc123', visitedAt: Date.now() - 10000 },
+    }))
+
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/files')) return Promise.resolve(jsonResponse([]))
+      return Promise.resolve(jsonResponse(makePrMeta('abc123')))
+    }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 300 } })
+
+    await vi.waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /next step/i }))
+
+    expect(screen.queryByText(/changed since your last visit/i)).not.toBeInTheDocument()
+  })
+
+  it('shows banner in step 2 when headSha differs from last visit', async () => {
+    const user = userEvent.setup()
+    // Seed previous visit with a different sha
+    localStorage.setItem('review123:visits', JSON.stringify({
+      'a/b#400': { headSha: 'old-sha', visitedAt: Date.now() - 86400000 },
+    }))
+
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/files')) return Promise.resolve(jsonResponse([]))
+      return Promise.resolve(jsonResponse(makePrMeta('new-sha')))
+    }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 400 } })
+
+    await vi.waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+
+    // Banner should NOT show on step 1
+    expect(screen.queryByText(/changed since your last visit/i)).not.toBeInTheDocument()
+
+    // Navigate to step 2 → banner appears
+    await user.click(screen.getByRole('button', { name: /next step/i }))
+
+    await vi.waitFor(() => {
+      expect(screen.getByText(/changed since your last visit/i)).toBeInTheDocument()
+    })
+    expect(screen.getByRole('button', { name: /show only changes since then/i })).toBeInTheDocument()
+  })
+
+  it('banner is NOT shown on step 1 even when sha differs', async () => {
+    localStorage.setItem('review123:visits', JSON.stringify({
+      'a/b#401': { headSha: 'old-sha', visitedAt: Date.now() - 10000 },
+    }))
+
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/files')) return Promise.resolve(jsonResponse([]))
+      return Promise.resolve(jsonResponse(makePrMeta('new-sha')))
+    }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 401 } })
+
+    await vi.waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+
+    // On step 1: no banner
+    expect(screen.queryByText(/changed since your last visit/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('Since-last-visit — toggle fetch + swap + exit', () => {
+  it('clicking "Show only changes since then" fetches compare and shows compare files', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('review123:visits', JSON.stringify({
+      'a/b#500': { headSha: 'base-sha', visitedAt: Date.now() - 10000 },
+    }))
+
+    const compareFiles = [
+      { filename: 'changed.ts', status: 'modified', additions: 2, deletions: 1 },
+    ]
+
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/compare/')) return Promise.resolve(jsonResponse({ files: compareFiles }))
+      if (url.includes('/files')) return Promise.resolve(jsonResponse([
+        { filename: 'a.ts', status: 'modified', additions: 1, deletions: 0 },
+        { filename: 'b.ts', status: 'added', additions: 5, deletions: 0 },
+      ]))
+      return Promise.resolve(jsonResponse(makePrMeta('head-sha')))
+    }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 500 } })
+
+    await vi.waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+
+    // Navigate to step 2
+    await user.click(screen.getByRole('button', { name: /next step/i }))
+
+    await vi.waitFor(() => {
+      expect(screen.getByText(/changed since your last visit/i)).toBeInTheDocument()
+    })
+
+    // Click to show compare
+    await user.click(screen.getByRole('button', { name: /show only changes since then/i }))
+
+    // Wait for compare mode to be active
+    await vi.waitFor(() => {
+      expect(screen.getByText(/Showing 1 file changed since your last visit/i)).toBeInTheDocument()
+    })
+
+    // Exit button should be present
+    expect(screen.getByRole('button', { name: /show full diff/i })).toBeInTheDocument()
+  })
+
+  it('clicking "Show full diff" exits compare mode', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('review123:visits', JSON.stringify({
+      'a/b#501': { headSha: 'base-sha', visitedAt: Date.now() - 10000 },
+    }))
+
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/compare/')) return Promise.resolve(jsonResponse({ files: [] }))
+      if (url.includes('/files')) return Promise.resolve(jsonResponse([]))
+      return Promise.resolve(jsonResponse(makePrMeta('head-sha')))
+    }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 501 } })
+
+    await vi.waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /next step/i }))
+
+    await vi.waitFor(() => {
+      expect(screen.getByText(/changed since your last visit/i)).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: /show only changes since then/i }))
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('button', { name: /show full diff/i })).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: /show full diff/i }))
+
+    // Back to idle banner
+    await vi.waitFor(() => {
+      expect(screen.getByText(/changed since your last visit/i)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /show only changes since then/i })).toBeInTheDocument()
+    })
+  })
+})
+
+describe('Since-last-visit — 404 graceful fallback', () => {
+  it('shows force-push error message when compare returns 404', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('review123:visits', JSON.stringify({
+      'a/b#600': { headSha: 'old-sha', visitedAt: Date.now() - 10000 },
+    }))
+
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/compare/')) return Promise.resolve(new Response('{}', { status: 404 }))
+      if (url.includes('/files')) return Promise.resolve(jsonResponse([]))
+      return Promise.resolve(jsonResponse(makePrMeta('new-sha')))
+    }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 600 } })
+
+    await vi.waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /next step/i }))
+
+    await vi.waitFor(() => {
+      expect(screen.getByText(/changed since your last visit/i)).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: /show only changes since then/i }))
+
+    await vi.waitFor(() => {
+      expect(screen.getByText(/force-pushed away/i)).toBeInTheDocument()
+    })
+
+    // Banner is dismissible
+    expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument()
   })
 })
