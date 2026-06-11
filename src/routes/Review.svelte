@@ -15,6 +15,7 @@
   import UnderstandStep from '../components/UnderstandStep.svelte'
   import ContextRail from '../components/ContextRail.svelte'
   import { addToHistory } from '../lib/history/history'
+  import { createViewedStore } from '../lib/viewed/viewed.svelte'
   import type { CiSummary } from '../lib/github/checks'
   import type { AttentionResult } from '../lib/ai/schemas'
 
@@ -35,6 +36,10 @@
   }
   const canPrev = $derived(step > 1)
   const canNext = $derived(step < 3)
+
+  // ---- Viewed store — keyed by owner/repo#number (NO sha — survives pushes) ---
+  const prId = $derived(`${owner}/${repo}#${number}`)
+  const viewedStore = $derived(createViewedStore(prId))
 
   // ---- Draft store — created once per PR+headSha (after the PR loads) -----
   // We keep a single store instance; it persists across step switches.
@@ -209,6 +214,7 @@
         {draftStore}
         attention={aiRun?.attention.status === 'done' ? aiRun.attention.value as AttentionResult : null}
         {readingOrder}
+        {viewedStore}
       />
     {:else}
       <VerdictStep
@@ -232,7 +238,7 @@
           </span>
         {/if}
         <span class="draft-count">
-          {draftStore?.count ?? 0} comment{(draftStore?.count ?? 0) === 1 ? '' : 's'} drafted
+          {draftStore?.count ?? 0} comment{(draftStore?.count ?? 0) === 1 ? '' : 's'} drafted{#if viewedStore.count > 0}&nbsp;&middot; viewed {viewedStore.count}/{load.state.files.length}{/if}
         </span>
       </span>
       <div class="step-nav">
