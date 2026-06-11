@@ -30,9 +30,12 @@ import {
   attentionPrompt,
   diagramsPrompt,
   verdictPrompt,
+  testInsightPrompt,
+  coachPrompt,
 } from './tasks'
-import { validateAttention, validateVerdict, validateGraphResult } from './schemas'
-import type { AttentionResult, VerdictResult, GraphResult } from './schemas'
+import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult } from './schemas'
+import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult } from './schemas'
+import type { Draft } from '../drafts/drafts.svelte'
 
 // ---------------------------------------------------------------------------
 // PanelState union
@@ -50,7 +53,7 @@ export interface PanelState<T> {
 // Task names (used as cache key discriminants + analytics)
 // ---------------------------------------------------------------------------
 
-type TaskName = 'summary' | 'attention' | 'diagrams' | 'verdict'
+type TaskName = 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests'
 
 // ---------------------------------------------------------------------------
 // AiRun public interface
@@ -61,8 +64,10 @@ export interface AiRun {
   readonly attention: PanelState<AttentionResult>
   readonly diagrams: PanelState<GraphResult>
   readonly verdict: PanelState<VerdictResult>
+  readonly tests: PanelState<TestInsight>
   start(): Promise<void>
   retry(task: TaskName): Promise<void>
+  coach(drafts: Draft[]): Promise<CoachResult | { error: string }>
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +142,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   const attentionState = $state<PanelState<AttentionResult>>({ status: 'idle' })
   const diagramsState = $state<PanelState<GraphResult>>({ status: 'idle' })
   const verdictState = $state<PanelState<VerdictResult>>({ status: 'idle' })
+  const testsState = $state<PanelState<TestInsight>>({ status: 'idle' })
 
   // Packed context — kept in closure so retry can reuse it without re-packing
   // (unless the initial pack failed, in which case retry re-packs)
@@ -251,6 +257,39 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
   }
 
+  async function runTestsTask(ctx: PackedContext): Promise<void> {
+    const key = cacheKey(prKey, 'tests', PROMPT_VERSION)
+
+    const t0 = performance.now()
+    const hit = await getCached<TestInsight>(key)
+    if (hit !== null) {
+      testsState.status = 'done'
+      testsState.value = hit
+      track('ai_task_completed', { task: 'tests', duration_ms: Math.round(performance.now() - t0), cached: true })
+      return
+    }
+
+    testsState.status = 'loading'
+    const t1 = performance.now()
+    const prompts = testInsightPrompt(ctx)
+
+    try {
+      const result = await llmJsonWithRepair<TestInsight>(
+        { system: prompts.system, user: prompts.user },
+        validateTestInsight,
+      )
+      await setCached<TestInsight>(key, result)
+      testsState.status = 'done'
+      testsState.value = result
+      track('ai_task_completed', { task: 'tests', duration_ms: Math.round(performance.now() - t1), cached: false })
+    } catch (err) {
+      const kind = err instanceof LlmError ? err.kind : 'unknown'
+      testsState.status = 'error'
+      testsState.error = humanMessage(kind)
+      track('ai_task_failed', { task: 'tests', reason: kind })
+    }
+  }
+
   async function runVerdictTask(ctx: PackedContext, ciData: CiSummary | null): Promise<void> {
     const key = cacheKey(prKey, 'verdict', PROMPT_VERSION)
 
@@ -296,11 +335,13 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     attentionState.status = status
     diagramsState.status = status
     verdictState.status = status
+    testsState.status = status
     if (error !== undefined) {
       summaryState.error = error
       attentionState.error = error
       diagramsState.error = error
       verdictState.error = error
+      testsState.error = error
     }
   }
 
@@ -353,11 +394,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       return
     }
 
-    // Run all four tasks in parallel, each isolated (EC-12c / EC-13g)
+    // Run all five tasks in parallel, each isolated (EC-12c / EC-13g)
     await Promise.all([
       runSummaryTask(ctx),
       runAttentionTask(ctx),
       runDiagramsTask(ctx),
+      runTestsTask(ctx),
       runVerdictTask(ctx, ciData),
     ])
   }
@@ -379,6 +421,49 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     if (task === 'summary') return runSummaryTask(ctx)
     if (task === 'attention') return runAttentionTask(ctx)
     if (task === 'diagrams') return runDiagramsTask(ctx)
+    if (task === 'tests') return runTestsTask(ctx)
+  }
+
+  // ---------------------------------------------------------------------------
+  // coach(drafts) — on-demand, never cached, never run in start()
+  // ---------------------------------------------------------------------------
+
+  async function coach(drafts: Draft[]): Promise<CoachResult | { error: string }> {
+    // No-key check: same early-exit as start()
+    const settings = getSettings()
+    if (!settings.deepseekKey) {
+      return { error: 'No DeepSeek API key configured.' }
+    }
+
+    // Consent gate: private repos may quote code in comments (same gateAi / shared ask)
+    const allowed = await gateAi({ repo, isPrivate, ask })
+    if (!allowed) {
+      return { error: 'AI analysis was declined. Enable AI analysis in the consent dialog to use the comment coach.' }
+    }
+
+    // Map drafts to the coachPrompt input shape (index = array position)
+    const draftInputs = drafts.map((d, i) => ({
+      index: i,
+      path: d.path,
+      line: d.line,
+      body: d.body,
+    }))
+
+    const prompts = coachPrompt(draftInputs)
+    const t1 = performance.now()
+
+    try {
+      const result = await llmJsonWithRepair<CoachResult>(
+        { system: prompts.system, user: prompts.user },
+        validateCoachResult,
+      )
+      track('ai_task_completed', { task: 'coach', duration_ms: Math.round(performance.now() - t1), cached: false })
+      return result
+    } catch (err) {
+      const kind = err instanceof LlmError ? err.kind : 'unknown'
+      track('ai_task_failed', { task: 'coach', reason: kind })
+      return { error: humanMessage(kind) }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -390,7 +475,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     get attention() { return attentionState },
     get diagrams() { return diagramsState },
     get verdict() { return verdictState },
+    get tests() { return testsState },
     start,
     retry,
+    coach,
   }
 }

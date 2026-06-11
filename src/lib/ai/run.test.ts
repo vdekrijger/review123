@@ -20,7 +20,7 @@ import { createAiRun } from './run.svelte'
 import { LlmError } from '../llm/llm'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
-import type { AttentionResult, VerdictResult, GraphResult } from './schemas'
+import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult } from './schemas'
 
 // ---------------------------------------------------------------------------
 // Fixture data
@@ -54,6 +54,11 @@ const VERDICT_RESULT: VerdictResult = {
   notAnalyzed: ['model-unknown.ts'],
 }
 
+const TEST_INSIGHT_RESULT: TestInsight = {
+  covered: [{ behavior: 'handles valid input', test: 'it validates', file: 'src/foo.test.ts' }],
+  gaps: ['src/bar.ts has no test coverage'],
+}
+
 // ---------------------------------------------------------------------------
 // Default llmJsonWithRepair implementation that dispatches by validator result
 // Returns appropriate fixture based on which validator accepts the result.
@@ -63,7 +68,7 @@ type ValidateFn = (x: unknown) => unknown
 
 function defaultJsonDispatch(_opts: unknown, validate: ValidateFn): unknown {
   // Try each fixture in order — return the first one the validator accepts
-  for (const candidate of [ATTENTION_RESULT, GRAPH_RESULT, VERDICT_RESULT]) {
+  for (const candidate of [ATTENTION_RESULT, GRAPH_RESULT, TEST_INSIGHT_RESULT, VERDICT_RESULT]) {
     if (validate(candidate) !== null) return candidate
   }
   return ATTENTION_RESULT // fallback
@@ -232,12 +237,13 @@ describe('cache-hit (EC-17a, track cached:true)', () => {
     expect((attentionTrack![1] as Record<string, unknown>)['cached']).toBe(true)
   })
 
-  it('all four tasks cache hit: no llm calls at all', async () => {
+  it('all five tasks cache hit: no llm calls at all', async () => {
     const deps = makeDeps()
     deps.getCached.mockImplementation(async (key: string) => {
       if (key.includes('summary')) return 'cached summary'
       if (key.includes('attention')) return ATTENTION_RESULT
       if (key.includes('diagrams')) return GRAPH_RESULT
+      if (key.includes('tests')) return TEST_INSIGHT_RESULT
       if (key.includes('verdict')) return VERDICT_RESULT
       return null
     })
@@ -251,6 +257,7 @@ describe('cache-hit (EC-17a, track cached:true)', () => {
     expect(run.summary.status).toBe('done')
     expect(run.attention.status).toBe('done')
     expect(run.diagrams.status).toBe('done')
+    expect(run.tests.status).toBe('done')
     expect(run.verdict.status).toBe('done')
   })
 })
@@ -541,6 +548,8 @@ describe('retry single task', () => {
       if (asAttention !== null) return asAttention
       const asGraph = validate(GRAPH_RESULT)
       if (asGraph !== null) return asGraph
+      const asTests = validate(TEST_INSIGHT_RESULT)
+      if (asTests !== null) return asTests
       verdictCallCount++
       if (verdictCallCount === 1) throw new LlmError('server', 'verdict broke')
       return VERDICT_RESULT
@@ -647,7 +656,7 @@ describe('duration_ms as number', () => {
     await run.start()
 
     const completedCalls = deps.track.mock.calls.filter((c: unknown[]) => c[0] === 'ai_task_completed')
-    expect(completedCalls.length).toBe(4) // summary + attention + diagrams + verdict
+    expect(completedCalls.length).toBe(5) // summary + attention + diagrams + tests + verdict
 
     for (const call of completedCalls) {
       const props = call[1] as Record<string, unknown>
@@ -687,5 +696,245 @@ describe('llm.ts SSE parser nit: data: without space', () => {
     // The actual SSE no-space test is in src/lib/llm/llm.test.ts
     // See: "accepts data: with no space between colon and payload"
     expect(true).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Tests panel (D2) — fifth parallel task
+// ---------------------------------------------------------------------------
+
+describe('tests panel (D2)', () => {
+  it('tests cache hit: done + track cached:true, no llmJsonWithRepair call for tests', async () => {
+    const deps = makeDeps()
+    deps.getCached.mockImplementation(async (key: string) => {
+      if (key.includes('tests')) return TEST_INSIGHT_RESULT
+      return null
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.tests.status).toBe('done')
+    expect(run.tests.value).toEqual(TEST_INSIGHT_RESULT)
+
+    const testsTrack = deps.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_completed' && (c[1] as Record<string, unknown>)['task'] === 'tests',
+    )
+    expect(testsTrack).toBeTruthy()
+    expect((testsTrack![1] as Record<string, unknown>)['cached']).toBe(true)
+  })
+
+  it('tests failure does not affect summary, attention, diagrams, or verdict', async () => {
+    const deps = makeDeps()
+
+    deps.llmStream.mockImplementation(async (_opts: unknown, onDelta: (d: string) => void) => {
+      onDelta('summary text')
+      return 'summary text'
+    })
+
+    // Make tests task fail by throwing when validate returns non-null for TEST_INSIGHT_RESULT
+    deps.llmJsonWithRepair.mockImplementation(async (_opts: unknown, validate: ValidateFn) => {
+      const asTests = validate(TEST_INSIGHT_RESULT)
+      if (asTests !== null) {
+        throw new LlmError('server', 'tests task broke')
+      }
+      const asAttention = validate(ATTENTION_RESULT)
+      if (asAttention !== null) return asAttention
+      const asGraph = validate(GRAPH_RESULT)
+      if (asGraph !== null) return asGraph
+      return VERDICT_RESULT
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    // tests should fail
+    expect(run.tests.status).toBe('error')
+    expect(run.tests.error).toBeTruthy()
+    // other panels should succeed
+    expect(run.summary.status).toBe('done')
+    expect(run.attention.status).toBe('done')
+    expect(run.diagrams.status).toBe('done')
+    expect(run.verdict.status).toBe('done')
+
+    // ai_task_failed should be tracked for tests
+    const failedCall = deps.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_failed' && (c[1] as Record<string, unknown>)['task'] === 'tests',
+    )
+    expect(failedCall).toBeTruthy()
+    expect((failedCall![1] as Record<string, unknown>)['reason']).toBe('server')
+  })
+
+  it('retry(tests) re-runs only tests, other panels unaffected', async () => {
+    const deps = makeDeps()
+
+    let testsCallCount = 0
+    deps.llmJsonWithRepair.mockImplementation(async (_opts: unknown, validate: ValidateFn) => {
+      const asTests = validate(TEST_INSIGHT_RESULT)
+      if (asTests !== null) {
+        testsCallCount++
+        if (testsCallCount === 1) throw new LlmError('server', 'tests broke first time')
+        return asTests
+      }
+      const asAttention = validate(ATTENTION_RESULT)
+      if (asAttention !== null) return asAttention
+      const asGraph = validate(GRAPH_RESULT)
+      if (asGraph !== null) return asGraph
+      return VERDICT_RESULT
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.tests.status).toBe('error')
+    const summaryStatusBeforeRetry = run.summary.status
+    const attentionStatusBeforeRetry = run.attention.status
+
+    // Retry tests only
+    await run.retry('tests')
+
+    expect(run.tests.status).toBe('done')
+    expect(run.tests.value).toEqual(TEST_INSIGHT_RESULT)
+    // Other panels unchanged by retry
+    expect(run.summary.status).toBe(summaryStatusBeforeRetry)
+    expect(run.attention.status).toBe(attentionStatusBeforeRetry)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// coach() — on-demand, never cached, consent gating
+// ---------------------------------------------------------------------------
+
+import type { Draft } from '../drafts/drafts.svelte'
+
+const DRAFT_FIXTURE: Draft[] = [
+  { prKey: 'owner/repo#1@abc', path: 'src/foo.ts', line: 10, side: 'RIGHT', body: 'This is wrong.', updatedAt: 0 },
+  { prKey: 'owner/repo#1@abc', path: 'src/bar.ts', line: 42, side: 'LEFT', body: 'Why not use a map?', updatedAt: 0 },
+]
+
+const COACH_RESULT: CoachResult = {
+  reviews: [
+    { index: 0, clarity: 3, actionable: false, tone: 'blunt', biasQuestion: 'Is this a preference or a defect?', suggestion: 'Consider renaming X to Y for clarity.' },
+    { index: 1, clarity: 4, actionable: true, tone: 'ok', biasQuestion: null, suggestion: null },
+  ],
+}
+
+describe('coach() — gating (no-key / declined)', () => {
+  it('no-key: coach returns error message without calling gateAi or llm', async () => {
+    const deps = makeDeps({ hasKey: false })
+    const run = createAiRun(makeInput(), deps)
+
+    const result = await run.coach(DRAFT_FIXTURE)
+
+    expect('error' in result).toBe(true)
+    expect((result as { error: string }).error).toContain('No DeepSeek API key')
+    expect(deps.gateAi).not.toHaveBeenCalled()
+    expect(deps.llmJsonWithRepair).not.toHaveBeenCalled()
+  })
+
+  it('declined: coach returns declined error message without calling llm', async () => {
+    const deps = makeDeps({ gateResult: false })
+    const run = createAiRun(makeInput(), deps)
+
+    const result = await run.coach(DRAFT_FIXTURE)
+
+    expect('error' in result).toBe(true)
+    expect((result as { error: string }).error.length).toBeGreaterThan(0)
+    expect(deps.llmJsonWithRepair).not.toHaveBeenCalled()
+  })
+
+  it('declined: coach uses the same gateAi (shared ask)', async () => {
+    const deps = makeDeps({ gateResult: false })
+    const ask = vi.fn().mockResolvedValue(false)
+    const run = createAiRun({ ...makeInput({ isPrivate: true }), ask }, deps)
+
+    await run.coach(DRAFT_FIXTURE)
+
+    expect(deps.gateAi).toHaveBeenCalledWith({
+      repo: 'owner/repo',
+      isPrivate: true,
+      ask,
+    })
+  })
+})
+
+describe('coach() — success', () => {
+  it('returns CoachResult on success, maps drafts to index=array-position', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockResolvedValue(COACH_RESULT)
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.coach(DRAFT_FIXTURE)
+
+    expect('error' in result).toBe(false)
+    expect(result).toEqual(COACH_RESULT)
+  })
+
+  it('tracks ai_task_completed with task:coach on success', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockResolvedValue(COACH_RESULT)
+
+    const run = createAiRun(makeInput(), deps)
+    await run.coach(DRAFT_FIXTURE)
+
+    const coachTrack = deps.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_completed' && (c[1] as Record<string, unknown>)['task'] === 'coach',
+    )
+    expect(coachTrack).toBeTruthy()
+    expect(typeof (coachTrack![1] as Record<string, unknown>)['duration_ms']).toBe('number')
+  })
+})
+
+describe('coach() — error mapping', () => {
+  it('LlmError → {error: human message}, tracks ai_task_failed', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockRejectedValue(new LlmError('rate-limited', 'too many calls'))
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.coach(DRAFT_FIXTURE)
+
+    expect('error' in result).toBe(true)
+    expect((result as { error: string }).error).toContain('Rate limited')
+
+    const failedCall = deps.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_failed' && (c[1] as Record<string, unknown>)['task'] === 'coach',
+    )
+    expect(failedCall).toBeTruthy()
+    expect((failedCall![1] as Record<string, unknown>)['reason']).toBe('rate-limited')
+  })
+
+  it('unknown error → {error: human message}', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockRejectedValue(new Error('Unexpected crash'))
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.coach(DRAFT_FIXTURE)
+
+    expect('error' in result).toBe(true)
+    expect(typeof (result as { error: string }).error).toBe('string')
+    expect((result as { error: string }).error.length).toBeGreaterThan(0)
+  })
+})
+
+describe('coach() — never touches cache', () => {
+  it('coach does not call getCached or setCached', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockResolvedValue(COACH_RESULT)
+
+    const getCachedSpy = deps.getCached
+    const setCachedSpy = deps.setCached
+
+    const run = createAiRun(makeInput(), deps)
+    // Reset call counts after start() might have touched cache
+    await run.coach(DRAFT_FIXTURE)
+
+    // After a standalone coach call (without start()), cache should not be touched
+    const run2 = createAiRun(makeInput(), deps)
+    deps.getCached.mockClear()
+    deps.setCached.mockClear()
+    await run2.coach(DRAFT_FIXTURE)
+
+    expect(getCachedSpy).not.toHaveBeenCalled()
+    expect(setCachedSpy).not.toHaveBeenCalled()
   })
 })
