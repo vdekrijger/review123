@@ -5,8 +5,9 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 export default defineConfig({
   plugins: [svelte()],
   test: {
+    globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.{test,spec}.ts'],
   },
 })
