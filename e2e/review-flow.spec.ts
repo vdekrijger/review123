@@ -408,11 +408,11 @@ test('review flow: diff renders with red/green rows, AI panels populate, CI show
 
   // --- Step 1 (Understand) should be active by default ---
 
-  // CI: should show failure (Integration tests failed)
-  await expect(page.getByText(/Integration tests/i)).toBeVisible({ timeout: 10_000 })
+  // CI badge in glance card should show failure
+  await expect(page.locator('.ci-badge.ci-fail')).toBeVisible({ timeout: 10_000 })
 
   // PR description is inside a collapsed <details> — open it first to check
-  const prDescDetails = page.locator('.pr-description-details')
+  const prDescDetails = page.locator('details.pr-description-details')
   await prDescDetails.evaluate((el: HTMLDetailsElement) => { el.open = true })
   await expect(page.getByText('This PR adds a new feature for testing.')).toBeVisible()
 
