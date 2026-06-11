@@ -43,11 +43,9 @@ function validateToken(field: 'githubPat' | 'deepseekKey', value: string | null)
 }
 
 export function saveTokens(patch: { githubPat?: string | null; deepseekKey?: string | null }): void {
-  const githubPat = 'githubPat' in patch ? validateToken('githubPat', patch.githubPat ?? null) : undefined
-  const deepseekKey = 'deepseekKey' in patch ? validateToken('deepseekKey', patch.deepseekKey ?? null) : undefined
   const update: Partial<Settings> = {}
-  if ('githubPat' in patch) update.githubPat = githubPat ?? null
-  if ('deepseekKey' in patch) update.deepseekKey = deepseekKey ?? null
+  if ('githubPat' in patch) update.githubPat = validateToken('githubPat', patch.githubPat ?? null)
+  if ('deepseekKey' in patch) update.deepseekKey = validateToken('deepseekKey', patch.deepseekKey ?? null)
   save(update)
 }
 

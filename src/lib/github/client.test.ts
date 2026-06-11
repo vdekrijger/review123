@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ghFetch, ghFetchPage } from './client'
 import { GithubApiError } from './types'
+import { setGithubPat } from '../settings/settings'
+import { jsonResponse } from '../../test-helpers'
 
 function mockFetch(status: number, body: unknown, headers: Record<string, string> = {}) {
-  return vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status, headers }))
+  return vi.fn().mockResolvedValue(jsonResponse(body, headers, status))
 }
 
 describe('ghFetch', () => {
@@ -12,7 +14,7 @@ describe('ghFetch', () => {
   it('returns parsed JSON on 200 and sends auth header when PAT set', async () => {
     const f = mockFetch(200, { id: 1 })
     vi.stubGlobal('fetch', f)
-    localStorage.setItem('review123:settings', JSON.stringify({ githubPat: 'ghp_x' }))
+    setGithubPat('ghp_x')
     const data = await ghFetch<{ id: number }>('/repos/a/b')
     expect(data).toEqual({ id: 1 })
     expect(f.mock.calls[0][0]).toBe('https://api.github.com/repos/a/b')
@@ -86,7 +88,7 @@ describe('ghFetchPage', () => {
   it('does NOT send Authorization header to non-github hosts (auth leak guard)', async () => {
     const f = mockFetch(200, {})
     vi.stubGlobal('fetch', f)
-    localStorage.setItem('review123:settings', JSON.stringify({ githubPat: 'ghp_secret' }))
+    setGithubPat('ghp_secret')
     await ghFetchPage('https://evil.example.com/x')
     expect(f.mock.calls[0][1].headers.Authorization).toBeUndefined()
   })
@@ -94,7 +96,7 @@ describe('ghFetchPage', () => {
   it('DOES send Authorization header to api.github.com (auth guard passthrough)', async () => {
     const f = mockFetch(200, {})
     vi.stubGlobal('fetch', f)
-    localStorage.setItem('review123:settings', JSON.stringify({ githubPat: 'ghp_secret' }))
+    setGithubPat('ghp_secret')
     await ghFetchPage('https://api.github.com/x?page=2')
     expect(f.mock.calls[0][1].headers.Authorization).toBe('Bearer ghp_secret')
   })

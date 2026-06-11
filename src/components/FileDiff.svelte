@@ -7,7 +7,7 @@
 
   let { file, mode }: { file: PrFile; mode: DiffMode } = $props()
   const kind = $derived(classifyFile(file))
-  const diffFile = $derived(kind === 'diff' ? buildDiffFile(file) : null)
+  const diffFile = $derived(kind === 'diff' ? buildDiffFile(file, mode) : null)
 </script>
 
 <article class="file-diff">

@@ -5,6 +5,9 @@ import '@testing-library/jest-dom/vitest'
 // overriding it because populateGlobal skips keys that already exist in global.
 // Manually restore localStorage/sessionStorage from the jsdom instance so that
 // tests relying on Web Storage work correctly.
+// TODO: remove when vitest/jsdom populateGlobal handles Node's native localStorage
+// getter (see vitest issue tracker: populateGlobal skips keys already present on
+// globalThis).
 declare const jsdom: { window: Window & typeof globalThis }
 if (typeof jsdom !== 'undefined' && jsdom.window) {
   Object.defineProperty(globalThis, 'localStorage', {

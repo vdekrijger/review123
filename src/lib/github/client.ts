@@ -3,21 +3,27 @@ import { GithubApiError, type GithubError } from './types'
 
 const BASE = 'https://api.github.com'
 
-function baseHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
+const GITHUB_HEADERS = {
+  Accept: 'application/vnd.github+json',
+  'X-GitHub-Api-Version': '2022-11-28',
+} as const
+
+function buildHeaders(targetUrl?: string): Record<string, string> {
+  const headers: Record<string, string> = { ...GITHUB_HEADERS }
+  const isGithubApi = !targetUrl || new URL(targetUrl).hostname === 'api.github.com'
+  if (isGithubApi) {
+    const pat = getSettings().githubPat
+    if (pat) headers.Authorization = `Bearer ${pat}`
   }
-  const pat = getSettings().githubPat
-  if (pat) headers.Authorization = `Bearer ${pat}`
   return headers
 }
 
 export async function ghFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = { ...baseHeaders(), ...(init.headers as Record<string, string> | undefined) }
+  const url = `${BASE}${path}`
+  const headers = { ...buildHeaders(url), ...(init.headers as Record<string, string> | undefined) }
   let res: Response
   try {
-    res = await fetch(`${BASE}${path}`, { ...init, headers })
+    res = await fetch(url, { ...init, headers })
   } catch {
     throw new GithubApiError({ kind: 'network' })
   }
@@ -28,14 +34,9 @@ export async function ghFetch<T>(path: string, init: RequestInit = {}): Promise<
 // Returns one page plus the rel="next" link for paginated endpoints.
 export async function ghFetchPage<T>(pathOrUrl: string): Promise<{ body: T; next: string | null }> {
   const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${BASE}${pathOrUrl}`
-  const parsedHost = new URL(url).hostname
-  const headers = parsedHost === 'api.github.com' ? baseHeaders() : {
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-  }
   let res: Response
   try {
-    res = await fetch(url, { headers })
+    res = await fetch(url, { headers: buildHeaders(url) })
   } catch {
     throw new GithubApiError({ kind: 'network' })
   }

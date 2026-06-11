@@ -1,5 +1,6 @@
 import { DiffFile } from '@git-diff-view/svelte'
 import type { PrFile } from '../github/types'
+import type { DiffMode } from '../settings/settings'
 
 export type FileKind = 'diff' | 'rename-only' | 'binary-or-too-large'
 
@@ -22,25 +23,14 @@ function buildUnifiedDiffEnvelope(f: PrFile): string {
   const oldPath = f.previousFilename ?? f.filename
   const newPath = f.filename
 
-  let oldSide: string
-  let newSide: string
-
-  if (f.status === 'added') {
-    oldSide = '--- /dev/null'
-    newSide = `+++ b/${newPath}`
-  } else if (f.status === 'removed') {
-    oldSide = `--- a/${oldPath}`
-    newSide = '+++ /dev/null'
-  } else {
-    oldSide = `--- a/${oldPath}`
-    newSide = `+++ b/${newPath}`
-  }
+  const oldSide = f.status === 'added' ? '--- /dev/null' : `--- a/${oldPath}`
+  const newSide = f.status === 'removed' ? '+++ /dev/null' : `+++ b/${newPath}`
 
   const patch = f.patch!.endsWith('\n') ? f.patch! : f.patch! + '\n'
   return `diff --git a/${oldPath} b/${newPath}\n${oldSide}\n${newSide}\n${patch}`
 }
 
-export function buildDiffFile(f: PrFile): DiffFile | null {
+export function buildDiffFile(f: PrFile, mode: DiffMode): DiffFile | null {
   if (!f.patch) return null
 
   const envelope = buildUnifiedDiffEnvelope(f)
@@ -52,8 +42,11 @@ export function buildDiffFile(f: PrFile): DiffFile | null {
   })
 
   file.init()
-  file.buildSplitDiffLines()
-  file.buildUnifiedDiffLines()
+  if (mode === 'split') {
+    file.buildSplitDiffLines()
+  } else {
+    file.buildUnifiedDiffLines()
+  }
 
   return file
 }

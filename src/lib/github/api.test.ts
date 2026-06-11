@@ -1,9 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { getPrMeta, getPrFiles, getFileAtRef } from './api'
-
-function jsonResponse(body: unknown, headers: Record<string, string> = {}) {
-  return new Response(JSON.stringify(body), { status: 200, headers })
-}
+import { jsonResponse } from '../../test-helpers'
 
 const META = {
   title: 'T', state: 'open', merged: false, body: null,

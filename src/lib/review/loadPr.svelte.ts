@@ -30,19 +30,17 @@ export function createPrLoad(
         primary_language: files[0]?.filename.split('.').pop() ?? 'unknown',
       })
     } catch (e) {
-      if (e instanceof GithubApiError) {
-        if (e.detail.kind === 'rate-limited') {
-          holder.state = { status: 'error', error: 'rate-limited', resetAt: e.detail.resetAt }
-        } else if (
+      if (e instanceof GithubApiError && e.detail.kind === 'rate-limited') {
+        holder.state = { status: 'error', error: 'rate-limited', resetAt: e.detail.resetAt }
+      } else if (
+        e instanceof GithubApiError && (
           e.detail.kind === 'not-found' ||
           e.detail.kind === 'unauthorized' ||
           e.detail.kind === 'forbidden' ||
           e.detail.kind === 'server'
-        ) {
-          holder.state = { status: 'error', error: e.detail.kind }
-        } else {
-          holder.state = { status: 'error', error: 'network' }
-        }
+        )
+      ) {
+        holder.state = { status: 'error', error: e.detail.kind }
       } else {
         holder.state = { status: 'error', error: 'network' }
       }

@@ -2,6 +2,18 @@ import { describe, it, expect } from 'vitest'
 import { DiffLineType } from '@git-diff-view/file'
 import { buildDiffFile, classifyFile } from './diffFile'
 import type { PrFile } from '../github/types'
+import type { DiffFile } from '@git-diff-view/svelte'
+
+function countDiffLines(df: DiffFile): { addCount: number; delCount: number } {
+  let addCount = 0
+  let delCount = 0
+  for (let i = 0; i < df.unifiedLineLength; i++) {
+    const line = df.getUnifiedLine(i)
+    if (line.diff?.type === DiffLineType.Add) addCount++
+    if (line.diff?.type === DiffLineType.Delete) delCount++
+  }
+  return { addCount, delCount }
+}
 
 // All patch strings below use BARE hunks — the real format returned by
 // GitHub's PR files API.  buildDiffFile is responsible for synthesizing the
@@ -26,25 +38,19 @@ describe('classifyFile', () => {
 
 describe('buildDiffFile', () => {
   it('builds a renderable DiffFile from a bare patch', () => {
-    const df = buildDiffFile(modified)
+    const df = buildDiffFile(modified, 'unified')
     expect(df).not.toBeNull()
   })
   it('returns null for files without patch', () => {
-    expect(buildDiffFile({ filename: 'img.png', status: 'added', additions: 0, deletions: 0 })).toBeNull()
+    expect(buildDiffFile({ filename: 'img.png', status: 'added', additions: 0, deletions: 0 }, 'unified')).toBeNull()
   })
 
   it('bare GitHub patch produces nonzero parsed diff lines', () => {
-    const df = buildDiffFile(modified)!
+    const df = buildDiffFile(modified, 'unified')!
     expect(df).not.toBeNull()
     expect(df.unifiedLineLength).toBeGreaterThan(0)
 
-    let addCount = 0
-    let delCount = 0
-    for (let i = 0; i < df.unifiedLineLength; i++) {
-      const line = df.getUnifiedLine(i)
-      if (line.diff?.type === DiffLineType.Add) addCount++
-      if (line.diff?.type === DiffLineType.Delete) delCount++
-    }
+    const { addCount, delCount } = countDiffLines(df)
     expect(addCount).toBe(1)
     expect(delCount).toBe(1)
   })
@@ -70,35 +76,21 @@ describe('EC-06b: additions-only / deletions-only diff line classification', () 
   }
 
   it('EC-06b: additions-only bare patch yields ≥2 Add-typed lines and 0 Delete-typed lines', () => {
-    const df = buildDiffFile(additionsOnly)!
+    const df = buildDiffFile(additionsOnly, 'unified')!
     expect(df).not.toBeNull()
     expect(df.unifiedLineLength).toBeGreaterThan(0)
 
-    let addCount = 0
-    let delCount = 0
-    for (let i = 0; i < df.unifiedLineLength; i++) {
-      const line = df.getUnifiedLine(i)
-      if (line.diff?.type === DiffLineType.Add) addCount++
-      if (line.diff?.type === DiffLineType.Delete) delCount++
-    }
-
+    const { addCount, delCount } = countDiffLines(df)
     expect(addCount).toBeGreaterThanOrEqual(2)
     expect(delCount).toBe(0)
   })
 
   it('EC-06b: deletions-only bare patch yields ≥2 Delete-typed lines and 0 Add-typed lines', () => {
-    const df = buildDiffFile(deletionsOnly)!
+    const df = buildDiffFile(deletionsOnly, 'unified')!
     expect(df).not.toBeNull()
     expect(df.unifiedLineLength).toBeGreaterThan(0)
 
-    let addCount = 0
-    let delCount = 0
-    for (let i = 0; i < df.unifiedLineLength; i++) {
-      const line = df.getUnifiedLine(i)
-      if (line.diff?.type === DiffLineType.Add) addCount++
-      if (line.diff?.type === DiffLineType.Delete) delCount++
-    }
-
+    const { addCount, delCount } = countDiffLines(df)
     expect(delCount).toBeGreaterThanOrEqual(2)
     expect(addCount).toBe(0)
   })
