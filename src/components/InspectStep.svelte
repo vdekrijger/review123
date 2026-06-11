@@ -6,6 +6,7 @@
   import { draftKey } from '../lib/drafts/drafts.svelte'
   import { track } from '../lib/analytics/analytics'
   import type { AttentionResult } from '../lib/ai/schemas'
+  import type { createViewedStore } from '../lib/viewed/viewed.svelte'
 
   let {
     files,
@@ -15,6 +16,7 @@
     draftStore,
     attention = null,
     readingOrder = [],
+    viewedStore = null,
   }: {
     files: PrFile[]
     changedFiles: number
@@ -23,6 +25,7 @@
     draftStore: ReturnType<typeof createDraftStore> | null
     attention?: AttentionResult | null
     readingOrder?: string[]
+    viewedStore?: ReturnType<typeof createViewedStore> | null
   } = $props()
 
   function draftsForFile(path: string) {
@@ -107,6 +110,9 @@
         drafts={draftsForFile(file.filename)}
         onAddDraft={(line, side, body) => handleAddDraft(file.filename, line, side, body)}
         onRemoveDraft={(line, side) => handleRemoveDraft(file.filename, line, side)}
+        viewed={viewedStore?.isViewed(file.filename, file.patch) ?? false}
+        changedSinceViewed={viewedStore?.changedSinceViewed(file.filename, file.patch) ?? false}
+        onToggleViewed={() => viewedStore?.toggle(file.filename, file.patch)}
       />
     </div>
   {/each}

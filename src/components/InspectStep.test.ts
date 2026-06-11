@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import InspectStep from './InspectStep.svelte'
 import type { AttentionResult } from '../lib/ai/schemas'
 import type { PrFile } from '../lib/github/types'
+import { createViewedStore } from '../lib/viewed/viewed.svelte'
 
 // Minimal canvas stub so FileDiff doesn't throw in jsdom
 Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
@@ -13,10 +14,16 @@ Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
   writable: true,
 })
 
+beforeEach(() => {
+  localStorage.clear()
+})
+
+const PATCH = '@@ -1 +1 @@\n-old\n+new'
+
 const makeFiles = (names: string[]): PrFile[] =>
   names.map(filename => ({
     filename, status: 'modified', additions: 1, deletions: 0,
-    patch: `@@ -1 +1 @@\n-old\n+new`,
+    patch: PATCH,
   }))
 
 describe('InspectStep ordering (EC-12e)', () => {
@@ -64,5 +71,38 @@ describe('InspectStep hotspot badge and test flag (EC-13c, EC-13d)', () => {
       readingOrder: [], hotspots: [{ path: 'ghost.ts', reason: 'x', level: 'low' }], testFlags: [{ path: 'ghost.ts', note: 'y' }],
     }
     expect(() => render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, attention, readingOrder: [] } })).not.toThrow()
+  })
+})
+
+describe('InspectStep — viewedStore wiring', () => {
+  it('renders Viewed checkboxes for each file when viewedStore is provided', () => {
+    const files = makeFiles(['src/a.ts', 'src/b.ts'])
+    const viewedStore = createViewedStore('owner/repo#1')
+    render(InspectStep, { props: { files, changedFiles: 2, mode: 'unified', onmode: () => {}, draftStore: null, viewedStore } })
+    const checkboxes = screen.getAllByRole('checkbox', { name: /mark .* as viewed/i })
+    expect(checkboxes).toHaveLength(2)
+  })
+
+  it('viewed file has is-collapsed article', () => {
+    const files = makeFiles(['src/a.ts'])
+    const viewedStore = createViewedStore('owner/repo#1')
+    // Mark the file as viewed before rendering
+    viewedStore.toggle('src/a.ts', PATCH)
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, viewedStore } })
+    expect(container.querySelector('article.file-diff.is-collapsed')).toBeInTheDocument()
+  })
+
+  it('unviewed file is NOT collapsed', () => {
+    const files = makeFiles(['src/a.ts'])
+    const viewedStore = createViewedStore('owner/repo#1')
+    // NOT toggled — not viewed
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, viewedStore } })
+    expect(container.querySelector('article.file-diff.is-collapsed')).not.toBeInTheDocument()
+  })
+
+  it('works without viewedStore (null) — no collapse, no checkbox error', () => {
+    const files = makeFiles(['src/a.ts'])
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, viewedStore: null } })
+    expect(container.querySelector('article.file-diff.is-collapsed')).not.toBeInTheDocument()
   })
 })
