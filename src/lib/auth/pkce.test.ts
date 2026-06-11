@@ -8,8 +8,11 @@ describe('pkce', () => {
       expect(v).toMatch(/^[A-Za-z0-9\-._~]+$/)
     })
 
-    it('length is between 43 and 128 chars', () => {
+    it('length is 86 chars (64 bytes base64url-encoded)', () => {
       const v = generateVerifier()
+      // 64 random bytes → base64url without padding → exactly 86 characters
+      expect(v.length).toBe(86)
+      // Also confirms it is within RFC 7636 §4.1 range (43–128)
       expect(v.length).toBeGreaterThanOrEqual(43)
       expect(v.length).toBeLessThanOrEqual(128)
     })

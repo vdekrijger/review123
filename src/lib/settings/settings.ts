@@ -97,9 +97,12 @@ export function saveTokens(patch: { githubPat?: string | null; deepseekKey?: str
 
 export function saveGithubAuth(auth: GithubAuth | null): void {
   const update: Partial<Settings> = { githubAuth: auth }
-  // Keep githubPat in sync for backward compat (Task 9 will clean this up)
   if (auth && auth.method === 'pat') {
+    // Keep githubPat in sync for backward compat
     update.githubPat = auth.token
+  } else if (auth && auth.method === 'oauth') {
+    // Clear any stale legacy PAT so no plaintext token lingers at rest
+    update.githubPat = null
   } else if (auth === null) {
     update.githubPat = null
   }

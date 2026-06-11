@@ -3,21 +3,20 @@
  * Uses WebCrypto (available in all modern browsers and Node 19+/jsdom).
  */
 
-/** URL-safe characters for the verifier (unreserved chars per RFC 3986) */
-const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'
-
 /**
  * Generate a cryptographically random code verifier.
- * Length: 43–128 URL-safe characters (RFC 7636 §4.1).
+ * Encodes 64 random bytes as base64url → 86 URL-safe characters,
+ * which is within the 43–128 range required by RFC 7636 §4.1.
+ * Using base64url avoids modulo bias and produces a uniform distribution
+ * over the RFC 3986 unreserved character set.
  */
 export function generateVerifier(): string {
-  // 96 bytes → 96 chars (all within 0-63 range after modulo CHARS.length=66)
-  // We use exactly 96 bytes → string length 96 (within 43-128)
-  const bytes = new Uint8Array(96)
+  const bytes = new Uint8Array(64)
   crypto.getRandomValues(bytes)
-  return Array.from(bytes)
-    .map((b) => CHARS[b % CHARS.length])
-    .join('')
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
 }
 
 /**

@@ -142,6 +142,12 @@ describe('completeSignIn', () => {
     const params = new URLSearchParams({ code: 'abc', state: stored.state })
     const result = await completeSignIn(params)
     expect(result).toEqual({ ok: true })
+    const { getSettings } = await import('../settings/settings')
+    expect(getSettings().githubAuth).toEqual({
+      token: 'gho_TOKEN123',
+      method: 'oauth',
+      scopes: ['public_repo'],
+    })
   })
 
   it('success path: clears sessionStorage after completion', async () => {
@@ -153,6 +159,19 @@ describe('completeSignIn', () => {
     }))
     const params = new URLSearchParams({ code: 'abc', state: stored.state })
     await completeSignIn(params)
+    expect(sessionStorage.getItem('review123:oauth')).toBeNull()
+  })
+
+  it('failed exchange: sessionStorage entry is cleared even when exchange fails', async () => {
+    const stored = await setupValidSession('public_repo')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+    }))
+    const params = new URLSearchParams({ code: 'abc', state: stored.state })
+    const result = await completeSignIn(params)
+    expect(result).toEqual({ ok: false, error: 'exchange-failed' })
     expect(sessionStorage.getItem('review123:oauth')).toBeNull()
   })
 

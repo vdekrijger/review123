@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens } from './settings'
+import { getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens, saveGithubAuth } from './settings'
 
 describe('settings', () => {
   beforeEach(() => localStorage.clear())
@@ -89,5 +89,14 @@ describe('settings', () => {
     setGithubPat('ghp_test')
     setGithubPat(null)
     expect(getSettings().githubAuth).toBeNull()
+  })
+
+  it('saveGithubAuth(oauth) clears stale githubPat so no plaintext PAT lingers at rest', () => {
+    setGithubPat('ghp_old')
+    expect(getSettings().githubPat).toBe('ghp_old')
+    saveGithubAuth({ token: 'gho_new', method: 'oauth', scopes: ['public_repo'] })
+    const s = getSettings()
+    expect(s.githubPat).toBeNull()
+    expect(s.githubAuth).toEqual({ token: 'gho_new', method: 'oauth', scopes: ['public_repo'] })
   })
 })

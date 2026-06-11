@@ -66,74 +66,79 @@ export async function completeSignIn(params: URLSearchParams): Promise<SignInRes
   const incomingState = params.get('state')
   const storedState = session?.state ?? null
 
-  // EC-02d: state mismatch (includes case where no session at all)
-  if (!incomingState || incomingState !== storedState) {
-    return { ok: false, error: 'state-mismatch' }
-  }
-
-  // EC-02b: user denied
-  if (params.get('error') === 'access_denied') {
-    return { ok: false, error: 'denied' }
-  }
-
-  // EC-02a: missing code
-  const code = params.get('code')
-  if (!code) {
-    return { ok: false, error: 'missing-code' }
-  }
-
-  // EC-02c: verifier missing (shouldn't happen if state matched, but guard anyway)
-  const verifier = session?.verifier
-  if (!verifier) {
-    return { ok: false, error: 'no-verifier' }
-  }
-
-  const scope = session?.scope ?? ''
-
-  // Exchange code for token
-  let res: Response
+  // Always clear the session key when completeSignIn exits, regardless of outcome.
+  // A failed exchange means the code is dead; user must restart sign-in anyway.
   try {
-    res = await fetch(EXCHANGE_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, code_verifier: verifier }),
+    // EC-02d: state mismatch (includes case where no session at all)
+    if (!incomingState || incomingState !== storedState) {
+      return { ok: false, error: 'state-mismatch' }
+    }
+
+    // EC-02b: user denied
+    if (params.get('error') === 'access_denied') {
+      return { ok: false, error: 'denied' }
+    }
+
+    // EC-02a: missing code
+    const code = params.get('code')
+    if (!code) {
+      return { ok: false, error: 'missing-code' }
+    }
+
+    // EC-02c: verifier missing (shouldn't happen if state matched, but guard anyway)
+    const verifier = session?.verifier
+    if (!verifier) {
+      return { ok: false, error: 'no-verifier' }
+    }
+
+    const scope = session?.scope ?? ''
+
+    // Exchange code for token
+    let res: Response
+    try {
+      res = await fetch(EXCHANGE_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, code_verifier: verifier }),
+      })
+    } catch {
+      return { ok: false, error: 'exchange-failed' }
+    }
+
+    // EC-02e: non-200
+    if (!res.ok) {
+      return { ok: false, error: 'exchange-failed' }
+    }
+
+    let body: Record<string, unknown>
+    try {
+      body = (await res.json()) as Record<string, unknown>
+    } catch {
+      return { ok: false, error: 'exchange-failed' }
+    }
+
+    // EC-02k: GitHub error in body
+    if (body['error']) {
+      return { ok: false, error: 'exchange-failed' }
+    }
+
+    // EC-02e: missing access_token
+    const token = body['access_token']
+    if (typeof token !== 'string' || !token) {
+      return { ok: false, error: 'exchange-failed' }
+    }
+
+    // Success: store token
+    saveGithubAuth({
+      token,
+      method: 'oauth',
+      scopes: scope ? scope.split(',').map((s) => s.trim()).filter(Boolean) : [],
     })
-  } catch {
-    return { ok: false, error: 'exchange-failed' }
+
+    return { ok: true }
+  } finally {
+    sessionStorage.removeItem(SESSION_KEY)
   }
-
-  // EC-02e: non-200
-  if (!res.ok) {
-    return { ok: false, error: 'exchange-failed' }
-  }
-
-  let body: Record<string, unknown>
-  try {
-    body = (await res.json()) as Record<string, unknown>
-  } catch {
-    return { ok: false, error: 'exchange-failed' }
-  }
-
-  // EC-02k: GitHub error in body
-  if (body['error']) {
-    return { ok: false, error: 'exchange-failed' }
-  }
-
-  // EC-02e: missing access_token
-  const token = body['access_token']
-  if (typeof token !== 'string' || !token) {
-    return { ok: false, error: 'exchange-failed' }
-  }
-
-  // Success: store token and clear session
-  saveGithubAuth({
-    token,
-    method: 'oauth',
-    scopes: scope ? scope.split(',').map((s) => s.trim()).filter(Boolean) : [],
-  })
-  sessionStorage.removeItem(SESSION_KEY)
-
-  return { ok: true }
 }
 
 /**

@@ -46,8 +46,8 @@
         const cursorPos = start + prefix.length
         ta.setSelectionRange(cursorPos, cursorPos)
       } else {
-        // Had selection: place cursor after the whole wrapped block
-        ta.setSelectionRange(start, end + prefix.length + suffix.length)
+        // Had selection: highlight only the original text (between the markers)
+        ta.setSelectionRange(start + prefix.length, end + prefix.length)
       }
       ta.focus()
     })
