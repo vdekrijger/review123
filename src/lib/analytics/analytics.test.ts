@@ -48,4 +48,10 @@ describe('analytics privacy choke-point', () => {
     capture.mockImplementation(() => { throw new Error('blocked') })
     expect(() => track('pr_loaded', { visibility: 'public' })).not.toThrow()
   })
+
+  it('rejects unknown props at compile time', () => {
+    // @ts-expect-error — typo'd prop must not compile
+    track('pr_loaded', { fil_count: 12 })
+    expect(capture).not.toHaveBeenCalledWith('pr_loaded', expect.objectContaining({ fil_count: 12 }))
+  })
 })

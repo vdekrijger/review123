@@ -6,8 +6,9 @@ export type ParseResult = { ok: true; value: PrRef } | { ok: false; error: Parse
 const SEGMENT = /^[A-Za-z0-9_.-]+$/
 
 export function parsePrUrl(input: string | null | undefined): ParseResult {
-  if (typeof input !== 'string' || input.trim() === '') return { ok: false, error: 'empty' }
+  if (typeof input !== 'string') return { ok: false, error: 'empty' }
   const raw = input.trim()
+  if (!raw) return { ok: false, error: 'empty' }
   if (raw.length > 2048) return { ok: false, error: 'not-a-pr-url' }
   let url: URL
   try {

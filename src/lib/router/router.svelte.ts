@@ -14,18 +14,14 @@ export function matchRoute(pathname: string): Route {
   return { name: 'not-found' }
 }
 
-function currentRoute(): Route {
-  return matchRoute(location.pathname)
-}
-
 export const router = $state<{ route: Route }>({ route: { name: 'landing' } })
 
 export function startRouter(): void {
-  router.route = currentRoute()
-  window.addEventListener('popstate', () => { router.route = currentRoute() })
+  router.route = matchRoute(location.pathname)
+  window.addEventListener('popstate', () => { router.route = matchRoute(location.pathname) })
 }
 
 export function navigate(path: string): void {
   history.pushState(null, '', path)
-  router.route = currentRoute()
+  router.route = matchRoute(path)
 }

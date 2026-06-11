@@ -9,11 +9,23 @@ export interface Settings {
 
 const DEFAULTS: Settings = { githubPat: null, deepseekKey: null, diffMode: 'unified' }
 
+function coerce(raw: unknown): Partial<Settings> {
+  if (typeof raw !== 'object' || raw === null) return {}
+  const obj = raw as Record<string, unknown>
+  const result: Partial<Settings> = {}
+  const diffMode = obj['diffMode']
+  if (diffMode === 'unified' || diffMode === 'split') result.diffMode = diffMode
+  const githubPat = obj['githubPat']
+  if (typeof githubPat === 'string' || githubPat === null) result.githubPat = githubPat
+  const deepseekKey = obj['deepseekKey']
+  if (typeof deepseekKey === 'string' || deepseekKey === null) result.deepseekKey = deepseekKey
+  return result
+}
+
 export function getSettings(): Settings {
   try {
     const raw = localStorage.getItem(KEY)
-    if (!raw) return { ...DEFAULTS }
-    return { ...DEFAULTS, ...JSON.parse(raw) }
+    return { ...DEFAULTS, ...coerce(raw ? JSON.parse(raw) : {}) }
   } catch {
     return { ...DEFAULTS }
   }

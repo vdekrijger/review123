@@ -17,10 +17,10 @@ const EVENTS = {
 } as const
 
 export type EventName = keyof typeof EVENTS
-export type EventProps = Record<string, string | number | boolean>
+type AllowedProps<E extends EventName> = Partial<Record<(typeof EVENTS)[E][number], string | number | boolean>>
 
 type CaptureFn = (event: string, props: Record<string, unknown>) => void
-let capture: CaptureFn = (e, p) => { posthog.capture(e, p) }
+let capture: CaptureFn = posthog.capture.bind(posthog)
 export function _setCaptureForTest(fn: CaptureFn): void { capture = fn }
 
 export function initAnalytics(): void {
@@ -33,11 +33,11 @@ export function initAnalytics(): void {
   })
 }
 
-export function track(event: EventName, props: EventProps = {}): void {
+export function track<E extends EventName>(event: E, props: AllowedProps<E> = {} as AllowedProps<E>): void {
   const allowed = EVENTS[event] as readonly string[] | undefined
-  if (!allowed) return
+  if (!allowed) return // defense-in-depth: guard against as-never bypasses at runtime
   const safe: Record<string, unknown> = {}
-  for (const k of allowed) if (k in props) safe[k] = props[k]
+  for (const k of allowed) if (k in (props as Record<string, unknown>)) safe[k] = (props as Record<string, unknown>)[k]
   try {
     capture(event, safe)
   } catch {

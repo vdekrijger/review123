@@ -39,4 +39,11 @@ describe('settings', () => {
     localStorage.setItem('review123:settings', '{not json')
     expect(getSettings()).toEqual({ githubPat: null, deepseekKey: null, diffMode: 'unified' })
   })
+
+  it('coerces invalid field types back to defaults (shape validation)', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ diffMode: 'wat', githubPat: 42 }))
+    const s = getSettings()
+    expect(s.diffMode).toBe('unified')
+    expect(s.githubPat).toBeNull()
+  })
 })
