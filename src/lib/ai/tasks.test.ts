@@ -69,11 +69,6 @@ describe('summarizePrompt', () => {
     expect(user).toContain('unique-context-text-abc')
   })
 
-  it('system prompt contains "Suggested reading order:" heading instruction', () => {
-    const { system } = summarizePrompt(makeCtx())
-    expect(system).toContain('Suggested reading order:')
-  })
-
   it('system prompt does NOT instruct JSON output (streaming plain text)', () => {
     const { system } = summarizePrompt(makeCtx())
     // summarize is plain text, not JSON
@@ -197,6 +192,16 @@ describe('diagramsPrompt', () => {
     // The JSON snippet in the example has nodes and edges
     expect(system).toContain('"nodes"')
     expect(system).toContain('"edges"')
+  })
+
+  it('system prompt instructs max 12 nodes per graph', () => {
+    const { system } = diagramsPrompt(makeCtx())
+    expect(system).toMatch(/12\s+nodes|12 nodes/i)
+  })
+
+  it('system prompt instructs labels ≤ 3 words', () => {
+    const { system } = diagramsPrompt(makeCtx())
+    expect(system).toMatch(/3 words|three words/i)
   })
 })
 
@@ -444,5 +449,123 @@ Trailing prose after blank line.`
   it('is case-insensitive for the heading', () => {
     const text = 'Prose.\n\nSUGGESTED READING ORDER:\nsrc/a.ts'
     expect(stripReadingOrder(text)).toBe('Prose.')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PROMPT_VERSION ≥ 3 (bumped for sentinel contract)
+// ---------------------------------------------------------------------------
+
+describe('PROMPT_VERSION v3', () => {
+  it('is at least 3 (bumped for sentinel reading-order contract)', () => {
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(3)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// summarizePrompt — sentinel instructions
+// ---------------------------------------------------------------------------
+
+describe('summarizePrompt v3 sentinel contract', () => {
+  it('system prompt instructs ending with ===READING-ORDER=== sentinel', () => {
+    const { system } = summarizePrompt(makeCtx())
+    expect(system).toContain('===READING-ORDER===')
+    expect(system).toContain('===END===')
+  })
+
+  it('system prompt instructs NOT mentioning reading order in prose', () => {
+    const { system } = summarizePrompt(makeCtx())
+    expect(system.toLowerCase()).toMatch(/do not mention reading order|not.*mention.*reading order|no.*reading order.*prose/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// parseReadingOrder — sentinel block
+// ---------------------------------------------------------------------------
+
+describe('parseReadingOrder — sentinel block', () => {
+  it('parses sentinel block correctly', () => {
+    const text = `Summary prose here.
+
+===READING-ORDER===
+src/lib/router/router.ts
+src/lib/router/parse.ts
+src/App.svelte
+===END===`
+    expect(parseReadingOrder(text)).toEqual([
+      'src/lib/router/router.ts',
+      'src/lib/router/parse.ts',
+      'src/App.svelte',
+    ])
+  })
+
+  it('sentinel parse returns [] when sentinel absent', () => {
+    const text = 'This is prose without any reading order block.'
+    expect(parseReadingOrder(text)).toEqual([])
+  })
+
+  it('sentinel parse handles empty block between sentinels', () => {
+    const text = '===READING-ORDER===\n===END==='
+    expect(parseReadingOrder(text)).toEqual([])
+  })
+
+  it('legacy heading fallback still works for cached v2 outputs', () => {
+    const text = `Prose.\n\nSuggested reading order:\nsrc/a.ts\nsrc/b.ts`
+    expect(parseReadingOrder(text)).toEqual(['src/a.ts', 'src/b.ts'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// stripReadingOrder — sentinel block
+// ---------------------------------------------------------------------------
+
+describe('stripReadingOrder — sentinel block', () => {
+  it('strips sentinel block from summary', () => {
+    const text = `This PR adds caching.
+
+===READING-ORDER===
+src/lib/cache/cache.ts
+src/routes/Review.svelte
+===END===`
+    const result = stripReadingOrder(text)
+    expect(result).toBe('This PR adds caching.')
+    expect(result).not.toContain('===READING-ORDER===')
+    expect(result).not.toContain('===END===')
+    expect(result).not.toContain('src/lib/cache/cache.ts')
+  })
+
+  it('sentinel strip: prose before sentinel is preserved', () => {
+    const text = `Important context.\n\nMore prose.\n\n===READING-ORDER===\nsrc/a.ts\n===END===`
+    const result = stripReadingOrder(text)
+    expect(result).toContain('Important context.')
+    expect(result).toContain('More prose.')
+  })
+
+  it('legacy heading strip still works for cached v2 outputs', () => {
+    const text = `Summary.\n\nSuggested reading order:\nsrc/a.ts\nsrc/b.ts`
+    const result = stripReadingOrder(text)
+    expect(result).toBe('Summary.')
+  })
+
+  it('strips trailing bare-path-run (≥3 consecutive lines) defensively', () => {
+    const text = `This PR refactors routing.\n\nsrc/lib/router.ts\nsrc/App.svelte\nsrc/index.ts`
+    const result = stripReadingOrder(text)
+    expect(result).not.toContain('src/lib/router.ts')
+    expect(result).not.toContain('src/App.svelte')
+    expect(result).not.toContain('src/index.ts')
+    expect(result).toContain('This PR refactors routing.')
+  })
+
+  it('does NOT strip trailing section with only 2 bare paths (not ≥3)', () => {
+    const text = `This PR refactors routing.\n\nsrc/lib/router.ts\nsrc/App.svelte`
+    const result = stripReadingOrder(text)
+    expect(result).toContain('src/lib/router.ts')
+  })
+
+  it('prose lines with spaces are NOT stripped by trailing-path heuristic', () => {
+    const text = `This PR is great.\n\nIt has many features.\nAnd some more text.\nWith three lines.`
+    const result = stripReadingOrder(text)
+    expect(result).toContain('It has many features.')
+    expect(result).toContain('And some more text.')
   })
 })

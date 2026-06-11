@@ -137,7 +137,7 @@ function makeDeepSeekStreamResponse(text: string): string {
 }
 
 const SUMMARY_TEXT =
-  'This PR adds a new feature. Suggested reading order:\n- src/feature.ts\n- src/old-utils.ts'
+  'This PR adds a new feature.\n\n===READING-ORDER===\nsrc/feature.ts\nsrc/old-utils.ts\n===END==='
 
 const ATTENTION_RESULT = {
   readingOrder: ['src/feature.ts', 'src/old-utils.ts'],
