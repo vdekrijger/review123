@@ -18,6 +18,10 @@ export const authState = {
   get auth() {
     return holder.auth
   },
+  /** true when any GitHub auth (OAuth or PAT) is present */
+  get ok(): boolean {
+    return holder.auth !== null
+  },
 }
 
 export function refreshAuthState(): void {

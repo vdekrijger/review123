@@ -21,6 +21,10 @@
     return 'Using PAT'
   })
 
+  // Advanced disclosure is open by default only when PAT is the active auth method,
+  // so existing PAT users aren't confused by a closed section hiding their token.
+  const advancedOpen = $derived(authState.auth?.method === 'pat')
+
   function save() {
     try {
       const hadPat = !!current.githubPat
@@ -41,12 +45,15 @@
 <dialog open aria-label="Settings">
   <h2>Settings</h2>
   <p class="auth-status">{authStatusLine}</p>
-  <label>GitHub token (PAT)
-    <input type="password" bind:value={pat} autocomplete="off" placeholder="github_pat_… (fine-grained, repo-scoped recommended)" />
-  </label>
   <label>DeepSeek API key
     <input type="password" bind:value={deepseek} autocomplete="off" placeholder="sk-…" />
   </label>
+  <details open={advancedOpen}>
+    <summary>Advanced: use a personal access token instead</summary>
+    <label>GitHub token (PAT)
+      <input type="password" bind:value={pat} autocomplete="off" placeholder="github_pat_… (fine-grained, repo-scoped recommended)" />
+    </label>
+  </details>
   <p class="hint">Keys are stored only in this browser (localStorage) and sent only to their own services.</p>
   {#if error}<p role="alert">{error}</p>{/if}
   <button onclick={save}>Save</button>
@@ -55,4 +62,7 @@
 
 <style>
   .auth-status { font-size: 0.9em; opacity: 0.8; margin-bottom: 0.75rem; }
+  details { margin: 0.5rem 0; }
+  details summary { cursor: pointer; font-size: 0.9em; opacity: 0.8; }
+  details label { display: block; margin-top: 0.5rem; }
 </style>

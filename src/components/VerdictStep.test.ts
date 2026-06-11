@@ -7,11 +7,12 @@
  * Auth seam: setGithubPat / saveGithubAuth on localStorage (jsdom).
  * IndexedDB: undefined in jsdom → createDraftStore falls back to in-memory.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/svelte'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, waitFor, act } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import VerdictStep from './VerdictStep.svelte'
 import { setGithubPat, saveGithubAuth } from '../lib/settings/settings'
+import { _resetAuthStateForTest } from '../lib/auth/authState.svelte'
 import { createDraftStore } from '../lib/drafts/drafts.svelte'
 import type { PrRef } from '../lib/github/parse'
 import type { SubmitOutcome } from '../lib/github/review'
@@ -50,6 +51,7 @@ function signIn() {
 
 function signOut() {
   localStorage.clear()
+  _resetAuthStateForTest()
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +317,67 @@ describe('VerdictStep', () => {
       expect(screen.getByRole('button', { name: /submit review/i })).toBeInTheDocument()
       // No sign-in prompt
       expect(screen.queryByText(/sign in with github/i)).toBeNull()
+    })
+  })
+
+  // EC-REACT: reactive auth — signing in AFTER render flips prompt→form without remount
+  describe('reactive auth (EC-REACT)', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it('form appears without remount when saveGithubAuth is called after initial signed-out render', async () => {
+      // Render signed-out first
+      render(VerdictStep, {
+        props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit },
+      })
+
+      // Signed-out prompt is visible
+      expect(screen.getByText(/sign in with github/i)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /submit review/i })).toBeNull()
+
+      // Now sign in reactively (simulates OAuth callback completing)
+      await act(async () => {
+        saveGithubAuth({ token: 'gho_reactive_token', method: 'oauth', scopes: ['public_repo'] })
+      })
+
+      // Form must appear without re-render
+      expect(screen.getByRole('button', { name: /submit review/i })).toBeInTheDocument()
+      // Prompt must be gone
+      expect(screen.queryByText(/sign in with github/i)).toBeNull()
+    })
+
+    it('shows a real "Sign in with GitHub" button (not just text) when VITE_GITHUB_CLIENT_ID is set', () => {
+      vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'test_client_id')
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit },
+      })
+
+      // Should be an actual button element, not just paragraph text
+      expect(screen.getByRole('button', { name: /sign in with github/i })).toBeInTheDocument()
+    })
+
+    it('sign-in button sets returnTo to location.pathname so user returns to PR after OAuth', async () => {
+      vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'test_client_id')
+      // Set the current location to a PR review path
+      Object.defineProperty(globalThis, 'location', {
+        value: { pathname: '/review/alice/widgets/42', origin: 'http://localhost', assign: vi.fn() },
+        writable: true,
+        configurable: true,
+      })
+      sessionStorage.clear()
+
+      const user = userEvent.setup()
+      render(VerdictStep, {
+        props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit },
+      })
+
+      const btn = screen.getByRole('button', { name: /sign in with github/i })
+      await user.click(btn)
+
+      // returnTo must be stored in sessionStorage so AuthCallback navigates back
+      expect(sessionStorage.getItem('review123:returnTo')).toBe('/review/alice/widgets/42')
     })
   })
 })
