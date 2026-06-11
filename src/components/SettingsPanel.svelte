@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSettings, setGithubPat, setDeepseekKey } from '../lib/settings/settings'
+  import { getSettings, saveTokens } from '../lib/settings/settings'
   import { track } from '../lib/analytics/analytics'
 
   let { onclose }: { onclose: () => void } = $props()
@@ -12,8 +12,10 @@
     try {
       const hadPat = !!current.githubPat
       const hadKey = !!current.deepseekKey
-      setGithubPat(pat.trim() === '' ? null : pat)
-      setDeepseekKey(deepseek.trim() === '' ? null : deepseek)
+      saveTokens({
+        githubPat: pat.trim() === '' ? null : pat,
+        deepseekKey: deepseek.trim() === '' ? null : deepseek,
+      })
       if (!hadPat && pat.trim()) track('settings_key_added', { service: 'github' })
       if (!hadKey && deepseek.trim()) track('settings_key_added', { service: 'deepseek' })
       onclose()

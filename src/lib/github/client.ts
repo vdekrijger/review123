@@ -28,9 +28,14 @@ export async function ghFetch<T>(path: string, init: RequestInit = {}): Promise<
 // Returns one page plus the rel="next" link for paginated endpoints.
 export async function ghFetchPage<T>(pathOrUrl: string): Promise<{ body: T; next: string | null }> {
   const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${BASE}${pathOrUrl}`
+  const parsedHost = new URL(url).hostname
+  const headers = parsedHost === 'api.github.com' ? baseHeaders() : {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  }
   let res: Response
   try {
-    res = await fetch(url, { headers: baseHeaders() })
+    res = await fetch(url, { headers })
   } catch {
     throw new GithubApiError({ kind: 'network' })
   }
@@ -50,6 +55,5 @@ function mapError(res: Response): GithubError {
     }
     return { kind: 'forbidden' }
   }
-  if (res.status >= 500) return { kind: 'server', status: res.status }
   return { kind: 'server', status: res.status }
 }

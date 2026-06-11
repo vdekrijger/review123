@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { getSettings, setGithubPat, setDeepseekKey, setDiffMode } from './settings'
+import { getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens } from './settings'
 
 describe('settings', () => {
   beforeEach(() => localStorage.clear())
@@ -45,5 +45,20 @@ describe('settings', () => {
     const s = getSettings()
     expect(s.diffMode).toBe('unified')
     expect(s.githubPat).toBeNull()
+  })
+
+  it('saveTokens with valid githubPat and null deepseekKey stores both atomically', () => {
+    saveTokens({ githubPat: 'ghp_abc', deepseekKey: null })
+    const s = getSettings()
+    expect(s.githubPat).toBe('ghp_abc')
+    expect(s.deepseekKey).toBeNull()
+  })
+
+  it('saveTokens throws and leaves storage completely unchanged when deepseekKey is whitespace', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ githubPat: 'ghp_original', deepseekKey: 'sk_original' }))
+    expect(() => saveTokens({ githubPat: 'x', deepseekKey: '  ' })).toThrow()
+    const s = getSettings()
+    expect(s.githubPat).toBe('ghp_original')
+    expect(s.deepseekKey).toBe('sk_original')
   })
 })

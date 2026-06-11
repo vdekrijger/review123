@@ -82,4 +82,20 @@ describe('ghFetchPage', () => {
     expect(result.body).toEqual([3, 4])
     expect(result.next).toBeNull()
   })
+
+  it('does NOT send Authorization header to non-github hosts (auth leak guard)', async () => {
+    const f = mockFetch(200, {})
+    vi.stubGlobal('fetch', f)
+    localStorage.setItem('review123:settings', JSON.stringify({ githubPat: 'ghp_secret' }))
+    await ghFetchPage('https://evil.example.com/x')
+    expect(f.mock.calls[0][1].headers.Authorization).toBeUndefined()
+  })
+
+  it('DOES send Authorization header to api.github.com (auth guard passthrough)', async () => {
+    const f = mockFetch(200, {})
+    vi.stubGlobal('fetch', f)
+    localStorage.setItem('review123:settings', JSON.stringify({ githubPat: 'ghp_secret' }))
+    await ghFetchPage('https://api.github.com/x?page=2')
+    expect(f.mock.calls[0][1].headers.Authorization).toBe('Bearer ghp_secret')
+  })
 })

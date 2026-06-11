@@ -35,13 +35,22 @@ function save(patch: Partial<Settings>): void {
   localStorage.setItem(KEY, JSON.stringify({ ...getSettings(), ...patch }))
 }
 
-function setToken(field: 'githubPat' | 'deepseekKey', value: string | null): void {
-  if (value === null) return save({ [field]: null })
+function validateToken(field: 'githubPat' | 'deepseekKey', value: string | null): string | null {
+  if (value === null) return null
   const trimmed = value.trim()
   if (!trimmed) throw new Error(`${field} must not be empty`)
-  save({ [field]: trimmed })
+  return trimmed
 }
 
-export const setGithubPat = (v: string | null) => setToken('githubPat', v)
-export const setDeepseekKey = (v: string | null) => setToken('deepseekKey', v)
+export function saveTokens(patch: { githubPat?: string | null; deepseekKey?: string | null }): void {
+  const githubPat = 'githubPat' in patch ? validateToken('githubPat', patch.githubPat ?? null) : undefined
+  const deepseekKey = 'deepseekKey' in patch ? validateToken('deepseekKey', patch.deepseekKey ?? null) : undefined
+  const update: Partial<Settings> = {}
+  if ('githubPat' in patch) update.githubPat = githubPat ?? null
+  if ('deepseekKey' in patch) update.deepseekKey = deepseekKey ?? null
+  save(update)
+}
+
+export const setGithubPat = (v: string | null) => saveTokens({ githubPat: v })
+export const setDeepseekKey = (v: string | null) => saveTokens({ deepseekKey: v })
 export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
