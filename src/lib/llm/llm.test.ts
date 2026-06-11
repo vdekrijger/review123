@@ -264,6 +264,29 @@ describe('llmStream — basic flow', () => {
 })
 
 // ---------------------------------------------------------------------------
+// llmStream — SSE `data:` without trailing space (nit fix regression test)
+// ---------------------------------------------------------------------------
+
+describe('llmStream — data: without trailing space', () => {
+  beforeEach(() => {
+    setDeepseekKey('sk-test')
+  })
+
+  it('accepts data: with no space between colon and payload', async () => {
+    // Build a raw SSE line with no space after "data:"
+    const payload = JSON.stringify({ choices: [{ delta: { content: 'nospace' } }] })
+    const noSpaceLine = `data:${payload}\n\n`
+    const chunks = [noSpaceLine, DONE_LINE]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(makeStream(chunks), { status: 200 })))
+
+    const deltas: string[] = []
+    const result = await llmStream({ system: 's', user: 'u' }, (d) => deltas.push(d))
+    expect(result).toBe('nospace')
+    expect(deltas).toEqual(['nospace'])
+  })
+})
+
+// ---------------------------------------------------------------------------
 // llmStream — SSE chunk boundary (delta split across two chunks)
 // ---------------------------------------------------------------------------
 

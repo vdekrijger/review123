@@ -273,6 +273,8 @@ export async function fetchContents(
 // Concurrency runner (cap = max simultaneous in-flight promises)
 // ---------------------------------------------------------------------------
 
+// NOTE: first rejection from fn() rejects the whole batch immediately; any
+// already in-flight GETs continue to completion (read-only, no cancellation needed).
 async function runWithConcurrency<T>(
   cap: number,
   items: T[],

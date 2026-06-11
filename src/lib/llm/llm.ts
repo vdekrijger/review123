@@ -170,9 +170,10 @@ export async function llmStream(
         buffer = buffer.slice(newlineIdx + 1)
 
         const trimmed = line.trimEnd()
-        if (!trimmed.startsWith('data: ')) continue
+        // Accept both `data: ` (with space) and `data:` (without space) per SSE spec
+        if (!trimmed.startsWith('data:')) continue
 
-        const payload = trimmed.slice(6) // 'data: '.length === 6
+        const payload = trimmed.slice(5).replace(/^ /, '') // strip one optional leading space
         if (payload === '[DONE]') {
           done_received = true
           break
