@@ -1,20 +1,29 @@
 <script lang="ts">
   import { createPrLoad } from '../lib/review/loadPr.svelte'
   import Stepper, { type Step } from '../components/Stepper.svelte'
-  import FileDiff from '../components/FileDiff.svelte'
+  import InspectStep from '../components/InspectStep.svelte'
   import { getSettings, setDiffMode, type DiffMode } from '../lib/settings/settings'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
-  import { createDraftStore, draftKey } from '../lib/drafts/drafts.svelte'
-  import { track } from '../lib/analytics/analytics'
+  import { createDraftStore } from '../lib/drafts/drafts.svelte'
   import VerdictStep from '../components/VerdictStep.svelte'
 
   const RETURN_KEY = 'review123:returnTo'
 
   let { owner, repo, number }: { owner: string; repo: string; number: number } = $props()
+  // Relies on the {#key} remount in App.svelte: props never change within a
+  // mount, so createPrLoad is called exactly once per PR navigation. Removing
+  // the key would cause duplicate fetches + stale draft store.
   const load = $derived.by(() => createPrLoad({ owner, repo, number }))
   let step = $state<Step>(1)
   let mode = $state<DiffMode>(getSettings().diffMode)
   function setMode(m: DiffMode) { mode = m; setDiffMode(m) }
+
+  /** Clamp n to 1..3 and assign to step */
+  function goStep(n: number) {
+    step = Math.max(1, Math.min(3, n)) as Step
+  }
+  const canPrev = $derived(step > 1)
+  const canNext = $derived(step < 3)
 
   // ---- Draft store — created once per PR+headSha (after the PR loads) -----
   // We keep a single store instance; it persists across step switches.
@@ -28,28 +37,11 @@
       const prKey = `${owner}/${repo}#${number}@${load.state.meta.headSha}`
       const store = createDraftStore(prKey)
       draftStore = store
+      // Un-awaited intentionally: causes a cosmetic 0-count flash on mount
+      // but avoids blocking render. Load completes asynchronously.
       store.load()
     }
   })
-
-  /** Drafts for a given file path */
-  function draftsForFile(path: string) {
-    return draftStore?.drafts.filter((d) => d.path === path) ?? []
-  }
-
-  async function handleAddDraft(path: string, line: number, side: 'LEFT' | 'RIGHT', body: string) {
-    if (!draftStore) return
-    await draftStore.upsert({ path, line, side, body })
-    track('comment_drafted')
-  }
-
-  async function handleRemoveDraft(path: string, line: number, side: 'LEFT' | 'RIGHT') {
-    if (!draftStore) return
-    const draft = draftStore.drafts.find((d) => d.path === path && d.line === line && d.side === side)
-    if (draft) {
-      await draftStore.remove(draftKey(draft))
-    }
-  }
 
   async function handleGrantPrivateAccess() {
     sessionStorage.setItem(RETURN_KEY, location.pathname)
@@ -85,26 +77,13 @@
       <p>{load.state.meta.body ?? 'No description.'}</p>
       <p class="muted">AI summary, behavior verdict, diagrams and CI signals arrive in upcoming milestones.</p>
     {:else if step === 2}
-      <div class="mode-toggle" role="group" aria-label="Diff mode">
-        <button class:active={mode === 'unified'} aria-pressed={mode === 'unified'} onclick={() => setMode('unified')}>Unified</button>
-        <button class:active={mode === 'split'} aria-pressed={mode === 'split'} onclick={() => setMode('split')}>Side-by-side</button>
-      </div>
-      {#if load.state.files.length < load.state.meta.changedFiles}
-        <p role="alert">Showing {load.state.files.length} of {load.state.meta.changedFiles} changed files — the list was truncated.</p>
-      {/if}
-      {#if load.state.files.length === 0}
-        <p>This PR has no changed files.</p>
-      {:else}
-        {#each load.state.files as file (file.filename)}
-          <FileDiff
-            {file}
-            {mode}
-            drafts={draftsForFile(file.filename)}
-            onAddDraft={(line, side, body) => handleAddDraft(file.filename, line, side, body)}
-            onRemoveDraft={(line, side) => handleRemoveDraft(file.filename, line, side)}
-          />
-        {/each}
-      {/if}
+      <InspectStep
+        files={load.state.files}
+        changedFiles={load.state.meta.changedFiles}
+        {mode}
+        onmode={setMode}
+        {draftStore}
+      />
     {:else}
       <VerdictStep
         prRef={{ owner, repo, number }}
@@ -118,29 +97,31 @@
 
 <!-- EC-07i: Sticky bottom bar — shown once the PR is loaded -->
 {#if load.state.status === 'ready'}
-  <div class="draft-bar" role="status" aria-live="polite">
+  <div class="draft-bar">
     <div class="draft-bar-inner">
-      {#if draftStore && !draftStore.persistent}
-        <span class="storage-warning" role="alert">
-          Drafts won't survive closing this tab (browser storage unavailable)
+      <span role="status" aria-live="polite" class="draft-status">
+        {#if draftStore && !draftStore.persistent}
+          <span class="storage-warning" role="alert">
+            Drafts won't survive closing this tab (browser storage unavailable)
+          </span>
+        {/if}
+        <span class="draft-count">
+          {draftStore?.count ?? 0} comment{(draftStore?.count ?? 0) === 1 ? '' : 's'} drafted
         </span>
-      {/if}
-      <span class="draft-count">
-        {draftStore?.count ?? 0} comment{(draftStore?.count ?? 0) === 1 ? '' : 's'} drafted
       </span>
       <div class="step-nav">
         <button
           class="step-btn"
-          disabled={step === 1}
-          onclick={() => step = (step - 1) as Step}
+          disabled={!canPrev}
+          onclick={() => goStep(step - 1)}
           aria-label="Previous step"
         >
           ← Prev
         </button>
         <button
           class="step-btn"
-          disabled={step === 3}
-          onclick={() => step = (step + 1) as Step}
+          disabled={!canNext}
+          onclick={() => goStep(step + 1)}
           aria-label="Next step"
         >
           Next →
@@ -153,7 +134,6 @@
 <style>
   .review { max-width: 70rem; margin: 0 auto; padding: 1rem; padding-bottom: 5rem; }
   .muted { opacity: 0.6; }
-  .mode-toggle button.active { font-weight: 700; }
 
   /* EC-07i: Sticky bottom bar */
   .draft-bar {
@@ -175,6 +155,13 @@
     align-items: center;
     gap: 1rem;
     justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .draft-status {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
     flex-wrap: wrap;
   }
 

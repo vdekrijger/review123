@@ -6,12 +6,14 @@
 
   const RETURN_KEY = 'review123:returnTo'
 
-  let status = $state<'pending' | 'success' | 'error'>('pending')
+  let status = $state<'pending' | 'error'>('pending')
   let errorMessage = $state<string | null>(null)
 
   const ERROR_MESSAGES: Record<string, string> = {
     'state-mismatch': 'Sign-in session expired or invalid — please try again.',
-    'missing-code': 'GitHub sign-in was cancelled.',
+    // 'missing-code' means GitHub returned no code param at all (distinct from user denial)
+    'missing-code': 'GitHub returned no authorization code — please try signing in again.',
+    // 'denied' means the user explicitly cancelled the OAuth consent screen
     'denied': 'GitHub sign-in was cancelled.',
     'no-verifier': 'Sign-in session lost — please try again.',
     'exchange-failed': 'GitHub sign-in failed during token exchange. Try again or use a PAT in Settings.',
@@ -19,6 +21,9 @@
 
   onMount(async () => {
     const params = new URLSearchParams(location.search)
+    // Idempotency against re-consumed codes is handled inside completeSignIn,
+    // which removes the session key in a finally block so a second call finds
+    // no verifier and returns {ok: false, error: 'no-verifier'}.
     const result = await completeSignIn(params)
     if (result.ok) {
       track('signed_in', { method: 'oauth' })
