@@ -5,7 +5,7 @@ describe('settings', () => {
   beforeEach(() => localStorage.clear())
 
   it('returns defaults when nothing stored', () => {
-    expect(getSettings()).toEqual({ githubPat: null, deepseekKey: null, diffMode: 'unified' })
+    expect(getSettings()).toEqual({ githubPat: null, deepseekKey: null, diffMode: 'unified', githubAuth: null })
   })
 
   it('stores and retrieves a PAT', () => {
@@ -37,7 +37,7 @@ describe('settings', () => {
 
   it('survives corrupt stored JSON', () => {
     localStorage.setItem('review123:settings', '{not json')
-    expect(getSettings()).toEqual({ githubPat: null, deepseekKey: null, diffMode: 'unified' })
+    expect(getSettings()).toEqual({ githubPat: null, deepseekKey: null, diffMode: 'unified', githubAuth: null })
   })
 
   it('coerces invalid field types back to defaults (shape validation)', () => {
@@ -60,5 +60,34 @@ describe('settings', () => {
     const s = getSettings()
     expect(s.githubPat).toBe('ghp_original')
     expect(s.deepseekKey).toBe('sk_original')
+  })
+
+  it('migration: legacy JSON with only githubPat coerces to githubAuth {token, method, scopes}', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ githubPat: 'ghp_x' }))
+    const s = getSettings()
+    expect(s.githubAuth).toEqual({ token: 'ghp_x', method: 'pat', scopes: [] })
+    // githubPat field still accessible for backward compat
+    expect(s.githubPat).toBe('ghp_x')
+  })
+
+  it('migration: githubAuth takes precedence over legacy githubPat when both stored', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      githubPat: 'ghp_old',
+      githubAuth: { token: 'gho_new', method: 'oauth', scopes: ['public_repo'] },
+    }))
+    const s = getSettings()
+    expect(s.githubAuth).toEqual({ token: 'gho_new', method: 'oauth', scopes: ['public_repo'] })
+  })
+
+  it('setGithubPat writes githubAuth in PAT shape', () => {
+    setGithubPat('ghp_test')
+    const s = getSettings()
+    expect(s.githubAuth).toEqual({ token: 'ghp_test', method: 'pat', scopes: [] })
+  })
+
+  it('setGithubPat(null) clears githubAuth', () => {
+    setGithubPat('ghp_test')
+    setGithubPat(null)
+    expect(getSettings().githubAuth).toBeNull()
   })
 })

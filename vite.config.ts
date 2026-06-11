@@ -12,5 +12,8 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
     include: ['src/**/*.{test,spec}.ts'],
+    env: {
+      VITE_GITHUB_CLIENT_ID: 'test_client_id',
+    },
   },
 })
