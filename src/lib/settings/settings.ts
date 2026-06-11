@@ -13,6 +13,7 @@ export interface Settings {
   deepseekKey: string | null
   diffMode: DiffMode
   githubAuth: GithubAuth | null
+  railCollapsed: boolean
 }
 
 const DEFAULTS: Settings = {
@@ -20,6 +21,7 @@ const DEFAULTS: Settings = {
   deepseekKey: null,
   diffMode: 'unified',
   githubAuth: null,
+  railCollapsed: false,
 }
 
 function coerceGithubAuth(raw: unknown): GithubAuth | null {
@@ -47,6 +49,9 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const deepseekKey = obj['deepseekKey']
   if (typeof deepseekKey === 'string' || deepseekKey === null) result.deepseekKey = deepseekKey
+
+  const railCollapsed = obj['railCollapsed']
+  if (typeof railCollapsed === 'boolean') result.railCollapsed = railCollapsed
 
   // Prefer explicit githubAuth; fall back to migrating legacy githubPat string
   if ('githubAuth' in obj) {
@@ -112,3 +117,4 @@ export function saveGithubAuth(auth: GithubAuth | null): void {
 export const setGithubPat = (v: string | null) => saveTokens({ githubPat: v })
 export const setDeepseekKey = (v: string | null) => saveTokens({ deepseekKey: v })
 export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
+export const setRailCollapsed = (collapsed: boolean) => save({ railCollapsed: collapsed })

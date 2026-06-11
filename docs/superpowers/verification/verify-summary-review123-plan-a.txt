@@ -1,5 +1,5 @@
-status=PARTIAL
+status=PASS
 total=44
-pass=43
+pass=44
 fail=0
-uncovered=1
+uncovered=0

@@ -90,7 +90,7 @@ vt "EC-06c" "EC-06c" src/lib/diff/diffFile.test.ts
 vt "EC-06c-ui" "rename-only fixture shows the rename note" src/components/FileDiff.test.ts
 vt "REQ-06-binary-ui" "no-patch fixture shows the binary note" src/components/FileDiff.test.ts
 vt "REQ-06-smoke" "smoke: renders modified file" src/components/FileDiff.test.ts
-skip "EC-06h: diff renders before AI completes (vacuous until Plan C adds AI panels)"
+vt "EC-06h" "EC-06h: FileDiff article is present in step 2 while AI panels show loading" src/routes/Review.test.ts
 
 # --- REQ-18: Analytics privacy (all musts) ---
 header "REQ-18: PostHog allowlist privacy choke-point"

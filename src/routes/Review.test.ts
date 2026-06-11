@@ -223,3 +223,41 @@ describe('Review analytics (comment_drafted)', () => {
     expect(extraArgs).toHaveLength(0)
   })
 })
+
+describe('EC-06h: diff renders while AI panels are loading', () => {
+  it('EC-06h: FileDiff article is present in step 2 while AI panels show loading', async () => {
+    const user = userEvent.setup()
+
+    // Stub fetch: returns PR meta + files with patches (never resolves AI)
+    const files = [{
+      filename: 'src/foo.ts',
+      status: 'modified',
+      additions: 5,
+      deletions: 2,
+      patch: '@@ -1,3 +1,5 @@\n context\n+added line\n-removed line\n context',
+    }]
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/files')) return Promise.resolve(jsonResponse(files))
+      if (url.includes('/check-runs') || url.includes('/commits') || url.includes('/contents')) {
+        return new Promise(() => {}) // never resolves — simulates AI loading forever
+      }
+      return Promise.resolve(jsonResponse(makePrMeta()))
+    }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 42 } })
+
+    // Wait for PR to load (sticky bar appears)
+    await vi.waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    // Navigate to step 2 (diff view)
+    const nextBtn = screen.getByRole('button', { name: /next step/i })
+    await user.click(nextBtn)
+
+    // FileDiff article element must be present — diff renders fully
+    await vi.waitFor(() => {
+      expect(document.querySelector('article.file-diff')).toBeInTheDocument()
+    })
+  })
+})

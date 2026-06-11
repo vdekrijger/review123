@@ -5,7 +5,7 @@ describe('settings', () => {
   beforeEach(() => localStorage.clear())
 
   it('returns defaults when nothing stored', () => {
-    expect(getSettings()).toEqual({ githubPat: null, deepseekKey: null, diffMode: 'unified', githubAuth: null })
+    expect(getSettings()).toEqual({ githubPat: null, deepseekKey: null, diffMode: 'unified', githubAuth: null, railCollapsed: false })
   })
 
   it('stores and retrieves a PAT', () => {
@@ -37,7 +37,7 @@ describe('settings', () => {
 
   it('survives corrupt stored JSON', () => {
     localStorage.setItem('review123:settings', '{not json')
-    expect(getSettings()).toEqual({ githubPat: null, deepseekKey: null, diffMode: 'unified', githubAuth: null })
+    expect(getSettings()).toEqual({ githubPat: null, deepseekKey: null, diffMode: 'unified', githubAuth: null, railCollapsed: false })
   })
 
   it('coerces invalid field types back to defaults (shape validation)', () => {
