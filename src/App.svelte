@@ -5,19 +5,12 @@
   import AuthCallback from './routes/AuthCallback.svelte'
   import SettingsPanel from './components/SettingsPanel.svelte'
   import { beginSignIn, signOut } from './lib/auth/auth'
-  import { getSettings } from './lib/settings/settings'
+  import { authState } from './lib/auth/authState.svelte'
 
   const RETURN_KEY = 'review123:returnTo'
 
   startRouter()
   let settingsOpen = $state(false)
-
-  // Reactive auth state (re-read after sign-out)
-  let authState = $state(getSettings().githubAuth)
-
-  function refreshAuth() {
-    authState = getSettings().githubAuth
-  }
 
   async function handleSignIn() {
     sessionStorage.setItem(RETURN_KEY, location.pathname)
@@ -26,7 +19,8 @@
 
   function handleSignOut() {
     signOut()
-    refreshAuth()
+    // signOut() calls saveGithubAuth(null) → refreshAuthState() → authState.auth
+    // updates reactively, so no local state sync needed here.
   }
 
   const clientId = import.meta.env.VITE_GITHUB_CLIENT_ID as string | undefined
@@ -35,9 +29,9 @@
 <header class="topbar">
   <a href="/">Review 1‑2‑3</a>
   <div class="topbar-right">
-    {#if authState}
+    {#if authState.auth}
       <span class="auth-badge" aria-label="Authentication method">
-        {authState.method === 'oauth' ? 'GitHub ✓' : 'PAT ✓'}
+        {authState.auth.method === 'oauth' ? 'GitHub ✓' : 'PAT ✓'}
       </span>
       <button onclick={handleSignOut}>Sign out</button>
     {:else if clientId}
@@ -47,7 +41,7 @@
   </div>
 </header>
 
-{#if settingsOpen}<SettingsPanel onclose={() => { settingsOpen = false; refreshAuth() }} />{/if}
+{#if settingsOpen}<SettingsPanel onclose={() => { settingsOpen = false }} />{/if}
 
 {#if router.route.name === 'landing'}
   <Landing />

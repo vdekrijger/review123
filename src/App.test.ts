@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import App from './App.svelte'
 import { _resetStartedForTest } from './lib/router/router.svelte'
+import { _resetAuthStateForTest } from './lib/auth/authState.svelte'
 import { jsonResponse } from './test-helpers'
 import { saveGithubAuth } from './lib/settings/settings'
 
@@ -45,6 +46,7 @@ function makeFetchStub() {
 describe('App topbar auth states', () => {
   beforeEach(() => {
     localStorage.clear()
+    _resetAuthStateForTest()
     _resetStartedForTest()
     history.replaceState(null, '', '/')
   })
@@ -79,6 +81,33 @@ describe('App topbar auth states', () => {
     render(App)
     expect(screen.getByText(/PAT ✓/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /sign out/i })).toBeTruthy()
+  })
+
+  it('topbar updates to "GitHub ✓" badge after saveGithubAuth called post-render (reactivity bug)', async () => {
+    vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'test_client_id')
+    // Render while signed out
+    render(App)
+    expect(screen.getByRole('button', { name: /sign in with github/i })).toBeTruthy()
+
+    // Simulate what AuthCallback does: save auth to storage (no re-render)
+    saveGithubAuth({ token: 'gho_x', method: 'oauth', scopes: ['public_repo'] })
+
+    // The topbar must update reactively — without a full page reload
+    expect(await screen.findByText(/GitHub ✓/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /sign in with github/i })).toBeNull()
+  })
+
+  it('topbar reverts to sign-in button after clicking Sign out', async () => {
+    vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'test_client_id')
+    saveGithubAuth({ token: 'gho_x', method: 'oauth', scopes: ['public_repo'] })
+    const user = userEvent.setup()
+    render(App)
+
+    expect(screen.getByText(/GitHub ✓/)).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: /sign out/i }))
+
+    expect(await screen.findByRole('button', { name: /sign in with github/i })).toBeTruthy()
+    expect(screen.queryByText(/GitHub ✓/)).toBeNull()
   })
 })
 

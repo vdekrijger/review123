@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getSettings, saveTokens } from '../lib/settings/settings'
   import { track } from '../lib/analytics/analytics'
+  import { authState } from '../lib/auth/authState.svelte'
 
   let { onclose }: { onclose: () => void } = $props()
   const current = getSettings()
@@ -8,16 +9,17 @@
   let deepseek = $state(current.deepseekKey ?? '')
   let error = $state<string | null>(null)
 
-  const auth = current.githubAuth
-
-  function authStatusLine(): string {
+  // authStatusLine is derived from the reactive authState so it updates live
+  // when the user saves a PAT or signs in/out via OAuth.
+  const authStatusLine = $derived.by(() => {
+    const auth = authState.auth
     if (!auth) return 'Not signed in'
     if (auth.method === 'oauth') {
       const scopeList = auth.scopes.length > 0 ? auth.scopes.join(', ') : 'none'
       return `Signed in via GitHub (scopes: ${scopeList})`
     }
     return 'Using PAT'
-  }
+  })
 
   function save() {
     try {
@@ -38,7 +40,7 @@
 
 <dialog open aria-label="Settings">
   <h2>Settings</h2>
-  <p class="auth-status">{authStatusLine()}</p>
+  <p class="auth-status">{authStatusLine}</p>
   <label>GitHub token (PAT)
     <input type="password" bind:value={pat} autocomplete="off" placeholder="github_pat_… (fine-grained, repo-scoped recommended)" />
   </label>

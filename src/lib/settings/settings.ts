@@ -1,5 +1,17 @@
 const KEY = 'review123:settings'
 
+// Lazy refresh hook: authState.svelte.ts registers itself here after it
+// initialises (avoiding a circular module-init dependency). settings.ts calls
+// this hook after every mutation that touches githubAuth so that the reactive
+// store stays in sync without a static import cycle.
+let _onAuthMutated: (() => void) | null = null
+export function _registerAuthRefresh(fn: () => void): void {
+  _onAuthMutated = fn
+}
+function notifyAuthMutated(): void {
+  _onAuthMutated?.()
+}
+
 export type DiffMode = 'unified' | 'split'
 
 export interface GithubAuth {
@@ -98,6 +110,7 @@ export function saveTokens(patch: { githubPat?: string | null; deepseekKey?: str
   }
 
   save(update)
+  if ('githubPat' in update) notifyAuthMutated()
 }
 
 export function saveGithubAuth(auth: GithubAuth | null): void {
@@ -112,6 +125,7 @@ export function saveGithubAuth(auth: GithubAuth | null): void {
     update.githubPat = null
   }
   save(update)
+  notifyAuthMutated()
 }
 
 export const setGithubPat = (v: string | null) => saveTokens({ githubPat: v })
