@@ -8,6 +8,17 @@
   let deepseek = $state(current.deepseekKey ?? '')
   let error = $state<string | null>(null)
 
+  const auth = current.githubAuth
+
+  function authStatusLine(): string {
+    if (!auth) return 'Not signed in'
+    if (auth.method === 'oauth') {
+      const scopeList = auth.scopes.length > 0 ? auth.scopes.join(', ') : 'none'
+      return `Signed in via GitHub (scopes: ${scopeList})`
+    }
+    return 'Using PAT'
+  }
+
   function save() {
     try {
       const hadPat = !!current.githubPat
@@ -27,6 +38,7 @@
 
 <dialog open aria-label="Settings">
   <h2>Settings</h2>
+  <p class="auth-status">{authStatusLine()}</p>
   <label>GitHub token (PAT)
     <input type="password" bind:value={pat} autocomplete="off" placeholder="github_pat_… (fine-grained, repo-scoped recommended)" />
   </label>
@@ -38,3 +50,7 @@
   <button onclick={save}>Save</button>
   <button onclick={onclose}>Cancel</button>
 </dialog>
+
+<style>
+  .auth-status { font-size: 0.9em; opacity: 0.8; margin-bottom: 0.75rem; }
+</style>

@@ -3,12 +3,20 @@
   import Stepper, { type Step } from '../components/Stepper.svelte'
   import FileDiff from '../components/FileDiff.svelte'
   import { getSettings, setDiffMode, type DiffMode } from '../lib/settings/settings'
+  import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
+
+  const RETURN_KEY = 'review123:returnTo'
 
   let { owner, repo, number }: { owner: string; repo: string; number: number } = $props()
   const load = $derived.by(() => createPrLoad({ owner, repo, number }))
   let step = $state<Step>(1)
   let mode = $state<DiffMode>(getSettings().diffMode)
   function setMode(m: DiffMode) { mode = m; setDiffMode(m) }
+
+  async function handleGrantPrivateAccess() {
+    sessionStorage.setItem(RETURN_KEY, location.pathname)
+    location.assign(await beginSignIn('repo'))
+  }
 </script>
 
 <section class="review">
@@ -16,7 +24,13 @@
     <p>Loading {owner}/{repo}#{number}…</p>
   {:else if load.state.status === 'error'}
     {#if load.state.error === 'not-found'}
-      <p role="alert">PR not found. If this repo is private, add a GitHub token in Settings (sign-in arrives soon).</p>
+      {#if needsScopeUpgrade()}
+        <p role="alert">PR not found. This may be a private repository.</p>
+        <button onclick={handleGrantPrivateAccess}>Grant access to private repositories</button>
+        <p class="muted">Or add a GitHub token in <a href="#settings">Settings</a> (PAT with repo scope).</p>
+      {:else}
+        <p role="alert">PR not found. If this repo is private, add a GitHub token in Settings (sign-in arrives soon).</p>
+      {/if}
     {:else if load.state.error === 'rate-limited'}
       <p role="alert">GitHub rate limit reached. Resets at {load.state.resetAt.toLocaleTimeString()}. Add a token in Settings to raise the limit.</p>
     {:else if load.state.error === 'unauthorized'}
