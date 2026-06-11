@@ -35,6 +35,9 @@ jobs:
         run: pnpm exec playwright install chromium --with-deps
       - name: Run e2e tests
         run: pnpm exec playwright test
+        env:
+          # Authenticates the real-PR smoke test; runner IPs are rate-limited tokenless
+          SMOKE_GITHUB_TOKEN: ${{ github.token }}
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v4
