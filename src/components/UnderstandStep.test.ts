@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import UnderstandStep from './UnderstandStep.svelte'
 import type { AiRun } from '../lib/ai/run.svelte'
-import type { VerdictResult, AttentionResult } from '../lib/ai/schemas'
+import type { VerdictResult, AttentionResult, TestInsight } from '../lib/ai/schemas'
 import type { PrMeta, PrFile } from '../lib/github/types'
 
 // Mock mermaid for MarkdownView (used by the component)
@@ -306,5 +306,139 @@ describe('UnderstandStep panel states via AiPanel', () => {
     render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
     openAllDetails()
     expect(screen.getByText(/AI analysis declined/i)).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Tests chip — glance card Row 1 (D2)
+// ---------------------------------------------------------------------------
+
+const sampleTests: TestInsight = {
+  covered: [
+    { behavior: 'renders correctly', test: 'it renders', file: 'src/a.test.ts' },
+    { behavior: 'handles errors', test: 'it throws', file: 'src/b.test.ts' },
+  ],
+  gaps: ['edge case not covered'],
+}
+
+describe('UnderstandStep glance card — tests chip', () => {
+  it('renders tests chip with covered count when tests is done', () => {
+    const run = makeRun({ tests: { status: 'done', value: sampleTests } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    expect(container.querySelector('.tests-chip')).not.toBeNull()
+    expect(container.querySelector('.tests-chip-covered')?.textContent).toContain('2 behaviors tested')
+  })
+
+  it('renders gaps chip in amber when gaps > 0', () => {
+    const run = makeRun({ tests: { status: 'done', value: sampleTests } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    const gapsChip = container.querySelector('.tests-chip-gaps')
+    expect(gapsChip).not.toBeNull()
+    expect(gapsChip?.textContent).toContain('1 gaps')
+  })
+
+  it('does not render gaps chip when gaps is empty', () => {
+    const noGapTests: TestInsight = { covered: sampleTests.covered, gaps: [] }
+    const run = makeRun({ tests: { status: 'done', value: noGapTests } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    expect(container.querySelector('.tests-chip-gaps')).toBeNull()
+  })
+
+  it('shows inline loading indicator while tests is loading', () => {
+    const run = makeRun({ tests: { status: 'loading' } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    // Tests chip should not appear
+    expect(container.querySelector('.tests-chip')).toBeNull()
+    // Loading indicator should appear
+    const loadingEls = container.querySelectorAll('.glance-loading-inline')
+    expect(loadingEls.length).toBeGreaterThan(0)
+  })
+
+  it('does not show tests chip when tests is idle', () => {
+    const run = makeRun({ tests: { status: 'idle' } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    expect(container.querySelector('.tests-chip')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Test coverage panel — checklist rows, file link, AI-inferred wording (D2)
+// ---------------------------------------------------------------------------
+
+describe('UnderstandStep test coverage panel', () => {
+  it('renders "Test coverage (AI-inferred)" panel summary', () => {
+    const run = makeRun({ tests: { status: 'idle' } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    const testPanel = Array.from(document.querySelectorAll('details')).find(
+      (d) => d.querySelector('summary')?.textContent?.match(/test coverage.*ai-inferred/i)
+    )
+    expect(testPanel).not.toBeUndefined()
+  })
+
+  it('panel is collapsed by default', () => {
+    const run = makeRun({ tests: { status: 'done', value: sampleTests } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    const testPanel = Array.from(document.querySelectorAll('details')).find(
+      (d) => d.querySelector('summary')?.textContent?.match(/test coverage.*ai-inferred/i)
+    ) as HTMLDetailsElement
+    expect(testPanel.open).toBe(false)
+  })
+
+  it('renders covered checklist rows with behavior and test name', () => {
+    const run = makeRun({ tests: { status: 'done', value: sampleTests } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(screen.getByText('renders correctly')).toBeInTheDocument()
+    expect(screen.getByText(/it renders/)).toBeInTheDocument()
+  })
+
+  it('renders file as a button in covered rows', () => {
+    const run = makeRun({ tests: { status: 'done', value: sampleTests } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    const fileLinks = document.querySelectorAll('.tests-file-link')
+    expect(fileLinks.length).toBe(2)
+    expect(fileLinks[0].textContent).toContain('src/a.test.ts')
+  })
+
+  it('calls onhotspot with file path when file link is clicked', () => {
+    const onhotspot = vi.fn()
+    const run = makeRun({ tests: { status: 'done', value: sampleTests } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run, onhotspot } })
+    openAllDetails()
+    const firstFileLink = document.querySelector('.tests-file-link') as HTMLButtonElement
+    firstFileLink?.click()
+    expect(onhotspot).toHaveBeenCalledWith('src/a.test.ts')
+  })
+
+  it('renders gaps as warning rows', () => {
+    const run = makeRun({ tests: { status: 'done', value: sampleTests } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(screen.getByText('edge case not covered')).toBeInTheDocument()
+    const gapIcons = document.querySelectorAll('.tests-gap-icon')
+    expect(gapIcons.length).toBe(1)
+  })
+
+  it('uses "AI-inferred" wording in panel (EC-13d)', () => {
+    const run = makeRun({ tests: { status: 'done', value: sampleTests } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(container.textContent?.toLowerCase()).toContain('ai-inferred')
+  })
+
+  it('error state shows Retry button that calls run.retry("tests")', () => {
+    const retryFn = vi.fn()
+    const run = makeRun({ tests: { status: 'error', error: 'tests failed' }, retry: retryFn })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    // Find the retry button inside the tests panel
+    const testPanel = Array.from(document.querySelectorAll('details')).find(
+      (d) => d.querySelector('summary')?.textContent?.match(/test coverage.*ai-inferred/i)
+    ) as HTMLDetailsElement
+    const retryBtn = testPanel?.querySelector('button.retry-btn') as HTMLButtonElement
+    expect(retryBtn).not.toBeNull()
+    retryBtn?.click()
+    expect(retryFn).toHaveBeenCalledWith('tests')
   })
 })
