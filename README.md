@@ -44,8 +44,41 @@ Set these in `.env.local` locally; configure them in the Vercel dashboard for pr
 |---|---|---|---|
 | `VITE_POSTHOG_KEY` | No | — | PostHog project API key. Analytics are disabled when absent. |
 | `VITE_POSTHOG_HOST` | No | `https://us.i.posthog.com` | PostHog ingestion host. |
+| `VITE_GITHUB_CLIENT_ID` | No | — | GitHub OAuth App client ID (build-time, public). Sign-in button is hidden when absent. |
+| `GITHUB_OAUTH_CLIENT_ID` | No | — | GitHub OAuth App client ID (server-side, Vercel only). Required for OAuth sign-in. |
+| `GITHUB_OAUTH_CLIENT_SECRET` | No | — | GitHub OAuth App client secret (server-side, Vercel only). Never exposed to the browser. |
 
 `.env.local` is gitignored by the `.env.*` pattern in `.gitignore`.
+
+---
+
+## GitHub OAuth setup
+
+To enable "Sign in with GitHub" you need a GitHub OAuth App and a Vercel deployment.
+
+### 1. Register an OAuth App
+
+1. Go to **GitHub → Settings → Developer settings → OAuth Apps → New OAuth App**.
+2. Set **Homepage URL** to your Vercel deployment URL (e.g. `https://review123.vercel.app`).
+3. Set **Authorization callback URL** to `https://<your-domain>/auth/callback`.
+4. Click **Register application**, then note the **Client ID** and generate a **Client secret**.
+
+### 2. Configure environment variables
+
+**In Vercel** (dashboard → project → Settings → Environment Variables):
+
+| Variable | Value |
+|---|---|
+| `GITHUB_OAUTH_CLIENT_ID` | Your OAuth App client ID |
+| `GITHUB_OAUTH_CLIENT_SECRET` | Your OAuth App client secret |
+| `VITE_GITHUB_CLIENT_ID` | Your OAuth App client ID (same value — needed at build time) |
+
+**Locally** — two options:
+
+- **PAT fallback (recommended for local dev):** Set your GitHub Personal Access Token in the app's Settings panel. No OAuth config needed locally.
+- **Full OAuth via `vercel dev`:** Run `vercel dev` instead of `pnpm dev`. It picks up environment variables from Vercel and routes `/api/*` to the serverless functions, giving you a full OAuth round-trip locally.
+
+When `VITE_GITHUB_CLIENT_ID` is absent the Sign-in button is hidden and the app works in PAT-only mode — forks and local dev work with zero OAuth setup.
 
 ---
 
@@ -76,3 +109,5 @@ This override is deliberate friction — using it should be an explicit, documen
 ## Privacy
 
 PostHog receives only coarse, allowlisted event metadata (see [`src/lib/analytics/analytics.ts`](src/lib/analytics/analytics.ts)). Code content, diffs, repository names, and private repo identifiers are never sent. Your GitHub PAT and DeepSeek API key are stored in `localStorage` only and are sent exclusively to their respective services.
+
+**Drafts & privacy:** Comment drafts are stored entirely in your browser's IndexedDB — they never leave your device until you click "Submit review". At that point the draft bodies are sent directly to GitHub's API as part of the review submission payload; they are not sent to any other server, and they are not included in PostHog analytics events.

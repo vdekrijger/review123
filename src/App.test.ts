@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import App from './App.svelte'
 import { _resetStartedForTest } from './lib/router/router.svelte'
 import { jsonResponse } from './test-helpers'
+import { saveGithubAuth } from './lib/settings/settings'
 
 // Stub analytics so posthog.capture doesn't fire during tests
 vi.mock('./lib/analytics/analytics', () => ({
@@ -40,6 +41,46 @@ function makeFetchStub() {
     return Promise.resolve(new Response('{}', { status: 404 }))
   })
 }
+
+describe('App topbar auth states', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetStartedForTest()
+    history.replaceState(null, '', '/')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it('signed-out with clientId: shows "Sign in with GitHub" button', () => {
+    vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'test_client_id')
+    render(App)
+    expect(screen.getByRole('button', { name: /sign in with github/i })).toBeTruthy()
+  })
+
+  it('no clientId configured: no sign-in button shown (PAT-only mode)', () => {
+    vi.stubEnv('VITE_GITHUB_CLIENT_ID', '')
+    render(App)
+    expect(screen.queryByRole('button', { name: /sign in with github/i })).toBeNull()
+  })
+
+  it('signed in via oauth: shows "GitHub ✓" badge and sign-out button', () => {
+    saveGithubAuth({ token: 'gho_TOKEN', method: 'oauth', scopes: ['public_repo'] })
+    vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'test_client_id')
+    render(App)
+    expect(screen.getByText(/GitHub ✓/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /sign out/i })).toBeTruthy()
+  })
+
+  it('signed in via PAT: shows "PAT ✓" badge and sign-out button', () => {
+    saveGithubAuth({ token: 'ghp_PAT', method: 'pat', scopes: [] })
+    render(App)
+    expect(screen.getByText(/PAT ✓/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /sign out/i })).toBeTruthy()
+  })
+})
 
 describe('EC-05k: closed/merged PR renders correctly', () => {
   let originalFetch: typeof fetch

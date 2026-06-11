@@ -12,8 +12,8 @@ function buildHeaders(targetUrl?: string): Record<string, string> {
   const headers: Record<string, string> = { ...GITHUB_HEADERS }
   const isGithubApi = !targetUrl || new URL(targetUrl).hostname === 'api.github.com'
   if (isGithubApi) {
-    const pat = getSettings().githubPat
-    if (pat) headers.Authorization = `Bearer ${pat}`
+    const auth = getSettings().githubAuth
+    if (auth) headers.Authorization = `Bearer ${auth.token}`
   }
   return headers
 }
@@ -29,6 +29,14 @@ export async function ghFetch<T>(path: string, init: RequestInit = {}): Promise<
     throw new GithubApiError({ kind: 'network' })
   }
   if (res.ok) return (await res.json()) as T
+  if (res.status === 422) {
+    let msg = 'Unprocessable Entity'
+    try {
+      const body = (await res.json()) as { message?: string }
+      if (typeof body.message === 'string') msg = body.message
+    } catch { /* ignore parse errors */ }
+    throw new GithubApiError({ kind: 'unprocessable', message: msg })
+  }
   throw new GithubApiError(mapError(res))
 }
 

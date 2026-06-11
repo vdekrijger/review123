@@ -1,10 +1,12 @@
 export type Route =
   | { name: 'landing' }
   | { name: 'review'; owner: string; repo: string; number: number }
+  | { name: 'auth-callback' }
   | { name: 'not-found' }
 
 export function matchRoute(pathname: string): Route {
   if (pathname === '/') return { name: 'landing' }
+  if (pathname === '/auth/callback') return { name: 'auth-callback' }
   const m = pathname.match(/^\/review\/([^/]+)\/([^/]+)\/(\d+)$/)
   if (m) {
     const number = Number(m[3])

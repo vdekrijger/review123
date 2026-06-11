@@ -17,4 +17,7 @@ describe('matchRoute', () => {
   it('unknown paths are not-found', () => {
     expect(matchRoute('/nope')).toEqual({ name: 'not-found' })
   })
+  it('matches /auth/callback → auth-callback', () => {
+    expect(matchRoute('/auth/callback')).toEqual({ name: 'auth-callback' })
+  })
 })
