@@ -222,6 +222,7 @@
         commitId={load.state.meta.headSha}
         store={draftStore ?? createDraftStore(`${owner}/${repo}#${number}`)}
         prUrl={`https://github.com/${owner}/${repo}/pull/${number}`}
+        coachFn={aiRun ? aiRun.coach : undefined}
       />
     {/if}
   {/if}

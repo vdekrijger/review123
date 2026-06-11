@@ -8,6 +8,7 @@
    *   store     - The reactive draft store for this PR.
    *   prUrl     - Full GitHub PR URL for the success link.
    *   submitFn  - (optional) Override submitReview — used in tests for prop injection.
+   *   coachFn   - (optional) Override run.coach — DI seam for tests.
    *
    * EC-09a: APPROVE allows empty body/no drafts.
    * EC-09c, EC-19b: Signed out → sign-in prompt only, no form.
@@ -19,9 +20,12 @@
   import { submitReview, type Verdict, type SubmitOutcome } from '../lib/github/review'
   import { renderMarkdown } from '../lib/markdown/render'
   import { track } from '../lib/analytics/analytics'
+  import { getSettings } from '../lib/settings/settings'
   import CommentEditor from './CommentEditor.svelte'
   import type { PrRef } from '../lib/github/parse'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
+  import type { Draft } from '../lib/drafts/drafts.svelte'
+  import type { CoachResult } from '../lib/ai/schemas'
 
   const RETURN_KEY = 'review123:returnTo'
 
@@ -41,9 +45,14 @@
       drafts: ReturnType<typeof createDraftStore>['drafts'],
       commitId: string,
     ) => Promise<SubmitOutcome>
+    /**
+     * Override the coach function — DI seam for tests. In production,
+     * Review.svelte passes run.coach.
+     */
+    coachFn?: (drafts: Draft[]) => Promise<CoachResult | { error: string }>
   }
 
-  let { prRef, commitId, store, prUrl, submitFn = submitReview }: Props = $props()
+  let { prRef, commitId, store, prUrl, submitFn = submitReview, coachFn }: Props = $props()
 
   // Derive signed-in status reactively from authState so the UI flips live
   // when the user completes OAuth (EC-REACT: no reload required).
@@ -63,6 +72,54 @@
   let errorMsg = $state<string | null>(null)
   let success = $state(false)
   let clientHint = $state<string | null>(null)
+
+  // ---- Coach state ----
+  let coachPending = $state(false)
+  let coachResult = $state<CoachResult | null>(null)
+  let coachError = $state<string | null>(null)
+  // Track dismissed suggestions by draft index
+  let dismissedSuggestions = $state<Set<number>>(new Set())
+
+  // Show coach button: signed in + has drafts + key configured + coachFn provided
+  const showCoachButton = $derived(
+    isSignedIn && store.count > 0 && !!getSettings().deepseekKey && !!coachFn
+  )
+
+  async function handleCoach() {
+    if (!coachFn) return
+    coachPending = true
+    coachError = null
+    coachResult = null
+    dismissedSuggestions = new Set()
+    try {
+      const result = await coachFn([...store.drafts])
+      if ('error' in result) {
+        coachError = result.error
+      } else {
+        coachResult = result
+        track('ai_task_completed', { task: 'coach', cached: false })
+      }
+    } finally {
+      coachPending = false
+    }
+  }
+
+  async function applyCoachSuggestion(draftIndex: number, suggestion: string) {
+    const draft = store.drafts[draftIndex]
+    if (!draft) return
+    await store.upsert({ path: draft.path, line: draft.line, side: draft.side, body: suggestion })
+    // Dismiss the suggestion card after applying
+    dismissedSuggestions = new Set([...dismissedSuggestions, draftIndex])
+  }
+
+  function dismissSuggestion(draftIndex: number) {
+    dismissedSuggestions = new Set([...dismissedSuggestions, draftIndex])
+  }
+
+  /** Render clarity as N filled + (5-N) empty stars */
+  function clarityStars(n: number): string {
+    return '★'.repeat(n) + '☆'.repeat(5 - n)
+  }
 
   // Group drafts by path for the recap section
   const draftsByPath = $derived.by(() => {
@@ -150,6 +207,67 @@
       </section>
     {:else}
       <p class="no-drafts">No line comments drafted yet. You can still leave an overall comment below.</p>
+    {/if}
+
+    <!-- Coach my comments -->
+    {#if showCoachButton}
+      <section class="coach-section">
+        <button
+          class="coach-btn"
+          onclick={handleCoach}
+          disabled={coachPending}
+          aria-busy={coachPending}
+        >
+          {coachPending ? 'Coaching…' : 'Coach my comments'}
+        </button>
+
+        {#if coachError}
+          <p class="coach-error" role="alert">{coachError}</p>
+        {/if}
+
+        {#if coachResult}
+          <div class="coach-results">
+            {#each coachResult.reviews as review (review.index)}
+              {@const draft = store.drafts[review.index]}
+              {#if draft}
+                <div class="coach-card">
+                  <div class="coach-card-header">
+                    <span class="coach-draft-ref">{draft.path} line {draft.line}</span>
+                    <span
+                      class="coach-stars"
+                      aria-label="clarity {review.clarity} of 5"
+                    >{clarityStars(review.clarity)}</span>
+                    <span class="coach-chip tone-{review.tone}">{review.tone}</span>
+                    <span class="coach-chip actionable-{review.actionable}">{review.actionable ? '✓ actionable' : '✗ actionable'}</span>
+                  </div>
+
+                  {#if review.biasQuestion}
+                    <div class="coach-bias-callout">
+                      <strong>Bias check:</strong> {review.biasQuestion}
+                    </div>
+                  {/if}
+
+                  {#if review.suggestion && !dismissedSuggestions.has(review.index)}
+                    <blockquote class="coach-suggestion">
+                      <p>{review.suggestion}</p>
+                      <div class="coach-suggestion-actions">
+                        <button
+                          class="coach-apply-btn"
+                          onclick={() => applyCoachSuggestion(review.index, review.suggestion!)}
+                        >Apply suggestion</button>
+                        <button
+                          class="coach-dismiss-btn"
+                          onclick={() => dismissSuggestion(review.index)}
+                        >Dismiss</button>
+                      </div>
+                    </blockquote>
+                  {/if}
+                </div>
+              {/if}
+            {/each}
+          </div>
+        {/if}
+      </section>
     {/if}
 
     <!-- Overall comment editor -->
@@ -365,5 +483,180 @@
 
   .view-link:hover {
     background: #156c30;
+  }
+
+  /* ---- Coach ---- */
+  .coach-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .coach-btn {
+    align-self: flex-start;
+    padding: 0.4rem 1rem;
+    border: 1px solid #6b7280;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .coach-btn:hover:not(:disabled) {
+    background: #8882;
+  }
+
+  .coach-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .coach-error {
+    color: #dc2626;
+    font-size: 0.9rem;
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    margin: 0;
+  }
+
+  .coach-results {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .coach-card {
+    border: 1px solid #8883;
+    border-radius: 6px;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .coach-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .coach-draft-ref {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    opacity: 0.7;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .coach-stars {
+    font-size: 1rem;
+    letter-spacing: 0.05em;
+  }
+
+  .coach-chip {
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-weight: 500;
+  }
+
+  .tone-ok {
+    background: #88888822;
+    border-color: #8888;
+    color: inherit;
+    opacity: 0.8;
+  }
+
+  .tone-blunt {
+    background: #fef3c7;
+    border-color: #fcd34d;
+    color: #92400e;
+  }
+
+  .tone-harsh {
+    background: #fee2e2;
+    border-color: #fca5a5;
+    color: #991b1b;
+  }
+
+  .actionable-true {
+    background: #dcfce7;
+    border-color: #86efac;
+    color: #166534;
+  }
+
+  .actionable-false {
+    background: #f3f4f6;
+    border-color: #d1d5db;
+    color: #6b7280;
+  }
+
+  .coach-bias-callout {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.88rem;
+    color: #78350f;
+  }
+
+  .coach-suggestion {
+    border-left: 3px solid #6b7280;
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+    background: #8881;
+    border-radius: 0 4px 4px 0;
+  }
+
+  .coach-suggestion p {
+    margin: 0 0 0.5rem;
+    font-size: 0.9rem;
+    font-style: italic;
+  }
+
+  .coach-suggestion-actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .coach-apply-btn {
+    font-size: 0.8rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    border: 1px solid #1a7f37;
+    background: transparent;
+    color: #1a7f37;
+    cursor: pointer;
+    font-weight: 500;
+  }
+
+  .coach-apply-btn:hover {
+    background: #dcfce7;
+  }
+
+  .coach-dismiss-btn {
+    font-size: 0.8rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    border: 1px solid #8884;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.7;
+  }
+
+  .coach-dismiss-btn:hover {
+    opacity: 1;
+    background: #8882;
   }
 </style>
