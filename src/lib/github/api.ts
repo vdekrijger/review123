@@ -2,7 +2,7 @@ import { ghFetch, ghFetchPage } from './client'
 import { GithubApiError, type PrFile, type PrMeta } from './types'
 import type { PrRef } from './parse'
 
-interface RawPrFile {
+export interface RawPrFile {
   filename: string
   status: PrFile['status']
   previous_filename?: string
@@ -30,7 +30,7 @@ export async function getPrMeta(ref: PrRef): Promise<PrMeta> {
 
 const MAX_PAGES = 50 // defensive cap against malformed Link cycles (~5 000 files)
 
-function mapPrFile(raw: RawPrFile): PrFile {
+export function mapPrFile(raw: RawPrFile): PrFile {
   return {
     filename: raw.filename,
     status: raw.status,
