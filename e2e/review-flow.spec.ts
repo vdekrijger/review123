@@ -414,11 +414,15 @@ test('review flow: diff renders with red/green rows, AI panels populate, CI show
   // PR description should appear
   await expect(page.getByText('This PR adds a new feature for testing.')).toBeVisible()
 
-  // AI summary should appear (streamed text)
-  await expect(page.getByText(/This PR adds a new feature/i)).toBeVisible({ timeout: 15_000 })
+  // AI summary should appear (streamed text in the prose pre element in UnderstandStep)
+  await expect(page.locator('.understand-step pre.prose')).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('.understand-step pre.prose')).toContainText(
+    'This PR adds a new feature',
+    { timeout: 15_000 },
+  )
 
-  // Verdict pill should appear (level shown as a styled div)
-  await expect(page.locator('[class*="level-minor"]').first()).toBeVisible({ timeout: 15_000 })
+  // Verdict pill should appear — UnderstandStep renders the verdict-level div
+  await expect(page.locator('.understand-step .verdict-level')).toBeVisible({ timeout: 20_000 })
 
   // Diagram panel: the understand-step section with the diagrams heading
   await expect(page.locator('.understand-step')).toBeVisible()
