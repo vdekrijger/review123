@@ -12,7 +12,7 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
-export const PROMPT_VERSION = 2
+export const PROMPT_VERSION = 3
 
 // ---------------------------------------------------------------------------
 // summarizePrompt — streaming plain-text summary + reading order
@@ -30,20 +30,22 @@ export function summarizePrompt(ctx: PackedContext): { system: string; user: str
   const system = `You are an expert code reviewer assistant. Your role is to help engineers \
 understand pull requests quickly and accurately.
 
-Given the code changes below, produce TWO sections in Markdown:
+Given the code changes below, produce a concise prose summary: lead with what the PR does \
+and why in one sentence, then use bullet points for any important details a reviewer should \
+know. Keep the prose summary to ~120 words maximum — shorter is better. Do NOT mention \
+reading order anywhere in the prose.
 
-1. A concise prose summary: lead with what the PR does and why in one sentence, then use \
-bullet points for any important details a reviewer should know. Keep the prose summary to \
-~120 words maximum — shorter is better.
+At the very end of your response, after all prose, append a reading order block in EXACTLY \
+this format (nothing after ===END===):
 
-2. A section headed EXACTLY (including the colon):
+===READING-ORDER===
+path/one
+path/two
+===END===
 
-Suggested reading order:
-
-List one file path per line, in the order a reviewer should read them — most load-bearing or \
-context-setting files first. Only include files that appear in the PR changes. Do not add \
-bullet points, numbers, or any other prefix to the file paths. Stop the list at a blank line \
-or the end of your response.`
+List one file path per line between the sentinels, in the order a reviewer should read them — \
+most load-bearing or context-setting files first. Only include files that appear in the PR \
+changes. Plain paths only — no bullets, numbers, or prefixes.`
 
   return { system, user: ctx.text }
 }
@@ -175,6 +177,13 @@ that do not exist in the same graph's nodes array.
 
 DO NOT write any Mermaid syntax. The downstream serializer converts your graph data to Mermaid.
 
+Graph size constraints (IMPORTANT):
+- At most 12 nodes per graph (before and after combined). If more files are touched, \
+  only include nodes whose relationships CHANGED or are needed for context.
+- Node labels must be ≤ 3 words — prefer module/file names over sentences (e.g. \
+  "router.ts" not "The router module that handles requests").
+- Edges: only include edges that represent CHANGED or newly-added relationships.
+
 ${FEW_SHOT_EXAMPLE}
 
 Do not include any text outside the JSON object.`
@@ -266,7 +275,19 @@ Do not include any text outside the JSON object.`
 export function parseReadingOrder(summaryText: string): string[] {
   const lines = summaryText.split('\n')
 
-  // Find the heading line
+  // --- Primary: sentinel block ===READING-ORDER=== … ===END=== ---
+  const sentinelStart = lines.findIndex((l) => l.trim() === '===READING-ORDER===')
+  if (sentinelStart !== -1) {
+    const paths: string[] = []
+    for (let i = sentinelStart + 1; i < lines.length; i++) {
+      const raw = lines[i].trim()
+      if (raw === '===END===') break
+      if (raw.length > 0) paths.push(raw)
+    }
+    return paths
+  }
+
+  // --- Fallback: legacy "Suggested reading order:" heading (cached v2 outputs) ---
   let headingIndex = -1
   for (let i = 0; i < lines.length; i++) {
     if (/suggested reading order\s*:/i.test(lines[i])) {
@@ -280,23 +301,14 @@ export function parseReadingOrder(summaryText: string): string[] {
   const paths: string[] = []
   for (let i = headingIndex + 1; i < lines.length; i++) {
     const raw = lines[i]
-
-    // Stop at blank line
     if (raw.trim() === '') break
-
-    // Strip bullet/number prefixes and backticks
     const cleaned = raw
       .trim()
-      // Remove leading list markers: "- ", "* ", "• ", "1. ", "2) ", etc.
       .replace(/^[-*•]\s+/, '')
       .replace(/^\d+[.)]\s+/, '')
-      // Remove surrounding backticks
       .replace(/^`+|`+$/g, '')
       .trim()
-
-    if (cleaned.length > 0) {
-      paths.push(cleaned)
-    }
+    if (cleaned.length > 0) paths.push(cleaned)
   }
 
   return paths
@@ -307,22 +319,29 @@ export function parseReadingOrder(summaryText: string): string[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Strip the "Suggested reading order:" heading and its file-list block from
- * a summary string, returning only the prose portion.
+ * Strip the reading-order block from a summary string, returning only prose.
  *
- * The heading is matched case-insensitively and tolerantly (surrounding
- * whitespace). The list block that follows — non-blank lines until the first
- * blank line or end of input — is also removed.
+ * Three strategies (applied in order, first match wins):
+ *  1. Sentinel block: ===READING-ORDER=== … ===END=== (v3 contract)
+ *  2. Legacy heading: "Suggested reading order:" + list block (cached v2 fallback)
+ *  3. Defensive: strip trailing run of ≥3 consecutive bare file-path lines
+ *     (catches prompt-noncompliant models)
  *
- * Use this before displaying the summary; parsing/ordering logic still uses
- * parseReadingOrder on the original text.
- *
- * Returns the trimmed prose portion, or the original string if no heading is found.
+ * A "bare file-path line" matches: ^[\w@./-]+\.[\w]+$ or ^[\w@./-]+/[\w@./-]+$
  */
 export function stripReadingOrder(summaryText: string): string {
   const lines = summaryText.split('\n')
 
-  // Find the heading line
+  // --- Strategy 1: sentinel block ---
+  const sentinelStart = lines.findIndex((l) => l.trim() === '===READING-ORDER===')
+  if (sentinelStart !== -1) {
+    const sentinelEnd = lines.findIndex((l, i) => i > sentinelStart && l.trim() === '===END===')
+    const cutEnd = sentinelEnd !== -1 ? sentinelEnd + 1 : lines.length
+    const result = [...lines.slice(0, sentinelStart), ...lines.slice(cutEnd)]
+    return result.join('\n').trim()
+  }
+
+  // --- Strategy 2: legacy heading ---
   let headingIndex = -1
   for (let i = 0; i < lines.length; i++) {
     if (/suggested reading order\s*:/i.test(lines[i])) {
@@ -331,16 +350,32 @@ export function stripReadingOrder(summaryText: string): string {
     }
   }
 
-  if (headingIndex === -1) return summaryText
-
-  // Find the end of the list block: first blank line after heading, or end
-  let listEnd = headingIndex + 1
-  while (listEnd < lines.length && lines[listEnd].trim() !== '') {
-    listEnd++
+  if (headingIndex !== -1) {
+    let listEnd = headingIndex + 1
+    while (listEnd < lines.length && lines[listEnd].trim() !== '') {
+      listEnd++
+    }
+    const before = lines.slice(0, headingIndex)
+    const after = lines.slice(listEnd)
+    return [...before, ...after].join('\n').trim()
   }
 
-  // Remove heading + list lines and rejoin
-  const before = lines.slice(0, headingIndex)
-  const after = lines.slice(listEnd)
-  return [...before, ...after].join('\n').trim()
+  // --- Strategy 3: defensive trailing bare-path-run (≥3 lines) ---
+  const barePathRe = /^[\w@.\-/]+\.[\w]+$|^[\w@.\-/]+\/[\w@.\-/]+$/
+  let trailStart = lines.length
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim()
+    if (line === '') continue // skip blank lines in tail
+    if (barePathRe.test(line)) {
+      trailStart = i
+    } else {
+      break
+    }
+  }
+  const trailingCount = lines.length - trailStart
+  if (trailingCount >= 3) {
+    return lines.slice(0, trailStart).join('\n').trim()
+  }
+
+  return summaryText
 }

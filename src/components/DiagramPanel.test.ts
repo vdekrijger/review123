@@ -26,6 +26,15 @@ vi.mock('mermaid', () => ({
   },
 }))
 
+// mermaidInit is a singleton module — mock it so its internal state doesn't
+// bleed between tests. getMermaid always calls initialize + returns the mock.
+vi.mock('../lib/diagram/mermaidInit', () => ({
+  getMermaid: async () => {
+    mockInitialize({ securityLevel: 'strict', startOnLoad: false })
+    return { initialize: mockInitialize, render: mockRender }
+  },
+}))
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

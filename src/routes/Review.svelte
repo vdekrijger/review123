@@ -194,9 +194,11 @@
     {#if step === 1}
       <UnderstandStep
         meta={load.state.meta}
+        files={load.state.files}
         ci={ciData}
         {ciError}
         run={aiRun ?? { summary: {status:'idle'}, attention: {status:'idle'}, diagrams: {status:'idle'}, verdict: {status:'idle'}, start: async()=>{}, retry: async()=>{} } as any}
+        onhotspot={handleHotspot}
       />
     {:else if step === 2}
       <InspectStep
