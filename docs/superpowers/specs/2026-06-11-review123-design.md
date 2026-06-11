@@ -1,6 +1,6 @@
 # Review 1-2-3 — Design
 
-**Date:** 2026-06-11
+**Date:** 2026-06-11 (revised same day after controversy review)
 **Status:** Approved pending final user review
 **Mode:** proof-driven-dev, full pipeline
 
@@ -16,7 +16,7 @@ is preserved.
 
 Paste a GitHub PR URL → get a guided three-step review:
 
-1. **Understand** — AI summary, behavior-preservation confidence score,
+1. **Understand** — AI summary, behavior-change verdict, CI status summary,
    before/after architectural Mermaid diagrams.
 2. **Inspect** — file diffs in AI-suggested reading order with attention
    (hotspot) highlighting and test-coverage flags; pinnable context rail.
@@ -27,71 +27,95 @@ Paste a GitHub PR URL → get a guided three-step review:
 
 ### v1 (must-have)
 
-- Parse public **and** private GitHub PR URLs (private requires a GitHub PAT).
+- Parse public **and** private GitHub PR URLs (private requires auth).
+- **Auth: GitHub OAuth (primary) + PAT fallback.** OAuth sign-in via a
+  single Vercel serverless function that performs the authorization-code
+  exchange (it holds only the app's client secret; user tokens never touch
+  our storage — the resulting token is returned to the browser and kept
+  client-side). PAT entry remains in Settings as a fallback for
+  self-hosters who don't want to register an OAuth app.
 - Diff view: unified and side-by-side modes, GitHub-style red/green line
   coloring, word-level intra-line highlights.
 - Full review write-back: draft line comments, submit a review with
   APPROVE / REQUEST_CHANGES / COMMENT via the GitHub API.
 - WYSIWYG markdown editor for comments (toolbar + live preview; GitHub
   comments are markdown).
+- **CI signals:** fetch check runs + annotations for the PR head SHA. Show
+  a pass/fail summary in Understand; feed failed checks and annotation
+  messages into the attention and behavior-verdict prompt context.
 - AI features (all four), powered by a BYO DeepSeek API key:
   - **PR summary + walkthrough** — plain-language summary and a suggested
     file reading order.
   - **Attention highlighting** — flags hunks/files deserving extra scrutiny;
     maps changed code to covering tests and flags "behavior changed but no
-    test touched".
+    test touched". Test mapping is AI-inferred, not measured coverage, and
+    is labeled as such in the UI.
   - **Mermaid before/after diagrams** — architectural view of the touched
     code in base state vs PR state. This is the primary "compare before and
-    after the change" feature.
-  - **Confidence score** — overall behavior-preservation score with
-    reasoning ("why?" expander).
-- BYO keys: GitHub PAT + DeepSeek key, entered in a settings panel, stored
-  in localStorage, never sent anywhere except to GitHub / DeepSeek directly.
-  Both are optional for browsing: with no DeepSeek key, AI panels show an
-  "add a key" prompt and everything else (diff view, manual commenting flow
-  up to submission) still works; with no GitHub PAT, public PRs are readable
-  but review submission prompts for a token.
+    after the change" feature. **The LLM never emits Mermaid syntax**: it
+    returns a structured graph (JSON nodes/edges/labels, schema-validated);
+    we serialize to Mermaid deterministically in code. Prompting uses
+    few-shot examples and selects diagram type by change shape (e.g. flow
+    vs class/module graph).
+  - **Behavior-change verdict** (formerly "confidence score") — categorical,
+    three levels: *Behavior preserved* / *Minor behavioral changes* /
+    *Significant behavioral changes*, with bulleted evidence and an explicit
+    "not analyzed" list (e.g. files truncated for token budget). No
+    percentages — we don't have calibration to back them.
+- BYO DeepSeek key entered in Settings, stored in localStorage, sent only
+  to DeepSeek directly. Keys/tokens are optional for browsing: with no
+  DeepSeek key, AI panels show an "add a key" prompt and everything else
+  (diff view, manual commenting flow up to submission) still works; signed
+  out, public PRs are readable but review submission prompts for sign-in.
 - Client-side AI-output cache so revisiting a PR re-spends zero tokens.
 - PostHog product analytics (posthog-js).
-- Deploys to Vercel as a static site.
+- Deploys to Vercel: static SPA + the one OAuth exchange function.
 
 ### Nice-to-have (not v1, tracked)
 
 - Interdiff: compare the PR's diff between two of its own revisions
   (e.g. before/after a force-push).
+- Mining raw CI job logs (beyond check runs/annotations) for AI context —
+  log downloads redirect to blob storage without CORS, so this likely needs
+  the serverless tier; deferred.
 
 ### Future (explicitly deferred)
 
 - Model switching (other LLM providers/models). v1 prepares for this by
   isolating all LLM calls behind `lib/llm/` with a configurable
   OpenAI-compatible base URL + model name.
-- Shared/server-side caching of AI outputs (would require a backend).
+- Shared/server-side caching of AI outputs.
 
 ## Architecture
 
-Pure static SPA — **Vite + Svelte 5 + TypeScript**, deployed to Vercel as
-static files. No backend. Chosen over (B) a Vercel rewrite proxy for DeepSeek
-(unnecessary — DeepSeek CORS verified working 2026-06-11; would create an
-abusable open proxy) and (C) SvelteKit server routes (violates frontend-only
-constraint; caching benefit assumes multi-user usage v1 doesn't have).
-Escape hatch: if DeepSeek ever drops CORS, upgrading to (B) is a small
-`vercel.json` change.
+Static SPA — **Vite + Svelte 5 + TypeScript** — deployed to Vercel, plus a
+single serverless function (`/api/oauth/exchange`) whose only job is the
+GitHub OAuth authorization-code exchange. No other backend; no user data or
+user tokens stored server-side.
+
+(Original approach comparison: pure static SPA chosen over a DeepSeek
+rewrite proxy — unnecessary, DeepSeek CORS verified working 2026-06-11 —
+and over full server routes. The OAuth function was added afterwards as a
+deliberate, minimal exception to frontend-only. Escape hatch remains: if
+DeepSeek drops CORS, a `vercel.json` rewrite proxy is a small change.)
 
 Browser talks directly to:
 
 1. **GitHub REST API** — PR metadata, per-file patches, before/after file
-   contents at base/head SHAs; review submission. Tokenless works for public
-   repos (60 req/h); PAT raises limits, unlocks private repos and writes.
+   contents at base/head SHAs, check runs + annotations; review submission.
+   Tokenless works for public repos (60 req/h); OAuth token or PAT raises
+   limits, unlocks private repos and writes.
 2. **DeepSeek API** (`api.deepseek.com`, OpenAI-compatible, CORS confirmed) —
    four independent AI tasks as separate prompts so failures are isolated
    and results stream independently.
 3. **PostHog** — client-side analytics. **Privacy rule: no code contents,
-   no diffs, no keys, no repo identifiers of private repos in any event.**
-   Only event names + coarse metadata (visibility, file count, language).
+   no diffs, no keys/tokens, no repo identifiers of private repos in any
+   event.** Only event names + coarse metadata (visibility, file count,
+   language).
 
 Persistence (client-side only):
 
-- `localStorage`: keys, preferences.
+- `localStorage`: OAuth token / PAT, DeepSeek key, preferences.
 - IndexedDB: AI-output cache keyed by `repo#pr@headSHA` + task + prompt
   version; comment drafts (survive tab close).
 
@@ -107,11 +131,13 @@ with a **pinnable, collapsible context rail** available in all steps:
 
 - Rail contents: summary (expandable), before/after diagram (click =
   full-screen overlay), hotspot list (click jumps to file), tests-touched
-  indicator, confidence score with "why?" expander.
+  indicator, behavior-change verdict with evidence expander.
+- Step 1 (Understand) additionally shows the CI check summary (pass/fail
+  counts, failed check names + annotations).
 - Step 2 (Inspect): files stacked in AI reading order; high-attention files
   expanded with attention reason shown, low-attention files collapsed with a
   one-line reason ("rename only"); inline test-coverage warning blocks under
-  affected files; per-line comment affordance.
+  affected files (labeled as AI-inferred); per-line comment affordance.
 - Sticky bottom bar: step navigation + drafted-comment count.
 - Diff blocks: GitHub-style red/green, unified/side-by-side toggle,
   word-level highlights.
@@ -120,56 +146,78 @@ with a **pinnable, collapsible context rail** available in all steps:
 
 ## Components
 
-- **`lib/github/`** — GitHub API client. URL parsing, PR/diff/content
-  fetching, review submission. No UI/AI knowledge.
+- **`lib/github/`** — GitHub API client. URL parsing, PR/diff/content/check
+  fetching, review submission, OAuth token handling. No UI/AI knowledge.
 - **`lib/llm/`** — DeepSeek client (OpenAI-compatible chat completions,
   streaming). One function per AI task: `summarize`, `analyzeAttention`,
-  `generateDiagrams`, `scoreConfidence`. Typed results.
+  `generateDiagrams`, `assessBehavior`. Typed results, schema validation.
+- **`lib/diagram/`** — deterministic graph-JSON → Mermaid serializer +
+  graph schema. Pure, fully unit-testable.
 - **`lib/context/`** — builds AI prompt context from GitHub data: selects
   changed files, trims lock files/generated code, packs before/after
-  contents within a token budget, chunks/truncates oversized PRs. Pure
-  logic; the highest-risk module; heavily unit-tested.
+  contents within a token budget, chunks/truncates oversized PRs, includes
+  CI failures/annotations. Pure logic; the highest-risk module; heavily
+  unit-tested.
 - **`lib/cache/`** — IndexedDB cache for AI outputs.
-- **`lib/settings/`** — keys + preferences (localStorage).
+- **`lib/settings/`** — tokens/keys + preferences (localStorage).
 - **`lib/analytics/`** — typed PostHog event wrapper; the single choke-point
   enforcing the privacy rule.
+- **`api/oauth/exchange`** — the one serverless function: receives the OAuth
+  code + PKCE verifier, exchanges with GitHub using the app client secret,
+  returns the token to the browser. Stateless, no logging of tokens.
 - **UI:** `Stepper`, `UnderstandStep`, `InspectStep`, `VerdictStep`,
   `DiffView`, `ContextRail`, `CommentEditor` (WYSIWYG markdown),
-  `SettingsPanel`.
+  `SettingsPanel`, `SignIn`.
 
-Libraries: `mermaid` for diagrams; diff parsing via an established parser
-(e.g. `parse-diff`) + custom Svelte diff rendering (accepted cost of
-choosing Svelte: no mature ready-made diff-view component). Final library
-picks happen during planning.
+Libraries: `mermaid` for rendering; `@git-diff-view/svelte` for diffs — a
+thin Svelte 5 wrapper over `@git-diff-view/core`, the same engine behind
+the widely-used React package (~512k downloads/month), giving unified/split
+modes and word-level highlights without hand-rolling; if the wrapper falls
+short we render via the core package directly. WYSIWYG markdown editor
+picked at planning (e.g. `carta-md`). Final picks during planning.
 
 ## Data flow
 
-Paste URL → parse → parallel GitHub fetches → Step 1 renders skeleton
-immediately → `lib/context` packs context → four DeepSeek calls fire in
-parallel, stream into their UI slots → results cached on completion.
+Paste URL → parse → parallel GitHub fetches (meta, patches, check runs) →
+Step 1 renders skeleton immediately → `lib/context` packs context → four
+DeepSeek calls fire in parallel, stream into their UI slots → results
+cached on completion.
 
 Comments: drafted locally (in-memory + IndexedDB), attached to file+line,
 submitted in Step 3 as one GitHub review.
 
+OAuth: Sign in → GitHub authorize (PKCE) → redirect back with code →
+`/api/oauth/exchange` → token stored in localStorage → all GitHub calls
+authenticated.
+
 ## Error handling
 
-- **Bad URL / not found / private without token** → specific inline message
+- **Bad URL / not found / private without auth** → specific inline message
   on landing page.
 - **GitHub rate limit** → detect `403` + `X-RateLimit-Remaining: 0`, show
-  reset time, suggest adding a token.
+  reset time, suggest signing in.
+- **OAuth failures** (denied, exchange error) → return to landing with
+  message; PAT fallback always available.
 - **DeepSeek failures** (auth, quota, timeout, CORS regression) → each AI
   panel fails independently with retry; review flow fully usable without AI.
   Invalid key → settings prompt.
-- **Malformed AI output** (bad JSON / invalid Mermaid) → one automatic
-  repair retry (re-prompt with the error), then graceful "couldn't generate"
-  state. Mermaid renders in a sandboxed container.
+- **Malformed AI output** (schema-invalid JSON) → one automatic repair retry
+  (re-prompt with the validation error), then graceful "couldn't generate"
+  state. Mermaid syntax errors are designed out (deterministic serializer);
+  rendering still sandboxed as defense in depth.
 - **Review submission failure** → drafts preserved until GitHub confirms
   success; GitHub's error shown verbatim.
 
 ## Security & supply chain
 
-- BYO keys live only in localStorage and are sent only to their own
-  services. No proxy, no server, no third-party key transit.
+- DeepSeek key only in localStorage, sent only to DeepSeek. GitHub tokens
+  (OAuth or PAT) only in localStorage, sent only to GitHub. The OAuth
+  function holds the app's client secret but never stores or logs user
+  tokens.
+- Token-in-browser risk acknowledged: an XSS hole could leak a write-scoped
+  token. Mitigations: strict CSP, PostHog as the only third-party script,
+  OAuth scopes kept minimal, PAT users guided to fine-grained repo-scoped
+  tokens.
 - **pnpm** is the package manager with `minimumReleaseAge: 10080`
   (7 days) configured, so freshly published package versions cannot be
   installed — mitigating npm supply-chain attacks.
@@ -179,21 +227,23 @@ submitted in Step 3 as one GitHub review.
 ## Analytics (PostHog)
 
 Typed events, indicative set: `pr_loaded` (visibility, file count, primary
-language), `ai_task_completed` / `ai_task_failed` (task name, duration,
-cached?), `diagram_viewed`, `hotspot_clicked`, `comment_drafted`,
+language), `signed_in` (method: oauth|pat), `ai_task_completed` /
+`ai_task_failed` (task name, duration, cached?), `diagram_viewed`,
+`hotspot_clicked`, `ci_summary_viewed`, `comment_drafted`,
 `review_submitted` (verdict type, comment count), `settings_key_added`
 (which service, never the key). Exact schema finalized during planning.
 
 ## Testing
 
 - **Unit (Vitest):** URL parsing, diff parsing, context packing (token
-  budgets, file filtering), cache keying, AI response parsing/validation.
-  Pure logic with fixture PRs.
+  budgets, file filtering, CI inclusion), graph-JSON → Mermaid serializer,
+  cache keying, AI response schema validation. Pure logic with fixture PRs.
 - **Component (Vitest + Testing Library):** DiffView modes + word-level
-  highlights, stepper navigation, comment editor, settings.
+  highlights, stepper navigation, comment editor, settings, sign-in states.
 - **E2E (Playwright):** full flow against MSW-mocked GitHub/DeepSeek
   fixtures: paste URL → diff renders → AI panels populate → draft comment →
-  submit review (mocked). One tokenless smoke test against a real public PR
+  submit review (mocked). OAuth exchange function tested with a mocked
+  GitHub token endpoint. One tokenless smoke test against a real public PR
   in CI.
 - AI prompt **quality** is verified at the human checkpoint (non-
   deterministic); automated tests cover plumbing, not prose.
@@ -203,13 +253,18 @@ cached?), `diagram_viewed`, `hotspot_clicked`, `comment_drafted`,
 | Decision | Choice |
 |---|---|
 | Write-back scope | Full review actions (comment, approve, request changes) |
-| Repo access | Public + private (PAT) |
-| AI features in v1 | All four (summary, attention, diagrams, confidence) |
+| Repo access | Public + private |
+| Auth | **OAuth in v1** (one Vercel function for code exchange) + PAT fallback |
+| AI features in v1 | All four (summary, attention, diagrams, behavior verdict) |
 | "Old vs new diff" feature | Reframed: architectural before/after (= Mermaid feature); commit-interdiff is nice-to-have |
-| Stack | Svelte 5 + TypeScript + Vite, pnpm |
-| Architecture | Pure static SPA (approach A) + client-side AI cache |
-| Layout | 1-2-3 stepper + pinnable context rail (hybrid A+B from mockups) |
+| Confidence presentation | **Categorical 3-level behavior verdict + evidence; no percentages** |
+| Diagram reliability | **LLM emits graph JSON; Mermaid serialized deterministically in code** |
+| CI signals | **Check runs + annotations in v1**; raw log mining deferred |
+| Stack | **Svelte 5 + TypeScript + Vite**, pnpm (React switch considered for diff-view ecosystem, reverted after finding `@git-diff-view/svelte`) |
+| Architecture | Static SPA + single OAuth exchange function; client-side AI cache |
+| Layout | 1-2-3 stepper + pinnable context rail (hybrid from mockups) |
 | Comments | WYSIWYG markdown editor |
 | Analytics | PostHog, client-side, strict privacy rule |
 | Supply chain | pnpm `minimumReleaseAge` 7 days |
 | Model switching | Deferred; enabled cheaply by `lib/llm/` abstraction |
+| Test-coverage flags | AI-inferred, labeled as such in UI (not measured coverage) |
