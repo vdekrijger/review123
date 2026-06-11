@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { renderMarkdown } from './render'
+import { renderMarkdown, replaceEmojiShortcodes } from './render'
 
 describe('renderMarkdown', () => {
   it('strips <script> tags (XSS: script injection)', () => {
@@ -88,5 +88,86 @@ describe('renderMarkdown', () => {
   it('handles empty string', () => {
     const out = renderMarkdown('')
     expect(typeof out).toBe('string')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// replaceEmojiShortcodes — GitHub-style :emoji: preview parity
+// ---------------------------------------------------------------------------
+
+describe('replaceEmojiShortcodes', () => {
+  it(':tada: → 🎉', () => {
+    expect(replaceEmojiShortcodes(':tada:')).toBe('🎉')
+  })
+
+  it(':smile: → 😄', () => {
+    expect(replaceEmojiShortcodes(':smile:')).toBe('😄')
+  })
+
+  it(':+1: → 👍', () => {
+    expect(replaceEmojiShortcodes(':+1:')).toBe('👍')
+  })
+
+  it(':-1: → 👎', () => {
+    expect(replaceEmojiShortcodes(':-1:')).toBe('👎')
+  })
+
+  it(':rocket: → 🚀', () => {
+    expect(replaceEmojiShortcodes(':rocket:')).toBe('🚀')
+  })
+
+  it(':heart: → ❤️', () => {
+    expect(replaceEmojiShortcodes(':heart:')).toBe('❤️')
+  })
+
+  it(':eyes: → 👀', () => {
+    expect(replaceEmojiShortcodes(':eyes:')).toBe('👀')
+  })
+
+  it(':thinking: → 🤔', () => {
+    expect(replaceEmojiShortcodes(':thinking:')).toBe('🤔')
+  })
+
+  it(':fire: → 🔥', () => {
+    expect(replaceEmojiShortcodes(':fire:')).toBe('🔥')
+  })
+
+  it(':check: → ✅', () => {
+    expect(replaceEmojiShortcodes(':check:')).toBe('✅')
+  })
+
+  it('unknown shortcode :zzzz: left as literal text', () => {
+    expect(replaceEmojiShortcodes(':zzzz:')).toBe(':zzzz:')
+  })
+
+  it('mixed known and unknown shortcodes', () => {
+    const result = replaceEmojiShortcodes(':tada: great work :zzzz:!')
+    expect(result).toBe('🎉 great work :zzzz:!')
+  })
+
+  it('empty string returns empty string', () => {
+    expect(replaceEmojiShortcodes('')).toBe('')
+  })
+
+  it('no shortcodes left unchanged', () => {
+    const text = 'No emojis here'
+    expect(replaceEmojiShortcodes(text)).toBe(text)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// renderMarkdown + emoji: ensure shortcodes survive through the pipeline
+// ---------------------------------------------------------------------------
+
+describe('renderMarkdown emoji integration', () => {
+  it(':tada: expands to 🎉 in rendered output', () => {
+    const out = renderMarkdown('Congrats :tada:')
+    expect(out).toContain('🎉')
+    expect(out).not.toContain(':tada:')
+  })
+
+  it('unknown :zzzz: shortcode left as text in rendered output', () => {
+    const out = renderMarkdown('Test :zzzz: here')
+    expect(out).toContain(':zzzz:')
   })
 })

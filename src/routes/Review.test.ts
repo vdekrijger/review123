@@ -14,6 +14,7 @@ import userEvent from '@testing-library/user-event'
 import Review from './Review.svelte'
 import { jsonResponse } from '../test-helpers'
 import { track } from '../lib/analytics/analytics'
+import { getHistory } from '../lib/history/history'
 
 // Stub analytics
 vi.mock('../lib/analytics/analytics', () => ({
@@ -259,5 +260,22 @@ describe('EC-06h: diff renders while AI panels are loading', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('article.file-diff')).toBeInTheDocument()
     })
+  })
+})
+
+describe('Review adds PR to history on load (history.ts)', () => {
+  it('adds the PR to localStorage history when the PR reaches ready state', async () => {
+    vi.stubGlobal('fetch', makeFetchStub())
+
+    render(Review, { props: { owner: 'alice', repo: 'widgets', number: 42 } })
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    const history = getHistory()
+    const entry = history.find((e) => e.owner === 'alice' && e.repo === 'widgets' && e.number === 42)
+    expect(entry).toBeDefined()
+    expect(entry?.title).toBe('Test PR')
   })
 })

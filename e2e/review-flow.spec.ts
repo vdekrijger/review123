@@ -411,15 +411,16 @@ test('review flow: diff renders with red/green rows, AI panels populate, CI show
   // CI: should show failure (Integration tests failed)
   await expect(page.getByText(/Integration tests/i)).toBeVisible({ timeout: 10_000 })
 
-  // PR description should appear
+  // PR description is inside a collapsed <details> — open it first to check
+  const prDescDetails = page.locator('.pr-description-details')
+  await prDescDetails.evaluate((el: HTMLDetailsElement) => { el.open = true })
   await expect(page.getByText('This PR adds a new feature for testing.')).toBeVisible()
 
-  // AI summary should appear (streamed text in the prose pre element in UnderstandStep)
-  await expect(page.locator('.understand-step pre.prose')).toBeVisible({ timeout: 15_000 })
-  await expect(page.locator('.understand-step pre.prose')).toContainText(
-    'This PR adds a new feature',
-    { timeout: 15_000 },
-  )
+  // AI summary should appear (may be in pre.prose while streaming or .prose-md when done)
+  // Use containsText directly: it waits for text to appear and ignores empty/zero-size containers
+  await expect(
+    page.locator('.understand-step')
+  ).toContainText('This PR adds a new feature', { timeout: 15_000 })
 
   // Verdict pill should appear — UnderstandStep renders the verdict-level div
   await expect(page.locator('.understand-step .verdict-level')).toBeVisible({ timeout: 20_000 })
@@ -500,8 +501,8 @@ test('draft bar shows draft count; step 3 shows sign-in prompt when signed out',
   await page.getByRole('button', { name: 'Next step' }).click()
   await page.getByRole('button', { name: 'Next step' }).click()
 
-  // VerdictStep renders a sign-in prompt when signed out (EC-09c / EC-19b)
-  await expect(page.getByText(/sign in/i)).toBeVisible({ timeout: 5_000 })
+  // VerdictStep renders a sign-in prompt / PAT prompt when signed out (EC-09c / EC-19b)
+  await expect(page.getByText(/sign in|add a.*pat|authentication required/i)).toBeVisible({ timeout: 5_000 })
 
   // Submit button should NOT be present when signed out
   await expect(page.getByRole('button', { name: /submit review/i })).not.toBeVisible()

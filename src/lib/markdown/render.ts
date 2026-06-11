@@ -12,6 +12,47 @@
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
+// ---------------------------------------------------------------------------
+// GitHub-style emoji shortcode map (preview parity — GitHub renders these
+// server-side; the preview should match for the ~20 most common ones).
+// ---------------------------------------------------------------------------
+
+const EMOJI_MAP: Record<string, string> = {
+  smile: '😄',
+  '+1': '👍',
+  thumbsup: '👍',
+  '-1': '👎',
+  thumbsdown: '👎',
+  tada: '🎉',
+  rocket: '🚀',
+  heart: '❤️',
+  eyes: '👀',
+  thinking: '🤔',
+  fire: '🔥',
+  white_check_mark: '✅',
+  check: '✅',
+  x: '❌',
+  warning: '⚠️',
+  bug: '🐛',
+  sparkles: '✨',
+  zap: '⚡',
+  100: '💯',
+  pray: '🙏',
+  clap: '👏',
+  wave: '👋',
+  point_up: '☝️',
+  laughing: '😆',
+  sob: '😭',
+}
+
+/**
+ * Replace GitHub-style :emoji: shortcodes with their Unicode equivalents.
+ * Unknown shortcodes are left as-is (e.g. `:zzzz:` stays `:zzzz:`).
+ */
+export function replaceEmojiShortcodes(src: string): string {
+  return src.replace(/:([a-z0-9_+\-]+):/g, (match, name) => EMOJI_MAP[name] ?? match)
+}
+
 /**
  * DOMPurify is a factory in non-browser environments (jsdom, node with jsdom).
  * In a real browser, the default export is already an initialized instance.
@@ -69,11 +110,16 @@ const PURIFY_CONFIG: Parameters<typeof purify.sanitize>[1] = {
 /**
  * Render Markdown to sanitized HTML.
  *
+ * Also expands GitHub-style :emoji: shortcodes before passing through marked,
+ * so the preview matches what GitHub renders server-side.
+ *
  * @param src - Raw Markdown string (may contain user-supplied content).
  * @returns Safe HTML string. Safe to embed via {@html} — sanitization is done here.
  */
 export function renderMarkdown(src: string): string {
+  // Expand :emoji: shortcodes before rendering so they appear in the HTML
+  const withEmoji = replaceEmojiShortcodes(src)
   // marked 18: parse() with async:false returns string synchronously
-  const rawHtml = marked(src, { gfm: true, breaks: true, async: false }) as string
+  const rawHtml = marked(withEmoji, { gfm: true, breaks: true, async: false }) as string
   return purify.sanitize(rawHtml, PURIFY_CONFIG)
 }
