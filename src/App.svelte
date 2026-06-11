@@ -19,7 +19,10 @@
   <Landing />
 {:else if router.route.name === 'review'}
   {@const route = router.route}
-  <Review owner={route.owner} repo={route.repo} number={route.number} />
+  {#key `${route.owner}/${route.repo}/${route.number}`}
+    <Review owner={route.owner} repo={route.repo} number={route.number} />
+  {/key}
+
 {:else}
   <section><h1>Not found</h1><p>That isn't a valid review link. <a href="/">Go home</a>.</p></section>
 {/if}

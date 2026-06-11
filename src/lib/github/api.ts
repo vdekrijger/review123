@@ -19,14 +19,18 @@ export async function getPrMeta(ref: PrRef): Promise<PrMeta> {
   }
 }
 
+const MAX_PAGES = 50 // defensive cap against malformed Link cycles (~5 000 files)
+
 // Traverses all pages (100/page). EC-05i.
 export async function getPrFiles(ref: PrRef): Promise<PrFile[]> {
   const all: PrFile[] = []
   let path: string | null = `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/files?per_page=100`
-  while (path !== null) {
+  let pages = 0
+  while (path !== null && pages < MAX_PAGES) {
     const { body, next }: { body: PrFile[]; next: string | null } = await ghFetchPage<PrFile[]>(path)
     all.push(...body)
     path = next
+    pages++
   }
   return all
 }

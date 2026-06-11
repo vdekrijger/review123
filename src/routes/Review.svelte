@@ -5,7 +5,7 @@
   import { getSettings, setDiffMode, type DiffMode } from '../lib/settings/settings'
 
   let { owner, repo, number }: { owner: string; repo: string; number: number } = $props()
-  const load = createPrLoad({ owner, repo, number })
+  const load = $derived.by(() => createPrLoad({ owner, repo, number }))
   let step = $state<Step>(1)
   let mode = $state<DiffMode>(getSettings().diffMode)
   function setMode(m: DiffMode) { mode = m; setDiffMode(m) }
@@ -32,8 +32,8 @@
       <p class="muted">AI summary, behavior verdict, diagrams and CI signals arrive in upcoming milestones.</p>
     {:else if step === 2}
       <div class="mode-toggle" role="group" aria-label="Diff mode">
-        <button class:active={mode === 'unified'} onclick={() => setMode('unified')}>Unified</button>
-        <button class:active={mode === 'split'} onclick={() => setMode('split')}>Side-by-side</button>
+        <button class:active={mode === 'unified'} aria-pressed={mode === 'unified'} onclick={() => setMode('unified')}>Unified</button>
+        <button class:active={mode === 'split'} aria-pressed={mode === 'split'} onclick={() => setMode('split')}>Side-by-side</button>
       </div>
       {#if load.state.files.length === 0}
         <p>This PR has no changed files.</p>

@@ -55,4 +55,24 @@ describe('github api', () => {
     const url = f.mock.calls[0][0] as string
     expect(url).toContain('/contents/src/has%20space/f%231.ts?ref=h1')
   })
+
+  it('getPrFiles stops at MAX_PAGES (50) when Link always returns next — no infinite loop', async () => {
+    // Every response returns a next Link pointing to the same "next page" URL
+    const nextLink = 'https://api.github.com/repos/a/b/pulls/1/files?page=2'
+    // Return a fresh Response object each call — Response body can only be read once
+    const f = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify([{ filename: 'x.ts', status: 'modified', patch: '@@', additions: 1, deletions: 0 }]),
+          { status: 200, headers: { Link: `<${nextLink}>; rel="next"` } },
+        ),
+      ),
+    )
+    vi.stubGlobal('fetch', f)
+    const files = await getPrFiles({ owner: 'a', repo: 'b', number: 1 })
+    // Should have stopped at exactly 50 pages
+    expect(f).toHaveBeenCalledTimes(50)
+    // Each page has 1 file
+    expect(files).toHaveLength(50)
+  })
 })

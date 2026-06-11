@@ -23,6 +23,7 @@ export function createPrLoad(
     try {
       const [meta, files] = await Promise.all([deps.getPrMeta(ref), deps.getPrFiles(ref)])
       holder.state = { status: 'ready', meta, files }
+      // Note: this event may fire for an abandoned load (AbortSignal planned in a later milestone).
       track('pr_loaded', {
         visibility: meta.private ? 'private' : 'public',
         file_count: files.length,

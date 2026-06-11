@@ -47,4 +47,31 @@ describe('createPrLoad', () => {
     await load.promise
     expect(load.state.status).toBe('ready')
   })
+
+  it('maps forbidden to a specific error state', async () => {
+    const load = createPrLoad(REF, {
+      getPrMeta: vi.fn().mockRejectedValue(new GithubApiError({ kind: 'forbidden' })),
+      getPrFiles: vi.fn().mockResolvedValue(FILES),
+    })
+    await load.promise
+    expect(load.state).toEqual({ status: 'error', error: 'forbidden' })
+  })
+
+  it('maps server error to a specific error state', async () => {
+    const load = createPrLoad(REF, {
+      getPrMeta: vi.fn().mockRejectedValue(new GithubApiError({ kind: 'server', status: 500 })),
+      getPrFiles: vi.fn().mockResolvedValue(FILES),
+    })
+    await load.promise
+    expect(load.state).toEqual({ status: 'error', error: 'server' })
+  })
+
+  it('maps non-GithubApiError (network rejection) to network error', async () => {
+    const load = createPrLoad(REF, {
+      getPrMeta: vi.fn().mockRejectedValue(new TypeError('Failed to fetch')),
+      getPrFiles: vi.fn().mockResolvedValue(FILES),
+    })
+    await load.promise
+    expect(load.state).toEqual({ status: 'error', error: 'network' })
+  })
 })
