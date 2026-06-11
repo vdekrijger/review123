@@ -14,13 +14,16 @@
    * EC-09d/e/f: errors rendered verbatim in role=alert, drafts NOT cleared.
    * EC-09g: drafts cleared ONLY on success.
    */
-  import { requireAuth } from '../lib/auth/requireAuth'
+  import { authState } from '../lib/auth/authState.svelte'
+  import { beginSignIn } from '../lib/auth/auth'
   import { submitReview, type Verdict, type SubmitOutcome } from '../lib/github/review'
   import { renderMarkdown } from '../lib/markdown/render'
   import { track } from '../lib/analytics/analytics'
   import CommentEditor from './CommentEditor.svelte'
   import type { PrRef } from '../lib/github/parse'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
+
+  const RETURN_KEY = 'review123:returnTo'
 
   interface Props {
     prRef: PrRef
@@ -42,7 +45,16 @@
 
   let { prRef, commitId, store, prUrl, submitFn = submitReview }: Props = $props()
 
-  const auth = requireAuth()
+  // Derive signed-in status reactively from authState so the UI flips live
+  // when the user completes OAuth (EC-REACT: no reload required).
+  const isSignedIn = $derived(authState.auth !== null)
+
+  const clientId = import.meta.env.VITE_GITHUB_CLIENT_ID as string | undefined
+
+  async function handleSignIn() {
+    sessionStorage.setItem(RETURN_KEY, location.pathname)
+    location.assign(await beginSignIn('public_repo'))
+  }
 
   // ---- Local state ----
   let verdict = $state<Verdict>('COMMENT')
@@ -99,11 +111,16 @@
   }
 </script>
 
-{#if !auth.ok}
+{#if !isSignedIn}
   <!-- EC-09c, EC-19b: signed-out state — no form, sign-in prompt only -->
   <div class="signed-out" role="status">
-    <p>Sign in with GitHub or add a PAT in Settings to submit your review.</p>
-    <a href="#settings">Open Settings</a>
+    {#if clientId}
+      <p>Authentication required — use OAuth or add a PAT in Settings.</p>
+      <button type="button" class="signin-btn" onclick={handleSignIn}>Sign in with GitHub</button>
+    {:else}
+      <p>Add a GitHub PAT in Settings to submit your review.</p>
+      <a href="#settings">Open Settings</a>
+    {/if}
   </div>
 {:else if success}
   <!-- Success state -->
@@ -188,6 +205,25 @@
   .signed-out {
     padding: 1.5rem;
     text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .signin-btn {
+    padding: 0.5rem 1.25rem;
+    border: none;
+    border-radius: 6px;
+    background: #24292f;
+    color: #fff;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .signin-btn:hover {
+    background: #1c2128;
   }
 
   .verdict-step {
