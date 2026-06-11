@@ -21,9 +21,10 @@ function buildHeaders(targetUrl?: string): Record<string, string> {
 export async function ghFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = `${BASE}${path}`
   const headers = { ...buildHeaders(url), ...(init.headers as Record<string, string> | undefined) }
+  const signal = init.signal ?? AbortSignal.timeout(20_000)
   let res: Response
   try {
-    res = await fetch(url, { ...init, headers })
+    res = await fetch(url, { ...init, headers, signal })
   } catch {
     throw new GithubApiError({ kind: 'network' })
   }
@@ -31,12 +32,11 @@ export async function ghFetch<T>(path: string, init: RequestInit = {}): Promise<
   throw new GithubApiError(mapError(res))
 }
 
-// Returns one page plus the rel="next" link for paginated endpoints.
 export async function ghFetchPage<T>(pathOrUrl: string): Promise<{ body: T; next: string | null }> {
   const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${BASE}${pathOrUrl}`
   let res: Response
   try {
-    res = await fetch(url, { headers: buildHeaders(url) })
+    res = await fetch(url, { headers: buildHeaders(url), signal: AbortSignal.timeout(20_000) })
   } catch {
     throw new GithubApiError({ kind: 'network' })
   }

@@ -63,6 +63,11 @@ describe('ghFetch', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')))
     await expect(ghFetch('/x')).rejects.toMatchObject({ detail: { kind: 'network' } })
   })
+
+  it('maps DOMException TimeoutError to network error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new DOMException('t', 'TimeoutError')))
+    await expect(ghFetch('/x')).rejects.toMatchObject({ detail: { kind: 'network' } })
+  })
 })
 
 describe('ghFetchPage', () => {

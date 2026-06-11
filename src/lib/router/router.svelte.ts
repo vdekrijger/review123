@@ -16,7 +16,11 @@ export function matchRoute(pathname: string): Route {
 
 export const router = $state<{ route: Route }>({ route: { name: 'landing' } })
 
+let started = false
+export function _resetStartedForTest(): void { started = false }
 export function startRouter(): void {
+  if (started) return
+  started = true
   router.route = matchRoute(location.pathname)
   window.addEventListener('popstate', () => { router.route = matchRoute(location.pathname) })
 }

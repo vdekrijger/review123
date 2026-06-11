@@ -41,7 +41,7 @@ function mapPrFile(raw: RawPrFile): PrFile {
   }
 }
 
-// Traverses all pages (100/page). EC-05i.
+// EC-05i; MAX_PAGES caps runaway Link cycles.
 export async function getPrFiles(ref: PrRef): Promise<PrFile[]> {
   const all: PrFile[] = []
   let path: string | null = `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/files?per_page=100`

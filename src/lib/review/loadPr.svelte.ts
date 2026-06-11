@@ -3,6 +3,22 @@ import { GithubApiError, type PrFile, type PrMeta } from '../github/types'
 import type { PrRef } from '../github/parse'
 import { track } from '../analytics/analytics'
 
+/** Returns the most-frequent file extension across all files, or 'unknown'.
+ *  Dotfiles (e.g. .gitignore) and extensionless files (e.g. Dockerfile) are
+ *  excluded so no raw filename ever leaks into analytics. */
+export function primaryLanguage(files: PrFile[]): string {
+  const counts = new Map<string, number>()
+  for (const { filename } of files) {
+    const base = filename.split('/').pop() ?? filename
+    const dot = base.lastIndexOf('.')
+    if (dot <= 0) continue // no dot, or dot is the first char (dotfile)
+    const ext = base.slice(dot + 1)
+    counts.set(ext, (counts.get(ext) ?? 0) + 1)
+  }
+  if (counts.size === 0) return 'unknown'
+  return [...counts.entries()].reduce((a, b) => (b[1] > a[1] ? b : a))[0]
+}
+
 export type LoadState =
   | { status: 'loading' }
   | { status: 'ready'; meta: PrMeta; files: PrFile[] }
@@ -27,7 +43,7 @@ export function createPrLoad(
       track('pr_loaded', {
         visibility: meta.private ? 'private' : 'public',
         file_count: files.length,
-        primary_language: files[0]?.filename.split('.').pop() ?? 'unknown',
+        primary_language: primaryLanguage(files),
       })
     } catch (e) {
       if (e instanceof GithubApiError && e.detail.kind === 'rate-limited') {

@@ -34,6 +34,9 @@ describe('classifyFile', () => {
   it('normal patched file classifies as diff', () => {
     expect(classifyFile(modified)).toBe('diff')
   })
+  it('renamed file with patch classifies as diff', () => {
+    expect(classifyFile({ filename: 'b.ts', previousFilename: 'a.ts', status: 'renamed', additions: 2, deletions: 0, patch: '@@ -1,2 +1,4 @@\n line\n+added\n+added' })).toBe('diff')
+  })
 })
 
 describe('buildDiffFile', () => {

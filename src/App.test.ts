@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import App from './App.svelte'
+import { _resetStartedForTest } from './lib/router/router.svelte'
 import { jsonResponse } from './test-helpers'
 
 // Stub analytics so posthog.capture doesn't fire during tests
@@ -45,6 +46,7 @@ describe('EC-05k: closed/merged PR renders correctly', () => {
 
   beforeEach(() => {
     originalFetch = globalThis.fetch
+    _resetStartedForTest()
   })
 
   afterEach(() => {
@@ -75,6 +77,7 @@ describe('App review→review navigation', () => {
 
   beforeEach(() => {
     originalFetch = globalThis.fetch
+    _resetStartedForTest()
   })
 
   afterEach(() => {
