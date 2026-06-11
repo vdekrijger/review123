@@ -29,6 +29,14 @@ export async function ghFetch<T>(path: string, init: RequestInit = {}): Promise<
     throw new GithubApiError({ kind: 'network' })
   }
   if (res.ok) return (await res.json()) as T
+  if (res.status === 422) {
+    let msg = 'Unprocessable Entity'
+    try {
+      const body = (await res.json()) as { message?: string }
+      if (typeof body.message === 'string') msg = body.message
+    } catch { /* ignore parse errors */ }
+    throw new GithubApiError({ kind: 'unprocessable', message: msg })
+  }
   throw new GithubApiError(mapError(res))
 }
 
