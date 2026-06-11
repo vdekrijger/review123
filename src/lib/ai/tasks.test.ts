@@ -14,6 +14,7 @@ import {
   diagramsPrompt,
   verdictPrompt,
   parseReadingOrder,
+  stripReadingOrder,
 } from './tasks'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
@@ -45,6 +46,10 @@ describe('PROMPT_VERSION', () => {
     expect(typeof PROMPT_VERSION).toBe('number')
     expect(PROMPT_VERSION).toBeGreaterThan(0)
   })
+
+  it('is at least 2 (bumped for concise-summary prompt change)', () => {
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(2)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -73,6 +78,11 @@ describe('summarizePrompt', () => {
     const { system } = summarizePrompt(makeCtx())
     // summarize is plain text, not JSON
     expect(system.toLowerCase()).not.toContain('json only')
+  })
+
+  it('system prompt contains word-limit instruction (~120 words)', () => {
+    const { system } = summarizePrompt(makeCtx())
+    expect(system).toContain('120')
   })
 
   it('user is exactly ctx.text (no additional CI appended)', () => {
@@ -377,5 +387,62 @@ Trailing prose that should not be included.`
   it('handles mixed bullet and plain entries', () => {
     const text = 'Suggested reading order:\nsrc/a.ts\n- src/b.ts\n* src/c.ts'
     expect(parseReadingOrder(text)).toEqual(['src/a.ts', 'src/b.ts', 'src/c.ts'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// stripReadingOrder
+// ---------------------------------------------------------------------------
+
+describe('stripReadingOrder', () => {
+  it('returns the original string when no heading is present', () => {
+    const text = 'This PR refactors the router. Nothing else here.'
+    expect(stripReadingOrder(text)).toBe(text)
+  })
+
+  it('removes the heading and its list block from a normal summary', () => {
+    const text = `This PR adds caching.
+
+Suggested reading order:
+src/lib/cache/cache.ts
+src/routes/Review.svelte`
+    expect(stripReadingOrder(text)).toBe('This PR adds caching.')
+  })
+
+  it('removes heading + list and any subsequent blank lines from the tail', () => {
+    const text = `Summary prose here.
+
+Suggested reading order:
+src/a.ts
+src/b.ts
+
+Trailing prose after blank line.`
+    const result = stripReadingOrder(text)
+    expect(result).toContain('Summary prose here.')
+    // The trailing prose is preserved (it was after a blank line — not part of the list)
+    expect(result).toContain('Trailing prose after blank line.')
+    expect(result).not.toContain('Suggested reading order')
+    expect(result).not.toContain('src/a.ts')
+  })
+
+  it('handles summary with heading at end (missing blank terminator)', () => {
+    const text = `Summary.\n\nSuggested reading order:\nsrc/a.ts\nsrc/b.ts`
+    const result = stripReadingOrder(text)
+    expect(result).toBe('Summary.')
+    expect(result).not.toContain('Suggested reading order')
+  })
+
+  it('handles empty string input gracefully', () => {
+    expect(stripReadingOrder('')).toBe('')
+  })
+
+  it('handles input that is only the heading (no list items)', () => {
+    const text = 'Suggested reading order:'
+    expect(stripReadingOrder(text)).toBe('')
+  })
+
+  it('is case-insensitive for the heading', () => {
+    const text = 'Prose.\n\nSUGGESTED READING ORDER:\nsrc/a.ts'
+    expect(stripReadingOrder(text)).toBe('Prose.')
   })
 })

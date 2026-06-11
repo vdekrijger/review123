@@ -166,3 +166,33 @@ describe('CommentEditor', () => {
     await userEvent.type(textarea, '{Control>}{Enter}{/Control}')
   })
 })
+
+describe('CommentEditor emoji support', () => {
+  it('direct emoji character (😄) typed into textarea is preserved via onchange', async () => {
+    const onchange = vi.fn()
+    render(CommentEditor, { props: { value: '', onchange } })
+    const textarea = getTextarea()
+    // Fire input event directly (userEvent.type doesn't handle emoji chars well in jsdom)
+    textarea.value = '😄'
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    // onchange should have been called with the emoji
+    const calls = onchange.mock.calls.map((c: string[]) => c[0])
+    expect(calls.some((v: string) => v.includes('😄'))).toBe(true)
+  })
+
+  it(':tada: shortcode renders as 🎉 in the Preview tab', async () => {
+    render(CommentEditor, { props: { value: ':tada:', onchange: vi.fn() } })
+    await userEvent.click(screen.getByRole('tab', { name: /preview/i }))
+    // The preview should contain the rendered emoji, not the raw shortcode
+    const preview = document.querySelector('.preview')
+    expect(preview?.textContent).toContain('🎉')
+    expect(preview?.textContent).not.toContain(':tada:')
+  })
+
+  it(':zzzz: (unknown shortcode) left as literal text in Preview', async () => {
+    render(CommentEditor, { props: { value: ':zzzz:', onchange: vi.fn() } })
+    await userEvent.click(screen.getByRole('tab', { name: /preview/i }))
+    const preview = document.querySelector('.preview')
+    expect(preview?.textContent).toContain(':zzzz:')
+  })
+})

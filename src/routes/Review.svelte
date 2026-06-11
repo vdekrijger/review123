@@ -14,6 +14,7 @@
   import ConsentDialog from '../components/ConsentDialog.svelte'
   import UnderstandStep from '../components/UnderstandStep.svelte'
   import ContextRail from '../components/ContextRail.svelte'
+  import { addToHistory } from '../lib/history/history'
   import type { CiSummary } from '../lib/github/checks'
   import type { AttentionResult } from '../lib/ai/schemas'
 
@@ -44,12 +45,16 @@
     // Initialise the store once the PR is ready and we have the headSha
     if (load.state.status === 'ready' && !storeInitialized) {
       storeInitialized = true
-      const prKey = `${owner}/${repo}#${number}@${load.state.meta.headSha}`
+      const meta = load.state.meta
+      const prKey = `${owner}/${repo}#${number}@${meta.headSha}`
       const store = createDraftStore(prKey)
       draftStore = store
       // Un-awaited intentionally: causes a cosmetic 0-count flash on mount
       // but avoids blocking render. Load completes asynchronously.
       store.load()
+
+      // Record this PR in the recent-reviews history
+      addToHistory({ owner, repo, number, title: meta.title })
     }
   })
 

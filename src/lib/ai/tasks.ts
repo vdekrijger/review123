@@ -12,7 +12,7 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
-export const PROMPT_VERSION = 1
+export const PROMPT_VERSION = 2
 
 // ---------------------------------------------------------------------------
 // summarizePrompt — streaming plain-text summary + reading order
@@ -30,11 +30,11 @@ export function summarizePrompt(ctx: PackedContext): { system: string; user: str
   const system = `You are an expert code reviewer assistant. Your role is to help engineers \
 understand pull requests quickly and accurately.
 
-Given the code changes below, produce TWO sections in plain text (no JSON, no markdown headers \
-other than what is specified):
+Given the code changes below, produce TWO sections in Markdown:
 
-1. A concise plain-language summary of what the PR does, why the changes were made, and any \
-important context a reviewer should know. Keep it under 200 words.
+1. A concise prose summary: lead with what the PR does and why in one sentence, then use \
+bullet points for any important details a reviewer should know. Keep the prose summary to \
+~120 words maximum — shorter is better.
 
 2. A section headed EXACTLY (including the colon):
 
@@ -300,4 +300,47 @@ export function parseReadingOrder(summaryText: string): string[] {
   }
 
   return paths
+}
+
+// ---------------------------------------------------------------------------
+// stripReadingOrder — remove the "Suggested reading order:" block from display
+// ---------------------------------------------------------------------------
+
+/**
+ * Strip the "Suggested reading order:" heading and its file-list block from
+ * a summary string, returning only the prose portion.
+ *
+ * The heading is matched case-insensitively and tolerantly (surrounding
+ * whitespace). The list block that follows — non-blank lines until the first
+ * blank line or end of input — is also removed.
+ *
+ * Use this before displaying the summary; parsing/ordering logic still uses
+ * parseReadingOrder on the original text.
+ *
+ * Returns the trimmed prose portion, or the original string if no heading is found.
+ */
+export function stripReadingOrder(summaryText: string): string {
+  const lines = summaryText.split('\n')
+
+  // Find the heading line
+  let headingIndex = -1
+  for (let i = 0; i < lines.length; i++) {
+    if (/suggested reading order\s*:/i.test(lines[i])) {
+      headingIndex = i
+      break
+    }
+  }
+
+  if (headingIndex === -1) return summaryText
+
+  // Find the end of the list block: first blank line after heading, or end
+  let listEnd = headingIndex + 1
+  while (listEnd < lines.length && lines[listEnd].trim() !== '') {
+    listEnd++
+  }
+
+  // Remove heading + list lines and rejoin
+  const before = lines.slice(0, headingIndex)
+  const after = lines.slice(listEnd)
+  return [...before, ...after].join('\n').trim()
 }
