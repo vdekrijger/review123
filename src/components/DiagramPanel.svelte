@@ -18,6 +18,7 @@
    */
   import { track } from '../lib/analytics/analytics'
   import { graphToMermaid } from '../lib/diagram/mermaid'
+  import { getMermaid } from '../lib/diagram/mermaidInit'
   import type { GraphResult } from '../lib/diagram/types'
 
   interface Props {
@@ -37,23 +38,6 @@
 
   // Track whether we have fired the analytics event
   let hasTracked = false
-
-  // Mermaid module (lazy-loaded once)
-  let mermaidMod: typeof import('mermaid') | null = null
-  let mermaidInitialized = false
-
-  async function getMermaid(): Promise<typeof import('mermaid')['default']> {
-    if (!mermaidMod) {
-      mermaidMod = await import('mermaid')
-    }
-    const m = mermaidMod.default
-    if (!mermaidInitialized) {
-      // EC-14j: strict security level, no autostart
-      m.initialize({ securityLevel: 'strict', startOnLoad: false })
-      mermaidInitialized = true
-    }
-    return m
-  }
 
   async function renderDiagram(
     container: HTMLDivElement,
@@ -327,15 +311,21 @@
     background: #fff;
     border-radius: 8px;
     padding: 2rem;
-    max-width: 90vw;
-    max-height: 90vh;
+    width: 92vw;
+    height: 88vh;
+    max-width: 92vw;
+    max-height: 88vh;
     overflow: auto;
     position: relative;
+    display: flex;
+    flex-direction: column;
   }
 
   .overlay-content :global(svg) {
     max-width: 100%;
+    max-height: 100%;
     height: auto;
+    flex: 1 1 auto;
   }
 
   .close-btn {
