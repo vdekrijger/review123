@@ -139,7 +139,7 @@
   }
 
   .hotspot-reason {
-    font-family: monospace;
+    font-family: var(--font-mono);
     font-size: 0.78rem;
     word-break: break-word;
   }

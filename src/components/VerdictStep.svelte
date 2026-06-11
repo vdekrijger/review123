@@ -248,7 +248,7 @@
 
   .file-path {
     padding: 0.4rem 0.75rem;
-    font-family: monospace;
+    font-family: var(--font-mono);
     font-size: 0.85rem;
     cursor: pointer;
     background: #8881;

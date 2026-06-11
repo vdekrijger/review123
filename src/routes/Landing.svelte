@@ -142,7 +142,7 @@
   }
 
   .recent-ref {
-    font-family: monospace;
+    font-family: var(--font-mono);
     font-size: 0.85rem;
     opacity: 0.8;
     flex-shrink: 0;

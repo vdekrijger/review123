@@ -216,7 +216,7 @@
     margin: 0;
     padding-left: 1.5em;
     font-size: 0.85rem;
-    font-family: monospace;
+    font-family: var(--font-mono);
     opacity: 0.8;
   }
 
@@ -247,13 +247,15 @@
     white-space: pre-wrap;
     margin: 0;
     font-size: 0.9rem;
-    line-height: 1.5;
+    line-height: 1.6;
+    max-width: 72ch;
   }
 
   /* Normalize rendered markdown in the summary card */
   .prose-md {
     font-size: 0.9rem;
-    line-height: 1.5;
+    line-height: 1.6;
+    max-width: 72ch;
   }
 
   .prose-md :global(h1),
@@ -300,6 +302,7 @@
     margin: 0;
     white-space: pre-wrap;
     font-size: 0.9rem;
+    max-width: 72ch;
   }
 
   /* ---- Diagrams (collapsible) ---- */
