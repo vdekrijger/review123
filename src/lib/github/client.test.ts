@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ghFetch, ghFetchPage } from './client'
 import { GithubApiError } from './types'
-import { setGithubPat } from '../settings/settings'
+import { setGithubPat, saveGithubAuth } from '../settings/settings'
 import { jsonResponse } from '../../test-helpers'
 
 function mockFetch(status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -19,6 +19,25 @@ describe('ghFetch', () => {
     expect(data).toEqual({ id: 1 })
     expect(f.mock.calls[0][0]).toBe('https://api.github.com/repos/a/b')
     expect(f.mock.calls[0][1].headers.Authorization).toBe('Bearer ghp_x')
+  })
+
+  it('sends oauth token in Authorization header when method is oauth', async () => {
+    const f = mockFetch(200, { id: 2 })
+    vi.stubGlobal('fetch', f)
+    saveGithubAuth({ token: 'gho_oauth', method: 'oauth', scopes: ['public_repo'] })
+    const data = await ghFetch<{ id: number }>('/repos/a/b')
+    expect(data).toEqual({ id: 2 })
+    expect(f.mock.calls[0][1].headers.Authorization).toBe('Bearer gho_oauth')
+  })
+
+  it('authenticates via legacy migration: raw githubPat in localStorage → Bearer token', async () => {
+    const f = mockFetch(200, { id: 3 })
+    vi.stubGlobal('fetch', f)
+    // Seed raw legacy storage (no githubAuth key) to prove migration path end-to-end
+    localStorage.setItem('review123:settings', JSON.stringify({ githubPat: 'ghp_legacy' }))
+    const data = await ghFetch<{ id: number }>('/repos/a/b')
+    expect(data).toEqual({ id: 3 })
+    expect(f.mock.calls[0][1].headers.Authorization).toBe('Bearer ghp_legacy')
   })
 
   it('omits auth header without a token', async () => {
