@@ -13,7 +13,7 @@ export function buildDiffFile(f: PrFile): DiffFile | null {
   if (!f.patch) return null
 
   const file = DiffFile.createInstance({
-    oldFile: { fileName: f.filename },
+    oldFile: { fileName: f.previousFilename ?? f.filename },
     newFile: { fileName: f.filename },
     hunks: [f.patch],
   })

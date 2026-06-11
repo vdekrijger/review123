@@ -24,15 +24,20 @@ describe('github api', () => {
   })
 
   it('getPrFiles traverses pagination via Link header (EC-05i)', async () => {
-    const page1 = jsonResponse([{ filename: 'a.ts', status: 'modified', patch: '@@', additions: 1, deletions: 0 }], {
+    const page1 = jsonResponse([
+      { filename: 'a.ts', status: 'modified', patch: '@@', additions: 1, deletions: 0 },
+      { filename: 'new.ts', previous_filename: 'old.ts', status: 'renamed', additions: 3, deletions: 0, patch: '@@' },
+    ], {
       Link: '<https://api.github.com/repos/a/b/pulls/1/files?page=2>; rel="next"',
     })
     const page2 = jsonResponse([{ filename: 'b.bin', status: 'added', additions: 0, deletions: 0 }])
     const f = vi.fn().mockResolvedValueOnce(page1).mockResolvedValueOnce(page2)
     vi.stubGlobal('fetch', f)
     const files = await getPrFiles({ owner: 'a', repo: 'b', number: 1 })
-    expect(files.map(x => x.filename)).toEqual(['a.ts', 'b.bin'])
-    expect(files[1].patch).toBeUndefined() // EC-05j binary has no patch
+    expect(files.map(x => x.filename)).toEqual(['a.ts', 'new.ts', 'b.bin'])
+    // previous_filename (wire) maps to previousFilename (camelCase)
+    expect(files[1].previousFilename).toBe('old.ts')
+    expect(files[2].patch).toBeUndefined() // EC-05j binary has no patch
     expect(f).toHaveBeenCalledTimes(2)
   })
 

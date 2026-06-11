@@ -2,6 +2,15 @@ import { ghFetch, ghFetchPage } from './client'
 import { GithubApiError, type PrFile, type PrMeta } from './types'
 import type { PrRef } from './parse'
 
+interface RawPrFile {
+  filename: string
+  status: PrFile['status']
+  previous_filename?: string
+  patch?: string
+  additions: number
+  deletions: number
+}
+
 interface RawPr {
   title: string; state: 'open' | 'closed'; merged: boolean; body: string | null
   base: { sha: string; repo?: { private: boolean } }
@@ -21,14 +30,25 @@ export async function getPrMeta(ref: PrRef): Promise<PrMeta> {
 
 const MAX_PAGES = 50 // defensive cap against malformed Link cycles (~5 000 files)
 
+function mapPrFile(raw: RawPrFile): PrFile {
+  return {
+    filename: raw.filename,
+    status: raw.status,
+    ...(raw.previous_filename ? { previousFilename: raw.previous_filename } : {}),
+    ...(raw.patch !== undefined ? { patch: raw.patch } : {}),
+    additions: raw.additions,
+    deletions: raw.deletions,
+  }
+}
+
 // Traverses all pages (100/page). EC-05i.
 export async function getPrFiles(ref: PrRef): Promise<PrFile[]> {
   const all: PrFile[] = []
   let path: string | null = `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/files?per_page=100`
   let pages = 0
   while (path !== null && pages < MAX_PAGES) {
-    const { body, next }: { body: PrFile[]; next: string | null } = await ghFetchPage<PrFile[]>(path)
-    all.push(...body)
+    const { body, next }: { body: RawPrFile[]; next: string | null } = await ghFetchPage<RawPrFile[]>(path)
+    all.push(...body.map(mapPrFile))
     path = next
     pages++
   }

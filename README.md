@@ -55,7 +55,7 @@ Set these in `.env.local` locally; configure them in the Vercel dashboard for pr
 - **Build command:** `pnpm build`
 - **Output directory:** `dist/`
 
-`vercel.json` provides a SPA fallback rewrite that sends all paths to `index.html`, with `/api/*` explicitly excluded — that prefix is reserved for the Milestone B OAuth serverless function.
+`vercel.json` provides a SPA fallback rewrite that sends all non-`/api/` paths to `index.html` — `/api/*` is reserved for the Milestone B OAuth serverless function.
 
 ---
 
