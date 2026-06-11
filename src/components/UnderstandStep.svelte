@@ -410,6 +410,7 @@
   .tldr-streaming {
     display: -webkit-box;
     -webkit-line-clamp: 3;
+    line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
     font-weight: 400;
@@ -481,7 +482,7 @@
   .hotspot-chip.level-medium { border-color: #9a670055; }
 
   .chip-path {
-    font-family: monospace;
+    font-family: var(--font-mono, monospace);
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
@@ -528,7 +529,7 @@
   .churn-row.border-medium { border-left-color: #9a6700; }
 
   .churn-path {
-    font-family: monospace;
+    font-family: var(--font-mono, monospace);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -618,7 +619,7 @@
     margin: 0;
     padding-left: 1.5em;
     font-size: 0.85rem;
-    font-family: monospace;
+    font-family: var(--font-mono, monospace);
     opacity: 0.8;
   }
 

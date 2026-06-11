@@ -45,7 +45,10 @@
   }
 
   // ---- extendData — map existing drafts to per-line annotation entries ----
-  // extendData shape: { oldFile: Record<lineNumber, {data}>, newFile: Record<...> }
+  // NOTE: DiffUnifiedExtendLine only renders for hidden/collapsed lines (library
+  // limitation). We use extendData for split mode but render drafts inline below
+  // the DiffView for reliable display in both modes (see the draft-annotations
+  // section in the template).
   const extendData = $derived.by(() => {
     const oldFile: Record<string, { data: Draft }> = {}
     const newFile: Record<string, { data: Draft }> = {}
@@ -137,11 +140,39 @@
         />
       {/snippet}
     </DiffView>
+
+    <!-- Draft annotations: rendered outside DiffView so they appear immediately
+         after save regardless of diff mode or virtual-scroll state.
+         DiffUnifiedExtendLine only fires for hidden/collapsed lines (library v0.1.5
+         limitation), so we render saved drafts here as a reliable fallback. -->
+    {#if drafts.length > 0}
+      <div class="draft-annotations" aria-label="Draft comments on this file">
+        {#each drafts as draft (draft.line + '|' + draft.side)}
+          <DraftThread
+            {draft}
+            path={file.filename}
+            line={draft.line}
+            side={draft.side}
+            onsave={(body) => handleExtendSave(draft.line, sideToSplitSide(draft.side), body)}
+            ondelete={() => handleExtendDelete(draft.line, sideToSplitSide(draft.side))}
+            oncancel={() => {}}
+          />
+        {/each}
+      </div>
+    {/if}
   {/if}
 </article>
 
 <style>
   .file-diff { border: 1px solid #8884; border-radius: 6px; margin-bottom: 1rem; overflow: hidden; }
   header { display: flex; justify-content: space-between; padding: 0.4rem 0.8rem; background: #8881; }
+  header code { font-family: var(--font-mono); }
   .note { padding: 0.8rem; opacity: 0.7; }
+  /* Apply the --font-mono token to the diff view container */
+  :global(.unified-diff-table-wrapper),
+  :global(.old-diff-table-wrapper),
+  :global(.new-diff-table-wrapper) {
+    font-family: var(--font-mono) !important;
+  }
+  .draft-annotations { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.5rem; border-top: 1px solid #f0b44444; }
 </style>

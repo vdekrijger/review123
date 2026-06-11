@@ -233,7 +233,7 @@
     padding: 0.25rem 0.4rem;
     border-radius: 4px;
     font-size: 0.8rem;
-    font-family: monospace;
+    font-family: var(--font-mono);
     word-break: break-all;
   }
 

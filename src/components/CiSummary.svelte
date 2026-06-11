@@ -116,7 +116,7 @@
   }
 
   .ci-annotation {
-    font-family: monospace;
+    font-family: var(--font-mono);
     font-size: 0.85em;
     white-space: pre-wrap;
     word-break: break-word;
