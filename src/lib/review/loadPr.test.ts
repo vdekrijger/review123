@@ -74,4 +74,15 @@ describe('createPrLoad', () => {
     await load.promise
     expect(load.state).toEqual({ status: 'error', error: 'network' })
   })
+
+  it('EC-05k: closed/merged PR loads into ready state', async () => {
+    const closedMeta = { ...META, state: 'closed' as const, merged: true }
+    const load = createPrLoad(REF, {
+      getPrMeta: vi.fn().mockResolvedValue(closedMeta),
+      getPrFiles: vi.fn().mockResolvedValue(FILES),
+    })
+    await load.promise
+    expect(load.state.status).toBe('ready')
+    expect(load.state.status === 'ready' && load.state.meta.merged).toBe(true)
+  })
 })

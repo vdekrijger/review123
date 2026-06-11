@@ -10,11 +10,11 @@ vi.mock('./lib/analytics/analytics', () => ({
   _setCaptureForTest: vi.fn(),
 }))
 
-function makePrResponse(title: string) {
+function makePrResponse(title: string, state = 'open', merged = false) {
   return {
     title,
-    state: 'open',
-    merged: false,
+    state,
+    merged,
     body: null,
     base: { sha: 'b1', repo: { private: false } },
     head: { sha: 'h1' },
@@ -38,6 +38,36 @@ function makeFetchStub() {
     return Promise.resolve(new Response('{}', { status: 404 }))
   })
 }
+
+describe('EC-05k: closed/merged PR renders correctly', () => {
+  let originalFetch: typeof fetch
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+    vi.restoreAllMocks()
+  })
+
+  it('EC-05k: closed/merged PR title renders without choking on closed state', async () => {
+    history.replaceState(null, '', '/review/a/b/1')
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/files')) {
+        return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }))
+      }
+      if (url.includes('/pulls/1')) {
+        return Promise.resolve(new Response(JSON.stringify(makePrResponse('CLOSED-PR', 'closed', true)), { status: 200 }))
+      }
+      return Promise.resolve(new Response('{}', { status: 404 }))
+    }))
+
+    render(App)
+
+    expect(await screen.findByText(/CLOSED-PR/)).toBeTruthy()
+  })
+})
 
 describe('App review→review navigation', () => {
   let originalFetch: typeof fetch
