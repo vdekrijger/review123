@@ -15,6 +15,7 @@ beforeAll(() => {
   })
 })
 
+// bare hunk — real GitHub wire format; buildDiffFile synthesises the envelope
 const modified: PrFile = {
   filename: 'src/a.ts',
   status: 'modified',
