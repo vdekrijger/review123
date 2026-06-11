@@ -148,3 +148,5 @@ This override is deliberate friction — using it should be an explicit, documen
 PostHog receives only coarse, allowlisted event metadata (see [`src/lib/analytics/analytics.ts`](src/lib/analytics/analytics.ts)). Code content, diffs, repository names, and private repo identifiers are never sent. Your GitHub PAT and DeepSeek API key are stored in `localStorage` only and are sent exclusively to their respective services.
 
 **Drafts & privacy:** Comment drafts are stored entirely in your browser's IndexedDB — they never leave your device until you click "Submit review". At that point the draft bodies are sent directly to GitHub's API as part of the review submission payload; they are not sent to any other server, and they are not included in PostHog analytics events.
+
+<!-- OAuth enabled: requires VITE_GITHUB_CLIENT_ID at build time -->
