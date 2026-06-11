@@ -34,6 +34,12 @@ Paste a GitHub PR URL → get a guided three-step review:
   our storage — the resulting token is returned to the browser and kept
   client-side). PAT entry remains in Settings as a fallback for
   self-hosters who don't want to register an OAuth app.
+  **Incremental scopes:** initial sign-in requests `public_repo` only;
+  opening a private PR triggers a re-authorization requesting `repo`.
+  Most users never grant the broad scope. Deployment requires registering
+  a GitHub OAuth app (callback URL + client secret in Vercel env) — this
+  setup, including the local-dev story (second OAuth app or PAT), is
+  documented in the README.
 - Diff view: unified and side-by-side modes, GitHub-style red/green line
   coloring, word-level intra-line highlights.
 - Full review write-back: draft line comments, submit a review with
@@ -43,6 +49,10 @@ Paste a GitHub PR URL → get a guided three-step review:
 - **CI signals:** fetch check runs + annotations for the PR head SHA. Show
   a pass/fail summary in Understand; feed failed checks and annotation
   messages into the attention and behavior-verdict prompt context.
+- **Private-code consent gate:** before any private-repo content is sent
+  to DeepSeek, an explicit one-time confirmation ("This sends code from a
+  private repo to DeepSeek — proceed?"), remembered per repo. Public repos
+  skip the gate.
 - AI features (all four), powered by a BYO DeepSeek API key:
   - **PR summary + walkthrough** — plain-language summary and a suggested
     file reading order.
@@ -216,8 +226,10 @@ authenticated.
   tokens.
 - Token-in-browser risk acknowledged: an XSS hole could leak a write-scoped
   token. Mitigations: strict CSP, PostHog as the only third-party script,
-  OAuth scopes kept minimal, PAT users guided to fine-grained repo-scoped
-  tokens.
+  incremental OAuth scopes (`public_repo` first, `repo` only on demand for
+  private PRs), PAT users guided to fine-grained repo-scoped tokens.
+- Private-repo code never reaches DeepSeek without the explicit per-repo
+  consent gate (see Scope).
 - **pnpm** is the package manager with `minimumReleaseAge: 10080`
   (7 days) configured, so freshly published package versions cannot be
   installed — mitigating npm supply-chain attacks.
@@ -255,6 +267,8 @@ language), `signed_in` (method: oauth|pat), `ai_task_completed` /
 | Write-back scope | Full review actions (comment, approve, request changes) |
 | Repo access | Public + private |
 | Auth | **OAuth in v1** (one Vercel function for code exchange) + PAT fallback |
+| OAuth scopes | **Incremental**: `public_repo` at sign-in, `repo` requested on first private PR |
+| Private code → LLM | Explicit per-repo consent gate before sending private-repo content to DeepSeek |
 | AI features in v1 | All four (summary, attention, diagrams, behavior verdict) |
 | "Old vs new diff" feature | Reframed: architectural before/after (= Mermaid feature); commit-interdiff is nice-to-have |
 | Confidence presentation | **Categorical 3-level behavior verdict + evidence; no percentages** |
