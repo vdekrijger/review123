@@ -1,0 +1,54 @@
+import { ghFetch, ghFetchPage } from './client'
+import { GithubApiError, type PrFile, type PrMeta } from './types'
+import type { PrRef } from './parse'
+
+interface RawPr {
+  title: string; state: 'open' | 'closed'; merged: boolean; body: string | null
+  base: { sha: string; repo?: { private: boolean } }
+  head: { sha: string }
+  changed_files: number
+}
+
+export async function getPrMeta(ref: PrRef): Promise<PrMeta> {
+  const pr = await ghFetch<RawPr>(`/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`)
+  return {
+    title: pr.title, state: pr.state, merged: pr.merged, body: pr.body,
+    baseSha: pr.base.sha, headSha: pr.head.sha,
+    private: pr.base.repo?.private ?? false,
+    changedFiles: pr.changed_files,
+  }
+}
+
+// Traverses all pages (100/page). EC-05i.
+export async function getPrFiles(ref: PrRef): Promise<PrFile[]> {
+  const all: PrFile[] = []
+  let path: string | null = `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/files?per_page=100`
+  while (path !== null) {
+    const { body, next }: { body: PrFile[]; next: string | null } = await ghFetchPage<PrFile[]>(path)
+    all.push(...body)
+    path = next
+  }
+  return all
+}
+
+export async function getFileAtRef(
+  repo: { owner: string; repo: string }, filePath: string, ref: string,
+): Promise<string | null> {
+  const encodedPath = filePath.split('/').map(encodeURIComponent).join('/')
+  try {
+    const data = await ghFetch<{ content: string; encoding: string }>(
+      `/repos/${repo.owner}/${repo.repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`,
+    )
+    if (data.encoding !== 'base64') return null
+    return decodeBase64(data.content)
+  } catch (e) {
+    if (e instanceof GithubApiError && e.detail.kind === 'not-found') return null
+    throw e
+  }
+}
+
+function decodeBase64(b64: string): string {
+  const bin = atob(b64.replace(/\n/g, ''))
+  const bytes = Uint8Array.from(bin, c => c.charCodeAt(0))
+  return new TextDecoder().decode(bytes)
+}
