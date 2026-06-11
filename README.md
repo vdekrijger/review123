@@ -4,9 +4,46 @@ Paste a GitHub PR URL and get a guided three-step review: **Understand → Inspe
 
 ---
 
+## AI features (Milestone C)
+
+Review 1-2-3 adds four AI-assisted panels to the **Understand** step, all powered by a BYO [DeepSeek](https://platform.deepseek.com/) API key. No key, no AI calls — the rest of the review flow works without it.
+
+### BYO DeepSeek key
+
+1. Obtain a key from [platform.deepseek.com](https://platform.deepseek.com/).
+2. Open **Settings** (gear icon, top-right) and paste the key in the **DeepSeek API key** field.
+3. The key is stored in `localStorage` only and is sent exclusively to `api.deepseek.com` — it never leaves your browser to any intermediate server.
+
+### What gets sent to DeepSeek
+
+For each PR you review, four structured prompts are sent:
+
+| Panel | Task | Transmission |
+|---|---|---|
+| **Summary** | Streaming plain-text overview + suggested reading order | Patch text for changed files (within the token budget) |
+| **Attention** | Hotspots (high/medium/low) + inferred test gaps | Same packed context as above |
+| **Diagrams** | Before/after architecture graph (JSON, converted to Mermaid client-side) | Same packed context |
+| **Verdict** | 3-level behaviour verdict (preserved/minor/significant) + evidence | Same packed context + CI failure names & annotations |
+
+The packed context includes file patches and, when they fit within the token budget (~58 000 tokens for `deepseek-chat`), the full before/after file contents. Lock files (`pnpm-lock.yaml`, `package-lock.json`, etc.) and minified/generated files are excluded automatically.
+
+**What is NOT sent:** repository names, PR titles, PR numbers, your GitHub token, any reviewer identity, or PostHog analytics data.
+
+### Consent gate for private repositories
+
+When you open a pull request from a **private repository**, a one-time consent dialog appears before any AI call is made. It tells you exactly what will be sent (code from that repository) and to whom (DeepSeek). You can accept (persisted per-repo in `localStorage`) or decline (AI panels show a "declined" state; manual review is unaffected). Closing or refreshing without accepting treats it as a decline.
+
+Public repositories skip the gate entirely.
+
+### Zero-token revisits via caching
+
+AI results are cached in IndexedDB keyed by `owner/repo#number@headSha + task + promptVersion`. Revisiting the same PR after the head SHA has not changed costs zero tokens. When the PR gets new commits the cache key changes and the panels re-run automatically.
+
+---
+
 ## Status
 
-**Milestone A (this code):** PR URL input → diff viewer with unified/side-by-side modes, three-step stepper shell, settings panel, PostHog analytics.
+**Milestone A:** PR URL input → diff viewer with unified/side-by-side modes, three-step stepper shell, settings panel, PostHog analytics.
 
 **Milestone B:** GitHub sign-in and review submission via OAuth flow (Vercel serverless function).
 

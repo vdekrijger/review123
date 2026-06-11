@@ -2,10 +2,20 @@
   import { createPrLoad } from '../lib/review/loadPr.svelte'
   import Stepper, { type Step } from '../components/Stepper.svelte'
   import InspectStep from '../components/InspectStep.svelte'
-  import { getSettings, setDiffMode, type DiffMode } from '../lib/settings/settings'
+  import { getSettings, setDiffMode, setRailCollapsed, type DiffMode } from '../lib/settings/settings'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
   import { createDraftStore } from '../lib/drafts/drafts.svelte'
   import VerdictStep from '../components/VerdictStep.svelte'
+  import { createAiRun } from '../lib/ai/run.svelte'
+  import { packContext, fetchContents } from '../lib/context/pack'
+  import { getCiSummary } from '../lib/github/checks'
+  import { LLM_CONFIG } from '../lib/llm/config'
+  import { parseReadingOrder } from '../lib/ai/tasks'
+  import ConsentDialog from '../components/ConsentDialog.svelte'
+  import UnderstandStep from '../components/UnderstandStep.svelte'
+  import ContextRail from '../components/ContextRail.svelte'
+  import type { CiSummary } from '../lib/github/checks'
+  import type { AttentionResult } from '../lib/ai/schemas'
 
   const RETURN_KEY = 'review123:returnTo'
 
@@ -47,7 +57,99 @@
     sessionStorage.setItem(RETURN_KEY, location.pathname)
     location.assign(await beginSignIn('repo'))
   }
+
+  // ---- AI run ----
+  let aiRun: ReturnType<typeof createAiRun> | null = $state(null)
+  let railCollapsed = $state(getSettings().railCollapsed)
+
+  // ConsentDialog: stored promise resolver
+  let consentDialogVisible = $state(false)
+  let consentDialogRepo = $state('')
+  let consentResolve: ((v: boolean) => void) | null = null
+
+  function showConsentDialog(): Promise<boolean> {
+    return new Promise((resolve) => {
+      consentResolve = resolve
+      consentDialogVisible = true
+    })
+  }
+
+  function handleConsentResult(accepted: boolean) {
+    consentDialogVisible = false
+    consentResolve?.(accepted)
+    consentResolve = null
+  }
+
+  // CI fetch — memoized
+  let ciPromise: Promise<CiSummary | null> | null = null
+  function getCi(ref: { owner: string; repo: string; number: number }, headSha: string) {
+    if (!ciPromise) {
+      ciPromise = getCiSummary(ref, headSha).catch(() => null)
+    }
+    return ciPromise
+  }
+
+  // CI display state (for UnderstandStep)
+  let ciData: CiSummary | null = $state(null)
+  let ciError = $state(false)
+
+  // Initialize AI run when PR becomes ready
+  let aiInitialized = false
+  $effect(() => {
+    if (load.state.status === 'ready' && !aiInitialized) {
+      aiInitialized = true
+      const meta = load.state.meta
+      const files = load.state.files
+      const prKey = `${owner}/${repo}#${number}@${meta.headSha}`
+      const repoStr = `${owner}/${repo}`
+      consentDialogRepo = repoStr
+
+      const budgetTokens = LLM_CONFIG.contextWindowTokens - LLM_CONFIG.maxOutputTokens - 2000
+
+      const run = createAiRun({
+        prKey,
+        repo: repoStr,
+        isPrivate: meta.private,
+        pack: async () => {
+          const contents = await fetchContents({ owner, repo }, files, meta)
+          const ci = await getCi({ owner, repo, number }, meta.headSha)
+          return packContext({ files, contents, ci, budgetTokens })
+        },
+        ci: () => getCi({ owner, repo, number }, meta.headSha),
+        ask: showConsentDialog,
+      })
+      aiRun = run
+
+      // Start AI (non-blocking)
+      run.start()
+
+      // Also load CI for display (non-blocking)
+      getCi({ owner, repo, number }, meta.headSha).then(
+        (ci) => { ciData = ci },
+        () => { ciError = true },
+      )
+    }
+  })
+
+  // Reading order from summary
+  const readingOrder = $derived.by(() => {
+    if (!aiRun || aiRun.summary.status !== 'done') return []
+    return parseReadingOrder(aiRun.summary.value as string)
+  })
+
+  function handleHotspot(path: string) {
+    goStep(2)
+    // Scroll to file after step switch (next tick)
+    requestAnimationFrame(() => {
+      const slug = path.replace(/[^a-zA-Z0-9]/g, '-')
+      document.getElementById(`file-${slug}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
 </script>
+
+{#if consentDialogVisible}
+  <ConsentDialog repo={consentDialogRepo} onresult={handleConsentResult} />
+{/if}
 
 <section class="review">
   {#if load.state.status === 'loading'}
@@ -73,9 +175,24 @@
   {:else}
     <h1>{load.state.meta.title} <small>{owner}/{repo}#{number}</small></h1>
     <Stepper {step} onstep={(s) => (step = s)} />
+
+    <!-- ContextRail outside step switch (all steps) -->
+    {#if aiRun}
+      <ContextRail
+        run={aiRun}
+        onhotspot={handleHotspot}
+        collapsed={railCollapsed}
+        oncollapse={(c) => { railCollapsed = c; setRailCollapsed(c) }}
+      />
+    {/if}
+
     {#if step === 1}
-      <p>{load.state.meta.body ?? 'No description.'}</p>
-      <p class="muted">AI summary, behavior verdict, diagrams and CI signals arrive in upcoming milestones.</p>
+      <UnderstandStep
+        meta={load.state.meta}
+        ci={ciData}
+        {ciError}
+        run={aiRun ?? { summary: {status:'idle'}, attention: {status:'idle'}, diagrams: {status:'idle'}, verdict: {status:'idle'}, start: async()=>{}, retry: async()=>{} } as any}
+      />
     {:else if step === 2}
       <InspectStep
         files={load.state.files}
@@ -83,6 +200,8 @@
         {mode}
         onmode={setMode}
         {draftStore}
+        attention={aiRun?.attention.status === 'done' ? aiRun.attention.value as AttentionResult : null}
+        {readingOrder}
       />
     {:else}
       <VerdictStep
