@@ -12,8 +12,8 @@ function buildHeaders(targetUrl?: string): Record<string, string> {
   const headers: Record<string, string> = { ...GITHUB_HEADERS }
   const isGithubApi = !targetUrl || new URL(targetUrl).hostname === 'api.github.com'
   if (isGithubApi) {
-    const pat = getSettings().githubPat
-    if (pat) headers.Authorization = `Bearer ${pat}`
+    const auth = getSettings().githubAuth
+    if (auth) headers.Authorization = `Bearer ${auth.token}`
   }
   return headers
 }
