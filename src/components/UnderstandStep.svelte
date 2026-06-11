@@ -27,7 +27,7 @@
   import type { PrMeta, PrFile } from '../lib/github/types'
   import type { CiSummary as CiSummaryType } from '../lib/github/checks'
   import type { AiRun } from '../lib/ai/run.svelte'
-  import type { AttentionResult, GraphResult, VerdictResult } from '../lib/ai/schemas'
+  import type { AttentionResult, GraphResult, VerdictResult, TestInsight } from '../lib/ai/schemas'
 
   interface Props {
     meta: PrMeta
@@ -70,6 +70,17 @@
       .filter((h) => h.level === 'high' || h.level === 'medium')
       .slice(0, 3)
   })
+
+  // --- Tests ---
+  const tests = $derived(
+    run.tests.status === 'done' ? (run.tests.value as TestInsight) : null
+  )
+
+  let testsPanelEl: HTMLDetailsElement | undefined = $state()
+
+  function openTestsPanel() {
+    if (testsPanelEl) testsPanelEl.open = true
+  }
 
   // --- Verdict ---
   const verdict = $derived(
@@ -151,6 +162,24 @@
         <span class="additions">+{totalAdditions}</span>
         <span class="deletions">−{totalDeletions}</span>
       </span>
+
+      {#if tests}
+        <button
+          class="tests-chip"
+          onclick={openTestsPanel}
+          aria-label="Test coverage: {tests.covered.length} behaviors tested{tests.gaps.length ? `, ${tests.gaps.length} gaps` : ''}"
+        >
+          <span class="tests-chip-covered">✓ {tests.covered.length} behaviors tested</span>
+          {#if tests.gaps.length > 0}
+            <span class="tests-chip-gaps">⚠ {tests.gaps.length} gaps</span>
+          {/if}
+        </button>
+      {:else if run.tests.status === 'loading'}
+        <span class="glance-loading-inline" aria-busy="true">
+          <span class="spinner-sm" aria-hidden="true"></span>
+          Analyzing tests…
+        </span>
+      {/if}
     </div>
 
     <!-- Row 2: TL;DR -->
@@ -247,6 +276,53 @@
       <AiPanel title="Diagrams" state={run.diagrams} onretry={() => run.retry('diagrams')}>
         {#if run.diagrams.status === 'done'}
           <DiagramPanel result={run.diagrams.value as GraphResult} panelState="idle" />
+        {/if}
+      </AiPanel>
+    </div>
+  </details>
+
+  <!-- Test coverage (AI-inferred) -->
+  <details class="detail-panel tests-panel" bind:this={testsPanelEl}>
+    <summary class="detail-summary">Test coverage (AI-inferred)</summary>
+    <div class="detail-body">
+      <AiPanel title="Test coverage (AI-inferred)" state={run.tests} onretry={() => run.retry('tests')}>
+        {#if tests}
+          {#if tests.covered.length > 0}
+            <p class="tests-ai-inferred-note">AI-inferred — not measured coverage</p>
+            <ul class="tests-covered-list">
+              {#each tests.covered as item (item.behavior)}
+                <li class="tests-covered-item">
+                  <span class="tests-covered-check">✓</span>
+                  <span class="tests-covered-content">
+                    <span class="tests-covered-behavior">{item.behavior}</span>
+                    <span class="tests-covered-meta">
+                      {item.test} ·
+                      <button
+                        class="tests-file-link"
+                        onclick={() => onhotspot?.(item.file)}
+                        title="Jump to {item.file} in Inspect"
+                        aria-label="Jump to {item.file}"
+                      >{item.file}</button>
+                    </span>
+                  </span>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          {#if tests.gaps.length > 0}
+            <p class="tests-gaps-heading">AI-inferred gaps — behaviors changed without test coverage:</p>
+            <ul class="tests-gaps-list">
+              {#each tests.gaps as gap (gap)}
+                <li class="tests-gap-item">
+                  <span class="tests-gap-icon">⚠</span>
+                  <span class="tests-gap-text">{gap}</span>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          {#if tests.covered.length === 0 && tests.gaps.length === 0}
+            <p class="tests-empty">No AI-inferred test coverage data available.</p>
+          {/if}
         {/if}
       </AiPanel>
     </div>
@@ -628,5 +704,129 @@
     font-style: italic;
     opacity: 0.6;
     font-size: 0.9rem;
+  }
+
+  /* ===== Tests chip (glance card Row 1) ===== */
+
+  .tests-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 10px;
+    border: 1px solid #8883;
+    background: none;
+    cursor: pointer;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    transition: background 0.1s;
+  }
+
+  .tests-chip:hover { background: #8881; }
+
+  .tests-chip-covered {
+    color: #1a7f37;
+    font-weight: 500;
+  }
+
+  .tests-chip-gaps {
+    color: #9a6700;
+    font-weight: 500;
+  }
+
+  /* ===== Test coverage panel ===== */
+
+  .tests-ai-inferred-note {
+    margin: 0 0 0.6rem;
+    font-size: 0.8rem;
+    opacity: 0.6;
+    font-style: italic;
+  }
+
+  .tests-covered-list,
+  .tests-gaps-list {
+    list-style: none;
+    margin: 0 0 0.75rem;
+    padding: 0;
+  }
+
+  .tests-covered-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+    padding: 0.25rem 0;
+    border-bottom: 1px solid #8881;
+    font-size: 0.88rem;
+  }
+
+  .tests-covered-item:last-child { border-bottom: none; }
+
+  .tests-covered-check {
+    color: #1a7f37;
+    font-weight: 700;
+    flex-shrink: 0;
+    margin-top: 0.05rem;
+  }
+
+  .tests-covered-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+
+  .tests-covered-behavior {
+    font-weight: 500;
+  }
+
+  .tests-covered-meta {
+    font-size: 0.78rem;
+    opacity: 0.65;
+  }
+
+  .tests-file-link {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: #2563eb;
+    font-size: inherit;
+    font-family: var(--font-mono, monospace);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .tests-file-link:hover { opacity: 0.75; }
+
+  .tests-gaps-heading {
+    margin: 0 0 0.4rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #9a6700;
+  }
+
+  .tests-gap-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+    padding: 0.2rem 0;
+    font-size: 0.88rem;
+  }
+
+  .tests-gap-icon {
+    color: #9a6700;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .tests-gap-text {
+    opacity: 0.9;
+  }
+
+  .tests-empty {
+    margin: 0;
+    font-size: 0.88rem;
+    opacity: 0.6;
+    font-style: italic;
   }
 </style>
