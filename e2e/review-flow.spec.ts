@@ -145,6 +145,7 @@ const ATTENTION_RESULT = {
   testFlags: [{ path: 'src/feature.ts', note: 'No test covers this change' }],
 }
 
+// v4 contract: GRAPH_RESULT includes changeMap with status fields
 const GRAPH_RESULT = {
   kind: 'flow',
   before: { nodes: [{ id: 'a', label: 'Utils' }], edges: [] },
@@ -155,12 +156,52 @@ const GRAPH_RESULT = {
     ],
     edges: [{ from: 'a', to: 'b' }],
   },
+  changeMap: {
+    nodes: [
+      { id: 'a', label: 'Utils', status: 'unchanged' },
+      { id: 'b', label: 'Feature', status: 'added' },
+    ],
+    edges: [
+      { from: 'a', to: 'b', status: 'added' },
+    ],
+  },
 }
 
 const VERDICT_RESULT = {
   level: 'minor-changes',
   evidence: ['src/feature.ts modified with 2 additions'],
   notAnalyzed: [],
+}
+
+// v4 contract: TestInsight with 2 covered + 1 gap
+const TEST_INSIGHT_RESULT = {
+  covered: [
+    {
+      behavior: 'feature adds lines correctly',
+      test: 'adds new lines to feature output',
+      file: 'src/feature.test.ts',
+    },
+    {
+      behavior: 'unchanged utils path preserved',
+      test: 'utils module exports unchanged',
+      file: 'src/old-utils.test.ts',
+    },
+  ],
+  gaps: ['no test covers removal of removed line from feature.ts'],
+}
+
+// v4 contract: CoachResult with one review containing a suggestion
+const COACH_RESULT = {
+  reviews: [
+    {
+      index: 0,
+      clarity: 3,
+      actionable: true,
+      tone: 'blunt',
+      biasQuestion: null,
+      suggestion: 'Consider rephrasing this as a question to encourage discussion.',
+    },
+  ],
 }
 
 // ---------------------------------------------------------------------------
@@ -335,6 +376,12 @@ async function setupRoutes(
       result = ATTENTION_RESULT
     } else if (systemContent.includes('graphresult') || systemContent.includes('mermaid')) {
       result = GRAPH_RESULT
+    } else if (systemContent.includes('covered') || systemContent.includes('gaps')) {
+      // testInsightPrompt system content mentions "covered" and "gaps" fields
+      result = TEST_INSIGHT_RESULT
+    } else if (systemContent.includes('reviews') && systemContent.includes('clarity')) {
+      // coachPrompt system content mentions "reviews" and "clarity" fields
+      result = COACH_RESULT
     } else {
       // Default to verdict (also covers summarize which is streaming so won't reach here)
       result = VERDICT_RESULT
@@ -547,4 +594,200 @@ test('verdict step: with auth, submit review → success panel', async ({ page }
   await expect(
     page.getByText('Your review was submitted successfully.'),
   ).toBeVisible({ timeout: 10_000 })
+})
+
+// ---------------------------------------------------------------------------
+// Test 5: tests-panel — glance chip + checklist rows (D2 / v4 contract)
+// ---------------------------------------------------------------------------
+
+test('tests-panel: glance chip shows covered/gap counts; open panel shows checklist rows', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Glance chip: "2 behaviors tested" from TEST_INSIGHT_RESULT.covered (2 items)
+  await expect(
+    page.locator('.tests-chip'),
+  ).toContainText('2 behaviors tested', { timeout: 20_000 })
+
+  // Glance chip: "1 gaps" from TEST_INSIGHT_RESULT.gaps (1 item)
+  await expect(
+    page.locator('.tests-chip-gaps'),
+  ).toContainText('1 gap', { timeout: 5_000 })
+
+  // Open the tests panel (it is collapsed by default)
+  const testsPanel = page.locator('details.tests-panel')
+  await testsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+
+  // Covered checklist rows should be visible (2 covered items)
+  await expect(page.locator('.tests-covered-item')).toHaveCount(2)
+
+  // Gap rows should also be visible (1 gap)
+  await expect(page.locator('.tests-gap-item')).toHaveCount(1)
+})
+
+// ---------------------------------------------------------------------------
+// Test 6: change-map — diagrams panel shows legend chips (D1 / v4 contract)
+// ---------------------------------------------------------------------------
+
+test('change-map: diagrams panel shows Added/Removed/Changed/Unchanged legend chips', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Open the diagrams detail panel inside UnderstandStep
+  const diagramsPanel = page.locator('details').filter({ hasText: 'Diagrams' }).first()
+  await diagramsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+
+  // Wait for the change-map to render — the legend should appear
+  // The change-map legend is rendered when result.changeMap is present (D1)
+  // Use .first() to avoid strict-mode violation if multiple DiagramPanel instances exist
+  const legend = page.locator('[aria-label="Change map legend"]').first()
+  await expect(legend).toBeVisible({ timeout: 20_000 })
+
+  // All four legend chips must be present
+  await expect(legend.locator('.legend-chip.legend-added')).toContainText('Added')
+  await expect(legend.locator('.legend-chip.legend-removed')).toContainText('Removed')
+  await expect(legend.locator('.legend-chip.legend-changed')).toContainText('Changed')
+  await expect(legend.locator('.legend-chip.legend-unchanged')).toContainText('Unchanged')
+})
+
+// ---------------------------------------------------------------------------
+// Test 7: viewed-state — mark viewed → collapse → reload → still collapsed + sticky bar
+// ---------------------------------------------------------------------------
+
+test('viewed-state: mark first file viewed → collapses → reload → still collapsed, sticky bar shows viewed 1/2', async ({
+  page,
+}) => {
+  test.setTimeout(60_000)
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load and navigate to step 2 (Inspect)
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+
+  // Wait for file diffs to appear
+  const fileDiffs = page.locator('article.file-diff')
+  await expect(fileDiffs.first()).toBeVisible({ timeout: 5_000 })
+
+  // Find the viewed checkbox for the first file (src/feature.ts)
+  const firstViewedCheckbox = page.locator('input.viewed-checkbox').first()
+  await expect(firstViewedCheckbox).toBeVisible()
+
+  // Toggle the viewed state by dispatching a change event directly.
+  // We use evaluate() because: (a) the context-rail SVG overlaps the header in headless
+  // Chrome; (b) the FileDiff checkbox is a controlled Svelte 5 component — Playwright's
+  // check() verifies checked state synchronously, but Svelte's reactive update lands after
+  // the microtask boundary. Dispatching the event from JS sidesteps both issues.
+  await firstViewedCheckbox.evaluate((el: HTMLInputElement) => {
+    el.checked = true
+    el.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+
+  // After toggling, the first article should be collapsed (has .is-collapsed class)
+  await expect(fileDiffs.first()).toHaveClass(/is-collapsed/, { timeout: 5_000 })
+
+  // Reload the page
+  await page.reload()
+
+  // Wait for PR to reload
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate back to step 2
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(fileDiffs.first()).toBeVisible({ timeout: 5_000 })
+
+  // After reload, first article should still be collapsed (persisted in localStorage)
+  await expect(fileDiffs.first()).toHaveClass(/is-collapsed/, { timeout: 3_000 })
+
+  // The sticky bar should show "viewed 1/2"
+  const draftStatus = page.getByRole('status')
+  await expect(draftStatus).toContainText('viewed 1/2', { timeout: 5_000 })
+})
+
+// ---------------------------------------------------------------------------
+// Test 8: coach — seed draft + auth + key → step 3 → "Coach my comments" → suggestion → Apply
+// ---------------------------------------------------------------------------
+
+test('coach: seed draft, navigate to step 3, Coach my comments → suggestion card → Apply → recap shows updated body', async ({
+  page,
+}) => {
+  await setupRoutes(page, { withGithubAuth: true })
+
+  // Seed settings WITH github auth and deepseek key
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(true))
+
+  // Seed a draft so the coach button becomes eligible
+  const prKey = `${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
+  await page.addInitScript(seedDraftScript(prKey))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 3 (VerdictStep)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await page.getByRole('button', { name: 'Next step' }).click()
+
+  // Should show the verdict form (signed in)
+  const approveRadio = page.getByRole('radio', { name: /approve/i })
+  await expect(approveRadio).toBeVisible({ timeout: 5_000 })
+
+  // The "Coach my comments" button should be visible (auth + draft + key all present)
+  const coachBtn = page.getByRole('button', { name: /coach my comments/i })
+  await expect(coachBtn).toBeVisible({ timeout: 5_000 })
+
+  // Click the Coach button — triggers the DeepSeek call which returns COACH_RESULT
+  await coachBtn.click()
+
+  // The suggestion card should appear (COACH_RESULT has suggestion: "Consider rephrasing...")
+  await expect(
+    page.getByText(/Consider rephrasing this as a question/i),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Click Apply — this should replace the draft body in the store
+  const applyBtn = page.getByRole('button', { name: /apply/i })
+  await expect(applyBtn).toBeVisible()
+  await applyBtn.click()
+
+  // After applying, the draft recap should show the new (suggested) body text.
+  // Scope to the recap section to avoid strict-mode violation with the suggestion blockquote.
+  const recapSection = page.locator('[aria-label="Drafted comments"]')
+  await expect(
+    recapSection.getByText(/Consider rephrasing this as a question/i),
+  ).toBeVisible({ timeout: 5_000 })
 })

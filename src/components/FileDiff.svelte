@@ -16,9 +16,39 @@
     onAddDraft?: (line: number, side: 'LEFT' | 'RIGHT', body: string) => void
     /** Called when the user deletes a comment at a given line */
     onRemoveDraft?: (line: number, side: 'LEFT' | 'RIGHT') => void
+    /** Whether this file has been marked viewed (hash-matched) */
+    viewed?: boolean
+    /** Whether the file changed since it was last viewed (entry exists, hash differs) */
+    changedSinceViewed?: boolean
+    /** Called when the user clicks the Viewed checkbox */
+    onToggleViewed?: () => void
   }
 
-  let { file, mode, drafts = [], onAddDraft, onRemoveDraft }: Props = $props()
+  let { file, mode, drafts = [], onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed }: Props = $props()
+
+  // When viewed → collapse diff body; user can re-expand by clicking header or unchecking
+  let manuallyExpanded = $state(false)
+  const collapsed = $derived(viewed && !manuallyExpanded)
+
+  function handleHeaderClick() {
+    if (collapsed) manuallyExpanded = true
+  }
+
+  function handleViewedChange(e: Event) {
+    // Uncheck → expand + notify parent
+    const checked = (e.target as HTMLInputElement).checked
+    if (!checked) manuallyExpanded = true
+    onToggleViewed?.()
+  }
+
+  // Reset manual expansion when viewed state changes (e.g. re-toggled from outside)
+  $effect(() => {
+    if (!viewed) manuallyExpanded = false
+  })
+
+  const filename = $derived(
+    file.previousFilename ? `${file.previousFilename} → ${file.filename}` : file.filename
+  )
 
   const kind = $derived(classifyFile(file))
   const diffFile = $derived(kind === 'diff' ? buildDiffFile(file, mode) : null)
@@ -85,11 +115,33 @@
   }
 </script>
 
-<article class="file-diff">
-  <header>
-    <code>{file.previousFilename ? `${file.previousFilename} → ` : ''}{file.filename}</code>
-    <span class="stats">+{file.additions} −{file.deletions}</span>
+<article class="file-diff" class:is-collapsed={collapsed}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <header onclick={handleHeaderClick} class:clickable={collapsed}>
+    <code>{filename}</code>
+    <div class="header-right">
+      {#if changedSinceViewed}
+        <span class="changed-badge" role="status">Changed since you viewed it</span>
+      {/if}
+      <span class="stats">+{file.additions} −{file.deletions}</span>
+      <label class="viewed-label">
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <span onclick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            class="viewed-checkbox"
+            checked={viewed}
+            aria-label="Mark {file.filename} as viewed"
+            onchange={handleViewedChange}
+          />
+        </span>
+        Viewed
+      </label>
+    </div>
   </header>
+  {#if !collapsed}
   {#if kind === 'rename-only'}
     <p class="note">Rename only — no content changes.</p>
   {:else if kind === 'binary-or-too-large' || !diffFile}
@@ -161,13 +213,37 @@
       </div>
     {/if}
   {/if}
+  {/if}
 </article>
 
 <style>
   .file-diff { border: 1px solid #8884; border-radius: 6px; margin-bottom: 1rem; overflow: hidden; }
-  header { display: flex; justify-content: space-between; padding: 0.4rem 0.8rem; background: #8881; }
+  header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: #8881; }
   header code { font-family: var(--font-mono); }
+  header.clickable { cursor: pointer; }
+  header.clickable:hover { background: #8882; }
+  .header-right { display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0; }
   .note { padding: 0.8rem; opacity: 0.7; }
+  .viewed-label {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .viewed-checkbox { cursor: pointer; }
+  .changed-badge {
+    font-size: 0.75rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    background: #9a67000a;
+    color: #9a6700;
+    border: 1px solid #9a670033;
+    white-space: nowrap;
+  }
+  .is-collapsed { opacity: 0.85; }
   /* Apply the --font-mono token to the diff view container */
   :global(.unified-diff-table-wrapper),
   :global(.old-diff-table-wrapper),

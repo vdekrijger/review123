@@ -9,7 +9,7 @@
  * in sync with the Mermaid serializer (Task 7).
  */
 
-import type { Graph, GraphResult } from '../diagram/types'
+import type { Graph, GraphResult, NodeStatus } from '../diagram/types'
 
 // Re-export so consumers can import everything from one place.
 export type { Graph, GraphResult }
@@ -111,6 +111,12 @@ export function validateVerdict(x: unknown): VerdictResult | null {
 /**
  * Validate an unknown value as GraphResult.
  * Returns the typed value or null if the shape is invalid.
+ *
+ * Accepts optional `changeMap` (D1: change-map graph with statuses) and
+ * optional `status` on nodes/edges. Absent statuses/changeMap stay valid
+ * (backward compatible with cached v3 results).
+ *
+ * Invalid status enum value → null (strict enum enforcement).
  */
 export function validateGraphResult(x: unknown): GraphResult | null {
   if (!isObject(x)) return null
@@ -125,25 +131,41 @@ export function validateGraphResult(x: unknown): GraphResult | null {
   const after = validateGraph(x['after'])
   if (after === null) return null
 
-  return { before, after, kind: x['kind'] as 'flow' | 'module' }
+  // changeMap — optional Graph shape (D1)
+  let changeMap: Graph | undefined
+  if ('changeMap' in x && x['changeMap'] !== undefined) {
+    const cm = validateGraph(x['changeMap'])
+    if (cm === null) return null
+    changeMap = cm
+  }
+
+  const result: GraphResult = { before, after, kind: x['kind'] as 'flow' | 'module' }
+  if (changeMap !== undefined) result.changeMap = changeMap
+  return result
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+const NODE_STATUSES = new Set<string>(['added', 'removed', 'changed', 'unchanged'])
+
 function validateGraph(x: unknown): Graph | null {
   if (!isObject(x)) return null
 
-  // nodes — required array of {id: string, label: string}
+  // nodes — required array of {id: string, label: string, status?: NodeStatus}
   if (!Array.isArray(x['nodes'])) return null
   for (const node of x['nodes']) {
     if (!isObject(node)) return null
     if (typeof node['id'] !== 'string') return null
     if (typeof node['label'] !== 'string') return null
+    // status is optional — only validate type/enum if present
+    if ('status' in node && node['status'] !== undefined) {
+      if (typeof node['status'] !== 'string' || !NODE_STATUSES.has(node['status'] as string)) return null
+    }
   }
 
-  // edges — required array of {from: string, to: string, label?: string}
+  // edges — required array of {from: string, to: string, label?: string, status?: NodeStatus}
   if (!Array.isArray(x['edges'])) return null
   for (const edge of x['edges']) {
     if (!isObject(edge)) return null
@@ -151,9 +173,111 @@ function validateGraph(x: unknown): Graph | null {
     if (typeof edge['to'] !== 'string') return null
     // label is optional — only validate type if present
     if ('label' in edge && edge['label'] !== undefined && typeof edge['label'] !== 'string') return null
+    // status is optional — only validate type/enum if present
+    if ('status' in edge && edge['status'] !== undefined) {
+      if (typeof edge['status'] !== 'string' || !NODE_STATUSES.has(edge['status'] as string)) return null
+    }
   }
 
   return x as unknown as Graph
+}
+
+// ---------------------------------------------------------------------------
+// TestInsight
+// ---------------------------------------------------------------------------
+
+export interface TestInsight {
+  covered: { behavior: string; test: string; file: string }[]
+  gaps: string[]
+}
+
+/**
+ * Validate an unknown value as TestInsight.
+ * Returns the typed value or null if the shape is invalid.
+ *
+ * Strict on required fields and array element shapes; tolerant of extra keys.
+ */
+export function validateTestInsight(x: unknown): TestInsight | null {
+  if (!isObject(x)) return null
+
+  // covered — required array of {behavior: string; test: string; file: string}
+  if (!Array.isArray(x['covered'])) return null
+  for (const item of x['covered']) {
+    if (!isObject(item)) return null
+    if (typeof item['behavior'] !== 'string') return null
+    if (typeof item['test'] !== 'string') return null
+    if (typeof item['file'] !== 'string') return null
+  }
+
+  // gaps — required array of strings
+  if (!Array.isArray(x['gaps'])) return null
+  for (const item of x['gaps']) {
+    if (typeof item !== 'string') return null
+  }
+
+  return x as unknown as TestInsight
+}
+
+// ---------------------------------------------------------------------------
+// CommentReview / CoachResult
+// ---------------------------------------------------------------------------
+
+export interface CommentReview {
+  index: number
+  clarity: 1 | 2 | 3 | 4 | 5
+  actionable: boolean
+  tone: 'ok' | 'blunt' | 'harsh'
+  biasQuestion: string | null
+  suggestion: string | null
+}
+
+export interface CoachResult {
+  reviews: CommentReview[]
+}
+
+const TONE_VALUES = new Set<string>(['ok', 'blunt', 'harsh'])
+const CLARITY_VALUES = new Set<number>([1, 2, 3, 4, 5])
+
+/**
+ * Validate an unknown value as CoachResult.
+ * Returns the typed value or null if the shape is invalid.
+ *
+ * Strict: clarity must be an integer 1–5 (not 0, not 6, not 2.5);
+ * tone must be 'ok'|'blunt'|'harsh'; index must be an integer.
+ * Tolerant of extra keys on both the top-level object and review objects.
+ */
+export function validateCoachResult(x: unknown): CoachResult | null {
+  if (!isObject(x)) return null
+
+  // reviews — required array of CommentReview
+  if (!Array.isArray(x['reviews'])) return null
+  for (const review of x['reviews']) {
+    if (!isObject(review)) return null
+
+    // index — required integer
+    if (typeof review['index'] !== 'number' || !Number.isInteger(review['index'])) return null
+
+    // clarity — required integer in {1,2,3,4,5}
+    if (typeof review['clarity'] !== 'number') return null
+    if (!Number.isInteger(review['clarity'])) return null
+    if (!CLARITY_VALUES.has(review['clarity'] as number)) return null
+
+    // actionable — required boolean
+    if (typeof review['actionable'] !== 'boolean') return null
+
+    // tone — required string enum
+    if (typeof review['tone'] !== 'string' || !TONE_VALUES.has(review['tone'] as string)) return null
+
+    // biasQuestion — required, must be string or null
+    if (!('biasQuestion' in review)) return null
+    if (review['biasQuestion'] !== null && typeof review['biasQuestion'] !== 'string') return null
+
+    // suggestion — required, must be string or null
+    if (!('suggestion' in review)) return null
+    if (review['suggestion'] !== null && typeof review['suggestion'] !== 'string') return null
+  }
+
+  return x as unknown as CoachResult
 }
 
 function isObject(x: unknown): x is Record<string, unknown> {

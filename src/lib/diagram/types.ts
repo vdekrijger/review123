@@ -7,13 +7,16 @@
  * the AI schema validator.
  */
 
+export type NodeStatus = 'added' | 'removed' | 'changed' | 'unchanged'
+
 export interface Graph {
-  nodes: { id: string; label: string }[]
-  edges: { from: string; to: string; label?: string }[]
+  nodes: { id: string; label: string; status?: NodeStatus }[]
+  edges: { from: string; to: string; label?: string; status?: NodeStatus }[]
 }
 
 export interface GraphResult {
   before: Graph
   after: Graph
   kind: 'flow' | 'module'
+  changeMap?: Graph
 }

@@ -4,9 +4,9 @@ Paste a GitHub PR URL and get a guided three-step review: **Understand → Inspe
 
 ---
 
-## AI features (Milestone C)
+## AI features (Milestone C + D)
 
-Review 1-2-3 adds four AI-assisted panels to the **Understand** step, all powered by a BYO [DeepSeek](https://platform.deepseek.com/) API key. No key, no AI calls — the rest of the review flow works without it.
+Review 1-2-3 adds AI-assisted panels to the **Understand** step and smart workflow tools to the **Inspect** and **Verdict** steps, all powered by a BYO [DeepSeek](https://platform.deepseek.com/) API key. No key, no AI calls — the rest of the review flow works without it.
 
 ### BYO DeepSeek key
 
@@ -16,14 +16,15 @@ Review 1-2-3 adds four AI-assisted panels to the **Understand** step, all powere
 
 ### What gets sent to DeepSeek
 
-For each PR you review, four structured prompts are sent:
+For each PR you review, up to five structured prompts are sent:
 
 | Panel | Task | Transmission |
 |---|---|---|
 | **Summary** | Streaming plain-text overview + suggested reading order | Patch text for changed files (within the token budget) |
 | **Attention** | Hotspots (high/medium/low) + inferred test gaps | Same packed context as above |
-| **Diagrams** | Before/after architecture graph (JSON, converted to Mermaid client-side) | Same packed context |
+| **Diagrams** | Before/after architecture graph + change-map overlay (JSON, converted to Mermaid client-side) | Same packed context |
 | **Verdict** | 3-level behaviour verdict (preserved/minor/significant) + evidence | Same packed context + CI failure names & annotations |
+| **Test insight** | AI-inferred test coverage — which behaviors are tested and what gaps remain | Same packed context |
 
 The packed context includes file patches and, when they fit within the token budget (~58 000 tokens for `deepseek-chat`), the full before/after file contents. Lock files (`pnpm-lock.yaml`, `package-lock.json`, etc.) and minified/generated files are excluded automatically.
 
@@ -41,6 +42,30 @@ AI results are cached in IndexedDB keyed by `owner/repo#number@headSha + task + 
 
 ---
 
+## Plan D features (Milestone D)
+
+### Change map (status-aware diagrams)
+
+The **Diagrams** panel now renders a **Change Map** as the primary view when AI analysis completes. Each node and edge is colour-coded: *Added* (green), *Removed* (red), *Changed* (amber), *Unchanged* (grey). A "Before / After" toggle reveals the traditional side-by-side graphs for deeper comparison.
+
+### Test insight panel
+
+The **At-a-Glance** card in the Understand step shows a **tests chip** summarising AI-inferred test coverage: how many behaviors have corresponding test changes and how many appear to be gaps. Opening the "Test coverage (AI-inferred)" panel shows the full checklist with behavior descriptions, test names, and file links. Coverage is inferred by reading the code — not measured instrumentation.
+
+### Viewed state
+
+In the **Inspect** step each file header has a **Viewed** checkbox. Marking a file viewed collapses its diff and persists the state across page reloads (stored in `localStorage` under `review123:viewed`). If the file's patch changes after you marked it viewed, an amber "Changed since you viewed it" badge appears. The sticky bar at the bottom shows `viewed N/M` so you can track progress.
+
+### Since-last-visit interdiff
+
+When you return to a PR whose head SHA has changed since your last visit, a banner appears in the **Inspect** step offering **"Show only changes since then"**. Clicking it fetches the GitHub compare API (`base...head`) and shows only the files that changed between your last visit and now. "Show full diff" exits compare mode. If the previous revision was force-pushed away the app shows a graceful error message.
+
+### Comment coach
+
+In the **Verdict** step, when you have one or more drafted comments and a DeepSeek key is configured, a **"Coach my comments"** button appears. Clicking it sends your draft bodies to DeepSeek and receives a review for each: clarity (1–5 stars), actionability, tone (ok / blunt / harsh), an optional anti-bias question, and an optional rewrite suggestion. Clicking **Apply** replaces the draft body with the suggestion. Clicking **Dismiss** hides the card. The coach result is never cached — each click makes a fresh call.
+
+---
+
 ## Status
 
 **Milestone A:** PR URL input → diff viewer with unified/side-by-side modes, three-step stepper shell, settings panel, PostHog analytics.
@@ -48,6 +73,8 @@ AI results are cached in IndexedDB keyed by `owner/repo#number@headSha + task + 
 **Milestone B:** GitHub sign-in and review submission via OAuth flow (Vercel serverless function).
 
 **Milestone C:** AI features (PR summary, hotspot highlighting, architecture diagrams, behaviour verdict) powered by a BYO DeepSeek API key.
+
+**Milestone D:** Review intelligence — status-aware change-map diagrams, AI-inferred test insight panel, viewed-file state with persistence, since-last-visit interdiff banner, and comment coach with apply/dismiss.
 
 Milestone specs and criteria matrices live in [`docs/superpowers/specs/`](docs/superpowers/specs/).
 

@@ -15,8 +15,13 @@
   import UnderstandStep from '../components/UnderstandStep.svelte'
   import ContextRail from '../components/ContextRail.svelte'
   import { addToHistory } from '../lib/history/history'
+  import { createViewedStore } from '../lib/viewed/viewed.svelte'
+  import { recordVisit, lastVisit } from '../lib/visits/visits'
+  import { compareCommits } from '../lib/github/compare'
+  import { GithubApiError } from '../lib/github/types'
   import type { CiSummary } from '../lib/github/checks'
   import type { AttentionResult } from '../lib/ai/schemas'
+  import type { PrFile } from '../lib/github/types'
 
   const RETURN_KEY = 'review123:returnTo'
 
@@ -36,10 +41,24 @@
   const canPrev = $derived(step > 1)
   const canNext = $derived(step < 3)
 
+  // ---- Viewed store — keyed by owner/repo#number (NO sha — survives pushes) ---
+  const prId = $derived(`${owner}/${repo}#${number}`)
+  const viewedStore = $derived(createViewedStore(prId))
+
   // ---- Draft store — created once per PR+headSha (after the PR loads) -----
   // We keep a single store instance; it persists across step switches.
   let draftStore: ReturnType<typeof createDraftStore> | null = $state(null)
   let storeInitialized = false
+
+  // ---- Since-last-visit interdiff state ----
+  // The headSha from the PREVIOUS visit (null = first visit or same sha)
+  let prevVisitSha: string | null = $state(null)
+  let prevVisitedAt: number | null = $state(null)
+  // null = not active; PrFile[] = compare result when active
+  let sinceLastVisit: PrFile[] | null = $state(null)
+  // 'idle' | 'loading' | 'active' | 'error'
+  let compareMode: 'idle' | 'loading' | 'active' | 'error' = $state('idle')
+  let compareError: string | null = $state(null)
 
   $effect(() => {
     // Initialise the store once the PR is ready and we have the headSha
@@ -55,8 +74,53 @@
 
       // Record this PR in the recent-reviews history
       addToHistory({ owner, repo, number, title: meta.title })
+
+      // Read last visit BEFORE recording the new one
+      const prior = lastVisit(prId)
+      if (prior !== null && prior.headSha !== meta.headSha) {
+        prevVisitSha = prior.headSha
+        prevVisitedAt = prior.visitedAt
+      }
+      recordVisit(prId, meta.headSha)
     }
   })
+
+  async function fetchCompare() {
+    if (!prevVisitSha || load.state.status !== 'ready') return
+    compareMode = 'loading'
+    compareError = null
+    try {
+      const files = await compareCommits({ owner, repo }, prevVisitSha, load.state.meta.headSha)
+      sinceLastVisit = files
+      compareMode = 'active'
+    } catch (e) {
+      if (e instanceof GithubApiError && e.detail.kind === 'not-found') {
+        compareError = "Couldn't compare — the previous revision may have been force-pushed away."
+      } else {
+        compareError = 'Comparison failed. Please try again.'
+      }
+      compareMode = 'error'
+    }
+  }
+
+  function exitCompareMode() {
+    compareMode = 'idle'
+    sinceLastVisit = null
+    compareError = null
+  }
+
+  function dismissBanner() {
+    prevVisitSha = null
+    prevVisitedAt = null
+    compareMode = 'idle'
+    sinceLastVisit = null
+    compareError = null
+  }
+
+  function formatVisitDate(ts: number): string {
+    const d = new Date(ts)
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  }
 
   async function handleGrantPrivateAccess() {
     sessionStorage.setItem(RETURN_KEY, location.pathname)
@@ -197,18 +261,38 @@
         files={load.state.files}
         ci={ciData}
         {ciError}
-        run={aiRun ?? { summary: {status:'idle'}, attention: {status:'idle'}, diagrams: {status:'idle'}, verdict: {status:'idle'}, start: async()=>{}, retry: async()=>{} } as any}
+        run={aiRun ?? { summary: {status:'idle'}, attention: {status:'idle'}, diagrams: {status:'idle'}, verdict: {status:'idle'}, tests: {status:'idle'}, start: async()=>{}, retry: async()=>{}, coach: async()=>({error:'no-key'}) } as any}
         onhotspot={handleHotspot}
       />
     {:else if step === 2}
+      {#if prevVisitSha !== null}
+        <div class="visit-banner" role="alert">
+          {#if compareMode === 'idle'}
+            This PR changed since your last visit ({prevVisitedAt !== null ? formatVisitDate(prevVisitedAt) : 'previously'}).
+            <button class="banner-btn" onclick={fetchCompare}>Show only changes since then</button>
+            <button class="banner-dismiss" onclick={dismissBanner} aria-label="Dismiss">×</button>
+          {:else if compareMode === 'loading'}
+            Loading changes since your last visit…
+            <button class="banner-dismiss" onclick={dismissBanner} aria-label="Dismiss">×</button>
+          {:else if compareMode === 'error'}
+            {compareError}
+            <button class="banner-dismiss" onclick={dismissBanner} aria-label="Dismiss">×</button>
+          {:else if compareMode === 'active' && sinceLastVisit !== null}
+            Showing {sinceLastVisit.length} file{sinceLastVisit.length === 1 ? '' : 's'} changed since your last visit
+            · <button class="banner-btn" onclick={exitCompareMode}>Show full diff</button>
+            <button class="banner-dismiss" onclick={dismissBanner} aria-label="Dismiss">×</button>
+          {/if}
+        </div>
+      {/if}
       <InspectStep
-        files={load.state.files}
-        changedFiles={load.state.meta.changedFiles}
+        files={compareMode === 'active' && sinceLastVisit !== null ? sinceLastVisit : load.state.files}
+        changedFiles={compareMode === 'active' && sinceLastVisit !== null ? sinceLastVisit.length : load.state.meta.changedFiles}
         {mode}
         onmode={setMode}
         {draftStore}
-        attention={aiRun?.attention.status === 'done' ? aiRun.attention.value as AttentionResult : null}
-        {readingOrder}
+        attention={compareMode === 'active' ? null : (aiRun?.attention.status === 'done' ? aiRun.attention.value as AttentionResult : null)}
+        readingOrder={compareMode === 'active' ? [] : readingOrder}
+        {viewedStore}
       />
     {:else}
       <VerdictStep
@@ -216,6 +300,7 @@
         commitId={load.state.meta.headSha}
         store={draftStore ?? createDraftStore(`${owner}/${repo}#${number}`)}
         prUrl={`https://github.com/${owner}/${repo}/pull/${number}`}
+        coachFn={aiRun ? aiRun.coach : undefined}
       />
     {/if}
   {/if}
@@ -232,7 +317,7 @@
           </span>
         {/if}
         <span class="draft-count">
-          {draftStore?.count ?? 0} comment{(draftStore?.count ?? 0) === 1 ? '' : 's'} drafted
+          {draftStore?.count ?? 0} comment{(draftStore?.count ?? 0) === 1 ? '' : 's'} drafted{#if viewedStore.count > 0}&nbsp;&middot; viewed {viewedStore.count}/{load.state.files.length}{/if}
         </span>
       </span>
       <div class="step-nav">
@@ -260,6 +345,50 @@
 <style>
   .review { max-width: 70rem; margin: 0 auto; padding: 1rem; padding-bottom: 5rem; }
   .muted { opacity: 0.6; }
+
+  .visit-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    background: #1a3050;
+    border: 1px solid #2a5080;
+    border-left: 3px solid #4a90d0;
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    margin-bottom: 0.75rem;
+    color: #c8dff0;
+  }
+
+  .banner-btn {
+    background: none;
+    border: none;
+    color: #6ab4f0;
+    cursor: pointer;
+    font-size: 0.875rem;
+    text-decoration: underline;
+    padding: 0;
+  }
+
+  .banner-btn:hover {
+    color: #90ccff;
+  }
+
+  .banner-dismiss {
+    background: none;
+    border: none;
+    color: #6a8090;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 0.25rem;
+    margin-left: auto;
+  }
+
+  .banner-dismiss:hover {
+    color: #90a8b8;
+  }
 
   /* EC-07i: Sticky bottom bar */
   .draft-bar {

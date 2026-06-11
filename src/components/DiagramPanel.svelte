@@ -15,6 +15,10 @@
    * EC-14k: click on diagram opens full-screen <dialog> overlay; Esc or
    *         backdrop click closes it.
    * REQ-14: track('diagram_viewed') once on first successful render.
+   *
+   * D1 change-map: when result.changeMap is present, renders the change-map
+   * FIRST (full width) with a compact legend row and a "Before / After" toggle.
+   * v3 cached results without changeMap fall back to the before/after layout.
    */
   import { track } from '../lib/analytics/analytics'
   import { graphToMermaid } from '../lib/diagram/mermaid'
@@ -29,12 +33,16 @@
   let { result, panelState }: Props = $props()
 
   // Containers for Mermaid SVG output
+  let changeMapContainer = $state<HTMLDivElement | null>(null)
   let beforeContainer = $state<HTMLDivElement | null>(null)
   let afterContainer = $state<HTMLDivElement | null>(null)
 
   // Overlay state
   let overlayOpen = $state(false)
   let overlayContent = $state('')
+
+  // Before/After toggle (visible only when changeMap is present)
+  let showBeforeAfter = $state(false)
 
   // Track whether we have fired the analytics event
   let hasTracked = false
@@ -56,7 +64,37 @@
     }
   }
 
-  // Render diagrams when result and containers are ready
+  // Render the change-map diagram when container and result.changeMap are ready
+  $effect(() => {
+    if (!result?.changeMap || !changeMapContainer) return
+
+    const { changeMap, kind } = result
+    const changeMapMermaid = graphToMermaid(changeMap, kind).mermaid
+
+    let cancelled = false
+
+    async function renderChangeMap() {
+      const cmc = changeMapContainer
+      if (!cmc) return
+
+      const svg = await renderDiagram(cmc, changeMapMermaid, 'changemap')
+
+      if (cancelled) return
+
+      if (svg && !hasTracked) {
+        hasTracked = true
+        track('diagram_viewed')
+      }
+    }
+
+    renderChangeMap()
+
+    return () => {
+      cancelled = true
+    }
+  })
+
+  // Render before/after diagrams when result and containers are ready
   $effect(() => {
     if (!result || !beforeContainer || !afterContainer) return
 
@@ -82,7 +120,7 @@
 
       if (cancelled) return
 
-      // EC-14 track: fire once on first successful render
+      // EC-14 track: fire once on first successful render (if change-map didn't already)
       if ((beforeSvg || afterSvg) && !hasTracked) {
         hasTracked = true
         track('diagram_viewed')
@@ -96,10 +134,16 @@
     }
   })
 
-  function openOverlay(which: 'before' | 'after') {
+  function openOverlay(which: 'changemap' | 'before' | 'after') {
     if (!result) return
-    // Show the SVG already rendered in the container
-    const container = which === 'before' ? beforeContainer : afterContainer
+    let container: HTMLDivElement | null
+    if (which === 'changemap') {
+      container = changeMapContainer
+    } else if (which === 'before') {
+      container = beforeContainer
+    } else {
+      container = afterContainer
+    }
     overlayContent = container?.innerHTML ?? ''
     overlayOpen = true
   }
@@ -122,11 +166,14 @@
     }
   }
 
-  // Derived: are both graphs empty?
+  // Derived: are both before/after graphs empty?
   const bothEmpty = $derived(
     !result ||
-      (result.before.nodes.length === 0 && result.after.nodes.length === 0)
+      (result.before.nodes.length === 0 && result.after.nodes.length === 0 && !result.changeMap)
   )
+
+  // Derived: whether we have a change-map to show
+  const hasChangeMap = $derived(!!result?.changeMap && (result.changeMap.nodes.length > 0))
 </script>
 
 {#if panelState === 'loading'}
@@ -148,43 +195,120 @@
   </div>
 {:else if result}
   <div class="diagram-panel">
-    <div class="diagrams-row">
-      <!-- Before diagram -->
-      <div class="diagram-side">
-        <h4 class="diagram-label">Before</h4>
-        {#if result.before.nodes.length === 0}
-          <p class="empty-graph">No structural changes detected.</p>
-        {:else}
-          <div
-            class="diagram-container"
-            role="button"
-            tabindex="0"
-            aria-label="View before diagram full screen"
-            bind:this={beforeContainer}
-            onclick={() => openOverlay('before')}
-            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') openOverlay('before') }}
-          ></div>
-        {/if}
+    {#if hasChangeMap}
+      <!-- D1: Change-map section (full width, rendered first) -->
+      <div class="changemap-section">
+        <!-- Legend row -->
+        <div class="changemap-header">
+          <span class="changemap-title">Change Map</span>
+          <div class="legend" aria-label="Change map legend">
+            <span class="legend-chip legend-added">Added</span>
+            <span class="legend-chip legend-removed">Removed</span>
+            <span class="legend-chip legend-changed">Changed</span>
+            <span class="legend-chip legend-unchanged">Unchanged</span>
+          </div>
+          <button
+            class="toggle-btn"
+            onclick={() => { showBeforeAfter = !showBeforeAfter }}
+            aria-expanded={showBeforeAfter}
+            aria-controls="before-after-section"
+          >
+            {showBeforeAfter ? 'Hide Before / After' : 'Before / After'}
+          </button>
+        </div>
+
+        <!-- Change-map diagram (full width) -->
+        <div
+          class="diagram-container diagram-container--full"
+          role="button"
+          tabindex="0"
+          aria-label="View change map full screen"
+          bind:this={changeMapContainer}
+          onclick={() => openOverlay('changemap')}
+          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') openOverlay('changemap') }}
+        ></div>
       </div>
 
-      <!-- After diagram -->
-      <div class="diagram-side">
-        <h4 class="diagram-label">After</h4>
-        {#if result.after.nodes.length === 0}
-          <p class="empty-graph">No structural changes detected.</p>
-        {:else}
-          <div
-            class="diagram-container"
-            role="button"
-            tabindex="0"
-            aria-label="View after diagram full screen"
-            bind:this={afterContainer}
-            onclick={() => openOverlay('after')}
-            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') openOverlay('after') }}
-          ></div>
-        {/if}
+      <!-- Before/After toggle section -->
+      {#if showBeforeAfter}
+        <div id="before-after-section" class="diagrams-row">
+          <!-- Before diagram -->
+          <div class="diagram-side">
+            <h4 class="diagram-label">Before</h4>
+            {#if result.before.nodes.length === 0}
+              <p class="empty-graph">No structural changes detected.</p>
+            {:else}
+              <div
+                class="diagram-container"
+                role="button"
+                tabindex="0"
+                aria-label="View before diagram full screen"
+                bind:this={beforeContainer}
+                onclick={() => openOverlay('before')}
+                onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') openOverlay('before') }}
+              ></div>
+            {/if}
+          </div>
+
+          <!-- After diagram -->
+          <div class="diagram-side">
+            <h4 class="diagram-label">After</h4>
+            {#if result.after.nodes.length === 0}
+              <p class="empty-graph">No structural changes detected.</p>
+            {:else}
+              <div
+                class="diagram-container"
+                role="button"
+                tabindex="0"
+                aria-label="View after diagram full screen"
+                bind:this={afterContainer}
+                onclick={() => openOverlay('after')}
+                onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') openOverlay('after') }}
+              ></div>
+            {/if}
+          </div>
+        </div>
+      {/if}
+    {:else}
+      <!-- v3 fallback: no changeMap → render before/after side-by-side as before -->
+      <div class="diagrams-row">
+        <!-- Before diagram -->
+        <div class="diagram-side">
+          <h4 class="diagram-label">Before</h4>
+          {#if result.before.nodes.length === 0}
+            <p class="empty-graph">No structural changes detected.</p>
+          {:else}
+            <div
+              class="diagram-container"
+              role="button"
+              tabindex="0"
+              aria-label="View before diagram full screen"
+              bind:this={beforeContainer}
+              onclick={() => openOverlay('before')}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') openOverlay('before') }}
+            ></div>
+          {/if}
+        </div>
+
+        <!-- After diagram -->
+        <div class="diagram-side">
+          <h4 class="diagram-label">After</h4>
+          {#if result.after.nodes.length === 0}
+            <p class="empty-graph">No structural changes detected.</p>
+          {:else}
+            <div
+              class="diagram-container"
+              role="button"
+              tabindex="0"
+              aria-label="View after diagram full screen"
+              bind:this={afterContainer}
+              onclick={() => openOverlay('after')}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') openOverlay('after') }}
+            ></div>
+          {/if}
+        </div>
       </div>
-    </div>
+    {/if}
   </div>
 {/if}
 
@@ -242,6 +366,89 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
+  }
+
+  /* D1: Change-map section */
+  .changemap-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .changemap-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .changemap-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .legend {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+
+  .legend-chip {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.15rem 0.45rem;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    letter-spacing: 0.02em;
+  }
+
+  .legend-added {
+    background: #1a4731;
+    border-color: #2ea44f;
+    color: #7ee2a8;
+  }
+
+  .legend-removed {
+    background: #4a1a1a;
+    border-color: #d73a49;
+    color: #f0a3a3;
+  }
+
+  .legend-changed {
+    background: #4a3a10;
+    border-color: #d4a72c;
+    color: #ffd86e;
+  }
+
+  .legend-unchanged {
+    background: #2a2a2e;
+    border-color: #555;
+    color: #aaa;
+  }
+
+  .toggle-btn {
+    margin-left: auto;
+    font-size: 0.78rem;
+    padding: 0.2rem 0.6rem;
+    border: 1px solid #8883;
+    background: transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    color: inherit;
+    opacity: 0.8;
+    white-space: nowrap;
+  }
+
+  .toggle-btn:hover {
+    opacity: 1;
+    background: #8881;
+  }
+
+  .diagram-container--full {
+    width: 100%;
   }
 
   .diagrams-row {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { render, screen } from '@testing-library/svelte'
+import { render, screen, fireEvent } from '@testing-library/svelte'
 import FileDiff from './FileDiff.svelte'
 import type { PrFile } from '../lib/github/types'
 
@@ -71,5 +71,57 @@ describe('FileDiff', () => {
     expect(container.querySelector('.note')).not.toBeInTheDocument()
     // DiffView should have rendered some diff structure
     expect(container.querySelector('article.file-diff')!.childElementCount).toBeGreaterThan(1)
+  })
+})
+
+describe('FileDiff — viewed state', () => {
+  it('renders a "Viewed" checkbox with correct aria-label', () => {
+    render(FileDiff, { props: { file: modified, mode: 'unified' } })
+    const checkbox = screen.getByRole('checkbox', { name: /mark src\/a\.ts as viewed/i })
+    expect(checkbox).toBeInTheDocument()
+    expect((checkbox as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('viewed=true: checkbox is checked and diff body is collapsed', () => {
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified', viewed: true } })
+    const checkbox = screen.getByRole('checkbox', { name: /mark src\/a\.ts as viewed/i })
+    expect((checkbox as HTMLInputElement).checked).toBe(true)
+    // Article should have is-collapsed class
+    expect(container.querySelector('article.file-diff')!.classList.contains('is-collapsed')).toBe(true)
+    // The diff view should not be rendered (collapsed)
+    expect(container.querySelector('.note')).not.toBeInTheDocument()
+    // No DiffView rendered when collapsed
+    const article = container.querySelector('article.file-diff')!
+    // Header is the only child when collapsed
+    const headerChildren = article.querySelectorAll('header')
+    expect(headerChildren.length).toBe(1)
+  })
+
+  it('viewed=false: article is not collapsed', () => {
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified', viewed: false } })
+    expect(container.querySelector('article.file-diff')!.classList.contains('is-collapsed')).toBe(false)
+  })
+
+  it('changedSinceViewed=true: amber badge is shown', () => {
+    render(FileDiff, { props: { file: modified, mode: 'unified', changedSinceViewed: true } })
+    expect(screen.getByText(/changed since you viewed it/i)).toBeInTheDocument()
+  })
+
+  it('changedSinceViewed=false: amber badge is not shown', () => {
+    render(FileDiff, { props: { file: modified, mode: 'unified', changedSinceViewed: false } })
+    expect(screen.queryByText(/changed since you viewed it/i)).not.toBeInTheDocument()
+  })
+
+  it('onToggleViewed is called when checkbox changes', async () => {
+    let called = false
+    render(FileDiff, { props: { file: modified, mode: 'unified', onToggleViewed: () => { called = true } } })
+    const checkbox = screen.getByRole('checkbox', { name: /mark src\/a\.ts as viewed/i })
+    await fireEvent.change(checkbox, { target: { checked: true } })
+    expect(called).toBe(true)
+  })
+
+  it('rename-only file: shows viewed checkbox', () => {
+    render(FileDiff, { props: { file: renameOnly, mode: 'unified' } })
+    expect(screen.getByRole('checkbox', { name: /mark b\.ts as viewed/i })).toBeInTheDocument()
   })
 })

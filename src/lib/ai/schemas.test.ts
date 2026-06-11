@@ -1,7 +1,8 @@
 /**
  * Tests for src/lib/ai/schemas.ts
  *
- * Covers: validateAttention, validateVerdict, validateGraphResult
+ * Covers: validateAttention, validateVerdict, validateGraphResult,
+ *         validateTestInsight, validateCoachResult
  * Per-schema: valid / invalid-enum / wrong-type / extra-keys-tolerated / missing-array
  * EC-15a: numeric or percentage level returns null
  */
@@ -11,6 +12,8 @@ import {
   validateAttention,
   validateVerdict,
   validateGraphResult,
+  validateTestInsight,
+  validateCoachResult,
 } from './schemas'
 
 // ---------------------------------------------------------------------------
@@ -382,5 +385,351 @@ describe('validateGraphResult', () => {
     expect(validateGraphResult(null)).toBeNull()
     expect(validateGraphResult('graph')).toBeNull()
     expect(validateGraphResult([])).toBeNull()
+  })
+
+  // D1: optional status on nodes and edges
+  it('accepts nodes with valid status', () => {
+    const x = {
+      kind: 'flow',
+      before: { nodes: [{ id: 'a', label: 'A', status: 'unchanged' }], edges: [] },
+      after: { nodes: [{ id: 'b', label: 'B', status: 'added' }], edges: [] },
+    }
+    expect(validateGraphResult(x)).not.toBeNull()
+  })
+
+  it('accepts edges with valid status', () => {
+    const x = {
+      kind: 'flow',
+      before: { nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], edges: [{ from: 'a', to: 'b', status: 'changed' }] },
+      after: { nodes: [], edges: [] },
+    }
+    expect(validateGraphResult(x)).not.toBeNull()
+  })
+
+  it('accepts all four status enum values on nodes', () => {
+    for (const status of ['added', 'removed', 'changed', 'unchanged']) {
+      const x = {
+        kind: 'flow',
+        before: { nodes: [{ id: 'a', label: 'A', status }], edges: [] },
+        after: { nodes: [], edges: [] },
+      }
+      expect(validateGraphResult(x)).not.toBeNull()
+    }
+  })
+
+  it('returns null for invalid node status enum value', () => {
+    const x = {
+      kind: 'flow',
+      before: { nodes: [{ id: 'a', label: 'A', status: 'modified' }], edges: [] },
+      after: { nodes: [], edges: [] },
+    }
+    expect(validateGraphResult(x)).toBeNull()
+  })
+
+  it('returns null for numeric node status', () => {
+    const x = {
+      kind: 'flow',
+      before: { nodes: [{ id: 'a', label: 'A', status: 1 }], edges: [] },
+      after: { nodes: [], edges: [] },
+    }
+    expect(validateGraphResult(x)).toBeNull()
+  })
+
+  it('returns null for invalid edge status enum value', () => {
+    const x = {
+      kind: 'flow',
+      before: { nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], edges: [{ from: 'a', to: 'b', status: 'new' }] },
+      after: { nodes: [], edges: [] },
+    }
+    expect(validateGraphResult(x)).toBeNull()
+  })
+
+  it('accepts nodes and edges without status (backward compat with cached v3)', () => {
+    const x = {
+      kind: 'module',
+      before: { nodes: [{ id: 'a', label: 'A' }], edges: [] },
+      after: { nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], edges: [] },
+    }
+    const result = validateGraphResult(x)
+    expect(result).not.toBeNull()
+    expect(result?.changeMap).toBeUndefined()
+  })
+
+  // D1: optional changeMap
+  it('accepts a valid changeMap (D1)', () => {
+    const x = {
+      kind: 'flow',
+      before: { nodes: [], edges: [] },
+      after: { nodes: [], edges: [] },
+      changeMap: {
+        nodes: [
+          { id: 'a', label: 'api.ts', status: 'unchanged' },
+          { id: 'b', label: 'handler.ts', status: 'added' },
+        ],
+        edges: [
+          { from: 'a', to: 'b', label: 'calls', status: 'added' },
+        ],
+      },
+    }
+    const result = validateGraphResult(x)
+    expect(result).not.toBeNull()
+    expect(result?.changeMap).toBeDefined()
+    expect(result?.changeMap?.nodes).toHaveLength(2)
+  })
+
+  it('returns null when changeMap has invalid node status', () => {
+    const x = {
+      kind: 'flow',
+      before: { nodes: [], edges: [] },
+      after: { nodes: [], edges: [] },
+      changeMap: {
+        nodes: [{ id: 'a', label: 'A', status: 'brand-new' }],
+        edges: [],
+      },
+    }
+    expect(validateGraphResult(x)).toBeNull()
+  })
+
+  it('accepts result without changeMap (backward compat with cached v3)', () => {
+    const x = {
+      kind: 'module',
+      before: { nodes: [{ id: 'a', label: 'A' }], edges: [] },
+      after: { nodes: [], edges: [] },
+    }
+    const result = validateGraphResult(x)
+    expect(result).not.toBeNull()
+    expect(result?.changeMap).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// validateTestInsight (D2)
+// ---------------------------------------------------------------------------
+
+describe('validateTestInsight', () => {
+  const valid = {
+    covered: [
+      { behavior: 'validates email format', test: 'it validates email', file: 'src/auth.test.ts' },
+      { behavior: 'rejects empty passwords', test: 'rejects empty password', file: 'src/auth.test.ts' },
+    ],
+    gaps: ['src/mailer.ts — sendWelcome not tested after rewrite'],
+  }
+
+  it('accepts a valid TestInsight', () => {
+    expect(validateTestInsight(valid)).toEqual(valid)
+  })
+
+  it('accepts empty covered and gaps arrays', () => {
+    const x = { covered: [], gaps: [] }
+    expect(validateTestInsight(x)).toEqual(x)
+  })
+
+  it('accepts extra top-level keys (tolerant of extras)', () => {
+    const withExtras = { ...valid, version: 1, meta: { ts: '2026' } }
+    const result = validateTestInsight(withExtras)
+    expect(result).not.toBeNull()
+    expect(result?.covered).toEqual(valid.covered)
+  })
+
+  it('accepts extra keys on covered item objects', () => {
+    const x = {
+      covered: [{ behavior: 'b', test: 't', file: 'f.ts', extra: 'ok' }],
+      gaps: [],
+    }
+    expect(validateTestInsight(x)).not.toBeNull()
+  })
+
+  it('returns null when covered is missing', () => {
+    const { covered: _c, ...rest } = valid
+    expect(validateTestInsight(rest)).toBeNull()
+  })
+
+  it('returns null when gaps is missing', () => {
+    const { gaps: _g, ...rest } = valid
+    expect(validateTestInsight(rest)).toBeNull()
+  })
+
+  it('returns null when covered is not an array', () => {
+    const bad = { ...valid, covered: 'not-array' }
+    expect(validateTestInsight(bad)).toBeNull()
+  })
+
+  it('returns null when gaps is not an array', () => {
+    const bad = { ...valid, gaps: null }
+    expect(validateTestInsight(bad)).toBeNull()
+  })
+
+  it('returns null when covered item is missing behavior', () => {
+    const bad = { covered: [{ test: 't', file: 'f.ts' }], gaps: [] }
+    expect(validateTestInsight(bad)).toBeNull()
+  })
+
+  it('returns null when covered item is missing test', () => {
+    const bad = { covered: [{ behavior: 'b', file: 'f.ts' }], gaps: [] }
+    expect(validateTestInsight(bad)).toBeNull()
+  })
+
+  it('returns null when covered item is missing file', () => {
+    const bad = { covered: [{ behavior: 'b', test: 't' }], gaps: [] }
+    expect(validateTestInsight(bad)).toBeNull()
+  })
+
+  it('returns null when covered item has non-string behavior', () => {
+    const bad = { covered: [{ behavior: 42, test: 't', file: 'f.ts' }], gaps: [] }
+    expect(validateTestInsight(bad)).toBeNull()
+  })
+
+  it('returns null when gaps contains non-string', () => {
+    const bad = { covered: [], gaps: [42] }
+    expect(validateTestInsight(bad)).toBeNull()
+  })
+
+  it('returns null for non-object input', () => {
+    expect(validateTestInsight(null)).toBeNull()
+    expect(validateTestInsight('insight')).toBeNull()
+    expect(validateTestInsight([])).toBeNull()
+    expect(validateTestInsight(42)).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// validateCoachResult (D4)
+// ---------------------------------------------------------------------------
+
+describe('validateCoachResult', () => {
+  const validReview = {
+    index: 0,
+    clarity: 3,
+    actionable: true,
+    tone: 'ok',
+    biasQuestion: null,
+    suggestion: null,
+  }
+
+  const valid = { reviews: [validReview] }
+
+  it('accepts a valid CoachResult', () => {
+    expect(validateCoachResult(valid)).toEqual(valid)
+  })
+
+  it('accepts empty reviews array', () => {
+    expect(validateCoachResult({ reviews: [] })).toEqual({ reviews: [] })
+  })
+
+  it('accepts all tone enum values', () => {
+    for (const tone of ['ok', 'blunt', 'harsh']) {
+      const x = { reviews: [{ ...validReview, tone }] }
+      expect(validateCoachResult(x)).not.toBeNull()
+    }
+  })
+
+  it('accepts all clarity integer values 1–5', () => {
+    for (const clarity of [1, 2, 3, 4, 5]) {
+      const x = { reviews: [{ ...validReview, clarity }] }
+      expect(validateCoachResult(x)).not.toBeNull()
+    }
+  })
+
+  it('accepts string biasQuestion and suggestion', () => {
+    const x = {
+      reviews: [{
+        ...validReview,
+        biasQuestion: 'Is this a preference or a defect?',
+        suggestion: 'Consider rephrasing this.',
+      }],
+    }
+    expect(validateCoachResult(x)).not.toBeNull()
+  })
+
+  it('accepts extra keys on result and review objects (tolerant of extras)', () => {
+    const x = {
+      reviews: [{ ...validReview, extra: 'ok', meta: { ts: '2026' } }],
+      modelVersion: 'v4',
+    }
+    expect(validateCoachResult(x)).not.toBeNull()
+  })
+
+  it('returns null for clarity = 0 (out of range)', () => {
+    const x = { reviews: [{ ...validReview, clarity: 0 }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null for clarity = 6 (out of range)', () => {
+    const x = { reviews: [{ ...validReview, clarity: 6 }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null for clarity = 2.5 (non-integer)', () => {
+    const x = { reviews: [{ ...validReview, clarity: 2.5 }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null for clarity as string', () => {
+    const x = { reviews: [{ ...validReview, clarity: '3' }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null for invalid tone string', () => {
+    const x = { reviews: [{ ...validReview, tone: 'aggressive' }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null for numeric tone', () => {
+    const x = { reviews: [{ ...validReview, tone: 1 }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when index is a float', () => {
+    const x = { reviews: [{ ...validReview, index: 1.5 }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when index is a string', () => {
+    const x = { reviews: [{ ...validReview, index: '0' }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when actionable is not boolean', () => {
+    const x = { reviews: [{ ...validReview, actionable: 'yes' }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when biasQuestion is a number (must be string or null)', () => {
+    const x = { reviews: [{ ...validReview, biasQuestion: 42 }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when suggestion is a number (must be string or null)', () => {
+    const x = { reviews: [{ ...validReview, suggestion: 99 }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when biasQuestion is absent (required field)', () => {
+    const { biasQuestion: _bq, ...withoutBq } = validReview
+    const x = { reviews: [withoutBq] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when suggestion is absent (required field)', () => {
+    const { suggestion: _s, ...withoutS } = validReview
+    const x = { reviews: [withoutS] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when reviews is not an array', () => {
+    const bad = { reviews: {} }
+    expect(validateCoachResult(bad)).toBeNull()
+  })
+
+  it('returns null when reviews contains a non-object element', () => {
+    const bad = { reviews: ['not-an-object'] }
+    expect(validateCoachResult(bad)).toBeNull()
+  })
+
+  it('returns null for non-object input', () => {
+    expect(validateCoachResult(null)).toBeNull()
+    expect(validateCoachResult('coach')).toBeNull()
+    expect(validateCoachResult(42)).toBeNull()
+    expect(validateCoachResult([])).toBeNull()
   })
 })

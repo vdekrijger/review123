@@ -11,11 +11,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import VerdictStep from './VerdictStep.svelte'
-import { setGithubPat, saveGithubAuth } from '../lib/settings/settings'
+import { setGithubPat, saveGithubAuth, setDeepseekKey } from '../lib/settings/settings'
 import { _resetAuthStateForTest } from '../lib/auth/authState.svelte'
 import { createDraftStore } from '../lib/drafts/drafts.svelte'
 import type { PrRef } from '../lib/github/parse'
 import type { SubmitOutcome } from '../lib/github/review'
+import type { CoachResult, CommentReview } from '../lib/ai/schemas'
+import type { Draft } from '../lib/drafts/drafts.svelte'
 
 const prRef: PrRef = { owner: 'alice', repo: 'widgets', number: 42 }
 const commitId = 'abc123'
@@ -301,6 +303,349 @@ describe('VerdictStep', () => {
       expect(screen.getByText(/src\/a\.ts/)).toBeInTheDocument()
       expect(screen.getByText(/src\/b\.ts/)).toBeInTheDocument()
       expect(screen.getByText(/drafted comments \(2\)/i)).toBeInTheDocument()
+    })
+  })
+
+  // ---- Coach feature tests ----
+  describe('comment coach', () => {
+    /** Set up a deepseek key so coach button is eligible to show */
+    function setDeepseek() {
+      setDeepseekKey('sk-test-deep')
+    }
+
+    /** Clear deepseek key */
+    function clearDeepseek() {
+      setDeepseekKey(null)
+    }
+
+    /** Make a minimal CoachResult for a single draft */
+    function makeCoachResult(overrides: Partial<CommentReview> = {}): CoachResult {
+      return {
+        reviews: [{
+          index: 0,
+          clarity: 3,
+          actionable: true,
+          tone: 'ok',
+          biasQuestion: null,
+          suggestion: null,
+          ...overrides,
+        }],
+      }
+    }
+
+    /** A coachFn stub that returns a successful CoachResult */
+    function okCoach(result: CoachResult = makeCoachResult()): (_drafts: Draft[]) => Promise<CoachResult | { error: string }> {
+      return vi.fn().mockResolvedValue(result)
+    }
+
+    /** A coachFn stub that returns an error */
+    function errorCoach(msg: string): (_drafts: Draft[]) => Promise<CoachResult | { error: string }> {
+      return vi.fn().mockResolvedValue({ error: msg })
+    }
+
+    /** A coachFn stub that never resolves (hanging) */
+    function hangingCoach(): (_drafts: Draft[]) => Promise<CoachResult | { error: string }> {
+      return vi.fn().mockImplementation(() => new Promise(() => {}))
+    }
+
+    afterEach(() => {
+      clearDeepseek()
+    })
+
+    // --- Button gating ---
+
+    it('Coach button is hidden when there are 0 drafts', async () => {
+      signIn()
+      setDeepseek()
+      render(VerdictStep, {
+        props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, coachFn: okCoach() },
+      })
+      expect(screen.queryByRole('button', { name: /coach my comments/i })).toBeNull()
+    })
+
+    it('Coach button is hidden when no deepseek key', async () => {
+      signIn()
+      // No setDeepseek() call
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: okCoach() },
+      })
+      expect(screen.queryByRole('button', { name: /coach my comments/i })).toBeNull()
+    })
+
+    it('Coach button is hidden when signed out', async () => {
+      // signOut() already called in beforeEach
+      setDeepseek()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: okCoach() },
+      })
+      expect(screen.queryByRole('button', { name: /coach my comments/i })).toBeNull()
+    })
+
+    it('Coach button is hidden when coachFn is not provided', async () => {
+      signIn()
+      setDeepseek()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit },
+      })
+      expect(screen.queryByRole('button', { name: /coach my comments/i })).toBeNull()
+    })
+
+    it('Coach button is visible when signed in + drafts > 0 + key + coachFn', async () => {
+      signIn()
+      setDeepseek()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: okCoach() },
+      })
+      expect(screen.getByRole('button', { name: /coach my comments/i })).toBeInTheDocument()
+    })
+
+    // --- Pending state ---
+
+    it('Coach button is disabled while coachFn is in-flight', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: hangingCoach() },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /coaching…/i })).toBeDisabled()
+      })
+    })
+
+    it('Submit button stays enabled while coaching is in-flight', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: hangingCoach() },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        // Submit button must remain enabled
+        expect(screen.getByRole('button', { name: /submit review/i })).not.toBeDisabled()
+      })
+    })
+
+    // --- Result rendering ---
+
+    it('renders clarity stars with correct aria-label', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: okCoach(makeCoachResult({ clarity: 3 })) },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/clarity 3 of 5/i)).toBeInTheDocument()
+      })
+    })
+
+    it('renders tone chip', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: okCoach(makeCoachResult({ tone: 'blunt' })) },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText('blunt')).toBeInTheDocument()
+      })
+    })
+
+    it('renders bias callout when biasQuestion present', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      const biasQ = 'Is this a preference or a defect?'
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: okCoach(makeCoachResult({ biasQuestion: biasQ })) },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText(biasQ)).toBeInTheDocument()
+      })
+    })
+
+    it('renders suggestion with Apply and Dismiss buttons', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: okCoach(makeCoachResult({ suggestion: 'Consider simplifying this.' })) },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText('Consider simplifying this.')).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /apply suggestion/i })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument()
+      })
+    })
+
+    // --- Apply suggestion mutates store ---
+
+    it('Apply suggestion replaces the draft body in the store', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'original comment' })
+      expect(store.drafts[0].body).toBe('original comment')
+
+      const suggestion = 'Better rewritten comment'
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: okCoach(makeCoachResult({ suggestion })) },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /apply suggestion/i })).toBeInTheDocument()
+      })
+
+      await user.click(screen.getByRole('button', { name: /apply suggestion/i }))
+
+      // Suggestion card should be dismissed after apply
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /apply suggestion/i })).toBeNull()
+      })
+
+      // Store draft body should be updated
+      expect(store.drafts[0].body).toBe(suggestion)
+    })
+
+    it('Dismiss hides the suggestion card without mutating the store', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      const originalBody = 'original comment'
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: originalBody })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: okCoach(makeCoachResult({ suggestion: 'A suggestion' })) },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument()
+      })
+
+      await user.click(screen.getByRole('button', { name: /dismiss/i }))
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /dismiss/i })).toBeNull()
+      })
+
+      // Store body must be unchanged
+      expect(store.drafts[0].body).toBe(originalBody)
+    })
+
+    // --- Error path ---
+
+    it('renders error message in role=alert on coachFn error', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: errorCoach('No DeepSeek API key configured.') },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('alert')).toBeInTheDocument()
+        expect(screen.getByRole('alert').textContent).toContain('No DeepSeek API key configured.')
+      })
+    })
+
+    it('Submit button stays enabled after coach error', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: errorCoach('Some error') },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('alert')).toBeInTheDocument()
+      })
+
+      expect(screen.getByRole('button', { name: /submit review/i })).not.toBeDisabled()
+    })
+
+    it('Submit button stays enabled after successful coaching', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: okCoach() },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/clarity/i)).toBeInTheDocument()
+      })
+
+      expect(screen.getByRole('button', { name: /submit review/i })).not.toBeDisabled()
     })
   })
 
