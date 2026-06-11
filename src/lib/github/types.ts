@@ -23,6 +23,7 @@ export type GithubError =
   | { kind: 'unauthorized' }       // 401 — bad/expired token (EC-04c/e)
   | { kind: 'rate-limited'; resetAt: Date } // EC-05c
   | { kind: 'forbidden' }          // other 403
+  | { kind: 'unprocessable'; message: string } // 422 — with parsed body message
   | { kind: 'server'; status: number }
   | { kind: 'network' }
 
