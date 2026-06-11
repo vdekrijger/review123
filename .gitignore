@@ -1,2 +1,6 @@
 .superpowers/
 node_modules/
+dist/
+.vercel/
+coverage/
+*.local
