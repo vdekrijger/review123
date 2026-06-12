@@ -27,6 +27,56 @@
   color-scheme: light;
 }
 
+/* Change-map legend chip color vars — dark defaults (auto + dark) */
+:root {
+  --legend-added-bg: #1a4731;
+  --legend-added-border: #2ea44f;
+  --legend-added-color: #7ee2a8;
+  --legend-removed-bg: #4a1a1a;
+  --legend-removed-border: #d73a49;
+  --legend-removed-color: #f0a3a3;
+  --legend-changed-bg: #4a3a10;
+  --legend-changed-border: #d4a72c;
+  --legend-changed-color: #ffd86e;
+  --legend-unchanged-bg: #2a2a2e;
+  --legend-unchanged-border: #555;
+  --legend-unchanged-color: #aaa;
+}
+
+/* Light theme overrides for legend chips */
+:root[data-theme='light'] {
+  --legend-added-bg: #dcffe4;
+  --legend-added-border: #2ea44f;
+  --legend-added-color: #1a7f37;
+  --legend-removed-bg: #ffe5e5;
+  --legend-removed-border: #d73a49;
+  --legend-removed-color: #cb2431;
+  --legend-changed-bg: #fff5cc;
+  --legend-changed-border: #d4a72c;
+  --legend-changed-color: #9a6700;
+  --legend-unchanged-bg: #f0f0f2;
+  --legend-unchanged-border: #bbb;
+  --legend-unchanged-color: #666;
+}
+
+/* Auto light preference — applies when no data-theme attribute is set */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --legend-added-bg: #dcffe4;
+    --legend-added-border: #2ea44f;
+    --legend-added-color: #1a7f37;
+    --legend-removed-bg: #ffe5e5;
+    --legend-removed-border: #d73a49;
+    --legend-removed-color: #cb2431;
+    --legend-changed-bg: #fff5cc;
+    --legend-changed-border: #d4a72c;
+    --legend-changed-color: #9a6700;
+    --legend-unchanged-bg: #f0f0f2;
+    --legend-unchanged-border: #bbb;
+    --legend-unchanged-color: #666;
+  }
+}
+
 body {
   margin: 0;
   font-family: var(--font-ui);

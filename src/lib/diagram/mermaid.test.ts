@@ -525,6 +525,81 @@ describe('graphToMermaid — status-aware', () => {
 })
 
 // ---------------------------------------------------------------------------
+// palette option — light vs dark classDefs
+// ---------------------------------------------------------------------------
+
+describe('graphToMermaid — palette option', () => {
+  const allStatusGraph = {
+    nodes: [
+      { id: 'a', label: 'A', status: 'added' as const },
+      { id: 'b', label: 'B', status: 'removed' as const },
+      { id: 'c', label: 'C', status: 'changed' as const },
+      { id: 'd', label: 'D', status: 'unchanged' as const },
+    ],
+    edges: [],
+  }
+
+  it('default (no options) uses dark palette classDefs — unchanged from before', () => {
+    const { mermaid } = graphToMermaid(allStatusGraph, 'flow')
+    expect(mermaid).toContain('classDef added fill:#1a4731,stroke:#2ea44f,color:#7ee2a8')
+    expect(mermaid).toContain('classDef removed fill:#4a1a1a,stroke:#d73a49,color:#f0a3a3,stroke-dasharray: 5 5')
+    expect(mermaid).toContain('classDef changed fill:#4a3a10,stroke:#d4a72c,color:#ffd86e')
+    expect(mermaid).toContain('classDef unchanged fill:#2a2a2e,stroke:#555,color:#aaa')
+  })
+
+  it('palette:"dark" explicit uses same dark classDefs as default', () => {
+    const { mermaid } = graphToMermaid(allStatusGraph, 'flow', { palette: 'dark' })
+    expect(mermaid).toContain('classDef added fill:#1a4731,stroke:#2ea44f,color:#7ee2a8')
+    expect(mermaid).toContain('classDef removed fill:#4a1a1a,stroke:#d73a49,color:#f0a3a3,stroke-dasharray: 5 5')
+    expect(mermaid).toContain('classDef changed fill:#4a3a10,stroke:#d4a72c,color:#ffd86e')
+    expect(mermaid).toContain('classDef unchanged fill:#2a2a2e,stroke:#555,color:#aaa')
+  })
+
+  it('palette:"light" emits light-tuned added classDef', () => {
+    const { mermaid } = graphToMermaid(allStatusGraph, 'flow', { palette: 'light' })
+    expect(mermaid).toContain('classDef added fill:#dcffe4,stroke:#2ea44f,color:#1a7f37')
+  })
+
+  it('palette:"light" does NOT emit dark added classDef', () => {
+    const { mermaid } = graphToMermaid(allStatusGraph, 'flow', { palette: 'light' })
+    expect(mermaid).not.toContain('fill:#1a4731')
+  })
+
+  it('palette:"light" removed classDef uses light red tokens with dashes', () => {
+    const { mermaid } = graphToMermaid(allStatusGraph, 'flow', { palette: 'light' })
+    // Light removed: fill:#ffe5e5,stroke:#d73a49,color:#cb2431,stroke-dasharray: 5 5
+    expect(mermaid).toContain('classDef removed fill:#ffe5e5,stroke:#d73a49,color:#cb2431,stroke-dasharray: 5 5')
+    // Must NOT use dark removed fill
+    expect(mermaid).not.toContain('fill:#4a1a1a')
+  })
+
+  it('palette:"light" changed classDef uses light yellow tokens', () => {
+    const { mermaid } = graphToMermaid(allStatusGraph, 'flow', { palette: 'light' })
+    expect(mermaid).toContain('classDef changed fill:#fff5cc,stroke:#d4a72c,color:#9a6700')
+  })
+
+  it('palette:"light" unchanged classDef is unchanged from dark', () => {
+    const { mermaid } = graphToMermaid(allStatusGraph, 'flow', { palette: 'light' })
+    expect(mermaid).toContain('classDef unchanged fill:#f0f0f2,stroke:#bbb,color:#666')
+  })
+
+  it('palette option does not affect statusless graphs', () => {
+    const statuslessGraph = {
+      nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+      edges: [{ from: 'a', to: 'b' }],
+    }
+    const { mermaid: light } = graphToMermaid(statuslessGraph, 'flow', { palette: 'light' })
+    const { mermaid: dark } = graphToMermaid(statuslessGraph, 'flow', { palette: 'dark' })
+    const { mermaid: def } = graphToMermaid(statuslessGraph, 'flow')
+    expect(light).not.toContain('classDef')
+    expect(dark).not.toContain('classDef')
+    expect(def).not.toContain('classDef')
+    expect(light).toBe(def)
+    expect(dark).toBe(def)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Adversarial label invariants extended for status graphs
 // ---------------------------------------------------------------------------
 
