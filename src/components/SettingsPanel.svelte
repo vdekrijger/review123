@@ -207,10 +207,19 @@
       const hadKey = !!current.deepseekKey
       const hadGitlab = !!current.gitlabToken
       const hadBitbucket = !!current.bitbucketAuth
-      saveTokens({
-        githubPat: pat.trim() === '' ? null : pat,
+
+      // Belt-and-braces: when signed in via OAuth and PAT field is empty,
+      // omit githubPat from the patch so saveTokens does not clear githubAuth.
+      const patTrimmed = pat.trim()
+      const isOauth = authState.auth?.method === 'oauth'
+      const tokensPatch: { githubPat?: string | null; deepseekKey?: string | null } = {
         deepseekKey: deepseek.trim() === '' ? null : deepseek,
-      })
+      }
+      if (patTrimmed !== '' || !isOauth) {
+        tokensPatch.githubPat = patTrimmed === '' ? null : pat
+      }
+      saveTokens(tokensPatch)
+
       setGitlabToken(gitlabTokenInput.trim() === '' ? null : gitlabTokenInput)
       const emailTrimmed = bitbucketEmail.trim()
       const tokenTrimmed = bitbucketToken.trim()
@@ -220,7 +229,7 @@
         // throws if one is empty — caught below and shown as error
         saveBitbucketAuth({ email: emailTrimmed, token: tokenTrimmed })
       }
-      if (!hadPat && pat.trim()) track('settings_key_added', { service: 'github' })
+      if (!hadPat && patTrimmed) track('settings_key_added', { service: 'github' })
       if (!hadKey && deepseek.trim()) track('settings_key_added', { service: 'deepseek' })
       if (!hadGitlab && gitlabTokenInput.trim()) track('settings_key_added', { service: 'gitlab' })
       if (!hadBitbucket && emailTrimmed && tokenTrimmed) track('settings_key_added', { service: 'bitbucket' })

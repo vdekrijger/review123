@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import SettingsPanel from './SettingsPanel.svelte'
-import { getSettings, saveGithubAuth, setShowProgress } from '../lib/settings/settings'
+import { getSettings, saveGithubAuth, saveTokens, setShowProgress } from '../lib/settings/settings'
 import { _resetAuthStateForTest } from '../lib/auth/authState.svelte'
 
 // Stub applyAppearance so SettingsPanel tests don't need real DOM env for it
@@ -306,5 +306,43 @@ describe('SettingsPanel — Bitbucket auth fields', () => {
     await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
     expect(onclose).toHaveBeenCalledOnce()
     expect(getSettings().bitbucketAuth).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SettingsPanel — OAuth logout regression (Bug 1)
+// ---------------------------------------------------------------------------
+
+describe('SettingsPanel — save does not log out OAuth user', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetAuthStateForTest()
+  })
+
+  it('saving with empty PAT field while signed in via OAuth preserves githubAuth', async () => {
+    // Seed OAuth auth
+    saveGithubAuth({ token: 'gho_oauth123', method: 'oauth', scopes: ['repo'] })
+    _resetAuthStateForTest()
+
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    // PAT field is empty (user did not type anything)
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    // OAuth auth must be untouched
+    expect(getSettings().githubAuth).toEqual({ token: 'gho_oauth123', method: 'oauth', scopes: ['repo'] })
+  })
+
+  it('PAT user clearing the PAT field still clears githubAuth', async () => {
+    saveGithubAuth({ token: 'ghp_existing', method: 'pat', scopes: [] })
+    _resetAuthStateForTest()
+
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const patInput = screen.getByLabelText(/github token/i)
+    await userEvent.clear(patInput)
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    expect(getSettings().githubAuth).toBeNull()
   })
 })
