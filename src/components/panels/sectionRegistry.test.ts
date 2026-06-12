@@ -16,7 +16,6 @@ describe('SECTION_REGISTRY — structure', () => {
       expect(typeof s.id).toBe('string')
       expect(typeof s.title).toBe('string')
       expect(typeof s.defaultOpen.page).toBe('boolean')
-      expect(typeof s.defaultOpen.rail).toBe('boolean')
       expect(typeof s.show.page).toBe('boolean')
       expect(typeof s.show.rail).toBe('boolean')
     }
@@ -137,20 +136,15 @@ describe('SECTION_REGISTRY — show flags', () => {
 // ---------------------------------------------------------------------------
 
 describe('SECTION_REGISTRY — defaultOpen flags', () => {
-  it('summary is open in rail by default', () => {
-    const s = SECTION_REGISTRY.find((s) => s.id === 'summary')!
-    expect(s.defaultOpen.rail).toBe(true)
-  })
-
-  it('all other sections are collapsed by default on page', () => {
+  it('all sections are collapsed by default on page', () => {
     for (const s of SECTION_REGISTRY) {
       expect(s.defaultOpen.page).toBe(false)
     }
   })
 
-  it('all sections except summary are closed in rail by default', () => {
-    for (const s of SECTION_REGISTRY.filter((s) => s.id !== 'summary')) {
-      expect(s.defaultOpen.rail).toBe(false)
+  it('carries NO rail default — rail open state is per-browser persisted, collapsed by default (src/lib/rail/collapse.ts)', () => {
+    for (const s of SECTION_REGISTRY) {
+      expect('rail' in s.defaultOpen).toBe(false)
     }
   })
 })
