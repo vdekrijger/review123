@@ -1,5 +1,9 @@
 import { defineConfig, devices } from '@playwright/test'
 
+// PW_PORT lets concurrent local runs (e.g. parallel worktrees) use a dedicated
+// preview port so they don't reuse each other's servers via reuseExistingServer.
+const PORT = Number(process.env.PW_PORT ?? 4174)
+
 export default defineConfig({
   testDir: './e2e',
   // Fail fast on first failure in CI
@@ -10,7 +14,7 @@ export default defineConfig({
   reporter: [['html', { open: 'never' }], ['list']],
 
   use: {
-    baseURL: 'http://localhost:4174',
+    baseURL: `http://localhost:${PORT}`,
     trace: 'on-first-retry',
   },
 
@@ -25,8 +29,8 @@ export default defineConfig({
   // reuseExistingServer: !process.env.CI allows local runs to skip rebuild
   // when the developer already has pnpm preview running.
   webServer: {
-    command: 'pnpm build && pnpm preview --port 4174',
-    port: 4174,
+    command: `pnpm build && pnpm preview --port ${PORT}`,
+    port: PORT,
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,
   },
