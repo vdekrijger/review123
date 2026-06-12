@@ -21,6 +21,7 @@
    */
   import CiSummary from './CiSummary.svelte'
   import MarkdownView from './MarkdownView.svelte'
+  import FileTree from './FileTree.svelte'
   import SummaryPanel from './panels/SummaryPanel.svelte'
   import DiagramsSection from './panels/DiagramsSection.svelte'
   import TestInsightPanel from './panels/TestInsightPanel.svelte'
@@ -285,6 +286,20 @@
   </section>
 
   <!-- ===== COLLAPSED DETAIL PANELS ===== -->
+
+  <!-- Changed files structure (mini FileTree, read-only) -->
+  <details class="detail-panel file-structure-panel">
+    <summary class="detail-summary">Changed files — structure</summary>
+    <div class="detail-body file-structure-body">
+      <FileTree
+        {files}
+        attention={attention}
+        viewedStore={null}
+        activePath={null}
+        onselect={(path) => onhotspot?.(path)}
+      />
+    </div>
+  </details>
 
   <!-- Full summary -->
   <details class="detail-panel summary-panel">
@@ -678,4 +693,9 @@
 
   .alternatives-glance-chip:hover { background: #d9770620; }
 
+  /* ===== File structure panel ===== */
+
+  .file-structure-body {
+    padding: 0.5rem 0.25rem;
+  }
 </style>
