@@ -108,18 +108,12 @@
 
 <style>
   .draft-thread {
-    border: 1px solid #f0b44488;
+    border: 1px solid var(--border-draft, #f0b44488);
     border-radius: 6px;
     padding: 0.5rem 0.75rem;
-    background: #fffbf0;
-    color: #333;
+    background: var(--surface-draft, #fffbf0);
+    color: var(--text-draft, #333);
     font-size: 0.9rem;
-  }
-
-  :global(.dark) .draft-thread {
-    background: #2a2510;
-    border-color: #a07820;
-    color: #e8e0c8;
   }
 
   .thread-header {

@@ -61,3 +61,27 @@ describe('ContextRail collapse', () => {
     expect(oncollapse).toHaveBeenCalledWith(true)
   })
 })
+
+describe('ContextRail theme — uses CSS variables for surface', () => {
+  it('.context-rail element has the context-rail class (CSS variable background applied via class)', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    // The aside element must have the class "context-rail" so the CSS-var
+    // background rule applies.  A hardcoded inline background: #16161e would
+    // break light theme — this class assertion catches a regression where the
+    // class is removed or the element replaced with one lacking the class.
+    const aside = container.querySelector('aside.context-rail')
+    expect(aside).not.toBeNull()
+  })
+
+  it('.context-rail does NOT carry an inline background style (must come from CSS class/var)', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const aside = container.querySelector('aside.context-rail')
+    // Inline style must not set background to a hardcoded dark color —
+    // the surface color must live in the stylesheet as a CSS variable.
+    expect(aside?.getAttribute('style') ?? '').not.toMatch(/background\s*:/)
+  })
+})

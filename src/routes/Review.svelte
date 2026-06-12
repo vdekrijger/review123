@@ -351,14 +351,14 @@
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
-    background: #1a3050;
-    border: 1px solid #2a5080;
-    border-left: 3px solid #4a90d0;
+    background: var(--surface-banner, #1a3050);
+    border: 1px solid var(--border-banner, #2a5080);
+    border-left: 3px solid var(--border-banner-accent, #4a90d0);
     border-radius: 4px;
     padding: 0.5rem 0.75rem;
     font-size: 0.875rem;
     margin-bottom: 0.75rem;
-    color: #c8dff0;
+    color: var(--text-banner, #c8dff0);
   }
 
   .banner-btn {
@@ -397,8 +397,7 @@
     left: 0;
     right: 0;
     z-index: 100;
-    background: #1a1a2e;
-    color: #e8e8f0;
+    background: var(--surface-raised, #1a1a2e);
     border-top: 1px solid #4444;
     padding: 0.5rem 1rem;
   }
