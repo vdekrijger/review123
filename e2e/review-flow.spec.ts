@@ -1055,3 +1055,112 @@ test('alternatives-panel: glance chip appears when alternative-is-better; panel 
     page.locator('.assessment-chip.assessment-comparable'),
   ).toContainText('Comparable')
 })
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Test: Context-line expansion affordance appears in Inspect diff view
+//
+// This test uses a custom file fixture with many context lines so the hunk
+// is in the MIDDLE of the file — hidden lines above and below trigger expand
+// button rendering by the @git-diff-view library.
+// ---------------------------------------------------------------------------
+
+test('inspect: context-line expand affordance renders when full file contents are available', async ({
+  page,
+}) => {
+  // A patch that touches line 6 of a 12-line file — lines 1-4 above and 9-12
+  // below are hidden → the library renders Expand Up / Expand Down buttons.
+  const EXPAND_PATCH = `@@ -5,4 +5,4 @@\n context above\n-old value\n+new value\n context below`
+  const OLD_CONTENT = [
+    'line 1', 'line 2', 'line 3', 'line 4',
+    'context above', 'old value', 'context below',
+    'line 8', 'line 9', 'line 10', 'line 11', 'line 12',
+  ].join('\n')
+  const NEW_CONTENT = [
+    'line 1', 'line 2', 'line 3', 'line 4',
+    'context above', 'new value', 'context below',
+    'line 8', 'line 9', 'line 10', 'line 11', 'line 12',
+  ].join('\n')
+
+  // Block PostHog
+  await page.route('**/*posthog.com/**', (route) => route.abort())
+  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+
+  // GitHub API mock — only what's needed for this test
+  await page.route('**/api.github.com/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}`) {
+      return route.fulfill({
+        json: {
+          title: 'Expand test PR',
+          state: 'open', merged: false, body: null,
+          base: { sha: BASE_SHA, repo: { private: false } },
+          head: { sha: HEAD_SHA },
+          changed_files: 1,
+        },
+      })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) {
+      return route.fulfill({
+        json: [
+          {
+            filename: 'src/module.ts',
+            status: 'modified',
+            patch: EXPAND_PATCH,
+            additions: 1,
+            deletions: 1,
+          },
+        ],
+      })
+    }
+    // File contents for expansion
+    if (path.startsWith(`/repos/${OWNER}/${REPO}/contents/`)) {
+      const ref = url.searchParams.get('ref') ?? ''
+      const filePath = decodeURIComponent(path.replace(`/repos/${OWNER}/${REPO}/contents/`, ''))
+      if (filePath === 'src/module.ts') {
+        const content = ref === BASE_SHA ? OLD_CONTENT : NEW_CONTENT
+        const b64 = Buffer.from(content).toString('base64')
+        return route.fulfill({ json: { content: b64 + '\n', encoding: 'base64' } })
+      }
+      return route.fulfill({ status: 404, json: { message: 'Not Found' } })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/commits/${HEAD_SHA}/check-runs`) {
+      return route.fulfill({ json: { total_count: 0, check_runs: [] } })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/comments`) {
+      return route.fulfill({ json: [] })
+    }
+    return route.fulfill({ status: 404, json: { message: 'Not Found' } })
+  })
+
+  // DeepSeek — just 404 so AI features don't block the test
+  await page.route('**/api.deepseek.com/**', (route) => route.abort())
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, { deepseekKey: '', diffMode: 'unified', railCollapsed: true })
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Expand test PR/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // File diff should be rendered
+  const fileDiff = page.locator('article.file-diff').first()
+  await expect(fileDiff).toBeVisible({ timeout: 8_000 })
+
+  // Wait for file contents to load (the expand buttons appear after the
+  // contentsMap resolves — give it a moment then assert expansion is available)
+  const expandBtn = page.locator(
+    'button[title="Expand Up"], button[title="Expand Down"], button[title="Expand All"]',
+  ).first()
+  await expect(expandBtn).toBeVisible({ timeout: 10_000 })
+})

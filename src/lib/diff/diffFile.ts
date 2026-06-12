@@ -30,14 +30,50 @@ function buildUnifiedDiffEnvelope(f: PrFile): string {
   return `diff --git a/${oldPath} b/${newPath}\n${oldSide}\n${newSide}\n${patch}`
 }
 
-export function buildDiffFile(f: PrFile, mode: DiffMode): DiffFile | null {
+/**
+ * Build a DiffFile from a PrFile, optionally with full file contents.
+ *
+ * When `contents` is provided (before + after text), the library constructs the
+ * diff with awareness of the full file, enabling GitHub-style "expand context
+ * lines" between hunks (`getExpandEnabled()` returns true). Without contents the
+ * library composes the file solely from the patch lines (`composeByDiff = true`)
+ * and expansion is not available — this is the hunk-only fallback.
+ *
+ * Expansion mechanism (verified from @git-diff-view/core source):
+ *   - `getExpandEnabled()` = `!composeByDiff && !composeByRange`
+ *   - `composeByDiff` is set to `true` only when BOTH oldFileContent and
+ *     newFileContent are empty strings (the library then reconstructs content
+ *     purely from the diff hunk lines and disables expansion).
+ *   - Providing non-empty `content` in `createInstance` keeps `composeByDiff`
+ *     false → expansion buttons render in the hunk separator rows.
+ */
+export function buildDiffFile(
+  f: PrFile,
+  mode: DiffMode,
+  contents?: { before: string | null; after: string | null },
+): DiffFile | null {
   if (!f.patch) return null
 
   const envelope = buildUnifiedDiffEnvelope(f)
 
+  // Use full contents when both sides are available for the diff direction.
+  // Added files have no "before"; removed files have no "after".
+  // Even one side being non-empty prevents composeByDiff from being set,
+  // keeping expansion available.
+  const oldContent =
+    contents && f.status !== 'added' && contents.before != null ? contents.before : undefined
+  const newContent =
+    contents && f.status !== 'removed' && contents.after != null ? contents.after : undefined
+
   const file = DiffFile.createInstance({
-    oldFile: { fileName: f.previousFilename ?? f.filename },
-    newFile: { fileName: f.filename },
+    oldFile: {
+      fileName: f.previousFilename ?? f.filename,
+      content: oldContent ?? undefined,
+    },
+    newFile: {
+      fileName: f.filename,
+      content: newContent ?? undefined,
+    },
     hunks: [envelope],
   })
 
