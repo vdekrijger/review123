@@ -218,6 +218,32 @@ export const githubProvider: ReviewProvider = {
     return getFileAtRef(repo, path, ref)
   },
 
+  // Plan G deep review: repo-scoped code search via GitHub's code-search API.
+  // Requires auth (GitHub rejects unauthenticated /search/code); errors
+  // propagate as GithubApiError and are converted to tool-result errors by
+  // the deep-review toolkit. text-match media type yields code fragments.
+  async searchCode(repo: { owner: string; repo: string }, query: string): Promise<string> {
+    const q = encodeURIComponent(`${query} repo:${repo.owner}/${repo.repo}`)
+    const data = await ghFetch<{
+      total_count: number
+      items: {
+        path: string
+        text_matches?: { fragment?: string }[]
+      }[]
+    }>(`/search/code?q=${q}&per_page=10`, {
+      headers: { Accept: 'application/vnd.github.text-match+json' },
+    })
+    if (!data.items || data.items.length === 0) return 'No matches found.'
+    const lines: string[] = [`${data.total_count} match(es); showing up to 10:`]
+    for (const item of data.items) {
+      lines.push(`## ${item.path}`)
+      for (const m of item.text_matches ?? []) {
+        if (m.fragment) lines.push(m.fragment)
+      }
+    }
+    return lines.join('\n')
+  },
+
   getCiSummary(ref: PrRefX, headSha: string): Promise<CiSummary> {
     return getCiSummary(toRef(ref), headSha)
   },

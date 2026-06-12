@@ -21,6 +21,20 @@ export interface LlmModelDef {
   id: string
   label: string
   contextWindowTokens: number
+  /**
+   * Whether the model supports function calling / tool use (Plan G deep review).
+   * Omitted = true. Verified 2026-06-13 against provider docs:
+   * - DeepSeek: tools supported on deepseek-v4-flash / v4-pro / deepseek-chat
+   *   (api-docs.deepseek.com/guides/function_calling); legacy deepseek-reasoner
+   *   historically does NOT support function calling → flagged false.
+   * - OpenAI / Anthropic / Gemini lineups here all support tool use.
+   */
+  supportsTools?: boolean
+}
+
+/** True when a model supports tool use. Omitted flag = supported. */
+export function modelSupportsTools(model: LlmModelDef): boolean {
+  return model.supportsTools !== false
 }
 
 export interface LlmProviderDef {
@@ -67,7 +81,7 @@ export const PROVIDERS: LlmProviderDef[] = [
       // non-thinking/thinking modes; deprecated 2026-07-24. Kept so saved
       // aiModel values from earlier versions keep working until then.
       { id: 'deepseek-chat', label: 'DeepSeek Chat (legacy)', contextWindowTokens: 1_000_000 },
-      { id: 'deepseek-reasoner', label: 'DeepSeek Reasoner (legacy)', contextWindowTokens: 1_000_000 },
+      { id: 'deepseek-reasoner', label: 'DeepSeek Reasoner (legacy)', contextWindowTokens: 1_000_000, supportsTools: false },
     ],
   },
   {

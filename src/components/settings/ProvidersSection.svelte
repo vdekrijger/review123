@@ -3,15 +3,12 @@
   import { settingsState } from '../../lib/settings/settingsState.svelte'
   import { track } from '../../lib/analytics/analytics'
   import { authState } from '../../lib/auth/authState.svelte'
-  import { beginSignIn, signOut } from '../../lib/auth/auth'
-  import { beginGitlabSignIn, signOutGitlab } from '../../lib/auth/gitlabAuth'
+  import { signOut } from '../../lib/auth/auth'
+  import { signOutGitlab } from '../../lib/auth/gitlabAuth'
+  import { beginOAuth } from '../../lib/auth/oauthFlow'
   import GitHubSignInButton from '../GitHubSignInButton.svelte'
   import GitLabSignInButton from '../GitLabSignInButton.svelte'
   import SecretInput from './SecretInput.svelte'
-
-  // returnTo: stored before the OAuth redirect so AuthCallback navigates back
-  // here (/settings) after sign-in. Same key as App.svelte / VerdictStep.svelte.
-  const RETURN_KEY = 'review123:returnTo'
 
   const current = getSettings()
   let pat = $state(current.githubPat ?? '')
@@ -76,10 +73,12 @@
     settingsState.current.gitlabToken ? 'GitLab: using PAT' : 'GitLab: not configured',
   )
 
+  // Sign-in goes through the shared beginOAuth helper (same as the navbar and
+  // the verdict step): it clears stale pending sessions from earlier abandoned
+  // attempts and stores returnTo (= /settings) so AuthCallback navigates back.
   async function handleGithubSignIn() {
     try {
-      sessionStorage.setItem(RETURN_KEY, location.pathname)
-      location.assign(await beginSignIn('public_repo'))
+      location.assign(await beginOAuth('github'))
     } catch (e) {
       error = (e as Error).message
     }
@@ -91,9 +90,7 @@
 
   async function handleGitlabSignIn() {
     try {
-      sessionStorage.setItem(RETURN_KEY, location.pathname)
-      const url = await beginGitlabSignIn()
-      location.href = url
+      location.assign(await beginOAuth('gitlab'))
     } catch (e) {
       error = (e as Error).message
     }

@@ -364,8 +364,11 @@ test('providers save UX: single scoped Save, dirty tracking, Saved ✓ confirmat
   await expect(page.getByRole('heading', { name: /^settings$/i })).toBeVisible({ timeout: 5_000 })
 
   // Connected provider renders as a compact chip with an icon sign-out button
+  // (scoped to the Providers card: the navbar has its own GitHub sign-out)
   await expect(page.getByText(/GitHub · connected/)).toBeVisible()
-  await expect(page.getByRole('button', { name: /sign out of github/i })).toBeVisible()
+  await expect(
+    page.locator('#providers').getByRole('button', { name: /sign out of github/i }),
+  ).toBeVisible()
 
   // Exactly ONE plain Save button on the whole page, inside the Providers card
   const saveBtn = page.getByRole('button', { name: /^save$/i })
@@ -400,6 +403,118 @@ test('providers save UX: single scoped Save, dirty tracking, Saved ✓ confirmat
 
   // The Saved ✓ confirmation fades after ~2s
   await expect(providersSection.getByText('Saved ✓')).toHaveCount(0, { timeout: 4_000 })
+})
+
+// ---------------------------------------------------------------------------
+// OAuth dispatch (regression): a settings-initiated GitHub sign-in must
+// complete as a GITHUB flow even when a stale GitLab pending session is
+// lying around from an earlier abandoned attempt. Before the fix, the
+// callback dispatched on "a gitlab session key exists" and failed with
+// "GitLab sign-in session expired or invalid".
+// ---------------------------------------------------------------------------
+
+test('oauth dispatch: settings-initiated GitHub sign-in completes despite a STALE GitLab pending session', async ({
+  page,
+}) => {
+  await blockExternal(page)
+
+  // Stale GitLab pending session from an abandoned attempt. addInitScript
+  // re-seeds it on EVERY document load — including the /auth/callback load —
+  // so this also proves the state-nonce match (not just clearing-on-begin).
+  await page.addInitScript(() => {
+    sessionStorage.setItem(
+      'review123:gitlab-oauth',
+      JSON.stringify({ state: 'stale-gitlab-state', verifier: 'stale-verifier', provider: 'gitlab' }),
+    )
+  })
+
+  // Intercept the GitHub authorize navigation: bounce straight back to our
+  // callback carrying the SAME state nonce the app just generated.
+  await page.route('**/github.com/login/oauth/authorize**', async (route) => {
+    const url = new URL(route.request().url())
+    const state = url.searchParams.get('state') ?? ''
+    const redirectUri = url.searchParams.get('redirect_uri') ?? ''
+    await route.fulfill({
+      status: 302,
+      headers: { location: `${redirectUri}?code=e2e_code_123&state=${state}` },
+    })
+  })
+
+  // Intercept the token exchange (the serverless function is not running in preview)
+  await page.route('**/api/oauth/exchange', (route) =>
+    route.fulfill({ json: { access_token: 'gho_e2e_oauth_token' } }),
+  )
+
+  await page.goto('/settings')
+  await expect(page.getByRole('heading', { name: /^settings$/i })).toBeVisible({ timeout: 5_000 })
+
+  // Settings-initiated sign-in (the Providers section button, not the navbar one)
+  await page.locator('#providers').getByRole('button', { name: /sign in with github/i }).click()
+
+  // Round-trip lands back on /settings (returnTo) signed in as GITHUB —
+  // and crucially there is NO GitLab-named error.
+  await expect(page).toHaveURL(/\/settings$/, { timeout: 8_000 })
+  await expect(page.getByText(/GitHub · connected/)).toBeVisible({ timeout: 5_000 })
+  await expect(page.getByText(/GitLab sign-in session expired/i)).toHaveCount(0)
+
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('review123:settings') ?? '{}'),
+  )
+  expect(stored.githubAuth).toEqual({
+    token: 'gho_e2e_oauth_token',
+    method: 'oauth',
+    scopes: ['public_repo'],
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Navbar provider parity: GitLab status/sign-in next to GitHub's, sessions
+// independent, compact (icon-only sign-in chips) below 700px.
+// ---------------------------------------------------------------------------
+
+test('navbar parity: GitLab ✓ chip with sign-out when connected; Sign in with GitLab when not; compact below 700px', async ({
+  page,
+}) => {
+  await blockExternal(page)
+
+  // Seed a connected GitLab OAuth session (GitHub stays signed out)
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({
+        gitlabOAuth: { token: 'glo_e2e', refreshToken: 'glr_e2e', expiresAt: Date.now() + 3_600_000 },
+      }),
+    )
+  })
+
+  await page.goto('/')
+
+  const topbar = page.locator('.topbar')
+  // GitLab: connected chip + sign-out affordance
+  await expect(topbar.getByText('GitLab ✓')).toBeVisible()
+  await expect(topbar.getByRole('button', { name: /sign out of gitlab/i })).toBeVisible()
+  // GitHub: independent — still offers sign-in
+  await expect(topbar.getByRole('button', { name: /sign in with github/i })).toBeVisible()
+
+  // Sign out of GitLab only → reverts to its sign-in button
+  await topbar.getByRole('button', { name: /sign out of gitlab/i }).click()
+  await expect(topbar.getByText('GitLab ✓')).toHaveCount(0)
+  await expect(topbar.getByRole('button', { name: /sign in with gitlab/i })).toBeVisible()
+
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('review123:settings') ?? '{}'),
+  )
+  expect(stored.gitlabOAuth).toBeNull()
+
+  // Compact below 700px: both navbar sign-in buttons collapse to icon-only
+  // chips (label hidden, accessible name preserved via aria-label).
+  await page.setViewportSize({ width: 540, height: 800 })
+  for (const selector of ['.topbar .gh-signin-btn .btn-label', '.topbar .gl-signin-btn .btn-label']) {
+    const display = await page.locator(selector).evaluate((el) => getComputedStyle(el).display)
+    expect(display).toBe('none')
+  }
+  await expect(topbar.getByRole('button', { name: /sign in with gitlab/i })).toBeVisible()
+  await expect(topbar.getByRole('button', { name: /sign in with github/i })).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------

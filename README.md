@@ -185,7 +185,7 @@ For **gitlab.com**:
 1. Go to **GitLab → User Settings → Applications** (direct link: `https://gitlab.com/-/profile/applications`).
 2. Fill in:
    - **Name:** `review123` (or any label)
-   - **Redirect URI:** `https://<your-domain>/auth/callback` (e.g. `https://review123.vercel.app/auth/callback`)
+   - **Redirect URI:** `https://<your-domain>/auth/callback` (e.g. `https://review123.vercel.app/auth/callback`). Register every origin you serve the app from (e.g. your production domain *and* `http://localhost:5173/auth/callback` for local dev) — GitLab rejects the sign-in with a "redirect URI … is not valid" error when the origin in use is not in this list.
    - **Scopes:** check **`api`** only
    - **Confidential:** **NO** (uncheck this — Review 1-2-3 uses a public PKCE client, no client secret)
 3. Click **Save application** and copy the **Application ID**.
@@ -204,7 +204,7 @@ No `GITLAB_CLIENT_SECRET` is needed — this is a public PKCE client (RFC 7636).
 
 #### 3. Sign in
 
-Once `VITE_GITLAB_CLIENT_ID` is set, a **Sign in with GitLab** button appears in **Settings → Advanced**. Click it, authorise the app, and you are signed in. The OAuth token (valid 2 hours) is refreshed automatically on expiry — you will rarely need to re-authenticate.
+Once `VITE_GITLAB_CLIENT_ID` is set, a **Sign in with GitLab** button appears in the navbar and in **Settings → Providers & access**. Click it, authorise the app, and you are signed in. The OAuth token (valid 2 hours) is refreshed automatically on expiry — you will rarely need to re-authenticate.
 
 #### Self-hosted instances
 

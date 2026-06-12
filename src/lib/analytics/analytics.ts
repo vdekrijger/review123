@@ -9,7 +9,10 @@ const EVENTS = {
   // PRIVACY DECISION: 'tokens' is a token count (integer), not content.
   // It tells us how many tokens were consumed per task; it cannot be used
   // to reconstruct code or diffs. Added for cost observability only.
-  ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens'],
+  // PRIVACY DECISION (Plan G): 'deep' is a boolean mode flag and 'tool_calls'
+  // is a count of verification tool invocations — neither carries file paths,
+  // queries, or content. Added for deep-review cost/precision observability.
+  ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls'],
   ai_task_failed: ['task', 'reason'],
   diagram_viewed: [],
   hotspot_clicked: [],

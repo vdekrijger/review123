@@ -19,6 +19,14 @@ import {
   llmJsonWithRepairWithUsage as defaultLlmJsonWithRepairWithUsage,
   LlmError,
 } from '../llm/llm'
+import type { LlmUsage } from '../llm/llm'
+import { llmToolLoop as defaultLlmToolLoop } from '../llm/llmToolLoop'
+import {
+  createDeepReviewToolkit,
+  deepReviewAvailability,
+  DEEP_REVIEW_MAX_TOOL_CALLS,
+} from './deepReview'
+import type { DeepReviewSource } from './deepReview'
 import {
   cacheKey,
   getCached as defaultGetCached,
@@ -37,6 +45,7 @@ import {
   alternativesPrompt,
   askPrompt,
   skillReviewPrompt,
+  withDeepReviewGuidance,
   type AskFocus,
 } from './tasks'
 export type { AskFocus }
@@ -56,6 +65,12 @@ export interface PanelState<T> {
   status: PanelStatus
   value?: T | string
   error?: string
+  /** Deep review: humanized tool-activity lines, present while the loop runs. */
+  activity?: string[]
+  /** Deep review: tool calls used by the run ("verified with N tool calls"). */
+  toolCallsUsed?: number
+  /** Honest UI note (e.g. deep review fell back to single-pass). */
+  note?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +119,13 @@ export interface AiRunInput {
   pack: () => Promise<PackedContext>
   ci: () => Promise<CiSummary | null>
   ask: () => Promise<boolean>
+  /**
+   * Deep-review tool source (Plan G part 2). When present AND the
+   * aiDeepReview setting is on AND the active model supports tool calling,
+   * the verdict + skill-review tasks run through the agentic tool loop.
+   * Absent / toggle off → behavior is byte-identical to single-pass.
+   */
+  deepReview?: DeepReviewSource
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +137,7 @@ interface AiRunDeps {
   llmStreamWithUsage: typeof defaultLlmStreamWithUsage
   llmJsonWithRepair: typeof defaultLlmJsonWithRepair
   llmJsonWithRepairWithUsage: typeof defaultLlmJsonWithRepairWithUsage
+  llmToolLoop: typeof defaultLlmToolLoop
   getCached: typeof defaultGetCached
   setCached: typeof defaultSetCached
   gateAi: typeof defaultGateAi
@@ -150,6 +173,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     llmStreamWithUsage,
     llmJsonWithRepair,
     llmJsonWithRepairWithUsage,
+    llmToolLoop,
     getCached,
     setCached,
     gateAi,
@@ -159,6 +183,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     llmStreamWithUsage: defaultLlmStreamWithUsage,
     llmJsonWithRepair: defaultLlmJsonWithRepair,
     llmJsonWithRepairWithUsage: defaultLlmJsonWithRepairWithUsage,
+    llmToolLoop: defaultLlmToolLoop,
     getCached: defaultGetCached,
     setCached: defaultSetCached,
     gateAi: defaultGateAi,
@@ -166,7 +191,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     ...deps,
   }
 
-  const { prKey, repo, isPrivate, pack, ci, ask: askConsent } = input
+  const { prKey, repo, isPrivate, pack, ci, ask: askConsent, deepReview } = input
 
   // Reactive panel state holders
   const summaryState = $state<PanelState<string>>({ status: 'idle' })
@@ -384,43 +409,153 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Deep review helpers (Plan G part 2)
+  //
+  // Deep results cache under a key whose task segment carries a '|deep'
+  // marker (+ PROMPT_VERSION as usual) so deep and single-pass outputs never
+  // collide. The cached value wraps the result with toolCallsUsed so the
+  // "verified with N tool calls" footer survives cache hits. Partial loops
+  // are NEVER cached: setCached only runs after successful validation.
+  // ---------------------------------------------------------------------------
+
+  interface DeepCached<T> {
+    deep: true
+    result: T
+    toolCallsUsed: number
+  }
+
+  function sumUsage(a: LlmUsage | undefined, b: LlmUsage | undefined): LlmUsage | undefined {
+    if (!a) return b
+    if (!b) return a
+    return {
+      prompt_tokens: a.prompt_tokens + b.prompt_tokens,
+      completion_tokens: a.completion_tokens + b.completion_tokens,
+      total_tokens: a.total_tokens + b.total_tokens,
+    }
+  }
+
+  /**
+   * Run one deep (agentic) JSON task: tool loop → validate → at most one
+   * single-pass repair grounded in the loop's tool-verified output.
+   */
+  async function runDeepJson<T>(
+    prompts: { system: string; user: string },
+    validate: (x: unknown) => T | null,
+    onActivity: (line: string) => void,
+  ): Promise<{ result: T; usage?: LlmUsage; toolCallsUsed: number }> {
+    const toolkit = createDeepReviewToolkit(deepReview!)
+    const loop = await llmToolLoop({
+      system: withDeepReviewGuidance(prompts.system, toolkit.tools.map((t) => t.name)),
+      user: prompts.user,
+      tools: toolkit.tools,
+      executeTool: toolkit.executeTool,
+      humanize: toolkit.humanize,
+      maxToolCalls: DEEP_REVIEW_MAX_TOOL_CALLS,
+      onToolEvent: (ev) => onActivity(ev.detail),
+    })
+
+    try {
+      const valid = validate(JSON.parse(loop.content) as unknown)
+      if (valid !== null) return { result: valid, usage: loop.usage, toolCallsUsed: loop.toolCallsUsed }
+    } catch {
+      // fall through to the repair pass
+    }
+
+    // Repair: reformat the already-verified answer — no tools needed.
+    const repaired = await llmJsonWithRepairWithUsage<T>(
+      {
+        system: prompts.system,
+        user:
+          `${prompts.user}\n\nYou already analyzed this PR (with verification tools) and answered:\n` +
+          `${loop.content}\n` +
+          'Reformat that answer as valid JSON exactly matching the required shape. ' +
+          'Do not change the verified content. Respond with the JSON only.',
+      },
+      validate,
+    )
+    return {
+      result: repaired.result,
+      usage: sumUsage(loop.usage, repaired.usage),
+      toolCallsUsed: loop.toolCallsUsed,
+    }
+  }
+
   async function runVerdictTask(ctx: PackedContext, ciData: CiSummary | null): Promise<void> {
-    const key = cacheKey(prKey, 'verdict', PROMPT_VERSION)
+    const deep = deepReviewAvailability(deepReview)
+    if (deep.note) verdictState.note = deep.note
+    const key = cacheKey(prKey, deep.enabled ? 'verdict|deep' : 'verdict', PROMPT_VERSION)
 
     const t0 = performance.now()
-    const hit = await getCached<VerdictResult>(key)
-    if (hit !== null) {
-      verdictState.status = 'done'
-      verdictState.value = hit
-      track('ai_task_completed', { task: 'verdict', duration_ms: Math.round(performance.now() - t0), cached: true })
-      return
+    if (deep.enabled) {
+      const hit = await getCached<DeepCached<VerdictResult>>(key)
+      if (hit !== null) {
+        verdictState.status = 'done'
+        verdictState.value = hit.result
+        verdictState.toolCallsUsed = hit.toolCallsUsed
+        track('ai_task_completed', { task: 'verdict', duration_ms: Math.round(performance.now() - t0), cached: true, deep: true })
+        return
+      }
+    } else {
+      const hit = await getCached<VerdictResult>(key)
+      if (hit !== null) {
+        verdictState.status = 'done'
+        verdictState.value = hit
+        track('ai_task_completed', { task: 'verdict', duration_ms: Math.round(performance.now() - t0), cached: true })
+        return
+      }
     }
 
     verdictState.status = 'loading'
+    if (deep.enabled) verdictState.activity = []
     const t1 = performance.now()
     const prompts = verdictPrompt(ctx, ciData)
 
     try {
-      const { result: verdictResult, usage: verdictUsage } = await llmJsonWithRepairWithUsage<VerdictResult>(
-        { system: prompts.system, user: prompts.user },
-        validateVerdict,
-      )
+      let verdictResult: VerdictResult
+      let verdictUsage: LlmUsage | undefined
+      let toolCallsUsed: number | undefined
+
+      if (deep.enabled) {
+        const deepOutcome = await runDeepJson<VerdictResult>(prompts, validateVerdict, (line) => {
+          verdictState.activity = [...(verdictState.activity ?? []), line]
+        })
+        verdictResult = deepOutcome.result
+        verdictUsage = deepOutcome.usage
+        toolCallsUsed = deepOutcome.toolCallsUsed
+      } else {
+        const singlePass = await llmJsonWithRepairWithUsage<VerdictResult>(
+          { system: prompts.system, user: prompts.user },
+          validateVerdict,
+        )
+        verdictResult = singlePass.result
+        verdictUsage = singlePass.usage
+      }
+
       // Merge notAnalyzed: union of packed context's notAnalyzed + model's own list (EC-15c)
       const merged = [...new Set([...ctx.notAnalyzed, ...verdictResult.notAnalyzed])]
       const finalResult: VerdictResult = { ...verdictResult, notAnalyzed: merged }
-      await setCached<VerdictResult>(key, finalResult)
+      if (deep.enabled) {
+        await setCached<DeepCached<VerdictResult>>(key, { deep: true, result: finalResult, toolCallsUsed: toolCallsUsed ?? 0 })
+      } else {
+        await setCached<VerdictResult>(key, finalResult)
+      }
       verdictState.status = 'done'
       verdictState.value = finalResult
+      verdictState.activity = undefined
+      if (toolCallsUsed !== undefined) verdictState.toolCallsUsed = toolCallsUsed
       track('ai_task_completed', {
         task: 'verdict',
         duration_ms: Math.round(performance.now() - t1),
         cached: false,
         ...(verdictUsage?.total_tokens !== undefined ? { tokens: verdictUsage.total_tokens } : {}),
+        ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
     } catch (err) {
       const kind = err instanceof LlmError ? err.kind : 'unknown'
       verdictState.status = 'error'
       verdictState.error = humanMessage(kind)
+      verdictState.activity = undefined
       track('ai_task_failed', { task: 'verdict', reason: kind })
     }
   }
@@ -676,57 +811,105 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const skills = listSkills().filter((s) => s.enabled)
     if (skills.length === 0) return
 
+    // Deep review (Plan G): one availability check for the whole batch.
+    const deep = deepReviewAvailability(deepReview)
+
     // Initialize entries (loading state)
     skillReviewsState = skills.map((skill) => ({
       skillId: skill.id,
       name: skill.name,
-      state: { status: 'loading' as const },
+      state: { status: 'loading' as const, ...(deep.note ? { note: deep.note } : {}) },
     }))
     onUpdate?.()
 
     // Run each skill in parallel, isolated
     await Promise.all(
       skills.map(async (skill, idx) => {
-        // Content-addressed cache key: includes djb2(skill.content)
-        const key = cacheKey(prKey, 'skill:' + djb2(skill.content), PROMPT_VERSION)
+        // Content-addressed cache key: includes djb2(skill.content).
+        // Deep runs carry a '|deep' marker so they never collide with
+        // single-pass results for the same skill content.
+        const key = cacheKey(prKey, 'skill:' + djb2(skill.content) + (deep.enabled ? '|deep' : ''), PROMPT_VERSION)
 
         const t0 = performance.now()
 
         // Cache check
-        const hit = await getCached<SkillReviewResult>(key)
-        if (hit !== null) {
-          skillReviewsState[idx] = {
-            skillId: skill.id,
-            name: skill.name,
-            state: { status: 'done', value: hit },
+        if (deep.enabled) {
+          const hit = await getCached<DeepCached<SkillReviewResult>>(key)
+          if (hit !== null) {
+            skillReviewsState[idx] = {
+              skillId: skill.id,
+              name: skill.name,
+              state: { status: 'done', value: hit.result, toolCallsUsed: hit.toolCallsUsed },
+            }
+            track('ai_task_completed', {
+              task: 'skill-review',
+              duration_ms: Math.round(performance.now() - t0),
+              cached: true,
+              deep: true,
+            })
+            onUpdate?.()
+            return
           }
-          track('ai_task_completed', {
-            task: 'skill-review',
-            duration_ms: Math.round(performance.now() - t0),
-            cached: true,
-          })
-          onUpdate?.()
-          return
+        } else {
+          const hit = await getCached<SkillReviewResult>(key)
+          if (hit !== null) {
+            skillReviewsState[idx] = {
+              skillId: skill.id,
+              name: skill.name,
+              state: { status: 'done', value: hit, ...(deep.note ? { note: deep.note } : {}) },
+            }
+            track('ai_task_completed', {
+              task: 'skill-review',
+              duration_ms: Math.round(performance.now() - t0),
+              cached: true,
+            })
+            onUpdate?.()
+            return
+          }
         }
 
         const prompts = skillReviewPrompt(ctx, { name: skill.name, content: skill.content }, existingComments)
 
         try {
-          const { result: skillResult, usage: skillUsage } = await llmJsonWithRepairWithUsage<SkillReviewResult>(
-            { system: prompts.system, user: prompts.user },
-            validateSkillReviewResult,
-          )
-          await setCached<SkillReviewResult>(key, skillResult)
+          let skillResult: SkillReviewResult
+          let skillUsage: LlmUsage | undefined
+          let toolCallsUsed: number | undefined
+
+          if (deep.enabled) {
+            const deepOutcome = await runDeepJson<SkillReviewResult>(prompts, validateSkillReviewResult, (line) => {
+              const entry = skillReviewsState[idx]
+              entry.state = { ...entry.state, activity: [...(entry.state.activity ?? []), line] }
+              onUpdate?.()
+            })
+            skillResult = deepOutcome.result
+            skillUsage = deepOutcome.usage
+            toolCallsUsed = deepOutcome.toolCallsUsed
+            await setCached<DeepCached<SkillReviewResult>>(key, { deep: true, result: skillResult, toolCallsUsed })
+          } else {
+            const singlePass = await llmJsonWithRepairWithUsage<SkillReviewResult>(
+              { system: prompts.system, user: prompts.user },
+              validateSkillReviewResult,
+            )
+            skillResult = singlePass.result
+            skillUsage = singlePass.usage
+            await setCached<SkillReviewResult>(key, skillResult)
+          }
           skillReviewsState[idx] = {
             skillId: skill.id,
             name: skill.name,
-            state: { status: 'done', value: skillResult },
+            state: {
+              status: 'done',
+              value: skillResult,
+              ...(toolCallsUsed !== undefined ? { toolCallsUsed } : {}),
+              ...(deep.note ? { note: deep.note } : {}),
+            },
           }
           track('ai_task_completed', {
             task: 'skill-review',
             duration_ms: Math.round(performance.now() - t0),
             cached: false,
             ...(skillUsage?.total_tokens !== undefined ? { tokens: skillUsage.total_tokens } : {}),
+            ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
           })
         } catch (err) {
           const kind = err instanceof LlmError ? err.kind : 'unknown'

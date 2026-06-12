@@ -4,8 +4,9 @@ import userEvent from '@testing-library/user-event'
 import App from './App.svelte'
 import { _resetStartedForTest } from './lib/router/router.svelte'
 import { _resetAuthStateForTest } from './lib/auth/authState.svelte'
+import { _resetSettingsStateForTest } from './lib/settings/settingsState.svelte'
 import { jsonResponse } from './test-helpers'
-import { saveGithubAuth } from './lib/settings/settings'
+import { saveGithubAuth, saveGitlabOAuth, getSettings } from './lib/settings/settings'
 
 // Stub analytics so posthog.capture doesn't fire during tests
 vi.mock('./lib/analytics/analytics', () => ({
@@ -125,6 +126,98 @@ describe('App topbar auth states', () => {
   })
 })
 
+describe('App topbar GitLab provider status (parity with GitHub)', () => {
+  const validGitlabOAuth = {
+    token: 'glo_token123',
+    refreshToken: 'glr_refresh123',
+    expiresAt: Date.now() + 60 * 60 * 1000,
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+    _resetAuthStateForTest()
+    _resetSettingsStateForTest()
+    _resetStartedForTest()
+    history.replaceState(null, '', '/')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it('gitlab configured but not connected: shows "Sign in with GitLab" next to the GitHub button', () => {
+    vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'test_client_id')
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    render(App)
+    expect(screen.getByRole('button', { name: /sign in with gitlab/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /sign in with github/i })).toBeTruthy()
+  })
+
+  it('no VITE_GITLAB_CLIENT_ID: renders nothing GitLab-related in the navbar', () => {
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', '')
+    saveGitlabOAuth(validGitlabOAuth) // even when a session exists
+    render(App)
+    expect(screen.queryByRole('button', { name: /sign in with gitlab/i })).toBeNull()
+    expect(screen.queryByText(/GitLab ✓/)).toBeNull()
+    expect(screen.queryByRole('button', { name: /sign out of gitlab/i })).toBeNull()
+  })
+
+  it('gitlab connected: shows "GitLab ✓" with a sign-out affordance, no sign-in button', () => {
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    saveGitlabOAuth(validGitlabOAuth)
+    render(App)
+    expect(screen.getByText(/GitLab ✓/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /sign out of gitlab/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /sign in with gitlab/i })).toBeNull()
+  })
+
+  it('expired gitlabOAuth counts as NOT connected: sign-in button shown', () => {
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    saveGitlabOAuth({ ...validGitlabOAuth, expiresAt: Date.now() - 1000 })
+    render(App)
+    expect(screen.queryByText(/GitLab ✓/)).toBeNull()
+    expect(screen.getByRole('button', { name: /sign in with gitlab/i })).toBeTruthy()
+  })
+
+  it('GitLab sign-out clears ONLY gitlabOAuth — the GitHub session stays (independent sessions)', async () => {
+    vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'test_client_id')
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    saveGithubAuth({ token: 'gho_TOKEN', method: 'oauth', scopes: ['public_repo'] })
+    saveGitlabOAuth(validGitlabOAuth)
+    const user = userEvent.setup()
+    render(App)
+
+    expect(screen.getByText(/GitHub ✓/)).toBeTruthy()
+    expect(screen.getByText(/GitLab ✓/)).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: /sign out of gitlab/i }))
+
+    // GitLab reverts to its sign-in button reactively…
+    expect(await screen.findByRole('button', { name: /sign in with gitlab/i })).toBeTruthy()
+    expect(screen.queryByText(/GitLab ✓/)).toBeNull()
+    // …while GitHub stays signed in
+    expect(screen.getByText(/GitHub ✓/)).toBeTruthy()
+    expect(getSettings().githubAuth).not.toBeNull()
+    expect(getSettings().gitlabOAuth).toBeNull()
+  })
+
+  it('GitHub sign-out leaves the GitLab session intact (independent sessions)', async () => {
+    vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'test_client_id')
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    saveGithubAuth({ token: 'gho_TOKEN', method: 'oauth', scopes: ['public_repo'] })
+    saveGitlabOAuth(validGitlabOAuth)
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByRole('button', { name: /sign out of github/i }))
+
+    expect(await screen.findByRole('button', { name: /sign in with github/i })).toBeTruthy()
+    expect(screen.getByText(/GitLab ✓/)).toBeTruthy()
+    expect(getSettings().gitlabOAuth).toEqual(validGitlabOAuth)
+  })
+})
+
 describe('EC-05k: closed/merged PR renders correctly', () => {
   let originalFetch: typeof fetch
 
@@ -152,7 +245,9 @@ describe('EC-05k: closed/merged PR renders correctly', () => {
 
     render(App)
 
-    expect(await screen.findByText(/CLOSED-PR/)).toBeTruthy()
+    // Generous timeout: the FIRST render pays the lazy Review-chunk import,
+    // which can exceed the 1s default under CPU contention (parallel test files).
+    expect(await screen.findByText(/CLOSED-PR/, {}, { timeout: 10_000 })).toBeTruthy()
   })
 })
 
@@ -182,8 +277,9 @@ describe('App — Review route is lazy-loaded (bundle discipline)', () => {
     expect(document.querySelector('.route-loading')).toBeInTheDocument()
     expect(document.querySelector('.review')).not.toBeInTheDocument()
 
-    // Once the lazy chunk wires up, the Review route renders fully.
-    expect(await screen.findByText(/PR-ONE/)).toBeTruthy()
+    // Once the lazy chunk wires up, the Review route renders fully (generous
+    // timeout: the dynamic import can be slow under CPU contention).
+    expect(await screen.findByText(/PR-ONE/, {}, { timeout: 10_000 })).toBeTruthy()
     expect(document.querySelector('.route-loading')).not.toBeInTheDocument()
   })
 })
@@ -207,8 +303,8 @@ describe('App review→review navigation', () => {
 
     render(App)
 
-    // First PR title appears
-    expect(await screen.findByText(/PR-ONE/)).toBeTruthy()
+    // First PR title appears (lazy Review chunk — generous timeout)
+    expect(await screen.findByText(/PR-ONE/, {}, { timeout: 10_000 })).toBeTruthy()
 
     // Navigate to PR-2
     history.pushState(null, '', '/review/a/b/2')
@@ -238,7 +334,7 @@ describe('App review→review navigation', () => {
     render(App)
 
     // Wait for PR-ONE to load (skeleton gone, content rendered)
-    await screen.findByText(/PR-ONE/)
+    await screen.findByText(/PR-ONE/, {}, { timeout: 10_000 })
     expect(loadCalls()).toBe(2) // 1× meta + 1× files from the initial load
 
     // Step 1 → 2 via the stepper button (uses navigate() → pushState)
@@ -271,8 +367,8 @@ describe('App review→review navigation', () => {
     const user = userEvent.setup()
     render(App)
 
-    // Wait for PR-ONE to load
-    await screen.findByText(/PR-ONE/)
+    // Wait for PR-ONE to load (lazy Review chunk — generous timeout)
+    await screen.findByText(/PR-ONE/, {}, { timeout: 10_000 })
 
     // Navigate to step 2 ("Inspect") on PR-1
     await user.click(screen.getByRole('button', { name: /2.*Inspect/i }))

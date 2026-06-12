@@ -16,7 +16,7 @@
    * EC-09g: drafts cleared ONLY on success.
    */
   import { authState } from '../lib/auth/authState.svelte'
-  import { beginSignIn } from '../lib/auth/auth'
+  import { beginOAuth } from '../lib/auth/oauthFlow'
   import { submitReview, type Verdict, type SubmitOutcome } from '../lib/github/review'
   import { resolveViewerLogin } from '../lib/provider/viewer'
   import { isSelfReviewGated } from '../lib/provider/selfReview'
@@ -31,8 +31,6 @@
   import { COACH_DIMENSIONS, type CoachDimension, type CoachResult, type CommentReview } from '../lib/ai/schemas'
   import type { PrComment } from '../lib/github/comments'
   import type { ReviewProvider } from '../lib/provider/types'
-
-  const RETURN_KEY = 'review123:returnTo'
 
   interface Props {
     prRef: PrRef
@@ -104,8 +102,9 @@
   const clientId = import.meta.env.VITE_GITHUB_CLIENT_ID as string | undefined
 
   async function handleSignIn() {
-    sessionStorage.setItem(RETURN_KEY, location.pathname)
-    location.assign(await beginSignIn('public_repo'))
+    // Shared helper: clears stale pending sessions + stores returnTo so the
+    // user comes back to this PR after the OAuth round-trip.
+    location.assign(await beginOAuth('github'))
   }
 
   // ---- Local state ----
