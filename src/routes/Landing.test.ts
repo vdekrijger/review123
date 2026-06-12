@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/svelte'
+import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import Landing from './Landing.svelte'
 import { navigate } from '../lib/router/router.svelte'
 import * as queueModule from '../lib/provider/queue'
+import * as sizesModule from '../lib/landing/queueSizes'
+import type { DiffSize } from '../lib/landing/queueSizes'
 import type { QueueItem } from '../lib/provider/types'
 import { addToHistory, clearHistory } from '../lib/history/history'
 import { setSectionCollapsed } from '../lib/landing/collapse'
@@ -254,6 +256,112 @@ describe('Landing queue provider icons + per-repo grouping', () => {
     expect(container.querySelectorAll('.repo-group-header')).toHaveLength(2)
     expect(screen.getByText(/org\/mine#3/)).toBeInTheDocument()
   })
+
+  it('"Your open PRs" groups per repo (reusing groupQueue) when authored PRs span repos', async () => {
+    const items = [
+      makeItem('github', 'org', 'alpha', 1, 'Mine in alpha', true),
+      makeItem('github', 'org', 'beta', 2, 'Mine in beta', true),
+      makeItem('github', 'org', 'alpha', 3, 'Also mine in alpha', true),
+    ]
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue(items)
+
+    const { container } = render(Landing)
+    await screen.findByText(/Your open PRs/i)
+
+    // Repo headers with provider icon + owner/repo, same treatment as awaiting
+    const headers = [...container.querySelectorAll('.repo-group-header')]
+    expect(headers).toHaveLength(2)
+    expect(headers[0].textContent).toContain('org/alpha')
+    expect(headers[1].textContent).toContain('org/beta')
+    expect(headers[0].querySelector('[data-provider="github"] svg')).not.toBeNull()
+
+    // Rows show just "#number · title" — no repeated repo prefix
+    expect(screen.getByText('#1')).toBeInTheDocument()
+    expect(screen.getByText('#2')).toBeInTheDocument()
+    expect(screen.getByText('#3')).toBeInTheDocument()
+    expect(screen.queryByText(/org\/alpha#1/)).not.toBeInTheDocument()
+  })
+})
+
+describe('Landing queue diff size chips (+adds −dels)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    sessionStorage.clear()
+    vi.restoreAllMocks()
+    vi.mocked(navigate).mockClear()
+    queueModule._resetQueueCacheForTest()
+  })
+
+  it('rows render immediately without sizes; chips pop in as the lazy fetch reports them', async () => {
+    const item = makeItem('github', 'org', 'repo', 5, 'Sized PR', false)
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([item])
+
+    let emit: ((key: string, size: DiffSize) => void) | null = null
+    vi.spyOn(sizesModule, 'fetchMissingSizes').mockImplementation(async (_items, onSize) => {
+      emit = onSize
+    })
+
+    render(Landing)
+    await screen.findByText(/org\/repo#5/)
+
+    // Rendered without a size — the queue is never blocked on size fetches
+    expect(screen.queryByTestId('queue-size')).not.toBeInTheDocument()
+    expect(emit).not.toBeNull()
+
+    // The lazy batch resolves — the chip pops in
+    emit!(sizesModule.sizeKey(item), { additions: 12, deletions: 3 })
+    await screen.findByTestId('queue-size')
+    expect(screen.getByText('+12')).toBeInTheDocument()
+    expect(screen.getByText('−3')).toBeInTheDocument()
+  })
+
+  it('cached sizes render together with the rows (no pop-in for cache hits)', async () => {
+    const item = makeItem('github', 'org', 'repo', 8, 'Cached PR', false)
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([item])
+    vi.spyOn(sizesModule, 'getCachedSizes').mockReturnValue({
+      [sizesModule.sizeKey(item)]: { additions: 7, deletions: 1 },
+    })
+    vi.spyOn(sizesModule, 'fetchMissingSizes').mockResolvedValue(undefined)
+
+    render(Landing)
+    await screen.findByText(/org\/repo#8/)
+
+    expect(screen.getByTestId('queue-size')).toBeInTheDocument()
+    expect(screen.getByText('+7')).toBeInTheDocument()
+    expect(screen.getByText('−1')).toBeInTheDocument()
+  })
+
+  it('silent failure: rows simply show no chip when the size fetch yields nothing', async () => {
+    const item = makeItem('github', 'org', 'repo', 9, 'Rate-limited PR', false)
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([item])
+    vi.spyOn(sizesModule, 'fetchMissingSizes').mockResolvedValue(undefined)
+
+    render(Landing)
+    await screen.findByText(/org\/repo#9/)
+
+    expect(screen.queryByTestId('queue-size')).not.toBeInTheDocument()
+  })
+
+  it('size chips appear on grouped (multi-repo) rows too', async () => {
+    const items = [
+      makeItem('github', 'org', 'alpha', 1, 'Alpha PR', false),
+      makeItem('github', 'org', 'beta', 2, 'Beta PR', false),
+    ]
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue(items)
+    vi.spyOn(sizesModule, 'getCachedSizes').mockReturnValue({
+      [sizesModule.sizeKey(items[0])]: { additions: 4, deletions: 2 },
+    })
+    vi.spyOn(sizesModule, 'fetchMissingSizes').mockResolvedValue(undefined)
+
+    render(Landing)
+    await screen.findByText(/Awaiting your review/i)
+
+    const alphaRow = screen.getByRole('button', { name: /org\/alpha#1/i })
+    expect(within(alphaRow).getByText('+4')).toBeInTheDocument()
+    expect(within(alphaRow).getByText('−2')).toBeInTheDocument()
+    const betaRow = screen.getByRole('button', { name: /org\/beta#2/i })
+    expect(within(betaRow).queryByTestId('queue-size')).not.toBeInTheDocument()
+  })
 })
 
 describe('Landing recent reviews provider icons (flat, no grouping)', () => {
@@ -366,6 +474,20 @@ describe('Landing recent reviews', () => {
     render(Landing)
     expect(screen.getByText(/a\/r#1/)).toBeInTheDocument()
     expect(screen.getByText(/b\/s#2/)).toBeInTheDocument()
+  })
+
+  it('history rows show a +/− size chip when the entry carries sizes; legacy entries show none', () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Sized', additions: 10, deletions: 2 })
+    addToHistory({ owner: 'bob', repo: 'gadgets', number: 7, title: 'Legacy entry without sizes' })
+    render(Landing)
+
+    const sized = screen.getByRole('button', { name: /alice\/widgets#42/i })
+    expect(within(sized).getByText('+10')).toBeInTheDocument()
+    expect(within(sized).getByText('−2')).toBeInTheDocument()
+
+    // Old entries persisted before the fields existed simply show nothing
+    const legacy = screen.getByRole('button', { name: /bob\/gadgets#7/i })
+    expect(within(legacy).queryByTestId('queue-size')).not.toBeInTheDocument()
   })
 
   it('gitlab history entry navigates to /review/gitlab route', async () => {

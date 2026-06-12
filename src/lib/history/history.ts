@@ -19,6 +19,11 @@ export interface HistoryEntry {
   title: string
   viewedAt: number // timestamp (ms since epoch)
   provider?: 'github' | 'gitlab' | 'bitbucket' // optional for backward compat
+  /** Total lines added across the PR's files, captured at review time.
+   *  Optional — entries persisted before this field existed simply show no size. */
+  additions?: number
+  /** Total lines deleted across the PR's files, captured at review time. */
+  deletions?: number
 }
 
 function isValidEntry(raw: unknown): raw is HistoryEntry {

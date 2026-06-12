@@ -1,11 +1,13 @@
 /**
  * e2e/review-queue.spec.ts — Your review queue feature on the landing page.
  *
- * Three scenarios:
- *   (a) GitHub: seed auth + intercept search API → queue row appears → click navigates
- *   (b) GitLab: seed token + intercept /user + MR list → queue row appears
- *   (c) GitHub with delayed fixture: skeleton shows while fetch is in flight,
- *       then rows replace it
+ * Scenarios:
+ *   (a)  GitHub: seed auth + intercept search API → queue row appears with a
+ *        lazily-fetched +/− size chip → click navigates
+ *   (b)  GitLab: seed token + intercept /user + MR list → queue row appears
+ *   (b2) Signed out: the queue section (header included) does not render
+ *   (c)  GitHub with delayed fixture: skeleton shows while fetch is in flight,
+ *        then rows replace it
  */
 
 import { test, expect } from '@playwright/test'
@@ -48,7 +50,8 @@ test('github queue: row appears on landing and click navigates to review', async
       })
     }
 
-    // PR meta — needed so the review page can load after navigation
+    // PR meta — serves both the lazy queue-size fetch (additions/deletions)
+    // and the review page load after navigation
     if (path === `/repos/${GH_OWNER}/${GH_REPO}/pulls/${GH_PR}`) {
       return route.fulfill({
         json: {
@@ -58,7 +61,9 @@ test('github queue: row appears on landing and click navigates to review', async
           body: null,
           base: { sha: 'basesha', repo: { private: false } },
           head: { sha: 'headsha' },
-          changed_files: 0,
+          changed_files: 2,
+          additions: 34,
+          deletions: 12,
         },
       })
     }
@@ -85,6 +90,11 @@ test('github queue: row appears on landing and click navigates to review', async
 
   const queueRow = page.getByRole('button', { name: new RegExp(`${GH_OWNER}/${GH_REPO}#${GH_PR}`, 'i') })
   await expect(queueRow).toBeVisible({ timeout: 10_000 })
+
+  // Diff size pops in lazily (fetched from /pulls/:n after the list renders)
+  const sizeChip = queueRow.getByTestId('queue-size')
+  await expect(sizeChip).toContainText('+34', { timeout: 10_000 })
+  await expect(sizeChip).toContainText('−12')
 
   // Click the row — should navigate to the review route
   await queueRow.click()
@@ -151,6 +161,27 @@ test('gitlab queue: row appears on landing when signed in via token', async ({ p
 
   const queueRow = page.getByRole('button', { name: new RegExp(`${GL_OWNER}/${GL_REPO}#${GL_MR}`, 'i') })
   await expect(queueRow).toBeVisible({ timeout: 10_000 })
+})
+
+// ---------------------------------------------------------------------------
+// Test (b2): signed out everywhere → no queue section at all
+// ---------------------------------------------------------------------------
+
+test('signed out: the review queue section (header included) does not render', async ({ page }) => {
+  await page.route('**/*posthog.com/**', (route) => route.abort())
+  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+  await page.route('**/api.deepseek.com/**', (route) => route.abort())
+  // No auth seeded — any API call would be a bug; fail it loudly
+  await page.route('**/api.github.com/**', (route) => route.abort())
+  await page.route('**/gitlab.com/api/**', (route) => route.abort())
+
+  await page.goto('/')
+
+  // The landing form renders…
+  await expect(page.getByRole('textbox', { name: /pull request url/i })).toBeVisible()
+  // …but the queue section does not exist (no header, no sign-in hint)
+  await expect(page.getByText('Your review queue')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /refresh queue/i })).toHaveCount(0)
 })
 
 // ---------------------------------------------------------------------------

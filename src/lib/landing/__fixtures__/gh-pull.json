@@ -1,0 +1,13 @@
+{
+  "url": "https://api.github.com/repos/org/alpha/pulls/7",
+  "number": 7,
+  "state": "open",
+  "title": "Fixture PR — size source for queue rows",
+  "updated_at": "2026-06-01T12:00:00Z",
+  "merged": false,
+  "comments": 2,
+  "commits": 3,
+  "additions": 142,
+  "deletions": 38,
+  "changed_files": 9
+}

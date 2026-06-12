@@ -4,6 +4,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "resolveJsonModule": true,
     "strict": true,
     "types": ["vite/client", "vitest/globals"]
   },

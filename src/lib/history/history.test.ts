@@ -92,3 +92,33 @@ describe('clearHistory', () => {
     expect(getHistory()).toEqual([])
   })
 })
+
+describe('diff size on history entries (optional additions/deletions)', () => {
+  it('persists additions/deletions when provided and returns them from getHistory', () => {
+    addToHistory({ owner: 'a', repo: 'r', number: 1, title: 'Sized', additions: 120, deletions: 14 })
+    const entry = getHistory()[0]
+    expect(entry.additions).toBe(120)
+    expect(entry.deletions).toBe(14)
+  })
+
+  it('entries without sizes remain valid (backward compat with old stored entries)', () => {
+    // Simulate an old entry persisted before the fields existed
+    localStorage.setItem(
+      'review123:history',
+      JSON.stringify([{ owner: 'old', repo: 'repo', number: 9, title: 'Legacy', viewedAt: 123 }]),
+    )
+    const history = getHistory()
+    expect(history).toHaveLength(1)
+    expect(history[0].additions).toBeUndefined()
+    expect(history[0].deletions).toBeUndefined()
+  })
+
+  it('revisiting a PR with fresh sizes overwrites the stored entry', () => {
+    addToHistory({ owner: 'a', repo: 'r', number: 1, title: 'T', additions: 1, deletions: 1 })
+    addToHistory({ owner: 'a', repo: 'r', number: 1, title: 'T', additions: 5, deletions: 2 })
+    const history = getHistory()
+    expect(history).toHaveLength(1)
+    expect(history[0].additions).toBe(5)
+    expect(history[0].deletions).toBe(2)
+  })
+})
