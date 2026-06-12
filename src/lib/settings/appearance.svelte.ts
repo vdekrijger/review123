@@ -4,7 +4,7 @@ import { getSettings } from './settings'
  * Apply current theme and uiFont settings to document.documentElement.
  *
  * theme: sets/clears data-theme attribute ('dark'/'light', absent for auto).
- * uiFont: sets/clears data-font attribute ('humanist'/'serif', absent for system).
+ * uiFont: sets/clears data-font attribute ('system'/'serif', absent for plex default).
  *
  * Call once at startup (main.ts) and immediately on every change in the UI.
  */
@@ -18,10 +18,11 @@ export function applyAppearance(): void {
     document.documentElement.removeAttribute('data-theme')
   }
 
-  // data-font: explicit value only; absent = system default
-  if (uiFont === 'humanist' || uiFont === 'serif') {
+  // data-font: only set for non-default fonts; absent = plex (IBM Plex Sans, the default)
+  if (uiFont === 'system' || uiFont === 'serif') {
     document.documentElement.setAttribute('data-font', uiFont)
   } else {
+    // 'plex' is the default — no attribute needed
     document.documentElement.removeAttribute('data-font')
   }
 }

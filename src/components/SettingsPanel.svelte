@@ -81,12 +81,12 @@
     <fieldset>
       <legend>Font</legend>
       <label>
-        <input type="radio" name="uiFont" value="system" checked={uiFont === 'system'} onchange={() => onFontChange('system')} />
-        System
+        <input type="radio" name="uiFont" value="plex" checked={uiFont === 'plex'} onchange={() => onFontChange('plex')} />
+        Plex
       </label>
       <label>
-        <input type="radio" name="uiFont" value="humanist" checked={uiFont === 'humanist'} onchange={() => onFontChange('humanist')} />
-        Humanist
+        <input type="radio" name="uiFont" value="system" checked={uiFont === 'system'} onchange={() => onFontChange('system')} />
+        System
       </label>
       <label>
         <input type="radio" name="uiFont" value="serif" checked={uiFont === 'serif'} onchange={() => onFontChange('serif')} />

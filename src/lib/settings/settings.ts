@@ -14,7 +14,7 @@ function notifyAuthMutated(): void {
 
 export type DiffMode = 'unified' | 'split'
 export type Theme = 'auto' | 'dark' | 'light'
-export type UiFont = 'system' | 'humanist' | 'serif'
+export type UiFont = 'plex' | 'system' | 'serif'
 
 export interface GithubAuth {
   token: string
@@ -39,7 +39,7 @@ const DEFAULTS: Settings = {
   githubAuth: null,
   railCollapsed: false,
   theme: 'auto',
-  uiFont: 'system',
+  uiFont: 'plex',
 }
 
 function coerceGithubAuth(raw: unknown): GithubAuth | null {
@@ -75,7 +75,12 @@ function coerce(raw: unknown): Partial<Settings> {
   if (theme === 'auto' || theme === 'dark' || theme === 'light') result.theme = theme
 
   const uiFont = obj['uiFont']
-  if (uiFont === 'system' || uiFont === 'humanist' || uiFont === 'serif') result.uiFont = uiFont
+  // 'humanist' was the old name for system-font choice — coerce to 'system'
+  if (uiFont === 'plex' || uiFont === 'system' || uiFont === 'serif') {
+    result.uiFont = uiFont
+  } else if (uiFont === 'humanist') {
+    result.uiFont = 'system'
+  }
 
   // Prefer explicit githubAuth; fall back to migrating legacy githubPat string
   if ('githubAuth' in obj) {

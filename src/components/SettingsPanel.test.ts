@@ -98,12 +98,12 @@ describe('SettingsPanel', () => {
       expect(screen.getByRole('radio', { name: /dark/i })).toBeInTheDocument()
     })
 
-    it('renders Font radiogroup with System, Humanist, Serif options', () => {
+    it('renders Font radiogroup with Plex, System, Serif options', () => {
       render(SettingsPanel, { props: { onclose: vi.fn() } })
       const fontGroup = screen.getByRole('group', { name: /font/i })
       expect(fontGroup).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: /plex/i })).toBeInTheDocument()
       expect(screen.getByRole('radio', { name: /system/i })).toBeInTheDocument()
-      expect(screen.getByRole('radio', { name: /humanist/i })).toBeInTheDocument()
       expect(screen.getByRole('radio', { name: /serif/i })).toBeInTheDocument()
     })
 
@@ -121,10 +121,10 @@ describe('SettingsPanel', () => {
       expect(getSettings().theme).toBe('light')
     })
 
-    it('selecting Humanist font persists in getSettings', async () => {
+    it('selecting Plex font persists in getSettings', async () => {
       render(SettingsPanel, { props: { onclose: vi.fn() } })
-      await userEvent.click(screen.getByRole('radio', { name: /humanist/i }))
-      expect(getSettings().uiFont).toBe('humanist')
+      await userEvent.click(screen.getByRole('radio', { name: /plex/i }))
+      expect(getSettings().uiFont).toBe('plex')
     })
 
     it('selecting Serif font persists in getSettings', async () => {
@@ -139,10 +139,10 @@ describe('SettingsPanel', () => {
       expect((autoRadio as HTMLInputElement).checked).toBe(true)
     })
 
-    it('System is selected by default for font (matches stored default)', () => {
+    it('Plex is selected by default for font (matches stored default)', () => {
       render(SettingsPanel, { props: { onclose: vi.fn() } })
-      const systemRadio = screen.getByRole('radio', { name: /system/i })
-      expect((systemRadio as HTMLInputElement).checked).toBe(true)
+      const plexRadio = screen.getByRole('radio', { name: /plex/i })
+      expect((plexRadio as HTMLInputElement).checked).toBe(true)
     })
   })
 })

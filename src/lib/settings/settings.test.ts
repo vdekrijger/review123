@@ -15,7 +15,7 @@ describe('settings', () => {
       githubAuth: null,
       railCollapsed: false,
       theme: 'auto',
-      uiFont: 'system',
+      uiFont: 'plex',
     })
   })
 
@@ -55,7 +55,7 @@ describe('settings', () => {
       githubAuth: null,
       railCollapsed: false,
       theme: 'auto',
-      uiFont: 'system',
+      uiFont: 'plex',
     })
   })
 
@@ -147,13 +147,13 @@ describe('settings', () => {
   })
 
   describe('uiFont', () => {
-    it('defaults to system', () => {
-      expect(getSettings().uiFont).toBe('system')
+    it('defaults to plex', () => {
+      expect(getSettings().uiFont).toBe('plex')
     })
 
-    it('setUiFont persists humanist', () => {
-      setUiFont('humanist')
-      expect(getSettings().uiFont).toBe('humanist')
+    it('setUiFont persists system', () => {
+      setUiFont('system')
+      expect(getSettings().uiFont).toBe('system')
     })
 
     it('setUiFont persists serif', () => {
@@ -161,14 +161,19 @@ describe('settings', () => {
       expect(getSettings().uiFont).toBe('serif')
     })
 
-    it('setUiFont persists system', () => {
+    it('setUiFont persists plex', () => {
       setUiFont('serif')
-      setUiFont('system')
-      expect(getSettings().uiFont).toBe('system')
+      setUiFont('plex')
+      expect(getSettings().uiFont).toBe('plex')
     })
 
-    it('coerces invalid uiFont value back to default (system)', () => {
+    it('coerces invalid uiFont value back to default (plex)', () => {
       localStorage.setItem('review123:settings', JSON.stringify({ uiFont: 'comic-sans' }))
+      expect(getSettings().uiFont).toBe('plex')
+    })
+
+    it('coerces legacy "humanist" value to "system"', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ uiFont: 'humanist' }))
       expect(getSettings().uiFont).toBe('system')
     })
   })
