@@ -32,6 +32,19 @@ export interface PrRefX {
 }
 
 // ---------------------------------------------------------------------------
+// Queue types
+// ---------------------------------------------------------------------------
+
+export interface QueueItem {
+  ref: PrRefX
+  title: string
+  /** true when the current user is the author (not awaiting their review) */
+  authorIsMe: boolean
+  /** ISO 8601 timestamp */
+  updatedAt: string
+}
+
+// ---------------------------------------------------------------------------
 // ParseResult — result of parseUrl
 // ---------------------------------------------------------------------------
 
@@ -121,4 +134,13 @@ export interface ReviewProvider {
    * Callers check capabilities.suggestions before using this method.
    */
   suggestionFence?(lines: string[]): string
+
+  /**
+   * Return open PRs/MRs in the current user's review queue.
+   * - authorIsMe=false → awaiting this user's review (reviewer-requested)
+   * - authorIsMe=true  → authored by this user (open PRs)
+   * Capability implied by method presence.
+   * Returns [] when unauthenticated.
+   */
+  getMyQueue?(): Promise<QueueItem[]>
 }
