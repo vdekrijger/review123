@@ -427,9 +427,15 @@
             const finding = f as { path?: string }
             return prPathSet.has(finding.path ?? '')
           }).length ?? 0}
-          <span class="skill-status-chip chip-done" aria-label="Done, {findingCount} finding{findingCount !== 1 ? 's' : ''}">
-            ✓ {findingCount} finding{findingCount !== 1 ? 's' : ''}
-          </span>
+          {#if findingCount === 0}
+            <span class="skill-status-chip chip-done" aria-label="Done, no significant issues">
+              ✓ no significant issues
+            </span>
+          {:else}
+            <span class="skill-status-chip chip-done" aria-label="Done, {findingCount} finding{findingCount !== 1 ? 's' : ''}">
+              ✓ {findingCount} finding{findingCount !== 1 ? 's' : ''}
+            </span>
+          {/if}
         {:else if entry.state.status === 'error'}
           <span class="skill-status-chip chip-error" aria-label="Error, retry available">
             ↻ error

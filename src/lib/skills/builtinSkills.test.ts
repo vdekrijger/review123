@@ -116,3 +116,57 @@ describe('BUILTIN_SKILLS', () => {
     expect(pragmatic?.name).toBe(SAMPLE_SKILL_NAME)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Shared anti-fatigue calibration (v10) — appended to every persona
+// ---------------------------------------------------------------------------
+
+describe('BUILTIN_SKILLS — shared calibration (v10)', () => {
+  it('exports SHARED_CALIBRATION as a non-empty string', async () => {
+    const { SHARED_CALIBRATION } = await import('./builtinSkills')
+    expect(typeof SHARED_CALIBRATION).toBe('string')
+    expect(SHARED_CALIBRATION.trim().length).toBeGreaterThan(0)
+  })
+
+  it('every persona content ends with the shared calibration block', async () => {
+    const { SHARED_CALIBRATION } = await import('./builtinSkills')
+    for (const skill of BUILTIN_SKILLS) {
+      expect(skill.content.endsWith(SHARED_CALIBRATION), `skill "${skill.name}" is missing the shared calibration`).toBe(true)
+    }
+  })
+
+  it('shared calibration appears exactly once per persona (no double-append)', async () => {
+    const { SHARED_CALIBRATION } = await import('./builtinSkills')
+    for (const skill of BUILTIN_SKILLS) {
+      const occurrences = skill.content.split(SHARED_CALIBRATION).length - 1
+      expect(occurrences, `skill "${skill.name}"`).toBe(1)
+    }
+  })
+
+  it('shared calibration encodes the six anti-fatigue rules', async () => {
+    const { SHARED_CALIBRATION } = await import('./builtinSkills')
+    // 1. Evidence gate
+    expect(SHARED_CALIBRATION).toMatch(/Evidence gate/i)
+    expect(SHARED_CALIBRATION).toMatch(/what breaks, or who gets hurt/i)
+    expect(SHARED_CALIBRATION).toMatch(/couldn't verify/i)
+    // 2. Hard cap
+    expect(SHARED_CALIBRATION).toMatch(/At most 5 findings/i)
+    // 3. Brevity format
+    expect(SHARED_CALIBRATION).toMatch(/one sentence of what \+ where/i)
+    expect(SHARED_CALIBRATION).toMatch(/no praise padding, no methodology narration/i)
+    // 4. Silence is valid
+    expect(SHARED_CALIBRATION).toContain('No significant issues from this lens.')
+    // 5. No redundancy
+    expect(SHARED_CALIBRATION).toMatch(/Never repeat a point an existing PR comment already makes/i)
+    // 6. Severity honesty
+    expect(SHARED_CALIBRATION).toMatch(/nits are nits/i)
+    expect(SHARED_CALIBRATION).toMatch(/never inflate/i)
+  })
+
+  it('per-persona priorities remain intact after the append (not rewrites)', () => {
+    const security = BUILTIN_SKILLS.find((s) => s.id === 'security')
+    expect(security?.content).toContain('Injection surfaces')
+    const sre = BUILTIN_SKILLS.find((s) => s.id === 'sre')
+    expect(sre?.content).toContain('Unbounded operations')
+  })
+})
