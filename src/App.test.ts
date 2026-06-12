@@ -231,7 +231,9 @@ describe('EC-05k: closed/merged PR renders correctly', () => {
 
     render(App)
 
-    expect(await screen.findByText(/CLOSED-PR/)).toBeTruthy()
+    // Generous timeout: the FIRST render pays the lazy Review-chunk import,
+    // which can exceed the 1s default under CPU contention (parallel test files).
+    expect(await screen.findByText(/CLOSED-PR/, {}, { timeout: 10_000 })).toBeTruthy()
   })
 })
 
@@ -261,8 +263,9 @@ describe('App — Review route is lazy-loaded (bundle discipline)', () => {
     expect(document.querySelector('.route-loading')).toBeInTheDocument()
     expect(document.querySelector('.review')).not.toBeInTheDocument()
 
-    // Once the lazy chunk wires up, the Review route renders fully.
-    expect(await screen.findByText(/PR-ONE/)).toBeTruthy()
+    // Once the lazy chunk wires up, the Review route renders fully (generous
+    // timeout: the dynamic import can be slow under CPU contention).
+    expect(await screen.findByText(/PR-ONE/, {}, { timeout: 10_000 })).toBeTruthy()
     expect(document.querySelector('.route-loading')).not.toBeInTheDocument()
   })
 })
@@ -286,8 +289,8 @@ describe('App review→review navigation', () => {
 
     render(App)
 
-    // First PR title appears
-    expect(await screen.findByText(/PR-ONE/)).toBeTruthy()
+    // First PR title appears (lazy Review chunk — generous timeout)
+    expect(await screen.findByText(/PR-ONE/, {}, { timeout: 10_000 })).toBeTruthy()
 
     // Navigate to PR-2
     history.pushState(null, '', '/review/a/b/2')
@@ -317,7 +320,7 @@ describe('App review→review navigation', () => {
     render(App)
 
     // Wait for PR-ONE to load (skeleton gone, content rendered)
-    await screen.findByText(/PR-ONE/)
+    await screen.findByText(/PR-ONE/, {}, { timeout: 10_000 })
     expect(loadCalls()).toBe(2) // 1× meta + 1× files from the initial load
 
     // Step 1 → 2 via the stepper button (uses navigate() → pushState)
@@ -350,8 +353,8 @@ describe('App review→review navigation', () => {
     const user = userEvent.setup()
     render(App)
 
-    // Wait for PR-ONE to load
-    await screen.findByText(/PR-ONE/)
+    // Wait for PR-ONE to load (lazy Review chunk — generous timeout)
+    await screen.findByText(/PR-ONE/, {}, { timeout: 10_000 })
 
     // Navigate to step 2 ("Inspect") on PR-1
     await user.click(screen.getByRole('button', { name: /2.*Inspect/i }))
