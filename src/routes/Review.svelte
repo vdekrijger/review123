@@ -456,6 +456,49 @@
   // Files to show in InspectStep
   const inspectFiles = $derived(isCompareActive ? compareMode!.files : (load.state.status === 'ready' ? load.state.files : []))
   const inspectChangedFiles = $derived(isCompareActive ? compareMode!.files.length : (load.state.status === 'ready' ? load.state.meta.changedFiles : 0))
+
+  // ---- Scroll-based inspect progress (step 2 only) ----
+  // Tracks vertical scroll progress through the inspect content container.
+  // 0% = container top at/above viewport top; 100% = scrolled to container bottom.
+  let scrollPercent = $state(0)
+
+  $effect(() => {
+    // Only active on step 2
+    if (step !== 2) {
+      scrollPercent = 0
+      return
+    }
+
+    let rafId = 0
+
+    function updateScroll() {
+      const container = document.querySelector('.review') as HTMLElement | null
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+      const scrollable = container.scrollHeight - window.innerHeight
+      if (scrollable <= 0) {
+        scrollPercent = 100
+        return
+      }
+      // How far from the top of the page to the top of the container
+      const containerTop = container.offsetTop
+      const scrolled = window.scrollY - containerTop
+      const raw = scrolled / scrollable
+      scrollPercent = Math.round(Math.max(0, Math.min(1, raw)) * 100)
+    }
+
+    function onScroll() {
+      cancelAnimationFrame(rafId)
+      rafId = requestAnimationFrame(updateScroll)
+    }
+
+    updateScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      cancelAnimationFrame(rafId)
+    }
+  })
 </script>
 
 {#if consentDialogVisible}
@@ -512,6 +555,8 @@
           }
         }}
         onbackdropclick={() => { railCollapsed = true }}
+        ci={ciData}
+        meta={load.state.meta}
       />
     {/if}
 
@@ -631,8 +676,8 @@
         <ReviewProgress
           viewedCount={viewedCountDerived}
           fileCount={load.state.files.length}
-          draftCount={draftStore?.count ?? 0}
           {step}
+          percent={scrollPercent}
           inline
         />
       {/if}

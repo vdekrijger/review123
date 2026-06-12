@@ -16,6 +16,7 @@ export type DiffMode = 'unified' | 'split'
 export type Theme = 'auto' | 'dark' | 'light'
 export type UiFont = 'plex' | 'system' | 'serif'
 export type TestFileDisplay = 'normal' | 'highlight' | 'dim'
+export type DiffWidth = 'centered' | 'full'
 
 export interface GithubAuth {
   token: string
@@ -33,6 +34,7 @@ export interface Settings {
   deepseekKey: string | null
   diffMode: DiffMode
   githubAuth: GithubAuth | null
+  gitlabToken: string | null
   bitbucketAuth: BitbucketAuth | null
   railCollapsed: boolean
   theme: Theme
@@ -40,6 +42,7 @@ export interface Settings {
   showProgress: boolean
   treeOpen: boolean
   testFileDisplay: TestFileDisplay
+  diffWidth: DiffWidth
 }
 
 const DEFAULTS: Settings = {
@@ -47,6 +50,7 @@ const DEFAULTS: Settings = {
   deepseekKey: null,
   diffMode: 'unified',
   githubAuth: null,
+  gitlabToken: null,
   bitbucketAuth: null,
   railCollapsed: false,
   theme: 'auto',
@@ -54,6 +58,7 @@ const DEFAULTS: Settings = {
   showProgress: true,
   treeOpen: false,
   testFileDisplay: 'normal',
+  diffWidth: 'centered',
 }
 
 function coerceGithubAuth(raw: unknown): GithubAuth | null {
@@ -90,6 +95,10 @@ function coerce(raw: unknown): Partial<Settings> {
   const deepseekKey = obj['deepseekKey']
   if (typeof deepseekKey === 'string' || deepseekKey === null) result.deepseekKey = deepseekKey
 
+  const gitlabToken = obj['gitlabToken']
+  if (typeof gitlabToken === 'string') result.gitlabToken = gitlabToken
+  else if (gitlabToken === null) result.gitlabToken = null
+
   const railCollapsed = obj['railCollapsed']
   if (typeof railCollapsed === 'boolean') result.railCollapsed = railCollapsed
 
@@ -114,6 +123,9 @@ function coerce(raw: unknown): Partial<Settings> {
   if (testFileDisplay === 'normal' || testFileDisplay === 'highlight' || testFileDisplay === 'dim') {
     result.testFileDisplay = testFileDisplay
   }
+
+  const diffWidth = obj['diffWidth']
+  if (diffWidth === 'centered' || diffWidth === 'full') result.diffWidth = diffWidth
 
   // Prefer explicit githubAuth; fall back to migrating legacy githubPat string
   if ('githubAuth' in obj) {
@@ -191,6 +203,22 @@ export const setUiFont = (font: UiFont) => save({ uiFont: font })
 export const setShowProgress = (show: boolean) => save({ showProgress: show })
 export const setTreeOpen = (open: boolean) => save({ treeOpen: open })
 export const setTestFileDisplay = (v: TestFileDisplay) => save({ testFileDisplay: v })
+export const setDiffWidth = (v: DiffWidth) => save({ diffWidth: v })
+
+/**
+ * Save the GitLab personal access token (PAT).
+ * Pass null to clear. Trims whitespace; throws on empty string.
+ * Required scope: api
+ */
+export function setGitlabToken(v: string | null): void {
+  if (v === null) {
+    save({ gitlabToken: null })
+    return
+  }
+  const trimmed = v.trim()
+  if (!trimmed) throw new Error('gitlabToken must not be empty')
+  save({ gitlabToken: trimmed })
+}
 
 /**
  * Atomically validate and save Bitbucket credentials.

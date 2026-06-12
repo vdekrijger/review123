@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSettings, saveTokens, setTheme, setUiFont, setShowProgress, setTestFileDisplay, type Theme, type UiFont, type TestFileDisplay } from '../lib/settings/settings'
+  import { getSettings, saveTokens, setGitlabToken, setTheme, setUiFont, setShowProgress, setTestFileDisplay, setDiffWidth, type Theme, type UiFont, type TestFileDisplay, type DiffWidth } from '../lib/settings/settings'
   import { applyAppearance } from '../lib/settings/appearance.svelte'
   import { track } from '../lib/analytics/analytics'
   import { authState } from '../lib/auth/authState.svelte'
@@ -26,11 +26,13 @@
   const current = getSettings()
   let pat = $state(current.githubPat ?? '')
   let deepseek = $state(current.deepseekKey ?? '')
+  let gitlabTokenInput = $state(current.gitlabToken ?? '')
   let error = $state<string | null>(null)
   let theme = $state<Theme>(current.theme)
   let uiFont = $state<UiFont>(current.uiFont)
   let showProgress = $state<boolean>(current.showProgress)
   let testFileDisplay = $state<TestFileDisplay>(current.testFileDisplay)
+  let diffWidth = $state<DiffWidth>(current.diffWidth)
 
   // ---- Reviewer skills state ----
   let skills = $state<ReviewerSkill[]>(listSkills())
@@ -191,16 +193,24 @@
     setTestFileDisplay(value)
   }
 
+  function onDiffWidthChange(value: DiffWidth) {
+    diffWidth = value
+    setDiffWidth(value)
+  }
+
   function save() {
     try {
       const hadPat = !!current.githubPat
       const hadKey = !!current.deepseekKey
+      const hadGitlab = !!current.gitlabToken
       saveTokens({
         githubPat: pat.trim() === '' ? null : pat,
         deepseekKey: deepseek.trim() === '' ? null : deepseek,
       })
+      setGitlabToken(gitlabTokenInput.trim() === '' ? null : gitlabTokenInput)
       if (!hadPat && pat.trim()) track('settings_key_added', { service: 'github' })
       if (!hadKey && deepseek.trim()) track('settings_key_added', { service: 'deepseek' })
+      if (!hadGitlab && gitlabTokenInput.trim()) track('settings_key_added', { service: 'gitlab' })
       onclose()
     } catch (e) {
       error = (e as Error).message
@@ -275,6 +285,18 @@
         De-emphasize
       </label>
     </fieldset>
+
+    <fieldset aria-label="Diff width">
+      <legend>Diff width</legend>
+      <label>
+        <input type="radio" name="diffWidth" value="centered" checked={diffWidth === 'centered'} onchange={() => onDiffWidthChange('centered')} />
+        Centered
+      </label>
+      <label>
+        <input type="radio" name="diffWidth" value="full" checked={diffWidth === 'full'} onchange={() => onDiffWidthChange('full')} />
+        Full width
+      </label>
+    </fieldset>
   </section>
 
   <p class="auth-status">{authStatusLine}</p>
@@ -291,6 +313,12 @@
         <em>Pull requests: Read &amp; write</em>, <em>Contents: Read</em>, and <em>Checks: Read</em>.</p>
       <p><strong>Classic token:</strong> the <code>public_repo</code> scope (or <code>repo</code> for private
         repositories). In a SAML/SSO organization, click <em>Configure SSO → Authorize</em> on the token afterwards.</p>
+    </div>
+    <label>GitLab token (PAT)
+      <input type="password" bind:value={gitlabTokenInput} autocomplete="off" placeholder="glpat_… (scope: api)" aria-label="GitLab personal access token" />
+    </label>
+    <div class="hint pat-scope-hint">
+      <p>Required scope: <code>api</code>. Create one at <em>GitLab → User Settings → Access Tokens</em>.</p>
     </div>
   </details>
   <p class="hint">Keys are stored only in this browser (localStorage) and sent only to their own services.</p>

@@ -1,11 +1,9 @@
 /**
  * src/lib/provider/registry.ts — provider registry for Review 1-2-3.
- *
- * Currently only GitHub is registered. GitLab and Bitbucket adapters will be
- * added in future tasks and registered here.
  */
 
 import { githubProvider } from './github'
+import { gitlabProvider } from './gitlab'
 import { bitbucketProvider } from './bitbucket'
 import type { ReviewProvider, PrRefX } from './types'
 
@@ -15,6 +13,7 @@ import type { ReviewProvider, PrRefX } from './types'
 
 export const PROVIDERS: Map<string, ReviewProvider> = new Map([
   ['github', githubProvider],
+  ['gitlab', gitlabProvider],
   ['bitbucket', bitbucketProvider],
 ])
 
