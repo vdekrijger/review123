@@ -4,9 +4,11 @@
  * Unit tests for the pure scrollspy selection logic used by the
  * /settings page section nav. The selection rule: pick the last section
  * (in document order) whose top edge is at or above the viewport
- * midline; fall back to the first section at scroll top; force the last
- * section when the page is scrolled to the bottom (classic scrollspy
- * bottom bug — a short last section may never dominate the viewport).
+ * midline; keep the first section while its top edge is still at or
+ * below the viewport top (classic top-edge bug — a short first section
+ * under a tall page header); force the last section when the page is
+ * scrolled to the bottom (classic scrollspy bottom bug — a short last
+ * section may never dominate the viewport).
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -78,6 +80,58 @@ describe('pickActiveSection', () => {
 
   it('ignores atBottom for an empty section list', () => {
     expect(pickActiveSection([], VIEWPORT, true)).toBeNull()
+  })
+
+  // Top-edge regression (user report): at scrollTop ≈ 0 the page header
+  // pushes a SHORT first section's successor above the midline, and the
+  // raw midline rule highlighted "providers" while the user was reading
+  // "appearance". While the first section's top edge is still at or below
+  // the viewport top, the first section must win.
+  describe('top edge (regression: Providers highlighted while reading Appearance)', () => {
+    it('keeps the first section active at the very top even when later tops sit above the midline', () => {
+      // Page header ≈ 130px; appearance is short, so providers' top (350)
+      // is above the midline (400) at scrollTop 0.
+      const result = pickActiveSection(
+        sections({ appearance: 130, providers: 350, 'ai-models': 900, skills: 1500 }),
+        VIEWPORT,
+      )
+      expect(result).toBe('appearance')
+    })
+
+    it('keeps the first section active while its top edge is still inside the viewport top (small scroll)', () => {
+      // Scrolled ~100px: appearance top 30 is still at/below the viewport top.
+      const result = pickActiveSection(
+        sections({ appearance: 30, providers: 250, 'ai-models': 800, skills: 1400 }),
+        VIEWPORT,
+      )
+      expect(result).toBe('appearance')
+    })
+
+    it('hands over to the midline rule once the first section has scrolled past the viewport top', () => {
+      const result = pickActiveSection(
+        sections({ appearance: -40, providers: 180, 'ai-models': 730, skills: 1330 }),
+        VIEWPORT,
+      )
+      expect(result).toBe('providers')
+    })
+
+    it('treats a first-section top of exactly 0 as at-top', () => {
+      const result = pickActiveSection(
+        sections({ appearance: 0, providers: 220, skills: 900 }),
+        VIEWPORT,
+      )
+      expect(result).toBe('appearance')
+    })
+
+    it('prefers the top edge over atBottom when a short page is both at top and bottom', () => {
+      // Whole page fits the viewport: reading starts at the top.
+      const result = pickActiveSection(
+        sections({ appearance: 60, providers: 260, skills: 500 }),
+        VIEWPORT,
+        true,
+      )
+      expect(result).toBe('appearance')
+    })
   })
 })
 

@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { llmTestConnection, LlmError } from './llm'
+import { llmTestConnection, LlmError, INVALID_KEY_CHAR_MESSAGE } from './llm'
 import { activeProviderHasKey } from './config'
 import {
   setDeepseekKey,
@@ -178,5 +178,30 @@ describe('activeProviderHasKey', () => {
     setAiProvider('openai')
     setOpenaiKey('sk-oa')
     expect(activeProviderHasKey()).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Friendly error for a legacy saved key with an invalid header character:
+// the Settings "Save & test" button surfaces LlmError.message directly, so
+// the mapped message (not the raw DOMException text) is what the user sees.
+// ---------------------------------------------------------------------------
+
+describe('llmTestConnection — invalid header character in a saved key', () => {
+  it('maps the fetch ByteString TypeError to the friendly re-copy message', async () => {
+    setDeepseekKey('sk-saved-before-sanitization')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(
+        new TypeError(
+          'Window.fetch: Cannot convert value to ByteString because the character at index 49 has value 8212 which is greater than 255.',
+        ),
+      ),
+    )
+    const err = await llmTestConnection('deepseek').catch((e) => e as LlmError)
+    expect(err).toBeInstanceOf(LlmError)
+    expect((err as LlmError).kind).toBe('auth')
+    expect((err as LlmError).message).toBe(INVALID_KEY_CHAR_MESSAGE)
+    expect((err as LlmError).message).not.toMatch(/ByteString|8212/)
   })
 })

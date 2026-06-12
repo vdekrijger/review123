@@ -7,8 +7,13 @@
  * can be unit-tested without a real browser: pick the last section (in
  * document order) whose top edge is at or above the viewport midline.
  * Two edge cases are handled explicitly:
- *  - scroll top: if no section has crossed the midline yet, the first
- *    section is active;
+ *  - scroll top: while the FIRST section's top edge is still at or below
+ *    the viewport top (the page header above it is in view), the user is
+ *    reading the first section — the midline rule must not skip ahead to
+ *    a later section whose top already sits above the midline (the
+ *    classic top-edge bug: a short first section under a tall page
+ *    header). This geometric check needs no scrollY, so it cannot be
+ *    fooled by a scroll-container vs window mismatch;
  *  - page bottom: a short last section may never reach the midline (the
  *    classic scrollspy bottom bug), so when the page is scrolled to the
  *    bottom the last section is forced active.
@@ -39,6 +44,12 @@ export function pickActiveSection(
   atBottom = false,
 ): string | null {
   if (sections.length === 0) return null
+  // Top edge first: while the first section's top edge has not scrolled
+  // past the viewport top, the user is at (or near) the very top of the
+  // page reading the first section. Checked BEFORE atBottom so a page
+  // that fits the viewport (top and bottom at once) starts on the first
+  // section, where reading starts.
+  if (sections[0].top >= 0) return sections[0].id
   if (atBottom) return sections[sections.length - 1].id
   const midline = viewportHeight / 2
   let active = sections[0].id

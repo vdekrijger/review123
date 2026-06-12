@@ -4,6 +4,7 @@ import {
   setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay, setGitlabToken,
   saveBitbucketAuth, setGitlabHost,
   setOpenaiKey, setAnthropicKey, setGeminiKey, setAiProvider, setAiModel,
+  findInvalidKeyChar, invalidKeyCharMessage,
 } from './settings'
 
 describe('settings', () => {
@@ -600,6 +601,96 @@ describe('settings', () => {
       localStorage.setItem('review123:settings', JSON.stringify({ openaiKey: 'sk-openai-original' }))
       expect(() => saveTokens({ openaiKey: '  ' })).toThrow()
       expect(getSettings().openaiKey).toBe('sk-openai-original')
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Key character sanitization (user report: an EM DASH copy-paste artifact in
+// a DeepSeek key blew up fetch header construction with a raw DOMException).
+// All key/token save paths share one validator: trim, then reject characters
+// that cannot travel in an HTTP header (non-ISO-8859-1 or control chars) with
+// a human message naming the character and its position.
+// ---------------------------------------------------------------------------
+
+describe('key character sanitization', () => {
+  beforeEach(() => localStorage.clear())
+
+  describe('findInvalidKeyChar', () => {
+    it('returns null for a clean ASCII key', () => {
+      expect(findInvalidKeyChar('sk-abc_123.XYZ~')).toBeNull()
+    })
+
+    it('accepts ISO-8859-1 printable characters (e.g. é, ÿ)', () => {
+      expect(findInvalidKeyChar('sk-café-ÿ')).toBeNull()
+    })
+
+    it('finds an EM DASH (U+2014) with its index', () => {
+      expect(findInvalidKeyChar('sk-ab—cd')).toEqual({ char: '—', codePoint: 0x2014, index: 5 })
+    })
+
+    it('finds an inner newline control character', () => {
+      expect(findInvalidKeyChar('sk-ab\ncd')).toEqual({ char: '\n', codePoint: 0x0a, index: 5 })
+    })
+
+    it('finds an astral character (emoji) as one code point', () => {
+      const found = findInvalidKeyChar('sk-💥x')
+      expect(found?.index).toBe(3)
+      expect(found?.char).toBe('💥')
+    })
+  })
+
+  describe('invalidKeyCharMessage', () => {
+    it('names the printable character, its code point and 1-based position, and says re-copy', () => {
+      const msg = invalidKeyCharMessage({ char: '—', codePoint: 0x2014, index: 49 })
+      expect(msg).toContain('invalid character')
+      expect(msg).toContain('"—" (U+2014)')
+      expect(msg).toContain('position 50')
+      expect(msg).toContain('re-copy it from the provider')
+    })
+
+    it('shows only the code point for control characters', () => {
+      const msg = invalidKeyCharMessage({ char: '\n', codePoint: 0x0a, index: 3 })
+      expect(msg).toContain('U+000A')
+      expect(msg).not.toContain('"\n"')
+    })
+  })
+
+  describe('save paths reject invalid characters with the friendly message', () => {
+    const EM_DASH_KEY = 'sk-or-v1-0123456789abcdef0123456789abcdef0123456789a—b'
+
+    it('saveTokens(deepseekKey) with an em dash throws the friendly message and saves nothing', () => {
+      expect(() => saveTokens({ deepseekKey: EM_DASH_KEY })).toThrow(/invalid character/)
+      expect(() => saveTokens({ deepseekKey: EM_DASH_KEY })).toThrow(/re-copy it from the provider/)
+      expect(getSettings().deepseekKey).toBeNull()
+    })
+
+    it('the message points at the offending character and position', () => {
+      expect(() => saveTokens({ deepseekKey: 'sk-ab—cd' })).toThrow('"—" (U+2014) at position 6')
+    })
+
+    it('applies to every AI provider key field via saveTokens', () => {
+      for (const field of ['githubPat', 'deepseekKey', 'openaiKey', 'anthropicKey', 'geminiKey'] as const) {
+        expect(() => saveTokens({ [field]: 'x—y' })).toThrow(/invalid character/)
+        expect(getSettings()[field]).toBeNull()
+      }
+    })
+
+    it('rejects an inner newline (multi-line paste) but trims surrounding whitespace', () => {
+      expect(() => setDeepseekKey('sk-a\nb')).toThrow(/invalid character/)
+      setDeepseekKey('  sk-clean\n')
+      expect(getSettings().deepseekKey).toBe('sk-clean')
+    })
+
+    it('setGitlabToken rejects an em dash with the friendly message', () => {
+      expect(() => setGitlabToken('glpat—oops')).toThrow(/invalid character/)
+      expect(getSettings().gitlabToken).toBeNull()
+    })
+
+    it('saveBitbucketAuth rejects an invalid character in token or email (Basic auth header)', () => {
+      expect(() => saveBitbucketAuth({ email: 'a@b.c', token: 'tok—en' })).toThrow(/invalid character/)
+      expect(() => saveBitbucketAuth({ email: 'a—b@c.d', token: 'token' })).toThrow(/invalid character/)
+      expect(getSettings().bitbucketAuth).toBeNull()
     })
   })
 })

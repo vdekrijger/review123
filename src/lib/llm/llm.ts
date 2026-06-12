@@ -98,9 +98,38 @@ export interface LlmStreamOpts {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Friendly message when a SAVED key smuggles a non-ISO-8859-1 character
+ * (e.g. an em dash from a styled copy-paste) into header construction.
+ * The save path rejects such keys since the same fix landed, but keys
+ * saved before it can still be in localStorage — belt and braces.
+ */
+export const INVALID_KEY_CHAR_MESSAGE =
+  'The saved API key contains an invalid character — re-copy it from the provider and save it again.'
+
+/**
+ * fetch throws a TypeError when a header value cannot be converted to a
+ * ByteString (ISO-8859-1). Message wording differs per engine:
+ *   Firefox:  "Window.fetch: Cannot convert value to ByteString because the
+ *              character at index 49 has value 8212 which is greater than 255."
+ *   Chrome:   "Failed to execute 'fetch' on 'Window': Invalid value"
+ *   WebKit/undici: "... is an invalid header value"
+ * The generic network failure ("Failed to fetch" / "NetworkError ...")
+ * matches none of these patterns.
+ */
+function isHeaderCharError(err: unknown): boolean {
+  return (
+    err instanceof TypeError &&
+    /ByteString|ISO-8859-1|invalid header|Invalid value|Cannot convert/i.test(err.message)
+  )
+}
+
 function mapFetchError(err: unknown): never {
   if (err instanceof DOMException && err.name === 'TimeoutError') {
     throw new LlmError('timeout', err.message)
+  }
+  if (isHeaderCharError(err)) {
+    throw new LlmError('auth', INVALID_KEY_CHAR_MESSAGE)
   }
   throw new LlmError('network', err instanceof Error ? err.message : String(err))
 }

@@ -14,7 +14,8 @@ import { addSkill, listSkills, SKILLS_CAP, SKILL_CONTENT_CAP } from '../../lib/s
 import { BUILTIN_SKILLS } from '../../lib/skills/builtinSkills'
 import { SAMPLE_SKILL_NAME } from '../../lib/skills/sampleSkill'
 import { _resetAuthStateForTest } from '../../lib/auth/authState.svelte'
-import { saveTokens, saveGithubAuth, setGitlabToken } from '../../lib/settings/settings'
+import { saveTokens, saveGithubAuth, setGitlabToken, setAiProvider } from '../../lib/settings/settings'
+import { _resetSettingsStateForTest } from '../../lib/settings/settingsState.svelte'
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -23,6 +24,7 @@ function escapeRegex(s: string): string {
 beforeEach(() => {
   localStorage.clear()
   _resetAuthStateForTest()
+  _resetSettingsStateForTest()
 })
 
 describe('SkillsSection — Reviewer skills section', () => {
@@ -437,5 +439,69 @@ describe('SkillsSection — account-wide mining UI', () => {
     render(SkillsSection)
     await userEvent.selectOptions(providerSelect(), 'gitlab')
     expect(screen.getByText(/add a gitlab token or sign in via oauth/i)).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Provider-aware mine gate (user report: the gate copy read "DeepSeek" even
+// with another provider active — it derived from a non-reactive getSettings()
+// snapshot frozen at mount, which defaulted to DeepSeek).
+// ---------------------------------------------------------------------------
+
+describe('SkillsSection — provider-aware mine gate copy', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetAuthStateForTest()
+    _resetSettingsStateForTest()
+  })
+
+  function gateHint(): HTMLElement | null {
+    return document.querySelector('.mine-gate-hint')
+  }
+
+  it('names the active provider in the no-key hint and points at the AI models section (default DeepSeek)', () => {
+    render(SkillsSection)
+    expect(gateHint()).toHaveTextContent('Add an API key for DeepSeek (see AI models above) to use this feature.')
+  })
+
+  it('names Anthropic — not DeepSeek — when Anthropic is the active provider', () => {
+    setAiProvider('anthropic')
+    render(SkillsSection)
+    expect(gateHint()).toHaveTextContent(/add an api key for anthropic/i)
+    expect(gateHint()).not.toHaveTextContent(/deepseek/i)
+  })
+
+  it('ignores keys saved for NON-active providers (gates on the active one)', () => {
+    setAiProvider('anthropic')
+    saveTokens({ deepseekKey: 'sk-other-provider' })
+    render(SkillsSection)
+    expect(gateHint()).toHaveTextContent(/add an api key for anthropic/i)
+  })
+
+  it('reacts live: switching the active provider updates the hint without a remount', async () => {
+    render(SkillsSection)
+    expect(gateHint()).toHaveTextContent(/deepseek/i)
+    setAiProvider('gemini')
+    await waitFor(() => expect(gateHint()).toHaveTextContent(/add an api key for gemini/i))
+  })
+
+  it('reacts live: saving a key for the active provider unlocks mining without a remount', async () => {
+    setAiProvider('gemini')
+    saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
+    render(SkillsSection)
+    expect(gateHint()).toHaveTextContent(/add an api key for gemini/i)
+    saveTokens({ geminiKey: 'AIza-now-configured' })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /analyze my comments/i })).toBeInTheDocument()
+    })
+    expect(document.body.textContent).not.toMatch(/add an api key for/i)
+  })
+
+  it('the privacy note names the active provider', () => {
+    setAiProvider('openai')
+    saveTokens({ openaiKey: 'sk-oa-x' })
+    saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
+    render(SkillsSection)
+    expect(screen.getByText(/your comments are sent to openai for analysis/i)).toBeInTheDocument()
   })
 })
