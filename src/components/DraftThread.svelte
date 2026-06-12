@@ -5,13 +5,14 @@
    * Shows an existing draft body (rendered via renderMarkdown) with Edit/Delete buttons,
    * or a CommentEditor in edit/new mode.
    *
-   * Mode toggle: when askFn is provided, a tab bar at the top lets the user switch
-   * between "Comment" (existing behaviour) and "Ask AI" (streams an answer inline).
-   * A follow-up question keeps the same focus. A small "Copy answer" button is shown
-   * under each completed answer.
+   * Single editor surface: typing then clicking "Leave comment" saves as draft (the Save
+   * flow), "Ask AI" sends the SAME textarea text as a question (streams the answer below,
+   * textarea stays for follow-ups), Cancel closes.
    *
-   * Gating: when askDisabledReason is set, the Ask AI tab is shown but disabled
-   * (the hint text is displayed instead of the textarea).
+   * Keyboard: Ctrl/Cmd+Enter = Leave comment (Save).
+   *
+   * Gating: when askDisabledReason is set, the Ask AI button is shown but disabled
+   * (the hint text is displayed below the textarea).
    */
   import type { AskFocus } from '../lib/ai/tasks'
   import { renderMarkdown } from '../lib/markdown/render'
@@ -36,13 +37,13 @@
     ondelete: () => void
     oncancel: () => void
     /**
-     * Optional Ask AI function — when provided the tab toggle appears.
+     * Optional Ask AI function — when provided the "Ask AI" action button appears.
      * Signature mirrors AiRun.ask but also accepts a focus param.
      */
     askFn?: ((q: string, onDelta: (t: string) => void, focus?: AskFocus) => Promise<{ ok: true; answer: string } | { ok: false; error: string }>) | null
     /**
      * Optional disabled reason for Ask AI gating (e.g. "No API key configured.").
-     * When set, the Ask AI tab is shown but the textarea is replaced with this hint.
+     * When set, the Ask AI button is shown but disabled and the hint is displayed.
      */
     askDisabledReason?: string | null
     /**
@@ -133,17 +134,14 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Ask AI tab state
+  // Ask AI state (unified with the comment editor surface)
   // ---------------------------------------------------------------------------
 
-  /** Active tab — 'comment' | 'ask' */
-  let activeTab = $state<'comment' | 'ask'>('comment')
-
-  let askQuestion = $state('')
   let askLoading = $state(false)
   let conversation = $state<ConversationEntry[]>([])
 
-  const askDisabled = $derived(!!askDisabledReason || askLoading)
+  const hasAskFn = $derived(askFn !== null && askFn !== undefined)
+  const askDisabled = $derived(!!askDisabledReason || askLoading || !editorValue.trim())
 
   const focus = $derived<AskFocus>({ path, line, excerpt })
 
@@ -151,7 +149,7 @@
     if (!q.trim() || askLoading || !askFn) return
 
     const trimmed = q.trim()
-    askQuestion = ''
+    // NOTE: textarea stays filled (editorValue not cleared) so user can follow-up
     askLoading = true
 
     const entry: ConversationEntry = { question: trimmed, answer: '', streaming: true, error: null }
@@ -177,15 +175,8 @@
     askLoading = false
   }
 
-  function handleAskSubmit() {
-    void submitAsk(askQuestion)
-  }
-
-  function handleAskKeydown(e: KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault()
-      handleAskSubmit()
-    }
+  function handleAskClick() {
+    void submitAsk(editorValue)
   }
 
   function copyAnswer(answer: string) {
@@ -200,106 +191,74 @@
     {:else}
       <span class="thread-label">Comment at line {line}</span>
     {/if}
-    {#if askFn !== null && askFn !== undefined}
-      <div class="tab-bar" role="tablist" aria-label="Widget mode">
-        <button
-          role="tab"
-          class="tab-btn"
-          class:active={activeTab === 'comment'}
-          aria-selected={activeTab === 'comment'}
-          onclick={() => (activeTab = 'comment')}
-          data-testid="tab-comment"
-        >Comment</button>
-        <button
-          role="tab"
-          class="tab-btn"
-          class:active={activeTab === 'ask'}
-          aria-selected={activeTab === 'ask'}
-          onclick={() => (activeTab = 'ask')}
-          data-testid="tab-ask-ai"
-        >Ask AI</button>
-      </div>
-    {/if}
   </div>
 
-  {#if activeTab === 'comment'}
-    {#if editing}
-      <CommentEditor
-        value={editorValue}
-        onchange={(v) => (editorValue = v)}
-        onsubmit={handleSave}
-      />
-      <div class="thread-actions">
-        <button type="button" class="btn btn-primary" onclick={handleSave} disabled={!editorValue.trim()}>
-          Save
-        </button>
-        <button type="button" class="btn" onclick={handleCancel}>
-          Cancel
-        </button>
-      </div>
-    {:else if draft !== null}
-      <!-- View mode: show rendered body -->
-      <!-- renderMarkdown output is the only accepted use of {@html} -->
-      <div class="draft-body prose">
-        {@html renderMarkdown(draft.body)}
-      </div>
-      <div class="thread-actions">
-        <button type="button" class="btn" onclick={handleEdit}>Edit</button>
-        <button type="button" class="btn btn-danger" onclick={handleDelete}>Delete</button>
+  {#if editing}
+    <!-- Single editor surface for comment + ask AI -->
+    <CommentEditor
+      value={editorValue}
+      onchange={(v) => (editorValue = v)}
+      onsubmit={handleSave}
+    />
+
+    <!-- AI conversation: streamed answers appear below textarea -->
+    {#if conversation.length > 0}
+      <div class="ask-inline-conversation" aria-live="polite" data-testid="ask-conversation">
+        {#each conversation as entry (entry.question + entry.answer.slice(0, 20))}
+          <div class="ask-inline-question">{entry.question}</div>
+          {#if entry.streaming && !entry.error}
+            <div class="ask-inline-answer ask-inline-streaming">{entry.answer}<span class="ask-inline-cursor" aria-hidden="true"></span></div>
+          {:else if entry.error}
+            <div class="ask-inline-error" role="alert">{entry.error}</div>
+          {:else}
+            <div class="ask-inline-answer" data-testid="ask-answer">
+              <MarkdownView source={entry.answer} />
+              <button
+                type="button"
+                class="ask-copy-btn"
+                onclick={() => copyAnswer(entry.answer)}
+                aria-label="Copy answer"
+                data-testid="copy-answer-btn"
+              >Copy</button>
+            </div>
+          {/if}
+        {/each}
       </div>
     {/if}
-  {:else}
-    <!-- Ask AI tab -->
-    <div class="ask-inline-body">
-      {#if askDisabledReason}
-        <p class="ask-inline-hint" data-testid="ask-disabled-hint">{askDisabledReason}</p>
-      {/if}
 
-      {#if conversation.length > 0}
-        <div class="ask-inline-conversation" aria-live="polite" data-testid="ask-conversation">
-          {#each conversation as entry (entry.question + entry.answer.slice(0, 20))}
-            <div class="ask-inline-question">{entry.question}</div>
-            {#if entry.streaming && !entry.error}
-              <div class="ask-inline-answer ask-inline-streaming">{entry.answer}<span class="ask-inline-cursor" aria-hidden="true"></span></div>
-            {:else if entry.error}
-              <div class="ask-inline-error" role="alert">{entry.error}</div>
-            {:else}
-              <div class="ask-inline-answer" data-testid="ask-answer">
-                <MarkdownView source={entry.answer} />
-                <button
-                  type="button"
-                  class="ask-copy-btn"
-                  onclick={() => copyAnswer(entry.answer)}
-                  aria-label="Copy answer"
-                  data-testid="copy-answer-btn"
-                >Copy</button>
-              </div>
-            {/if}
-          {/each}
-        </div>
-      {/if}
+    <!-- Ask disabled hint -->
+    {#if askDisabledReason}
+      <p class="ask-inline-hint" data-testid="ask-disabled-hint">{askDisabledReason}</p>
+    {/if}
 
-      {#if !askDisabledReason}
-        <div class="ask-inline-input-area">
-          <textarea
-            bind:value={askQuestion}
-            onkeydown={handleAskKeydown}
-            placeholder="Ask about this line…"
-            rows="2"
-            disabled={askDisabled}
-            aria-label="Ask a question about this line"
-            class="ask-inline-textarea"
-            data-testid="ask-textarea"
-          ></textarea>
-          <button
-            type="button"
-            class="ask-inline-submit"
-            onclick={handleAskSubmit}
-            disabled={askDisabled || !askQuestion.trim()}
-            data-testid="ask-submit-btn"
-          >Ask</button>
-        </div>
+    <!-- Bottom action row: Leave comment | [Ask AI] | Cancel -->
+    <div class="thread-actions">
+      <button
+        type="button"
+        class="btn btn-primary"
+        onclick={handleSave}
+        disabled={!editorValue.trim()}
+      >Leave comment</button>
+      {#if hasAskFn}
+        <button
+          type="button"
+          class="btn btn-ask"
+          onclick={handleAskClick}
+          disabled={askDisabled}
+          aria-busy={askLoading}
+        >Ask AI</button>
       {/if}
+      <button type="button" class="btn" onclick={handleCancel}>Cancel</button>
+    </div>
+  {:else if draft !== null}
+    <!-- View mode: show rendered body -->
+    <!-- renderMarkdown output is the only accepted use of {@html} -->
+    <div class="draft-body prose">
+      {@html renderMarkdown(draft.body)}
+    </div>
+    <div class="thread-actions">
+      <button type="button" class="btn" onclick={handleEdit}>Edit</button>
+      <button type="button" class="btn btn-danger" onclick={handleDelete}>Delete</button>
     </div>
   {/if}
 </div>
@@ -327,38 +286,6 @@
     font-weight: 500;
   }
 
-  /* Tab bar */
-  .tab-bar {
-    display: flex;
-    gap: 0;
-    border: 1px solid var(--border-draft, #f0b44488);
-    border-radius: 4px;
-    overflow: hidden;
-  }
-
-  .tab-btn {
-    background: none;
-    border: none;
-    padding: 0.15rem 0.55rem;
-    font-size: 0.75rem;
-    cursor: pointer;
-    font-family: inherit;
-    color: inherit;
-    opacity: 0.6;
-    transition: background 0.1s, opacity 0.1s;
-  }
-
-  .tab-btn:hover:not(.active) {
-    background: #8881;
-    opacity: 0.8;
-  }
-
-  .tab-btn.active {
-    background: var(--border-draft, #f0b44488);
-    opacity: 1;
-    font-weight: 600;
-  }
-
   .draft-body {
     padding: 0.25rem 0;
     font-size: 0.9rem;
@@ -378,29 +305,24 @@
     display: flex;
     gap: 0.4rem;
     margin-top: 0.5rem;
+    flex-wrap: wrap;
   }
 
-  /* Ask AI inline panel */
-  .ask-inline-body {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    padding-top: 0.25rem;
-  }
-
-  .ask-inline-hint {
-    font-size: 0.78rem;
-    opacity: 0.6;
-    margin: 0;
-    font-style: italic;
-  }
-
+  /* Ask AI inline conversation panel */
   .ask-inline-conversation {
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
     max-height: 240px;
     overflow-y: auto;
+    margin-top: 0.4rem;
+  }
+
+  .ask-inline-hint {
+    font-size: 0.78rem;
+    opacity: 0.6;
+    margin: 0.25rem 0 0;
+    font-style: italic;
   }
 
   .ask-inline-question {
@@ -444,53 +366,24 @@
     font-size: 0.78rem;
   }
 
-  .ask-inline-input-area {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .ask-inline-textarea {
-    width: 100%;
-    resize: vertical;
-    min-height: 3.5rem;
+  .btn-ask {
     border: 1px solid #8884;
-    border-radius: 4px;
-    padding: 0.35rem 0.45rem;
-    font-size: 0.8rem;
-    font-family: inherit;
-    background: transparent;
-    color: inherit;
-    outline: none;
-    box-sizing: border-box;
-  }
-
-  .ask-inline-textarea:focus {
-    border-color: #8886;
-  }
-
-  .ask-inline-textarea:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .ask-inline-submit {
-    align-self: flex-end;
     background: none;
-    border: 1px solid #8884;
     border-radius: 4px;
-    padding: 0.2rem 0.7rem;
+    padding: 0.25rem 0.7rem;
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: 0.85rem;
     font-family: inherit;
+    color: inherit;
+    transition: background 0.1s;
   }
 
-  .ask-inline-submit:hover:not(:disabled) {
-    border-color: #8887;
+  .btn-ask:hover:not(:disabled) {
     background: #8881;
+    border-color: #8887;
   }
 
-  .ask-inline-submit:disabled {
+  .btn-ask:disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }

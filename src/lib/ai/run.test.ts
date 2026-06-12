@@ -939,8 +939,8 @@ const DRAFT_FIXTURE: Draft[] = [
 
 const COACH_RESULT: CoachResult = {
   reviews: [
-    { index: 0, clarity: 3, actionable: false, tone: 'blunt', biasQuestion: 'Is this a preference or a defect?', suggestion: 'Consider renaming X to Y for clarity.' },
-    { index: 1, clarity: 4, actionable: true, tone: 'ok', biasQuestion: null, suggestion: null },
+    { index: 0, clarity: 3, actionable: false, tone: 'blunt', biasQuestion: 'Is this a preference or a defect?', suggestion: 'Consider renaming X to Y for clarity.', accuracy: 'consistent', accuracyNote: null, duplicate: false },
+    { index: 1, clarity: 4, actionable: true, tone: 'ok', biasQuestion: null, suggestion: null, accuracy: 'questionable', accuracyNote: null, duplicate: true },
   ],
 }
 
@@ -1061,6 +1061,33 @@ describe('coach() — never touches cache', () => {
 
     expect(getCachedSpy).not.toHaveBeenCalled()
     expect(setCachedSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('coach() — prComments threading', () => {
+  it('coach passes prComments to coachPrompt when provided', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockResolvedValue(COACH_RESULT)
+
+    const run = createAiRun(makeInput(), deps)
+    const prComments = ['Existing comment A.', 'Existing comment B.']
+    await run.coach(DRAFT_FIXTURE, prComments)
+
+    // The user prompt passed to llmJsonWithRepair should contain the PR comments
+    const callArgs = deps.llmJsonWithRepair.mock.calls[0]
+    const userPrompt: string = (callArgs[0] as { system: string; user: string }).user
+    expect(userPrompt).toContain('Existing comment A.')
+    expect(userPrompt).toContain('Existing comment B.')
+  })
+
+  it('coach works without prComments (backward compatible)', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockResolvedValue(COACH_RESULT)
+
+    const run = createAiRun(makeInput(), deps)
+    // No prComments — should not throw
+    const result = await run.coach(DRAFT_FIXTURE)
+    expect('error' in result).toBe(false)
   })
 })
 

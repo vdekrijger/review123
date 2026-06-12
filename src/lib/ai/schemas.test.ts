@@ -605,6 +605,9 @@ describe('validateCoachResult', () => {
     tone: 'ok',
     biasQuestion: null,
     suggestion: null,
+    accuracy: 'consistent',
+    accuracyNote: null,
+    duplicate: false,
   }
 
   const valid = { reviews: [validReview] }
@@ -732,6 +735,84 @@ describe('validateCoachResult', () => {
     expect(validateCoachResult('coach')).toBeNull()
     expect(validateCoachResult(42)).toBeNull()
     expect(validateCoachResult([])).toBeNull()
+  })
+
+  // --- accuracy field (new dimension) ---
+
+  it('accepts all three accuracy enum values', () => {
+    for (const accuracy of ['consistent', 'questionable', 'contradicted']) {
+      const x = { reviews: [{ ...validReview, accuracy, accuracyNote: null }] }
+      expect(validateCoachResult(x)).not.toBeNull()
+    }
+  })
+
+  it('returns null for invalid accuracy string', () => {
+    const x = { reviews: [{ ...validReview, accuracy: 'wrong', accuracyNote: null }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null for numeric accuracy value', () => {
+    const x = { reviews: [{ ...validReview, accuracy: 1, accuracyNote: null }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when accuracy is absent (required field)', () => {
+    const { accuracy: _a, ...withoutAccuracy } = validReview
+    const x = { reviews: [withoutAccuracy] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('accepts accuracyNote as string or null', () => {
+    const withNote = { reviews: [{ ...validReview, accuracy: 'contradicted', accuracyNote: 'The diff shows X not Y.' }] }
+    expect(validateCoachResult(withNote)).not.toBeNull()
+    const nullNote = { reviews: [{ ...validReview, accuracy: 'consistent', accuracyNote: null }] }
+    expect(validateCoachResult(nullNote)).not.toBeNull()
+  })
+
+  it('returns null when accuracyNote is a number', () => {
+    const x = { reviews: [{ ...validReview, accuracy: 'consistent', accuracyNote: 42 }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when accuracyNote is absent (required field)', () => {
+    const { accuracyNote: _an, ...withoutAccuracyNote } = validReview
+    const x = { reviews: [withoutAccuracyNote] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  // --- duplicate field (new dimension) ---
+
+  it('accepts duplicate as true or false', () => {
+    const trueX = { reviews: [{ ...validReview, duplicate: true }] }
+    expect(validateCoachResult(trueX)).not.toBeNull()
+    const falseX = { reviews: [{ ...validReview, duplicate: false }] }
+    expect(validateCoachResult(falseX)).not.toBeNull()
+  })
+
+  it('returns null when duplicate is not boolean', () => {
+    const x = { reviews: [{ ...validReview, duplicate: 'yes' }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when duplicate is absent (required field)', () => {
+    const { duplicate: _d, ...withoutDuplicate } = validReview
+    const x = { reviews: [withoutDuplicate] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('accepts a full valid review with all new fields', () => {
+    const fullReview = {
+      index: 0,
+      clarity: 4,
+      actionable: true,
+      tone: 'ok',
+      biasQuestion: null,
+      suggestion: null,
+      accuracy: 'consistent',
+      accuracyNote: null,
+      duplicate: false,
+    }
+    expect(validateCoachResult({ reviews: [fullReview] })).not.toBeNull()
   })
 })
 

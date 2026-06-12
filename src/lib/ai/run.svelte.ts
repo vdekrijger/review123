@@ -86,7 +86,7 @@ export interface AiRun {
   readonly skillReviews: SkillReviewEntry[]
   start(): Promise<void>
   retry(task: TaskName): Promise<void>
-  coach(drafts: Draft[]): Promise<CoachResult | { error: string }>
+  coach(drafts: Draft[], prComments?: string[]): Promise<CoachResult | { error: string }>
   ask(question: string, onDelta: (t: string) => void, focus?: AskFocus): Promise<{ ok: true; answer: string } | { ok: false; error: string }>
   runSkillReviews(onUpdate?: () => void): Promise<void>
 }
@@ -490,7 +490,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // coach(drafts) — on-demand, never cached, never run in start()
   // ---------------------------------------------------------------------------
 
-  async function coach(drafts: Draft[]): Promise<CoachResult | { error: string }> {
+  async function coach(drafts: Draft[], prComments?: string[]): Promise<CoachResult | { error: string }> {
     // No-key check: same early-exit as start()
     const settings = getSettings()
     if (!settings.deepseekKey) {
@@ -511,7 +511,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       body: d.body,
     }))
 
-    const prompts = coachPrompt(draftInputs)
+    const prompts = coachPrompt(draftInputs, prComments)
     const t1 = performance.now()
 
     try {

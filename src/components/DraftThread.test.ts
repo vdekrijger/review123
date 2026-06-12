@@ -38,11 +38,11 @@ describe('DraftThread', () => {
     })
     // Should show the textarea for writing
     expect(screen.getByRole('textbox', { name: /comment body/i })).toBeInTheDocument()
-    // Save button should be visible
-    expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument()
+    // Leave comment button should be visible
+    expect(screen.getByRole('button', { name: /leave comment/i })).toBeInTheDocument()
   })
 
-  it('new draft: typing body and clicking Save calls onsave with body', async () => {
+  it('new draft: typing body and clicking Leave comment saves as draft', async () => {
     const user = userEvent.setup()
     render(DraftThread, {
       props: {
@@ -57,7 +57,7 @@ describe('DraftThread', () => {
     })
     const textarea = screen.getByRole('textbox', { name: /comment body/i })
     await user.type(textarea, 'Great catch!')
-    await user.click(screen.getByRole('button', { name: /save/i }))
+    await user.click(screen.getByRole('button', { name: /leave comment/i }))
     expect(onsave).toHaveBeenCalledOnce()
     expect(onsave).toHaveBeenCalledWith('Great catch!')
   })
@@ -80,7 +80,7 @@ describe('DraftThread', () => {
     expect(onsave).not.toHaveBeenCalled()
   })
 
-  it('new draft: Save button is disabled when body is empty', () => {
+  it('new draft: Leave comment button is disabled when body is empty', () => {
     render(DraftThread, {
       props: {
         draft: null,
@@ -92,7 +92,7 @@ describe('DraftThread', () => {
         oncancel,
       },
     })
-    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /leave comment/i })).toBeDisabled()
   })
 
   it('existing draft: renders markdown body in view mode', () => {
@@ -171,7 +171,7 @@ describe('DraftThread', () => {
     const textarea = screen.getByRole('textbox', { name: /comment body/i })
     await user.clear(textarea)
     await user.type(textarea, 'Updated comment')
-    await user.click(screen.getByRole('button', { name: /save/i }))
+    await user.click(screen.getByRole('button', { name: /leave comment/i }))
     expect(onsave).toHaveBeenCalledOnce()
     expect(onsave).toHaveBeenCalledWith('Updated comment')
   })
@@ -322,10 +322,10 @@ describe('DraftThread — Fix-B widget stays open after save (EC-FIX-B-01)', () 
 })
 
 // ---------------------------------------------------------------------------
-// DraftThread — Ask AI tab toggle (line-level Ask AI feature)
+// DraftThread — Action row buttons (Feature 1: replaces tab UI)
 // ---------------------------------------------------------------------------
 
-describe('DraftThread — Ask AI tab toggle', () => {
+describe('DraftThread — action row (Leave comment / Ask AI / Cancel buttons)', () => {
   /** A resolved askFn stub that returns a successful answer */
   function makeAskFn(answer = 'Test answer from AI') {
     return vi.fn(async (_q: string, onDelta: (t: string) => void, _focus?: unknown) => {
@@ -344,91 +344,131 @@ describe('DraftThread — Ask AI tab toggle', () => {
     oncancel: vi.fn(),
   }
 
-  it('without askFn: no mode tab bar is rendered (no Comment/Ask AI tabs)', () => {
+  // --- No tab bar anymore ---
+
+  it('without askFn: no tab bar rendered (no Comment/Ask AI tabs)', () => {
     render(DraftThread, { props: baseProps })
     expect(screen.queryByRole('tab', { name: /comment/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: /ask ai/i })).not.toBeInTheDocument()
   })
 
-  it('with askFn: Comment and Ask AI tabs are rendered', () => {
+  it('with askFn: no tab bar rendered (tabs replaced by action row buttons)', () => {
     render(DraftThread, {
       props: { ...baseProps, askFn: makeAskFn() },
     })
-    expect(screen.getByRole('tab', { name: /comment/i })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: /ask ai/i })).toBeInTheDocument()
+    // Tabs must NOT be present — this is the key change from PR #24
+    expect(screen.queryByRole('tab', { name: /comment/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /ask ai/i })).not.toBeInTheDocument()
   })
 
-  it('Comment tab is active by default when askFn is provided', () => {
+  // --- Single editor surface with action buttons at the bottom ---
+
+  it('without askFn: shows Leave comment + Cancel buttons (no Ask AI button)', () => {
+    render(DraftThread, { props: baseProps })
+    expect(screen.getByRole('button', { name: /leave comment/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /ask ai/i })).not.toBeInTheDocument()
+  })
+
+  it('with askFn: shows Leave comment + Ask AI + Cancel buttons in the action row', () => {
     render(DraftThread, {
       props: { ...baseProps, askFn: makeAskFn() },
     })
-    const commentTab = screen.getByRole('tab', { name: /comment/i })
-    expect(commentTab).toHaveAttribute('aria-selected', 'true')
-    // Editor should be visible in comment mode
-    expect(screen.getByRole('textbox', { name: /comment body/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /leave comment/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /ask ai/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument()
   })
 
-  it('switching to Ask AI tab shows the ask textarea', async () => {
+  it('Leave comment button is disabled when textarea is empty', () => {
+    render(DraftThread, {
+      props: { ...baseProps, askFn: makeAskFn() },
+    })
+    expect(screen.getByRole('button', { name: /leave comment/i })).toBeDisabled()
+  })
+
+  it('Ask AI button is disabled when textarea is empty', () => {
+    render(DraftThread, {
+      props: { ...baseProps, askFn: makeAskFn() },
+    })
+    expect(screen.getByRole('button', { name: /ask ai/i })).toBeDisabled()
+  })
+
+  it('typing then clicking Leave comment calls onsave with the textarea text', async () => {
     const user = userEvent.setup()
+    const onsave = vi.fn()
     render(DraftThread, {
-      props: { ...baseProps, askFn: makeAskFn() },
+      props: { ...baseProps, onsave, askFn: makeAskFn() },
     })
-    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
-    expect(screen.getByTestId('ask-textarea')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^ask$/i })).toBeInTheDocument()
-    // Comment editor should not be visible
-    expect(screen.queryByRole('textbox', { name: /comment body/i })).not.toBeInTheDocument()
+    const textarea = screen.getByRole('textbox', { name: /comment body/i })
+    await user.type(textarea, 'My review comment')
+    await user.click(screen.getByRole('button', { name: /leave comment/i }))
+    expect(onsave).toHaveBeenCalledOnce()
+    expect(onsave).toHaveBeenCalledWith('My review comment')
   })
 
-  it('switching back to Comment tab restores the comment editor', async () => {
+  it('typing then clicking Ask AI sends the same textarea text as a question', async () => {
     const user = userEvent.setup()
-    render(DraftThread, {
-      props: { ...baseProps, askFn: makeAskFn() },
-    })
-    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
-    await user.click(screen.getByRole('tab', { name: /comment/i }))
-    expect(screen.getByRole('textbox', { name: /comment body/i })).toBeInTheDocument()
-    expect(screen.queryByTestId('ask-textarea')).not.toBeInTheDocument()
-  })
-
-  it('Ask button is disabled when textarea is empty', async () => {
-    const user = userEvent.setup()
-    render(DraftThread, {
-      props: { ...baseProps, askFn: makeAskFn() },
-    })
-    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
-    const askBtn = screen.getByTestId('ask-submit-btn')
-    expect(askBtn).toBeDisabled()
-  })
-
-  it('typing a question and clicking Ask calls askFn', async () => {
-    const user = userEvent.setup()
-    const askFn = makeAskFn('The reason is XYZ.')
+    const askFn = makeAskFn('The answer is 42.')
     render(DraftThread, {
       props: { ...baseProps, askFn },
     })
-    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
-    const textarea = screen.getByTestId('ask-textarea')
-    await user.type(textarea, 'Why is this coded here?')
-    await user.click(screen.getByTestId('ask-submit-btn'))
-    // askFn should have been called once
+    const textarea = screen.getByRole('textbox', { name: /comment body/i })
+    await user.type(textarea, 'Why is this here?')
+    await user.click(screen.getByRole('button', { name: /ask ai/i }))
     expect(askFn).toHaveBeenCalledOnce()
-    expect(askFn.mock.calls[0][0]).toBe('Why is this coded here?')
+    expect(askFn.mock.calls[0][0]).toBe('Why is this here?')
   })
 
-  it('answer streams into the conversation area', async () => {
+  it('Ask AI streams answer below the textarea', async () => {
     const user = userEvent.setup()
     render(DraftThread, {
       props: { ...baseProps, askFn: makeAskFn('AI says: hello') },
     })
-    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
-    await user.type(screen.getByTestId('ask-textarea'), 'My question')
-    await user.click(screen.getByTestId('ask-submit-btn'))
-    // Answer should appear in the conversation
+    const textarea = screen.getByRole('textbox', { name: /comment body/i })
+    await user.type(textarea, 'My question')
+    await user.click(screen.getByRole('button', { name: /ask ai/i }))
     await vi.waitFor(() => {
       expect(screen.getByTestId('ask-answer')).toBeInTheDocument()
     })
     expect(screen.getByTestId('ask-answer').textContent).toContain('AI says: hello')
+  })
+
+  it('textarea stays filled after Ask AI so user can leave a follow-up comment', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, {
+      props: { ...baseProps, askFn: makeAskFn('The reason is XYZ.') },
+    })
+    const textarea = screen.getByRole('textbox', { name: /comment body/i })
+    await user.type(textarea, 'Why is this here?')
+    await user.click(screen.getByRole('button', { name: /ask ai/i }))
+    // Wait for the answer
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('ask-answer')).toBeInTheDocument()
+    })
+    // Textarea should still have the text (not cleared)
+    expect((textarea as HTMLTextAreaElement).value).toBe('Why is this here?')
+  })
+
+  it('Ctrl+Enter triggers Leave comment (saves draft)', async () => {
+    const user = userEvent.setup()
+    const onsave = vi.fn()
+    render(DraftThread, {
+      props: { ...baseProps, onsave, askFn: makeAskFn() },
+    })
+    const textarea = screen.getByRole('textbox', { name: /comment body/i })
+    await user.type(textarea, 'Quick comment')
+    await user.keyboard('{Control>}{Enter}{/Control}')
+    expect(onsave).toHaveBeenCalledWith('Quick comment')
+  })
+
+  it('Cancel closes the widget (calls oncancel)', async () => {
+    const user = userEvent.setup()
+    const oncancel = vi.fn()
+    render(DraftThread, {
+      props: { ...baseProps, oncancel, askFn: makeAskFn() },
+    })
+    await user.click(screen.getByRole('button', { name: /cancel/i }))
+    expect(oncancel).toHaveBeenCalledOnce()
   })
 
   it('askFn receives focus with correct path, line, and excerpt', async () => {
@@ -437,10 +477,9 @@ describe('DraftThread — Ask AI tab toggle', () => {
     render(DraftThread, {
       props: { ...baseProps, path: 'src/b.ts', line: 55, askFn, excerpt: '-old\n+new' },
     })
-    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
-    await user.type(screen.getByTestId('ask-textarea'), 'question')
-    await user.click(screen.getByTestId('ask-submit-btn'))
-    // Third argument should be the focus object
+    const textarea = screen.getByRole('textbox', { name: /comment body/i })
+    await user.type(textarea, 'question')
+    await user.click(screen.getByRole('button', { name: /ask ai/i }))
     expect(askFn.mock.calls[0][2]).toEqual({
       path: 'src/b.ts',
       line: 55,
@@ -453,16 +492,15 @@ describe('DraftThread — Ask AI tab toggle', () => {
     render(DraftThread, {
       props: { ...baseProps, askFn: makeAskFn('Finished answer') },
     })
-    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
-    await user.type(screen.getByTestId('ask-textarea'), 'q')
-    await user.click(screen.getByTestId('ask-submit-btn'))
+    const textarea = screen.getByRole('textbox', { name: /comment body/i })
+    await user.type(textarea, 'q')
+    await user.click(screen.getByRole('button', { name: /ask ai/i }))
     await vi.waitFor(() => {
       expect(screen.getByTestId('copy-answer-btn')).toBeInTheDocument()
     })
   })
 
-  it('askDisabledReason is shown as hint instead of textarea when provided', async () => {
-    const user = userEvent.setup()
+  it('askDisabledReason: Ask AI button is disabled and reason is shown', async () => {
     render(DraftThread, {
       props: {
         ...baseProps,
@@ -470,21 +508,30 @@ describe('DraftThread — Ask AI tab toggle', () => {
         askDisabledReason: 'No API key configured.',
       },
     })
-    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
+    // Ask AI button should be disabled
+    expect(screen.getByRole('button', { name: /ask ai/i })).toBeDisabled()
+    // Disabled hint text should be shown
     expect(screen.getByTestId('ask-disabled-hint')).toHaveTextContent('No API key configured.')
-    expect(screen.queryByTestId('ask-textarea')).not.toBeInTheDocument()
   })
 
-  it('comment mode is unaffected — save still works when no Ask AI interaction', async () => {
-    const user = userEvent.setup()
-    const onsave = vi.fn()
+  it('existing draft view (read mode with Edit/Delete) shows no action row buttons', () => {
     render(DraftThread, {
-      props: { ...baseProps, onsave, askFn: makeAskFn() },
+      props: {
+        draft: baseDraft,
+        path: 'src/a.ts',
+        line: 5,
+        side: 'RIGHT',
+        onsave: vi.fn(),
+        ondelete: vi.fn(),
+        oncancel: vi.fn(),
+        askFn: makeAskFn(),
+      },
     })
-    // Stay in comment tab (default)
-    const textarea = screen.getByRole('textbox', { name: /comment body/i })
-    await user.type(textarea, 'Regular comment')
-    await user.click(screen.getByRole('button', { name: /save/i }))
-    expect(onsave).toHaveBeenCalledWith('Regular comment')
+    // In read mode, the action row buttons should NOT be present
+    expect(screen.queryByRole('button', { name: /leave comment/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /ask ai/i })).not.toBeInTheDocument()
+    // Only Edit and Delete should be present (the existing view mode buttons)
+    expect(screen.getByRole('button', { name: /edit/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /delete/i })).toBeInTheDocument()
   })
 })
