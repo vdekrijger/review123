@@ -19,8 +19,9 @@ import { getResolvedCommentIds } from '../github/threads'
 import { getPrCommits } from '../github/commits'
 import { compareCommits } from '../github/compare'
 import { submitReview } from '../github/review'
+import { ghFetch } from '../github/client'
 import { getSettings } from '../settings/settings'
-import type { ReviewProvider, PrRefX, ParseResult } from './types'
+import type { ReviewProvider, PrRefX, ParseResult, QueueItem } from './types'
 import type { PrMeta, PrFile } from '../github/types'
 import type { CiSummary } from '../github/checks'
 import type { PrComment } from '../github/comments'
@@ -120,5 +121,75 @@ export const githubProvider: ReviewProvider = {
 
   suggestionFence(lines: string[]): string {
     return `\`\`\`suggestion\n${lines.join('\n')}\n\`\`\``
+  },
+
+  async getMyQueue(): Promise<QueueItem[]> {
+    const auth = getSettings().githubAuth
+    if (!auth) return []
+
+    interface GhSearchItem {
+      number: number
+      title: string
+      updated_at: string
+      repository_url: string
+    }
+
+    interface GhSearchResponse {
+      items: GhSearchItem[]
+    }
+
+    function parseRepoUrl(repositoryUrl: string): { owner: string; repo: string } | null {
+      const match = repositoryUrl.match(/\/repos\/([^/]+)\/([^/]+)$/)
+      if (!match) return null
+      return { owner: match[1], repo: match[2] }
+    }
+
+    async function query(q: string): Promise<GhSearchItem[]> {
+      try {
+        const res = await ghFetch<GhSearchResponse>(
+          `/search/issues?q=${encodeURIComponent(q)}&per_page=20`,
+        )
+        return res.items ?? []
+      } catch {
+        return []
+      }
+    }
+
+    const [reviewItems, authorItems] = await Promise.all([
+      query('type:pr state:open review-requested:@me'),
+      query('type:pr state:open author:@me'),
+    ])
+
+    // Build a deduplicated map keyed by "owner/repo#number"
+    const seen = new Map<string, QueueItem>()
+
+    for (const item of reviewItems) {
+      const repo = parseRepoUrl(item.repository_url)
+      if (!repo) continue
+      const key = `${repo.owner}/${repo.repo}#${item.number}`
+      seen.set(key, {
+        ref: { provider: 'github', owner: repo.owner, repo: repo.repo, number: item.number },
+        title: item.title,
+        authorIsMe: false,
+        updatedAt: item.updated_at,
+      })
+    }
+
+    for (const item of authorItems) {
+      const repo = parseRepoUrl(item.repository_url)
+      if (!repo) continue
+      const key = `${repo.owner}/${repo.repo}#${item.number}`
+      // Only add if not already in map (review-requested takes precedence over authored)
+      if (!seen.has(key)) {
+        seen.set(key, {
+          ref: { provider: 'github', owner: repo.owner, repo: repo.repo, number: item.number },
+          title: item.title,
+          authorIsMe: true,
+          updatedAt: item.updated_at,
+        })
+      }
+    }
+
+    return [...seen.values()]
   },
 }
