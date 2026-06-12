@@ -392,7 +392,7 @@
             <div class="alternatives-list">
               {#each alternatives.alternatives as alt (alt.approach)}
                 <div class="alternative-card">
-                  <p class="alternative-approach">{alt.approach.split('.')[0] + (alt.approach.includes('.') ? '.' : '')}</p>
+                  <p class="alternative-approach">{alt.approach}</p>
                   <p class="alternative-tradeoffs">{alt.tradeoffs}</p>
                   <span
                     class="assessment-chip assessment-{alt.assessment}"

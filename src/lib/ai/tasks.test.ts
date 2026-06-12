@@ -827,6 +827,84 @@ describe('alternativesPrompt', () => {
 })
 
 // ---------------------------------------------------------------------------
+// PROMPT_VERSION v6 — evidence-discipline block in attentionPrompt + verdictPrompt
+// ---------------------------------------------------------------------------
+
+describe('PROMPT_VERSION v6', () => {
+  it('is at least 6 (bumped for evidence-discipline in attention + verdict prompts)', () => {
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(6)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// attentionPrompt — evidence-discipline block
+// ---------------------------------------------------------------------------
+
+describe('attentionPrompt — evidence-discipline', () => {
+  it('system prompt instructs grounding claims in visible context', () => {
+    const { system } = attentionPrompt(makeCtx())
+    expect(system).toMatch(/ground every claim|grounded.*context|ground.*claim/i)
+  })
+
+  it('system prompt states diff shows ALL changes so completed refactors must not be flagged', () => {
+    const { system } = attentionPrompt(makeCtx())
+    // Must mention that if call sites are updated in the same diff, it is a completed refactor
+    expect(system).toMatch(/completed refactor|same diff|all changes/i)
+  })
+
+  it('system prompt instructs flagging consumer risk only when unreferenced file exists or context is truncated', () => {
+    const { system } = attentionPrompt(makeCtx())
+    expect(system).toMatch(/without being updated|not analyzed.*truncation|couldn't verify|couldn.t verify/i)
+  })
+
+  it('system prompt instructs neutral factual phrasing over alarm', () => {
+    const { system } = attentionPrompt(makeCtx())
+    expect(system).toMatch(/neutral|factual phrasing|prefer neutral/i)
+  })
+
+  it('system prompt instructs severity must reflect evidence not speculation', () => {
+    const { system } = attentionPrompt(makeCtx())
+    expect(system).toMatch(/severity.*evidence|evidence.*severity|not.*specul|worst.case/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// verdictPrompt — evidence-discipline block
+// ---------------------------------------------------------------------------
+
+describe('verdictPrompt — evidence-discipline', () => {
+  it('system prompt instructs grounding claims in visible context', () => {
+    const { system } = verdictPrompt(makeCtx(), null)
+    expect(system).toMatch(/ground every claim|grounded.*context|ground.*claim/i)
+  })
+
+  it('system prompt states diff shows ALL changes so completed refactors must not be flagged as breakage', () => {
+    const { system } = verdictPrompt(makeCtx(), null)
+    expect(system).toMatch(/completed refactor|same diff|all changes/i)
+  })
+
+  it('system prompt instructs flagging consumer risk only when unreferenced file exists or context is truncated', () => {
+    const { system } = verdictPrompt(makeCtx(), null)
+    expect(system).toMatch(/without being updated|not analyzed.*truncation|couldn't verify|couldn.t verify/i)
+  })
+
+  it('system prompt instructs neutral factual phrasing over alarm', () => {
+    const { system } = verdictPrompt(makeCtx(), null)
+    expect(system).toMatch(/neutral|factual phrasing|prefer neutral/i)
+  })
+
+  it('system prompt instructs severity must reflect evidence not speculation', () => {
+    const { system } = verdictPrompt(makeCtx(), null)
+    expect(system).toMatch(/severity.*evidence|evidence.*severity|not.*specul|worst.case/i)
+  })
+
+  it('system prompt instructs evidence items to cite observed facts not speculative consequences', () => {
+    const { system } = verdictPrompt(makeCtx(), null)
+    expect(system).toMatch(/observed fact|cite.*file|file.*what changed|factual/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // askPrompt (Ask AI feature)
 // ---------------------------------------------------------------------------
 

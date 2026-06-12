@@ -634,6 +634,78 @@ describe('UnderstandStep alternatives panel', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Fix: alternative card titles must render FULL approach text (no truncation)
+// Regression: approach containing "e.g." was cut off at first period
+// ---------------------------------------------------------------------------
+
+describe('UnderstandStep alternatives panel — full approach text (no truncation)', () => {
+  it('renders the full approach text including text after a period', () => {
+    const withPeriod: AlternativesResult = {
+      problem: 'A problem.',
+      alternatives: [
+        {
+          approach: 'Use a context object to make the edit mode transition instantaneous (e.g. via a flag).',
+          tradeoffs: 'Tradeoffs here.',
+          assessment: 'pr-is-better',
+          rationale: 'Simple is better.',
+        },
+      ],
+    }
+    const run = makeRun({ alternatives: { status: 'done', value: withPeriod } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    // The full text must be visible — not truncated at the first period
+    expect(
+      screen.getByText(
+        'Use a context object to make the edit mode transition instantaneous (e.g. via a flag).'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('does NOT show a truncated version (split at first period) of the approach', () => {
+    const withPeriod: AlternativesResult = {
+      problem: 'A problem.',
+      alternatives: [
+        {
+          approach: 'Use a context object to make the edit mode transition instantaneous (e.g. via a flag).',
+          tradeoffs: 'Tradeoffs here.',
+          assessment: 'pr-is-better',
+          rationale: 'Simple is better.',
+        },
+      ],
+    }
+    const run = makeRun({ alternatives: { status: 'done', value: withPeriod } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    // The truncated version "Use a context object to make the edit mode transition instantaneous (e."
+    // must NOT appear as the card heading
+    const cards = document.querySelectorAll('.alternative-card .alternative-approach')
+    expect(cards.length).toBe(1)
+    expect(cards[0].textContent).not.toBe('Use a context object to make the edit mode transition instantaneous (e.')
+  })
+
+  it('approach with no period renders its full text', () => {
+    const noPeriod: AlternativesResult = {
+      problem: 'A problem.',
+      alternatives: [
+        {
+          approach: 'Extract logic into a separate module for better testability',
+          tradeoffs: 'Tradeoffs.',
+          assessment: 'comparable',
+          rationale: 'Either works.',
+        },
+      ],
+    }
+    const run = makeRun({ alternatives: { status: 'done', value: noPeriod } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(
+      screen.getByText('Extract logic into a separate module for better testability')
+    ).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Verdict evidence panel — MarkdownView, path chips, clamping + expand
 // ---------------------------------------------------------------------------
 
