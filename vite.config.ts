@@ -27,9 +27,11 @@ export default defineConfig({
             // @git-diff-view (+ bundled highlight.js / lowlight syntax
             // engine) — large but stable, only loaded with the lazy Review
             // route. Splitting it out improves long-term caching.
+            // jsdiff (`diff`) powers the hide-whitespace recompute and is
+            // equally stable — cached with the same diff vendor chunk.
             {
               name: 'vendor-diff-view',
-              test: /node_modules[\\/](@git-diff-view[\\/]|highlight\.js[\\/]|lowlight[\\/]|fast-diff[\\/])/,
+              test: /node_modules[\\/](@git-diff-view[\\/]|highlight\.js[\\/]|lowlight[\\/]|fast-diff[\\/]|diff[\\/])/,
             },
 
             // posthog-js — heavyweight analytics SDK, completely stable.

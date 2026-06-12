@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
-  getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens, saveGithubAuth,
+  getSettings, setGithubPat, setDeepseekKey, setDiffMode, setHideWhitespace, saveTokens, saveGithubAuth,
   setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay, setGitlabToken,
   saveBitbucketAuth, setGitlabHost,
   setOpenaiKey, setAnthropicKey, setGeminiKey, setAiProvider, setAiModel,
@@ -19,6 +19,7 @@ describe('settings', () => {
       anthropicKey: null,
       geminiKey: null,
       diffMode: 'unified',
+      hideWhitespace: false,
       githubAuth: null,
       gitlabToken: null,
       gitlabHost: 'gitlab.com',
@@ -61,6 +62,18 @@ describe('settings', () => {
     expect(getSettings().diffMode).toBe('split')
   })
 
+  it('persists hide-whitespace preference', () => {
+    setHideWhitespace(true)
+    expect(getSettings().hideWhitespace).toBe(true)
+    setHideWhitespace(false)
+    expect(getSettings().hideWhitespace).toBe(false)
+  })
+
+  it('coerces non-boolean hideWhitespace back to default', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ hideWhitespace: 'yes' }))
+    expect(getSettings().hideWhitespace).toBe(false)
+  })
+
   it('survives corrupt stored JSON', () => {
     localStorage.setItem('review123:settings', '{not json')
     expect(getSettings()).toEqual({
@@ -72,6 +85,7 @@ describe('settings', () => {
       anthropicKey: null,
       geminiKey: null,
       diffMode: 'unified',
+      hideWhitespace: false,
       githubAuth: null,
       gitlabToken: null,
       gitlabHost: 'gitlab.com',

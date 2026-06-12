@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/svelte'
+import { render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import ProvidersSection from './ProvidersSection.svelte'
 import { getSettings, saveGithubAuth, saveGitlabOAuth } from '../../lib/settings/settings'
@@ -142,6 +142,7 @@ describe('ProvidersSection', () => {
 
     it('clearing previously stored credentials saves null for bitbucketAuth', async () => {
       localStorage.setItem('review123:settings', JSON.stringify({ bitbucketAuth: { email: 'old@example.com', token: 'oldtoken' } }))
+      _resetSettingsStateForTest()
       render(ProvidersSection)
       const summary = screen.getByText(/advanced.*personal access token/i)
       await userEvent.click(summary)
@@ -196,17 +197,25 @@ describe('ProvidersSection', () => {
     beforeEach(() => {
       localStorage.clear()
       _resetAuthStateForTest()
+      _resetSettingsStateForTest()
     })
 
     it('saving with empty PAT field while signed in via OAuth preserves githubAuth', async () => {
       saveGithubAuth({ token: 'gho_oauth123', method: 'oauth', scopes: ['repo'] })
       _resetAuthStateForTest()
+      _resetSettingsStateForTest()
 
       render(ProvidersSection)
-      // PAT field is empty (user did not type anything)
+      // PAT field is empty (user did not type anything). Edit another field so
+      // the section is dirty and Save is enabled — the realistic flow.
+      const summary = screen.getByText(/advanced.*personal access token/i)
+      await userEvent.click(summary)
+      await userEvent.type(screen.getByLabelText(/gitlab personal access token/i), 'glpat_new123')
       await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
 
-      // OAuth auth must be untouched
+      // The edited field was saved…
+      expect(getSettings().gitlabToken).toBe('glpat_new123')
+      // …and the OAuth auth must be untouched
       expect(getSettings().githubAuth).toEqual({ token: 'gho_oauth123', method: 'oauth', scopes: ['repo'] })
     })
 
@@ -265,11 +274,11 @@ describe('ProvidersSection', () => {
       expect(screen.getByRole('button', { name: /sign in with gitlab/i })).toBeInTheDocument()
     })
 
-    it('hides the GitLab sign-in button and shows signed-in state + sign-out when GitLab OAuth is connected', () => {
+    it('hides the GitLab sign-in button and shows signed-in chip + sign-out when GitLab OAuth is connected', () => {
       saveGitlabOAuth(validGitlabOAuth)
       render(ProvidersSection)
       expect(screen.queryByRole('button', { name: /sign in with gitlab/i })).toBeNull()
-      expect(screen.getByText(/gitlab: signed in via oauth/i)).toBeInTheDocument()
+      expect(screen.getByText(/gitlab · connected/i)).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /sign out of gitlab/i })).toBeInTheDocument()
     })
 
@@ -334,6 +343,119 @@ describe('ProvidersSection', () => {
       await userEvent.click(screen.getByRole('button', { name: /sign out of gitlab/i }))
       expect(getSettings().githubAuth).toEqual({ token: 'gho_oauth123', method: 'oauth', scopes: ['public_repo'] })
       expect(getSettings().gitlabOAuth).toBeNull()
+    })
+  })
+
+  describe('save UX — dirty tracking and saved feedback', () => {
+    async function openAdvanced() {
+      await userEvent.click(screen.getByText(/advanced.*personal access token/i))
+    }
+
+    it('Save button is disabled when no field differs from stored settings', () => {
+      render(ProvidersSection)
+      expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled()
+    })
+
+    it('typing in a field enables Save and shows an "unsaved changes" hint', async () => {
+      render(ProvidersSection)
+      expect(screen.queryByText(/unsaved changes/i)).toBeNull()
+      await openAdvanced()
+      await userEvent.type(screen.getByLabelText(/github token/i), 'github_pat_x')
+      expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled()
+      expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument()
+    })
+
+    it('reverting an edit back to the stored value makes the section clean again', async () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ gitlabHost: 'gitlab.com' }))
+      _resetSettingsStateForTest()
+      render(ProvidersSection)
+      await openAdvanced()
+      const hostInput = screen.getByLabelText(/gitlab host/i)
+      await userEvent.clear(hostInput)
+      await userEvent.type(hostInput, 'gitlab.corp')
+      expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled()
+      await userEvent.clear(hostInput)
+      await userEvent.type(hostInput, 'gitlab.com')
+      expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled()
+      expect(screen.queryByText(/unsaved changes/i)).toBeNull()
+    })
+
+    it('clicking Save shows "Saved ✓" in an aria-live=polite region and disables Save again', async () => {
+      render(ProvidersSection)
+      await openAdvanced()
+      await userEvent.type(screen.getByLabelText(/github token/i), 'github_pat_y')
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+      const saved = screen.getByText(/saved ✓/i)
+      expect(saved).toBeInTheDocument()
+      expect(saved.closest('[aria-live="polite"]')).not.toBeNull()
+      // Section is clean again: hint gone, Save back to quiet/disabled
+      expect(screen.queryByText(/unsaved changes/i)).toBeNull()
+      expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled()
+    })
+
+    it('the "Saved ✓" confirmation is transient (fades after ~2s)', async () => {
+      render(ProvidersSection)
+      await openAdvanced()
+      await userEvent.type(screen.getByLabelText(/github token/i), 'github_pat_z')
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+      expect(screen.getByText(/saved ✓/i)).toBeInTheDocument()
+      await waitFor(() => expect(screen.queryByText(/saved ✓/i)).toBeNull(), { timeout: 3500 })
+    })
+
+    it('a failed save (invalid Bitbucket pair) shows the error and does NOT show Saved ✓', async () => {
+      render(ProvidersSection)
+      await openAdvanced()
+      await userEvent.type(screen.getByLabelText(/bitbucket email address/i), 'user@example.com')
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+      expect(screen.queryByText(/saved ✓/i)).toBeNull()
+      // Still dirty — the user can fix and retry
+      expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled()
+    })
+
+    it('after saving a host entered as an origin URL, the field shows the normalized stored value (clean)', async () => {
+      render(ProvidersSection)
+      await openAdvanced()
+      const hostInput = screen.getByLabelText(/gitlab host/i)
+      await userEvent.clear(hostInput)
+      await userEvent.type(hostInput, 'https://gitlab.corp.example')
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+      expect((hostInput as HTMLInputElement).value).toBe('gitlab.corp.example')
+      expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled()
+    })
+  })
+
+  describe('compact connected chips', () => {
+    it('GitHub OAuth connected → one chip row "✓ GitHub · connected" with an icon sign-out button (aria-label + title)', () => {
+      saveGithubAuth({ token: 'gho_oauth123', method: 'oauth', scopes: ['public_repo'] })
+      _resetAuthStateForTest()
+      render(ProvidersSection)
+      expect(screen.getByText(/github · connected/i)).toBeInTheDocument()
+      const signOut = screen.getByRole('button', { name: /sign out of github/i })
+      expect(signOut).toHaveAttribute('title', 'Sign out of GitHub')
+      // The sign-out lives INSIDE the chip row (merged status + action)
+      expect(signOut.closest('.connected-chip')).not.toBeNull()
+      // The old separate status line is gone
+      expect(screen.queryByText(/signed in via github \(scopes/i)).toBeNull()
+    })
+
+    it('GitLab OAuth connected → identical chip treatment with icon sign-out button', () => {
+      saveGitlabOAuth(validGitlabOAuth)
+      render(ProvidersSection)
+      expect(screen.getByText(/gitlab · connected/i)).toBeInTheDocument()
+      const signOut = screen.getByRole('button', { name: /sign out of gitlab/i })
+      expect(signOut).toHaveAttribute('title', 'Sign out of GitLab')
+      expect(signOut.closest('.connected-chip')).not.toBeNull()
+      expect(screen.queryByText(/gitlab: signed in via oauth/i)).toBeNull()
+    })
+
+    it('disconnected providers keep their status lines and sign-in buttons (no chips)', () => {
+      render(ProvidersSection)
+      expect(document.querySelector('.connected-chip')).toBeNull()
+      expect(screen.getByText(/^not signed in$/i)).toBeInTheDocument()
+      expect(screen.getByText(/gitlab: not configured/i)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /sign in with github/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /sign in with gitlab/i })).toBeInTheDocument()
     })
   })
 })

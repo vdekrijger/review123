@@ -26,6 +26,9 @@ importers:
       '@git-diff-view/svelte':
         specifier: ^0.1.5
         version: 0.1.5(patch_hash=3a0d9c646b4824d0ac9485059fd9dc31e303707147df6650c736b16b21a49b9c)(svelte@5.56.1)
+      diff:
+        specifier: 8.0.4
+        version: 8.0.4
       dompurify:
         specifier: ^3.4.8
         version: 3.4.8

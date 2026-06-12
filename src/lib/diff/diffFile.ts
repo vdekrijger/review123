@@ -19,14 +19,15 @@ export function classifyFile(f: PrFile): FileKind {
  * hunk boundaries. Without the envelope `parseDiffHeader()` returns null and
  * zero diff lines are produced.
  */
-function buildUnifiedDiffEnvelope(f: PrFile): string {
+function buildUnifiedDiffEnvelope(f: PrFile, patchOverride?: string): string {
   const oldPath = f.previousFilename ?? f.filename
   const newPath = f.filename
 
   const oldSide = f.status === 'added' ? '--- /dev/null' : `--- a/${oldPath}`
   const newSide = f.status === 'removed' ? '+++ /dev/null' : `+++ b/${newPath}`
 
-  const patch = f.patch!.endsWith('\n') ? f.patch! : f.patch! + '\n'
+  const rawPatch = patchOverride ?? f.patch!
+  const patch = rawPatch.endsWith('\n') ? rawPatch : rawPatch + '\n'
   return `diff --git a/${oldPath} b/${newPath}\n${oldSide}\n${newSide}\n${patch}`
 }
 
@@ -51,10 +52,16 @@ export function buildDiffFile(
   f: PrFile,
   mode: DiffMode,
   contents?: { before: string | null; after: string | null },
+  /**
+   * Optional bare-hunk patch to render INSTEAD of f.patch (e.g. the
+   * whitespace-hidden recompute). f.patch still gates renderability —
+   * callers only pass an override for files that already have a patch.
+   */
+  patchOverride?: string,
 ): DiffFile | null {
   if (!f.patch) return null
 
-  const envelope = buildUnifiedDiffEnvelope(f)
+  const envelope = buildUnifiedDiffEnvelope(f, patchOverride)
 
   // Use full contents when both sides are available for the diff direction.
   // Added files have no "before"; removed files have no "after".

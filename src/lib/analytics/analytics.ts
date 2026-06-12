@@ -30,6 +30,8 @@ const EVENTS = {
   section_expanded: ['section', 'surface'],
   file_expanded: ['origin'],
   drawer_opened: [],
+  // Carries no content — fired when the user turns ON "Hide whitespace changes".
+  whitespace_hidden: [],
   rail_expanded: [],
   step_viewed: ['step'],
 } as const

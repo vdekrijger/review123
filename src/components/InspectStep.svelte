@@ -17,9 +17,12 @@
   import type { ReplyOutcome } from '../lib/github/replies'
   import { slugify } from '../lib/slug'
   import { scrollToFileCard } from '../lib/diff/jumpToFile'
+  import { observeDiffColHeight } from '../lib/tree/diffColHeight'
   import type { SkillReviewEntry, AskFocus } from '../lib/ai/run.svelte'
   import type { SkillReviewResult } from '../lib/ai/schemas'
   import { listSkills } from '../lib/skills/skills'
+  import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
+  import { classifyFile } from '../lib/diff/diffFile'
 
   let {
     files,
@@ -38,6 +41,9 @@
     askFn = null,
     askDisabledReason = null,
     replyFn = null,
+    hideWhitespace = false,
+    onhidewhitespace = null,
+    whitespaceDisabledReason = null,
   }: {
     files: PrFile[]
     changedFiles: number
@@ -74,6 +80,15 @@
      * capability commentReplies). null → Reply affordance hidden.
      */
     replyFn?: ((root: PrComment, body: string) => Promise<ReplyOutcome>) | null
+    /** Whether whitespace-only changes are hidden (like GitHub's ?w=1). */
+    hideWhitespace?: boolean
+    /** Called when the user toggles "Hide whitespace". */
+    onhidewhitespace?: ((hide: boolean) => void) | null
+    /**
+     * When non-null, the toggle is disabled with this reason as tooltip
+     * (e.g. compare mode, where fetched contents don't match the compared revisions).
+     */
+    whitespaceDisabledReason?: string | null
   } = $props()
 
   function commentsForFile(path: string): PrComment[] {
@@ -143,6 +158,21 @@
   // NARROW_THRESHOLD (<900px): after picking a file on a small screen we close
   // the drawer so the diff gets its width back (checked at call time, no listener).
   const NARROW_THRESHOLD = 900
+
+  // ---- Tree height clamp (--diff-col-h) ----
+  // The open tree nav must never be taller than the diff column it accompanies.
+  // CSS can't read a sibling's height, so a ResizeObserver on the diff column
+  // mirrors its height into --diff-col-h on .inspect-layout; the nav's
+  // max-height clamps to min(viewport cap, max(12rem, that height)).
+  // NOTE: this observes CONTENT height only — the margin-vs-inline drawer
+  // decision above stays pure CSS with no viewport listeners (PR #59 contract).
+  let layoutEl = $state<HTMLDivElement | null>(null)
+  let diffColEl = $state<HTMLDivElement | null>(null)
+
+  $effect(() => {
+    if (!layoutEl || !diffColEl) return
+    return observeDiffColHeight(diffColEl, layoutEl)
+  })
 
   function toggleTree(): void {
     treeOpen = !treeOpen
@@ -303,11 +333,69 @@
 
   // Running state: true when any skill entry is in loading status
   const isRunning = $derived(skillReviews.some(e => e.state.status === 'loading'))
+
+  // ---------------------------------------------------------------------------
+  // Hide whitespace changes (git diff -w semantics)
+  // ---------------------------------------------------------------------------
+
+  const whitespaceToggleEnabled = $derived(whitespaceDisabledReason === null)
+
+  /**
+   * Per-file whitespace-hiding decision, computed once here (not per FileDiff)
+   * so the toolbar can count collapsed files. Empty map when the toggle is off
+   * or disabled. Files are only included when hiding can APPLY:
+   * - added/removed files are exempt (a -w diff is identical to the normal one)
+   * - files without both full contents are 'unavailable' (honest degradation)
+   */
+  const whitespaceByPath = $derived.by(() => {
+    const map = new Map<string, WhitespaceDisplay>()
+    if (!hideWhitespace || !whitespaceToggleEnabled) return map
+    for (const f of files) {
+      if (classifyFile(f) !== 'diff') continue
+      // -w cannot change the diff of a pure addition/removal — leave as-is, no note
+      if (f.status === 'added' || f.status === 'removed') continue
+      const c = contentsMap?.get(f.filename)
+      if (c == null || c.before === null || c.after === null) {
+        map.set(f.filename, { kind: 'unavailable' })
+        continue
+      }
+      map.set(f.filename, computeWhitespaceHiddenPatch(c.before, c.after))
+    }
+    return map
+  })
+
+  /** Files whose entire change is whitespace-only (shown as placeholders). */
+  const whitespaceOnlyCount = $derived.by(() => {
+    let n = 0
+    for (const entry of whitespaceByPath.values()) {
+      if (entry.kind === 'collapsed') n++
+    }
+    return n
+  })
+
+  function toggleHideWhitespace(): void {
+    if (!whitespaceToggleEnabled) return
+    onhidewhitespace?.(!hideWhitespace)
+    if (!hideWhitespace) track('whitespace_hidden')
+  }
 </script>
 
 <div class="mode-toggle" role="group" aria-label="Diff mode">
   <button class="btn" class:btn-active={mode === 'unified'} aria-pressed={mode === 'unified'} onclick={() => onmode('unified')}>Unified</button>
   <button class="btn" class:btn-active={mode === 'split'} aria-pressed={mode === 'split'} onclick={() => onmode('split')}>Side-by-side</button>
+  <button
+    class="btn ws-toggle"
+    class:btn-active={hideWhitespace && whitespaceToggleEnabled}
+    aria-pressed={hideWhitespace && whitespaceToggleEnabled}
+    disabled={!whitespaceToggleEnabled}
+    title={whitespaceDisabledReason ?? 'Hide changes that only add or remove whitespace (like git diff -w)'}
+    onclick={toggleHideWhitespace}
+  >Hide whitespace</button>
+  {#if hideWhitespace && whitespaceToggleEnabled && whitespaceOnlyCount > 0}
+    <span class="ws-only-note" role="status">
+      {whitespaceOnlyCount} whitespace-only file{whitespaceOnlyCount === 1 ? '' : 's'} hidden
+    </span>
+  {/if}
   {#if showRunButton}
     <button
       class="run-reviewers-btn"
@@ -371,7 +459,7 @@
 {#if files.length === 0}
   <p>This PR has no changed files.</p>
 {:else}
-  <div class="inspect-layout" class:diff-full={diffWidth === 'full'} data-diffwidth={diffWidth}>
+  <div class="inspect-layout" class:diff-full={diffWidth === 'full'} data-diffwidth={diffWidth} bind:this={layoutEl}>
     <!-- Collapsible drawer. Two CSS regimes (see drawer CSS block below):
          MARGIN mode (centered + wide viewport): zero-width flex placeholder, nav extends LEFTWARD into the margin.
          INLINE mode (full-width OR narrower viewport): in-flow 340px flex child right of the tab; diff shrinks while open.
@@ -415,7 +503,7 @@
 
     <!-- No backdrop in any regime: the drawer never overlays the diff. In inline
          mode it pushes the diff over (flex), in margin mode it dwells in the margin. -->
-    <div class="diff-column">
+    <div class="diff-column" bind:this={diffColEl}>
       {#each orderedFiles as file (file.filename)}
         <div id="file-{slugify(file.filename)}">
           {#if hotspotMap.has(file.filename)}
@@ -465,6 +553,7 @@
             onReply={replyFn}
             skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
             onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key })}
+            whitespace={whitespaceByPath.get(file.filename) ?? null}
           />
         </div>
       {/each}
@@ -602,7 +691,13 @@
     top: 0;
     width: var(--tree-w);
     box-sizing: border-box; /* total width = var(--tree-w) including border + padding */
-    max-height: calc(100vh - 5rem);
+    /* Clamp: min(viewport cap, diff column height) — the tree must never run
+       past the end of the diff it accompanies. --diff-col-h is kept current by
+       a ResizeObserver on .diff-column (see observeDiffColHeight). The 12rem
+       floor keeps the tree usable beside a tiny diff: a tree squashed to three
+       rows is worse than a slight overhang. Applies in BOTH drawer regimes —
+       this same element is the visible panel in inline and margin mode. */
+    max-height: min(calc(100vh - 5rem), max(12rem, var(--diff-col-h, 100vh)));
     overflow-y: auto;
     background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
@@ -682,6 +777,16 @@
   }
   .mode-toggle .btn {
     border-radius: 4px 4px 0 0; /* flat bottom, pairs with underline indicator */
+  }
+  .ws-toggle:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .ws-only-note {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    align-self: center;
+    margin-left: 0.4rem;
   }
   .run-reviewers-btn { margin-left: auto; }
 
