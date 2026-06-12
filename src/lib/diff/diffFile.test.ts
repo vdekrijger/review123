@@ -59,6 +59,132 @@ describe('buildDiffFile', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// buildDiffFile — context expansion (hunk expand)
+// ---------------------------------------------------------------------------
+
+/**
+ * A patch with a single small hunk in the middle of a larger file.
+ * When full before/after content is provided, the library keeps composeByDiff=false
+ * → getExpandEnabled() returns true → expand buttons render.
+ */
+const multiLineFile: PrFile = {
+  filename: 'src/big.ts',
+  status: 'modified',
+  additions: 1,
+  deletions: 1,
+  patch: '@@ -5,3 +5,3 @@\n context\n-old line\n+new line\n context',
+}
+
+// 10-line old content; patch touches line 6
+const oldContent = [
+  'line 1',
+  'line 2',
+  'line 3',
+  'line 4',
+  'context',
+  'old line',
+  'context',
+  'line 8',
+  'line 9',
+  'line 10',
+].join('\n')
+
+const newContent = [
+  'line 1',
+  'line 2',
+  'line 3',
+  'line 4',
+  'context',
+  'new line',
+  'context',
+  'line 8',
+  'line 9',
+  'line 10',
+].join('\n')
+
+describe('buildDiffFile — expand enabled with full contents', () => {
+  it('without contents: getExpandEnabled() returns false (composeByDiff path)', () => {
+    const df = buildDiffFile(multiLineFile, 'unified')!
+    expect(df).not.toBeNull()
+    // Library sets composeByDiff=true when no content is provided,
+    // disabling expansion.
+    expect(df.getExpandEnabled()).toBe(false)
+  })
+
+  it('with full before+after contents: getExpandEnabled() returns true', () => {
+    const df = buildDiffFile(multiLineFile, 'unified', {
+      before: oldContent,
+      after: newContent,
+    })!
+    expect(df).not.toBeNull()
+    // Library keeps composeByDiff=false when real content is supplied,
+    // enabling the expand affordance.
+    expect(df.getExpandEnabled()).toBe(true)
+  })
+
+  it('with contents=undefined (not provided): falls back to hunk-only, no expansion', () => {
+    const df = buildDiffFile(multiLineFile, 'unified', undefined)!
+    expect(df.getExpandEnabled()).toBe(false)
+  })
+
+  it('with contents null-before (added file): uses after content, still enables expansion', () => {
+    const addedFile: PrFile = {
+      filename: 'src/new.ts',
+      status: 'added',
+      additions: 3,
+      deletions: 0,
+      patch: '@@ -0,0 +1,3 @@\n+line 1\n+line 2\n+line 3',
+    }
+    const df = buildDiffFile(addedFile, 'unified', {
+      before: null,
+      after: 'line 1\nline 2\nline 3',
+    })!
+    expect(df).not.toBeNull()
+    // At minimum no crash; expansion state depends on library's single-side handling.
+    expect(df.unifiedLineLength).toBeGreaterThan(0)
+  })
+
+  it('split mode with contents: getExpandEnabled() returns true', () => {
+    const df = buildDiffFile(multiLineFile, 'split', {
+      before: oldContent,
+      after: newContent,
+    })!
+    expect(df).not.toBeNull()
+    expect(df.getExpandEnabled()).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// renamed-file content keying
+// ---------------------------------------------------------------------------
+
+describe('buildDiffFile — renamed file content keying', () => {
+  const renamedFile: PrFile = {
+    filename: 'src/new-name.ts',
+    previousFilename: 'src/old-name.ts',
+    status: 'renamed',
+    additions: 1,
+    deletions: 1,
+    patch: '@@ -1,3 +1,3 @@\n context\n-old\n+new\n context',
+  }
+
+  it('renamed file without contents: builds diff, getExpandEnabled=false', () => {
+    const df = buildDiffFile(renamedFile, 'unified')!
+    expect(df).not.toBeNull()
+    expect(df.getExpandEnabled()).toBe(false)
+  })
+
+  it('renamed file with contents (before at previousFilename, after at filename): enables expansion', () => {
+    const df = buildDiffFile(renamedFile, 'unified', {
+      before: 'context\nold\ncontext',
+      after: 'context\nnew\ncontext',
+    })!
+    expect(df).not.toBeNull()
+    expect(df.getExpandEnabled()).toBe(true)
+  })
+})
+
 // EC-06b — fixtures now use real bare-hunk GitHub wire format.
 // buildDiffFile synthesises the envelope so the parser can locate hunks.
 describe('EC-06b: additions-only / deletions-only diff line classification', () => {

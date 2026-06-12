@@ -36,6 +36,7 @@ function makeRun(overrides: Partial<AiRun>): AiRun {
     diagrams: { status: 'idle' },
     verdict: { status: 'idle' },
     tests: { status: 'idle' },
+    alternatives: { status: 'idle' },
     start: async () => {},
     retry: async () => {},
     coach: async () => ({ error: 'no-key' }),
@@ -440,5 +441,190 @@ describe('UnderstandStep test coverage panel', () => {
     expect(retryBtn).not.toBeNull()
     retryBtn?.click()
     expect(retryFn).toHaveBeenCalledWith('tests')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Alternatives panel (Plan F)
+// ---------------------------------------------------------------------------
+
+import type { AlternativesResult } from '../lib/ai/schemas'
+
+const sampleAlternatives: AlternativesResult = {
+  problem: 'The PR adds a global singleton cache without request isolation.',
+  alternatives: [
+    {
+      approach: 'Use a WeakMap keyed by request context for per-request isolation.',
+      tradeoffs: 'Better isolation at the cost of more boilerplate.',
+      assessment: 'alternative-is-better',
+      rationale: 'Avoids shared state leaks across concurrent requests.',
+    },
+    {
+      approach: 'Keep singleton but add a reset() for tests.',
+      tradeoffs: 'Minimal change but still global state.',
+      assessment: 'pr-is-better',
+      rationale: 'Simple enough for the current use case.',
+    },
+    {
+      approach: 'Use a module-level cache with a different goals scope.',
+      tradeoffs: 'Solves a different problem entirely.',
+      assessment: 'different-goals',
+      rationale: 'Addresses service-level caching not request-level.',
+    },
+  ],
+}
+
+describe('UnderstandStep alternatives panel', () => {
+  it('renders "Alternative approaches (AI)" panel summary', () => {
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    const altPanel = Array.from(document.querySelectorAll('details')).find(
+      (d) => d.querySelector('summary')?.textContent?.match(/alternative approaches.*ai/i)
+    )
+    expect(altPanel).not.toBeUndefined()
+  })
+
+  it('panel is collapsed by default', () => {
+    const run = makeRun({ alternatives: { status: 'done', value: sampleAlternatives } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    const altPanel = Array.from(document.querySelectorAll('details')).find(
+      (d) => d.querySelector('summary')?.textContent?.match(/alternative approaches.*ai/i)
+    ) as HTMLDetailsElement
+    expect(altPanel.open).toBe(false)
+  })
+
+  it('renders problem statement when open', () => {
+    const run = makeRun({ alternatives: { status: 'done', value: sampleAlternatives } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(screen.getByText(sampleAlternatives.problem)).toBeInTheDocument()
+  })
+
+  it('renders one card per alternative', () => {
+    const run = makeRun({ alternatives: { status: 'done', value: sampleAlternatives } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    const cards = container.querySelectorAll('.alternative-card')
+    expect(cards.length).toBe(3)
+  })
+
+  it('renders assessment chip for pr-is-better with green class', () => {
+    const prBetterOnly: AlternativesResult = {
+      problem: 'A problem.',
+      alternatives: [
+        { approach: 'Use a function.', tradeoffs: 'Cleaner but verbose.', assessment: 'pr-is-better', rationale: 'Simple is better.' },
+      ],
+    }
+    const run = makeRun({ alternatives: { status: 'done', value: prBetterOnly } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    const chip = container.querySelector('.assessment-chip.assessment-pr-is-better')
+    expect(chip).not.toBeNull()
+    expect(chip?.textContent).toContain("PR's approach is better")
+  })
+
+  it('renders assessment chip for comparable with muted class', () => {
+    const comparableOnly: AlternativesResult = {
+      problem: 'A problem.',
+      alternatives: [
+        { approach: 'Similar alt.', tradeoffs: 'Same tradeoffs.', assessment: 'comparable', rationale: 'Either works.' },
+      ],
+    }
+    const run = makeRun({ alternatives: { status: 'done', value: comparableOnly } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    const chip = container.querySelector('.assessment-chip.assessment-comparable')
+    expect(chip).not.toBeNull()
+    expect(chip?.textContent).toContain('Comparable')
+  })
+
+  it('renders assessment chip for alternative-is-better with amber class', () => {
+    const worthConsidering: AlternativesResult = {
+      problem: 'A problem.',
+      alternatives: [
+        { approach: 'Better alt.', tradeoffs: 'Better tradeoffs.', assessment: 'alternative-is-better', rationale: 'Clearly better.' },
+      ],
+    }
+    const run = makeRun({ alternatives: { status: 'done', value: worthConsidering } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    const chip = container.querySelector('.assessment-chip.assessment-alternative-is-better')
+    expect(chip).not.toBeNull()
+    expect(chip?.textContent).toContain('Worth considering')
+  })
+
+  it('renders assessment chip for different-goals with blue class', () => {
+    const diffGoals: AlternativesResult = {
+      problem: 'A problem.',
+      alternatives: [
+        { approach: 'Different scope.', tradeoffs: 'Different goals.', assessment: 'different-goals', rationale: 'Solves another problem.' },
+      ],
+    }
+    const run = makeRun({ alternatives: { status: 'done', value: diffGoals } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    const chip = container.querySelector('.assessment-chip.assessment-different-goals')
+    expect(chip).not.toBeNull()
+    expect(chip?.textContent).toContain('Different goals')
+  })
+
+  it('shows glance chip only when any alternative has assessment alternative-is-better', () => {
+    const run = makeRun({ alternatives: { status: 'done', value: sampleAlternatives } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    // sampleAlternatives has one 'alternative-is-better'
+    const glanceChip = container.querySelector('.alternatives-glance-chip')
+    expect(glanceChip).not.toBeNull()
+  })
+
+  it('does not show glance chip when no alternative-is-better assessment', () => {
+    const prBetterOnly: AlternativesResult = {
+      problem: 'A problem.',
+      alternatives: [
+        { approach: 'Use a function.', tradeoffs: 'Cleaner.', assessment: 'pr-is-better', rationale: 'Simple is better.' },
+        { approach: 'Use a class.', tradeoffs: 'More OOP.', assessment: 'comparable', rationale: 'Either works.' },
+      ],
+    }
+    const run = makeRun({ alternatives: { status: 'done', value: prBetterOnly } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    const glanceChip = container.querySelector('.alternatives-glance-chip')
+    expect(glanceChip).toBeNull()
+  })
+
+  it('does not show glance chip when alternatives is idle', () => {
+    const run = makeRun({ alternatives: { status: 'idle' } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    const glanceChip = container.querySelector('.alternatives-glance-chip')
+    expect(glanceChip).toBeNull()
+  })
+
+  it('error state shows Retry button that calls run.retry("alternatives")', () => {
+    const retryFn = vi.fn()
+    const run = makeRun({ alternatives: { status: 'error', error: 'alternatives failed' }, retry: retryFn })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    const altPanel = Array.from(document.querySelectorAll('details')).find(
+      (d) => d.querySelector('summary')?.textContent?.match(/alternative approaches.*ai/i)
+    ) as HTMLDetailsElement
+    const retryBtn = altPanel?.querySelector('button.retry-btn') as HTMLButtonElement
+    expect(retryBtn).not.toBeNull()
+    retryBtn?.click()
+    expect(retryFn).toHaveBeenCalledWith('alternatives')
+  })
+
+  it('shows empty state when alternatives array is empty', () => {
+    const emptyAlts: AlternativesResult = {
+      problem: 'The approach is straightforward.',
+      alternatives: [],
+    }
+    const run = makeRun({ alternatives: { status: 'done', value: emptyAlts } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(screen.getByText(/no meaningfully different alternatives/i)).toBeInTheDocument()
+  })
+
+  it('renders rationale text for each alternative', () => {
+    const run = makeRun({ alternatives: { status: 'done', value: sampleAlternatives } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(screen.getByText('Avoids shared state leaks across concurrent requests.')).toBeInTheDocument()
   })
 })

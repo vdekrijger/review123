@@ -146,6 +146,44 @@ function makeIssueComments() {
   ]
 }
 
+// Two commits for the PR (used by revision picker tests)
+const COMMIT_1_SHA = '111111aaaaaaa'
+const COMMIT_2_SHA = '222222bbbbbbb' // head commit
+
+function makePrCommits() {
+  return [
+    {
+      sha: COMMIT_1_SHA,
+      commit: {
+        message: 'feat: first commit\n\nLonger body here',
+        author: { date: '2024-01-01T10:00:00Z' },
+      },
+    },
+    {
+      sha: COMMIT_2_SHA,
+      commit: {
+        message: 'fix: second commit (head)',
+        author: { date: '2024-01-02T10:00:00Z' },
+      },
+    },
+  ]
+}
+
+// Compare endpoint response for base → first commit (1 file)
+function makeCompareOneFile() {
+  return {
+    files: [
+      {
+        filename: 'src/feature.ts',
+        status: 'modified',
+        patch: '@@ -1,2 +1,3 @@\n context\n+added by commit 1\n context',
+        additions: 1,
+        deletions: 0,
+      },
+    ],
+  }
+}
+
 // DeepSeek SSE response for streaming summary
 function makeDeepSeekStreamResponse(text: string): string {
   const words = text.split(' ')
@@ -226,6 +264,25 @@ const COACH_RESULT = {
       tone: 'blunt',
       biasQuestion: null,
       suggestion: 'Consider rephrasing this as a question to encourage discussion.',
+    },
+  ],
+}
+
+// Plan F: AlternativesResult with one alternative-is-better entry to trigger glance chip
+const ALTERNATIVES_RESULT = {
+  problem: 'The PR introduces a global singleton cache without per-request isolation.',
+  alternatives: [
+    {
+      approach: 'Use a WeakMap keyed on the request context object for per-request cache scoping.',
+      tradeoffs: 'Better isolation at the cost of passing context through more call sites.',
+      assessment: 'alternative-is-better',
+      rationale: 'Avoids cross-request data leaks in concurrent environments.',
+    },
+    {
+      approach: 'Keep the singleton but add a reset() method for test isolation.',
+      tradeoffs: 'Minimal change but still global state.',
+      assessment: 'comparable',
+      rationale: 'Acceptable when tests are the only concern.',
     },
   ],
 }
@@ -364,6 +421,21 @@ async function setupRoutes(
       })
     }
 
+    // PR commits: /repos/:owner/:repo/pulls/:number/commits
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/commits`) {
+      return route.fulfill({ json: makePrCommits() })
+    }
+
+    // Compare: /repos/:owner/:repo/compare/:base...:head
+    if (path.startsWith(`/repos/${OWNER}/${REPO}/compare/`)) {
+      // base → commit1: return 1 file; other combos: empty
+      const range = decodeURIComponent(path.replace(`/repos/${OWNER}/${REPO}/compare/`, ''))
+      if (range === `${BASE_SHA}...${COMMIT_1_SHA}`) {
+        return route.fulfill({ json: makeCompareOneFile() })
+      }
+      return route.fulfill({ json: { files: [] } })
+    }
+
     // PR review comments: /repos/:owner/:repo/pulls/:number/comments
     if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/comments`) {
       return route.fulfill({ json: makeReviewComments() })
@@ -418,6 +490,9 @@ async function setupRoutes(
     } else if (systemContent.includes('reviews') && systemContent.includes('clarity')) {
       // coachPrompt system content mentions "reviews" and "clarity" fields
       result = COACH_RESULT
+    } else if (systemContent.includes('alternative-is-better') || (systemContent.includes('alternatives') && systemContent.includes('approaches'))) {
+      // alternativesPrompt system content mentions "alternative-is-better" enum value and "alternatives"/"approaches"
+      result = ALTERNATIVES_RESULT
     } else {
       // Default to verdict (also covers summarize which is streaming so won't reach here)
       result = VERDICT_RESULT
@@ -860,4 +935,232 @@ test('existing comments: inline review comment visible in step 2, no error note 
   await expect(
     page.getByText(/couldn't load existing comments/i)
   ).not.toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// Test 10: Revision picker — open, compare base→commit1, swap files, Full diff restores
+// ---------------------------------------------------------------------------
+
+test('revision picker: open picker, choose base→first-commit, compare files swap, Full diff restores', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Revision picker should appear after commits load
+  const fromSelect = page.getByRole('combobox', { name: /from revision/i })
+  const toSelect = page.getByRole('combobox', { name: /to revision/i })
+  await expect(fromSelect).toBeVisible({ timeout: 5_000 })
+  await expect(toSelect).toBeVisible({ timeout: 5_000 })
+
+  // "PR base" option should exist in both selects
+  await expect(fromSelect.locator('option', { hasText: 'PR base' })).toHaveCount(1)
+
+  // Both commit shas should appear as options (short shas from fixture)
+  // COMMIT_1_SHA = '111111aaaaaaa' → shortSha = '111111a'
+  // COMMIT_2_SHA = '222222bbbbbbb' → shortSha = '222222b'
+  const fromOptions = await fromSelect.locator('option').allTextContents()
+  expect(fromOptions.some(o => o.includes('111111a'))).toBeTruthy()
+  expect(fromOptions.some(o => o.includes('222222b'))).toBeTruthy()
+
+  // Select base → first commit
+  await fromSelect.selectOption({ label: 'PR base' })
+  await toSelect.selectOption({ value: COMMIT_1_SHA })
+
+  // Apply comparison
+  const compareBtn = page.getByRole('button', { name: /apply revision comparison/i })
+  await expect(compareBtn).not.toBeDisabled()
+  await compareBtn.click()
+
+  // Wait for compare to activate — the mock returns 1 file (src/feature.ts)
+  // After compare is active, InspectStep should show 1 file
+  await expect(page.locator('article.file-diff')).toHaveCount(1, { timeout: 8_000 })
+
+  // The PR base → commit1 comparison returns only src/feature.ts
+  await expect(page.locator('article.file-diff')).toHaveCount(1)
+
+  // "Full diff" button should be visible in the picker (clear action)
+  const fullDiffBtn = page.getByRole('button', { name: /full diff/i })
+  await expect(fullDiffBtn).toBeVisible()
+
+  // Click "Full diff" — restores original 2 files
+  await fullDiffBtn.click()
+
+  // After restore, should show original 2 files again
+  await expect(page.locator('article.file-diff')).toHaveCount(2, { timeout: 5_000 })
+})
+
+// ---------------------------------------------------------------------------
+// Test 11: alternatives panel — glance chip + panel content
+// ---------------------------------------------------------------------------
+
+test('alternatives-panel: glance chip appears when alternative-is-better; panel shows problem + cards + chips', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Wait for AI alternatives to populate — glance chip should appear because
+  // ALTERNATIVES_RESULT has one alternative-is-better assessment
+  await expect(
+    page.locator('.alternatives-glance-chip'),
+  ).toBeVisible({ timeout: 20_000 })
+
+  // The glance chip should contain the expected text
+  await expect(
+    page.locator('.alternatives-glance-chip'),
+  ).toContainText('alternative worth considering')
+
+  // Open the alternatives panel (it is collapsed by default)
+  const altPanel = page.locator('details.alternatives-panel')
+  await altPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+
+  // Problem statement should be visible
+  await expect(
+    page.getByText(/The PR introduces a global singleton cache/i),
+  ).toBeVisible({ timeout: 5_000 })
+
+  // Both alternative cards should be visible
+  await expect(page.locator('.alternative-card')).toHaveCount(2)
+
+  // The "alternative-is-better" chip should show "Worth considering"
+  await expect(
+    page.locator('.assessment-chip.assessment-alternative-is-better'),
+  ).toContainText('Worth considering')
+
+  // The "comparable" chip should show "Comparable"
+  await expect(
+    page.locator('.assessment-chip.assessment-comparable'),
+  ).toContainText('Comparable')
+})
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Test: Context-line expansion affordance appears in Inspect diff view
+//
+// This test uses a custom file fixture with many context lines so the hunk
+// is in the MIDDLE of the file — hidden lines above and below trigger expand
+// button rendering by the @git-diff-view library.
+// ---------------------------------------------------------------------------
+
+test('inspect: context-line expand affordance renders when full file contents are available', async ({
+  page,
+}) => {
+  // A patch that touches line 6 of a 12-line file — lines 1-4 above and 9-12
+  // below are hidden → the library renders Expand Up / Expand Down buttons.
+  const EXPAND_PATCH = `@@ -5,4 +5,4 @@\n context above\n-old value\n+new value\n context below`
+  const OLD_CONTENT = [
+    'line 1', 'line 2', 'line 3', 'line 4',
+    'context above', 'old value', 'context below',
+    'line 8', 'line 9', 'line 10', 'line 11', 'line 12',
+  ].join('\n')
+  const NEW_CONTENT = [
+    'line 1', 'line 2', 'line 3', 'line 4',
+    'context above', 'new value', 'context below',
+    'line 8', 'line 9', 'line 10', 'line 11', 'line 12',
+  ].join('\n')
+
+  // Block PostHog
+  await page.route('**/*posthog.com/**', (route) => route.abort())
+  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+
+  // GitHub API mock — only what's needed for this test
+  await page.route('**/api.github.com/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}`) {
+      return route.fulfill({
+        json: {
+          title: 'Expand test PR',
+          state: 'open', merged: false, body: null,
+          base: { sha: BASE_SHA, repo: { private: false } },
+          head: { sha: HEAD_SHA },
+          changed_files: 1,
+        },
+      })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) {
+      return route.fulfill({
+        json: [
+          {
+            filename: 'src/module.ts',
+            status: 'modified',
+            patch: EXPAND_PATCH,
+            additions: 1,
+            deletions: 1,
+          },
+        ],
+      })
+    }
+    // File contents for expansion
+    if (path.startsWith(`/repos/${OWNER}/${REPO}/contents/`)) {
+      const ref = url.searchParams.get('ref') ?? ''
+      const filePath = decodeURIComponent(path.replace(`/repos/${OWNER}/${REPO}/contents/`, ''))
+      if (filePath === 'src/module.ts') {
+        const content = ref === BASE_SHA ? OLD_CONTENT : NEW_CONTENT
+        const b64 = Buffer.from(content).toString('base64')
+        return route.fulfill({ json: { content: b64 + '\n', encoding: 'base64' } })
+      }
+      return route.fulfill({ status: 404, json: { message: 'Not Found' } })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/commits/${HEAD_SHA}/check-runs`) {
+      return route.fulfill({ json: { total_count: 0, check_runs: [] } })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/comments`) {
+      return route.fulfill({ json: [] })
+    }
+    return route.fulfill({ status: 404, json: { message: 'Not Found' } })
+  })
+
+  // DeepSeek — just 404 so AI features don't block the test
+  await page.route('**/api.deepseek.com/**', (route) => route.abort())
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, { deepseekKey: '', diffMode: 'unified', railCollapsed: true })
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Expand test PR/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // File diff should be rendered
+  const fileDiff = page.locator('article.file-diff').first()
+  await expect(fileDiff).toBeVisible({ timeout: 8_000 })
+
+  // Wait for file contents to load (the expand buttons appear after the
+  // contentsMap resolves — give it a moment then assert expansion is available)
+  const expandBtn = page.locator(
+    'button[title="Expand Up"], button[title="Expand Down"], button[title="Expand All"]',
+  ).first()
+  await expect(expandBtn).toBeVisible({ timeout: 10_000 })
 })

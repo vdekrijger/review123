@@ -15,6 +15,7 @@ import {
   verdictPrompt,
   testInsightPrompt,
   coachPrompt,
+  alternativesPrompt,
   parseReadingOrder,
   stripReadingOrder,
 } from './tasks'
@@ -755,5 +756,71 @@ describe('coachPrompt', () => {
     expect(typeof system).toBe('string')
     const parsed = JSON.parse(user)
     expect(parsed).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// alternativesPrompt (Plan F)
+// ---------------------------------------------------------------------------
+
+describe('alternativesPrompt', () => {
+  it('returns object with system and user strings', () => {
+    const { system, user } = alternativesPrompt(makeCtx())
+    expect(typeof system).toBe('string')
+    expect(typeof user).toBe('string')
+  })
+
+  it('user prompt contains ctx.text', () => {
+    const ctx = makeCtx('unique-alt-context-xyz')
+    const { user } = alternativesPrompt(ctx)
+    expect(user).toContain('unique-alt-context-xyz')
+  })
+
+  it('system prompt instructs JSON-only output', () => {
+    const { system } = alternativesPrompt(makeCtx())
+    expect(system.toLowerCase()).toContain('json only')
+  })
+
+  it('system prompt references all four assessment enum values', () => {
+    const { system } = alternativesPrompt(makeCtx())
+    expect(system).toContain('pr-is-better')
+    expect(system).toContain('comparable')
+    expect(system).toContain('alternative-is-better')
+    expect(system).toContain('different-goals')
+  })
+
+  it('system prompt mentions maximum 3 alternatives', () => {
+    const { system } = alternativesPrompt(makeCtx())
+    // Instruction should cap at 3
+    expect(system).toContain('3')
+  })
+
+  it('system prompt includes intellectual honesty instruction about pr-is-better', () => {
+    const { system } = alternativesPrompt(makeCtx())
+    expect(system).toContain('pr-is-better')
+    // Should signal it is valid to say PR is better
+    expect(system.toLowerCase()).toContain('valid')
+  })
+
+  it('system prompt specifies problem field as one sentence', () => {
+    const { system } = alternativesPrompt(makeCtx())
+    expect(system.toLowerCase()).toContain('one')
+    expect(system.toLowerCase()).toContain('problem')
+  })
+
+  it('system prompt spells out the JSON shape with problem and alternatives fields', () => {
+    const { system } = alternativesPrompt(makeCtx())
+    expect(system).toContain('"problem"')
+    expect(system).toContain('"alternatives"')
+    expect(system).toContain('"approach"')
+    expect(system).toContain('"tradeoffs"')
+    expect(system).toContain('"assessment"')
+    expect(system).toContain('"rationale"')
+  })
+
+  it('user is exactly ctx.text', () => {
+    const ctx = makeCtx('my context text')
+    const { user } = alternativesPrompt(ctx)
+    expect(user).toBe('my context text')
   })
 })

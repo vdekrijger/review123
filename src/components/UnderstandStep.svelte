@@ -27,7 +27,7 @@
   import type { PrMeta, PrFile } from '../lib/github/types'
   import type { CiSummary as CiSummaryType } from '../lib/github/checks'
   import type { AiRun } from '../lib/ai/run.svelte'
-  import type { AttentionResult, GraphResult, VerdictResult, TestInsight } from '../lib/ai/schemas'
+  import type { AttentionResult, GraphResult, VerdictResult, TestInsight, AlternativesResult } from '../lib/ai/schemas'
 
   interface Props {
     meta: PrMeta
@@ -80,6 +80,23 @@
 
   function openTestsPanel() {
     if (testsPanelEl) testsPanelEl.open = true
+  }
+
+  // --- Alternatives ---
+  const alternatives = $derived(
+    run.alternatives.status === 'done' ? (run.alternatives.value as AlternativesResult) : null
+  )
+
+  // Glance chip: show only if any alternative has assessment 'alternative-is-better'
+  const hasWorthConsidering = $derived(
+    alternatives !== null &&
+    alternatives.alternatives.some((a) => a.assessment === 'alternative-is-better')
+  )
+
+  let alternativesPanelEl: HTMLDetailsElement | undefined = $state()
+
+  function openAlternativesPanel() {
+    if (alternativesPanelEl) alternativesPanelEl.open = true
   }
 
   // --- Verdict ---
@@ -179,6 +196,16 @@
           <span class="spinner-sm" aria-hidden="true"></span>
           Analyzing tests…
         </span>
+      {/if}
+
+      {#if hasWorthConsidering}
+        <button
+          class="alternatives-glance-chip"
+          onclick={openAlternativesPanel}
+          aria-label="Alternative worth considering — open Alternative approaches panel"
+        >
+          💡 alternative worth considering
+        </button>
       {/if}
     </div>
 
@@ -322,6 +349,41 @@
           {/if}
           {#if tests.covered.length === 0 && tests.gaps.length === 0}
             <p class="tests-empty">No AI-inferred test coverage data available.</p>
+          {/if}
+        {/if}
+      </AiPanel>
+    </div>
+  </details>
+
+  <!-- Alternative approaches (AI) -->
+  <details class="detail-panel alternatives-panel" bind:this={alternativesPanelEl}>
+    <summary class="detail-summary">Alternative approaches (AI)</summary>
+    <div class="detail-body">
+      <AiPanel title="Alternative approaches (AI)" state={run.alternatives} onretry={() => run.retry('alternatives')}>
+        {#if alternatives}
+          <p class="alternatives-problem">{alternatives.problem}</p>
+          {#if alternatives.alternatives.length === 0}
+            <p class="alternatives-empty">No meaningfully different alternatives identified — the PR's approach appears to be the natural choice.</p>
+          {:else}
+            <div class="alternatives-list">
+              {#each alternatives.alternatives as alt (alt.approach)}
+                <div class="alternative-card">
+                  <p class="alternative-approach">{alt.approach.split('.')[0] + (alt.approach.includes('.') ? '.' : '')}</p>
+                  <p class="alternative-tradeoffs">{alt.tradeoffs}</p>
+                  <span
+                    class="assessment-chip assessment-{alt.assessment}"
+                    aria-label="Assessment: {alt.assessment}"
+                  >
+                    {#if alt.assessment === 'pr-is-better'}PR's approach is better
+                    {:else if alt.assessment === 'comparable'}Comparable
+                    {:else if alt.assessment === 'alternative-is-better'}Worth considering
+                    {:else}Different goals
+                    {/if}
+                  </span>
+                  <p class="alternative-rationale">{alt.rationale}</p>
+                </div>
+              {/each}
+            </div>
           {/if}
         {/if}
       </AiPanel>
@@ -828,5 +890,109 @@
     font-size: 0.88rem;
     opacity: 0.6;
     font-style: italic;
+  }
+
+  /* ===== Alternatives glance chip ===== */
+
+  .alternatives-glance-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 10px;
+    border: 1px solid #d97706aa;
+    background: #d9770610;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: #b45309;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: background 0.1s;
+  }
+
+  .alternatives-glance-chip:hover { background: #d9770620; }
+
+  /* ===== Alternatives panel ===== */
+
+  .alternatives-problem {
+    margin: 0 0 0.75rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    line-height: 1.45;
+  }
+
+  .alternatives-empty {
+    margin: 0;
+    font-size: 0.88rem;
+    opacity: 0.6;
+    font-style: italic;
+  }
+
+  .alternatives-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .alternative-card {
+    padding: 0.65rem 0.75rem;
+    border: 1px solid #8882;
+    border-radius: 6px;
+    background: #8880;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .alternative-approach {
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  .alternative-tradeoffs {
+    margin: 0;
+    font-size: 0.875rem;
+    opacity: 0.85;
+    line-height: 1.45;
+  }
+
+  .assessment-chip {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border: 1px solid currentColor;
+    align-self: flex-start;
+  }
+
+  .assessment-chip.assessment-pr-is-better {
+    color: #1a7f37;
+    background: #1a7f3715;
+  }
+
+  .assessment-chip.assessment-comparable {
+    color: #57606a;
+    background: #57606a10;
+  }
+
+  .assessment-chip.assessment-alternative-is-better {
+    color: #b45309;
+    background: #d9770615;
+  }
+
+  .assessment-chip.assessment-different-goals {
+    color: #0550ae;
+    background: #0550ae10;
+  }
+
+  .alternative-rationale {
+    margin: 0;
+    font-size: 0.8rem;
+    opacity: 0.65;
+    font-style: italic;
+    line-height: 1.4;
   }
 </style>

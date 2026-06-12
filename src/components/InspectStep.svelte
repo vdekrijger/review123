@@ -19,6 +19,7 @@
     readingOrder = [],
     viewedStore = null,
     prComments = [],
+    contentsMap = null,
   }: {
     files: PrFile[]
     changedFiles: number
@@ -29,6 +30,12 @@
     readingOrder?: string[]
     viewedStore?: ReturnType<typeof createViewedStore> | null
     prComments?: PrComment[]
+    /**
+     * Map from filename → { before, after } full file contents, used to enable
+     * context-line expansion in the diff view. Undefined while loading.
+     * Files not in the map (beyond the 30-file cap) render hunk-only.
+     */
+    contentsMap?: Map<string, { before: string | null; after: string | null }> | null
   } = $props()
 
   function commentsForFile(path: string): PrComment[] {
@@ -121,6 +128,7 @@
         viewed={viewedStore?.isViewed(file.filename, file.patch) ?? false}
         changedSinceViewed={viewedStore?.changedSinceViewed(file.filename, file.patch) ?? false}
         onToggleViewed={() => viewedStore?.toggle(file.filename, file.patch)}
+        contents={contentsMap?.get(file.filename)}
       />
     </div>
   {/each}

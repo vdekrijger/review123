@@ -12,7 +12,7 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
-export const PROMPT_VERSION = 4
+export const PROMPT_VERSION = 5
 
 // ---------------------------------------------------------------------------
 // summarizePrompt — streaming plain-text summary + reading order
@@ -382,6 +382,73 @@ Do not include any text outside the JSON object.`
   }
 
   return { system, user: userText }
+}
+
+// ---------------------------------------------------------------------------
+// alternativesPrompt — JSON AlternativesResult (Plan F)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build prompts for the alternatives task.
+ *
+ * Output must be JSON-only, matching AlternativesResult:
+ *   {
+ *     problem: string,
+ *     alternatives: Alternative[]   (≤3 entries)
+ *   }
+ *
+ * Per alternative:
+ *   { approach, tradeoffs, assessment, rationale }
+ *
+ * assessment must be exactly one of:
+ *   "pr-is-better" | "comparable" | "alternative-is-better" | "different-goals"
+ *
+ * Intellectual honesty rule: "pr-is-better" is always a valid answer.
+ * Do not invent spurious alternatives when the approach is obvious or forced.
+ */
+export function alternativesPrompt(ctx: PackedContext): { system: string; user: string } {
+  const system = `You are an expert code reviewer assistant. Analyze the pull request changes \
+and respond with JSON ONLY — no explanation, no markdown, no code fences. Your response must \
+be valid JSON that exactly matches this shape:
+
+{
+  "problem": "<one-sentence statement of the core problem this PR is solving>",
+  "alternatives": [
+    {
+      "approach": "<description of a genuinely different approach to the same problem>",
+      "tradeoffs": "<honest tradeoffs vs the PR's approach — what it gains and what it costs>",
+      "assessment": "pr-is-better" | "comparable" | "alternative-is-better" | "different-goals",
+      "rationale": "<one sentence explaining your assessment>"
+    }
+  ]
+}
+
+Field rules:
+- problem: one concise sentence describing the core problem the PR is addressing. Be specific \
+  to the actual change — not a generic description.
+- alternatives: up to 3 genuinely different approaches to the same problem. Do not list \
+  variations of the PR's approach (e.g. "rename the variable differently") — only include \
+  alternatives that represent a meaningfully different design or strategy.
+  - If the PR's approach is the obvious or only reasonable solution, return an empty array \
+    or a single alternative with assessment "pr-is-better".
+- approach: a concrete description of the alternative approach. Be specific enough that a \
+  developer could act on it.
+- tradeoffs: compare honestly against what the PR does. Name what the alternative gains \
+  (e.g. "better test isolation") and what it costs (e.g. "more boilerplate").
+- assessment: exactly one of the four enum values:
+  - "pr-is-better": the PR's approach is the better choice for this codebase/context
+  - "comparable": both approaches have similar merit; team preference should decide
+  - "alternative-is-better": this alternative would be meaningfully better
+  - "different-goals": this alternative solves a related but different problem
+- rationale: a single sentence explaining your assessment choice.
+
+Intellectual honesty: "pr-is-better" is a perfectly valid and often correct answer. Do not \
+invent alternatives just to fill the list. Fewer high-quality alternatives are better than \
+more low-quality ones. Maximum 3 alternatives total.
+
+Do not include any text outside the JSON object.`
+
+  return { system, user: ctx.text }
 }
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
   import { createPrLoad } from '../lib/review/loadPr.svelte'
   import Stepper, { type Step } from '../components/Stepper.svelte'
   import InspectStep from '../components/InspectStep.svelte'
+  import RevisionPicker from '../components/RevisionPicker.svelte'
   import { getSettings, setDiffMode, setRailCollapsed, type DiffMode } from '../lib/settings/settings'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
   import { createDraftStore } from '../lib/drafts/drafts.svelte'
@@ -18,10 +19,12 @@
   import { createViewedStore } from '../lib/viewed/viewed.svelte'
   import { recordVisit, lastVisit } from '../lib/visits/visits'
   import { compareCommits } from '../lib/github/compare'
+  import { getPrCommits } from '../lib/github/commits'
   import { GithubApiError } from '../lib/github/types'
   import type { CiSummary } from '../lib/github/checks'
   import type { AttentionResult } from '../lib/ai/schemas'
   import type { PrFile } from '../lib/github/types'
+  import type { PrCommit } from '../lib/github/commits'
   import { getPrComments } from '../lib/github/comments'
   import type { PrComment } from '../lib/github/comments'
 
@@ -56,11 +59,26 @@
   // The headSha from the PREVIOUS visit (null = first visit or same sha)
   let prevVisitSha: string | null = $state(null)
   let prevVisitedAt: number | null = $state(null)
-  // null = not active; PrFile[] = compare result when active
-  let sinceLastVisit: PrFile[] | null = $state(null)
-  // 'idle' | 'loading' | 'active' | 'error'
-  let compareMode: 'idle' | 'loading' | 'active' | 'error' = $state('idle')
+
+  // ---- Unified compare-mode state ----
+  // Serves both since-last-visit (banner) AND revision picker.
+  // null = not active; { files, label } = compare active with those files + label
+  let compareMode: { files: PrFile[]; label: string } | null = $state(null)
+  // 'idle' | 'loading' | 'error' — transient loading state
+  let compareStatus: 'idle' | 'loading' | 'error' = $state('idle')
   let compareError: string | null = $state(null)
+  // Source of the active compare: 'banner' | 'picker'
+  let compareSource: 'banner' | 'picker' | null = $state(null)
+
+  // Picker active selection (what's applied, reflected back from compareMode)
+  let pickerActive: { from: string; to: string } | null = $state(null)
+
+  // ---- Revision picker commits ----
+  // Lazily fetched on first step-2 activation; null = not yet fetched; [] = loaded (may be empty)
+  let prCommits: PrCommit[] | null = $state(null)
+  // Whether the picker is hidden due to commit fetch failure
+  let pickerHidden = $state(false)
+  let commitsInitializedForStep2 = false
 
   $effect(() => {
     // Initialise the store once the PR is ready and we have the headSha
@@ -87,36 +105,80 @@
     }
   })
 
+  // Lazily fetch commits when step 2 is first activated (non-blocking)
+  $effect(() => {
+    if (step === 2 && load.state.status === 'ready' && !commitsInitializedForStep2) {
+      commitsInitializedForStep2 = true
+      getPrCommits({ owner, repo, number }).then(
+        (commits) => { prCommits = commits },
+        () => { pickerHidden = true },
+      )
+    }
+  })
+
+  // ---- Since-last-visit banner actions ----
+
   async function fetchCompare() {
     if (!prevVisitSha || load.state.status !== 'ready') return
-    compareMode = 'loading'
+    compareStatus = 'loading'
+    compareSource = 'banner'
     compareError = null
     try {
       const files = await compareCommits({ owner, repo }, prevVisitSha, load.state.meta.headSha)
-      sinceLastVisit = files
-      compareMode = 'active'
+      compareMode = { files, label: 'since your last visit' }
+      compareStatus = 'idle'
     } catch (e) {
       if (e instanceof GithubApiError && e.detail.kind === 'not-found') {
         compareError = "Couldn't compare — the previous revision may have been force-pushed away."
       } else {
         compareError = 'Comparison failed. Please try again.'
       }
-      compareMode = 'error'
+      compareStatus = 'error'
     }
   }
 
-  function exitCompareMode() {
-    compareMode = 'idle'
-    sinceLastVisit = null
+  // ---- Picker actions ----
+
+  async function handlePickerSelect(from: string, to: string) {
+    if (load.state.status !== 'ready') return
+    compareStatus = 'loading'
+    compareSource = 'picker'
     compareError = null
+    const fromShort = from === load.state.meta.baseSha ? 'base' : from.slice(0, 7)
+    const toShort = to.slice(0, 7)
+    try {
+      const files = await compareCommits({ owner, repo }, from, to)
+      compareMode = { files, label: `${fromShort}…${toShort}` }
+      pickerActive = { from, to }
+      compareStatus = 'idle'
+    } catch (e) {
+      if (e instanceof GithubApiError && e.detail.kind === 'not-found') {
+        compareError = "Couldn't compare commits — one revision may no longer exist."
+      } else {
+        compareError = 'Comparison failed. Please try again.'
+      }
+      compareStatus = 'error'
+    }
+  }
+
+  function handlePickerClear() {
+    exitCompareMode()
+  }
+
+  // ---- Shared exit / dismiss ----
+
+  function exitCompareMode() {
+    compareMode = null
+    compareStatus = 'idle'
+    compareError = null
+    compareSource = null
+    pickerActive = null
   }
 
   function dismissBanner() {
     prevVisitSha = null
     prevVisitedAt = null
-    compareMode = 'idle'
-    sinceLastVisit = null
-    compareError = null
+    exitCompareMode()
   }
 
   function formatVisitDate(ts: number): string {
@@ -160,6 +222,22 @@
     return ciPromise
   }
 
+  // File contents — fetched once, shared by AI pack() and InspectStep diff expansion.
+  // null = not yet fetched; Map = ready (may be empty if fetch failed).
+  let contentsMap: Map<string, { before: string | null; after: string | null }> | null = $state(null)
+  let contentsPromise: Promise<Map<string, { before: string | null; after: string | null }>> | null = null
+
+  function getContents(
+    files: PrFile[],
+    meta: { baseSha: string; headSha: string },
+  ): Promise<Map<string, { before: string | null; after: string | null }>> {
+    if (!contentsPromise) {
+      contentsPromise = fetchContents({ owner, repo }, files, meta).catch(() => new Map())
+      contentsPromise.then((map) => { contentsMap = map })
+    }
+    return contentsPromise
+  }
+
   // PR comments state
   let prComments: PrComment[] = $state([])
   let commentsError = $state(false)
@@ -183,12 +261,16 @@
 
       const budgetTokens = LLM_CONFIG.contextWindowTokens - LLM_CONFIG.maxOutputTokens - 2000
 
+      // Start fetching file contents immediately — shared with InspectStep for
+      // context-line expansion (up to 30 files, concurrency cap 4).
+      getContents(files, meta)
+
       const run = createAiRun({
         prKey,
         repo: repoStr,
         isPrivate: meta.private,
         pack: async () => {
-          const contents = await fetchContents({ owner, repo }, files, meta)
+          const contents = await getContents(files, meta)
           const ci = await getCi({ owner, repo, number }, meta.headSha)
           return packContext({ files, contents, ci, budgetTokens })
         },
@@ -240,6 +322,12 @@
       document.getElementById(`file-${slug}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }
+
+  // Whether compare mode is currently active (either source)
+  const isCompareActive = $derived(compareMode !== null)
+  // Files to show in InspectStep
+  const inspectFiles = $derived(isCompareActive ? compareMode!.files : (load.state.status === 'ready' ? load.state.files : []))
+  const inspectChangedFiles = $derived(isCompareActive ? compareMode!.files.length : (load.state.status === 'ready' ? load.state.meta.changedFiles : 0))
 </script>
 
 {#if consentDialogVisible}
@@ -287,29 +375,58 @@
         files={load.state.files}
         ci={ciData}
         {ciError}
-        run={aiRun ?? { summary: {status:'idle'}, attention: {status:'idle'}, diagrams: {status:'idle'}, verdict: {status:'idle'}, tests: {status:'idle'}, start: async()=>{}, retry: async()=>{}, coach: async()=>({error:'no-key'}) } as any}
+        run={aiRun ?? { summary: {status:'idle'}, attention: {status:'idle'}, diagrams: {status:'idle'}, verdict: {status:'idle'}, tests: {status:'idle'}, alternatives: {status:'idle'}, start: async()=>{}, retry: async()=>{}, coach: async()=>({error:'no-key'}) } as any}
         onhotspot={handleHotspot}
       />
     {:else if step === 2}
+      <!-- Since-last-visit banner -->
       {#if prevVisitSha !== null}
         <div class="visit-banner" role="alert">
-          {#if compareMode === 'idle'}
+          {#if compareStatus === 'idle' && compareSource !== 'banner'}
             This PR changed since your last visit ({prevVisitedAt !== null ? formatVisitDate(prevVisitedAt) : 'previously'}).
             <button class="banner-btn" onclick={fetchCompare}>Show only changes since then</button>
             <button class="banner-dismiss" onclick={dismissBanner} aria-label="Dismiss">×</button>
-          {:else if compareMode === 'loading'}
+          {:else if compareStatus === 'loading' && compareSource === 'banner'}
             Loading changes since your last visit…
             <button class="banner-dismiss" onclick={dismissBanner} aria-label="Dismiss">×</button>
-          {:else if compareMode === 'error'}
+          {:else if compareStatus === 'error' && compareSource === 'banner'}
             {compareError}
             <button class="banner-dismiss" onclick={dismissBanner} aria-label="Dismiss">×</button>
-          {:else if compareMode === 'active' && sinceLastVisit !== null}
-            Showing {sinceLastVisit.length} file{sinceLastVisit.length === 1 ? '' : 's'} changed since your last visit
+          {:else if isCompareActive && compareSource === 'banner'}
+            Showing {compareMode!.files.length} file{compareMode!.files.length === 1 ? '' : 's'} changed since your last visit
             · <button class="banner-btn" onclick={exitCompareMode}>Show full diff</button>
+            <button class="banner-dismiss" onclick={dismissBanner} aria-label="Dismiss">×</button>
+          {:else}
+            <!-- Banner is idle but picker is active — show simplified banner with dismiss -->
+            This PR changed since your last visit ({prevVisitedAt !== null ? formatVisitDate(prevVisitedAt) : 'previously'}).
+            <button class="banner-btn" onclick={fetchCompare}>Show only changes since then</button>
             <button class="banner-dismiss" onclick={dismissBanner} aria-label="Dismiss">×</button>
           {/if}
         </div>
       {/if}
+
+      <!-- Revision picker (shown when commits loaded and not hidden due to error) -->
+      {#if prCommits !== null && !pickerHidden && prCommits.length > 0}
+        {#if compareStatus === 'loading' && compareSource === 'picker'}
+          <div class="picker-loading" role="status" aria-live="polite">
+            Loading commit comparison…
+          </div>
+        {:else if compareStatus === 'error' && compareSource === 'picker'}
+          <div class="picker-error" role="alert">
+            {compareError}
+            <button class="banner-btn" onclick={exitCompareMode}>Dismiss</button>
+          </div>
+        {:else}
+          <RevisionPicker
+            commits={prCommits}
+            baseSha={load.state.meta.baseSha}
+            active={compareSource === 'picker' ? pickerActive : null}
+            onselect={handlePickerSelect}
+            onclear={handlePickerClear}
+          />
+        {/if}
+      {/if}
+
       {#if commentsError && !commentsDismissed}
         <div class="comments-error-note" role="alert">
           Couldn't load existing comments.
@@ -321,15 +438,16 @@
         </div>
       {/if}
       <InspectStep
-        files={compareMode === 'active' && sinceLastVisit !== null ? sinceLastVisit : load.state.files}
-        changedFiles={compareMode === 'active' && sinceLastVisit !== null ? sinceLastVisit.length : load.state.meta.changedFiles}
+        files={inspectFiles}
+        changedFiles={inspectChangedFiles}
         {mode}
         onmode={setMode}
         {draftStore}
-        attention={compareMode === 'active' ? null : (aiRun?.attention.status === 'done' ? aiRun.attention.value as AttentionResult : null)}
-        readingOrder={compareMode === 'active' ? [] : readingOrder}
+        attention={isCompareActive ? null : (aiRun?.attention.status === 'done' ? aiRun.attention.value as AttentionResult : null)}
+        readingOrder={isCompareActive ? [] : readingOrder}
         {viewedStore}
-        prComments={compareMode === 'active' ? [] : prComments}
+        prComments={isCompareActive ? [] : prComments}
+        {contentsMap}
       />
     {:else}
       <VerdictStep
@@ -454,6 +572,34 @@
 
   .banner-dismiss:hover {
     color: #90a8b8;
+  }
+
+  .picker-loading {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--surface-raised, #1a1a2e);
+    border: 1px solid var(--border, #3a4060);
+    border-left: 3px solid var(--border-banner-accent, #4a90d0);
+    border-radius: 4px;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
+    color: #c8dff0;
+    margin-bottom: 0.5rem;
+  }
+
+  .picker-error {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #1a1a2e;
+    border: 1px solid #8883;
+    border-left: 3px solid #cf222e;
+    border-radius: 4px;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
+    color: #c8d0e0;
+    margin-bottom: 0.5rem;
   }
 
   /* EC-07i: Sticky bottom bar */
