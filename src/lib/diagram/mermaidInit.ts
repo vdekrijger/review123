@@ -2,12 +2,16 @@
  * mermaidInit.ts — shared mermaid lazy-loader + initializer.
  *
  * Exports getMermaid() which lazy-imports mermaid and initializes it ONCE
- * with the shared config: securityLevel strict, dark theme when OS prefers
- * dark, 14px fonts, and useMaxWidth for flowcharts.
+ * with the shared config: securityLevel strict, theme from resolvedTheme(),
+ * 14px fonts, and useMaxWidth for flowcharts.
  *
  * Security: securityLevel:'strict' prevents mermaid from injecting arbitrary
  * HTML/JS from diagram source strings.
+ *
+ * Note: mermaid is initialized once at first call. If the user changes the
+ * theme setting, diagram colors will update on next page reload.
  */
+import { resolvedTheme } from '../settings/appearance.svelte'
 
 let mermaidMod: typeof import('mermaid') | null = null
 let mermaidInitialized = false
@@ -22,14 +26,10 @@ export async function getMermaid(): Promise<typeof import('mermaid')['default']>
   }
   const m = mermaidMod.default
   if (!mermaidInitialized) {
-    const prefersDark =
-      typeof window !== 'undefined' &&
-      window.matchMedia?.('(prefers-color-scheme: dark)').matches
-
     m.initialize({
       securityLevel: 'strict',
       startOnLoad: false,
-      theme: prefersDark ? 'dark' : 'default',
+      theme: resolvedTheme() === 'dark' ? 'dark' : 'default',
       themeVariables: { fontSize: '14px' },
       flowchart: { useMaxWidth: true },
     })
