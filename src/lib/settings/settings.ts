@@ -13,6 +13,8 @@ function notifyAuthMutated(): void {
 }
 
 export type DiffMode = 'unified' | 'split'
+export type Theme = 'auto' | 'dark' | 'light'
+export type UiFont = 'system' | 'humanist' | 'serif'
 
 export interface GithubAuth {
   token: string
@@ -26,6 +28,8 @@ export interface Settings {
   diffMode: DiffMode
   githubAuth: GithubAuth | null
   railCollapsed: boolean
+  theme: Theme
+  uiFont: UiFont
 }
 
 const DEFAULTS: Settings = {
@@ -34,6 +38,8 @@ const DEFAULTS: Settings = {
   diffMode: 'unified',
   githubAuth: null,
   railCollapsed: false,
+  theme: 'auto',
+  uiFont: 'system',
 }
 
 function coerceGithubAuth(raw: unknown): GithubAuth | null {
@@ -64,6 +70,12 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const railCollapsed = obj['railCollapsed']
   if (typeof railCollapsed === 'boolean') result.railCollapsed = railCollapsed
+
+  const theme = obj['theme']
+  if (theme === 'auto' || theme === 'dark' || theme === 'light') result.theme = theme
+
+  const uiFont = obj['uiFont']
+  if (uiFont === 'system' || uiFont === 'humanist' || uiFont === 'serif') result.uiFont = uiFont
 
   // Prefer explicit githubAuth; fall back to migrating legacy githubPat string
   if ('githubAuth' in obj) {
@@ -132,3 +144,5 @@ export const setGithubPat = (v: string | null) => saveTokens({ githubPat: v })
 export const setDeepseekKey = (v: string | null) => saveTokens({ deepseekKey: v })
 export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
 export const setRailCollapsed = (collapsed: boolean) => save({ railCollapsed: collapsed })
+export const setTheme = (theme: Theme) => save({ theme })
+export const setUiFont = (font: UiFont) => save({ uiFont: font })

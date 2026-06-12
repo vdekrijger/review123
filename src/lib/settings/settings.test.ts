@@ -1,11 +1,22 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens, saveGithubAuth } from './settings'
+import {
+  getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens, saveGithubAuth,
+  setTheme, setUiFont,
+} from './settings'
 
 describe('settings', () => {
   beforeEach(() => localStorage.clear())
 
   it('returns defaults when nothing stored', () => {
-    expect(getSettings()).toEqual({ githubPat: null, deepseekKey: null, diffMode: 'unified', githubAuth: null, railCollapsed: false })
+    expect(getSettings()).toEqual({
+      githubPat: null,
+      deepseekKey: null,
+      diffMode: 'unified',
+      githubAuth: null,
+      railCollapsed: false,
+      theme: 'auto',
+      uiFont: 'system',
+    })
   })
 
   it('stores and retrieves a PAT', () => {
@@ -37,7 +48,15 @@ describe('settings', () => {
 
   it('survives corrupt stored JSON', () => {
     localStorage.setItem('review123:settings', '{not json')
-    expect(getSettings()).toEqual({ githubPat: null, deepseekKey: null, diffMode: 'unified', githubAuth: null, railCollapsed: false })
+    expect(getSettings()).toEqual({
+      githubPat: null,
+      deepseekKey: null,
+      diffMode: 'unified',
+      githubAuth: null,
+      railCollapsed: false,
+      theme: 'auto',
+      uiFont: 'system',
+    })
   })
 
   it('coerces invalid field types back to defaults (shape validation)', () => {
@@ -98,5 +117,59 @@ describe('settings', () => {
     const s = getSettings()
     expect(s.githubPat).toBeNull()
     expect(s.githubAuth).toEqual({ token: 'gho_new', method: 'oauth', scopes: ['public_repo'] })
+  })
+
+  describe('theme', () => {
+    it('defaults to auto', () => {
+      expect(getSettings().theme).toBe('auto')
+    })
+
+    it('setTheme persists dark', () => {
+      setTheme('dark')
+      expect(getSettings().theme).toBe('dark')
+    })
+
+    it('setTheme persists light', () => {
+      setTheme('light')
+      expect(getSettings().theme).toBe('light')
+    })
+
+    it('setTheme persists auto', () => {
+      setTheme('dark')
+      setTheme('auto')
+      expect(getSettings().theme).toBe('auto')
+    })
+
+    it('coerces invalid theme value back to default (auto)', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ theme: 'sepia' }))
+      expect(getSettings().theme).toBe('auto')
+    })
+  })
+
+  describe('uiFont', () => {
+    it('defaults to system', () => {
+      expect(getSettings().uiFont).toBe('system')
+    })
+
+    it('setUiFont persists humanist', () => {
+      setUiFont('humanist')
+      expect(getSettings().uiFont).toBe('humanist')
+    })
+
+    it('setUiFont persists serif', () => {
+      setUiFont('serif')
+      expect(getSettings().uiFont).toBe('serif')
+    })
+
+    it('setUiFont persists system', () => {
+      setUiFont('serif')
+      setUiFont('system')
+      expect(getSettings().uiFont).toBe('system')
+    })
+
+    it('coerces invalid uiFont value back to default (system)', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ uiFont: 'comic-sans' }))
+      expect(getSettings().uiFont).toBe('system')
+    })
   })
 })
