@@ -256,3 +256,150 @@ describe('ContextRail medium-regime: no inline width (CSS-only)', () => {
     expect(inlineStyle).not.toMatch(/\bwidth\s*:/)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Registry-driven completeness: ci-details and pr-description now in rail (task item 3)
+// ---------------------------------------------------------------------------
+
+import type { CiSummary } from '../lib/github/checks'
+import type { PrMeta } from '../lib/github/types'
+
+describe('ContextRail registry completeness — ci-details in rail', () => {
+  it('renders CI details section header when expanded', () => {
+    render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const summaries = document.querySelectorAll('details > summary')
+    const texts = Array.from(summaries).map((s) => s.textContent?.toLowerCase() ?? '')
+    expect(texts.some((t) => t.includes('ci details') || t.includes('ci'))).toBe(true)
+  })
+
+  it('renders Original PR description section header when expanded', () => {
+    render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const summaries = document.querySelectorAll('details > summary')
+    const texts = Array.from(summaries).map((s) => s.textContent?.toLowerCase() ?? '')
+    expect(texts.some((t) => t.includes('pr description') || t.includes('original pr'))).toBe(true)
+  })
+
+  it('passes CI data into ci-details section when ci prop provided', () => {
+    const ci: CiSummary = {
+      total: 1,
+      passed: 1,
+      failed: 0,
+      pending: 0,
+      failures: [],
+    }
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn(), ci },
+    })
+    // Open all details
+    document.querySelectorAll('details').forEach((d) => { d.open = true })
+    // CiSummary renders .ci-pass when all passed
+    expect(container.querySelector('.ci-pass')).not.toBeNull()
+  })
+
+  it('renders PR body when meta prop provided', () => {
+    const meta: PrMeta = {
+      title: 'My PR',
+      state: 'open',
+      merged: false,
+      body: 'Hello from PR description.',
+      baseSha: 'abc',
+      headSha: 'def',
+      private: false,
+      changedFiles: 1,
+    }
+    render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn(), meta },
+    })
+    document.querySelectorAll('details').forEach((d) => { d.open = true })
+    expect(screen.getByText('Hello from PR description.')).toBeInTheDocument()
+  })
+
+  it('shows "No description." when meta has no body', () => {
+    const meta: PrMeta = {
+      title: 'My PR',
+      state: 'open',
+      merged: false,
+      body: null,
+      baseSha: 'abc',
+      headSha: 'def',
+      private: false,
+      changedFiles: 1,
+    }
+    render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn(), meta },
+    })
+    document.querySelectorAll('details').forEach((d) => { d.open = true })
+    expect(screen.getByText(/no description/i)).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// No Ask AI in rail (task item 4)
+// ---------------------------------------------------------------------------
+
+describe('ContextRail — no Ask AI section', () => {
+  it('does not render AskAi widget in the rail body', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    // AskAi renders .ask-ai-section and a textarea
+    expect(container.querySelector('.ask-ai-section')).toBeNull()
+    // No textarea in rail body
+    const body = container.querySelector('.rail-body')
+    expect(body?.querySelector('textarea')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Registry order visible in rail (summary before diagrams, etc.)
+// ---------------------------------------------------------------------------
+
+describe('ContextRail — registry section order', () => {
+  it('Summary section appears before Diagrams in DOM order', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const summaries = Array.from(container.querySelectorAll('details > summary'))
+    const summaryIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('full summary') || s.textContent?.toLowerCase() === 'summary')
+    const diagramsIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('diagrams'))
+    expect(summaryIdx).toBeGreaterThanOrEqual(0)
+    expect(diagramsIdx).toBeGreaterThan(summaryIdx)
+  })
+
+  it('Diagrams section appears before Test coverage in DOM order', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const summaries = Array.from(container.querySelectorAll('details > summary'))
+    const diagramsIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('diagrams'))
+    const testsIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('test coverage'))
+    expect(diagramsIdx).toBeGreaterThanOrEqual(0)
+    expect(testsIdx).toBeGreaterThan(diagramsIdx)
+  })
+
+  it('Verdict evidence appears before CI details in DOM order', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const summaries = Array.from(container.querySelectorAll('details > summary'))
+    const verdictIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('verdict'))
+    const ciIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('ci'))
+    expect(verdictIdx).toBeGreaterThanOrEqual(0)
+    expect(ciIdx).toBeGreaterThan(verdictIdx)
+  })
+
+  it('CI details appears before PR description in DOM order', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const summaries = Array.from(container.querySelectorAll('details > summary'))
+    const ciIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('ci'))
+    const prDescIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('pr description') || s.textContent?.toLowerCase().includes('original pr'))
+    expect(ciIdx).toBeGreaterThanOrEqual(0)
+    expect(prDescIdx).toBeGreaterThan(ciIdx)
+  })
+})

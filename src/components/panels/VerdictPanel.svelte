@@ -99,10 +99,8 @@
   }
 
   .verdict-evidence-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.5rem;
-    padding: 0.3rem 0;
+    display: block;
+    padding: 0.35rem 0;
     border-bottom: 1px solid var(--hairline);
   }
 
@@ -111,8 +109,7 @@
   }
 
   .evidence-path-chip {
-    display: inline-flex;
-    align-items: center;
+    display: inline-block;
     padding: 0.1rem 0.4rem;
     border-radius: 4px;
     background: var(--surface-raised);
@@ -122,9 +119,9 @@
     color: var(--accent);
     cursor: pointer;
     white-space: nowrap;
-    flex-shrink: 0;
     text-decoration: none;
     transition: background 100ms;
+    margin-bottom: 0.25rem;
   }
 
   .evidence-path-chip:hover {
@@ -133,11 +130,11 @@
   }
 
   .evidence-text {
+    display: block;
     font-family: var(--font-prose);
     font-size: 0.9rem;
     line-height: 1.5;
-    flex: 1;
-    min-width: 0;
+    width: 100%;
   }
 
   /* MarkdownView inside evidence-text: inline, no block margins */
