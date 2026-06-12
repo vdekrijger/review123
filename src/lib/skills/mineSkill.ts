@@ -13,6 +13,7 @@
  */
 
 import type { llmJsonWithRepair as LlmJsonFn } from '../llm/llm'
+import { providerFor } from '../provider/registry'
 
 // ---------------------------------------------------------------------------
 // Public constants
@@ -115,7 +116,7 @@ ${commentsBlock}`
 // Strip code fences longer than CODE_FENCE_LINE_LIMIT lines
 // ---------------------------------------------------------------------------
 
-function stripLongFences(body: string): string {
+export function stripLongFences(body: string): string {
   // Matches ``` optionally followed by a language tag, then content, then ```
   return body.replace(/```[^\n]*\n([\s\S]*?)```/g, (match, inner: string) => {
     const lines = inner.split('\n')
@@ -223,23 +224,63 @@ export async function mineSkillFromComments(
 // ---------------------------------------------------------------------------
 
 export interface MineSkillPipelineDeps {
-  getToken: () => string | null
-  ghFetch: (path: string, token: string) => Promise<unknown>
   llmJsonWithRepair: typeof LlmJsonFn
+  /**
+   * Override the resolved provider for testing.
+   * When omitted, the provider is resolved from the registry using providerId.
+   */
+  provider?: {
+    id: string
+    displayName: string
+    authState(): { configured: boolean; hint: string }
+    getMyReviewComments?(repo: { owner: string; repo: string }, cap: number): Promise<string[]>
+  }
 }
 
 export async function mineSkillPipeline(
+  providerId: string,
   repo: { owner: string; repo: string },
   deps: MineSkillPipelineDeps,
 ): Promise<MineSkillResult | MineSkillError> {
-  const fetchResult = await fetchMineableComments(repo, {
-    getToken: deps.getToken,
-    ghFetch: deps.ghFetch,
-  })
-  if (!fetchResult.ok) return fetchResult
+  // Resolve provider (from registry or injected override)
+  const provider = deps.provider ?? providerFor(providerId)
 
+  // Check provider supports mining
+  if (typeof provider.getMyReviewComments !== 'function') {
+    return {
+      ok: false,
+      error: `Generate from my reviews is not available for ${provider.displayName} yet.`,
+    }
+  }
+
+  // Check auth
+  const auth = provider.authState()
+  if (!auth.configured) {
+    return { ok: false, error: auth.hint }
+  }
+
+  // Fetch comments via provider
+  let comments: string[]
+  try {
+    comments = await provider.getMyReviewComments(repo, MINE_COMMENTS_CAP)
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Failed to fetch review comments.',
+    }
+  }
+
+  if (comments.length === 0) {
+    return {
+      ok: false,
+      error: `No review comments found on ${repo.owner}/${repo.repo}.`,
+    }
+  }
+
+  // Distill with LLM — use providerId as login label since providers return only bodies
+  const loginLabel = `${providerId}-user`
   return mineSkillFromComments(
-    { login: fetchResult.login, comments: fetchResult.comments },
+    { login: loginLabel, comments },
     { llmJsonWithRepair: deps.llmJsonWithRepair },
   )
 }

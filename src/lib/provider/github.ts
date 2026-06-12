@@ -123,6 +123,41 @@ export const githubProvider: ReviewProvider = {
     return `\`\`\`suggestion\n${lines.join('\n')}\n\`\`\``
   },
 
+  async getMyReviewComments(
+    repo: { owner: string; repo: string },
+    cap: number,
+  ): Promise<string[]> {
+    // Inline stripLongFences to avoid circular dependency with mineSkill module
+    function stripLongFences(body: string): string {
+      return body.replace(/```[^\n]*\n([\s\S]*?)```/g, (match, inner: string) => {
+        const lines = inner.split('\n')
+        if (lines.length > 10) return ''
+        return match
+      })
+    }
+
+    // Step 1: resolve authenticated login
+    const user = await ghFetch<{ login: string }>('/user')
+    const login = user.login
+
+    // Step 2: fetch up to 3 pages of PR review comments
+    const MINE_PAGES = 3
+    const allComments: Array<{ user: { login: string }; body: string }> = []
+    for (let page = 1; page <= MINE_PAGES; page++) {
+      const path = `/repos/${repo.owner}/${repo.repo}/pulls/comments?sort=created&direction=desc&per_page=100&page=${page}`
+      const raw = await ghFetch<Array<{ user: { login: string }; body: string }>>(path)
+      if (!Array.isArray(raw) || raw.length === 0) break
+      allComments.push(...raw)
+    }
+
+    // Step 3: filter by author, cap, strip long fences
+    return allComments
+      .filter(c => c.user?.login === login)
+      .slice(0, cap)
+      .map(c => stripLongFences(c.body).trim())
+      .filter(body => body.length > 0)
+  },
+
   async getMyQueue(): Promise<QueueItem[]> {
     const auth = getSettings().githubAuth
     if (!auth) return []

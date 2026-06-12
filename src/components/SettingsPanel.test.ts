@@ -407,7 +407,8 @@ describe('SettingsPanel — mine-skill gate copy (Bug 3 regression)', () => {
   })
 
   it('mine-gate hint says "from the top bar" not "(above)"', async () => {
-    // No auth seeded → gate hint should show
+    // Seed DeepSeek key so the provider-auth gate is reached; no GitHub auth seeded
+    saveTokens({ deepseekKey: 'sk-test' })
     render(SettingsPanel, { props: { onclose: vi.fn() } })
     const hint = screen.getByText(/sign in with github from the top bar to use this feature/i)
     expect(hint).toBeInTheDocument()

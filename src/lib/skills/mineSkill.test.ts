@@ -11,9 +11,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   fetchMineableComments,
   mineSkillFromComments,
+  stripLongFences,
   MINE_COMMENTS_CAP,
   type RawPullComment,
 } from './mineSkill'
+import { githubProvider } from '../provider/github'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -261,5 +263,159 @@ describe('mineSkillFromComments', () => {
     expect(capturedValidator!({ content: 'y' })).toBeNull()
     // Valid → returns the object
     expect(capturedValidator!({ name: 'a', content: 'b' })).toEqual({ name: 'a', content: 'b' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// stripLongFences (exported util)
+// ---------------------------------------------------------------------------
+
+describe('stripLongFences (exported util)', () => {
+  it('strips fences with more than 10 lines of content', () => {
+    const longFence = '```ts\n' + Array.from({length: 12}, (_, i) => `line${i}`).join('\n') + '\n```'
+    expect(stripLongFences(longFence)).toBe('')
+  })
+
+  it('keeps fences with 10 or fewer lines of content', () => {
+    const shortFence = '```ts\nconst x = 1\n```'
+    expect(stripLongFences(shortFence)).toBe(shortFence)
+  })
+
+  it('strips only long fences in mixed body', () => {
+    const long = '```\n' + Array.from({length: 11}, (_, i) => `l${i}`).join('\n') + '\n```'
+    const short = '```\nshort\n```'
+    const body = `before\n${long}\nmiddle\n${short}\nafter`
+    const result = stripLongFences(body)
+    expect(result).not.toContain('l10')
+    expect(result).toContain('short')
+  })
+})
+
+import { mineSkillPipeline } from './mineSkill'
+
+describe('mineSkillPipeline (provider-dispatched)', () => {
+  const mockLlm = vi.fn()
+  const mockProvider = {
+    id: 'github' as const,
+    displayName: 'GitHub',
+    authState: () => ({ configured: true, hint: 'ok' }),
+    getMyReviewComments: vi.fn(),
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    mockLlm.mockResolvedValue({ name: "alice's review style", content: 'Priorities...' })
+    mockProvider.getMyReviewComments.mockResolvedValue(['comment 1', 'comment 2'])
+  })
+
+  it('returns error when provider has no getMyReviewComments', async () => {
+    const providerWithoutMining = {
+      id: 'bitbucket' as const,
+      displayName: 'Bitbucket',
+      authState: () => ({ configured: true, hint: 'ok' }),
+      // getMyReviewComments intentionally absent
+    }
+
+    const result = await mineSkillPipeline(
+      'bitbucket',
+      { owner: 'o', repo: 'r' },
+      { llmJsonWithRepair: mockLlm, provider: providerWithoutMining },
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/bitbucket/i)
+  })
+
+  it('returns error when provider auth is not configured', async () => {
+    const unauthProvider = {
+      ...mockProvider,
+      authState: () => ({ configured: false, hint: 'Please sign in to GitHub.' }),
+    }
+
+    const result = await mineSkillPipeline(
+      'github',
+      { owner: 'o', repo: 'r' },
+      { llmJsonWithRepair: mockLlm, provider: unauthProvider },
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('Please sign in to GitHub.')
+  })
+
+  it('dispatches to provider.getMyReviewComments and runs LLM distillation', async () => {
+    const result = await mineSkillPipeline(
+      'github',
+      { owner: 'myorg', repo: 'myrepo' },
+      { llmJsonWithRepair: mockLlm, provider: mockProvider },
+    )
+    expect(mockProvider.getMyReviewComments).toHaveBeenCalledWith(
+      { owner: 'myorg', repo: 'myrepo' },
+      150,
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.skill.name).toBe("alice's review style")
+  })
+
+  it('returns error when getMyReviewComments returns empty array', async () => {
+    mockProvider.getMyReviewComments.mockResolvedValue([])
+
+    const result = await mineSkillPipeline(
+      'github',
+      { owner: 'o', repo: 'r' },
+      { llmJsonWithRepair: mockLlm, provider: mockProvider },
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/no.*comment/i)
+  })
+})
+
+describe('githubProvider.getMyReviewComments', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.resetAllMocks()
+  })
+
+  it('method exists on github provider', () => {
+    expect(typeof githubProvider.getMyReviewComments).toBe('function')
+  })
+
+  it('returns error-style rejection when no GitHub auth', async () => {
+    // No token in localStorage → ghFetch will fail
+    await expect(
+      githubProvider.getMyReviewComments!({ owner: 'o', repo: 'r' }, 150)
+    ).rejects.toThrow()
+  })
+
+  it('returns filtered comment bodies for the authenticated user', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ login: 'alice' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([
+        { user: { login: 'alice' }, body: 'alice comment 1' },
+        { user: { login: 'bob' },   body: 'bob comment' },
+        { user: { login: 'alice' }, body: 'alice comment 2' },
+      ]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 })) // page 2 empty
+    )
+
+    const result = await githubProvider.getMyReviewComments!(
+      { owner: 'myorg', repo: 'myrepo' },
+      150,
+    )
+    expect(result).toEqual(['alice comment 1', 'alice comment 2'])
+  })
+
+  it('caps results at the cap parameter', async () => {
+    const manyComments = Array.from({ length: 10 }, (_, i) => ({
+      user: { login: 'alice' }, body: `comment ${i}`,
+    }))
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ login: 'alice' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(manyComments), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }))
+    )
+
+    const result = await githubProvider.getMyReviewComments!(
+      { owner: 'myorg', repo: 'myrepo' },
+      3,
+    )
+    expect(result.length).toBeLessThanOrEqual(3)
   })
 })

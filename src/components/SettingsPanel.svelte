@@ -12,7 +12,8 @@
   import { BUILTIN_SKILLS } from '../lib/skills/builtinSkills'
   import { mineSkillPipeline } from '../lib/skills/mineSkill'
   import { llmJsonWithRepair } from '../lib/llm/llm'
-  import { ghFetch } from '../lib/github/client'
+  import { githubProvider } from '../lib/provider/github'
+  import { gitlabProvider } from '../lib/provider/gitlab'
   import { getHistory } from '../lib/history/history'
 
   let { onclose }: { onclose: () => void } = $props()
@@ -78,37 +79,56 @@
   }
 
   // ---- Mine-my-reviews state ----
-  // Default repo from most recent history entry
-  const historyEntries = getHistory()
-  const defaultMineOwner = historyEntries[0]?.owner ?? ''
-  const defaultMineRepo = historyEntries[0]?.repo ?? ''
+  // Providers that implement getMyReviewComments (in preferred display order)
+  const MINE_CAPABLE_PROVIDERS = [githubProvider, gitlabProvider] as const
 
-  let mineOwner = $state(defaultMineOwner)
-  let mineRepo = $state(defaultMineRepo)
+  // Default provider selection: first configured mining provider, or 'github' fallback
+  let mineProvider = $state<'github' | 'gitlab'>(
+    (MINE_CAPABLE_PROVIDERS.find(p => p.authState().configured)?.id ?? 'github') as 'github' | 'gitlab'
+  )
+
+  // Prefill repo from most recent history entry matching the selected provider
+  const historyEntries = getHistory()
+  function defaultMineRepo(providerId: 'github' | 'gitlab'): { owner: string; repo: string } {
+    const match = historyEntries.find(e => e.provider === providerId)
+    if (match) return { owner: match.owner, repo: match.repo }
+    // Fallback to first entry regardless of provider
+    return { owner: historyEntries[0]?.owner ?? '', repo: historyEntries[0]?.repo ?? '' }
+  }
+
+  let mineOwner = $state(defaultMineRepo(mineProvider).owner)
+  let mineRepo = $state(defaultMineRepo(mineProvider).repo)
   let mineRunning = $state(false)
   let mineError = $state<string | null>(null)
-  // When mining completes, open the inline edit form pre-filled with the mined skill
   let minedSkillDraft = $state<{ name: string; content: string } | null>(null)
 
-  const hasGithubAuth = $derived(!!authState.auth)
+  // When provider selection changes, update repo prefill
+  function handleMineProviderChange(providerId: 'github' | 'gitlab') {
+    mineProvider = providerId
+    const defaults = defaultMineRepo(providerId)
+    mineOwner = defaults.owner
+    mineRepo = defaults.repo
+    mineError = null
+  }
+
   const hasDeepseekKey = $derived(!!getSettings().deepseekKey)
+  // For gating: whether the currently selected mine provider has auth configured
+  const hasMineProviderAuth = $derived(
+    MINE_CAPABLE_PROVIDERS.find(p => p.id === mineProvider)?.authState().configured ?? false
+  )
 
   async function handleMineComments() {
-    if (!hasGithubAuth || !hasDeepseekKey) return
+    if (!hasMineProviderAuth || !hasDeepseekKey) return
     mineRunning = true
     mineError = null
     minedSkillDraft = null
     try {
       const result = await mineSkillPipeline(
+        mineProvider,
         { owner: mineOwner.trim(), repo: mineRepo.trim() },
-        {
-          getToken: () => getSettings().githubAuth?.token ?? null,
-          ghFetch: (path, _token) => ghFetch(path),
-          llmJsonWithRepair,
-        },
+        { llmJsonWithRepair },
       )
       if (result.ok) {
-        // Pre-fill the add-skill form with the mined skill for user review
         minedSkillDraft = result.skill
         newSkillName = result.skill.name
         newSkillContent = result.skill.content
@@ -538,47 +558,71 @@
 
     <!-- Mine-my-reviews section -->
     <div class="mine-section">
-      <p class="section-label mine-label">Generate from my GitHub reviews</p>
+      <p class="section-label mine-label">Generate from my reviews</p>
       <p class="hint mine-hint">Analyzes your past review comments to build a personalized reviewer persona.</p>
 
-      {#if !hasGithubAuth}
-        <p class="mine-gate-hint">Sign in with GitHub from the top bar to use this feature.</p>
-      {:else if !hasDeepseekKey}
+      {#if !hasDeepseekKey}
         <p class="mine-gate-hint">Add a DeepSeek API key (above) to use this feature.</p>
       {:else}
-        <div class="mine-repo-row">
-          <input
-            type="text"
-            class="mine-repo-input"
-            bind:value={mineOwner}
-            placeholder="owner"
-            aria-label="Repository owner"
-          />
-          <span class="mine-repo-sep">/</span>
-          <input
-            type="text"
-            class="mine-repo-input"
-            bind:value={mineRepo}
-            placeholder="repo"
-            aria-label="Repository name"
-          />
-          <button
-            class="mine-btn"
-            onclick={handleMineComments}
-            disabled={mineRunning || !mineOwner.trim() || !mineRepo.trim() || skills.length >= SKILLS_CAP}
-            aria-busy={mineRunning}
+        <!-- Provider select -->
+        <div class="mine-provider-row">
+          <label class="mine-provider-label" for="mine-provider-select">Provider</label>
+          <select
+            id="mine-provider-select"
+            class="mine-provider-select"
+            value={mineProvider}
+            onchange={(e) => {
+              const v = (e.currentTarget as HTMLSelectElement).value
+              if (v === 'github' || v === 'gitlab') handleMineProviderChange(v)
+            }}
           >
-            {#if mineRunning}
-              <span class="mine-spinner" aria-hidden="true"></span>Analyzing…
-            {:else}
-              Analyze my comments
-            {/if}
-          </button>
+            <option value="github">GitHub</option>
+            <option value="gitlab">GitLab</option>
+            <option value="bitbucket" disabled>Bitbucket (not available yet)</option>
+          </select>
         </div>
-        {#if mineError}
-          <p role="alert" class="skill-error">{mineError}</p>
+
+        {#if !hasMineProviderAuth}
+          {#if mineProvider === 'github'}
+            <p class="mine-gate-hint">Sign in with GitHub from the top bar to use this feature.</p>
+          {:else if mineProvider === 'gitlab'}
+            <p class="mine-gate-hint">Add a GitLab token or sign in via OAuth (in Advanced above) to use this feature.</p>
+          {/if}
+        {:else}
+          <div class="mine-repo-row">
+            <input
+              type="text"
+              class="mine-repo-input"
+              bind:value={mineOwner}
+              placeholder="owner"
+              aria-label="Repository owner"
+            />
+            <span class="mine-repo-sep">/</span>
+            <input
+              type="text"
+              class="mine-repo-input"
+              bind:value={mineRepo}
+              placeholder="repo"
+              aria-label="Repository name"
+            />
+            <button
+              class="mine-btn"
+              onclick={handleMineComments}
+              disabled={mineRunning || !mineOwner.trim() || !mineRepo.trim() || skills.length >= SKILLS_CAP}
+              aria-busy={mineRunning}
+            >
+              {#if mineRunning}
+                <span class="mine-spinner" aria-hidden="true"></span>Analyzing…
+              {:else}
+                Analyze my comments
+              {/if}
+            </button>
+          </div>
+          {#if mineError}
+            <p role="alert" class="skill-error">{mineError}</p>
+          {/if}
+          <p class="hint mine-privacy-note">Your comments are sent to DeepSeek for analysis.</p>
         {/if}
-        <p class="hint mine-privacy-note">Your comments are sent to DeepSeek for analysis.</p>
       {/if}
     </div>
   </section>
@@ -989,6 +1033,29 @@
     margin-top: 0.3rem;
     font-size: 0.75em;
     color: var(--text-muted);
+  }
+
+  .mine-provider-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .mine-provider-label {
+    font-size: 0.88em;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .mine-provider-select {
+    font-size: 0.88em;
+    padding: 0.2rem 0.4rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
   }
 
   .mined-skill-notice {

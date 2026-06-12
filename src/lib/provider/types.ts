@@ -136,6 +136,20 @@ export interface ReviewProvider {
   suggestionFence?(lines: string[]): string
 
   /**
+   * Fetch the authenticated user's own review comment bodies from the given repo.
+   * Returns comment bodies only (not metadata); code fences > 10 lines are stripped.
+   * Capped at 150 comments total.
+   *
+   * Optional — only present for providers that support personal review mining.
+   * Callers must check whether the method exists before calling it.
+   * When absent, the UI should explain "not available for <Provider> yet".
+   */
+  getMyReviewComments?(
+    repo: { owner: string; repo: string },
+    cap: number,
+  ): Promise<string[]>
+
+  /**
    * Return open PRs/MRs in the current user's review queue.
    * - authorIsMe=false → awaiting this user's review (reviewer-requested)
    * - authorIsMe=true  → authored by this user (open PRs)
