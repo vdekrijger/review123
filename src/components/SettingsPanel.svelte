@@ -4,10 +4,14 @@
   import { track } from '../lib/analytics/analytics'
   import { authState } from '../lib/auth/authState.svelte'
   import {
-    listSkills, addSkill, removeSkill, toggleSkill,
+    listSkills, addSkill, updateSkill, removeSkill, toggleSkill,
     SKILLS_CAP, SKILL_CONTENT_CAP, type ReviewerSkill,
   } from '../lib/skills/skills'
   import { SAMPLE_SKILL_NAME, SAMPLE_SKILL_CONTENT } from '../lib/skills/sampleSkill'
+  import { mineSkillPipeline } from '../lib/skills/mineSkill'
+  import { llmJsonWithRepair } from '../lib/llm/llm'
+  import { ghFetch } from '../lib/github/client'
+  import { getHistory } from '../lib/history/history'
 
   let { onclose }: { onclose: () => void } = $props()
 
@@ -34,6 +38,84 @@
   let newSkillContent = $state('')
   let skillError = $state<string | null>(null)
 
+  // ---- Inline edit state (per-skill editing) ----
+  // editingId is the id of the skill currently being edited (null = none)
+  let editingId = $state<string | null>(null)
+  let editName = $state('')
+  let editContent = $state('')
+  let editError = $state<string | null>(null)
+
+  function openEdit(skill: ReviewerSkill) {
+    editingId = skill.id
+    editName = skill.name
+    editContent = skill.content
+    editError = null
+  }
+
+  function cancelEdit() {
+    editingId = null
+    editError = null
+  }
+
+  function handleSaveEdit() {
+    if (!editingId) return
+    editError = null
+    try {
+      updateSkill(editingId, { name: editName, content: editContent })
+      editingId = null
+      refreshSkills()
+    } catch (e) {
+      editError = (e as Error).message
+    }
+  }
+
+  // ---- Mine-my-reviews state ----
+  // Default repo from most recent history entry
+  const historyEntries = getHistory()
+  const defaultMineOwner = historyEntries[0]?.owner ?? ''
+  const defaultMineRepo = historyEntries[0]?.repo ?? ''
+
+  let mineOwner = $state(defaultMineOwner)
+  let mineRepo = $state(defaultMineRepo)
+  let mineRunning = $state(false)
+  let mineError = $state<string | null>(null)
+  // When mining completes, open the inline edit form pre-filled with the mined skill
+  let minedSkillDraft = $state<{ name: string; content: string } | null>(null)
+
+  const hasGithubAuth = $derived(!!authState.auth)
+  const hasDeepseekKey = $derived(!!getSettings().deepseekKey)
+
+  async function handleMineComments() {
+    if (!hasGithubAuth || !hasDeepseekKey) return
+    mineRunning = true
+    mineError = null
+    minedSkillDraft = null
+    try {
+      const result = await mineSkillPipeline(
+        { owner: mineOwner.trim(), repo: mineRepo.trim() },
+        {
+          getToken: () => getSettings().githubAuth?.token ?? null,
+          ghFetch: (path, _token) => ghFetch(path),
+          llmJsonWithRepair,
+        },
+      )
+      if (result.ok) {
+        // Pre-fill the add-skill form with the mined skill for user review
+        minedSkillDraft = result.skill
+        newSkillName = result.skill.name
+        newSkillContent = result.skill.content
+        addSkillOpen = true
+        skillError = null
+      } else {
+        mineError = result.error
+      }
+    } catch (e) {
+      mineError = (e as Error).message
+    } finally {
+      mineRunning = false
+    }
+  }
+
   function refreshSkills() {
     skills = listSkills()
   }
@@ -51,6 +133,7 @@
   }
 
   function handleRemoveSkill(id: string) {
+    if (editingId === id) editingId = null
     removeSkill(id)
     refreshSkills()
   }
@@ -62,6 +145,7 @@
       newSkillName = ''
       newSkillContent = ''
       addSkillOpen = false
+      minedSkillDraft = null
       refreshSkills()
     } catch (e) {
       skillError = (e as Error).message
@@ -199,20 +283,56 @@
     {#if skills.length > 0}
       <ul class="skill-list">
         {#each skills as skill (skill.id)}
-          <li class="skill-item">
-            <label class="skill-toggle-label">
-              <input
-                type="checkbox"
-                checked={skill.enabled}
-                onchange={() => handleToggleSkill(skill.id)}
-              />
-              <span class="skill-name">{skill.name}</span>
-            </label>
-            <button
-              class="skill-delete-btn"
-              onclick={() => handleRemoveSkill(skill.id)}
-              aria-label="Delete {skill.name}"
-            >Delete</button>
+          <li class="skill-item-wrapper">
+            <div class="skill-item">
+              <label class="skill-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={skill.enabled}
+                  onchange={() => handleToggleSkill(skill.id)}
+                />
+                <span class="skill-name">{skill.name}</span>
+              </label>
+              <button
+                class="skill-edit-btn"
+                onclick={() => editingId === skill.id ? cancelEdit() : openEdit(skill)}
+                aria-label="Edit {skill.name}"
+                aria-expanded={editingId === skill.id}
+              >{editingId === skill.id ? 'Cancel' : 'Edit'}</button>
+              <button
+                class="skill-delete-btn"
+                onclick={() => handleRemoveSkill(skill.id)}
+                aria-label="Delete {skill.name}"
+              >Delete</button>
+            </div>
+
+            {#if editingId === skill.id}
+              <div class="skill-edit-form" role="region" aria-label="Edit {skill.name}">
+                <label>
+                  Name
+                  <input
+                    type="text"
+                    bind:value={editName}
+                    placeholder="Skill name"
+                  />
+                </label>
+                <label>
+                  Persona
+                  <textarea
+                    bind:value={editContent}
+                    placeholder="Reviewer persona guidelines…"
+                    rows={8}
+                  ></textarea>
+                </label>
+                {#if editError}
+                  <p role="alert" class="skill-error">{editError}</p>
+                {/if}
+                <div class="skill-edit-actions">
+                  <button class="btn btn-primary-sm" onclick={handleSaveEdit}>Save</button>
+                  <button class="btn-sm" onclick={cancelEdit}>Cancel</button>
+                </div>
+              </div>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -232,11 +352,14 @@
     {#if !addSkillOpen}
       <button
         class="add-skill-btn"
-        onclick={() => { addSkillOpen = true; skillError = null }}
+        onclick={() => { addSkillOpen = true; skillError = null; minedSkillDraft = null }}
         disabled={skills.length >= SKILLS_CAP}
       >Add skill</button>
     {:else}
       <div class="add-skill-form">
+        {#if minedSkillDraft}
+          <p class="mined-skill-notice">Review your generated skill below, then save or edit it.</p>
+        {/if}
         <label>
           Skill name
           <input
@@ -258,10 +381,56 @@
         {/if}
         <div class="add-skill-actions">
           <button onclick={handleSaveSkill}>Save skill</button>
-          <button onclick={() => { addSkillOpen = false; skillError = null }}>Cancel</button>
+          <button onclick={() => { addSkillOpen = false; skillError = null; minedSkillDraft = null }}>Cancel</button>
         </div>
       </div>
     {/if}
+
+    <!-- Mine-my-reviews section -->
+    <div class="mine-section">
+      <p class="section-label mine-label">Generate from my GitHub reviews</p>
+      <p class="hint mine-hint">Analyzes your past review comments to build a personalized reviewer persona.</p>
+
+      {#if !hasGithubAuth}
+        <p class="mine-gate-hint">Sign in with GitHub (above) to use this feature.</p>
+      {:else if !hasDeepseekKey}
+        <p class="mine-gate-hint">Add a DeepSeek API key (above) to use this feature.</p>
+      {:else}
+        <div class="mine-repo-row">
+          <input
+            type="text"
+            class="mine-repo-input"
+            bind:value={mineOwner}
+            placeholder="owner"
+            aria-label="Repository owner"
+          />
+          <span class="mine-repo-sep">/</span>
+          <input
+            type="text"
+            class="mine-repo-input"
+            bind:value={mineRepo}
+            placeholder="repo"
+            aria-label="Repository name"
+          />
+          <button
+            class="mine-btn"
+            onclick={handleMineComments}
+            disabled={mineRunning || !mineOwner.trim() || !mineRepo.trim() || skills.length >= SKILLS_CAP}
+            aria-busy={mineRunning}
+          >
+            {#if mineRunning}
+              <span class="mine-spinner" aria-hidden="true"></span>Analyzing…
+            {:else}
+              Analyze my comments
+            {/if}
+          </button>
+        </div>
+        {#if mineError}
+          <p role="alert" class="skill-error">{mineError}</p>
+        {/if}
+        <p class="hint mine-privacy-note">Your comments are sent to DeepSeek for analysis.</p>
+      {/if}
+    </div>
   </section>
 </dialog>
 
@@ -477,5 +646,182 @@
     font-size: 0.8em;
     color: var(--text-muted);
     margin: 0.2rem 0 0;
+  }
+
+  /* ---- Skill edit button ---- */
+  .skill-item-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .skill-edit-btn {
+    font-size: 0.8em;
+    padding: 0.15rem 0.5rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.7;
+  }
+
+  .skill-edit-btn:hover {
+    opacity: 1;
+    background: var(--surface-raised);
+  }
+
+  /* ---- Inline edit form ---- */
+  .skill-edit-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin: 0.4rem 0 0.4rem 1.5rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--surface-raised);
+  }
+
+  .skill-edit-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.9em;
+  }
+
+  .skill-edit-form textarea {
+    font-family: var(--font-mono);
+    font-size: 0.8em;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    padding: 0.4rem;
+    resize: vertical;
+    background: var(--surface);
+    color: var(--text);
+  }
+
+  .skill-edit-actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .btn-primary-sm {
+    font-size: 0.82em;
+    padding: 0.25rem 0.65rem;
+    border-radius: 4px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .btn-sm {
+    font-size: 0.82em;
+    padding: 0.25rem 0.65rem;
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  /* ---- Mine-my-reviews section ---- */
+  .mine-section {
+    margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .mine-label {
+    margin-bottom: 0.15rem;
+  }
+
+  .mine-hint {
+    margin-top: 0;
+    margin-bottom: 0.6rem;
+  }
+
+  .mine-gate-hint {
+    font-size: 0.85em;
+    color: var(--text-muted);
+    margin: 0.25rem 0;
+  }
+
+  .mine-repo-row {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex-wrap: wrap;
+  }
+
+  .mine-repo-input {
+    font-size: 0.88em;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    width: 120px;
+  }
+
+  .mine-repo-sep {
+    color: var(--text-muted);
+    font-size: 1.1em;
+    line-height: 1;
+  }
+
+  .mine-btn {
+    font-size: 0.88em;
+    padding: 0.3rem 0.75rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .mine-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .mine-btn:not(:disabled):hover {
+    background: var(--surface-raised);
+  }
+
+  .mine-spinner {
+    display: inline-block;
+    width: 0.8em;
+    height: 0.8em;
+    border: 2px solid var(--text-muted);
+    border-top-color: var(--text);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    flex-shrink: 0;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .mine-privacy-note {
+    margin-top: 0.3rem;
+    font-size: 0.75em;
+    color: var(--text-muted);
+  }
+
+  .mined-skill-notice {
+    font-size: 0.85em;
+    color: var(--text-muted);
+    background: var(--legend-added-bg, #e6ffed);
+    border: 1px solid var(--legend-added-border, #acf2bd);
+    border-radius: 4px;
+    padding: 0.35rem 0.6rem;
+    margin: 0;
   }
 </style>
