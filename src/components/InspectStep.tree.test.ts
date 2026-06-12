@@ -312,12 +312,13 @@ describe('InspectStep — tree select expands viewed-collapsed article', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Wide-viewport: drawer expands into left margin, not pushing diff column
+// Adaptive drawer: opening never adds overlay artifacts — margin mode leaves
+// the diff untouched, inline mode pushes via plain flex flow (no class, no
+// backdrop). The regime decision itself is pure CSS; geometry proven in e2e.
 // ---------------------------------------------------------------------------
 
-describe('InspectStep — wide viewport: drawer opens into left margin', () => {
-  it('diff-column does NOT shrink when drawer opens on wide viewport (≥1200px)', async () => {
-    // Wide viewport with plenty of left-margin space
+describe('InspectStep — adaptive drawer: no overlay artifacts on open', () => {
+  it('diff-column never gets a drawer-open class when the drawer opens', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1400, writable: true, configurable: true })
 
     const files = [makeFile('src/a.ts'), makeFile('src/b.ts')]
@@ -325,7 +326,6 @@ describe('InspectStep — wide viewport: drawer opens into left margin', () => {
       props: { files, changedFiles: 2, mode: 'unified', onmode: () => {}, draftStore: null },
     })
 
-    // Measure diff column before opening
     const diffCol = container.querySelector('.diff-column') as HTMLElement
     expect(diffCol).toBeInTheDocument()
 
@@ -333,14 +333,11 @@ describe('InspectStep — wide viewport: drawer opens into left margin', () => {
     await fireEvent.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
 
-    // On wide viewport, drawer should be absolutely positioned (left-margin mode)
-    // so diff-column does NOT get the drawer-open class that would add margin
+    // Inline push happens through normal flex flow — no special class needed
     expect(diffCol).not.toHaveClass('drawer-open')
   })
 
-  it('inspect-layout has data-wide-mode when viewport is wide enough', async () => {
-    Object.defineProperty(window, 'innerWidth', { value: 1400, writable: true, configurable: true })
-
+  it('inspect-layout carries data-diffwidth so CSS can pick margin vs inline mode', async () => {
     const files = [makeFile('src/a.ts')]
     const { container } = render(InspectStep, {
       props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null },
@@ -348,13 +345,10 @@ describe('InspectStep — wide viewport: drawer opens into left margin', () => {
 
     const layout = container.querySelector('.inspect-layout') as HTMLElement
     expect(layout).toBeInTheDocument()
-
-    // On wide viewport, layout should carry an attribute indicating wide mode
-    // so the drawer is positioned absolutely into the left margin
-    expect(layout).toHaveAttribute('data-wide', 'true')
+    expect(layout).toHaveAttribute('data-diffwidth', 'centered')
   })
 
-  it('inspect-layout does NOT have data-wide when viewport is narrow (<1200px)', async () => {
+  it('no backdrop element is rendered when the drawer opens (any viewport)', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 800, writable: true, configurable: true })
 
     const files = [makeFile('src/a.ts')]
@@ -362,8 +356,9 @@ describe('InspectStep — wide viewport: drawer opens into left margin', () => {
       props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null },
     })
 
-    const layout = container.querySelector('.inspect-layout') as HTMLElement
-    expect(layout).not.toHaveAttribute('data-wide', 'true')
+    const toggle = container.querySelector('.tree-toggle-tab') as HTMLButtonElement
+    await fireEvent.click(toggle)
+    expect(container.querySelector('.tree-backdrop')).not.toBeInTheDocument()
   })
 })
 

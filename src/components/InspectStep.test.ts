@@ -150,20 +150,19 @@ describe('InspectStep — toolbar btn classes', () => {
 // ---------------------------------------------------------------------------
 
 describe('InspectStep — sticky drawer structure', () => {
-  it('file-tree-drawer has data-wide attribute', () => {
+  it('file-tree-drawer has data-open attribute (CSS keys the inline width off it)', () => {
     const files = makeFiles(['a.ts'])
     const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null } })
     const drawer = container.querySelector('.file-tree-drawer')
     expect(drawer).toBeInTheDocument()
-    // data-wide attribute is present (value depends on jsdom viewport, accept either)
-    expect(drawer!.hasAttribute('data-wide')).toBe(true)
+    expect(drawer!.hasAttribute('data-open')).toBe(true)
   })
 
-  it('inspect-layout has data-wide attribute', () => {
+  it('inspect-layout has data-diffwidth attribute (CSS keys margin-vs-inline off it)', () => {
     const files = makeFiles(['a.ts'])
     const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null } })
     const layout = container.querySelector('.inspect-layout')
     expect(layout).toBeInTheDocument()
-    expect(layout!.hasAttribute('data-wide')).toBe(true)
+    expect(layout!.hasAttribute('data-diffwidth')).toBe(true)
   })
 })

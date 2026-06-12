@@ -52,8 +52,21 @@
 /* ── Diff width: full-width mode lifts the .review container cap (step 2 only) ── */
 /* :has(.inspect-layout) scopes to step 2 so step 1/3 prose keeps its readable width. */
 /* :root[data-diffwidth] attribute is set/cleared by applyAppearance() on every change. */
+/* Gutters also collapse to a slim 10px so full mode is meaningfully wider than
+   centered at EVERY viewport size, not only above the 70rem cap. */
 :root[data-diffwidth='full'] .review:has(.inspect-layout) {
   max-width: none;
+  padding-left: 10px;
+}
+
+/* Right gutter slims only when the rail isn't reserving that space.
+   Scoped to data-rail-collapsed='true' so the expanded-rail reservations
+   (the ≥1444px media block below + the 1100–1443px rule in Review.svelte)
+   keep winning — PR #18 lesson: content must never slide under the rail in
+   full mode. At ≥1444px the media block below restores the collapsed-strip
+   reserve where width is plentiful. */
+:root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='true'] {
+  padding-right: 10px;
 }
 
 /*
