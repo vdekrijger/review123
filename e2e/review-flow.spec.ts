@@ -146,6 +146,44 @@ function makeIssueComments() {
   ]
 }
 
+// Two commits for the PR (used by revision picker tests)
+const COMMIT_1_SHA = '111111aaaaaaa'
+const COMMIT_2_SHA = '222222bbbbbbb' // head commit
+
+function makePrCommits() {
+  return [
+    {
+      sha: COMMIT_1_SHA,
+      commit: {
+        message: 'feat: first commit\n\nLonger body here',
+        author: { date: '2024-01-01T10:00:00Z' },
+      },
+    },
+    {
+      sha: COMMIT_2_SHA,
+      commit: {
+        message: 'fix: second commit (head)',
+        author: { date: '2024-01-02T10:00:00Z' },
+      },
+    },
+  ]
+}
+
+// Compare endpoint response for base → first commit (1 file)
+function makeCompareOneFile() {
+  return {
+    files: [
+      {
+        filename: 'src/feature.ts',
+        status: 'modified',
+        patch: '@@ -1,2 +1,3 @@\n context\n+added by commit 1\n context',
+        additions: 1,
+        deletions: 0,
+      },
+    ],
+  }
+}
+
 // DeepSeek SSE response for streaming summary
 function makeDeepSeekStreamResponse(text: string): string {
   const words = text.split(' ')
@@ -362,6 +400,21 @@ async function setupRoutes(
           html_url: `https://github.com/${OWNER}/${REPO}/pull/${PR_NUMBER}#pullrequestreview-1`,
         },
       })
+    }
+
+    // PR commits: /repos/:owner/:repo/pulls/:number/commits
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/commits`) {
+      return route.fulfill({ json: makePrCommits() })
+    }
+
+    // Compare: /repos/:owner/:repo/compare/:base...:head
+    if (path.startsWith(`/repos/${OWNER}/${REPO}/compare/`)) {
+      // base → commit1: return 1 file; other combos: empty
+      const range = decodeURIComponent(path.replace(`/repos/${OWNER}/${REPO}/compare/`, ''))
+      if (range === `${BASE_SHA}...${COMMIT_1_SHA}`) {
+        return route.fulfill({ json: makeCompareOneFile() })
+      }
+      return route.fulfill({ json: { files: [] } })
     }
 
     // PR review comments: /repos/:owner/:repo/pulls/:number/comments
@@ -860,4 +913,70 @@ test('existing comments: inline review comment visible in step 2, no error note 
   await expect(
     page.getByText(/couldn't load existing comments/i)
   ).not.toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// Test 10: Revision picker — open, compare base→commit1, swap files, Full diff restores
+// ---------------------------------------------------------------------------
+
+test('revision picker: open picker, choose base→first-commit, compare files swap, Full diff restores', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Revision picker should appear after commits load
+  const fromSelect = page.getByRole('combobox', { name: /from revision/i })
+  const toSelect = page.getByRole('combobox', { name: /to revision/i })
+  await expect(fromSelect).toBeVisible({ timeout: 5_000 })
+  await expect(toSelect).toBeVisible({ timeout: 5_000 })
+
+  // "PR base" option should exist in both selects
+  await expect(fromSelect.locator('option', { hasText: 'PR base' })).toHaveCount(1)
+
+  // Both commit shas should appear as options (short shas from fixture)
+  // COMMIT_1_SHA = '111111aaaaaaa' → shortSha = '111111a'
+  // COMMIT_2_SHA = '222222bbbbbbb' → shortSha = '222222b'
+  const fromOptions = await fromSelect.locator('option').allTextContents()
+  expect(fromOptions.some(o => o.includes('111111a'))).toBeTruthy()
+  expect(fromOptions.some(o => o.includes('222222b'))).toBeTruthy()
+
+  // Select base → first commit
+  await fromSelect.selectOption({ label: 'PR base' })
+  await toSelect.selectOption({ value: COMMIT_1_SHA })
+
+  // Apply comparison
+  const compareBtn = page.getByRole('button', { name: /apply revision comparison/i })
+  await expect(compareBtn).not.toBeDisabled()
+  await compareBtn.click()
+
+  // Wait for compare to activate — the mock returns 1 file (src/feature.ts)
+  // After compare is active, InspectStep should show 1 file
+  await expect(page.locator('article.file-diff')).toHaveCount(1, { timeout: 8_000 })
+
+  // The PR base → commit1 comparison returns only src/feature.ts
+  await expect(page.locator('article.file-diff')).toHaveCount(1)
+
+  // "Full diff" button should be visible in the picker (clear action)
+  const fullDiffBtn = page.getByRole('button', { name: /full diff/i })
+  await expect(fullDiffBtn).toBeVisible()
+
+  // Click "Full diff" — restores original 2 files
+  await fullDiffBtn.click()
+
+  // After restore, should show original 2 files again
+  await expect(page.locator('article.file-diff')).toHaveCount(2, { timeout: 5_000 })
 })
