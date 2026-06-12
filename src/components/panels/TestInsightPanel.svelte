@@ -16,6 +16,40 @@
   const tests = $derived(
     run.tests.status === 'done' ? (run.tests.value as TestInsight) : null
   )
+
+  // --- Test gap grouping (ai-quality-round2) ---
+  // Regex: gap starts with a file path (word chars, @, dots, hyphens, slashes,
+  // with a dot-extension), followed by an optional colon and space.
+  const GAP_PATH_RE = /^([\w@./-]+\.[\w]+):?\s*/
+
+  interface GapGroup {
+    file: string | null  // null → "General" bucket
+    items: string[]      // gap text with the path prefix stripped
+  }
+
+  const gapGroups = $derived.by((): GapGroup[] => {
+    if (!tests) return []
+    const map = new Map<string, string[]>()
+    const GENERAL = '\x00general'
+    for (const gap of tests.gaps) {
+      const m = gap.match(GAP_PATH_RE)
+      if (m) {
+        const file = m[1]
+        const rest = gap.slice(m[0].length).trim() || gap
+        const key = file === 'General' ? GENERAL : file
+        if (!map.has(key)) map.set(key, [])
+        map.get(key)!.push(rest)
+      } else {
+        if (!map.has(GENERAL)) map.set(GENERAL, [])
+        map.get(GENERAL)!.push(gap)
+      }
+    }
+    const result: GapGroup[] = []
+    for (const [key, items] of map) {
+      result.push({ file: key === GENERAL ? null : key, items })
+    }
+    return result
+  })
 </script>
 
 <AiPanel title="Test coverage (AI-inferred)" state={run.tests} onretry={() => run.retry('tests')}>
@@ -44,14 +78,26 @@
     {/if}
     {#if tests.gaps.length > 0}
       <p class="tests-gaps-heading">AI-inferred gaps — behaviors changed without test coverage:</p>
-      <ul class="tests-gaps-list">
-        {#each tests.gaps as gap (gap)}
-          <li class="tests-gap-item">
-            <span class="tests-gap-icon">⚠</span>
-            <span class="tests-gap-text">{gap}</span>
-          </li>
-        {/each}
-      </ul>
+      {#each gapGroups as group (group.file ?? 'General')}
+        {#if group.file}
+          <button
+            class="tests-gap-file-header"
+            onclick={() => onhotspot?.(group.file!)}
+            title="Jump to {group.file} in Inspect"
+            aria-label="Jump to {group.file}"
+          >{group.file}</button>
+        {:else}
+          <p class="tests-gap-file-header tests-gap-general-header" aria-label="Jump to General">General</p>
+        {/if}
+        <ul class="tests-gaps-list tests-gaps-group-list">
+          {#each group.items as item (item)}
+            <li class="tests-gap-item">
+              <span class="tests-gap-icon">⚠</span>
+              <span class="tests-gap-text">{item}</span>
+            </li>
+          {/each}
+        </ul>
+      {/each}
     {/if}
     {#if tests.covered.length === 0 && tests.gaps.length === 0}
       <p class="tests-empty">No AI-inferred test coverage data available.</p>
@@ -145,6 +191,43 @@
 
   .tests-gap-text {
     opacity: 0.9;
+  }
+
+  .tests-gap-file-header {
+    display: inline-flex;
+    align-items: center;
+    margin: 0.5rem 0 0.2rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    background: var(--surface-raised);
+    border: 1px solid var(--hairline);
+    font-family: var(--font-mono, monospace);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 100ms;
+    white-space: nowrap;
+  }
+
+  .tests-gap-file-header:hover {
+    background: var(--accent-subtle);
+    border-color: var(--accent);
+  }
+
+  .tests-gap-general-header {
+    cursor: default;
+    color: var(--text-muted);
+  }
+
+  .tests-gap-general-header:hover {
+    background: var(--surface-raised);
+    border-color: var(--hairline);
+  }
+
+  .tests-gaps-group-list {
+    margin-left: 0.75rem;
   }
 
   .tests-empty {

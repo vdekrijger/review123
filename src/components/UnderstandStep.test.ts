@@ -847,6 +847,95 @@ describe('UnderstandStep verdict evidence panel', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Test coverage panel — per-file grouping (ai-quality-round2)
+// gaps with file-path prefix render ONE header per file;
+// gaps without path prefix go in a General bucket.
+// ---------------------------------------------------------------------------
+
+describe('UnderstandStep test coverage panel — per-file gap grouping', () => {
+  it('renders one group header per unique file in gaps', () => {
+    const groupedTests: TestInsight = {
+      covered: [],
+      gaps: [
+        'src/lib/cache.ts: cache expiry not tested',
+        'src/lib/cache.ts: concurrent access not tested',
+        'src/routes/Review.svelte: retry on error not tested',
+      ],
+    }
+    const run = makeRun({ tests: { status: 'done', value: groupedTests } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    const headers = container.querySelectorAll('.tests-gap-file-header')
+    // Should have exactly 2 unique file headers
+    expect(headers.length).toBe(2)
+  })
+
+  it('each group header shows the file path without repeating it in entries', () => {
+    const groupedTests: TestInsight = {
+      covered: [],
+      gaps: [
+        'src/lib/cache.ts: cache expiry not tested',
+        'src/lib/cache.ts: concurrent access not tested',
+      ],
+    }
+    const run = makeRun({ tests: { status: 'done', value: groupedTests } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    const headers = container.querySelectorAll('.tests-gap-file-header')
+    expect(headers.length).toBe(1)
+    expect(headers[0].textContent).toContain('src/lib/cache.ts')
+    // Entries under the header should NOT re-include the full path
+    const items = container.querySelectorAll('.tests-gap-item')
+    // Both items should exist
+    expect(items.length).toBe(2)
+  })
+
+  it('gaps without file path prefix go into General bucket', () => {
+    const mixedTests: TestInsight = {
+      covered: [],
+      gaps: [
+        'src/foo.ts: some file-specific gap',
+        'General behavior not covered anywhere',
+      ],
+    }
+    const run = makeRun({ tests: { status: 'done', value: mixedTests } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    // Should have file header for src/foo.ts
+    const headers = container.querySelectorAll('.tests-gap-file-header')
+    expect(headers.length).toBeGreaterThanOrEqual(1)
+    // Should have a General bucket header
+    const generalHeader = Array.from(headers).find(h => h.textContent?.match(/general/i))
+    expect(generalHeader).not.toBeUndefined()
+  })
+
+  it('file header is clickable and calls onhotspot with the file path', () => {
+    const onhotspot = vi.fn()
+    const groupedTests: TestInsight = {
+      covered: [],
+      gaps: ['src/lib/cache.ts: missing test'],
+    }
+    const run = makeRun({ tests: { status: 'done', value: groupedTests } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run, onhotspot } })
+    openAllDetails()
+    const header = container.querySelector('.tests-gap-file-header') as HTMLElement
+    header?.click()
+    expect(onhotspot).toHaveBeenCalledWith('src/lib/cache.ts')
+  })
+
+  it('ungrouped gaps (no path prefix) still render gap text', () => {
+    const generalGaps: TestInsight = {
+      covered: [],
+      gaps: ['Some general gap with no file prefix'],
+    }
+    const run = makeRun({ tests: { status: 'done', value: generalGaps } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(screen.getByText('Some general gap with no file prefix')).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // File structure section (new: collapsed <details> with mini FileTree)
 // ---------------------------------------------------------------------------
 
