@@ -123,7 +123,7 @@
     top: 0;
     bottom: 0;
     width: 260px;
-    background: #16161e;
+    background: var(--surface, #16161e);
     border-left: 1px solid #4444;
     overflow-y: auto;
     z-index: 50;
