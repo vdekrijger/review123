@@ -28,6 +28,7 @@
   import type { Draft } from '../lib/drafts/drafts.svelte'
   import type { CoachResult } from '../lib/ai/schemas'
   import type { PrComment } from '../lib/github/comments'
+  import type { ReviewProvider } from '../lib/provider/types'
 
   const RETURN_KEY = 'review123:returnTo'
 
@@ -57,9 +58,14 @@
      * Capped at 30, truncated at 200ch inside coachPrompt.
      */
     prComments?: PrComment[]
+    /**
+     * The active review provider. Optional — when absent or when atomicReview is true,
+     * no non-atomic note is shown (GitHub behaviour).
+     */
+    provider?: ReviewProvider
   }
 
-  let { prRef, commitId, store, prUrl, submitFn = submitReview, coachFn, prComments = [] }: Props = $props()
+  let { prRef, commitId, store, prUrl, submitFn = submitReview, coachFn, prComments = [], provider }: Props = $props()
 
   // Derive signed-in status reactively from authState so the UI flips live
   // when the user completes OAuth (EC-REACT: no reload required).
@@ -337,6 +343,12 @@
       </label>
     </fieldset>
 
+    {#if provider && !provider.capabilities.atomicReview}
+      <p class="non-atomic-note">
+        On {provider.displayName}, submitting posts each comment individually plus your approval — not a single atomic review.
+      </p>
+    {/if}
+
     <!-- Submit -->
     <button
       class="submit-btn"
@@ -446,6 +458,12 @@
     gap: 0.4rem;
     cursor: pointer;
     font-size: 0.95rem;
+  }
+
+  .non-atomic-note {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin: 0;
   }
 
   .submit-btn {
