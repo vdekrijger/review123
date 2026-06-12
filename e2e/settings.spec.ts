@@ -61,6 +61,39 @@ test('appearance: pick Dark + Serif → documentElement has data-theme=dark & da
   expect(dataFontAfterReload).toBe('serif')
 })
 
+test('sample reviewer: clicking "Add sample reviewer" in Settings installs it and shows it in the list enabled', async ({
+  page,
+}) => {
+  await blockExternal(page)
+
+  await page.goto('/')
+
+  // Open settings dialog
+  const settingsBtn = page.getByRole('button', { name: /settings/i })
+  await expect(settingsBtn).toBeVisible({ timeout: 5_000 })
+  await settingsBtn.click()
+
+  await expect(page.getByRole('dialog', { name: /settings/i })).toBeVisible()
+
+  // "Add sample reviewer" button should be visible
+  const addSampleBtn = page.getByRole('button', { name: /add sample reviewer/i })
+  await expect(addSampleBtn).toBeVisible()
+
+  // Click it
+  await addSampleBtn.click()
+
+  // The sample skill name should appear in the list
+  await expect(page.getByText(/Pragmatic Senior Reviewer/i)).toBeVisible({ timeout: 3_000 })
+
+  // The button should be hidden now
+  await expect(page.getByRole('button', { name: /add sample reviewer/i })).not.toBeVisible()
+
+  // The skill's checkbox should be checked (enabled)
+  const skillCheckbox = page.locator('.skill-item input[type="checkbox"]').first()
+  await expect(skillCheckbox).toBeChecked()
+})
+
+
 // ---------------------------------------------------------------------------
 // Modal top-layer test: settings dialog opened on Inspect step is a real modal
 // Fix for: <dialog open> (non-modal) let sticky diff internals paint through it
