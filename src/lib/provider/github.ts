@@ -19,6 +19,7 @@ import { getResolvedCommentIds } from '../github/threads'
 import { getPrCommits } from '../github/commits'
 import { compareCommits } from '../github/compare'
 import { submitReview } from '../github/review'
+import { replyToReviewComment, type ReplyOutcome } from '../github/replies'
 import { ghFetch } from '../github/client'
 import { getSettings } from '../settings/settings'
 import type { ReviewProvider, PrRefX, ParseResult, QueueItem } from './types'
@@ -51,6 +52,7 @@ export const githubProvider: ReviewProvider = {
     suggestions: true,
     atomicReview: true,
     compare: true,
+    commentReplies: true,
   },
 
   parseUrl(input: string): ParseResult {
@@ -109,6 +111,10 @@ export const githubProvider: ReviewProvider = {
     commitId: string,
   ): Promise<SubmitOutcome> {
     return submitReview(toRef(ref), verdict, body, drafts, commitId)
+  },
+
+  replyToThread(ref: PrRefX, root: PrComment, body: string): Promise<ReplyOutcome> {
+    return replyToReviewComment(toRef(ref), root.id, body)
   },
 
   authState(): { configured: boolean; hint: string } {

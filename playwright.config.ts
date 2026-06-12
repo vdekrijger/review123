@@ -1,5 +1,10 @@
 import { defineConfig, devices } from '@playwright/test'
 
+// Port is overridable so parallel checkouts/worktrees don't attach to each
+// other's preview servers (reuseExistingServer would silently test a stale
+// build from a different worktree).
+const PORT = Number(process.env.PW_PORT ?? 4174)
+
 export default defineConfig({
   testDir: './e2e',
   // Fail fast on first failure in CI
@@ -10,7 +15,7 @@ export default defineConfig({
   reporter: [['html', { open: 'never' }], ['list']],
 
   use: {
-    baseURL: 'http://localhost:4174',
+    baseURL: `http://localhost:${PORT}`,
     trace: 'on-first-retry',
   },
 
@@ -25,8 +30,8 @@ export default defineConfig({
   // reuseExistingServer: !process.env.CI allows local runs to skip rebuild
   // when the developer already has pnpm preview running.
   webServer: {
-    command: 'pnpm build && pnpm preview --port 4174',
-    port: 4174,
+    command: `pnpm build && pnpm preview --port ${PORT}`,
+    port: PORT,
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,
   },

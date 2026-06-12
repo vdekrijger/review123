@@ -15,6 +15,9 @@ const EVENTS = {
   hotspot_clicked: [],
   ci_summary_viewed: ['conclusion'],
   comment_drafted: [],
+  // PRIVACY DECISION: 'ok' is a boolean outcome only — no body content,
+  // thread ids, or repo identifiers are ever sent.
+  reply_posted: ['ok'],
   review_submitted: ['verdict', 'comment_count'],
   settings_key_added: ['service'],
   // PRIVACY DECISION: engagement events below carry section/surface identifiers only.

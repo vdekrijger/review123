@@ -28,6 +28,19 @@ if (typeof jsdom !== 'undefined' && jsdom.window) {
 // The polyfill is minimal: showModal() sets open=true, close() sets
 // open=false. A guard prevents double-polyfilling if a future jsdom
 // version adds native support.
+// ResizeObserver stub for jsdom — @git-diff-view's useDomWidth hook observes
+// the diff wrapper width when inline extend annotations render (drafts and
+// existing comment threads anchored to a line). jsdom has no layout engine,
+// so a no-op observer is sufficient.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  class ResizeObserverStub {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver
+}
+
 if (typeof HTMLDialogElement !== 'undefined' && !HTMLDialogElement.prototype.showModal) {
   HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
     if (this.open) throw new DOMException('The dialog is already open.', 'InvalidStateError')

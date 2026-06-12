@@ -11,9 +11,14 @@ export interface PrComment {
   line: number | null
   side: 'LEFT' | 'RIGHT' | null
   inReplyTo: number | null
+  /**
+   * Provider-specific thread handle needed to post a reply.
+   * GitLab: discussion id. GitHub: not needed (reply uses the root comment id).
+   */
+  threadId?: string
 }
 
-interface RawReviewComment {
+export interface RawReviewComment {
   id: number
   user: { login: string; avatar_url: string | null }
   body: string
@@ -22,6 +27,20 @@ interface RawReviewComment {
   line: number | null
   side: 'LEFT' | 'RIGHT'
   in_reply_to_id: number | null
+}
+
+export function mapReviewComment(r: RawReviewComment): PrComment {
+  return {
+    id: r.id,
+    author: r.user.login,
+    authorAvatar: r.user.avatar_url,
+    body: r.body,
+    createdAt: r.created_at,
+    path: r.path,
+    line: r.line,
+    side: r.side,
+    inReplyTo: r.in_reply_to_id,
+  }
 }
 
 interface RawIssueComment {
@@ -56,17 +75,7 @@ export async function getPrComments(ref: PrRef): Promise<PrComment[]> {
     `/repos/${owner}/${repo}/issues/${number}/comments?per_page=100`,
   )
 
-  const reviewComments: PrComment[] = reviewRaw.map((r) => ({
-    id: r.id,
-    author: r.user.login,
-    authorAvatar: r.user.avatar_url,
-    body: r.body,
-    createdAt: r.created_at,
-    path: r.path,
-    line: r.line,
-    side: r.side,
-    inReplyTo: r.in_reply_to_id,
-  }))
+  const reviewComments: PrComment[] = reviewRaw.map(mapReviewComment)
 
   const issueComments: PrComment[] = issueRaw.map((r) => ({
     id: r.id,

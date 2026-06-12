@@ -916,7 +916,7 @@ describe('VerdictStep', () => {
       return {
         id: 'gitlab' as const,
         displayName: 'GitLab',
-        capabilities: { atomicReview, resolvedThreads: true, checks: true, suggestions: true, compare: true },
+        capabilities: { atomicReview, resolvedThreads: true, checks: true, suggestions: true, compare: true, commentReplies: true },
         parseUrl: vi.fn(),
         getPrMeta: vi.fn(),
         getPrFiles: vi.fn(),

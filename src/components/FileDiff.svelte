@@ -9,8 +9,11 @@
   import { isTestFile } from '../lib/testFile'
   import type { Draft } from '../lib/drafts/drafts.svelte'
   import DraftThread from './DraftThread.svelte'
-  import CommentThread from './CommentThread.svelte'
+  import ExistingThread from './ExistingThread.svelte'
   import type { PrComment } from '../lib/github/comments'
+  import { groupThreads, type CommentThread } from '../lib/github/commentThreads'
+  import { extractPatchLines } from '../lib/github/patchLines'
+  import type { ReplyOutcome } from '../lib/github/replies'
   import type { AskFocus } from '../lib/ai/tasks'
   import { excerptAround } from '../lib/diff/excerpt'
   import { track } from '../lib/analytics/analytics'
@@ -67,49 +70,64 @@
      * Called when the user clicks "Add as draft" on a skill finding inside FileDiff.
      */
     onAddSkillFindingDraft?: (finding: { body: string; line: number; key: string }) => Promise<void>
+    /**
+     * Posts a reply to an existing comment thread IMMEDIATELY (not queued
+     * with the review). null → no Reply affordance (provider unsupported).
+     */
+    onReply?: ((root: PrComment, body: string) => Promise<ReplyOutcome>) | null
   }
 
-  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft }: Props = $props()
+  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onReply = null }: Props = $props()
 
-  // Group existing comments by line (null-line comments go under a null key)
-  const commentsByLine = $derived.by(() => {
-    const map = new Map<number | null, PrComment[]>()
-    for (const c of comments) {
-      const key = c.line
+  // ---- Existing comments: thread grouping + anchorability split ------------
+  // Threads group a root comment with its replies (GitHub in_reply_to_id
+  // chains / GitLab discussions). A thread is ANCHORED when its root line
+  // exists in the patch hunks — anchored threads render INLINE at their line
+  // (via extendData); only file-level / unanchorable threads go to the
+  // bottom-of-file list. Same rule applies to drafts (dedupe fix).
+  const threads = $derived(groupThreads(comments))
+
+  /** Whether a line/side is present in the patch hunks (→ renders inline). */
+  function isAnchoredLine(line: number | null, side: 'LEFT' | 'RIGHT' | null): boolean {
+    if (line === null || side === null) return false
+    return extractPatchLines(file.patch, line, side) !== undefined
+  }
+
+  const anchoredThreads = $derived(threads.filter((t) => isAnchoredLine(t.root.line, t.root.side)))
+  const unanchoredThreads = $derived(threads.filter((t) => !isAnchoredLine(t.root.line, t.root.side)))
+
+  const anchoredDrafts = $derived(drafts.filter((d) => isAnchoredLine(d.line, d.side)))
+  const unanchoredDrafts = $derived(drafts.filter((d) => !isAnchoredLine(d.line, d.side)))
+
+  /** Whether a thread is resolved (root comment id in resolvedCommentIds) */
+  function isThreadResolved(thread: CommentThread): boolean {
+    return resolvedCommentIds.has(thread.root.id)
+  }
+
+  // Bottom list: unanchorable threads grouped by line (null = "General", last)
+  const unanchoredThreadsByLine = $derived.by(() => {
+    const map = new Map<number | null, CommentThread[]>()
+    for (const t of unanchoredThreads) {
+      const key = t.root.line
       const arr = map.get(key) ?? []
-      arr.push(c)
+      arr.push(t)
       map.set(key, arr)
     }
     return map
   })
 
-  /**
-   * Returns the root (top-level) comment of a thread group.
-   * The root is the first comment with inReplyTo === null; falls back to the
-   * first comment in the array if all are replies (orphan scenario).
-   */
-  function rootComment(group: PrComment[]): PrComment {
-    return group.find((c) => c.inReplyTo === null) ?? group[0]
-  }
-
-  /** Whether a thread group is resolved (root comment id in resolvedCommentIds) */
-  function isResolved(group: PrComment[]): boolean {
-    return resolvedCommentIds.has(rootComment(group).id)
-  }
-
-  /** Truncates body to ~60 chars for the resolved summary line */
-  function truncateBody(body: string, maxLen = 60): string {
-    const oneLine = body.replace(/\s+/g, ' ').trim()
-    return oneLine.length > maxLen ? oneLine.slice(0, maxLen) + '…' : oneLine
-  }
-
   // Ordered line keys (non-null first, sorted numerically; null last)
   const lineKeys = $derived.by(() => {
-    const keys = [...commentsByLine.keys()]
+    const keys = [...unanchoredThreadsByLine.keys()]
     const nonNull = (keys.filter((k) => k !== null) as number[]).sort((a, b) => a - b)
     const hasNull = keys.includes(null)
     return hasNull ? ([...nonNull, null] as (number | null)[]) : nonNull
   })
+
+  function commentCountAt(lineKey: number | null): number {
+    const group = unanchoredThreadsByLine.get(lineKey) ?? []
+    return group.reduce((n, t) => n + 1 + t.replies.length, 0)
+  }
 
   // Test-file display (must be declared before collapsed)
   const testFileDisplay = $derived<TestFileDisplay>(settingsState.current.testFileDisplay)
@@ -176,19 +194,35 @@
     return side === 'LEFT' ? SplitSide.old : SplitSide.new
   }
 
-  // ---- extendData — map existing drafts to per-line annotation entries ----
-  // NOTE: DiffUnifiedExtendLine only renders for hidden/collapsed lines (library
-  // limitation). We use extendData for split mode but render drafts inline below
-  // the DiffView for reliable display in both modes (see the draft-annotations
-  // section in the template).
+  // ---- extendData — per-line inline annotations (drafts + comment threads) ----
+  // Anchored drafts and anchored existing-comment threads render INLINE at
+  // their line via renderExtendLine. (The upstream unified-mode extend bug is
+  // fixed via patches/@git-diff-view__svelte.patch — extend rows now render
+  // for visible lines in both unified and split modes.)
+  interface ExtendAnno {
+    drafts: Draft[]
+    threads: CommentThread[]
+  }
+
   const extendData = $derived.by(() => {
-    const oldFile: Record<string, { data: Draft }> = {}
-    const newFile: Record<string, { data: Draft }> = {}
-    for (const d of drafts) {
-      if (d.side === 'LEFT') {
-        oldFile[String(d.line)] = { data: d }
-      } else {
-        newFile[String(d.line)] = { data: d }
+    const oldFile: Record<string, { data: ExtendAnno }> = {}
+    const newFile: Record<string, { data: ExtendAnno }> = {}
+    const annoAt = (side: 'LEFT' | 'RIGHT', line: number): ExtendAnno => {
+      const target = side === 'LEFT' ? oldFile : newFile
+      const key = String(line)
+      if (!target[key]) target[key] = { data: { drafts: [], threads: [] } }
+      return target[key].data
+    }
+    for (const d of anchoredDrafts) {
+      annoAt(d.side, d.line).drafts.push(d)
+    }
+    for (const t of anchoredThreads) {
+      annoAt(t.root.side!, t.root.line!).threads.push(t)
+    }
+    // Drafts at a line in thread order (n ascending)
+    for (const target of [oldFile, newFile]) {
+      for (const key of Object.keys(target)) {
+        target[key].data.drafts.sort((a, b) => (a.n ?? 0) - (b.n ?? 0))
       }
     }
     return { oldFile, newFile }
@@ -212,9 +246,9 @@
   function handleWidgetSave(line: number, side: SplitSide, body: string) {
     const sideStr = splitSideToSide(side)
     onAddDraft?.(line, sideStr, body)
-    // Fix-B: DO NOT close the widget — stay open showing the saved draft in read view.
-    // The widget will re-render with existingDraft set (since drafts prop updates).
-    // onClose is NOT called here; only called on explicit cancel/delete.
+    // The saved draft renders immediately as an inline annotation at its line
+    // (extendData), so the widget closes on save — keeping it open would show
+    // the same draft twice at the same line (dedupe fix).
     addFlash(line, sideStr)
   }
 
@@ -323,8 +357,11 @@
           line={lineNumber}
           side={splitSideToSide(side)}
           onsave={(body) => {
-            // Fix-B: do NOT call onClose here — widget stays open showing saved draft
             handleWidgetSave(lineNumber, side, body)
+            // Close the widget: the saved draft now renders inline at this
+            // line via extendData — leaving the widget open would duplicate it.
+            onClose()
+            openWidget = null
           }}
           ondelete={() => {
             handleExtendDelete(lineNumber, side)
@@ -342,25 +379,38 @@
       {/snippet}
 
       {#snippet renderExtendLine({ lineNumber, side, data })}
-        <DraftThread
-          draft={data}
-          path={file.filename}
-          line={lineNumber}
-          side={splitSideToSide(side)}
-          onsave={(body) => handleExtendSave(lineNumber, side, body)}
-          ondelete={() => handleExtendDelete(lineNumber, side)}
-          oncancel={() => {}}
-        />
+        <div class="inline-annotations" data-testid="inline-annotations" data-line={lineNumber}>
+          {#each data.drafts as draft (draft.line + '|' + draft.side + '|' + (draft.n ?? 0))}
+            {@const flashKey = `${draft.line}|${draft.side}`}
+            <div class="annotation-entry" class:flash={flashKeys.has(flashKey)}>
+              <DraftThread
+                {draft}
+                path={file.filename}
+                line={lineNumber}
+                side={splitSideToSide(side)}
+                onsave={(body) => handleExtendSave(lineNumber, side, body)}
+                ondelete={() => handleExtendDelete(lineNumber, side)}
+                oncancel={() => {}}
+                {askFn}
+                {askDisabledReason}
+                excerpt={file.patch ? excerptAround(file.patch, draft.line, draft.side, 6) : ''}
+              />
+            </div>
+          {/each}
+          {#each data.threads as thread (thread.root.id)}
+            <ExistingThread {thread} resolved={isThreadResolved(thread)} {onReply} />
+          {/each}
+        </div>
       {/snippet}
     </DiffView>
 
-    <!-- Draft annotations: rendered outside DiffView so they appear immediately
-         after save regardless of diff mode or virtual-scroll state.
-         DiffUnifiedExtendLine only fires for hidden/collapsed lines (library v0.1.5
-         limitation), so we render saved drafts here as a reliable fallback. -->
-    {#if drafts.length > 0}
+    <!-- Bottom-of-file draft list: ONLY drafts whose line is NOT in the patch
+         hunks (unanchorable — e.g. saved on an expanded context line).
+         Anchored drafts render inline at their line via extendData and must
+         NOT be repeated here (dedupe fix). -->
+    {#if unanchoredDrafts.length > 0}
       <div class="draft-annotations" aria-label="Draft comments on this file">
-        {#each drafts as draft (draft.line + '|' + draft.side + '|' + (draft.n ?? 0))}
+        {#each unanchoredDrafts as draft (draft.line + '|' + draft.side + '|' + (draft.n ?? 0))}
           {@const flashKey = `${draft.line}|${draft.side}`}
           <div class="annotation-entry" class:flash={flashKeys.has(flashKey)}>
             <DraftThread
@@ -407,27 +457,21 @@
       </div>
     {/if}
 
-    {#if comments.length > 0}
+    <!-- Bottom-of-file existing comments: ONLY file-level / unanchorable
+         threads (root line null or not present in the patch hunks).
+         Anchored threads render inline at their line via extendData. -->
+    {#if unanchoredThreads.length > 0}
       <div class="existing-comments" aria-label="Existing review comments">
         {#each lineKeys as lineKey (lineKey)}
-          {@const group = commentsByLine.get(lineKey)!}
-          {@const root = rootComment(group)}
+          {@const group = unanchoredThreadsByLine.get(lineKey)!}
+          {@const count = commentCountAt(lineKey)}
           <div class="existing-line-group">
             <div class="existing-line-label">
-              {lineKey !== null ? `Line ${lineKey}` : 'General'} — {group.length} comment{group.length === 1 ? '' : 's'}
+              {lineKey !== null ? `Line ${lineKey}` : 'General'} — {count} comment{count === 1 ? '' : 's'}
             </div>
-            {#if isResolved(group)}
-              <details class="resolved-thread">
-                <summary class="resolved-summary">
-                  <span class="resolved-check" aria-hidden="true">✓</span>
-                  <span class="resolved-label">Resolved</span>
-                  <span class="resolved-snippet">{root.author}: {truncateBody(root.body)}</span>
-                </summary>
-                <CommentThread comments={group} />
-              </details>
-            {:else}
-              <CommentThread comments={group} />
-            {/if}
+            {#each group as thread (thread.root.id)}
+              <ExistingThread {thread} resolved={isThreadResolved(thread)} {onReply} />
+            {/each}
           </div>
         {/each}
       </div>
@@ -560,53 +604,16 @@
     margin-bottom: 0.15rem;
   }
 
-  /* Resolved thread — collapsed <details> */
-  .resolved-thread {
-    border: 1px solid var(--hairline);
-    border-radius: 4px;
-    overflow: hidden;
-  }
-
-  .resolved-summary {
+  /* Inline annotations row (rendered inside the diff table at a line):
+     drafts + existing threads anchored to that line */
+  .inline-annotations {
     display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.3rem 0.6rem;
-    cursor: pointer;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    background: var(--surface-raised);
-    list-style: none;
-    user-select: none;
-  }
-
-  .resolved-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .resolved-check {
-    color: var(--accent);
-    font-size: 0.85rem;
-    flex-shrink: 0;
-  }
-
-  .resolved-label {
-    font-weight: 600;
-    color: var(--text-muted);
-    flex-shrink: 0;
-  }
-
-  .resolved-snippet {
-    opacity: 0.7;
-    font-size: 0.78rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* Expanded content padding */
-  .resolved-thread[open] > :not(summary) {
-    padding: 0.4rem;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    background: var(--surface-banner);
+    border-top: 1px solid var(--border-banner);
+    border-bottom: 1px solid var(--border-banner);
   }
 
   /* ---- Skill findings annotations (line-anchored, dashed-accent style) ---- */

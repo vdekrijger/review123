@@ -12,12 +12,14 @@ export type { CiSummary } from '../github/checks'
 export type { PrComment } from '../github/comments'
 export type { PrCommit } from '../github/commits'
 export type { Verdict, SubmitOutcome } from '../github/review'
+export type { ReplyOutcome } from '../github/replies'
 
 import type { PrMeta, PrFile } from '../github/types'
 import type { CiSummary } from '../github/checks'
 import type { PrComment } from '../github/comments'
 import type { PrCommit } from '../github/commits'
 import type { Verdict, SubmitOutcome } from '../github/review'
+import type { ReplyOutcome } from '../github/replies'
 import type { Draft } from '../drafts/drafts.svelte'
 
 // ---------------------------------------------------------------------------
@@ -67,6 +69,12 @@ export interface ProviderCapabilities {
   atomicReview: boolean
   /** Provider supports commit comparison */
   compare: boolean
+  /**
+   * Provider supports replying to an existing comment thread (immediate post,
+   * not part of the queued review). When true the provider must implement
+   * replyToThread().
+   */
+  commentReplies: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +156,18 @@ export interface ReviewProvider {
     repo: { owner: string; repo: string },
     cap: number,
   ): Promise<string[]>
+
+  /**
+   * Post a reply to an existing comment thread. Posts IMMEDIATELY (unlike
+   * drafts, which are queued and submitted with the review).
+   *
+   * `root` is the thread's root comment: GitHub uses root.id for the
+   * /replies endpoint; GitLab uses root.threadId (the discussion id).
+   *
+   * Optional — only present when capabilities.commentReplies is true.
+   * Returns a typed Result; never throws.
+   */
+  replyToThread?(ref: PrRefX, root: PrComment, body: string): Promise<ReplyOutcome>
 
   /**
    * Return open PRs/MRs in the current user's review queue.

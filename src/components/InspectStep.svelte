@@ -13,6 +13,7 @@
   import type { AttentionResult } from '../lib/ai/schemas'
   import type { createViewedStore } from '../lib/viewed/viewed.svelte'
   import type { PrComment } from '../lib/github/comments'
+  import type { ReplyOutcome } from '../lib/github/replies'
   import { slugify } from '../lib/slug'
   import type { SkillReviewEntry, AskFocus } from '../lib/ai/run.svelte'
   import type { SkillReviewResult } from '../lib/ai/schemas'
@@ -34,6 +35,7 @@
     runSkillReviewsFn = null,
     askFn = null,
     askDisabledReason = null,
+    replyFn = null,
   }: {
     files: PrFile[]
     changedFiles: number
@@ -65,6 +67,11 @@
      * Optional disabled hint for Ask AI gating (e.g. "No API key configured.").
      */
     askDisabledReason?: string | null
+    /**
+     * Posts a reply to an existing comment thread immediately (provider
+     * capability commentReplies). null → Reply affordance hidden.
+     */
+    replyFn?: ((root: PrComment, body: string) => Promise<ReplyOutcome>) | null
   } = $props()
 
   function commentsForFile(path: string): PrComment[] {
@@ -490,6 +497,7 @@
             contents={contentsMap?.get(file.filename)}
             {askFn}
             {askDisabledReason}
+            onReply={replyFn}
             skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
             onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key })}
           />
