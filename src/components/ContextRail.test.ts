@@ -56,6 +56,74 @@ describe('ContextRail hotspot click', () => {
     expect(onhotspot).toHaveBeenCalledWith('src/hot.ts')
     expect(vi.mocked(track)).toHaveBeenCalledWith('hotspot_clicked')
   })
+
+  it('hotspot is a plain button, not a link — no href to trigger a page load', () => {
+    const attn: AttentionResult = {
+      readingOrder: [], testFlags: [],
+      hotspots: [{ path: 'src/hot.ts', reason: 'Critical', level: 'high' }],
+    }
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(attn), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const btn = container.querySelector('.hotspot-btn')!
+    expect(btn.tagName).toBe('BUTTON')
+    expect(btn.getAttribute('href')).toBeNull()
+    expect(btn.closest('a')).toBeNull()
+  })
+})
+
+describe('ContextRail hotspot legend (level markers explained)', () => {
+  const attn: AttentionResult = {
+    readingOrder: [],
+    testFlags: [],
+    hotspots: [
+      { path: 'src/risky.ts', reason: 'Rewrites auth flow', level: 'high' },
+      { path: 'src/mid.ts', reason: 'New cache layer', level: 'medium' },
+      { path: 'src/minor.ts', reason: 'Rename only', level: 'low' },
+    ],
+  }
+
+  function renderWithHotspots() {
+    return render(ContextRail, {
+      props: { run: makeRun(attn), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+  }
+
+  it('renders a one-line visible legend naming all three attention levels', () => {
+    const { container } = renderWithHotspots()
+    const legend = container.querySelector('.hotspot-legend')
+    expect(legend).not.toBeNull()
+    expect(legend!.textContent).toContain('⚠ high risk')
+    expect(legend!.textContent).toContain('◆ medium')
+    expect(legend!.textContent).toContain('● low attention')
+  })
+
+  it('each hotspot button carries a title with its level and AI reason', () => {
+    renderWithHotspots()
+    const high = screen.getByRole('button', { name: /src\/risky\.ts/i })
+    const medium = screen.getByRole('button', { name: /src\/mid\.ts/i })
+    const low = screen.getByRole('button', { name: /src\/minor\.ts/i })
+    expect(high.getAttribute('title')).toBe('high attention — Rewrites auth flow')
+    expect(medium.getAttribute('title')).toBe('medium attention — New cache layer')
+    expect(low.getAttribute('title')).toBe('low attention — Rename only')
+  })
+
+  it('marker icon matches the level (⚠ high, ◆ medium, ● low)', () => {
+    renderWithHotspots()
+    const high = screen.getByRole('button', { name: /src\/risky\.ts/i })
+    const medium = screen.getByRole('button', { name: /src\/mid\.ts/i })
+    const low = screen.getByRole('button', { name: /src\/minor\.ts/i })
+    expect(high.querySelector('.hotspot-icon')!.textContent).toBe('⚠')
+    expect(medium.querySelector('.hotspot-icon')!.textContent).toBe('◆')
+    expect(low.querySelector('.hotspot-icon')!.textContent).toBe('●')
+  })
+
+  it('does not render the legend when there are no hotspots', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    expect(container.querySelector('.hotspot-legend')).toBeNull()
+  })
 })
 
 describe('ContextRail collapse', () => {
