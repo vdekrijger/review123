@@ -18,9 +18,24 @@
     onsave: (body: string) => void
     ondelete: () => void
     oncancel: () => void
+    /**
+     * For new (null) drafts: the start line of a multi-line range.
+     * When provided and < line, displays "Lines {startLine}–{line}" header.
+     */
+    startLine?: number
   }
 
-  let { draft, path: _path, line, side: _side, onsave, ondelete, oncancel }: Props = $props()
+  let { draft, path: _path, line, side: _side, onsave, ondelete, oncancel, startLine }: Props = $props()
+
+  /**
+   * The effective start line — either from the draft (when viewing a saved draft)
+   * or from the startLine prop (when composing a new draft).
+   */
+  const effectiveStartLine = $derived(
+    draft?.startLine != null && draft.startLine < line
+      ? draft.startLine
+      : (startLine != null && startLine < line ? startLine : null)
+  )
 
   // Track the last draft identity to detect external draft changes (e.g. parent load).
   // initialized with a sentinel so the $effect always runs on first mount.
@@ -76,7 +91,11 @@
 
 <div class="draft-thread" data-testid="draft-thread" data-line={line}>
   <div class="thread-header">
-    <span class="thread-label">Comment at line {line}</span>
+    {#if effectiveStartLine !== null}
+      <span class="thread-label">Lines {effectiveStartLine}–{line}</span>
+    {:else}
+      <span class="thread-label">Comment at line {line}</span>
+    {/if}
   </div>
 
   {#if editing}

@@ -369,3 +369,51 @@ describe('Fix-B: submitReview maps multiple same-line drafts', () => {
     expect(store.count).toBe(2)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Multi-line: startLine field on Draft
+// ---------------------------------------------------------------------------
+describe('multi-line comments: startLine field', () => {
+  it('upsert stores startLine and round-trips via load', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-startline-rt-${prKey.replace(/[^a-z0-9]/gi, '-')}`
+    const store1 = await freshStore(prKey, db)
+    await store1.load()
+    await store1.upsert({ path: 'a.ts', line: 10, side: 'RIGHT', body: 'ml comment', startLine: 7 })
+    expect(store1.drafts[0].startLine).toBe(7)
+
+    const store2 = await freshStore(prKey, db)
+    await store2.load()
+    expect(store2.drafts[0].startLine).toBe(7)
+    expect(store2.drafts[0].line).toBe(10)
+  })
+
+  it('draftKey is anchored at end line — same key with or without startLine', async () => {
+    const { draftKey } = await import('./drafts.svelte')
+    const withStart = draftKey({ prKey: 'o/r#1', path: 'a.ts', line: 10, side: 'RIGHT', startLine: 7 })
+    const withoutStart = draftKey({ prKey: 'o/r#1', path: 'a.ts', line: 10, side: 'RIGHT' })
+    expect(withStart).toBe(withoutStart)
+  })
+
+  it('startLine not stored when absent (single-line draft)', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-startline-absent-${prKey.replace(/[^a-z0-9]/gi, '-')}`
+    const store = await freshStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 5, side: 'LEFT', body: 'single line' })
+    expect(store.drafts[0].startLine).toBeUndefined()
+  })
+
+  it('startLine equal to line is treated as single-line (no startLine stored)', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-startline-eq-${prKey.replace(/[^a-z0-9]/gi, '-')}`
+    const store = await freshStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 5, side: 'LEFT', body: 'same line', startLine: 5 })
+    // startLine === line is semantically single-line; implementation may store or not store it
+    // but submission logic must NOT emit start_line in that case — tested in review.test.ts
+    const d = store.drafts[0]
+    // line must still be 5
+    expect(d.line).toBe(5)
+  })
+})

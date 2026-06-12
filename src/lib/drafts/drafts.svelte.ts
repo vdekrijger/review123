@@ -22,6 +22,8 @@ export interface Draft {
   prKey: string
   path: string
   line: number
+  /** For multi-line comments: the first (start) line of the range (must be < line). */
+  startLine?: number
   side: 'LEFT' | 'RIGHT'
   body: string
   /** Thread ordinal — 0 for first comment, 1+ for replies. Default 0. */
@@ -29,7 +31,7 @@ export interface Draft {
   updatedAt: number
 }
 
-export function draftKey(d: Pick<Draft, 'prKey' | 'path' | 'line' | 'side'> & { n?: number }): string {
+export function draftKey(d: Pick<Draft, 'prKey' | 'path' | 'line' | 'side'> & { n?: number; startLine?: number }): string {
   return `${d.prKey}|${d.path}|${d.line}|${d.side}|${d.n ?? 0}`
 }
 
@@ -282,7 +284,9 @@ export function createDraftStore(prKey: string, dbName = 'review123-drafts') {
       }
 
       const key = draftKey({ prKey, path: d.path, line: d.line, side: d.side, n })
-      const record: Draft = { path: d.path, line: d.line, side: d.side, body: d.body, prKey, n, updatedAt: Date.now() }
+      // Only store startLine when it forms a real range (< line)
+      const startLine = (d.startLine != null && d.startLine < d.line) ? d.startLine : undefined
+      const record: Draft = { path: d.path, line: d.line, side: d.side, body: d.body, prKey, n, updatedAt: Date.now(), ...(startLine != null ? { startLine } : {}) }
 
       // Update in-memory state (last-write-wins: replace existing if same key)
       const idx = drafts.findIndex((x) => draftKey(x) === key)
