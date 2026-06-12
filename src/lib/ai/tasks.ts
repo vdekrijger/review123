@@ -263,7 +263,10 @@ Field rules:
   Each entry must describe the behavior in plain language (not just the test name), name the \
   test function or describe block, and reference the file path. Infer from reading the test code.
 - gaps: behaviors in behavior-changing (non-test) files that have NO corresponding test change \
-  in this PR. Be specific — name the file and describe the untested behavior. \
+  in this PR. Each gap string MUST start with the file path followed by a colon, e.g. \
+  "src/lib/cache.ts: cache expiry is not tested". This file path + colon prefix is required so \
+  the UI can group gaps by file. If the gap is not specific to a single file, start with \
+  "General: " as the prefix. Be specific — name the file and describe the untested behavior. \
   IMPORTANT: coverage is inferred by reading the code — it is NOT measured instrumentation data. \
   Do not speculate about behaviors not visible in the diff.
 

@@ -984,3 +984,22 @@ describe('askPrompt', () => {
     expect(system.toLowerCase()).toMatch(/concise|brief|short/i)
   })
 })
+
+// ---------------------------------------------------------------------------
+// testInsightPrompt — gaps grouping instruction (ai-quality-round2)
+// Gaps must start with file path + colon so the UI can group them by file.
+// ---------------------------------------------------------------------------
+
+describe('testInsightPrompt — gaps file-path instruction (ai-quality-round2)', () => {
+  it('system prompt instructs gaps to start with the file path + colon', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    // Must contain an instruction that gaps start with a file path followed by a colon
+    expect(system).toMatch(/gaps.*start.*file|start.*with.*file.*path|file path.*colon|file.*:.*colon/i)
+  })
+
+  it('system prompt mentions colon separator for gaps grouping', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    // The colon separator for grouping must be mentioned
+    expect(system).toMatch(/colon|file:|\bpath\b.*colon/i)
+  })
+})
