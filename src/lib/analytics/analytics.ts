@@ -6,7 +6,10 @@ import posthog from 'posthog-js'
 const EVENTS = {
   pr_loaded: ['visibility', 'file_count', 'primary_language'],
   signed_in: ['method'],
-  ai_task_completed: ['task', 'duration_ms', 'cached'],
+  // PRIVACY DECISION: 'tokens' is a token count (integer), not content.
+  // It tells us how many tokens were consumed per task; it cannot be used
+  // to reconstruct code or diffs. Added for cost observability only.
+  ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens'],
   ai_task_failed: ['task', 'reason'],
   diagram_viewed: [],
   hotspot_clicked: [],
@@ -23,13 +26,28 @@ type CaptureFn = (event: string, props: Record<string, unknown>) => void
 let capture: CaptureFn = posthog.capture.bind(posthog)
 export function _setCaptureForTest(fn: CaptureFn): void { capture = fn }
 
+// Seam for testing posthog.init config — replaced by spy in init tests.
+type PosthogLike = { init: (key: string, opts: Record<string, unknown>) => void }
+let _posthog: PosthogLike = posthog as unknown as PosthogLike
+export function _setPosthogForTest(ph: PosthogLike): void { _posthog = ph }
+
 export function initAnalytics(): void {
   const key = import.meta.env.VITE_POSTHOG_KEY as string | undefined
   if (!key) return // analytics disabled without a key
-  posthog.init(key, {
+  // session_recording.maskAllInputs + maskTextSelector='*': masks ALL visible text
+  // in session replays — a code-review tool must never record readable code.
+  // Interaction patterns and layout remain useful for UX analysis.
+  // capture_exceptions: true — forwards unhandled JS errors to PostHog error
+  // tracking. Stack traces may include file paths but never code content.
+  _posthog.init(key, {
     api_host: (import.meta.env.VITE_POSTHOG_HOST as string) || 'https://us.i.posthog.com',
     autocapture: false, // only typed events pass the choke-point
     capture_pageview: true,
+    capture_exceptions: true,
+    session_recording: {
+      maskAllInputs: true,
+      maskTextSelector: '*',
+    },
   })
 }
 
