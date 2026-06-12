@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { parseGitlabUrl, gitlabProvider } from './gitlab'
-import { setGitlabToken } from '../settings/settings'
+import { setGitlabToken, setGitlabHost } from '../settings/settings'
 import { jsonResponse } from '../../test-helpers'
 import type { PrRefX } from './types'
 
@@ -47,6 +47,47 @@ function mockFetchSequence(...calls: Array<{ body: unknown; status?: number; hea
 // ---------------------------------------------------------------------------
 
 describe('parseGitlabUrl', () => {
+  beforeEach(() => localStorage.clear())
+
+  describe('self-hosted host support', () => {
+    it('accepts a URL on the configured self-hosted host', () => {
+      setGitlabHost('gitlab.mycompany.com')
+      const r = parseGitlabUrl('https://gitlab.mycompany.com/mygroup/myproject/-/merge_requests/42')
+      expect(r).toEqual({
+        ok: true,
+        value: { provider: 'gitlab', owner: 'mygroup', repo: 'myproject', number: 42 },
+      })
+    })
+
+    it('rejects a URL on a different host when custom host is configured', () => {
+      setGitlabHost('gitlab.mycompany.com')
+      const r = parseGitlabUrl('https://other.host.com/g/p/-/merge_requests/1')
+      expect(r.ok).toBe(false)
+    })
+
+    it('still accepts gitlab.com URLs when custom host is configured (also accepts configured host)', () => {
+      setGitlabHost('gitlab.mycompany.com')
+      const r = parseGitlabUrl('https://gitlab.com/g/p/-/merge_requests/1')
+      // gitlab.com should still work regardless of custom host
+      expect(r.ok).toBe(true)
+    })
+
+    it('accepts subgroup paths on the configured self-hosted host', () => {
+      setGitlabHost('internal.gitlab.corp')
+      const r = parseGitlabUrl('https://internal.gitlab.corp/org/sub/project/-/merge_requests/7')
+      expect(r).toEqual({
+        ok: true,
+        value: { provider: 'gitlab', owner: 'org/sub', repo: 'project', number: 7 },
+      })
+    })
+
+    it('rejects a non-MR URL on the configured host', () => {
+      setGitlabHost('gitlab.mycompany.com')
+      const r = parseGitlabUrl('https://gitlab.mycompany.com/group/project')
+      expect(r.ok).toBe(false)
+    })
+  })
+
   describe('valid URLs', () => {
     it('parses a simple group/project MR URL', () => {
       const r = parseGitlabUrl('https://gitlab.com/mygroup/myproject/-/merge_requests/42')
@@ -823,6 +864,8 @@ describe('suggestionFence', () => {
 // ---------------------------------------------------------------------------
 
 describe('registry integration', () => {
+  beforeEach(() => localStorage.clear())
+
   it('parseAnyUrl recognizes a gitlab.com MR URL after registration', async () => {
     const { parseAnyUrl } = await import('./registry')
     const result = parseAnyUrl('https://gitlab.com/myorg/myproject/-/merge_requests/5')
@@ -846,5 +889,19 @@ describe('registry integration', () => {
   it('providerFor("gitlab") returns the gitlab provider', async () => {
     const { providerFor } = await import('./registry')
     expect(providerFor('gitlab').id).toBe('gitlab')
+  })
+
+  it('parseAnyUrl recognizes a self-hosted GitLab MR URL when host is configured', async () => {
+    setGitlabHost('gitlab.mycompany.com')
+    const { parseAnyUrl } = await import('./registry')
+    const result = parseAnyUrl('https://gitlab.mycompany.com/myorg/myproject/-/merge_requests/99')
+    expect(result).not.toBeNull()
+    expect(result!.provider.id).toBe('gitlab')
+    expect(result!.ref).toMatchObject({
+      provider: 'gitlab',
+      owner: 'myorg',
+      repo: 'myproject',
+      number: 99,
+    })
   })
 })
