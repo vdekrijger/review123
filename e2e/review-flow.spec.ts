@@ -1251,3 +1251,54 @@ test('ask-ai: open rail, type question, answer streams in; second question retai
     askSection.getByText(/This code is in this location/i),
   ).toBeVisible()
 })
+
+// ---------------------------------------------------------------------------
+// Test 13: File tree explorer visible in Inspect view; clicking second file
+//          scrolls that article into view
+// ---------------------------------------------------------------------------
+
+test('file-tree: visible in step 2; clicking second file in tree scrolls to its article', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Wait for file diffs to appear
+  await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 5_000 })
+
+  // File tree nav should be visible
+  const treeNav = page.locator('nav[aria-label="File tree"]')
+  await expect(treeNav).toBeVisible()
+
+  // The fixture has 2 files: src/feature.ts and src/old-utils.ts
+  // Both should appear as buttons in the file tree
+  const fileButtons = treeNav.getByRole('button')
+  await expect(fileButtons).toHaveCount(2)
+
+  // Get the second file button (src/old-utils.ts)
+  const secondFileBtn = fileButtons.nth(1)
+  const secondFileName = await secondFileBtn.textContent()
+  expect(secondFileName).toMatch(/old-utils\.ts/)
+
+  // Click the second file in the tree
+  await secondFileBtn.click()
+
+  // The second article should now be visible in the viewport
+  // (scrolled to) — assert via locator visibility
+  const secondArticle = page.locator('article.file-diff').nth(1)
+  await expect(secondArticle).toBeVisible({ timeout: 5_000 })
+  await expect(secondArticle).toBeInViewport({ ratio: 0.1 })
+})
