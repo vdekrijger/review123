@@ -361,6 +361,21 @@
     margin: 0.5rem 0;
   }
 
+  /* PAT scope hint sits inside <details> — align its left edge with the label/input above it
+     and give each paragraph comfortable vertical breathing room. */
+  .pat-scope-hint {
+    margin: 0.25rem 0.75rem 0.75rem;
+    line-height: 1.4;
+  }
+
+  .pat-scope-hint p {
+    margin: 0 0 0.5rem;
+  }
+
+  .pat-scope-hint p:last-child {
+    margin-bottom: 0;
+  }
+
   /* ---- Reviewer skills ---- */
   .skills-section {
     margin-top: 1.25rem;
