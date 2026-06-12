@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens, saveGithubAuth,
-  setTheme, setUiFont,
+  setTheme, setUiFont, setShowProgress,
 } from './settings'
 
 describe('settings', () => {
@@ -16,6 +16,7 @@ describe('settings', () => {
       railCollapsed: false,
       theme: 'auto',
       uiFont: 'plex',
+      showProgress: true,
     })
   })
 
@@ -56,6 +57,7 @@ describe('settings', () => {
       railCollapsed: false,
       theme: 'auto',
       uiFont: 'plex',
+      showProgress: true,
     })
   })
 
@@ -175,6 +177,28 @@ describe('settings', () => {
     it('coerces legacy "humanist" value to "system"', () => {
       localStorage.setItem('review123:settings', JSON.stringify({ uiFont: 'humanist' }))
       expect(getSettings().uiFont).toBe('system')
+    })
+  })
+
+  describe('showProgress', () => {
+    it('defaults to true', () => {
+      expect(getSettings().showProgress).toBe(true)
+    })
+
+    it('setShowProgress persists false', () => {
+      setShowProgress(false)
+      expect(getSettings().showProgress).toBe(false)
+    })
+
+    it('setShowProgress persists true', () => {
+      setShowProgress(false)
+      setShowProgress(true)
+      expect(getSettings().showProgress).toBe(true)
+    })
+
+    it('coerces invalid showProgress value back to default (true)', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ showProgress: 'yes' }))
+      expect(getSettings().showProgress).toBe(true)
     })
   })
 })

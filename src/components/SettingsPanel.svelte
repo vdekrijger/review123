@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSettings, saveTokens, setTheme, setUiFont, type Theme, type UiFont } from '../lib/settings/settings'
+  import { getSettings, saveTokens, setTheme, setUiFont, setShowProgress, type Theme, type UiFont } from '../lib/settings/settings'
   import { applyAppearance } from '../lib/settings/appearance.svelte'
   import { track } from '../lib/analytics/analytics'
   import { authState } from '../lib/auth/authState.svelte'
@@ -15,6 +15,7 @@
   let error = $state<string | null>(null)
   let theme = $state<Theme>(current.theme)
   let uiFont = $state<UiFont>(current.uiFont)
+  let showProgress = $state<boolean>(current.showProgress)
 
   // ---- Reviewer skills state ----
   let skills = $state<ReviewerSkill[]>(listSkills())
@@ -78,6 +79,11 @@
     applyAppearance()
   }
 
+  function onShowProgressChange(value: boolean) {
+    showProgress = value
+    setShowProgress(value)
+  }
+
   function save() {
     try {
       const hadPat = !!current.githubPat
@@ -131,6 +137,16 @@
         Serif
       </label>
     </fieldset>
+
+    <label class="progress-toggle">
+      <input
+        type="checkbox"
+        checked={showProgress}
+        onchange={(e) => onShowProgressChange((e.currentTarget as HTMLInputElement).checked)}
+        aria-label="Show review progress bar"
+      />
+      Show review progress bar
+    </label>
   </section>
 
   <p class="auth-status">{authStatusLine}</p>
@@ -244,6 +260,16 @@
 
   section[aria-label^="Appearance"] {
     margin-bottom: 1rem;
+  }
+
+  .progress-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.9em;
+    cursor: pointer;
+    color: var(--text);
+    margin-top: 0.25rem;
   }
 
   .section-label {

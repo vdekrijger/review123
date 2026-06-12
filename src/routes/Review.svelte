@@ -4,6 +4,7 @@
   import InspectStep from '../components/InspectStep.svelte'
   import RevisionPicker from '../components/RevisionPicker.svelte'
   import { getSettings, setDiffMode, setRailCollapsed, type DiffMode } from '../lib/settings/settings'
+  import ReviewProgress from '../components/ReviewProgress.svelte'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
   import { createDraftStore } from '../lib/drafts/drafts.svelte'
   import VerdictStep from '../components/VerdictStep.svelte'
@@ -196,6 +197,12 @@
   // ---- AI run ----
   let aiRun: ReturnType<typeof createAiRun> | null = $state(null)
   let railCollapsed = $state(getSettings().railCollapsed)
+  // showProgress: read once at mount (same pattern as railCollapsed).
+  // To pick up changes from SettingsPanel without re-mounting Review, the
+  // SettingsPanel checkbox calls setShowProgress immediately (like theme),
+  // but Review itself does not re-read. A page reload or a remount via the
+  // {#key} block in App.svelte will pick up the new value.
+  let showProgress = $state(getSettings().showProgress)
 
   // ConsentDialog: stored promise resolver
   let consentDialogVisible = $state(false)
@@ -469,6 +476,16 @@
     {/if}
   {/if}
 </section>
+
+<!-- Progress bar — shown once the PR is loaded, when showProgress is enabled -->
+{#if load.state.status === 'ready' && showProgress}
+  <ReviewProgress
+    viewedCount={viewedStore.count}
+    fileCount={load.state.files.length}
+    draftCount={draftStore?.count ?? 0}
+    {step}
+  />
+{/if}
 
 <!-- EC-07i: Sticky bottom bar — shown once the PR is loaded -->
 {#if load.state.status === 'ready'}

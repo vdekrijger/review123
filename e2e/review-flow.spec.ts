@@ -1402,3 +1402,56 @@ test('resolved-threads: resolved thread renders collapsed with ✓ Resolved summ
   // details should now be open
   await expect(resolvedDetails).toHaveAttribute('open', '')
 })
+
+// ---------------------------------------------------------------------------
+// Test 15: Review progress bar — visible at step 2, percent increases after
+//          marking a file viewed
+// ---------------------------------------------------------------------------
+
+test('progress-bar: visible when PR loaded; percent increases after marking file viewed', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Progress bar should be visible (role=progressbar)
+  const progressBar = page.getByRole('progressbar', { name: /review progress/i })
+  await expect(progressBar).toBeVisible({ timeout: 5_000 })
+
+  // At step 1 with 0 files viewed → 0%
+  const initialPercent = Number(await progressBar.getAttribute('aria-valuenow'))
+  expect(initialPercent).toBe(0)
+
+  // Navigate to step 2 (Inspect) — progress should jump to 15%
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  const step2Percent = Number(await progressBar.getAttribute('aria-valuenow'))
+  expect(step2Percent).toBe(15)
+
+  // Wait for file diffs to appear
+  await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 5_000 })
+
+  // Mark the first file as viewed
+  const firstViewedCheckbox = page.locator('input.viewed-checkbox').first()
+  await expect(firstViewedCheckbox).toBeVisible()
+  await firstViewedCheckbox.evaluate((el: HTMLInputElement) => {
+    el.checked = true
+    el.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+
+  // After marking 1 of 2 files viewed → 15 + 70*(1/2) = 50%
+  await expect(async () => {
+    const pct = Number(await progressBar.getAttribute('aria-valuenow'))
+    expect(pct).toBeGreaterThan(step2Percent)
+  }).toPass({ timeout: 5_000 })
+})

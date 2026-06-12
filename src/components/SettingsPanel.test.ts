@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import SettingsPanel from './SettingsPanel.svelte'
-import { getSettings, saveGithubAuth } from '../lib/settings/settings'
+import { getSettings, saveGithubAuth, setShowProgress } from '../lib/settings/settings'
 import { _resetAuthStateForTest } from '../lib/auth/authState.svelte'
 
 // Stub applyAppearance so SettingsPanel tests don't need real DOM env for it
@@ -143,6 +143,39 @@ describe('SettingsPanel', () => {
       render(SettingsPanel, { props: { onclose: vi.fn() } })
       const plexRadio = screen.getByRole('radio', { name: /plex/i })
       expect((plexRadio as HTMLInputElement).checked).toBe(true)
+    })
+
+    it('renders "Show review progress bar" checkbox in Appearance section', () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      expect(screen.getByRole('checkbox', { name: /show review progress bar/i })).toBeInTheDocument()
+    })
+
+    it('"Show review progress bar" checkbox is checked by default (showProgress defaults to true)', () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      const cb = screen.getByRole('checkbox', { name: /show review progress bar/i }) as HTMLInputElement
+      expect(cb.checked).toBe(true)
+    })
+
+    it('"Show review progress bar" unchecked when showProgress=false in storage', () => {
+      setShowProgress(false)
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      const cb = screen.getByRole('checkbox', { name: /show review progress bar/i }) as HTMLInputElement
+      expect(cb.checked).toBe(false)
+    })
+
+    it('toggling the checkbox immediately persists showProgress=false', async () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      const cb = screen.getByRole('checkbox', { name: /show review progress bar/i })
+      await userEvent.click(cb)
+      expect(getSettings().showProgress).toBe(false)
+    })
+
+    it('toggling the checkbox twice restores showProgress=true', async () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      const cb = screen.getByRole('checkbox', { name: /show review progress bar/i })
+      await userEvent.click(cb)
+      await userEvent.click(cb)
+      expect(getSettings().showProgress).toBe(true)
     })
   })
 })
