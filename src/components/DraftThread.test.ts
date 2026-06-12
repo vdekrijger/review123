@@ -213,3 +213,52 @@ describe('DraftThread', () => {
     expect(screen.getByText(/line 42/i)).toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Fix-B: widget stays open with saved draft view (EC-FIX-B-01)
+// ---------------------------------------------------------------------------
+
+describe('DraftThread — Fix-B widget stays open after save (EC-FIX-B-01)', () => {
+  it('when draft prop changes from null to a saved draft, shows read view without re-editing', async () => {
+    const savedDraft: Draft = {
+      prKey: 'owner/repo#1@sha',
+      path: 'src/a.ts',
+      line: 5,
+      side: 'RIGHT',
+      body: 'My saved comment',
+      n: 0,
+      updatedAt: Date.now(),
+    }
+
+    // First render with draft=null (new comment mode)
+    const result = render(DraftThread, {
+      props: {
+        draft: null,
+        path: 'src/a.ts',
+        line: 5,
+        side: 'RIGHT',
+        onsave: vi.fn(),
+        ondelete: vi.fn(),
+        oncancel: vi.fn(),
+      },
+    })
+
+    // Simulate parent setting draft after save (widget-stays-open behavior)
+    await result.rerender({
+      draft: savedDraft,
+      path: 'src/a.ts',
+      line: 5,
+      side: 'RIGHT',
+      onsave: vi.fn(),
+      ondelete: vi.fn(),
+      oncancel: vi.fn(),
+    })
+
+    // Should show the saved draft body (read view)
+    const draftBody = result.container.querySelector('.draft-body')
+    expect(draftBody).toBeInTheDocument()
+    expect(draftBody!.textContent).toContain('My saved comment')
+    // Edit and Delete buttons should be present
+    expect(result.container.querySelector('[data-testid="draft-thread"]')).toBeInTheDocument()
+  })
+})

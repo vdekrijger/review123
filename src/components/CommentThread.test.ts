@@ -213,3 +213,44 @@ describe('relativeTime utility (EC-CT-06)', () => {
     expect(screen.getByText(/30m ago/i)).toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// EC-CT-07: comment body styling — code blocks, tables, details
+// ---------------------------------------------------------------------------
+
+describe('CommentThread — comment body prose styling (EC-CT-07)', () => {
+  it('code blocks inside comment bodies render as <pre><code> elements', () => {
+    const comment = makeComment({ body: '```\nconst x = 1\n```' })
+    const { container } = render(CommentThread, { props: { comments: [comment] } })
+    const pre = container.querySelector('.comment-body pre')
+    expect(pre).toBeInTheDocument()
+    const code = pre!.querySelector('code')
+    expect(code).toBeInTheDocument()
+  })
+
+  it('inline code renders as <code> element', () => {
+    const comment = makeComment({ body: 'use `foo()` here' })
+    const { container } = render(CommentThread, { props: { comments: [comment] } })
+    const code = container.querySelector('.comment-body code')
+    expect(code).toBeInTheDocument()
+    expect(code!.textContent).toContain('foo()')
+  })
+
+  it('tables in comment body render with <table> element', () => {
+    const tableBody = '| A | B |\n|---|---|\n| 1 | 2 |'
+    const comment = makeComment({ body: tableBody })
+    const { container } = render(CommentThread, { props: { comments: [comment] } })
+    // marked renders GFM tables as <table>
+    const table = container.querySelector('.comment-body table')
+    expect(table).toBeInTheDocument()
+  })
+
+  it('thread container uses .comment-item class (not a filled block)', () => {
+    const comment = makeComment()
+    const { container } = render(CommentThread, { props: { comments: [comment] } })
+    const item = container.querySelector('.comment-item')
+    expect(item).toBeInTheDocument()
+    // Must NOT use class that implies a solid navy/filled background
+    expect(item!.classList.contains('filled-block')).toBe(false)
+  })
+})

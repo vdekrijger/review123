@@ -273,9 +273,99 @@ describe('updatedAt timestamp', () => {
 // draftKey function
 // ---------------------------------------------------------------------------
 describe('draftKey', () => {
-  it('produces the expected composite key', async () => {
+  it('produces the expected composite key with n=0 default', async () => {
     const { draftKey } = await import('./drafts.svelte')
     expect(draftKey({ prKey: 'owner/repo#42', path: 'src/app.ts', line: 99, side: 'RIGHT' }))
-      .toBe('owner/repo#42|src/app.ts|99|RIGHT')
+      .toBe('owner/repo#42|src/app.ts|99|RIGHT|0')
+  })
+
+  it('includes n in the key when specified', async () => {
+    const { draftKey } = await import('./drafts.svelte')
+    expect(draftKey({ prKey: 'owner/repo#42', path: 'src/app.ts', line: 99, side: 'RIGHT', n: 2 }))
+      .toBe('owner/repo#42|src/app.ts|99|RIGHT|2')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Fix-B: Threaded follow-ups + legacy key migration
+// ---------------------------------------------------------------------------
+describe('Fix-B: threaded follow-ups', () => {
+  it('first upsert at a location uses n=0', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-thread-${prKey.replace(/[^a-z0-9]/gi, '-')}`
+    const store = await freshStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'first comment' })
+    expect(store.count).toBe(1)
+    expect(store.drafts[0].n ?? 0).toBe(0)
+  })
+
+  it('upsert with n=-1 appends a reply with next n', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-thread-reply-${prKey.replace(/[^a-z0-9]/gi, '-')}`
+    const store = await freshStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'first' })
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'reply', n: -1 })
+    expect(store.count).toBe(2)
+    const sorted = [...store.drafts].sort((a, b) => (a.n ?? 0) - (b.n ?? 0))
+    expect(sorted[0].body).toBe('first')
+    expect(sorted[0].n ?? 0).toBe(0)
+    expect(sorted[1].body).toBe('reply')
+    expect(sorted[1].n ?? 0).toBe(1)
+  })
+
+  it('upsert with explicit n=0 edits the first draft in place', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-thread-edit-${prKey.replace(/[^a-z0-9]/gi, '-')}`
+    const store = await freshStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'original' })
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'reply', n: -1 })
+    // Edit n=0 in place
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'edited', n: 0 })
+    expect(store.count).toBe(2)
+    const at = store.draftsAt('a.ts', 1, 'RIGHT')
+    expect(at[0].body).toBe('edited')
+    expect(at[1].body).toBe('reply')
+  })
+
+  it('draftsAt returns drafts at a line sorted by n', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-draftsAt-${prKey.replace(/[^a-z0-9]/gi, '-')}`
+    const store = await freshStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'b.ts', line: 5, side: 'LEFT', body: 'A' })
+    await store.upsert({ path: 'b.ts', line: 5, side: 'LEFT', body: 'B', n: -1 })
+    const at = store.draftsAt('b.ts', 5, 'LEFT')
+    expect(at).toHaveLength(2)
+    expect(at[0].body).toBe('A')
+    expect(at[1].body).toBe('B')
+  })
+})
+
+describe('Fix-B: legacy key migration', () => {
+  it('parseDraftKey handles legacy 4-part key as n=0', async () => {
+    const { parseDraftKey } = await import('./drafts.svelte')
+    const result = parseDraftKey('owner/repo#42|src/foo.ts|10|RIGHT')
+    expect(result).toEqual({ prKey: 'owner/repo#42', path: 'src/foo.ts', line: 10, side: 'RIGHT', n: 0 })
+  })
+
+  it('parseDraftKey handles 5-part key with n', async () => {
+    const { parseDraftKey } = await import('./drafts.svelte')
+    const result = parseDraftKey('owner/repo#42|src/foo.ts|10|RIGHT|2')
+    expect(result).toEqual({ prKey: 'owner/repo#42', path: 'src/foo.ts', line: 10, side: 'RIGHT', n: 2 })
+  })
+})
+
+describe('Fix-B: submitReview maps multiple same-line drafts', () => {
+  it('count reflects all threaded drafts', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-count-thread-${prKey.replace(/[^a-z0-9]/gi, '-')}`
+    const store = await freshStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'first' })
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'second', n: -1 })
+    expect(store.count).toBe(2)
   })
 })

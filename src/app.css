@@ -9,6 +9,7 @@
   --surface:        #1b1e24;
   --surface-raised: #22262d;
   --hairline:       #2e333b;
+  --border-subtle:  var(--hairline);
   --text:           #e8e6e1;
   --text-muted:     #9a9890;
   --accent:         #4db6a0;

@@ -44,6 +44,7 @@ function makeDraftStore(): ReturnType<typeof createDraftStore> {
   const remove = vi.fn()
   const clearAll = vi.fn()
   const load = vi.fn()
+  const draftsAt = vi.fn().mockReturnValue([])
   return {
     get drafts() { return [] },
     get count() { return 0 },
@@ -52,6 +53,7 @@ function makeDraftStore(): ReturnType<typeof createDraftStore> {
     remove,
     clearAll,
     load,
+    draftsAt,
   }
 }
 

@@ -37,6 +37,15 @@ export async function ghFetch<T>(path: string, init: RequestInit = {}): Promise<
     } catch { /* ignore parse errors */ }
     throw new GithubApiError({ kind: 'unprocessable', message: msg })
   }
+  if (res.status === 403 && res.headers.get('X-RateLimit-Remaining') !== '0') {
+    // Read body to capture GitHub's message (e.g. org OAuth-app restriction messages)
+    let message: string | undefined
+    try {
+      const body = (await res.json()) as { message?: string }
+      if (typeof body.message === 'string') message = body.message
+    } catch { /* ignore parse errors */ }
+    throw new GithubApiError({ kind: 'forbidden', message })
+  }
   throw new GithubApiError(mapError(res))
 }
 
@@ -66,3 +75,4 @@ function mapError(res: Response): GithubError {
   }
   return { kind: 'server', status: res.status }
 }
+

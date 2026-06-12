@@ -122,16 +122,37 @@
     return { oldFile, newFile }
   })
 
+  // ---- Flash-highlight state for newly saved annotation entries (Fix-B) ----
+  // Set of "line|side" strings that should flash after widget save
+  let flashKeys = $state<Set<string>>(new Set())
+
+  function addFlash(line: number, side: 'LEFT' | 'RIGHT') {
+    const key = `${line}|${side}`
+    flashKeys = new Set([...flashKeys, key])
+    // Remove flash class after animation completes (1.5s)
+    setTimeout(() => {
+      flashKeys = new Set([...flashKeys].filter(k => k !== key))
+    }, 1600)
+  }
+
   // ---- Helpers for DraftThread handlers ----------------------------------
 
   function handleWidgetSave(line: number, side: SplitSide, body: string) {
     const sideStr = splitSideToSide(side)
     onAddDraft?.(line, sideStr, body)
-    openWidget = null
+    // Fix-B: DO NOT close the widget — stay open showing the saved draft in read view.
+    // The widget will re-render with existingDraft set (since drafts prop updates).
+    // onClose is NOT called here; only called on explicit cancel/delete.
+    addFlash(line, sideStr)
   }
 
-  function handleWidgetCancel() {
-    openWidget = null
+  function handleWidgetCancel(hasDraft: boolean, onClose: () => void) {
+    // Fix-B: only close if there is no draft saved for this line
+    if (!hasDraft) {
+      onClose()
+      openWidget = null
+    }
+    // If there's a draft, cancel means "go back to read view" (handled inside DraftThread)
   }
 
   function handleExtendSave(line: number, side: SplitSide, body: string) {
@@ -196,16 +217,17 @@
           line={lineNumber}
           side={splitSideToSide(side)}
           onsave={(body) => {
+            // Fix-B: do NOT call onClose here — widget stays open showing saved draft
             handleWidgetSave(lineNumber, side, body)
-            onClose()
           }}
           ondelete={() => {
             handleExtendDelete(lineNumber, side)
             onClose()
+            openWidget = null
           }}
           oncancel={() => {
-            handleWidgetCancel()
-            onClose()
+            // Fix-B: only close widget if no draft saved for this line
+            handleWidgetCancel(existingDraft !== undefined, onClose)
           }}
         />
       {/snippet}
@@ -229,16 +251,19 @@
          limitation), so we render saved drafts here as a reliable fallback. -->
     {#if drafts.length > 0}
       <div class="draft-annotations" aria-label="Draft comments on this file">
-        {#each drafts as draft (draft.line + '|' + draft.side)}
-          <DraftThread
-            {draft}
-            path={file.filename}
-            line={draft.line}
-            side={draft.side}
-            onsave={(body) => handleExtendSave(draft.line, sideToSplitSide(draft.side), body)}
-            ondelete={() => handleExtendDelete(draft.line, sideToSplitSide(draft.side))}
-            oncancel={() => {}}
-          />
+        {#each drafts as draft (draft.line + '|' + draft.side + '|' + (draft.n ?? 0))}
+          {@const flashKey = `${draft.line}|${draft.side}`}
+          <div class="annotation-entry" class:flash={flashKeys.has(flashKey)}>
+            <DraftThread
+              {draft}
+              path={file.filename}
+              line={draft.line}
+              side={draft.side}
+              onsave={(body) => handleExtendSave(draft.line, sideToSplitSide(draft.side), body)}
+              ondelete={() => handleExtendDelete(draft.line, sideToSplitSide(draft.side))}
+              oncancel={() => {}}
+            />
+          </div>
         {/each}
       </div>
     {/if}
@@ -294,6 +319,18 @@
     font-family: var(--font-mono) !important;
   }
   .draft-annotations { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.5rem; border-top: 1px solid var(--border-draft); }
+
+  /* Fix-B: flash-highlight animation on the annotation entry after widget save */
+  @keyframes flash-new-draft {
+    0%   { background: var(--legend-changed-bg); }
+    80%  { background: var(--legend-changed-bg); }
+    100% { background: transparent; }
+  }
+
+  .annotation-entry.flash {
+    animation: flash-new-draft 1.5s ease-out forwards;
+    border-radius: 4px;
+  }
 
   .existing-comments {
     border-top: 1px solid var(--border-banner);

@@ -105,6 +105,22 @@ describe('submitReview', () => {
     expect(result).toMatchObject({ ok: false, kind: 'forbidden' })
   })
 
+  it('forbidden outcome includes PAT guidance for org OAuth-app restrictions (Fix-C)', async () => {
+    const githubMsg = 'Resource not accessible by integration'
+    vi.stubGlobal('fetch', mockFetch(403, { message: githubMsg }, { 'X-RateLimit-Remaining': '42' }))
+
+    const result = await submitReview(ref, verdict, '', [], commitId)
+
+    expect(result).toMatchObject({ ok: false, kind: 'forbidden' })
+    const { message } = result as { ok: false; message: string }
+    // Message starts with GitHub's verbatim text
+    expect(message).toContain(githubMsg)
+    // Message includes the PAT guidance
+    expect(message).toContain('fine-grained PAT')
+    expect(message).toContain('Settings → Advanced')
+    expect(message).toContain('OAuth apps')
+  })
+
   it('maps 422 with "own pull request" to self-approve with verbatim message (EC-09e)', async () => {
     const githubMsg = 'Can not approve your own pull request'
     vi.stubGlobal('fetch', mockFetch(422, { message: githubMsg }))
@@ -207,5 +223,30 @@ describe('submitReview', () => {
 
     expect(result).toEqual({ ok: true })
     expect(f.mock.calls.length).toBe(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Fix-B: two drafts on the same line submit as two separate comments
+// ---------------------------------------------------------------------------
+describe('submitReview — Fix-B same-line threaded drafts', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetInFlightForTest()
+  })
+
+  it('maps two drafts on the same line (n=0 and n=1) to two separate comments', async () => {
+    const f = mockFetch(200, { id: 42 })
+    vi.stubGlobal('fetch', f)
+
+    const draft0 = makeDraft({ path: 'a.ts', line: 5, side: 'RIGHT', body: 'First comment', n: 0 })
+    const draft1 = makeDraft({ path: 'a.ts', line: 5, side: 'RIGHT', body: 'Reply comment', n: 1 })
+
+    await submitReview(ref, 'COMMENT', 'Overall', [draft0, draft1], commitId)
+
+    const sentBody = JSON.parse(f.mock.calls[0][1].body as string)
+    expect(sentBody.comments).toHaveLength(2)
+    expect(sentBody.comments[0]).toEqual({ path: 'a.ts', line: 5, side: 'RIGHT', body: 'First comment' })
+    expect(sentBody.comments[1]).toEqual({ path: 'a.ts', line: 5, side: 'RIGHT', body: 'Reply comment' })
   })
 })
