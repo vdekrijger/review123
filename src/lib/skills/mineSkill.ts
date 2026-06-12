@@ -115,7 +115,7 @@ ${commentsBlock}`
 // Strip code fences longer than CODE_FENCE_LINE_LIMIT lines
 // ---------------------------------------------------------------------------
 
-function stripLongFences(body: string): string {
+export function stripLongFences(body: string): string {
   // Matches ``` optionally followed by a language tag, then content, then ```
   return body.replace(/```[^\n]*\n([\s\S]*?)```/g, (match, inner: string) => {
     const lines = inner.split('\n')

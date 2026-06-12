@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   fetchMineableComments,
   mineSkillFromComments,
+  stripLongFences,
   MINE_COMMENTS_CAP,
   type RawPullComment,
 } from './mineSkill'
@@ -261,5 +262,30 @@ describe('mineSkillFromComments', () => {
     expect(capturedValidator!({ content: 'y' })).toBeNull()
     // Valid → returns the object
     expect(capturedValidator!({ name: 'a', content: 'b' })).toEqual({ name: 'a', content: 'b' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// stripLongFences (exported util)
+// ---------------------------------------------------------------------------
+
+describe('stripLongFences (exported util)', () => {
+  it('strips fences with more than 10 lines of content', () => {
+    const longFence = '```ts\n' + Array.from({length: 12}, (_, i) => `line${i}`).join('\n') + '\n```'
+    expect(stripLongFences(longFence)).toBe('')
+  })
+
+  it('keeps fences with 10 or fewer lines of content', () => {
+    const shortFence = '```ts\nconst x = 1\n```'
+    expect(stripLongFences(shortFence)).toBe(shortFence)
+  })
+
+  it('strips only long fences in mixed body', () => {
+    const long = '```\n' + Array.from({length: 11}, (_, i) => `l${i}`).join('\n') + '\n```'
+    const short = '```\nshort\n```'
+    const body = `before\n${long}\nmiddle\n${short}\nafter`
+    const result = stripLongFences(body)
+    expect(result).not.toContain('l10')
+    expect(result).toContain('short')
   })
 })
