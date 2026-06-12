@@ -645,14 +645,11 @@
     flex-shrink: 0;
   }
 
+  /* Chrome comes from the global select primitive in app.css. */
   .mine-provider-select {
     font-size: 0.88em;
-    padding: 0.2rem 0.4rem;
-    border: 1px solid var(--border-subtle);
-    border-radius: 4px;
-    background: var(--surface);
-    color: var(--text);
-    cursor: pointer;
+    padding-block: 0.2rem;
+    padding-left: 0.4rem;
   }
 
   .mined-skill-notice {

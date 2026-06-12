@@ -60,7 +60,10 @@ function makeFileContent(text: string) {
   return { content: b64 + '\n', encoding: 'base64' }
 }
 
-// The SkillReviewResult our mock DeepSeek returns when it detects a skill persona prompt
+// The SkillReviewResult our mock DeepSeek returns when it detects a skill persona prompt.
+// Two findings exercise both placements:
+//  - line 2 IS in the patch hunks → renders INLINE at the line (extend row)
+//  - line 999 is NOT in the diff → falls back to the per-file block
 const SKILL_REVIEW_RESULT = {
   skillName: 'Security Reviewer',
   findings: [
@@ -69,6 +72,12 @@ const SKILL_REVIEW_RESULT = {
       line: 2,
       severity: 'high',
       body: 'Potential XSS vulnerability: user input is not sanitized',
+    },
+    {
+      path: 'src/feature.ts',
+      line: 999,
+      severity: 'medium',
+      body: 'Hardcoded credential found outside the visible diff',
     },
   ],
 }
@@ -228,10 +237,12 @@ async function setupRoutes(page: import('@playwright/test').Page) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: run reviewers → suggestion appears → Add as draft → sticky bar increments
+// Test: run reviewers → anchored finding renders INLINE at its line, unanchored
+//       finding falls back to the per-file block, never both → Add as draft
+//       from the inline card increments the sticky bar count
 // ---------------------------------------------------------------------------
 
-test('skill-reviewers: run my reviewers → suggestion appears → Add as draft → sticky bar count increments', async ({
+test('skill-reviewers: anchored finding inline at line, unanchored in per-file block, Add as draft increments count', async ({
   page,
 }) => {
   await setupRoutes(page)
@@ -265,43 +276,70 @@ test('skill-reviewers: run my reviewers → suggestion appears → Add as draft 
   // Click to run skill reviews
   await runBtn.click()
 
-  // The skill suggestion should appear (finding body text)
+  // Both finding bodies should appear
   await expect(
     page.getByText(/Potential XSS vulnerability/i),
   ).toBeVisible({ timeout: 15_000 })
-
-  // The persona summary line should appear: "Security Reviewer: 1 suggestion"
   await expect(
-    page.getByText(/Security Reviewer.*1 suggestion/i),
+    page.getByText(/Hardcoded credential found outside the visible diff/i),
   ).toBeVisible({ timeout: 5_000 })
 
-  // The severity chip should show "high"
+  // The persona summary line should appear: "Security Reviewer: 2 suggestions"
   await expect(
-    page.locator('.severity-chip-high'),
-  ).toBeVisible()
+    page.getByText(/Security Reviewer.*2 suggestions/i),
+  ).toBeVisible({ timeout: 5_000 })
+
+  // --- Placement contract ---
+  // Anchored finding (line 2 IS in the diff) renders INLINE in an extend row
+  // inside the diff table, at its line.
+  const inlineCard = page.locator('.diff-line-extend .line-findings .skill-finding')
+  await expect(inlineCard).toBeVisible()
+  await expect(inlineCard).toContainText('Potential XSS vulnerability')
+  await expect(page.locator('[data-line-findings="2"]')).toBeVisible()
+
+  // Unanchored finding (line 999 NOT in the diff) renders in the per-file
+  // fallback block, with a labeled line note.
+  const blockCard = page.locator('.skill-findings-annotations .skill-finding')
+  await expect(blockCard).toBeVisible()
+  await expect(blockCard).toContainText('Hardcoded credential')
+  await expect(blockCard).toContainText('line 999 — not in this diff')
+
+  // Never both: each finding body appears in exactly ONE card
+  await expect(page.locator('.skill-finding', { hasText: 'Potential XSS vulnerability' })).toHaveCount(1)
+  await expect(page.locator('.skill-finding', { hasText: 'Hardcoded credential' })).toHaveCount(1)
+
+  // --- Severity visual system ---
+  // high chip on the inline card, medium chip on the block card
+  await expect(inlineCard.locator('.severity-chip-high')).toBeVisible()
+  await expect(blockCard.locator('.severity-chip-medium')).toBeVisible()
+  // Card severity classes match the chips (border/badge consistency)
+  await expect(inlineCard).toHaveClass(/severity-high/)
+  await expect(blockCard).toHaveClass(/severity-medium/)
 
   // Initial draft count from sticky bar (filter to the draft-count status element)
   const draftStatus = page.locator('.draft-status')
   await expect(draftStatus).toContainText('0 comments', { timeout: 3_000 })
 
-  // Click "Add as draft" button
-  const addDraftBtn = page.getByRole('button', { name: /add as draft/i })
+  // Click "Add as draft" on the INLINE card
+  const addDraftBtn = inlineCard.getByRole('button', { name: /add as draft/i })
   await expect(addDraftBtn).toBeVisible()
   await addDraftBtn.click()
 
   // Draft count should increment to 1
   await expect(draftStatus).toContainText('1 comment', { timeout: 5_000 })
 
-  // The finding card should still be visible (not dismissed) — use first() to avoid
-  // strict-mode violation since the text also appears in the draft thread after add-as-draft
-  await expect(page.locator('.skill-finding-body').first()).toBeVisible()
+  // The card shows the labeled "added as draft" state chip (the ONE state treatment)
+  await expect(inlineCard.locator('.skill-state-chip')).toContainText('added as draft')
+
+  // The finding card should still be visible (not dismissed)
+  await expect(inlineCard.locator('.skill-finding-body')).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
-// Test: dismiss hides the finding
+// Test: dismiss hides each finding from its placement
 // ---------------------------------------------------------------------------
 
-test('skill-reviewers: dismiss hides the finding without affecting draft count', async ({
+test('skill-reviewers: dismiss hides inline and block findings without affecting draft count', async ({
   page,
 }) => {
   await setupRoutes(page)
@@ -326,17 +364,22 @@ test('skill-reviewers: dismiss hides the finding without affecting draft count',
   // Run skill reviews
   await page.getByRole('button', { name: /run my reviewers/i }).click()
 
-  // Wait for finding to appear
+  // Wait for the inline (anchored) finding to appear
+  const inlineCard = page.locator('.diff-line-extend .line-findings .skill-finding')
+  await expect(inlineCard).toBeVisible({ timeout: 15_000 })
+
+  // Dismiss the inline finding
+  await inlineCard.getByRole('button', { name: /dismiss/i }).click()
   await expect(
     page.getByText(/Potential XSS vulnerability/i),
-  ).toBeVisible({ timeout: 15_000 })
+  ).not.toBeVisible({ timeout: 3_000 })
 
-  // Click Dismiss
-  await page.getByRole('button', { name: /dismiss/i }).click()
-
-  // Finding should be gone
+  // Dismiss the fallback-block finding too
+  const blockCard = page.locator('.skill-findings-annotations .skill-finding')
+  await expect(blockCard).toBeVisible()
+  await blockCard.getByRole('button', { name: /dismiss/i }).click()
   await expect(
-    page.getByText(/Potential XSS vulnerability/i),
+    page.getByText(/Hardcoded credential/i),
   ).not.toBeVisible({ timeout: 3_000 })
 
   // Draft count stays at 0 (use class selector to avoid ambiguity with skill-run-status-bar)

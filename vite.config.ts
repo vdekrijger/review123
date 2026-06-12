@@ -45,6 +45,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // Process CSS through the Vite pipeline so `?raw` imports of stylesheets
+    // (design-system-primitives.test.ts) return real file contents instead of
+    // vitest's default empty-module CSS stub.
+    css: true,
     setupFiles: ['./src/test-setup.ts'],
     include: ['src/**/*.{test,spec}.ts', 'api/**/*.{test,spec}.ts'],
     env: {

@@ -401,7 +401,7 @@ function seedDraftScript(prKey: string) {
 
 async function setupRoutes(
   page: import('@playwright/test').Page,
-  opts: { withGithubAuth?: boolean; withResolvedThreads?: boolean } = {},
+  opts: { withGithubAuth?: boolean; withResolvedThreads?: boolean; aiDelayMs?: number } = {},
 ) {
   // Block PostHog analytics
   await page.route('**/*posthog.com/**', (route) => route.abort())
@@ -525,6 +525,11 @@ async function setupRoutes(
 
   // ---- DeepSeek API — single handler, dispatches by request body ----------
   await page.route('**/api.deepseek.com/**', async (route) => {
+    // Optional artificial latency — used by the AI-skeleton test to observe
+    // the pending state before any AI content arrives.
+    if (opts.aiDelayMs) {
+      await new Promise((resolve) => setTimeout(resolve, opts.aiDelayMs))
+    }
     let body: { stream?: boolean; messages?: Array<{ role: string; content: string }> } = {}
     try {
       body = route.request().postDataJSON() as typeof body
@@ -2144,6 +2149,51 @@ test('syntax-highlighting: dark app theme switches the diff to dark tokens, stil
     body: await article.screenshot(),
     contentType: 'image/png',
   })
+})
+
+// ---------------------------------------------------------------------------
+// AI skeletons — pending AI sections show content-shaped skeletons from the
+// first render (no blank gap, no late spinner pop-in), then real content
+// replaces them. Uses aiDelayMs to hold all DeepSeek responses back.
+// ---------------------------------------------------------------------------
+
+test('ai-skeletons: expanded AI sections show skeletons while pending, content replaces them', async ({
+  page,
+}) => {
+  await setupRoutes(page, { aiDelayMs: 3_000 })
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load — AI run starts now, but all LLM responses are delayed
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Open the page summary + diagrams + tests panels while AI is still pending
+  const summaryPanel = page.locator('details.summary-panel')
+  await summaryPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+  const diagramsPanel = page.locator('details.diagrams-panel')
+  await diagramsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+  const testsPanel = page.locator('details.tests-panel')
+  await testsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+
+  // Skeletons must be visible immediately — content-shaped per section
+  await expect(summaryPanel.locator('.ai-panel-loading .skeleton-block')).toBeVisible({ timeout: 2_000 })
+  await expect(diagramsPanel.locator('.skeleton-rect')).toBeVisible()
+  await expect(testsPanel.locator('.skeleton-card')).toHaveCount(2)
+
+  // The context rail (open Summary section by default) shows a skeleton too
+  const rail = page.locator('aside.context-rail')
+  await expect(rail.locator('.ai-panel-loading .skeleton-block').first()).toBeVisible()
+
+  // Eventually the real content replaces the skeleton (delayed fixtures resolve)
+  await expect(summaryPanel).toContainText('This PR adds a new feature', { timeout: 20_000 })
+  await expect(summaryPanel.locator('.ai-panel-loading')).toHaveCount(0)
+  await expect(testsPanel.locator('.tests-covered-item')).toHaveCount(2, { timeout: 20_000 })
+  await expect(testsPanel.locator('.skeleton-card')).toHaveCount(0)
 })
 
 // ---------------------------------------------------------------------------

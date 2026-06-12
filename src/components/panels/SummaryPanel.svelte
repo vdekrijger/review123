@@ -19,7 +19,7 @@
   })
 </script>
 
-<AiPanel title="Summary" state={run.summary} onretry={() => run.retry('summary')}>
+<AiPanel title="Summary" state={run.summary} skeletonVariant="text" skeletonLines={4} onretry={() => run.retry('summary')}>
   {#if run.summary.status === 'streaming'}
     <pre class="prose">{summaryText}</pre>
   {:else if run.summary.status === 'done'}

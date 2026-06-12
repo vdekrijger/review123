@@ -38,3 +38,16 @@ if (typeof HTMLDialogElement !== 'undefined' && !HTMLDialogElement.prototype.sho
     this.open = false
   }
 }
+
+// ResizeObserver stub for jsdom. @git-diff-view's useDomWidth hook observes
+// the diff table wrapper whenever an extend row (inline annotation at a line)
+// is shown. jsdom does not implement ResizeObserver; without this stub every
+// render of an inline draft/finding annotation would throw.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver
+}
