@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens, saveGithubAuth,
-  setTheme, setUiFont, setShowProgress,
+  setTheme, setUiFont, setShowProgress, setTreeOpen,
 } from './settings'
 
 describe('settings', () => {
@@ -17,6 +17,7 @@ describe('settings', () => {
       theme: 'auto',
       uiFont: 'plex',
       showProgress: true,
+      treeOpen: false,
     })
   })
 
@@ -58,6 +59,7 @@ describe('settings', () => {
       theme: 'auto',
       uiFont: 'plex',
       showProgress: true,
+      treeOpen: false,
     })
   })
 
@@ -199,6 +201,33 @@ describe('settings', () => {
     it('coerces invalid showProgress value back to default (true)', () => {
       localStorage.setItem('review123:settings', JSON.stringify({ showProgress: 'yes' }))
       expect(getSettings().showProgress).toBe(true)
+    })
+  })
+
+  describe('treeOpen', () => {
+    it('defaults to false (diff-first)', () => {
+      expect(getSettings().treeOpen).toBe(false)
+    })
+
+    it('setTreeOpen persists true', () => {
+      setTreeOpen(true)
+      expect(getSettings().treeOpen).toBe(true)
+    })
+
+    it('setTreeOpen persists false', () => {
+      setTreeOpen(true)
+      setTreeOpen(false)
+      expect(getSettings().treeOpen).toBe(false)
+    })
+
+    it('coerces invalid treeOpen value back to default (false)', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ treeOpen: 'yes' }))
+      expect(getSettings().treeOpen).toBe(false)
+    })
+
+    it('returns defaults includes treeOpen false', () => {
+      const s = getSettings()
+      expect(s).toHaveProperty('treeOpen', false)
     })
   })
 })

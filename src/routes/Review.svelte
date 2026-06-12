@@ -130,6 +130,8 @@
       const files = await compareCommits({ owner, repo }, prevVisitSha, load.state.meta.headSha)
       compareMode = { files, label: 'since your last visit' }
       compareStatus = 'idle'
+      // Push a flagged history entry so browser back exits compare instead of leaving the PR
+      history.pushState({ review123Compare: true }, '', location.pathname)
     } catch (e) {
       if (e instanceof GithubApiError && e.detail.kind === 'not-found') {
         compareError = "Couldn't compare — the previous revision may have been force-pushed away."
@@ -154,6 +156,8 @@
       compareMode = { files, label: `${fromShort}…${toShort}` }
       pickerActive = { from, to }
       compareStatus = 'idle'
+      // Push a flagged history entry so browser back exits compare instead of leaving the PR
+      history.pushState({ review123Compare: true }, '', location.pathname)
     } catch (e) {
       if (e instanceof GithubApiError && e.detail.kind === 'not-found') {
         compareError = "Couldn't compare commits — one revision may no longer exist."
@@ -170,13 +174,37 @@
 
   // ---- Shared exit / dismiss ----
 
-  function exitCompareMode() {
+  /**
+   * Clear compare state. When called from a UI button ("Full diff"), if the
+   * current history entry is the compare-flagged one, call history.back() so
+   * the stack stays clean. When called from the popstate handler (fromPopstate
+   * = true), skip history.back() — the pop already consumed the entry.
+   */
+  function exitCompareMode(fromPopstate = false) {
     compareMode = null
     compareStatus = 'idle'
     compareError = null
     compareSource = null
     pickerActive = null
+    if (!fromPopstate && history.state?.review123Compare) {
+      history.back()
+    }
   }
+
+  // Listen for browser back while compare is active: consume the pop and exit
+  // compare mode instead of navigating away.
+  $effect(() => {
+    function handlePopstate(e: PopStateEvent) {
+      // Only intercept when compare is active. The router's own listener will
+      // re-match the same pathname (same route, no remount) — exitCompareMode
+      // here runs in the same microtask and clears state before any re-render.
+      if (compareMode !== null) {
+        exitCompareMode(true)
+      }
+    }
+    window.addEventListener('popstate', handlePopstate)
+    return () => { window.removeEventListener('popstate', handlePopstate) }
+  })
 
   function dismissBanner() {
     prevVisitSha = null
@@ -197,6 +225,33 @@
   // ---- AI run ----
   let aiRun: ReturnType<typeof createAiRun> | null = $state(null)
   let railCollapsed = $state(getSettings().railCollapsed)
+
+  // Narrow viewport detection: below 1100px the rail auto-collapses and
+  // expansions are transient (not persisted to settings).
+  const NARROW_BREAKPOINT = 1100
+  let isNarrow = $state(
+    typeof window !== 'undefined' && window.innerWidth < NARROW_BREAKPOINT
+  )
+
+  $effect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const mq = window.matchMedia(`(max-width: ${NARROW_BREAKPOINT - 1}px)`)
+    function handleChange(e: MediaQueryListEvent) {
+      isNarrow = e.matches
+      // When entering narrow mode, force collapse (overlay behaviour)
+      if (e.matches) {
+        railCollapsed = true
+      }
+    }
+    mq.addEventListener('change', handleChange)
+    // Initialize: if currently narrow, force collapse regardless of stored pref
+    if (mq.matches) {
+      isNarrow = true
+      railCollapsed = true
+    }
+    return () => mq.removeEventListener('change', handleChange)
+  })
+
   // showProgress: read once at mount (same pattern as railCollapsed).
   // To pick up changes from SettingsPanel without re-mounting Review, the
   // SettingsPanel checkbox calls setShowProgress immediately (like theme),
@@ -347,7 +402,7 @@
   <ConsentDialog repo={consentDialogRepo} onresult={handleConsentResult} />
 {/if}
 
-<section class="review">
+<section class="review" data-rail-collapsed={String(railCollapsed)}>
   {#if load.state.status === 'loading'}
     <p>Loading {owner}/{repo}#{number}…</p>
   {:else if load.state.status === 'error'}
@@ -378,7 +433,14 @@
         run={aiRun}
         onhotspot={handleHotspot}
         collapsed={railCollapsed}
-        oncollapse={(c) => { railCollapsed = c; setRailCollapsed(c) }}
+        oncollapse={(c) => {
+          railCollapsed = c
+          // At narrow widths, the expanded state is transient — don't persist it
+          if (!isNarrow) {
+            setRailCollapsed(c)
+          }
+        }}
+        onbackdropclick={() => { railCollapsed = true }}
       />
     {/if}
 
@@ -407,7 +469,7 @@
             <button class="banner-dismiss" onclick={dismissBanner} aria-label="Dismiss">×</button>
           {:else if isCompareActive && compareSource === 'banner'}
             Showing {compareMode!.files.length} file{compareMode!.files.length === 1 ? '' : 's'} changed since your last visit
-            · <button class="banner-btn" onclick={exitCompareMode}>Show full diff</button>
+            · <button class="banner-btn" onclick={() => exitCompareMode()}>Show full diff</button>
             <button class="banner-dismiss" onclick={dismissBanner} aria-label="Dismiss">×</button>
           {:else}
             <!-- Banner is idle but picker is active — show simplified banner with dismiss -->
@@ -427,7 +489,7 @@
         {:else if compareStatus === 'error' && compareSource === 'picker'}
           <div class="picker-error" role="alert">
             {compareError}
-            <button class="banner-btn" onclick={exitCompareMode}>Dismiss</button>
+            <button class="banner-btn" onclick={() => exitCompareMode()}>Dismiss</button>
           </div>
         {:else}
           <RevisionPicker
@@ -477,16 +539,6 @@
   {/if}
 </section>
 
-<!-- Progress bar — shown once the PR is loaded, when showProgress is enabled -->
-{#if load.state.status === 'ready' && showProgress}
-  <ReviewProgress
-    viewedCount={viewedStore.count}
-    fileCount={load.state.files.length}
-    draftCount={draftStore?.count ?? 0}
-    {step}
-  />
-{/if}
-
 <!-- EC-07i: Sticky bottom bar — shown once the PR is loaded -->
 {#if load.state.status === 'ready'}
   <div class="draft-bar">
@@ -497,13 +549,22 @@
             Drafts won't survive closing this tab (browser storage unavailable)
           </span>
         {/if}
-        <span class="draft-count">
+        <span class="draft-count text-muted">
           {draftStore?.count ?? 0} comment{(draftStore?.count ?? 0) === 1 ? '' : 's'} drafted{#if viewedStore.count > 0}&nbsp;&middot; viewed {viewedStore.count}/{load.state.files.length}{/if}
         </span>
       </span>
+      {#if showProgress}
+        <ReviewProgress
+          viewedCount={viewedStore.count}
+          fileCount={load.state.files.length}
+          draftCount={draftStore?.count ?? 0}
+          {step}
+          inline
+        />
+      {/if}
       <div class="step-nav">
         <button
-          class="step-btn"
+          class="btn"
           disabled={!canPrev}
           onclick={() => goStep(step - 1)}
           aria-label="Previous step"
@@ -511,7 +572,7 @@
           ← Prev
         </button>
         <button
-          class="step-btn"
+          class="btn"
           disabled={!canNext}
           onclick={() => goStep(step + 1)}
           aria-label="Next step"
@@ -525,6 +586,18 @@
 
 <style>
   .review { max-width: 70rem; margin: 0 auto; padding: 1rem; padding-bottom: 5rem; }
+
+  /*
+   * Medium regime (1100–1443px): rail is 300px fixed, but the viewport doesn't have
+   * enough free space for it without covering content. Push content right so the
+   * expanded rail never overlaps interactive elements (e.g. the "Full diff" button).
+   * Only applies when the rail is expanded (data-rail-collapsed="false").
+   */
+  @media (max-width: 1443px) and (min-width: 1100px) {
+    .review:not([data-rail-collapsed="true"]) {
+      padding-right: calc(300px + 1rem);
+    }
+  }
   .muted { opacity: 0.6; }
 
   .comments-error-note {
@@ -635,8 +708,8 @@
     left: 0;
     right: 0;
     z-index: 100;
-    background: var(--surface-raised, #1a1a2e);
-    border-top: 1px solid #4444;
+    background: var(--surface-raised);
+    border-top: 1px solid var(--hairline);
     padding: 0.5rem 1rem;
   }
 
@@ -646,21 +719,20 @@
     display: flex;
     align-items: center;
     gap: 1rem;
-    justify-content: space-between;
-    flex-wrap: wrap;
   }
 
   .draft-status {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    flex-wrap: wrap;
+    flex-shrink: 0;
   }
 
   .draft-count {
-    font-size: 0.9rem;
-    font-weight: 500;
+    font-size: 0.85rem;
+    font-weight: 400;
     white-space: nowrap;
+    color: var(--text-muted);
   }
 
   .storage-warning {
@@ -673,24 +745,6 @@
     display: flex;
     gap: 0.5rem;
     align-items: center;
-  }
-
-  .step-btn {
-    background: #4444;
-    border: 1px solid #6666;
-    color: inherit;
-    border-radius: 4px;
-    padding: 0.25rem 0.75rem;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-
-  .step-btn:hover:not(:disabled) {
-    background: #6666;
-  }
-
-  .step-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+    flex-shrink: 0;
   }
 </style>

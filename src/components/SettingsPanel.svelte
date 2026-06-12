@@ -10,6 +10,15 @@
   import { SAMPLE_SKILL_NAME, SAMPLE_SKILL_CONTENT } from '../lib/skills/sampleSkill'
 
   let { onclose }: { onclose: () => void } = $props()
+
+  let dialogEl = $state<HTMLDialogElement | null>(null)
+
+  $effect(() => {
+    if (!dialogEl) return
+    if (!dialogEl.open) {
+      dialogEl.showModal()
+    }
+  })
   const current = getSettings()
   let pat = $state(current.githubPat ?? '')
   let deepseek = $state(current.deepseekKey ?? '')
@@ -109,7 +118,12 @@
   }
 </script>
 
-<dialog open aria-label="Settings">
+<dialog
+  bind:this={dialogEl}
+  aria-label="Settings"
+  oncancel={(e) => { e.preventDefault(); onclose() }}
+  onclick={(e) => { if (e.target === e.currentTarget) onclose() }}
+>
   <h2>Settings</h2>
 
   <section aria-label="Appearance — applies immediately">
@@ -249,6 +263,11 @@
   /* dialog base from app.css; override only layout-specific things */
   dialog {
     max-width: 520px;
+  }
+
+  dialog::backdrop {
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(2px);
   }
 
   .auth-status {

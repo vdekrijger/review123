@@ -20,14 +20,17 @@
    * acceptable use of {@html} in this codebase.
    */
   import CiSummary from './CiSummary.svelte'
-  import AiPanel from './AiPanel.svelte'
-  import DiagramPanel from './DiagramPanel.svelte'
   import MarkdownView from './MarkdownView.svelte'
+  import SummaryPanel from './panels/SummaryPanel.svelte'
+  import DiagramsSection from './panels/DiagramsSection.svelte'
+  import TestInsightPanel from './panels/TestInsightPanel.svelte'
+  import AlternativesPanel from './panels/AlternativesPanel.svelte'
+  import VerdictPanel from './panels/VerdictPanel.svelte'
   import { stripReadingOrder } from '../lib/ai/tasks'
   import type { PrMeta, PrFile } from '../lib/github/types'
   import type { CiSummary as CiSummaryType } from '../lib/github/checks'
   import type { AiRun } from '../lib/ai/run.svelte'
-  import type { AttentionResult, GraphResult, VerdictResult, TestInsight, AlternativesResult } from '../lib/ai/schemas'
+  import type { AttentionResult, TestInsight, AlternativesResult, VerdictResult } from '../lib/ai/schemas'
 
   interface Props {
     meta: PrMeta
@@ -147,29 +150,6 @@
     return '…/' + parts.slice(-2).join('/')
   }
 
-  // Verdict evidence: clamping + expand
-  const EVIDENCE_CLAMP = 5
-  let evidenceExpanded = $state(false)
-
-  // Parse an evidence item into an optional leading path chip + remaining text.
-  // The regex matches a recognizable file path: word chars, @, dots, hyphens, slashes,
-  // with a dot-extension. Captures the first such occurrence.
-  const PATH_RE = /[\w@./-]+\.[\w]+/
-
-  interface EvidenceRow {
-    path: string | null
-    text: string
-  }
-
-  function parseEvidenceItem(item: string): EvidenceRow {
-    const m = item.match(PATH_RE)
-    if (!m) return { path: null, text: item }
-    const path = m[0]
-    // Remove the path from the item text for the prose portion
-    const rest = item.slice(0, m.index).trimEnd() + item.slice(m.index! + path.length)
-    const text = rest.replace(/^[-–—:\s]+/, '').trimStart()
-    return { path, text: text || item }
-  }
 </script>
 
 <div class="understand-step">
@@ -310,13 +290,7 @@
   <details class="detail-panel summary-panel">
     <summary class="detail-summary">Full summary</summary>
     <div class="detail-body">
-      <AiPanel title="Summary" state={run.summary} onretry={() => run.retry('summary')}>
-        {#if run.summary.status === 'streaming'}
-          <pre class="prose">{summaryText}</pre>
-        {:else if run.summary.status === 'done'}
-          <MarkdownView source={summaryText} />
-        {/if}
-      </AiPanel>
+      <SummaryPanel {run} />
     </div>
   </details>
 
@@ -324,11 +298,7 @@
   <details class="detail-panel diagrams-panel">
     <summary class="detail-summary">Diagrams</summary>
     <div class="detail-body">
-      <AiPanel title="Diagrams" state={run.diagrams} onretry={() => run.retry('diagrams')}>
-        {#if run.diagrams.status === 'done'}
-          <DiagramPanel result={run.diagrams.value as GraphResult} panelState="idle" />
-        {/if}
-      </AiPanel>
+      <DiagramsSection {run} />
     </div>
   </details>
 
@@ -336,46 +306,7 @@
   <details class="detail-panel tests-panel" bind:this={testsPanelEl}>
     <summary class="detail-summary">Test coverage (AI-inferred)</summary>
     <div class="detail-body">
-      <AiPanel title="Test coverage (AI-inferred)" state={run.tests} onretry={() => run.retry('tests')}>
-        {#if tests}
-          {#if tests.covered.length > 0}
-            <p class="tests-ai-inferred-note">AI-inferred — not measured coverage</p>
-            <ul class="tests-covered-list">
-              {#each tests.covered as item (item.behavior)}
-                <li class="tests-covered-item">
-                  <span class="tests-covered-check">✓</span>
-                  <span class="tests-covered-content">
-                    <span class="tests-covered-behavior">{item.behavior}</span>
-                    <span class="tests-covered-meta">
-                      {item.test} ·
-                      <button
-                        class="tests-file-link"
-                        onclick={() => onhotspot?.(item.file)}
-                        title="Jump to {item.file} in Inspect"
-                        aria-label="Jump to {item.file}"
-                      >{item.file}</button>
-                    </span>
-                  </span>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-          {#if tests.gaps.length > 0}
-            <p class="tests-gaps-heading">AI-inferred gaps — behaviors changed without test coverage:</p>
-            <ul class="tests-gaps-list">
-              {#each tests.gaps as gap (gap)}
-                <li class="tests-gap-item">
-                  <span class="tests-gap-icon">⚠</span>
-                  <span class="tests-gap-text">{gap}</span>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-          {#if tests.covered.length === 0 && tests.gaps.length === 0}
-            <p class="tests-empty">No AI-inferred test coverage data available.</p>
-          {/if}
-        {/if}
-      </AiPanel>
+      <TestInsightPanel {run} {onhotspot} />
     </div>
   </details>
 
@@ -383,34 +314,7 @@
   <details class="detail-panel alternatives-panel" bind:this={alternativesPanelEl}>
     <summary class="detail-summary">Alternative approaches (AI)</summary>
     <div class="detail-body">
-      <AiPanel title="Alternative approaches (AI)" state={run.alternatives} onretry={() => run.retry('alternatives')}>
-        {#if alternatives}
-          <p class="alternatives-problem">{alternatives.problem}</p>
-          {#if alternatives.alternatives.length === 0}
-            <p class="alternatives-empty">No meaningfully different alternatives identified — the PR's approach appears to be the natural choice.</p>
-          {:else}
-            <div class="alternatives-list">
-              {#each alternatives.alternatives as alt (alt.approach)}
-                <div class="alternative-card">
-                  <p class="alternative-approach">{alt.approach}</p>
-                  <p class="alternative-tradeoffs">{alt.tradeoffs}</p>
-                  <span
-                    class="assessment-chip assessment-{alt.assessment}"
-                    aria-label="Assessment: {alt.assessment}"
-                  >
-                    {#if alt.assessment === 'pr-is-better'}PR's approach is better
-                    {:else if alt.assessment === 'comparable'}Comparable
-                    {:else if alt.assessment === 'alternative-is-better'}Worth considering
-                    {:else}Different goals
-                    {/if}
-                  </span>
-                  <p class="alternative-rationale">{alt.rationale}</p>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        {/if}
-      </AiPanel>
+      <AlternativesPanel {run} />
     </div>
   </details>
 
@@ -418,54 +322,7 @@
   <details class="detail-panel verdict-panel">
     <summary class="detail-summary">Verdict evidence</summary>
     <div class="detail-body">
-      <AiPanel title="Verdict" state={run.verdict} onretry={() => run.retry('verdict')}>
-        {#if verdict}
-          {#if verdict.evidence.length > 0}
-            {@const visibleEvidence = evidenceExpanded
-              ? verdict.evidence
-              : verdict.evidence.slice(0, EVIDENCE_CLAMP)}
-            <ul class="verdict-evidence">
-              {#each visibleEvidence as item (item)}
-                {@const row = parseEvidenceItem(item)}
-                <li class="verdict-evidence-row">
-                  {#if row.path}
-                    <button
-                      class="evidence-path-chip"
-                      onclick={() => onhotspot?.(row.path!)}
-                      title="Jump to {row.path}"
-                      aria-label="Jump to {row.path}"
-                    >{row.path}</button>
-                  {/if}
-                  <span class="evidence-text">
-                    <MarkdownView source={row.text} />
-                  </span>
-                </li>
-              {/each}
-            </ul>
-            {#if verdict.evidence.length > EVIDENCE_CLAMP}
-              <button
-                class="evidence-expander"
-                onclick={() => { evidenceExpanded = !evidenceExpanded }}
-                aria-expanded={evidenceExpanded}
-              >
-                {evidenceExpanded
-                  ? 'Show less'
-                  : `Show all ${verdict.evidence.length}`}
-              </button>
-            {/if}
-          {/if}
-          {#if verdict.notAnalyzed.length > 0}
-            <div class="not-analyzed">
-              <h4>Not analyzed</h4>
-              <ul>
-                {#each verdict.notAnalyzed as path}
-                  <li>{path}</li>
-                {/each}
-              </ul>
-            </div>
-          {/if}
-        {/if}
-      </AiPanel>
+      <VerdictPanel {run} {onhotspot} />
     </div>
   </details>
 
@@ -766,119 +623,6 @@
     border-top: 1px solid var(--hairline);
   }
 
-  .detail-body .prose {
-    font-family: inherit;
-    white-space: pre-wrap;
-    margin: 0;
-    font-size: 0.9rem;
-    line-height: 1.5;
-  }
-
-  /* ===== Verdict evidence ===== */
-
-  .verdict-evidence {
-    margin: 0 0 0.5rem 0;
-    padding-left: 0;
-    list-style: none;
-    font-size: 0.9rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .verdict-evidence-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.5rem;
-    padding: 0.3rem 0;
-    border-bottom: 1px solid var(--hairline);
-  }
-
-  .verdict-evidence-row:last-child {
-    border-bottom: none;
-  }
-
-  .evidence-path-chip {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.1rem 0.4rem;
-    border-radius: 4px;
-    background: var(--surface-raised);
-    border: 1px solid var(--hairline);
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    color: var(--accent);
-    cursor: pointer;
-    white-space: nowrap;
-    flex-shrink: 0;
-    text-decoration: none;
-    transition: background 100ms;
-  }
-
-  .evidence-path-chip:hover {
-    background: var(--accent-subtle);
-    border-color: var(--accent);
-  }
-
-  .evidence-text {
-    font-family: var(--font-prose);
-    font-size: 0.9rem;
-    line-height: 1.5;
-    flex: 1;
-    min-width: 0;
-  }
-
-  /* MarkdownView inside evidence-text: inline, no block margins */
-  .evidence-text :global(.markdown-view) {
-    font-size: inherit;
-    line-height: inherit;
-  }
-
-  .evidence-text :global(p) {
-    margin: 0;
-  }
-
-  .evidence-text :global(code) {
-    font-size: 0.85em;
-    background: var(--surface-raised);
-    padding: 0.1em 0.3em;
-    border-radius: 3px;
-  }
-
-  .evidence-expander {
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 0.82rem;
-    color: var(--accent);
-    padding: 0.2rem 0;
-    text-decoration: underline;
-    text-underline-offset: 2px;
-  }
-
-  .evidence-expander:hover {
-    opacity: 0.75;
-  }
-
-  .not-analyzed {
-    margin-top: 0.5rem;
-  }
-
-  .not-analyzed h4 {
-    margin: 0 0 0.4rem;
-    font-size: 0.9rem;
-    font-weight: 600;
-    opacity: 0.75;
-  }
-
-  .not-analyzed ul {
-    margin: 0;
-    padding-left: 1.5em;
-    font-size: 0.85rem;
-    font-family: var(--font-mono, monospace);
-    opacity: 0.8;
-  }
-
   .no-desc {
     margin: 0;
     font-style: italic;
@@ -914,102 +658,6 @@
     font-weight: 500;
   }
 
-  /* ===== Test coverage panel ===== */
-
-  .tests-ai-inferred-note {
-    margin: 0 0 0.6rem;
-    font-size: 0.8rem;
-    opacity: 0.6;
-    font-style: italic;
-  }
-
-  .tests-covered-list,
-  .tests-gaps-list {
-    list-style: none;
-    margin: 0 0 0.75rem;
-    padding: 0;
-  }
-
-  .tests-covered-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.4rem;
-    padding: 0.25rem 0;
-    border-bottom: 1px solid #8881;
-    font-size: 0.88rem;
-  }
-
-  .tests-covered-item:last-child { border-bottom: none; }
-
-  .tests-covered-check {
-    color: var(--legend-added-color);
-    font-weight: 700;
-    flex-shrink: 0;
-    margin-top: 0.05rem;
-  }
-
-  .tests-covered-content {
-    display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-    min-width: 0;
-  }
-
-  .tests-covered-behavior {
-    font-weight: 500;
-  }
-
-  .tests-covered-meta {
-    font-size: 0.78rem;
-    opacity: 0.65;
-  }
-
-  .tests-file-link {
-    background: none;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    color: var(--accent);
-    font-size: inherit;
-    font-family: var(--font-mono, monospace);
-    text-decoration: underline;
-    text-underline-offset: 2px;
-  }
-
-  .tests-file-link:hover { opacity: 0.75; }
-
-  .tests-gaps-heading {
-    margin: 0 0 0.4rem;
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--legend-changed-color);
-  }
-
-  .tests-gap-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.4rem;
-    padding: 0.2rem 0;
-    font-size: 0.88rem;
-  }
-
-  .tests-gap-icon {
-    color: var(--legend-changed-color);
-    font-weight: 700;
-    flex-shrink: 0;
-  }
-
-  .tests-gap-text {
-    opacity: 0.9;
-  }
-
-  .tests-empty {
-    margin: 0;
-    font-size: 0.88rem;
-    opacity: 0.6;
-    font-style: italic;
-  }
-
   /* ===== Alternatives glance chip ===== */
 
   .alternatives-glance-chip {
@@ -1030,89 +678,4 @@
 
   .alternatives-glance-chip:hover { background: #d9770620; }
 
-  /* ===== Alternatives panel ===== */
-
-  .alternatives-problem {
-    margin: 0 0 0.75rem;
-    font-size: 0.9rem;
-    font-weight: 500;
-    line-height: 1.45;
-  }
-
-  .alternatives-empty {
-    margin: 0;
-    font-size: 0.88rem;
-    opacity: 0.6;
-    font-style: italic;
-  }
-
-  .alternatives-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .alternative-card {
-    padding: 0.65rem 0.75rem;
-    border: 1px solid var(--hairline);
-    border-radius: 6px;
-    background: var(--surface);
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-  }
-
-  .alternative-approach {
-    margin: 0;
-    font-size: 0.9rem;
-    font-weight: 600;
-    line-height: 1.4;
-  }
-
-  .alternative-tradeoffs {
-    margin: 0;
-    font-size: 0.875rem;
-    opacity: 0.85;
-    line-height: 1.45;
-  }
-
-  .assessment-chip {
-    display: inline-block;
-    padding: 0.15rem 0.5rem;
-    border-radius: 8px;
-    font-size: 0.78rem;
-    font-weight: 600;
-    border: 1px solid currentColor;
-    align-self: flex-start;
-  }
-
-  .assessment-chip.assessment-pr-is-better {
-    color: var(--legend-added-color);
-    background: var(--legend-added-bg);
-    border-color: var(--legend-added-border);
-  }
-
-  .assessment-chip.assessment-comparable {
-    color: var(--text-muted);
-    background: var(--surface-raised);
-  }
-
-  .assessment-chip.assessment-alternative-is-better {
-    color: var(--legend-changed-color);
-    background: var(--legend-changed-bg);
-    border-color: var(--legend-changed-border);
-  }
-
-  .assessment-chip.assessment-different-goals {
-    color: var(--text-muted);
-    background: var(--surface-raised);
-  }
-
-  .alternative-rationale {
-    margin: 0;
-    font-size: 0.8rem;
-    opacity: 0.65;
-    font-style: italic;
-    line-height: 1.4;
-  }
 </style>
