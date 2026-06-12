@@ -319,3 +319,37 @@ describe('runSkillReviews — consent gate', () => {
     removeSkill(skill.id)
   })
 })
+
+// ---------------------------------------------------------------------------
+// runSkillReviews — existing PR comments threading (v10 no-redundancy rule)
+// ---------------------------------------------------------------------------
+
+describe('runSkillReviews — existing PR comments threading (v10)', () => {
+  it('passes existing comments into the skill prompt with the never-repeat rule', async () => {
+    const deps = makeDeps()
+    const skill = addSkill('Security Reviewer', 'check for XSS')
+
+    const run = createAiRun(makeInput(), deps)
+    await run.runSkillReviews(undefined, ['Already flagged: missing null check in parser.'])
+
+    expect(deps.llmJsonWithRepairWithUsage).toHaveBeenCalled()
+    const opts = deps.llmJsonWithRepairWithUsage.mock.calls[0][0] as { system: string }
+    expect(opts.system).toContain('Already flagged: missing null check in parser.')
+    expect(opts.system).toMatch(/Never repeat a point an existing comment already makes/i)
+
+    removeSkill(skill.id)
+  })
+
+  it('omits the existing-comments section when no comments are passed', async () => {
+    const deps = makeDeps()
+    const skill = addSkill('Security Reviewer', 'check for XSS')
+
+    const run = createAiRun(makeInput(), deps)
+    await run.runSkillReviews()
+
+    const opts = deps.llmJsonWithRepairWithUsage.mock.calls[0][0] as { system: string }
+    expect(opts.system).not.toContain('Existing PR comments')
+
+    removeSkill(skill.id)
+  })
+})

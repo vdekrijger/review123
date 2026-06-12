@@ -484,7 +484,7 @@ describe('ContextRail — registry section order', () => {
 // ---------------------------------------------------------------------------
 
 describe('ContextRail — pending AI skeletons', () => {
-  it('Summary section (open by default) shows a skeleton while the run is idle', () => {
+  it('Summary section (collapsed by default) carries a skeleton in its body while the run is idle', () => {
     const { container } = render(ContextRail, {
       props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
     })

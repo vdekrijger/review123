@@ -309,3 +309,94 @@ describe('InspectStep — skill suggestion annotations', () => {
     expect(screen.queryByRole('button', { name: /dismiss/i })).not.toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// "No findings" all-clear state (v10 anti-fatigue) — fixture-based
+// A calibrated reviewer returning zero findings must render a one-line
+// all-clear chip, with no finding cards and no awkward empty blocks.
+// ---------------------------------------------------------------------------
+
+describe('InspectStep — no-findings all-clear state (v10)', () => {
+  /** Raw model output fixture, exactly as a calibrated persona emits it. */
+  const NO_FINDINGS_FIXTURE = '{"skillName":"Security Reviewer","findings":[]}'
+
+  function makeAllClearReview(): SkillReviewEntry {
+    return {
+      skillId: 'skill-clean',
+      name: 'Security Reviewer',
+      state: { status: 'done', value: JSON.parse(NO_FINDINGS_FIXTURE) },
+    }
+  }
+
+  it('renders the one-line "no significant issues" chip for an empty findings array', () => {
+    const files = makeFiles(['src/foo.ts'])
+    render(InspectStep, {
+      props: {
+        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null,
+        skillReviews: [makeAllClearReview()],
+      },
+    })
+    expect(screen.getByText(/no significant issues/i)).toBeInTheDocument()
+    expect(screen.getByLabelText('Done, no significant issues')).toBeInTheDocument()
+  })
+
+  it('does not render the "0 findings" wording', () => {
+    const files = makeFiles(['src/foo.ts'])
+    render(InspectStep, {
+      props: {
+        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null,
+        skillReviews: [makeAllClearReview()],
+      },
+    })
+    expect(screen.queryByText(/0 findings/i)).not.toBeInTheDocument()
+  })
+
+  it('renders no finding cards, action buttons, or persona summary lines', () => {
+    const files = makeFiles(['src/foo.ts'])
+    render(InspectStep, {
+      props: {
+        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null,
+        skillReviews: [makeAllClearReview()],
+      },
+    })
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /add as draft/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /dismiss/i })).not.toBeInTheDocument()
+    // No "{persona}: N suggestions" summary line for a clean run
+    expect(screen.queryByText(/suggestion/i)).not.toBeInTheDocument()
+  })
+
+  it('counted chip still appears for personas WITH findings alongside an all-clear persona', () => {
+    const files = makeFiles(['src/foo.ts'])
+    const withFindings = makeSkillReview() // 1 high finding on src/foo.ts
+    render(InspectStep, {
+      props: {
+        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null,
+        skillReviews: [makeAllClearReview(), { ...withFindings, name: 'Performance Reviewer', state: { status: 'done', value: { skillName: 'Performance Reviewer', findings: [{ path: 'src/foo.ts', line: 2, severity: 'low', body: 'Minor allocation in loop' }] } } }],
+      },
+    })
+    expect(screen.getByText(/no significant issues/i)).toBeInTheDocument()
+    expect(screen.getByText(/1 finding/i)).toBeInTheDocument()
+  })
+
+  it('findings outside the PR collapse to the all-clear chip too (filtered count is 0)', () => {
+    const files = makeFiles(['src/foo.ts'])
+    const ghostReview = makeSkillReview({
+      state: {
+        status: 'done',
+        value: {
+          skillName: 'Security Reviewer',
+          findings: [{ path: 'src/ghost.ts', line: 1, severity: 'high', body: 'not in this PR' }],
+        },
+      },
+    })
+    render(InspectStep, {
+      props: {
+        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null,
+        skillReviews: [ghostReview],
+      },
+    })
+    expect(screen.getByText(/no significant issues/i)).toBeInTheDocument()
+    expect(screen.queryByText('not in this PR')).not.toBeInTheDocument()
+  })
+})

@@ -748,9 +748,17 @@ test('review flow: diff renders with red/green rows, AI panels populate, CI show
   await page.getByRole('button', { name: 'Previous step' }).click()
   await expect(page.locator('.understand-step')).toBeVisible()
 
-  // Wait for AI attention to populate (hotspot buttons appear in the rail)
+  // Wait for AI attention to populate (hotspot buttons attached inside the rail)
   const hotspotBtn = page.locator('.hotspot-btn').first()
-  await expect(hotspotBtn).toBeVisible({ timeout: 15_000 })
+  await expect(hotspotBtn).toBeAttached({ timeout: 15_000 })
+
+  // ALL rail sections start collapsed (default-collapsed rail) — expand Hotspots
+  await expect(hotspotBtn).not.toBeVisible()
+  const hotspotsSection = page
+    .locator('aside.context-rail details.rail-section-details')
+    .filter({ has: page.locator('summary', { hasText: 'Hotspots' }) })
+  await hotspotsSection.locator('summary').click()
+  await expect(hotspotBtn).toBeVisible()
 
   // The Hotspots section shows a one-line legend explaining the markers
   await expect(page.locator('.hotspot-legend')).toContainText('high risk')
@@ -799,6 +807,9 @@ test('hotspot click from fresh understand step: SPA-navigates to inspect and scr
   await setupRoutes(page)
   await page.addInitScript((settings) => {
     localStorage.setItem('review123:settings', JSON.stringify(settings))
+    // Persisted per-browser rail state: a previously expanded Hotspots section
+    // must be restored open (rail sections are otherwise collapsed by default).
+    localStorage.setItem('review123:rail-expanded', JSON.stringify({ hotspots: true }))
   }, seedSettings(false))
 
   // Land directly on the Understand step — InspectStep has never rendered
@@ -2239,8 +2250,18 @@ test('ai-skeletons: expanded AI sections show skeletons while pending, content r
   await expect(diagramsPanel.locator('.skeleton-rect')).toBeVisible()
   await expect(testsPanel.locator('.skeleton-card')).toHaveCount(2)
 
-  // The context rail (open Summary section by default) shows a skeleton too
+  // The context rail starts with ALL sections collapsed — pending AI state
+  // must NOT force any section open, and skeletons stay hidden until expanded.
   const rail = page.locator('aside.context-rail')
+  await expect(rail.locator('details.rail-section-details').first()).toBeVisible()
+  await expect(rail.locator('details.rail-section-details[open]')).toHaveCount(0)
+  await expect(rail.locator('.ai-panel-loading .skeleton-block').first()).toBeHidden()
+
+  // Expanding the rail Summary section reveals its skeleton while pending
+  const railSummarySection = rail
+    .locator('details.rail-section-details')
+    .filter({ has: page.locator('summary', { hasText: 'Full summary' }) })
+  await railSummarySection.locator('summary').click()
   await expect(rail.locator('.ai-panel-loading .skeleton-block').first()).toBeVisible()
 
   // Eventually the real content replaces the skeleton (delayed fixtures resolve)

@@ -105,7 +105,7 @@ export interface AiRun {
   retry(task: TaskName): Promise<void>
   coach(drafts: Draft[], prComments?: string[], verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'): Promise<CoachResult | { error: string }>
   ask(question: string, onDelta: (t: string) => void, focus?: AskFocus): Promise<{ ok: true; answer: string } | { ok: false; error: string }>
-  runSkillReviews(onUpdate?: () => void): Promise<void>
+  runSkillReviews(onUpdate?: () => void, existingComments?: string[]): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -791,7 +791,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // Gated once: no-key + consent check (shared gateAi/ask pattern).
   // ---------------------------------------------------------------------------
 
-  async function runSkillReviews(onUpdate?: () => void): Promise<void> {
+  async function runSkillReviews(onUpdate?: () => void, existingComments?: string[]): Promise<void> {
     // No-key gate: same early-exit as start() and coach()
     if (!activeProviderHasKey()) return
 
@@ -868,7 +868,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           }
         }
 
-        const prompts = skillReviewPrompt(ctx, { name: skill.name, content: skill.content })
+        const prompts = skillReviewPrompt(ctx, { name: skill.name, content: skill.content }, existingComments)
 
         try {
           let skillResult: SkillReviewResult

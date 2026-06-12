@@ -431,9 +431,15 @@
             const finding = f as { path?: string }
             return prPathSet.has(finding.path ?? '')
           }).length ?? 0}
-          <span class="skill-status-chip chip-done" aria-label="Done, {findingCount} finding{findingCount !== 1 ? 's' : ''}">
-            ✓ {findingCount} finding{findingCount !== 1 ? 's' : ''}
-          </span>
+          {#if findingCount === 0}
+            <span class="skill-status-chip chip-done" aria-label="Done, no significant issues">
+              ✓ no significant issues
+            </span>
+          {:else}
+            <span class="skill-status-chip chip-done" aria-label="Done, {findingCount} finding{findingCount !== 1 ? 's' : ''}">
+              ✓ {findingCount} finding{findingCount !== 1 ? 's' : ''}
+            </span>
+          {/if}
           {#if entry.state.toolCallsUsed !== undefined && entry.state.toolCallsUsed > 0}
             <span class="skill-deep-note" title="Deep review: this reviewer verified suspicions with tools before flagging">
               verified with {entry.state.toolCallsUsed} tool {entry.state.toolCallsUsed === 1 ? 'call' : 'calls'}

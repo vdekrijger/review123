@@ -12,7 +12,28 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
-export const PROMPT_VERSION = 9
+export const PROMPT_VERSION = 10
+
+// ---------------------------------------------------------------------------
+// Shared anti-fatigue calibration (v10)
+//
+// Reviewer fatigue is the failure mode this block fights: verbose output,
+// moot points, and redundant prose drain attention without adding value.
+// Embedded (with task-appropriate adaptations) in every review-output prompt.
+// ---------------------------------------------------------------------------
+
+const ANTI_FATIGUE_RULES = `Anti-fatigue calibration (IMPORTANT — the goal is value-add, not mental drain):
+- Evidence gate: only flag what you can cite (file and line in the diff) AND where you can \
+articulate the concrete harm — what breaks, or who gets hurt. Never write "consider...", \
+"might want to...", or "ensure that..." without a stated failure mode. If the harm depends \
+on conditions not visible in the diff, say "couldn't verify" or stay silent — never assert.
+- Brevity format: each point is one sentence of WHAT + WHERE, one sentence of WHY IT MATTERS, \
+and optionally a fix suggestion in at most one sentence or a small code block. Do not restate \
+the diff, no praise padding, no methodology narration.
+- Silence is a valid answer: finding nothing significant is a GOOD and expected outcome on \
+clean code. Do not invent points to fill space.
+- Severity honesty: nits are nits — label them "low"; never inflate severity to make a point \
+sound important.`
 
 // ---------------------------------------------------------------------------
 // summarizePrompt — streaming plain-text summary + reading order
@@ -32,8 +53,9 @@ understand pull requests quickly and accurately.
 
 Given the code changes below, produce a concise prose summary: lead with what the PR does \
 and why in one sentence, then use bullet points for any important details a reviewer should \
-know. Keep the prose summary to ~120 words maximum — shorter is better. Do NOT mention \
-reading order anywhere in the prose.
+know. Keep the prose summary to ~120 words maximum — shorter is better. No praise padding, \
+no methodology narration, do not restate the diff — every sentence must tell the reviewer \
+something they need. Do NOT mention reading order anywhere in the prose.
 
 At the very end of your response, after all prose, append a reading order block in EXACTLY \
 this format (nothing after ===END===):
@@ -85,11 +107,18 @@ Field rules:
 - readingOrder: all changed files ordered from most load-bearing / context-setting first.
 - hotspots: files that carry the most risk or require the most reviewer attention. Provide \
   concrete, specific reasons referencing the actual change (not generic advice). \
+  Each reason: one sentence of WHAT + WHERE plus one sentence of WHY IT MATTERS — no more. \
   level must be exactly one of: "high", "medium", "low" (lowercase strings — never a number \
   or percentage).
+- Hard cap: at most 5 hotspots. Report the TOP hotspots ranked by severity × confidence. \
+  If you cut lower-confidence candidates, append "(N lower-confidence observations omitted)" \
+  to the LAST hotspot's reason — one line, no list of what was cut. An empty hotspots array \
+  is a GOOD and expected outcome on clean, low-risk changes — do not invent hotspots.
 - testFlags: files where behavior changed but no corresponding test file was added or modified. \
   IMPORTANT: test mapping is inferred by reading the code — it is NOT measured coverage data. \
   Label your notes accordingly. Omit the flag if a test file clearly covers the change.
+
+${ANTI_FATIGUE_RULES}
 
 Evidence discipline (IMPORTANT — apply to every hotspot and testFlag):
 - Ground every claim in what you can SEE in the provided context. The diff shows ALL changes \
@@ -266,15 +295,25 @@ Your response must be valid JSON that exactly matches this shape:
 
 Field rules:
 - covered: list up to 10 behaviors actually covered by CHANGED test files in this PR. \
-  Each entry must describe the behavior in plain language (not just the test name), name the \
-  test function or describe block, and reference the file path. Infer from reading the test code.
+  Each behavior description is ONE short sentence (≤15 words) in plain language (not just the \
+  test name); name the test function or describe block, and reference the file path. Infer \
+  from reading the test code. Group related cases into one behavior instead of listing each \
+  assertion separately.
 - gaps: behaviors in behavior-changing (non-test) files that have NO corresponding test change \
   in this PR. Each gap string MUST start with the file path followed by a colon, e.g. \
   "src/lib/cache.ts: cache expiry is not tested". This file path + colon prefix is required so \
   the UI can group gaps by file. If the gap is not specific to a single file, start with \
-  "General: " as the prefix. Be specific — name the file and describe the untested behavior. \
+  "General: " as the prefix. Each gap is ONE sentence naming the untested behavior and the \
+  concrete harm of leaving it untested — what breaks if it regresses. \
+  Hard cap: at most 5 gaps, ranked by severity × confidence. If you cut lower-confidence \
+  candidates, add ONE final gap "General: N lower-confidence observations omitted". \
+  An empty gaps array is a GOOD and expected outcome when the changes are well tested — do \
+  not invent gaps. \
   IMPORTANT: coverage is inferred by reading the code — it is NOT measured instrumentation data. \
-  Do not speculate about behaviors not visible in the diff.
+  Do not speculate about behaviors not visible in the diff — if you couldn't verify coverage \
+  from the provided context, stay silent rather than assert a gap.
+
+${ANTI_FATIGUE_RULES}
 
 Do not include any text outside the JSON object.`
 
@@ -472,6 +511,9 @@ Level definitions:
 Evidence rules:
 - Each evidence bullet must cite observed facts (file + what changed) rather than speculative \
   consequences. Do not write generic descriptions.
+- Each evidence bullet is ONE sentence. Hard cap: at most 5 evidence bullets — report the \
+  ones that most directly justify the chosen level; do not enumerate every file. \
+  Do not restate the diff, no praise padding, no methodology narration.
 - List anything you could not assess (missing context, files not provided, etc.) in notAnalyzed.
 
 Evidence discipline (IMPORTANT — apply to every evidence item and level choice):
@@ -484,6 +526,8 @@ Evidence discipline (IMPORTANT — apply to every evidence item and level choice
   asserting breakage.
 - Prefer neutral, factual phrasing over alarm. Severity must reflect evidence, not worst-case \
   speculation.
+
+${ANTI_FATIGUE_RULES}
 
 Do not include any text outside the JSON object.`
 
@@ -551,10 +595,11 @@ Field rules:
   alternatives that represent a meaningfully different design or strategy.
   - If the PR's approach is the obvious or only reasonable solution, return an empty array \
     or a single alternative with assessment "pr-is-better".
-- approach: a concrete description of the alternative approach. Be specific enough that a \
-  developer could act on it.
-- tradeoffs: compare honestly against what the PR does. Name what the alternative gains \
-  (e.g. "better test isolation") and what it costs (e.g. "more boilerplate").
+- approach: a concrete description of the alternative approach in AT MOST 2 sentences. Be \
+  specific enough that a developer could act on it — no methodology narration.
+- tradeoffs: compare honestly against what the PR does in AT MOST 2 sentences: one for what \
+  the alternative gains (e.g. "better test isolation") and one for what it costs (e.g. "more \
+  boilerplate"). Do not restate the PR's approach.
 - assessment: exactly one of the four enum values:
   - "pr-is-better": the PR's approach is the better choice for this codebase/context
   - "comparable": both approaches have similar merit; team preference should decide
@@ -564,7 +609,10 @@ Field rules:
 
 Intellectual honesty: "pr-is-better" is a perfectly valid and often correct answer. Do not \
 invent alternatives just to fill the list. Fewer high-quality alternatives are better than \
-more low-quality ones. Maximum 3 alternatives total.
+more low-quality ones. Maximum 3 alternatives total. An empty alternatives array is a GOOD \
+and expected outcome when the PR's approach is the natural choice — silence is a valid answer.
+
+${ANTI_FATIGUE_RULES}
 
 Do not include any text outside the JSON object.`
 
@@ -661,13 +709,38 @@ Address THIS location first, then broader context only if relevant.`
  *         fenced; instructs JSON-only output matching SkillReviewResult.
  * user:   ctx.text (the packed PR context)
  *
- * NOTE: No PROMPT_VERSION participation — the orchestrator uses a content-hash
- * cache key (djb2 of skill content) so editing a skill invalidates its cache.
+ * existingComments: bodies of comments already on the PR (capped at 30,
+ * truncated to 200ch each — same policy as coachPrompt). The persona is
+ * instructed never to repeat a point an existing comment already makes.
+ *
+ * v10 anti-fatigue calibration: hard cap of 5 findings (the schema's 15 cap
+ * remains as a parse-side backstop only), evidence gate, brevity format,
+ * silence-is-valid, severity honesty.
+ *
+ * NOTE: The orchestrator's cache key combines PROMPT_VERSION with a
+ * content-hash (djb2 of skill content), so both prompt and skill edits
+ * invalidate the cache.
  */
 export function skillReviewPrompt(
   ctx: PackedContext,
   skill: { name: string; content: string },
+  existingComments?: string[],
 ): { system: string; user: string } {
+  // Same cap/truncation policy as coachPrompt: ≤30 comments, ≤200 chars each.
+  const cappedComments = (existingComments ?? []).slice(0, 30).map((c) => c.slice(0, 200))
+
+  const existingCommentsSection =
+    cappedComments.length > 0
+      ? `
+
+Existing PR comments (already made by humans or other reviewers):
+${cappedComments.map((c) => `- ${c.replace(/\n/g, ' ')}`).join('\n')}
+
+Never repeat a point an existing comment already makes — duplicated feedback wastes the \
+author's attention. If your only candidate findings are already covered above, return an \
+empty findings array.`
+      : ''
+
   const system = `You are the reviewer persona defined below. Your job is to review the pull \
 request in the user message and apply ONLY this persona's priorities, style, and standards. \
 Do not adopt any other reviewer perspective.
@@ -681,8 +754,16 @@ ${skill.content}
 
 Your findings must be:
 - Concrete and anchored to actual files and lines visible in the PR context.
-- At most 15 findings total (≤15). If you have more candidates, keep only the most important ones.
+- Hard cap: at most 5 findings total (≤5). Report the TOP findings ranked by \
+  severity × confidence. If you cut lower-confidence candidates, append \
+  "(N lower-confidence observations omitted)" to the LAST finding's body — one line, \
+  no list of what was cut.
 - Severity must be rated according to THIS persona's own standards: "high", "medium", or "low".
+
+${ANTI_FATIGUE_RULES}
+
+Silence from this lens: an empty findings array means "No significant issues from this lens." \
+That is a GOOD and expected outcome on clean code — never pad the list to look thorough.${existingCommentsSection}
 
 Respond with JSON ONLY — no explanation, no markdown outside the JSON, no code fences. \
 Your response must be valid JSON that exactly matches this shape:
@@ -701,11 +782,13 @@ Your response must be valid JSON that exactly matches this shape:
 
 Field rules:
 - skillName: must be exactly "${skill.name}".
-- findings: an array of 0–15 findings. Only include findings for files that appear in the PR changes.
+- findings: an array of 0–5 findings. Only include findings for files that appear in the PR changes.
 - path: must be a file path that actually appears in the PR diff context. Do not invent paths.
 - line: the specific line number (integer) the finding applies to, or null if it is a file-level concern.
-- severity: exactly one of "high", "medium", "low" — rated by this persona's own standards.
-- body: a clear, actionable description of the finding.
+- severity: exactly one of "high", "medium", "low" — rated by this persona's own standards. \
+  Nits are nits: label them "low"; never inflate.
+- body: one sentence of WHAT + WHERE, one sentence of WHY IT MATTERS (the concrete harm), \
+  optionally a fix suggestion in at most one sentence or a small code block.
 
 Do not include any text outside the JSON object.`
 
