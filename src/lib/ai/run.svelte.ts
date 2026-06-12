@@ -34,10 +34,13 @@ import {
   coachPrompt,
   alternativesPrompt,
   askPrompt,
+  skillReviewPrompt,
 } from './tasks'
-import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult } from './schemas'
-import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult } from './schemas'
+import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateSkillReviewResult } from './schemas'
+import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, SkillReviewResult } from './schemas'
 import type { Draft } from '../drafts/drafts.svelte'
+import { listSkills } from '../skills/skills'
+import { djb2 } from '../viewed/viewed.svelte'
 
 // ---------------------------------------------------------------------------
 // PanelState union
@@ -58,6 +61,16 @@ export interface PanelState<T> {
 type TaskName = 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests' | 'alternatives'
 
 // ---------------------------------------------------------------------------
+// SkillReviewEntry — reactive entry per skill in skillReviews array
+// ---------------------------------------------------------------------------
+
+export interface SkillReviewEntry {
+  skillId: string
+  name: string
+  state: PanelState<SkillReviewResult>
+}
+
+// ---------------------------------------------------------------------------
 // AiRun public interface
 // ---------------------------------------------------------------------------
 
@@ -68,10 +81,12 @@ export interface AiRun {
   readonly verdict: PanelState<VerdictResult>
   readonly tests: PanelState<TestInsight>
   readonly alternatives: PanelState<AlternativesResult>
+  readonly skillReviews: SkillReviewEntry[]
   start(): Promise<void>
   retry(task: TaskName): Promise<void>
   coach(drafts: Draft[]): Promise<CoachResult | { error: string }>
   ask(question: string, onDelta: (t: string) => void): Promise<{ ok: true; answer: string } | { ok: false; error: string }>
+  runSkillReviews(onUpdate?: () => void): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +163,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   const verdictState = $state<PanelState<VerdictResult>>({ status: 'idle' })
   const testsState = $state<PanelState<TestInsight>>({ status: 'idle' })
   const alternativesState = $state<PanelState<AlternativesResult>>({ status: 'idle' })
+
+  // Skill review entries — populated on-demand by runSkillReviews()
+  let skillReviewsState = $state<SkillReviewEntry[]>([])
 
   // Packed context — kept in closure so retry can reuse it without re-packing
   // (unless the initial pack failed, in which case retry re-packs)
@@ -562,6 +580,99 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   // ---------------------------------------------------------------------------
+  // runSkillReviews() — on-demand, NOT called in start()
+  //
+  // For each enabled skill: isolated parallel run with content-hash cache key.
+  // Gated once: no-key + consent check (shared gateAi/ask pattern).
+  // ---------------------------------------------------------------------------
+
+  async function runSkillReviews(onUpdate?: () => void): Promise<void> {
+    // No-key gate: same early-exit as start() and coach()
+    const settings = getSettings()
+    if (!settings.deepseekKey) return
+
+    // Consent gate: shared gateAi / shared ask
+    const allowed = await gateAi({ repo, isPrivate, ask: askConsent })
+    if (!allowed) return
+
+    // Get context (best-effort — reuse if already packed)
+    if (packedCtx === null) {
+      const ctx = await getPackedContext()
+      if (ctx === null) return
+    }
+
+    const ctx = packedCtx!
+
+    // Load enabled skills at call time
+    const skills = listSkills().filter((s) => s.enabled)
+    if (skills.length === 0) return
+
+    // Initialize entries (loading state)
+    skillReviewsState = skills.map((skill) => ({
+      skillId: skill.id,
+      name: skill.name,
+      state: { status: 'loading' as const },
+    }))
+    onUpdate?.()
+
+    // Run each skill in parallel, isolated
+    await Promise.all(
+      skills.map(async (skill, idx) => {
+        // Content-addressed cache key: includes djb2(skill.content)
+        const key = cacheKey(prKey, 'skill:' + djb2(skill.content), PROMPT_VERSION)
+
+        const t0 = performance.now()
+
+        // Cache check
+        const hit = await getCached<SkillReviewResult>(key)
+        if (hit !== null) {
+          skillReviewsState[idx] = {
+            skillId: skill.id,
+            name: skill.name,
+            state: { status: 'done', value: hit },
+          }
+          track('ai_task_completed', {
+            task: 'skill-review',
+            duration_ms: Math.round(performance.now() - t0),
+            cached: true,
+          })
+          onUpdate?.()
+          return
+        }
+
+        const prompts = skillReviewPrompt(ctx, { name: skill.name, content: skill.content })
+
+        try {
+          const result = await llmJsonWithRepair<SkillReviewResult>(
+            { system: prompts.system, user: prompts.user },
+            validateSkillReviewResult,
+          )
+          await setCached<SkillReviewResult>(key, result)
+          skillReviewsState[idx] = {
+            skillId: skill.id,
+            name: skill.name,
+            state: { status: 'done', value: result },
+          }
+          track('ai_task_completed', {
+            task: 'skill-review',
+            duration_ms: Math.round(performance.now() - t0),
+            cached: false,
+          })
+        } catch (err) {
+          const kind = err instanceof LlmError ? err.kind : 'unknown'
+          skillReviewsState[idx] = {
+            skillId: skill.id,
+            name: skill.name,
+            state: { status: 'error', error: humanMessage(kind) },
+          }
+          track('ai_task_failed', { task: 'skill-review', reason: kind })
+        }
+        onUpdate?.()
+      }),
+    )
+  }
+
+  // ---------------------------------------------------------------------------
   // Return reactive state + methods
   // ---------------------------------------------------------------------------
 
@@ -572,9 +683,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     get verdict() { return verdictState },
     get tests() { return testsState },
     get alternatives() { return alternativesState },
+    get skillReviews() { return skillReviewsState },
     start,
     retry,
     coach,
     ask,
+    runSkillReviews,
   }
 }

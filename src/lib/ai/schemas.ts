@@ -332,3 +332,61 @@ export function validateAlternativesResult(x: unknown): AlternativesResult | nul
 function isObject(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null && !Array.isArray(x)
 }
+
+// ---------------------------------------------------------------------------
+// SkillFinding / SkillReviewResult (Skill reviewer feature)
+// ---------------------------------------------------------------------------
+
+export interface SkillFinding {
+  path: string
+  line: number | null
+  severity: 'high' | 'medium' | 'low'
+  body: string
+}
+
+export interface SkillReviewResult {
+  skillName: string
+  findings: SkillFinding[]
+}
+
+const SEVERITY_VALUES = new Set<string>(['high', 'medium', 'low'])
+const SKILL_FINDINGS_CAP = 15
+
+/**
+ * Validate an unknown value as SkillReviewResult.
+ * Returns the typed value or null if the shape is invalid.
+ *
+ * - element-checked: each finding must have path (string), line (number|null),
+ *   severity (high|medium|low), body (string)
+ * - findings capped at 15; more than 15 → null
+ */
+export function validateSkillReviewResult(x: unknown): SkillReviewResult | null {
+  if (!isObject(x)) return null
+
+  // skillName — required string
+  if (typeof x['skillName'] !== 'string') return null
+
+  // findings — required array
+  if (!Array.isArray(x['findings'])) return null
+
+  // Cap: >15 findings → null
+  if (x['findings'].length > SKILL_FINDINGS_CAP) return null
+
+  for (const finding of x['findings']) {
+    if (!isObject(finding)) return null
+
+    // path — required string
+    if (typeof finding['path'] !== 'string') return null
+
+    // line — required: number or null
+    if (finding['line'] !== null && typeof finding['line'] !== 'number') return null
+
+    // severity — required string enum
+    if (typeof finding['severity'] !== 'string' || !SEVERITY_VALUES.has(finding['severity'] as string)) return null
+
+    // body — required string
+    if (typeof finding['body'] !== 'string') return null
+  }
+
+  return x as unknown as SkillReviewResult
+}

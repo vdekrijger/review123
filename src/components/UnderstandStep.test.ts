@@ -37,10 +37,12 @@ function makeRun(overrides: Partial<AiRun>): AiRun {
     verdict: { status: 'idle' },
     tests: { status: 'idle' },
     alternatives: { status: 'idle' },
+    skillReviews: [],
     start: async () => {},
     retry: async () => {},
     coach: async () => ({ error: 'no-key' }),
     ask: async () => ({ ok: false, error: 'no-key' }),
+    runSkillReviews: async () => {},
     ...overrides,
   }
 }
