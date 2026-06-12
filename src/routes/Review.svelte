@@ -27,6 +27,7 @@
   import type { PrCommit } from '../lib/github/commits'
   import { getPrComments } from '../lib/github/comments'
   import type { PrComment } from '../lib/github/comments'
+  import { getResolvedCommentIds } from '../lib/github/threads'
   import { slugify } from '../lib/slug'
 
   const RETURN_KEY = 'review123:returnTo'
@@ -241,6 +242,7 @@
 
   // PR comments state
   let prComments: PrComment[] = $state([])
+  let resolvedCommentIds: Set<number> = $state(new Set())
   let commentsError = $state(false)
   let commentsDismissed = $state(false)
   let commentsLoaded = $state(false)
@@ -291,14 +293,18 @@
     }
   })
 
-  // Fetch PR comments once when PR is ready (non-blocking, silent on failure)
+  // Fetch PR comments + resolved thread state once when PR is ready (non-blocking, silent on failure)
   let commentsInitialized = false
   $effect(() => {
     if (load.state.status === 'ready' && !commentsInitialized) {
       commentsInitialized = true
-      getPrComments({ owner, repo, number }).then(
-        (comments) => {
+      Promise.all([
+        getPrComments({ owner, repo, number }),
+        getResolvedCommentIds({ owner, repo, number }),
+      ]).then(
+        ([comments, resolved]) => {
           prComments = comments
+          resolvedCommentIds = resolved
           commentsLoaded = true
         },
         () => {
@@ -447,6 +453,7 @@
         readingOrder={isCompareActive ? [] : readingOrder}
         {viewedStore}
         prComments={isCompareActive ? [] : prComments}
+        resolvedCommentIds={isCompareActive ? new Set() : resolvedCommentIds}
         {contentsMap}
         skillReviews={aiRun?.skillReviews ?? []}
         runSkillReviewsFn={aiRun != null ? (() => { void aiRun!.runSkillReviews() }) : null}

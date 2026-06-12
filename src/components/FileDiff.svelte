@@ -16,6 +16,8 @@
     drafts?: Draft[]
     /** Existing PR comments for this file */
     comments?: PrComment[]
+    /** Set of comment databaseIds that belong to resolved review threads */
+    resolvedCommentIds?: Set<number>
     /** Called when the user saves a comment at a given line */
     onAddDraft?: (line: number, side: 'LEFT' | 'RIGHT', body: string) => void
     /** Called when the user deletes a comment at a given line */
@@ -34,7 +36,7 @@
     contents?: { before: string | null; after: string | null }
   }
 
-  let { file, mode, drafts = [], comments = [], onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents }: Props = $props()
+  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents }: Props = $props()
 
   // Group existing comments by line (null-line comments go under a null key)
   const commentsByLine = $derived.by(() => {
@@ -47,6 +49,26 @@
     }
     return map
   })
+
+  /**
+   * Returns the root (top-level) comment of a thread group.
+   * The root is the first comment with inReplyTo === null; falls back to the
+   * first comment in the array if all are replies (orphan scenario).
+   */
+  function rootComment(group: PrComment[]): PrComment {
+    return group.find((c) => c.inReplyTo === null) ?? group[0]
+  }
+
+  /** Whether a thread group is resolved (root comment id in resolvedCommentIds) */
+  function isResolved(group: PrComment[]): boolean {
+    return resolvedCommentIds.has(rootComment(group).id)
+  }
+
+  /** Truncates body to ~60 chars for the resolved summary line */
+  function truncateBody(body: string, maxLen = 60): string {
+    const oneLine = body.replace(/\s+/g, ' ').trim()
+    return oneLine.length > maxLen ? oneLine.slice(0, maxLen) + '…' : oneLine
+  }
 
   // Ordered line keys (non-null first, sorted numerically; null last)
   const lineKeys = $derived.by(() => {
@@ -271,11 +293,24 @@
     {#if comments.length > 0}
       <div class="existing-comments" aria-label="Existing review comments">
         {#each lineKeys as lineKey (lineKey)}
+          {@const group = commentsByLine.get(lineKey)!}
+          {@const root = rootComment(group)}
           <div class="existing-line-group">
             <div class="existing-line-label">
-              {lineKey !== null ? `Line ${lineKey}` : 'General'} — {commentsByLine.get(lineKey)!.length} comment{commentsByLine.get(lineKey)!.length === 1 ? '' : 's'}
+              {lineKey !== null ? `Line ${lineKey}` : 'General'} — {group.length} comment{group.length === 1 ? '' : 's'}
             </div>
-            <CommentThread comments={commentsByLine.get(lineKey)!} />
+            {#if isResolved(group)}
+              <details class="resolved-thread">
+                <summary class="resolved-summary">
+                  <span class="resolved-check" aria-hidden="true">✓</span>
+                  <span class="resolved-label">Resolved</span>
+                  <span class="resolved-snippet">{root.author}: {truncateBody(root.body)}</span>
+                </summary>
+                <CommentThread comments={group} />
+              </details>
+            {:else}
+              <CommentThread comments={group} />
+            {/if}
           </div>
         {/each}
       </div>
@@ -354,5 +389,54 @@
     padding: 0.1rem 0.25rem;
     border-left: 2px solid var(--border-banner-accent);
     margin-bottom: 0.15rem;
+  }
+
+  /* Resolved thread — collapsed <details> */
+  .resolved-thread {
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .resolved-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.6rem;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    background: var(--surface-raised);
+    list-style: none;
+    user-select: none;
+  }
+
+  .resolved-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .resolved-check {
+    color: var(--accent);
+    font-size: 0.85rem;
+    flex-shrink: 0;
+  }
+
+  .resolved-label {
+    font-weight: 600;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .resolved-snippet {
+    opacity: 0.7;
+    font-size: 0.78rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Expanded content padding */
+  .resolved-thread[open] > :not(summary) {
+    padding: 0.4rem;
   }
 </style>

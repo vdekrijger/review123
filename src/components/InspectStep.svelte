@@ -25,6 +25,7 @@
     readingOrder = [],
     viewedStore = null,
     prComments = [],
+    resolvedCommentIds = new Set(),
     contentsMap = null,
     skillReviews = [],
     runSkillReviewsFn = null,
@@ -38,6 +39,8 @@
     readingOrder?: string[]
     viewedStore?: ReturnType<typeof createViewedStore> | null
     prComments?: PrComment[]
+    /** Set of comment databaseIds that belong to resolved review threads */
+    resolvedCommentIds?: Set<number>
     /**
      * Map from filename → { before, after } full file contents, used to enable
      * context-line expansion in the diff view. Undefined while loading.
@@ -263,6 +266,7 @@
             {mode}
             drafts={draftsForFile(file.filename)}
             comments={commentsForFile(file.filename)}
+            {resolvedCommentIds}
             onAddDraft={(line, side, body) => handleAddDraft(file.filename, line, side, body)}
             onRemoveDraft={(line, side) => handleRemoveDraft(file.filename, line, side)}
             viewed={viewedStore?.isViewed(file.filename, file.patch) ?? false}
