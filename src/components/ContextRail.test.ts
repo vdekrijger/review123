@@ -406,3 +406,63 @@ describe('ContextRail — registry section order', () => {
     expect(prDescIdx).toBeGreaterThan(ciIdx)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Pending AI skeletons in the rail (same treatment as the Understand page):
+// while a section's run state is idle/loading the section body must show a
+// content-shaped skeleton from the FIRST render — no blank gap.
+// ---------------------------------------------------------------------------
+
+describe('ContextRail — pending AI skeletons', () => {
+  it('Summary section (open by default) shows a skeleton while the run is idle', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const summarySection = Array.from(container.querySelectorAll('details.rail-section-details'))
+      .find((d) => d.querySelector('summary')?.textContent?.toLowerCase().includes('full summary'))
+    expect(summarySection).toBeTruthy()
+    expect(summarySection!.querySelector('.ai-panel-loading .skeleton-block')).not.toBeNull()
+  })
+
+  it('Diagrams section shows a block-shaped skeleton, Test coverage shows cards, while idle', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const sections = Array.from(container.querySelectorAll('details.rail-section-details'))
+    const diagrams = sections.find((d) => d.querySelector('summary')?.textContent?.toLowerCase().includes('diagrams'))
+    const tests = sections.find((d) => d.querySelector('summary')?.textContent?.toLowerCase().includes('test coverage'))
+    expect(diagrams!.querySelector('.skeleton-rect')).not.toBeNull()
+    expect(tests!.querySelectorAll('.skeleton-card')).toHaveLength(2)
+  })
+
+  it('Hotspots section shows a pending skeleton while attention is idle (no late pop-in)', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const pending = container.querySelector('details.rail-hotspots-pending')
+    expect(pending).not.toBeNull()
+    expect(pending!.querySelector('summary')!.textContent).toContain('Hotspots')
+    expect(pending!.querySelector('.skeleton-block')).not.toBeNull()
+  })
+
+  it('Hotspots pending skeleton is replaced by real hotspot buttons when attention is done', () => {
+    const attn: AttentionResult = {
+      readingOrder: [], testFlags: [],
+      hotspots: [{ path: 'src/hot.ts', reason: 'Critical', level: 'high' }],
+    }
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(attn), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    expect(container.querySelector('details.rail-hotspots-pending')).toBeNull()
+    expect(container.querySelector('.hotspot-btn')).not.toBeNull()
+  })
+
+  it('Hotspots pending skeleton is NOT shown when attention errored', () => {
+    const run = makeRun()
+    ;(run as { attention: { status: string; error?: string } }).attention = { status: 'error', error: 'boom' }
+    const { container } = render(ContextRail, {
+      props: { run, onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    expect(container.querySelector('details.rail-hotspots-pending')).toBeNull()
+  })
+})

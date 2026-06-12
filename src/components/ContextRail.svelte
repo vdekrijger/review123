@@ -6,6 +6,7 @@
   import VerdictPanel from './panels/VerdictPanel.svelte'
   import CiSummary from './CiSummary.svelte'
   import MarkdownView from './MarkdownView.svelte'
+  import Skeleton from './Skeleton.svelte'
   import { SECTION_REGISTRY } from './panels/sectionRegistry'
   import { track } from '../lib/analytics/analytics'
   import type { AiRun } from '../lib/ai/run.svelte'
@@ -29,6 +30,13 @@
 
   const attention = $derived(
     run.attention.status === 'done' ? (run.attention.value as AttentionResult) : undefined
+  )
+
+  // Hotspots pending: attention run hasn't settled yet ('idle' = queued before
+  // the run signals 'loading') — show a skeleton section instead of nothing so
+  // the section doesn't pop in late.
+  const attentionPending = $derived(
+    run.attention.status === 'idle' || run.attention.status === 'loading'
   )
 
   function levelIcon(level: 'high' | 'medium' | 'low'): string {
@@ -114,6 +122,13 @@
                     </li>
                   {/each}
                 </ul>
+              </div>
+            </details>
+          {:else if attentionPending}
+            <details class="rail-section-details rail-hotspots-pending" open>
+              <summary class="rail-section-summary">Hotspots</summary>
+              <div class="rail-section-body">
+                <Skeleton lines={3} />
               </div>
             </details>
           {/if}
