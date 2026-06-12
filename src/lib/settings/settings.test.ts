@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
   getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens, saveGithubAuth,
   setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay,
+  saveBitbucketAuth,
 } from './settings'
 
 describe('settings', () => {
@@ -13,6 +14,7 @@ describe('settings', () => {
       deepseekKey: null,
       diffMode: 'unified',
       githubAuth: null,
+      bitbucketAuth: null,
       railCollapsed: false,
       theme: 'auto',
       uiFont: 'plex',
@@ -56,6 +58,7 @@ describe('settings', () => {
       deepseekKey: null,
       diffMode: 'unified',
       githubAuth: null,
+      bitbucketAuth: null,
       railCollapsed: false,
       theme: 'auto',
       uiFont: 'plex',
@@ -257,6 +260,72 @@ describe('settings', () => {
     it('coerces invalid testFileDisplay back to normal', () => {
       localStorage.setItem('review123:settings', JSON.stringify({ testFileDisplay: 'glow' }))
       expect(getSettings().testFileDisplay).toBe('normal')
+    })
+  })
+
+  describe('bitbucketAuth', () => {
+    it('defaults to null', () => {
+      expect(getSettings().bitbucketAuth).toBeNull()
+    })
+
+    it('saveBitbucketAuth stores email and token', () => {
+      saveBitbucketAuth({ email: 'user@example.com', token: 'ATBBTOKEN' })
+      const s = getSettings()
+      expect(s.bitbucketAuth).toEqual({ email: 'user@example.com', token: 'ATBBTOKEN' })
+    })
+
+    it('saveBitbucketAuth(null) clears the auth', () => {
+      saveBitbucketAuth({ email: 'user@example.com', token: 'ATBBTOKEN' })
+      saveBitbucketAuth(null)
+      expect(getSettings().bitbucketAuth).toBeNull()
+    })
+
+    it('saveBitbucketAuth trims whitespace from email and token', () => {
+      saveBitbucketAuth({ email: '  user@example.com  ', token: '  tk123  ' })
+      const s = getSettings()
+      expect(s.bitbucketAuth).toEqual({ email: 'user@example.com', token: 'tk123' })
+    })
+
+    it('saveBitbucketAuth throws and does not write if email is empty', () => {
+      expect(() => saveBitbucketAuth({ email: '', token: 'token' })).toThrow(/email.*empty/i)
+      expect(getSettings().bitbucketAuth).toBeNull()
+    })
+
+    it('saveBitbucketAuth throws and does not write if email is whitespace only', () => {
+      expect(() => saveBitbucketAuth({ email: '   ', token: 'token' })).toThrow(/email.*empty/i)
+      expect(getSettings().bitbucketAuth).toBeNull()
+    })
+
+    it('saveBitbucketAuth throws and does not write if token is empty', () => {
+      expect(() => saveBitbucketAuth({ email: 'user@example.com', token: '' })).toThrow(/token.*empty/i)
+      expect(getSettings().bitbucketAuth).toBeNull()
+    })
+
+    it('saveBitbucketAuth throws and does not write if token is whitespace only', () => {
+      expect(() => saveBitbucketAuth({ email: 'user@example.com', token: '   ' })).toThrow(/token.*empty/i)
+      expect(getSettings().bitbucketAuth).toBeNull()
+    })
+
+    it('coerces stored bitbucketAuth with missing fields to null', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ bitbucketAuth: { email: 'x@x.com' } }))
+      expect(getSettings().bitbucketAuth).toBeNull()
+    })
+
+    it('coerces stored bitbucketAuth with wrong types to null', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ bitbucketAuth: 42 }))
+      expect(getSettings().bitbucketAuth).toBeNull()
+    })
+
+    it('round-trips through JSON serialization', () => {
+      saveBitbucketAuth({ email: 'test@bb.com', token: 'secret123' })
+      // Simulate a page reload by re-reading from localStorage
+      const s = getSettings()
+      expect(s.bitbucketAuth).toEqual({ email: 'test@bb.com', token: 'secret123' })
+    })
+
+    it('getSettings defaults include bitbucketAuth: null', () => {
+      const s = getSettings()
+      expect(s).toHaveProperty('bitbucketAuth', null)
     })
   })
 })
