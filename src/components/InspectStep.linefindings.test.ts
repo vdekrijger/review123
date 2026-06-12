@@ -1,12 +1,14 @@
 /**
- * Tests for Fix 2: Skill findings anchored at their lines.
+ * Placement tests for skill-reviewer findings (line anchoring contract):
  *
- * - Findings with a numeric `line` are passed to FileDiff as a new `skillFindings` prop
- *   and rendered inside FileDiff's annotation area (NOT above the file in InspectStep).
- * - Findings with line=null keep the above-file placement in InspectStep.
- * - FileDiff renders line-bearing findings with dashed-accent style, severity chip, persona,
- *   Add-as-draft / Dismiss buttons — same visual style as before, now at the line.
- * - Add-as-draft from within FileDiff still calls draftStore.upsert via InspectStep handler.
+ * - A finding WITH a resolvable line anchor (line present in the patch hunks)
+ *   renders INLINE at that line, inside the DiffView extend row
+ *   (.diff-line-extend → .line-findings), in both unified and split modes.
+ * - A finding with NO anchor (line=null) renders above the file (file-level).
+ * - A finding whose anchor is NOT present in the current diff falls back to
+ *   the per-file block (.skill-findings-annotations) with a labeled line note.
+ * - A finding NEVER renders in both places.
+ * - Add-as-draft / Dismiss work from every placement.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -27,6 +29,7 @@ beforeEach(() => {
   localStorage.clear()
 })
 
+// New-file lines: 1 "line1" (context), 2 "line2new" (+), 3 "line3" (context)
 const PATCH = '@@ -1,3 +1,3 @@\n line1\n-line2\n+line2new\n line3'
 
 function makeFile(filename: string): PrFile {
@@ -61,112 +64,101 @@ function makeLineReview(line: number | null, body = 'Line-level finding here'): 
   }
 }
 
+function renderInspect(reviews: SkillReviewEntry[], opts: { draftStore?: ReturnType<typeof createDraftStore> | null; mode?: 'unified' | 'split' } = {}) {
+  return render(InspectStep, {
+    props: {
+      files: [makeFile('src/foo.ts')],
+      changedFiles: 1,
+      mode: opts.mode ?? 'unified',
+      onmode: () => {},
+      draftStore: opts.draftStore ?? null,
+      skillReviews: reviews,
+    },
+  })
+}
+
 // ---------------------------------------------------------------------------
-// Fix 2: Line findings passed to FileDiff — InspectStep level
+// Placement: anchored → inline at line; unanchored → per-file block; never both
 // ---------------------------------------------------------------------------
 
-describe('InspectStep — line-bearing findings routed to FileDiff (Fix 2)', () => {
-  it('line finding is NOT rendered above the file in InspectStep', () => {
-    const files = [makeFile('src/foo.ts')]
-    const review = makeLineReview(2, 'Should be inside diff, not above')
-    const { container } = render(InspectStep, {
-      props: {
-        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null,
-        skillReviews: [review],
-      },
-    })
-    // The above-file findings container (skill-finding) should NOT be in the diff-column
-    // ABOVE the FileDiff component. The finding body should appear (inside FileDiff) but
-    // the stacked-above .skill-finding div should not be a sibling of FileDiff.
-    const diffColumn = container.querySelector('.diff-column')
-    // The .skill-finding (above-file) should not appear as a direct-child element of the file wrapper
-    // before the FileDiff article — the line finding should be inside the FileDiff article
-    const fileArticle = container.querySelector('article.file-diff')
-    expect(fileArticle).toBeInTheDocument()
-
-    // The skill-finding div should NOT appear as a sibling BEFORE the article
-    // (it should be inside the article or not at all at the top level)
-    // We'll check: no .skill-finding is a previous sibling of the file-diff article
-    const fileWrapper = fileArticle?.parentElement
-    const skillFindingBeforeFile = fileWrapper
-      ? Array.from(fileWrapper.children).filter(
-          child => child.classList.contains('skill-finding')
-        )
-      : []
-    expect(skillFindingBeforeFile.length).toBe(0)
+describe('Finding placement — anchored findings render inline at their line', () => {
+  it('anchored finding (line in diff) renders inside a DiffView extend row in unified mode', () => {
+    const { container } = renderInspect([makeLineReview(2, 'Anchored finding body')])
+    const inline = container.querySelector('.diff-line-extend .line-findings .skill-finding')
+    expect(inline).toBeTruthy()
+    expect(inline?.textContent).toContain('Anchored finding body')
   })
 
-  it('file-level (null-line) finding IS still rendered above the FileDiff as .skill-finding', () => {
-    const files = [makeFile('src/foo.ts')]
-    const review = makeLineReview(null, 'File-level concern stays above')
-    const { container } = render(InspectStep, {
-      props: {
-        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null,
-        skillReviews: [review],
-      },
-    })
-    // null-line findings remain as .skill-finding elements above the FileDiff
-    const fileArticle = container.querySelector('article.file-diff')
-    const fileWrapper = fileArticle?.parentElement
-    const aboveFileFinding = fileWrapper
-      ? Array.from(fileWrapper.children).find(
-          child => child.classList.contains('skill-finding')
-        )
-      : undefined
-    expect(aboveFileFinding).toBeTruthy()
-    expect(aboveFileFinding?.textContent).toContain('File-level concern stays above')
+  it('anchored finding renders inside a DiffView extend row in split mode', () => {
+    const { container } = renderInspect([makeLineReview(2, 'Anchored split body')], { mode: 'split' })
+    const inline = container.querySelector('.diff-line-extend .line-findings .skill-finding')
+    expect(inline).toBeTruthy()
+    expect(inline?.textContent).toContain('Anchored split body')
   })
 
-  it('line finding body text appears in the rendered output (inside FileDiff area)', () => {
-    const files = [makeFile('src/foo.ts')]
-    const review = makeLineReview(2, 'Unique line finding text XYZ')
-    render(InspectStep, {
-      props: {
-        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null,
-        skillReviews: [review],
-      },
-    })
-    expect(screen.getByText('Unique line finding text XYZ')).toBeInTheDocument()
+  it('anchored finding is keyed to its line (data-line-findings attribute)', () => {
+    const { container } = renderInspect([makeLineReview(2, 'At line two')])
+    const lineFindings = container.querySelector('[data-line-findings="2"]')
+    expect(lineFindings).toBeTruthy()
+    expect(lineFindings?.textContent).toContain('At line two')
   })
 
-  it('Add-as-draft from line finding (inside FileDiff) still calls draftStore.upsert', async () => {
-    const files = [makeFile('src/foo.ts')]
-    const draftStore = makeDraftStore()
-    const review = makeLineReview(2, 'Add this line finding as draft')
-    render(InspectStep, {
-      props: {
-        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore,
-        skillReviews: [review],
-      },
-    })
-    const addBtn = screen.getByRole('button', { name: /add as draft/i })
-    await userEvent.click(addBtn)
-    expect(draftStore.upsert).toHaveBeenCalledOnce()
-    const arg = (draftStore.upsert as ReturnType<typeof vi.fn>).mock.calls[0][0]
-    expect(arg.body).toBe('Add this line finding as draft')
-    expect(arg.path).toBe('src/foo.ts')
-    expect(arg.line).toBe(2)
-    expect(arg.side).toBe('RIGHT')
+  it('anchored finding does NOT appear in the per-file fallback block', () => {
+    const { container } = renderInspect([makeLineReview(2, 'Inline only body')])
+    expect(container.querySelector('.skill-findings-annotations')).toBeNull()
   })
 
-  it('Dismiss from line finding (inside FileDiff) hides the finding', async () => {
-    const files = [makeFile('src/foo.ts')]
-    const review = makeLineReview(2, 'Finding to dismiss from inside diff')
-    render(InspectStep, {
-      props: {
-        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null,
-        skillReviews: [review],
-      },
-    })
-    expect(screen.getByText('Finding to dismiss from inside diff')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
-    await waitFor(() => {
-      expect(screen.queryByText('Finding to dismiss from inside diff')).not.toBeInTheDocument()
-    })
+  it('anchored finding renders exactly once (never both placements)', () => {
+    const { container } = renderInspect([makeLineReview(2, 'Render me once')])
+    const cards = [...container.querySelectorAll('.skill-finding')].filter(
+      el => el.textContent?.includes('Render me once'),
+    )
+    expect(cards.length).toBe(1)
   })
 
-  it('multiple findings: line-bearing ones are NOT in above-file area', () => {
-    const files = [makeFile('src/foo.ts')]
+  it('anchored finding is NOT rendered above the file', () => {
+    const { container } = renderInspect([makeLineReview(2, 'Not above the file')])
+    expect(container.querySelector('.file-level-finding')).toBeNull()
+  })
+})
+
+describe('Finding placement — unanchored findings fall back to the per-file block', () => {
+  it('finding with line NOT in the diff renders in .skill-findings-annotations', () => {
+    const { container } = renderInspect([makeLineReview(999, 'Unanchored finding body')])
+    const block = container.querySelector('.skill-findings-annotations .skill-finding')
+    expect(block).toBeTruthy()
+    expect(block?.textContent).toContain('Unanchored finding body')
+  })
+
+  it('unanchored finding does NOT render inline in any extend row', () => {
+    const { container } = renderInspect([makeLineReview(999, 'Block only body')])
+    expect(container.querySelector('.line-findings')).toBeNull()
+  })
+
+  it('unanchored finding renders exactly once (never both placements)', () => {
+    const { container } = renderInspect([makeLineReview(999, 'Fallback once')])
+    const cards = [...container.querySelectorAll('.skill-finding')].filter(
+      el => el.textContent?.includes('Fallback once'),
+    )
+    expect(cards.length).toBe(1)
+  })
+
+  it('unanchored finding shows a labeled line note ("not in this diff")', () => {
+    renderInspect([makeLineReview(999, 'Where does this go')])
+    expect(screen.getByText(/line 999 — not in this diff/i)).toBeInTheDocument()
+  })
+
+  it('file-level (null-line) finding renders above the FileDiff', () => {
+    const { container } = renderInspect([makeLineReview(null, 'File-level concern stays above')])
+    const above = container.querySelector('.file-level-finding .skill-finding')
+    expect(above).toBeTruthy()
+    expect(above?.textContent).toContain('File-level concern stays above')
+    // ...and nowhere else
+    const cards = [...container.querySelectorAll('.skill-finding')]
+    expect(cards.length).toBe(1)
+  })
+
+  it('mixed findings split placements: anchored inline, null-line above, off-diff in block', () => {
     const review: SkillReviewEntry = {
       skillId: 'multi',
       name: 'Reviewer',
@@ -177,92 +169,109 @@ describe('InspectStep — line-bearing findings routed to FileDiff (Fix 2)', () 
           findings: [
             { path: 'src/foo.ts', line: 3, severity: 'medium', body: 'Line 3 finding' },
             { path: 'src/foo.ts', line: null, severity: 'low', body: 'File level concern' },
+            { path: 'src/foo.ts', line: 500, severity: 'high', body: 'Off-diff finding' },
           ],
         },
       },
     }
-    const { container } = render(InspectStep, {
-      props: {
-        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null,
-        skillReviews: [review],
-      },
-    })
-    const fileArticle = container.querySelector('article.file-diff')
-    const fileWrapper = fileArticle?.parentElement
-    const aboveFileFindings = fileWrapper
-      ? Array.from(fileWrapper.children).filter(
-          child => child.classList.contains('skill-finding')
-        )
-      : []
-    // Only file-level (null-line) findings should appear above
-    expect(aboveFileFindings.length).toBe(1)
-    expect(aboveFileFindings[0].textContent).toContain('File level concern')
+    const { container } = renderInspect([review])
+    expect(container.querySelector('[data-line-findings="3"]')?.textContent).toContain('Line 3 finding')
+    expect(container.querySelector('.file-level-finding')?.textContent).toContain('File level concern')
+    expect(container.querySelector('.skill-findings-annotations')?.textContent).toContain('Off-diff finding')
+    // each rendered exactly once
+    for (const body of ['Line 3 finding', 'File level concern', 'Off-diff finding']) {
+      const cards = [...container.querySelectorAll('.skill-finding')].filter(
+        el => el.textContent?.includes(body),
+      )
+      expect(cards.length).toBe(1)
+    }
   })
 })
 
 // ---------------------------------------------------------------------------
-// Fix 2: FileDiff receives and renders skill findings at lines
+// Actions from each placement
 // ---------------------------------------------------------------------------
 
-describe('FileDiff — skillFindings prop (Fix 2)', () => {
+describe('Finding actions — Add as draft / Dismiss', () => {
+  it('Add-as-draft from an inline (anchored) finding calls draftStore.upsert with line+side', async () => {
+    const draftStore = makeDraftStore()
+    renderInspect([makeLineReview(2, 'Add this line finding as draft')], { draftStore })
+    const addBtn = screen.getByRole('button', { name: /add as draft/i })
+    await userEvent.click(addBtn)
+    expect(draftStore.upsert).toHaveBeenCalledOnce()
+    const arg = (draftStore.upsert as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(arg.body).toBe('Add this line finding as draft')
+    expect(arg.path).toBe('src/foo.ts')
+    expect(arg.line).toBe(2)
+    expect(arg.side).toBe('RIGHT')
+  })
+
+  it('Add-as-draft shows the labeled "added as draft" state chip', async () => {
+    const draftStore = makeDraftStore()
+    renderInspect([makeLineReview(2, 'Chip after add')], { draftStore })
+    await userEvent.click(screen.getByRole('button', { name: /add as draft/i }))
+    await waitFor(() => {
+      expect(screen.getByText(/added as draft/i)).toBeInTheDocument()
+    })
+  })
+
+  it('Dismiss from an inline (anchored) finding hides it', async () => {
+    renderInspect([makeLineReview(2, 'Finding to dismiss from inside diff')])
+    expect(screen.getByText('Finding to dismiss from inside diff')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    await waitFor(() => {
+      expect(screen.queryByText('Finding to dismiss from inside diff')).not.toBeInTheDocument()
+    })
+  })
+
+  it('Dismiss from a fallback-block (unanchored) finding hides it', async () => {
+    renderInspect([makeLineReview(999, 'Dismiss the fallback finding')])
+    expect(screen.getByText('Dismiss the fallback finding')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    await waitFor(() => {
+      expect(screen.queryByText('Dismiss the fallback finding')).not.toBeInTheDocument()
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// FileDiff-level: skillFindings prop placement
+// ---------------------------------------------------------------------------
+
+describe('FileDiff — skillFindings prop placement', () => {
   const file = makeFile('src/foo.ts')
 
-  it('renders a skill finding when skillFindings prop has a line-bearing entry', () => {
-    const skillFindings = [{
-      skillName: 'Security',
-      line: 2,
-      severity: 'high' as const,
-      body: 'XSS risk detected',
-      key: 'key1',
-    }]
-    render(FileDiff, {
-      props: { file, mode: 'unified', skillFindings },
+  function finding(line: number, body: string, severity: 'high' | 'medium' | 'low' = 'high') {
+    return { skillName: 'Security', line, severity, body, key: `k:${line}:${body}` }
+  }
+
+  it('renders an anchored finding inline (extend row), not in the fallback block', () => {
+    const { container } = render(FileDiff, {
+      props: { file, mode: 'unified', skillFindings: [finding(2, 'XSS risk detected')] },
     })
-    expect(screen.getByText('XSS risk detected')).toBeInTheDocument()
+    expect(container.querySelector('.diff-line-extend .skill-finding')).toBeTruthy()
+    expect(container.querySelector('.skill-findings-annotations')).toBeNull()
   })
 
-  it('renders severity chip for skill finding', () => {
-    const skillFindings = [{
-      skillName: 'Perf',
-      line: 2,
-      severity: 'medium' as const,
-      body: 'N+1 query detected',
-      key: 'key2',
-    }]
-    render(FileDiff, {
-      props: { file, mode: 'unified', skillFindings },
+  it('renders an unanchored finding in the fallback block, not inline', () => {
+    const { container } = render(FileDiff, {
+      props: { file, mode: 'unified', skillFindings: [finding(999, 'Mystery line')] },
     })
-    expect(screen.getByText('medium')).toBeInTheDocument()
+    expect(container.querySelector('.skill-findings-annotations .skill-finding')).toBeTruthy()
+    expect(container.querySelector('.line-findings')).toBeNull()
   })
 
-  it('renders persona label for skill finding', () => {
-    const skillFindings = [{
-      skillName: 'Perf Reviewer',
-      line: 2,
-      severity: 'low' as const,
-      body: 'Consider caching',
-      key: 'key3',
-    }]
-    render(FileDiff, {
-      props: { file, mode: 'unified', skillFindings },
+  it('two findings on the same anchored line render in the same extend row', () => {
+    const { container } = render(FileDiff, {
+      props: {
+        file,
+        mode: 'unified',
+        skillFindings: [finding(2, 'First on line 2'), finding(2, 'Second on line 2', 'low')],
+      },
     })
-    const labels = screen.getAllByText(/Perf Reviewer/i)
-    expect(labels.length).toBeGreaterThan(0)
-  })
-
-  it('renders Add-as-draft and Dismiss buttons for skill finding', () => {
-    const skillFindings = [{
-      skillName: 'Security',
-      line: 2,
-      severity: 'high' as const,
-      body: 'Finding with actions',
-      key: 'key4',
-    }]
-    render(FileDiff, {
-      props: { file, mode: 'unified', skillFindings },
-    })
-    expect(screen.getByRole('button', { name: /add as draft/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument()
+    const row = container.querySelector('[data-line-findings="2"]')
+    expect(row?.textContent).toContain('First on line 2')
+    expect(row?.textContent).toContain('Second on line 2')
   })
 
   it('no skill findings: no Add-as-draft button rendered', () => {
@@ -272,30 +281,21 @@ describe('FileDiff — skillFindings prop (Fix 2)', () => {
     expect(screen.queryByRole('button', { name: /add as draft/i })).not.toBeInTheDocument()
   })
 
-  it('skill finding has dashed-border style (skill-finding class)', () => {
-    const skillFindings = [{
-      skillName: 'Security',
-      line: 2,
-      severity: 'high' as const,
-      body: 'Needs fix',
-      key: 'key5',
-    }]
-    const { container } = render(FileDiff, {
-      props: { file, mode: 'unified', skillFindings },
+  it('Add-as-draft calls onAddSkillFindingDraft callback', async () => {
+    const onAddSkillFindingDraft = vi.fn().mockResolvedValue(undefined)
+    render(FileDiff, {
+      props: { file, mode: 'unified', skillFindings: [finding(2, 'Draft from FileDiff')], onAddSkillFindingDraft },
     })
-    expect(container.querySelector('.skill-finding')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /add as draft/i }))
+    expect(onAddSkillFindingDraft).toHaveBeenCalledOnce()
+    const arg = (onAddSkillFindingDraft as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(arg.body).toBe('Draft from FileDiff')
+    expect(arg.line).toBe(2)
   })
 
-  it('Dismiss button hides the finding within FileDiff', async () => {
-    const skillFindings = [{
-      skillName: 'Security',
-      line: 2,
-      severity: 'high' as const,
-      body: 'Dismiss me in FileDiff',
-      key: 'dismiss-key',
-    }]
+  it('Dismiss hides an inline finding within FileDiff', async () => {
     render(FileDiff, {
-      props: { file, mode: 'unified', skillFindings },
+      props: { file, mode: 'unified', skillFindings: [finding(2, 'Dismiss me in FileDiff')] },
     })
     expect(screen.getByText('Dismiss me in FileDiff')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
@@ -303,23 +303,47 @@ describe('FileDiff — skillFindings prop (Fix 2)', () => {
       expect(screen.queryByText('Dismiss me in FileDiff')).not.toBeInTheDocument()
     })
   })
+})
 
-  it('Add-as-draft calls onAddSkillFindingDraft callback', async () => {
-    const onAddSkillFindingDraft = vi.fn().mockResolvedValue(undefined)
-    const skillFindings = [{
-      skillName: 'Security',
-      line: 2,
-      severity: 'high' as const,
-      body: 'Draft from FileDiff',
-      key: 'draft-key',
-    }]
-    render(FileDiff, {
-      props: { file, mode: 'unified', skillFindings, onAddSkillFindingDraft },
+// ---------------------------------------------------------------------------
+// Draft placement parity — anchored drafts inline, unanchored in block
+// ---------------------------------------------------------------------------
+
+describe('FileDiff — draft annotation placement parity', () => {
+  const file = makeFile('src/foo.ts')
+
+  function draft(line: number, body: string) {
+    return { prKey: 'k', path: 'src/foo.ts', line, side: 'RIGHT' as const, body, updatedAt: 1 }
+  }
+
+  it('anchored draft renders inline in an extend row, not in the fallback block', () => {
+    const { container } = render(FileDiff, {
+      props: { file, mode: 'unified', drafts: [draft(2, 'Inline draft body')] },
     })
-    await userEvent.click(screen.getByRole('button', { name: /add as draft/i }))
-    expect(onAddSkillFindingDraft).toHaveBeenCalledOnce()
-    const arg = (onAddSkillFindingDraft as ReturnType<typeof vi.fn>).mock.calls[0][0]
-    expect(arg.body).toBe('Draft from FileDiff')
-    expect(arg.line).toBe(2)
+    expect(container.querySelector('.diff-line-extend .draft-annotations')).toBeTruthy()
+    // No fallback block (the only .draft-annotations is the inline one)
+    const blocks = container.querySelectorAll('.draft-annotations')
+    expect(blocks.length).toBe(1)
+    expect(blocks[0].closest('.diff-line-extend')).toBeTruthy()
+  })
+
+  it('unanchored draft renders in the fallback block below the diff', () => {
+    const { container } = render(FileDiff, {
+      props: { file, mode: 'unified', drafts: [draft(999, 'Orphan draft body')] },
+    })
+    const blocks = container.querySelectorAll('.draft-annotations')
+    expect(blocks.length).toBe(1)
+    expect(blocks[0].closest('.diff-line-extend')).toBeNull()
+    expect(blocks[0].textContent).toContain('Orphan draft body')
+  })
+
+  it('a draft never renders in both placements', () => {
+    const { container } = render(FileDiff, {
+      props: { file, mode: 'unified', drafts: [draft(2, 'Single placement draft')] },
+    })
+    const threads = [...container.querySelectorAll('[data-testid="draft-thread"]')].filter(
+      el => el.textContent?.includes('Single placement draft'),
+    )
+    expect(threads.length).toBe(1)
   })
 })
