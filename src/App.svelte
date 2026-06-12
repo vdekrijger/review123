@@ -49,7 +49,7 @@
 {:else if router.route.name === 'review'}
   {@const route = router.route}
   {#key `${route.owner}/${route.repo}/${route.number}`}
-    <Review owner={route.owner} repo={route.repo} number={route.number} />
+    <Review owner={route.owner} repo={route.repo} number={route.number} step={route.step} />
   {/key}
 {:else if router.route.name === 'auth-callback'}
   <AuthCallback />

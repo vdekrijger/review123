@@ -3,6 +3,7 @@
   import Stepper, { type Step } from '../components/Stepper.svelte'
   import InspectStep from '../components/InspectStep.svelte'
   import RevisionPicker from '../components/RevisionPicker.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
   import { getSettings, setDiffMode, setRailCollapsed, type DiffMode } from '../lib/settings/settings'
   import ReviewProgress from '../components/ReviewProgress.svelte'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
@@ -16,6 +17,7 @@
   import ConsentDialog from '../components/ConsentDialog.svelte'
   import UnderstandStep from '../components/UnderstandStep.svelte'
   import ContextRail from '../components/ContextRail.svelte'
+  import { navigate as navigateTo, STEP_PATHS, router } from '../lib/router/router.svelte'
   import { addToHistory } from '../lib/history/history'
   import { createViewedStore } from '../lib/viewed/viewed.svelte'
   import { recordVisit, lastVisit } from '../lib/visits/visits'
@@ -33,18 +35,31 @@
 
   const RETURN_KEY = 'review123:returnTo'
 
-  let { owner, repo, number }: { owner: string; repo: string; number: number } = $props()
+  let { owner, repo, number, step: stepProp }: {
+    owner: string
+    repo: string
+    number: number
+    step?: 1 | 2 | 3
+  } = $props()
   // Relies on the {#key} remount in App.svelte: props never change within a
   // mount, so createPrLoad is called exactly once per PR navigation. Removing
   // the key would cause duplicate fetches + stale draft store.
   const load = $derived.by(() => createPrLoad({ owner, repo, number }))
-  let step = $state<Step>(1)
+  // When App.svelte passes step={route.step} we use it directly. When Review is
+  // rendered without a parent (e.g. integration tests), fall back to router.route
+  // so navigate() calls are reflected here reactively.
+  const step = $derived<Step>(
+    stepProp !== undefined
+      ? stepProp
+      : (router.route.name === 'review' ? router.route.step : 1)
+  )
   let mode = $state<DiffMode>(getSettings().diffMode)
   function setMode(m: DiffMode) { mode = m; setDiffMode(m) }
 
-  /** Clamp n to 1..3 and assign to step */
+  /** Clamp n to 1..3 and navigate to the corresponding step URL */
   function goStep(n: number) {
-    step = Math.max(1, Math.min(3, n)) as Step
+    const clamped = Math.max(1, Math.min(3, n)) as Step
+    navigateTo(`/review/${owner}/${repo}/${number}/${STEP_PATHS[clamped]}`)
   }
   const canPrev = $derived(step > 1)
   const canNext = $derived(step < 3)
@@ -394,6 +409,14 @@
     }
   })
 
+  // Canonicalize bare /review/o/r/n → /review/o/r/n/understand (replaceState, not push)
+  $effect(() => {
+    const bare = `/review/${owner}/${repo}/${number}`
+    if (location.pathname === bare || location.pathname === bare + '/') {
+      history.replaceState(history.state, '', `${bare}/understand`)
+    }
+  })
+
   // Reading order from summary
   const readingOrder = $derived.by(() => {
     if (!aiRun || aiRun.summary.status !== 'done') return []
@@ -421,7 +444,18 @@
 
 <section class="review" data-rail-collapsed={String(railCollapsed)}>
   {#if load.state.status === 'loading'}
-    <p>Loading {owner}/{repo}#{number}…</p>
+    <div class="pr-loading" aria-busy="true">
+      <Skeleton header lines={1} />
+      <div class="skeleton-stepper-ghost" aria-hidden="true">
+        <span class="skeleton-step-btn"></span>
+        <span class="skeleton-step-btn"></span>
+        <span class="skeleton-step-btn"></span>
+      </div>
+      <Skeleton lines={3} />
+      <Skeleton lines={3} />
+      <Skeleton lines={3} />
+      <p class="loading-caption">Loading pull request from GitHub…</p>
+    </div>
   {:else if load.state.status === 'error'}
     {#if load.state.error === 'not-found'}
       {#if needsScopeUpgrade()}
@@ -442,7 +476,7 @@
     {/if}
   {:else}
     <h1>{load.state.meta.title} <small>{owner}/{repo}#{number}</small></h1>
-    <Stepper {step} onstep={(s) => (step = s)} />
+    <Stepper {step} onstep={(s) => goStep(s)} />
 
     <!-- ContextRail outside step switch (all steps) -->
     {#if aiRun}
@@ -766,5 +800,35 @@
     gap: 0.5rem;
     align-items: center;
     flex-shrink: 0;
+  }
+
+  .pr-loading {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem 0;
+  }
+
+  .skeleton-stepper-ghost {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.5rem 0;
+  }
+
+  .skeleton-step-btn {
+    display: inline-block;
+    width: 5rem;
+    height: 1.5rem;
+    background: var(--surface-raised, #2a2a3e);
+    border-radius: 4px;
+    opacity: 0.5;
+  }
+
+  .loading-caption {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    opacity: 0.75;
+    margin: 0;
+    text-align: center;
   }
 </style>
