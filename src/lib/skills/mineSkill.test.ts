@@ -291,6 +291,82 @@ describe('stripLongFences (exported util)', () => {
   })
 })
 
+import { mineSkillPipeline } from './mineSkill'
+
+describe('mineSkillPipeline (provider-dispatched)', () => {
+  const mockLlm = vi.fn()
+  const mockProvider = {
+    id: 'github' as const,
+    displayName: 'GitHub',
+    authState: () => ({ configured: true, hint: 'ok' }),
+    getMyReviewComments: vi.fn(),
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    mockLlm.mockResolvedValue({ name: "alice's review style", content: 'Priorities...' })
+    mockProvider.getMyReviewComments.mockResolvedValue(['comment 1', 'comment 2'])
+  })
+
+  it('returns error when provider has no getMyReviewComments', async () => {
+    const providerWithoutMining = {
+      id: 'bitbucket' as const,
+      displayName: 'Bitbucket',
+      authState: () => ({ configured: true, hint: 'ok' }),
+      // getMyReviewComments intentionally absent
+    }
+
+    const result = await mineSkillPipeline(
+      'bitbucket',
+      { owner: 'o', repo: 'r' },
+      { llmJsonWithRepair: mockLlm, provider: providerWithoutMining },
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/bitbucket/i)
+  })
+
+  it('returns error when provider auth is not configured', async () => {
+    const unauthProvider = {
+      ...mockProvider,
+      authState: () => ({ configured: false, hint: 'Please sign in to GitHub.' }),
+    }
+
+    const result = await mineSkillPipeline(
+      'github',
+      { owner: 'o', repo: 'r' },
+      { llmJsonWithRepair: mockLlm, provider: unauthProvider },
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('Please sign in to GitHub.')
+  })
+
+  it('dispatches to provider.getMyReviewComments and runs LLM distillation', async () => {
+    const result = await mineSkillPipeline(
+      'github',
+      { owner: 'myorg', repo: 'myrepo' },
+      { llmJsonWithRepair: mockLlm, provider: mockProvider },
+    )
+    expect(mockProvider.getMyReviewComments).toHaveBeenCalledWith(
+      { owner: 'myorg', repo: 'myrepo' },
+      150,
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.skill.name).toBe("alice's review style")
+  })
+
+  it('returns error when getMyReviewComments returns empty array', async () => {
+    mockProvider.getMyReviewComments.mockResolvedValue([])
+
+    const result = await mineSkillPipeline(
+      'github',
+      { owner: 'o', repo: 'r' },
+      { llmJsonWithRepair: mockLlm, provider: mockProvider },
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/no.*comment/i)
+  })
+})
+
 describe('githubProvider.getMyReviewComments', () => {
   beforeEach(() => {
     localStorage.clear()
