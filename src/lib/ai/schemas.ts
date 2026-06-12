@@ -280,6 +280,55 @@ export function validateCoachResult(x: unknown): CoachResult | null {
   return x as unknown as CoachResult
 }
 
+// ---------------------------------------------------------------------------
+// AlternativesResult (Plan F)
+// ---------------------------------------------------------------------------
+
+export interface Alternative {
+  approach: string
+  tradeoffs: string
+  assessment: 'pr-is-better' | 'comparable' | 'alternative-is-better' | 'different-goals'
+  rationale: string
+}
+
+export interface AlternativesResult {
+  problem: string
+  alternatives: Alternative[]
+}
+
+const ASSESSMENT_VALUES = new Set<string>([
+  'pr-is-better',
+  'comparable',
+  'alternative-is-better',
+  'different-goals',
+])
+
+/**
+ * Validate an unknown value as AlternativesResult.
+ * Returns the typed value or null if the shape is invalid.
+ *
+ * Strict on: problem (string), alternatives (array ≤3), each alternative's
+ * required fields and assessment enum. Tolerant of extra keys.
+ */
+export function validateAlternativesResult(x: unknown): AlternativesResult | null {
+  if (!isObject(x)) return null
+
+  // problem — required string
+  if (typeof x['problem'] !== 'string') return null
+
+  // alternatives — required array of Alternative (≤3)
+  if (!Array.isArray(x['alternatives'])) return null
+  for (const alt of x['alternatives']) {
+    if (!isObject(alt)) return null
+    if (typeof alt['approach'] !== 'string') return null
+    if (typeof alt['tradeoffs'] !== 'string') return null
+    if (typeof alt['assessment'] !== 'string' || !ASSESSMENT_VALUES.has(alt['assessment'] as string)) return null
+    if (typeof alt['rationale'] !== 'string') return null
+  }
+
+  return x as unknown as AlternativesResult
+}
+
 function isObject(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null && !Array.isArray(x)
 }

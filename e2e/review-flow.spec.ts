@@ -268,6 +268,25 @@ const COACH_RESULT = {
   ],
 }
 
+// Plan F: AlternativesResult with one alternative-is-better entry to trigger glance chip
+const ALTERNATIVES_RESULT = {
+  problem: 'The PR introduces a global singleton cache without per-request isolation.',
+  alternatives: [
+    {
+      approach: 'Use a WeakMap keyed on the request context object for per-request cache scoping.',
+      tradeoffs: 'Better isolation at the cost of passing context through more call sites.',
+      assessment: 'alternative-is-better',
+      rationale: 'Avoids cross-request data leaks in concurrent environments.',
+    },
+    {
+      approach: 'Keep the singleton but add a reset() method for test isolation.',
+      tradeoffs: 'Minimal change but still global state.',
+      assessment: 'comparable',
+      rationale: 'Acceptable when tests are the only concern.',
+    },
+  ],
+}
+
 // ---------------------------------------------------------------------------
 // Helper: seed settings + draft into localStorage/IndexedDB before page load
 // ---------------------------------------------------------------------------
@@ -471,6 +490,9 @@ async function setupRoutes(
     } else if (systemContent.includes('reviews') && systemContent.includes('clarity')) {
       // coachPrompt system content mentions "reviews" and "clarity" fields
       result = COACH_RESULT
+    } else if (systemContent.includes('alternative-is-better') || (systemContent.includes('alternatives') && systemContent.includes('approaches'))) {
+      // alternativesPrompt system content mentions "alternative-is-better" enum value and "alternatives"/"approaches"
+      result = ALTERNATIVES_RESULT
     } else {
       // Default to verdict (also covers summarize which is streaming so won't reach here)
       result = VERDICT_RESULT
@@ -979,4 +1001,57 @@ test('revision picker: open picker, choose base→first-commit, compare files sw
 
   // After restore, should show original 2 files again
   await expect(page.locator('article.file-diff')).toHaveCount(2, { timeout: 5_000 })
+})
+
+// ---------------------------------------------------------------------------
+// Test 11: alternatives panel — glance chip + panel content
+// ---------------------------------------------------------------------------
+
+test('alternatives-panel: glance chip appears when alternative-is-better; panel shows problem + cards + chips', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Wait for AI alternatives to populate — glance chip should appear because
+  // ALTERNATIVES_RESULT has one alternative-is-better assessment
+  await expect(
+    page.locator('.alternatives-glance-chip'),
+  ).toBeVisible({ timeout: 20_000 })
+
+  // The glance chip should contain the expected text
+  await expect(
+    page.locator('.alternatives-glance-chip'),
+  ).toContainText('alternative worth considering')
+
+  // Open the alternatives panel (it is collapsed by default)
+  const altPanel = page.locator('details.alternatives-panel')
+  await altPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+
+  // Problem statement should be visible
+  await expect(
+    page.getByText(/The PR introduces a global singleton cache/i),
+  ).toBeVisible({ timeout: 5_000 })
+
+  // Both alternative cards should be visible
+  await expect(page.locator('.alternative-card')).toHaveCount(2)
+
+  // The "alternative-is-better" chip should show "Worth considering"
+  await expect(
+    page.locator('.assessment-chip.assessment-alternative-is-better'),
+  ).toContainText('Worth considering')
+
+  // The "comparable" chip should show "Comparable"
+  await expect(
+    page.locator('.assessment-chip.assessment-comparable'),
+  ).toContainText('Comparable')
 })
