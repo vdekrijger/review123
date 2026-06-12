@@ -119,8 +119,10 @@ describe('InspectStep — tree height clamp wiring (--diff-col-h)', () => {
 
 describe('InspectStep — renders without ResizeObserver (jsdom guard)', () => {
   it('mounts cleanly when ResizeObserver is undefined', async () => {
-    vi.unstubAllGlobals()
-    expect(typeof globalThis.ResizeObserver).toBe('undefined') // jsdom precondition
+    // test-setup.ts stubs a global ResizeObserver (needed by @git-diff-view),
+    // so absence must be simulated explicitly rather than assumed from jsdom.
+    vi.stubGlobal('ResizeObserver', undefined)
+    expect(typeof globalThis.ResizeObserver).toBe('undefined')
     const { container } = renderStep()
     await tick()
     const layout = container.querySelector('.inspect-layout') as HTMLElement

@@ -121,9 +121,16 @@ describe('observeDiffColHeight', () => {
   })
 
   it('no-ops when ResizeObserver is unavailable (jsdom guard)', () => {
-    const { diffCol, layout } = makeEls(420)
-    const cleanup = observeDiffColHeight(diffCol, layout, undefined)
-    expect(layout.style.getPropertyValue(DIFF_COL_H_VAR)).toBe('')
-    expect(() => cleanup()).not.toThrow()
+    // An undefined third arg falls back to globalThis.ResizeObserver, which
+    // test-setup.ts now stubs — remove the global to exercise the guard.
+    vi.stubGlobal('ResizeObserver', undefined)
+    try {
+      const { diffCol, layout } = makeEls(420)
+      const cleanup = observeDiffColHeight(diffCol, layout, undefined)
+      expect(layout.style.getPropertyValue(DIFF_COL_H_VAR)).toBe('')
+      expect(() => cleanup()).not.toThrow()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
