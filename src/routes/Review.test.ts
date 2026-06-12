@@ -935,6 +935,48 @@ describe('Review progress bar — footer integration', () => {
     }, { timeout: 3000 })
   })
 
+  it('footer progressbar aria-valuenow increases when user clicks the viewed checkbox (reactivity regression)', async () => {
+    // This test reproduces the "stuck at 15%" bug: viewedStore.count must stay reactive
+    // through the $derived wrapper so the footer progressbar updates when files are toggled viewed.
+    // It differs from the existing raw-event test by using userEvent.click() — the same
+    // interaction path a real user takes — which goes through Svelte's compiled onchange handler.
+    vi.stubGlobal('fetch', makeFetchStub([
+      { filename: 'src/foo.ts', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1 +1 @@\n+x' },
+      { filename: 'src/bar.ts', status: 'modified', additions: 2, deletions: 0, patch: '@@ -1 +2 @@\n+y\n+z' },
+    ]))
+
+    const user = userEvent.setup()
+    const { container } = render(Review, { props: { owner: 'a', repo: 'b', number: 750 } })
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    // Navigate to step 2 where the viewed checkboxes appear
+    const nextBtn = screen.getByRole('button', { name: /next step/i })
+    await user.click(nextBtn)
+
+    // Wait for file diffs + viewed checkboxes to render
+    await vi.waitFor(() => {
+      expect(container.querySelector('input.viewed-checkbox')).not.toBeNull()
+    }, { timeout: 5000 })
+
+    const bar = screen.getByRole('progressbar')
+    const step2Percent = Number(bar.getAttribute('aria-valuenow'))
+    // At step 2 with 0/2 files viewed → 15%
+    expect(step2Percent).toBe(15)
+
+    // Click the first viewed checkbox via userEvent (real user interaction path)
+    const checkbox = container.querySelector('input.viewed-checkbox') as HTMLInputElement
+    await user.click(checkbox)
+
+    // After clicking: 1/2 files viewed → 15 + 70*(1/2) = 50%
+    await vi.waitFor(() => {
+      const newValue = Number(bar.getAttribute('aria-valuenow'))
+      expect(newValue).toBeGreaterThan(step2Percent)
+    }, { timeout: 3000 })
+  })
+
   it('progress bar is hidden when showProgress is false (settings toggle)', async () => {
     // Seed settings with showProgress: false
     localStorage.setItem('review123:settings', JSON.stringify({ showProgress: false }))
