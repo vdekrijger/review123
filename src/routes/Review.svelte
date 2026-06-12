@@ -3,6 +3,7 @@
   import Stepper, { type Step } from '../components/Stepper.svelte'
   import InspectStep from '../components/InspectStep.svelte'
   import RevisionPicker from '../components/RevisionPicker.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
   import { getSettings, setDiffMode, setRailCollapsed, type DiffMode } from '../lib/settings/settings'
   import ReviewProgress from '../components/ReviewProgress.svelte'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
@@ -436,7 +437,18 @@
 
 <section class="review" data-rail-collapsed={String(railCollapsed)}>
   {#if load.state.status === 'loading'}
-    <p>Loading {owner}/{repo}#{number}…</p>
+    <div class="pr-loading" role="status">
+      <Skeleton header lines={1} />
+      <div class="skeleton-stepper-ghost" aria-hidden="true">
+        <span class="skeleton-step-btn"></span>
+        <span class="skeleton-step-btn"></span>
+        <span class="skeleton-step-btn"></span>
+      </div>
+      <Skeleton lines={3} />
+      <Skeleton lines={3} />
+      <Skeleton lines={3} />
+      <p class="loading-caption">Loading pull request from GitHub…</p>
+    </div>
   {:else if load.state.status === 'error'}
     {#if load.state.error === 'not-found'}
       {#if needsScopeUpgrade()}
@@ -780,5 +792,35 @@
     gap: 0.5rem;
     align-items: center;
     flex-shrink: 0;
+  }
+
+  .pr-loading {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem 0;
+  }
+
+  .skeleton-stepper-ghost {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.5rem 0;
+  }
+
+  .skeleton-step-btn {
+    display: inline-block;
+    width: 5rem;
+    height: 1.5rem;
+    background: var(--surface-raised, #2a2a3e);
+    border-radius: 4px;
+    opacity: 0.5;
+  }
+
+  .loading-caption {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    opacity: 0.75;
+    margin: 0;
+    text-align: center;
   }
 </style>

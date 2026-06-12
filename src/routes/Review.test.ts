@@ -147,7 +147,8 @@ describe('Review sticky draft bar (EC-07i)', () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
 
     render(Review, { props: { owner: 'a', repo: 'b', number: 1 } })
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    // The loading skeleton has role="status" but the draft bar is not shown
+    expect(screen.queryByRole('region', { name: /draft/i })).not.toBeInTheDocument()
   })
 
   it('sticky bar is not shown on error', async () => {
