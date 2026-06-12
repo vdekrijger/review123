@@ -1318,8 +1318,8 @@ test('file-tree: drawer closed by default; toggle opens tree; clicking second fi
   await expect(treeNav).toBeVisible()
 
   // The fixture has 2 files: src/feature.ts and src/old-utils.ts
-  // Both should appear as buttons in the file tree
-  const fileButtons = treeNav.getByRole('button')
+  // Both should appear as file-selection buttons in the file tree (not counting close button)
+  const fileButtons = treeNav.locator('.file-btn')
   await expect(fileButtons).toHaveCount(2)
 
   // Get the second file button (src/old-utils.ts)
@@ -1335,6 +1335,48 @@ test('file-tree: drawer closed by default; toggle opens tree; clicking second fi
   const secondArticle = page.locator('article.file-diff').nth(1)
   await expect(secondArticle).toBeVisible({ timeout: 5_000 })
   await expect(secondArticle).toBeInViewport({ ratio: 0.1 })
+})
+
+// ---------------------------------------------------------------------------
+// file-tree: close via ✕ button inside drawer header
+// ---------------------------------------------------------------------------
+
+test('file-tree: drawer can be closed via the ✕ close button inside the drawer', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+  await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 5_000 })
+
+  const toggleTab = page.locator('.tree-toggle-tab')
+  const treeNav = page.locator('nav[aria-label="File tree"]')
+
+  // Open drawer
+  await toggleTab.click()
+  await expect(toggleTab).toHaveAttribute('aria-expanded', 'true')
+  await expect(treeNav).toBeVisible()
+
+  // Close via ✕ button inside the drawer header
+  const closeBtn = page.locator('.tree-drawer-close')
+  await expect(closeBtn).toBeVisible()
+  await closeBtn.click()
+
+  // Drawer should be closed
+  await expect(toggleTab).toHaveAttribute('aria-expanded', 'false')
+  await expect(treeNav).not.toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
