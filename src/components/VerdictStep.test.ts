@@ -18,6 +18,7 @@ import type { PrRef } from '../lib/github/parse'
 import type { SubmitOutcome } from '../lib/github/review'
 import type { CoachResult, CommentReview } from '../lib/ai/schemas'
 import type { Draft } from '../lib/drafts/drafts.svelte'
+import type { ReviewProvider } from '../lib/provider/types'
 
 const prRef: PrRef = { owner: 'alice', repo: 'widgets', number: 42 }
 const commitId = 'abc123'
@@ -1084,7 +1085,7 @@ describe('VerdictStep', () => {
       return {
         id: 'gitlab' as const,
         displayName: 'GitLab',
-        capabilities: { atomicReview, resolvedThreads: true, checks: true, suggestions: true, compare: true },
+        capabilities: { atomicReview, resolvedThreads: true, checks: true, suggestions: true, compare: true, selfReviewBlocked: false },
         parseUrl: vi.fn(),
         getPrMeta: vi.fn(),
         getPrFiles: vi.fn(),
@@ -1224,5 +1225,224 @@ describe('VerdictStep', () => {
       // returnTo must be stored in sessionStorage so AuthCallback navigates back
       expect(sessionStorage.getItem('review123:returnTo')).toBe('/review/alice/widgets/42')
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Own-PR verdict gating
+// ---------------------------------------------------------------------------
+
+describe('own-PR verdict gating', () => {
+  function makeProvider(opts: {
+    id?: 'github' | 'gitlab' | 'bitbucket'
+    displayName?: string
+    selfReviewBlocked?: boolean
+  } = {}): ReviewProvider {
+    return {
+      id: opts.id ?? 'github',
+      displayName: opts.displayName ?? 'GitHub',
+      capabilities: {
+        resolvedThreads: true,
+        checks: true,
+        suggestions: true,
+        atomicReview: true,
+        compare: true,
+        selfReviewBlocked: opts.selfReviewBlocked ?? true,
+      },
+      parseUrl: vi.fn(),
+      getPrMeta: vi.fn(),
+      getPrFiles: vi.fn(),
+      getFileAtRef: vi.fn(),
+      getCiSummary: vi.fn(),
+      getComments: vi.fn(),
+      getResolvedCommentIds: vi.fn(),
+      getCommits: vi.fn(),
+      compareCommits: vi.fn(),
+      submitReview: vi.fn(),
+      authState: vi.fn().mockReturnValue({ configured: true, hint: '' }),
+      getViewerLogin: vi.fn().mockResolvedValue('alice'),
+    } as unknown as ReviewProvider
+  }
+
+  beforeEach(() => {
+    signOut()
+  })
+
+  it('disables Approve and Request changes on own PR; Comment stays enabled', async () => {
+    signIn()
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: 'alice',
+        resolveViewerFn: () => Promise.resolve('alice'),
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /approve/i })).toBeDisabled()
+    })
+    expect(screen.getByRole('radio', { name: /request changes/i })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: /comment/i })).toBeEnabled()
+  })
+
+  it('shows the muted own-PR explanation with the provider name', async () => {
+    signIn()
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: 'alice',
+        resolveViewerFn: () => Promise.resolve('alice'),
+      },
+    })
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/GitHub doesn't allow reviewing your own PR — you can still comment/i),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('matches viewer and author logins case-insensitively', async () => {
+    signIn()
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: 'ALICE',
+        resolveViewerFn: () => Promise.resolve('Alice'),
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /approve/i })).toBeDisabled()
+    })
+  })
+
+  it('does NOT gate when the viewer is not the author', async () => {
+    signIn()
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: 'bob',
+        resolveViewerFn: () => Promise.resolve('alice'),
+      },
+    })
+
+    // Give the async resolution a tick to land
+    await act(() => Promise.resolve())
+    expect(screen.getByRole('radio', { name: /approve/i })).toBeEnabled()
+    expect(screen.getByRole('radio', { name: /request changes/i })).toBeEnabled()
+    expect(screen.queryByText(/doesn't allow reviewing your own PR/i)).toBeNull()
+  })
+
+  it('does NOT gate on providers that allow self-review (GitLab)', async () => {
+    signIn()
+    const resolveViewerFn = vi.fn().mockResolvedValue('alice')
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider({ id: 'gitlab', displayName: 'GitLab', selfReviewBlocked: false }),
+        authorLogin: 'alice',
+        resolveViewerFn,
+      },
+    })
+
+    await act(() => Promise.resolve())
+    expect(screen.getByRole('radio', { name: /approve/i })).toBeEnabled()
+    expect(screen.getByRole('radio', { name: /request changes/i })).toBeEnabled()
+    // Identity is never even resolved for non-gating providers
+    expect(resolveViewerFn).not.toHaveBeenCalled()
+  })
+
+  it('does NOT gate when the author identity is unknown', async () => {
+    signIn()
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: null,
+        resolveViewerFn: () => Promise.resolve('alice'),
+      },
+    })
+
+    await act(() => Promise.resolve())
+    expect(screen.getByRole('radio', { name: /approve/i })).toBeEnabled()
+  })
+
+  it('does NOT gate when the viewer identity cannot be resolved', async () => {
+    signIn()
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: 'alice',
+        resolveViewerFn: () => Promise.resolve(null),
+      },
+    })
+
+    await act(() => Promise.resolve())
+    expect(screen.getByRole('radio', { name: /approve/i })).toBeEnabled()
+  })
+
+  it('resets a selected Approve verdict back to Comment when gating resolves', async () => {
+    signIn()
+    const user = userEvent.setup()
+    let resolveIdentity!: (v: string | null) => void
+    const gate = new Promise<string | null>((res) => { resolveIdentity = res })
+
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: 'alice',
+        resolveViewerFn: () => gate,
+      },
+    })
+
+    // Identity not resolved yet → user can pick APPROVE
+    await user.click(screen.getByRole('radio', { name: /approve/i }))
+    expect(screen.getByRole('radio', { name: /approve/i })).toBeChecked()
+
+    resolveIdentity('alice')
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /approve/i })).toBeDisabled()
+    })
+    expect(screen.getByRole('radio', { name: /comment/i })).toBeChecked()
   })
 })

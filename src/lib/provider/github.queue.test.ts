@@ -68,3 +68,30 @@ describe('githubProvider.getMyQueue', () => {
     expect(queue[0]?.updatedAt).toBe('2025-06-01T08:00:00Z')
   })
 })
+
+describe('githubProvider.getViewerLogin', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.restoreAllMocks()
+  })
+
+  it('returns the authenticated login from GET /user', async () => {
+    saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
+    const f = vi.fn().mockResolvedValue(jsonResponse({ login: 'octocat' }))
+    vi.stubGlobal('fetch', f)
+    expect(await githubProvider.getViewerLogin!()).toBe('octocat')
+    expect(String(f.mock.calls[0][0])).toContain('/user')
+  })
+
+  it('returns null when /user has no login', async () => {
+    saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({})))
+    expect(await githubProvider.getViewerLogin!()).toBeNull()
+  })
+})
+
+describe('githubProvider.capabilities', () => {
+  it('blocks self-review (GitHub rejects approving your own PR with 422)', () => {
+    expect(githubProvider.capabilities.selfReviewBlocked).toBe(true)
+  })
+})
