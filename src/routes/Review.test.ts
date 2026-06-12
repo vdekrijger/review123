@@ -326,6 +326,35 @@ describe('Review adds PR to history on load (history.ts)', () => {
     const entry = history.find((e) => e.owner === 'alice' && e.repo === 'widgets' && e.number === 42)
     expect(entry).toBeDefined()
     expect(entry?.title).toBe('Test PR')
+    // Provider is persisted at record time — defaults to 'github' when no provider prop
+    expect(entry?.provider).toBe('github')
+  })
+
+  it('records the provider on the history entry for a non-github provider (gitlab)', async () => {
+    // Stub the GitLab REST shapes: MR meta + diffs; everything else returns []
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/diffs')) return Promise.resolve(jsonResponse([]))
+      if (url.includes('/merge_requests/7')) {
+        return Promise.resolve(jsonResponse({
+          title: 'GitLab MR',
+          state: 'opened',
+          description: null,
+          diff_refs: { base_sha: 'base1', head_sha: 'head1' },
+          changes_count: '0',
+          author: { username: 'alice' },
+        }))
+      }
+      return Promise.resolve(jsonResponse([]))
+    }))
+
+    render(Review, { props: { owner: 'grp', repo: 'proj', number: 7, provider: 'gitlab' } })
+
+    await vi.waitFor(() => {
+      const entry = getHistory().find((e) => e.owner === 'grp' && e.repo === 'proj' && e.number === 7)
+      expect(entry).toBeDefined()
+      expect(entry?.provider).toBe('gitlab')
+      expect(entry?.title).toBe('GitLab MR')
+    })
   })
 
   it('persists the total diff size (+adds −dels) into the history entry at review time', async () => {

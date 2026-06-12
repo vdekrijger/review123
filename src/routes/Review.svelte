@@ -169,6 +169,7 @@
       // shows it on history rows without any extra network.
       const files = load.state.files
       addToHistory({
+        provider: prRefX.provider,
         owner,
         repo,
         number,

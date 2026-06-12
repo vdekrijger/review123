@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import App from './App.svelte'
@@ -13,6 +13,20 @@ vi.mock('./lib/analytics/analytics', () => ({
   track: vi.fn(),
   _setCaptureForTest: vi.fn(),
 }))
+
+// Pre-warm the lazy Review chunk. App.svelte dynamic-imports Review on the
+// first /review navigation; in vitest that FIRST import transforms the whole
+// diff-view dependency graph (@git-diff-view, lowlight/highlight.js, marked),
+// which under CPU contention (parallel test files) can exceed testing-library's
+// 1s findBy* default — the EC-05k flake. Awaiting the import here pays the
+// one-time compile cost outside any assertion window, so the tests measure
+// rendering behaviour, not module-transform latency.
+// The bundle-discipline test below remains valid: even with a warm module
+// cache, dynamic import() always resolves asynchronously, so the
+// .route-loading fallback is still shown synchronously after render.
+beforeAll(async () => {
+  await import('./routes/Review.svelte')
+})
 
 function makePrResponse(title: string, state = 'open', merged = false) {
   return {
