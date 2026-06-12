@@ -65,13 +65,24 @@
   // Relies on the {#key} remount in App.svelte: props never change within a
   // mount, so createPrLoad is called exactly once per PR navigation. Removing
   // the key would cause duplicate fetches + stale draft store.
-  const load = $derived.by(() => createPrLoad(
+  //
+  // IMPORTANT: this must be a plain const, NOT $derived. Prop reads here track
+  // the parent's `router.route`, which is reassigned (new object, same values)
+  // on EVERY navigate() — including step-only changes (understand → inspect →
+  // verdict and browser back/forward). A $derived.by would re-run on each step
+  // change, recreating the load → duplicate fetch + loading-skeleton flash.
+  // Step changes must be instant; only a PR identity change ({#key} remount)
+  // or a hard page load may fetch.
+  // Capturing the initial prop values is intentional (see above) — silence the
+  // "only captures the initial value" warning.
+  // svelte-ignore state_referenced_locally
+  const load = createPrLoad(
     { owner, repo, number },
     {
       getPrMeta: (ref) => activeProvider.getPrMeta({ ...ref, provider: providerId as PrRefX['provider'] }),
       getPrFiles: (ref) => activeProvider.getPrFiles({ ...ref, provider: providerId as PrRefX['provider'] }),
     },
-  ))
+  )
   // When App.svelte passes step={route.step} we use it directly. When Review is
   // rendered without a parent (e.g. integration tests), fall back to router.route
   // so navigate() calls are reflected here reactively.

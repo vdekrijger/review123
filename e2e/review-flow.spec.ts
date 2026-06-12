@@ -1840,3 +1840,94 @@ test('step-back: browser back from verdict returns to /inspect URL', async ({ pa
   // Step 2 content should be visible (diff mode toggle)
   await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible({ timeout: 5_000 })
 })
+
+// ---------------------------------------------------------------------------
+// Test 21: instant step navigation — no PR refetch, no loading skeleton
+// ---------------------------------------------------------------------------
+
+test('step-nav: 1→2→3→back→forward is instant — no PR refetch, no loading skeleton', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+
+  // Count PR-load fetches (meta + files). Registered AFTER setupRoutes so this
+  // handler runs first (Playwright routes are LIFO); fallback() passes the
+  // request through to the setupRoutes dispatcher.
+  let prLoadFetches = 0
+  await page.route('**/api.github.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (
+      path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}` ||
+      path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`
+    ) {
+      prLoadFetches++
+    }
+    await route.fallback()
+  })
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  // Track every APPEARANCE of the PR loading skeleton (.pr-loading). The
+  // initial page load legitimately shows it; step navigation must never
+  // re-show it. A polling check via expect(...).toHaveCount(0) could miss a
+  // brief flash, so we observe DOM mutations instead.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __skeletonAppearances: number }
+    w.__skeletonAppearances = 0
+    let wasPresent = false
+    const check = () => {
+      const present = document.querySelector('.pr-loading') !== null
+      if (present && !wasPresent) w.__skeletonAppearances++
+      wasPresent = present
+    }
+    new MutationObserver(check).observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    })
+  })
+
+  await page.goto(APP_REVIEW_UNDERSTAND)
+  const heading = page.getByRole('heading', { name: /Test PR: add feature/i })
+  await expect(heading).toBeVisible({ timeout: 10_000 })
+
+  const initialAppearances = await page.evaluate(
+    () => (window as unknown as { __skeletonAppearances: number }).__skeletonAppearances,
+  )
+  expect(prLoadFetches).toBe(2) // 1× meta + 1× files from the initial load
+
+  // Step 1 → 2
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page).toHaveURL(APP_REVIEW_INSPECT)
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Step 2 → 3
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page).toHaveURL(APP_REVIEW_VERDICT)
+
+  // Browser back: verdict → inspect
+  await page.goBack({ waitUntil: 'commit' })
+  await expect(page).toHaveURL(APP_REVIEW_INSPECT)
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Browser back: inspect → understand
+  await page.goBack({ waitUntil: 'commit' })
+  await expect(page).toHaveURL(APP_REVIEW_UNDERSTAND)
+  await expect(page.locator('.understand-step')).toBeVisible()
+
+  // Browser forward: understand → inspect
+  await page.goForward({ waitUntil: 'commit' })
+  await expect(page).toHaveURL(APP_REVIEW_INSPECT)
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // The PR title stayed rendered and the skeleton never re-appeared
+  await expect(heading).toBeVisible()
+  const finalAppearances = await page.evaluate(
+    () => (window as unknown as { __skeletonAppearances: number }).__skeletonAppearances,
+  )
+  expect(finalAppearances).toBe(initialAppearances)
+
+  // And the PR was fetched exactly once — no refetch on any step change
+  expect(prLoadFetches).toBe(2)
+})
