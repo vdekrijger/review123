@@ -57,12 +57,12 @@ describe('analytics privacy choke-point', () => {
   })
 
   it('ai_task_completed allows tokens (count only, PRIVACY DECISION)', () => {
-    track('ai_task_completed', { task: 'summary', duration_ms: 1000, cached: false, tokens: 1234 } as never)
+    track('ai_task_completed', { task: 'summary', duration_ms: 1000, cached: false, tokens: 1234 })
     expect(capture.mock.calls[0][1]).toEqual({ task: 'summary', duration_ms: 1000, cached: false, tokens: 1234 })
   })
 
   it('ai_task_completed still strips content-ish keys even when tokens present', () => {
-    track('ai_task_completed', { task: 'summary', duration_ms: 500, cached: false, tokens: 800, output: 'leaked' } as never)
+    track('ai_task_completed', { task: 'summary', duration_ms: 500, cached: false, tokens: 800, output: 'leaked' } as never) // output is not in allowlist — as never needed
     const props = capture.mock.calls[0][1]
     expect(props).toHaveProperty('tokens', 800)
     expect(props).not.toHaveProperty('output')
