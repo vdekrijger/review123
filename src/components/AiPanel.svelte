@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import type { PanelStatus } from '../lib/ai/run.svelte'
+  import Skeleton from './Skeleton.svelte'
 
   interface Props {
     title: string
@@ -14,8 +15,7 @@
 
 {#if state.status === 'loading'}
   <div class="ai-panel-loading" aria-busy="true">
-    <span class="skeleton-line"></span>
-    <span class="skeleton-line short"></span>
+    <Skeleton lines={3} />
     <span class="sr-only">Loading {title}…</span>
   </div>
 {:else if state.status === 'error'}
@@ -59,24 +59,6 @@
     flex-direction: column;
     gap: 0.5rem;
     padding: 0.75rem 0;
-  }
-
-  .skeleton-line {
-    display: block;
-    height: 0.85em;
-    background: #e0e0e0;
-    border-radius: 4px;
-    width: 100%;
-    animation: pulse 1.4s ease-in-out infinite;
-  }
-
-  .skeleton-line.short {
-    width: 60%;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
   }
 
   .ai-panel-error {
