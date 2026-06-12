@@ -4,6 +4,7 @@
   import Review from './routes/Review.svelte'
   import AuthCallback from './routes/AuthCallback.svelte'
   import SettingsPanel from './components/SettingsPanel.svelte'
+  import GitHubSignInButton from './components/GitHubSignInButton.svelte'
   import { beginSignIn, signOut } from './lib/auth/auth'
   import { authState } from './lib/auth/authState.svelte'
 
@@ -35,7 +36,7 @@
       </span>
       <button onclick={handleSignOut}>Sign out</button>
     {:else if clientId}
-      <button onclick={handleSignIn}>Sign in with GitHub</button>
+      <GitHubSignInButton onclick={handleSignIn} />
     {/if}
     <button aria-label="Settings" onclick={() => (settingsOpen = true)}>⚙</button>
   </div>
