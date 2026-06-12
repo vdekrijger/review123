@@ -13,6 +13,7 @@
   import type { PrComment } from '../lib/github/comments'
   import type { AskFocus } from '../lib/ai/tasks'
   import { excerptAround } from '../lib/diff/excerpt'
+  import { track } from '../lib/analytics/analytics'
 
   /** A skill finding scoped to a specific line in this file */
   export interface SkillFinding {
@@ -120,7 +121,11 @@
   const collapsed = $derived(viewed && !manuallyExpanded)
 
   function handleHeaderClick() {
-    if (collapsed) manuallyExpanded = true
+    if (collapsed) {
+      manuallyExpanded = true
+      // viewed-collapsed is the only collapse origin that also hides the diff body
+      track('file_expanded', { origin: 'viewed' })
+    }
   }
 
   function handleViewedChange(e: Event) {
