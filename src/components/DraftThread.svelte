@@ -86,22 +86,22 @@
       onsubmit={handleSave}
     />
     <div class="thread-actions">
-      <button type="button" class="btn-primary" onclick={handleSave} disabled={!editorValue.trim()}>
+      <button type="button" class="btn btn-primary" onclick={handleSave} disabled={!editorValue.trim()}>
         Save
       </button>
-      <button type="button" class="btn-secondary" onclick={handleCancel}>
+      <button type="button" class="btn" onclick={handleCancel}>
         Cancel
       </button>
     </div>
   {:else if draft !== null}
     <!-- View mode: show rendered body -->
     <!-- renderMarkdown output is the only accepted use of {@html} -->
-    <div class="draft-body">
+    <div class="draft-body prose">
       {@html renderMarkdown(draft.body)}
     </div>
     <div class="thread-actions">
-      <button type="button" class="btn-secondary" onclick={handleEdit}>Edit</button>
-      <button type="button" class="btn-danger" onclick={handleDelete}>Delete</button>
+      <button type="button" class="btn" onclick={handleEdit}>Edit</button>
+      <button type="button" class="btn btn-danger" onclick={handleDelete}>Delete</button>
     </div>
   {/if}
 </div>
@@ -130,51 +130,22 @@
 
   .draft-body {
     padding: 0.25rem 0;
-    line-height: 1.5;
+    font-size: 0.9rem;
+    /* prose class sets font-family to Newsreader; override max-width and font-size */
+    max-width: none;
+    font-size: 0.9rem;
   }
 
   /* Normalize markdown output inside the draft body */
   .draft-body :global(p) { margin: 0 0 0.5em; }
   .draft-body :global(p:last-child) { margin-bottom: 0; }
-  .draft-body :global(pre) { background: #8882; padding: 0.5rem; border-radius: 4px; overflow-x: auto; }
-  .draft-body :global(code) { font-size: 0.85em; background: #8881; padding: 0.1em 0.3em; border-radius: 3px; }
+  .draft-body :global(pre) { background: var(--surface-raised); padding: 0.5rem; border-radius: 4px; overflow-x: auto; }
+  .draft-body :global(code) { font-size: 0.85em; background: var(--surface-raised); padding: 0.1em 0.3em; border-radius: 3px; }
   .draft-body :global(pre code) { background: none; padding: 0; }
 
   .thread-actions {
     display: flex;
     gap: 0.4rem;
     margin-top: 0.5rem;
-  }
-
-  button {
-    border: none;
-    border-radius: 4px;
-    padding: 0.25rem 0.75rem;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-
-  .btn-primary {
-    background: #0969da;
-    color: #fff;
-  }
-
-  .btn-primary:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .btn-secondary {
-    background: #8882;
-    color: inherit;
-  }
-
-  .btn-danger {
-    background: #cf222e22;
-    color: #cf222e;
-  }
-
-  button:hover:not(:disabled) {
-    filter: brightness(0.9);
   }
 </style>

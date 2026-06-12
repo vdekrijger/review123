@@ -125,6 +125,8 @@
   }
 
   .comment-body {
-    font-size: 0.88rem;
+    font-family: var(--font-prose);
+    font-size: 0.9rem;
+    line-height: 1.5;
   }
 </style>
