@@ -4,6 +4,7 @@
   import { PROVIDERS, getModelDef, type LlmProviderId } from '../../lib/llm/providers'
   import { llmTestConnection, LlmError } from '../../lib/llm/llm'
   import { track } from '../../lib/analytics/analytics'
+  import SecretInput from './SecretInput.svelte'
 
   const current = getSettings()
 
@@ -171,7 +172,7 @@
         </label>
 
         <label class="key-label">{p.displayName} API key
-          <input type="password" bind:value={keys[p.id]} autocomplete="off" placeholder={p.keyHint} />
+          <SecretInput bind:value={keys[p.id]} placeholder={p.keyHint} />
         </label>
         <div class="test-row">
           <button

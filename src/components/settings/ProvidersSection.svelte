@@ -7,6 +7,7 @@
   import { beginGitlabSignIn, signOutGitlab } from '../../lib/auth/gitlabAuth'
   import GitHubSignInButton from '../GitHubSignInButton.svelte'
   import GitLabSignInButton from '../GitLabSignInButton.svelte'
+  import SecretInput from './SecretInput.svelte'
 
   // returnTo: stored before the OAuth redirect so AuthCallback navigates back
   // here (/settings) after sign-in. Same key as App.svelte / VerdictStep.svelte.
@@ -52,7 +53,11 @@
 
   // Advanced disclosure is open by default only when PAT is the active auth method,
   // so existing PAT users aren't confused by a closed section hiding their token.
-  const advancedOpen = $derived(authState.auth?.method === 'pat')
+  // Owned as $state + bind:open (NOT a $derived one-way attribute): a plain
+  // open={...} attribute is re-applied by the fragment's grouped template
+  // effect on ANY state change — typing in a field would snap the panel shut.
+  // svelte-ignore state_referenced_locally
+  let advancedOpen = $state(authState.auth?.method === 'pat')
 
   // OAuth client ID presence gates each provider's sign-in button.
   const githubClientId =
@@ -192,10 +197,10 @@
     {/if}
   {/if}
 
-  <details open={advancedOpen}>
+  <details bind:open={advancedOpen}>
     <summary>Advanced: use a personal access token instead</summary>
     <label>GitHub token (PAT)
-      <input type="password" bind:value={pat} autocomplete="off" placeholder="github_pat_… (fine-grained, repo-scoped recommended)" />
+      <SecretInput bind:value={pat} placeholder="github_pat_… (fine-grained, repo-scoped recommended)" />
     </label>
     <div class="hint pat-scope-hint">
       <p><strong>Fine-grained token</strong> (recommended): grant access to the repositories you review, with
@@ -210,7 +215,7 @@
       <p>Self-hosted instances supported. Enter a hostname (e.g. <code>gitlab.mycompany.com</code>). Leave as <code>gitlab.com</code> for the default.</p>
     </div>
     <label>GitLab token (PAT)
-      <input type="password" bind:value={gitlabTokenInput} autocomplete="off" placeholder="glpat_… (scope: api)" aria-label="GitLab personal access token" />
+      <SecretInput bind:value={gitlabTokenInput} placeholder="glpat_… (scope: api)" ariaLabel="GitLab personal access token" />
     </label>
     <div class="hint pat-scope-hint">
       <p>Alternative: personal access token. Required scope: <code>api</code>. Create one at <em>GitLab → User Settings → Access Tokens</em>.</p>
@@ -219,7 +224,7 @@
       <input type="password" bind:value={bitbucketEmail} autocomplete="off" placeholder="your@email.com" aria-label="Bitbucket email address" />
     </label>
     <label>Bitbucket API token
-      <input type="password" bind:value={bitbucketToken} autocomplete="off" placeholder="App password / API token" aria-label="Bitbucket API token" />
+      <SecretInput bind:value={bitbucketToken} placeholder="App password / API token" ariaLabel="Bitbucket API token" />
     </label>
     <div class="hint pat-scope-hint">
       <p>Required: Bitbucket email address and an API token with <em>Pull requests: Write</em> scope. Create at <em>Bitbucket → Personal settings → App passwords</em>.</p>

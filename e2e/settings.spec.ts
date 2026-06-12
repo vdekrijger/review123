@@ -532,3 +532,94 @@ test('themed form controls: skill checkbox is custom-styled and fills with accen
   }, styles.accent)
   expect(styles.background).toBe(accentAsRgb)
 })
+
+// ---------------------------------------------------------------------------
+// API key fields: show/hide eye toggle + invalid-character rejection at save
+// (fix/settings-keys-scrollspy). The toggle flips masked ↔ plain text; a key
+// with a copy-paste artifact (em dash) is rejected with a human message —
+// never the raw "Cannot convert value to ByteString" DOMException text.
+// ---------------------------------------------------------------------------
+
+test('api keys: eye toggle reveals/remasks the key; an em-dash key is rejected with a friendly inline error', async ({
+  page,
+}) => {
+  await blockExternal(page)
+
+  await page.goto('/settings')
+  await expect(page.getByRole('heading', { name: /^settings$/i })).toBeVisible({ timeout: 5_000 })
+
+  const aiSection = page.locator('#ai-models')
+  const deepseekCard = aiSection.locator('.provider-card').filter({
+    has: page.getByRole('radio', { name: 'DeepSeek' }),
+  })
+  const keyInput = deepseekCard.getByLabel(/deepseek api key/i)
+
+  // Masked by default; the eye toggle reveals the plain text
+  await keyInput.fill('sk-peekaboo')
+  await expect(keyInput).toHaveAttribute('type', 'password')
+  const showToggle = deepseekCard.getByRole('button', { name: 'Show key' })
+  await expect(showToggle).toHaveAttribute('aria-pressed', 'false')
+  await showToggle.click()
+  await expect(keyInput).toHaveAttribute('type', 'text')
+  await expect(keyInput).toHaveValue('sk-peekaboo')
+
+  // …and back to masked
+  const hideToggle = deepseekCard.getByRole('button', { name: 'Hide key' })
+  await expect(hideToggle).toHaveAttribute('aria-pressed', 'true')
+  await hideToggle.click()
+  await expect(keyInput).toHaveAttribute('type', 'password')
+
+  // The PAT field in Providers & access has its own toggle
+  await page.locator('#providers summary').click()
+  const patInput = page.getByLabel(/github token/i)
+  await patInput.fill('github_pat_peek')
+  await page.locator('#providers').getByRole('button', { name: 'Show key' }).first().click()
+  await expect(patInput).toHaveAttribute('type', 'text')
+
+  // Em dash (U+2014) pasted into the key → friendly message, nothing saved,
+  // and no raw ByteString/DOMException text anywhere.
+  await keyInput.fill('sk-bad—key')
+  await deepseekCard.getByRole('button', { name: /save & test deepseek/i }).click()
+  const alert = deepseekCard.getByRole('alert')
+  await expect(alert).toBeVisible({ timeout: 5_000 })
+  await expect(alert).toContainText(/invalid character/i)
+  await expect(alert).toContainText(/re-copy it from the provider/i)
+  await expect(alert).not.toContainText(/ByteString/i)
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('review123:settings') ?? '{}'),
+  )
+  expect(stored.deepseekKey ?? null).toBeNull()
+})
+
+// ---------------------------------------------------------------------------
+// Scrollspy edges (fix/settings-keys-scrollspy): at the very top the FIRST
+// section (Appearance) must be active — not "Providers & access" — and the
+// bottom edge still reaches the last section.
+// ---------------------------------------------------------------------------
+
+test('scrollspy: Appearance is active at the top, the last section at the bottom, and the top again after scrolling back', async ({
+  page,
+}) => {
+  await blockExternal(page)
+
+  await page.goto('/settings')
+  await expect(page.getByRole('heading', { name: /^settings$/i })).toBeVisible({ timeout: 5_000 })
+
+  const nav = page.getByRole('navigation', { name: /settings sections/i })
+  const appearanceLink = nav.getByRole('link', { name: 'Appearance' })
+  const providersLink = nav.getByRole('link', { name: 'Providers & access' })
+  const skillsLink = nav.getByRole('link', { name: 'Reviewer skills' })
+
+  // At the very top: Appearance — the user report was Providers highlighted here
+  await expect(appearanceLink).toHaveAttribute('aria-current', 'true')
+  await expect(providersLink).not.toHaveAttribute('aria-current', 'true')
+
+  // Scroll to the bottom: the last section wins even if it is short
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+  await expect(skillsLink).toHaveAttribute('aria-current', 'true', { timeout: 5_000 })
+
+  // Scroll back to the very top: Appearance again
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await expect(appearanceLink).toHaveAttribute('aria-current', 'true', { timeout: 5_000 })
+  await expect(providersLink).not.toHaveAttribute('aria-current', 'true')
+})

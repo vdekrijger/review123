@@ -79,6 +79,15 @@
     return observeSections(elements, handleSectionsChanged)
   })
 
+  // Belt-and-braces for the viewport edges: IntersectionObserver only fires
+  // on threshold crossings, so the last few pixels toward the very top (or
+  // bottom) may not produce a callback and the active item would go stale.
+  // A passive scroll listener re-evaluates the cheap pure rule every frame.
+  $effect(() => {
+    window.addEventListener('scroll', handleSectionsChanged, { passive: true })
+    return () => window.removeEventListener('scroll', handleSectionsChanged)
+  })
+
   // Scroll to anchor section on mount if provided
   $effect(() => {
     if (section) {

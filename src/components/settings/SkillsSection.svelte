@@ -8,7 +8,9 @@
   import { llmJsonWithRepair } from '../../lib/llm/llm'
   import { githubProvider } from '../../lib/provider/github'
   import { gitlabProvider } from '../../lib/provider/gitlab'
-  import { activeLlmConfig, activeProviderHasKey } from '../../lib/llm/config'
+  import { PROVIDER_KEY_FIELDS } from '../../lib/llm/config'
+  import { getProvider } from '../../lib/llm/providers'
+  import { settingsState } from '../../lib/settings/settingsState.svelte'
 
   // ---- Reviewer skills state ----
   let skills = $state<ReviewerSkill[]>(listSkills())
@@ -69,9 +71,18 @@
     mineError = null
   }
 
-  // Mining gates on the ACTIVE AI provider's key (Plan F), not deepseekKey
-  const hasAiKey = $derived(activeProviderHasKey())
-  const aiProviderName = $derived(activeLlmConfig().provider.displayName)
+  // Mining gates on the ACTIVE AI provider's key (Plan F), not deepseekKey.
+  // Derived from the reactive settingsState facade — NOT from getSettings()
+  // (plain localStorage read, no reactive deps) — so switching the provider
+  // or saving a key in the AI models section above updates the gate and the
+  // provider name live instead of staying frozen at the mount-time value
+  // (which defaulted to DeepSeek).
+  const hasAiKey = $derived(
+    !!settingsState.current[PROVIDER_KEY_FIELDS[settingsState.current.aiProvider]],
+  )
+  const aiProviderName = $derived(
+    getProvider(settingsState.current.aiProvider)?.displayName ?? 'your AI provider',
+  )
   // For gating: whether the currently selected mine provider has auth configured
   const hasMineProviderAuth = $derived(
     MINE_CAPABLE_PROVIDERS.find(p => p.id === mineProvider)?.authState().configured ?? false
@@ -277,7 +288,7 @@
     <p class="hint mine-hint">Analyzes your recent review comments across your repositories to build a personalized reviewer persona.</p>
 
     {#if !hasAiKey}
-      <p class="mine-gate-hint">Add a {aiProviderName} API key (above) to use this feature.</p>
+      <p class="mine-gate-hint">Add an API key for {aiProviderName} (see AI models above) to use this feature.</p>
     {:else}
       <!-- Provider select -->
       <div class="mine-provider-row">

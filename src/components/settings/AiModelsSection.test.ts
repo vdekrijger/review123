@@ -380,6 +380,7 @@ describe('AiModelsSection — save UX (zero ambiguous buttons)', () => {
   })
 })
 
+<<<<<<< HEAD
 // ---------------------------------------------------------------------------
 // Deep review (agentic) toggle — Plan G part 2
 // ---------------------------------------------------------------------------
@@ -405,5 +406,82 @@ describe('AiModelsSection — deep review toggle', () => {
     localStorage.setItem('review123:settings', JSON.stringify({ aiDeepReview: true }))
     render(AiModelsSection)
     expect(screen.getByRole('checkbox', { name: /deep review \(agentic\)/i })).toBeChecked()
+=======
+describe('AiModelsSection — show/hide key toggle', () => {
+  function keyInput(name: RegExp): HTMLInputElement {
+    return screen.getByLabelText(name) as HTMLInputElement
+  }
+
+  it('every provider key field has a "Show key" eye toggle (aria-pressed=false, masked input)', () => {
+    render(AiModelsSection)
+    for (const p of PROVIDERS) {
+      const card = within(providerCard(p.displayName))
+      const toggle = card.getByRole('button', { name: 'Show key' })
+      expect(toggle).toHaveAttribute('aria-pressed', 'false')
+      expect((card.getByLabelText(new RegExp(`${p.displayName} API key`, 'i')) as HTMLInputElement).type).toBe('password')
+    }
+  })
+
+  it('clicking the toggle reveals the key as plain text and flips to "Hide key" (aria-pressed=true)', async () => {
+    saveTokens({ deepseekKey: 'sk-visible-check' })
+    render(AiModelsSection)
+    const card = within(providerCard('DeepSeek'))
+    await userEvent.click(card.getByRole('button', { name: 'Show key' }))
+    const input = keyInput(/deepseek api key/i)
+    expect(input.type).toBe('text')
+    expect(input.value).toBe('sk-visible-check')
+    const hideToggle = card.getByRole('button', { name: 'Hide key' })
+    expect(hideToggle).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('clicking again re-masks the input', async () => {
+    render(AiModelsSection)
+    const card = within(providerCard('Anthropic'))
+    await userEvent.click(card.getByRole('button', { name: 'Show key' }))
+    expect(keyInput(/anthropic api key/i).type).toBe('text')
+    await userEvent.click(card.getByRole('button', { name: 'Hide key' }))
+    expect(keyInput(/anthropic api key/i).type).toBe('password')
+  })
+
+  it('the toggle is per-card: revealing DeepSeek leaves the other key fields masked', async () => {
+    render(AiModelsSection)
+    await userEvent.click(within(providerCard('DeepSeek')).getByRole('button', { name: 'Show key' }))
+    expect(keyInput(/deepseek api key/i).type).toBe('text')
+    expect(keyInput(/openai api key/i).type).toBe('password')
+    expect(keyInput(/anthropic api key/i).type).toBe('password')
+    expect(keyInput(/gemini api key/i).type).toBe('password')
+  })
+
+  it('typing while revealed still saves through Save & test (value binding survives the type flip)', async () => {
+    render(AiModelsSection)
+    const card = within(providerCard('Gemini'))
+    await userEvent.click(card.getByRole('button', { name: 'Show key' }))
+    await userEvent.type(keyInput(/gemini api key/i), 'AIza-revealed-typing')
+    await userEvent.click(card.getByRole('button', { name: /save & test gemini/i }))
+    expect(getSettings().geminiKey).toBe('AIza-revealed-typing')
+  })
+
+  it('the eye toggle does NOT trigger Save & test or any persistence', async () => {
+    render(AiModelsSection)
+    await userEvent.type(keyInput(/deepseek api key/i), 'sk-unsaved')
+    await userEvent.click(within(providerCard('DeepSeek')).getByRole('button', { name: 'Show key' }))
+    expect(getSettings().deepseekKey).toBeNull()
+    expect(llmTestConnectionMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('AiModelsSection — invalid key characters rejected at save', () => {
+  it('an em dash (copy-paste artifact) in the key shows the friendly inline error and saves nothing', async () => {
+    render(AiModelsSection)
+    await userEvent.type(screen.getByLabelText(/deepseek api key/i), 'sk-bad—key')
+    await userEvent.click(screen.getByRole('button', { name: /save & test deepseek/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/invalid character/i)
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent(/re-copy it from the provider/i)
+    expect(getSettings().deepseekKey).toBeNull()
+    // The connection test never runs on a key that failed validation
+    expect(llmTestConnectionMock).not.toHaveBeenCalled()
+>>>>>>> origin/main
   })
 })

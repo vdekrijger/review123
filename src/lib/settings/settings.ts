@@ -252,11 +252,63 @@ function save(patch: Partial<Settings>): void {
   notifySettingsMutated()
 }
 
+// ---------------------------------------------------------------------------
+// Key/token character validation (shared by every key/token save path)
+//
+// Keys end up in HTTP headers (Authorization, x-api-key, …) where fetch
+// requires ISO-8859-1; a smuggled character like an EM DASH (U+2014) from a
+// styled copy-paste makes fetch throw a raw DOMException/TypeError at request
+// time. Reject such keys AT SAVE TIME with a human message instead.
+// ---------------------------------------------------------------------------
+
+export interface InvalidKeyChar {
+  /** The offending character (full code point). */
+  char: string
+  codePoint: number
+  /** 0-based index within the (trimmed) value. */
+  index: number
+}
+
+/**
+ * Find the first character that cannot travel in an HTTP header value:
+ * anything outside ISO-8859-1 (> U+00FF) or a control character.
+ * Returns null when the value is clean.
+ */
+export function findInvalidKeyChar(value: string): InvalidKeyChar | null {
+  for (let i = 0; i < value.length; i++) {
+    const codePoint = value.codePointAt(i)!
+    if (codePoint > 0xff || codePoint < 0x20 || codePoint === 0x7f) {
+      return { char: String.fromCodePoint(codePoint), codePoint, index: i }
+    }
+    if (codePoint > 0xffff) i++ // skip the low surrogate of an astral pair
+  }
+  return null
+}
+
+/** Human message for an invalid key character, naming the char and position. */
+export function invalidKeyCharMessage(bad: InvalidKeyChar): string {
+  const hex = bad.codePoint.toString(16).toUpperCase().padStart(4, '0')
+  // Control characters have no printable form — show only the code point.
+  const display =
+    bad.codePoint < 0x20 || bad.codePoint === 0x7f ? `U+${hex}` : `"${bad.char}" (U+${hex})`
+  return `Key contains an invalid character (${display} at position ${bad.index + 1}) — re-copy it from the provider.`
+}
+
+/**
+ * Shared validator for every key/token field: trims whitespace, rejects
+ * empty strings and characters that cannot be sent in an HTTP header.
+ */
+function validateKeyValue(value: string, emptyMessage: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) throw new Error(emptyMessage)
+  const bad = findInvalidKeyChar(trimmed)
+  if (bad) throw new Error(invalidKeyCharMessage(bad))
+  return trimmed
+}
+
 function validateToken(field: 'githubPat' | 'deepseekKey' | 'openaiKey' | 'anthropicKey' | 'geminiKey', value: string | null): string | null {
   if (value === null) return null
-  const trimmed = value.trim()
-  if (!trimmed) throw new Error(`${field} must not be empty`)
-  return trimmed
+  return validateKeyValue(value, `${field} must not be empty`)
 }
 
 export function saveTokens(patch: {
@@ -379,9 +431,7 @@ export function setGitlabToken(v: string | null): void {
     save({ gitlabToken: null })
     return
   }
-  const trimmed = v.trim()
-  if (!trimmed) throw new Error('gitlabToken must not be empty')
-  save({ gitlabToken: trimmed })
+  save({ gitlabToken: validateKeyValue(v, 'gitlabToken must not be empty') })
 }
 
 /**
@@ -391,10 +441,10 @@ export function setGitlabToken(v: string | null): void {
  */
 export function saveBitbucketAuth(auth: BitbucketAuth | null): void {
   if (auth !== null) {
-    const email = auth.email.trim()
-    const token = auth.token.trim()
-    if (!email) throw new Error('bitbucketAuth.email must not be empty')
-    if (!token) throw new Error('bitbucketAuth.token must not be empty')
+    // Both travel in the Basic auth header (btoa rejects > U+00FF too),
+    // so both get the shared character validation.
+    const email = validateKeyValue(auth.email, 'bitbucketAuth.email must not be empty')
+    const token = validateKeyValue(auth.token, 'bitbucketAuth.token must not be empty')
     save({ bitbucketAuth: { email, token } })
   } else {
     save({ bitbucketAuth: null })
