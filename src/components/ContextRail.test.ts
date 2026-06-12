@@ -197,3 +197,62 @@ describe('ContextRail content parity — shared panels', () => {
     expect(summaries.length).toBe(0)
   })
 })
+
+describe('ContextRail backdrop (narrow-mode overlay)', () => {
+  it('renders a backdrop element in the DOM', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    // Backdrop div must exist — CSS @media controls its visibility
+    const backdrop = container.querySelector('.rail-backdrop')
+    expect(backdrop).not.toBeNull()
+  })
+
+  it('backdrop has class "visible" when rail is expanded', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const backdrop = container.querySelector('.rail-backdrop')
+    expect(backdrop?.classList.contains('visible')).toBe(true)
+  })
+
+  it('backdrop does NOT have class "visible" when rail is collapsed', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: true, oncollapse: vi.fn() },
+    })
+    const backdrop = container.querySelector('.rail-backdrop')
+    expect(backdrop?.classList.contains('visible')).toBe(false)
+  })
+
+  it('calls onbackdropclick when backdrop is clicked', async () => {
+    const user = userEvent.setup()
+    const onbackdropclick = vi.fn()
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn(), onbackdropclick },
+    })
+    const backdrop = container.querySelector('.rail-backdrop') as HTMLElement
+    await user.click(backdrop)
+    expect(onbackdropclick).toHaveBeenCalledTimes(1)
+  })
+
+  it('backdrop is present even when onbackdropclick is not provided (optional prop)', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    // Should not throw even without onbackdropclick
+    const backdrop = container.querySelector('.rail-backdrop')
+    expect(backdrop).not.toBeNull()
+  })
+})
+
+describe('ContextRail medium-regime: no inline width (CSS-only)', () => {
+  it('aside.context-rail does not carry inline width — CSS clamp + media queries handle it', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const aside = container.querySelector('aside.context-rail')
+    // No inline width — width must come from CSS class + media queries
+    const inlineStyle = aside?.getAttribute('style') ?? ''
+    expect(inlineStyle).not.toMatch(/\bwidth\s*:/)
+  })
+})

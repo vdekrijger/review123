@@ -206,7 +206,7 @@
   )
 
   $effect(() => {
-    if (typeof window === 'undefined') return
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
     const mq = window.matchMedia(`(max-width: ${NARROW_BREAKPOINT - 1}px)`)
     function handleChange(e: MediaQueryListEvent) {
       isNarrow = e.matches
