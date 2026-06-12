@@ -52,6 +52,83 @@ describe('Landing queue section', () => {
     expect(screen.getByText(/Loading your queue/i)).toBeTruthy()
   })
 
+  it('shows skeleton rows while the initial fetch is in flight', () => {
+    vi.spyOn(queueModule, 'fetchAllQueues').mockReturnValue(new Promise(() => {}))
+
+    render(Landing)
+    const skeleton = screen.getByTestId('queue-skeleton')
+    expect(skeleton).toBeInTheDocument()
+    expect(skeleton).toHaveAttribute('aria-busy', 'true')
+  })
+
+  it('replaces skeletons with rows when the fetch resolves', async () => {
+    let resolveFetch!: (items: QueueItem[]) => void
+    vi.spyOn(queueModule, 'fetchAllQueues').mockReturnValue(
+      new Promise<QueueItem[]>((resolve) => { resolveFetch = resolve }),
+    )
+
+    render(Landing)
+    expect(screen.getByTestId('queue-skeleton')).toBeInTheDocument()
+
+    resolveFetch([makeItem('github', 'org', 'repo', 5, 'Resolved PR', false)])
+    await screen.findByText(/org\/repo#5/i)
+    expect(screen.queryByTestId('queue-skeleton')).not.toBeInTheDocument()
+  })
+
+  it('replaces skeletons with the empty state when the fetch resolves empty', async () => {
+    let resolveFetch!: (items: QueueItem[]) => void
+    vi.spyOn(queueModule, 'fetchAllQueues').mockReturnValue(
+      new Promise<QueueItem[]>((resolve) => { resolveFetch = resolve }),
+    )
+
+    render(Landing)
+    expect(screen.getByTestId('queue-skeleton')).toBeInTheDocument()
+
+    resolveFetch([])
+    await screen.findByText(/No PRs in your queue/i)
+    expect(screen.queryByTestId('queue-skeleton')).not.toBeInTheDocument()
+  })
+
+  it('refresh keeps existing rows visible but dimmed, with the refresh button disabled', async () => {
+    const item = makeItem('github', 'org', 'repo', 9, 'Existing PR', false)
+    let resolveRefresh!: (items: QueueItem[]) => void
+    vi.spyOn(queueModule, 'fetchAllQueues')
+      .mockResolvedValueOnce([item])
+      .mockReturnValueOnce(new Promise<QueueItem[]>((resolve) => { resolveRefresh = resolve }))
+
+    render(Landing)
+    await screen.findByText(/org\/repo#9/i)
+
+    const refreshBtn = screen.getByRole('button', { name: /refresh queue/i })
+    await fireEvent.click(refreshBtn)
+
+    // Rows stay visible (no skeleton swap), dimmed while in flight
+    expect(screen.getByText(/org\/repo#9/i)).toBeInTheDocument()
+    expect(screen.queryByTestId('queue-skeleton')).not.toBeInTheDocument()
+    const rows = screen.getByTestId('queue-rows')
+    expect(rows).toHaveAttribute('aria-busy', 'true')
+    expect(rows.classList.contains('refreshing')).toBe(true)
+    expect(refreshBtn).toBeDisabled()
+
+    resolveRefresh([makeItem('github', 'org', 'repo', 10, 'Fresh PR', false)])
+    await screen.findByText(/org\/repo#10/i)
+    expect(screen.getByTestId('queue-rows')).toHaveAttribute('aria-busy', 'false')
+    expect(refreshBtn).not.toBeDisabled()
+  })
+
+  it('refresh from the empty state shows skeletons (no rows to keep)', async () => {
+    vi.spyOn(queueModule, 'fetchAllQueues')
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(new Promise<QueueItem[]>(() => {}))
+
+    render(Landing)
+    await screen.findByText(/No PRs in your queue/i)
+
+    await fireEvent.click(screen.getByRole('button', { name: /refresh queue/i }))
+    expect(screen.getByTestId('queue-skeleton')).toBeInTheDocument()
+    expect(screen.queryByText(/No PRs in your queue/i)).not.toBeInTheDocument()
+  })
+
   it('shows queue items grouped by awaiting/authored', async () => {
     const reviewItem = makeItem('github', 'org', 'repo', 1, 'PR for review', false)
     const authorItem = makeItem('github', 'org', 'repo', 2, 'My PR', true)

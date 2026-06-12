@@ -1,8 +1,8 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// PW_PORT lets concurrent local runs (e.g. parallel worktrees) use a dedicated
-// preview port so they don't reuse each other's servers via reuseExistingServer.
-const PORT = Number(process.env.PW_PORT ?? 4174)
+// Overridable so parallel checkouts/worktrees don't fight over one port
+// (a stale server on a shared port serves a foreign build → phantom failures).
+const PORT = Number(process.env.E2E_PORT ?? 4174)
 
 export default defineConfig({
   testDir: './e2e',
