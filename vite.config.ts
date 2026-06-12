@@ -7,6 +7,37 @@ export default defineConfig({
   resolve: {
     conditions: ['browser'],
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          // @git-diff-view (+ bundled highlight.js / lowlight) — large but stable.
+          // Splitting it out improves long-term caching.
+          if (
+            id.includes('node_modules/@git-diff-view') ||
+            id.includes('node_modules/highlight.js') ||
+            id.includes('node_modules/lowlight') ||
+            id.includes('node_modules/fast-diff')
+          ) {
+            return 'vendor-diff-view'
+          }
+
+          // posthog-js — heavyweight analytics SDK, completely stable.
+          if (id.includes('node_modules/posthog-js')) {
+            return 'vendor-posthog'
+          }
+
+          // marked + DOMPurify — markdown rendering pipeline.
+          if (
+            id.includes('node_modules/marked') ||
+            id.includes('node_modules/dompurify')
+          ) {
+            return 'vendor-markdown'
+          }
+        },
+      },
+    },
+  },
   test: {
     globals: true,
     environment: 'jsdom',
