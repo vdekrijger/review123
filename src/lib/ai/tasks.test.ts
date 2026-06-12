@@ -984,3 +984,69 @@ describe('askPrompt', () => {
     expect(system.toLowerCase()).toMatch(/concise|brief|short/i)
   })
 })
+
+// ---------------------------------------------------------------------------
+// askPrompt — focus parameter (line-level Ask AI)
+// ---------------------------------------------------------------------------
+
+describe('askPrompt with focus', () => {
+  const focus = { path: 'src/foo.ts', line: 42, excerpt: '-old\n+new' }
+
+  it('without focus: system prompt has no location directive', () => {
+    const { system } = askPrompt(makeCtx(), [], 'why?')
+    expect(system).not.toContain('src/foo.ts')
+    expect(system).not.toContain('concerns the specific change')
+  })
+
+  it('with focus: system prompt includes path and line', () => {
+    const { system } = askPrompt(makeCtx(), [], 'why?', focus)
+    expect(system).toContain('src/foo.ts:42')
+    expect(system).toContain('specific change')
+  })
+
+  it('with focus: system instructs AI to address that location first', () => {
+    const { system } = askPrompt(makeCtx(), [], 'why?', focus)
+    expect(system).toMatch(/address.*location first|location first/i)
+  })
+
+  it('with focus: user prompt includes the excerpt quoted in a code block', () => {
+    const { user } = askPrompt(makeCtx(), [], 'why?', focus)
+    expect(user).toContain('-old\n+new')
+    // Excerpt should be inside a fenced code block
+    expect(user).toContain('```')
+  })
+
+  it('with focus: user prompt includes the focused path and line reference', () => {
+    const { user } = askPrompt(makeCtx(), [], 'why?', focus)
+    expect(user).toContain('src/foo.ts:42')
+  })
+
+  it('with focus: user prompt still contains the ctx.text', () => {
+    const ctx = makeCtx('unique-ctx-text-xyz')
+    const { user } = askPrompt(ctx, [], 'why?', focus)
+    expect(user).toContain('unique-ctx-text-xyz')
+  })
+
+  it('with focus: user prompt still contains the question', () => {
+    const { user } = askPrompt(makeCtx(), [], 'why is this done?', focus)
+    expect(user).toContain('why is this done?')
+  })
+
+  it('with focus: history is still included', () => {
+    const history = [{ q: 'prev-q', a: 'prev-a' }]
+    const { user } = askPrompt(makeCtx(), history, 'why?', focus)
+    expect(user).toContain('prev-q')
+    expect(user).toContain('prev-a')
+  })
+
+  it('focus does not affect history trimming (still ≤3 pairs)', () => {
+    const history = [
+      { q: 'Q1', a: 'A1' }, { q: 'Q2', a: 'A2' },
+      { q: 'Q3', a: 'A3' }, { q: 'Q4', a: 'A4' },
+    ]
+    const { user } = askPrompt(makeCtx(), history, 'Qnew', focus)
+    expect(user).not.toContain('Q1')
+    expect(user).toContain('Q2')
+    expect(user).toContain('Qnew')
+  })
+})

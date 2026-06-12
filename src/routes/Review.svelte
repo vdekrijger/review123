@@ -196,6 +196,16 @@
 
   // ---- AI run ----
   let aiRun: ReturnType<typeof createAiRun> | null = $state(null)
+
+  // Ask AI gating for the inline widget — mirrors ContextRail's askDisabledReason
+  function getInlineAskDisabledReason(): string | null {
+    if (aiRun === null) return null
+    return aiRun.summary.status === 'no-key'
+      ? 'No API key configured. Add your DeepSeek key in Settings to use Ask AI.'
+      : null
+  }
+  const inlineAskDisabledReason = $derived(getInlineAskDisabledReason())
+
   let railCollapsed = $state(getSettings().railCollapsed)
   // showProgress: read once at mount (same pattern as railCollapsed).
   // To pick up changes from SettingsPanel without re-mounting Review, the
@@ -464,6 +474,8 @@
         {contentsMap}
         skillReviews={aiRun?.skillReviews ?? []}
         runSkillReviewsFn={aiRun != null ? (() => { void aiRun!.runSkillReviews() }) : null}
+        askFn={aiRun ? aiRun.ask : null}
+        askDisabledReason={inlineAskDisabledReason}
       />
     {:else}
       <VerdictStep

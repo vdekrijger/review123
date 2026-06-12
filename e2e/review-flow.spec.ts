@@ -1479,3 +1479,81 @@ test('progress-bar: rendered inside sticky footer; percent increases after marki
   const prevClass = await prevBtn.getAttribute('class')
   expect(prevClass).toContain('btn')
 })
+
+// ---------------------------------------------------------------------------
+// Test 16: Inline Ask AI — open draft annotation widget, switch to Ask AI tab,
+//          ask a question, fixture answer streams in and is visible
+// ---------------------------------------------------------------------------
+
+test('inline-ask-ai: seed draft, step 2, switch widget tab to Ask AI, ask streams in', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  // Seed a draft so the annotation panel shows up in step 2
+  const prKey = `${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
+  await page.addInitScript(seedDraftScript(prKey))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect) where the draft annotation appears
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Wait for file diffs to appear
+  await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 5_000 })
+
+  // The seeded draft should appear in the .draft-annotations section
+  const draftAnnotations = page.locator('.draft-annotations')
+  await expect(draftAnnotations).toBeVisible({ timeout: 5_000 })
+
+  // The DraftThread widget should have Comment and Ask AI tabs
+  // (since aiRun.ask is provided and deepseekKey is set)
+  const commentTab = draftAnnotations.getByRole('tab', { name: /comment/i })
+  const askAiTab = draftAnnotations.getByRole('tab', { name: /ask ai/i })
+  await expect(commentTab).toBeVisible({ timeout: 5_000 })
+  await expect(askAiTab).toBeVisible()
+
+  // Comment tab should be active by default
+  await expect(commentTab).toHaveAttribute('aria-selected', 'true')
+
+  // Switch to Ask AI tab — use JS click to bypass the context-rail overlay
+  // (same pattern as the Ask AI rail tests in test 12)
+  await askAiTab.evaluate((el: HTMLButtonElement) => el.click())
+  await expect(askAiTab).toHaveAttribute('aria-selected', 'true')
+
+  // Ask textarea should be visible
+  const askTextarea = draftAnnotations.getByRole('textbox', { name: /ask a question about this line/i })
+  await expect(askTextarea).toBeVisible()
+
+  // Type a question — include "ask-marker" so the fixture route recognizes it
+  await askTextarea.evaluate((el: HTMLTextAreaElement, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })) }, 'ask-marker: Why is this change needed?')
+
+  // Click Ask button via JS to bypass overlay
+  const askBtn = draftAnnotations.getByRole('button', { name: /^ask$/i })
+  await expect(askBtn).toBeEnabled()
+  await askBtn.evaluate((el: HTMLButtonElement) => el.click())
+
+  // The answer should stream in from the fixture
+  await expect(
+    draftAnnotations.getByText(/This code is in this location/i),
+  ).toBeVisible({ timeout: 15_000 })
+
+  // The question should remain visible in the conversation
+  await expect(
+    draftAnnotations.getByText(/ask-marker: Why is this change needed\?/i),
+  ).toBeVisible()
+
+  // Copy button should appear under the answer
+  await expect(
+    draftAnnotations.getByRole('button', { name: /copy answer/i }),
+  ).toBeVisible()
+})

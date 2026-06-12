@@ -262,3 +262,171 @@ describe('DraftThread — Fix-B widget stays open after save (EC-FIX-B-01)', () 
     expect(result.container.querySelector('[data-testid="draft-thread"]')).toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// DraftThread — Ask AI tab toggle (line-level Ask AI feature)
+// ---------------------------------------------------------------------------
+
+describe('DraftThread — Ask AI tab toggle', () => {
+  /** A resolved askFn stub that returns a successful answer */
+  function makeAskFn(answer = 'Test answer from AI') {
+    return vi.fn(async (_q: string, onDelta: (t: string) => void, _focus?: unknown) => {
+      onDelta(answer)
+      return { ok: true as const, answer }
+    })
+  }
+
+  const baseProps = {
+    draft: null as Draft | null,
+    path: 'src/a.ts',
+    line: 10,
+    side: 'RIGHT' as const,
+    onsave: vi.fn(),
+    ondelete: vi.fn(),
+    oncancel: vi.fn(),
+  }
+
+  it('without askFn: no mode tab bar is rendered (no Comment/Ask AI tabs)', () => {
+    render(DraftThread, { props: baseProps })
+    expect(screen.queryByRole('tab', { name: /comment/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /ask ai/i })).not.toBeInTheDocument()
+  })
+
+  it('with askFn: Comment and Ask AI tabs are rendered', () => {
+    render(DraftThread, {
+      props: { ...baseProps, askFn: makeAskFn() },
+    })
+    expect(screen.getByRole('tab', { name: /comment/i })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /ask ai/i })).toBeInTheDocument()
+  })
+
+  it('Comment tab is active by default when askFn is provided', () => {
+    render(DraftThread, {
+      props: { ...baseProps, askFn: makeAskFn() },
+    })
+    const commentTab = screen.getByRole('tab', { name: /comment/i })
+    expect(commentTab).toHaveAttribute('aria-selected', 'true')
+    // Editor should be visible in comment mode
+    expect(screen.getByRole('textbox', { name: /comment body/i })).toBeInTheDocument()
+  })
+
+  it('switching to Ask AI tab shows the ask textarea', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, {
+      props: { ...baseProps, askFn: makeAskFn() },
+    })
+    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
+    expect(screen.getByTestId('ask-textarea')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^ask$/i })).toBeInTheDocument()
+    // Comment editor should not be visible
+    expect(screen.queryByRole('textbox', { name: /comment body/i })).not.toBeInTheDocument()
+  })
+
+  it('switching back to Comment tab restores the comment editor', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, {
+      props: { ...baseProps, askFn: makeAskFn() },
+    })
+    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
+    await user.click(screen.getByRole('tab', { name: /comment/i }))
+    expect(screen.getByRole('textbox', { name: /comment body/i })).toBeInTheDocument()
+    expect(screen.queryByTestId('ask-textarea')).not.toBeInTheDocument()
+  })
+
+  it('Ask button is disabled when textarea is empty', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, {
+      props: { ...baseProps, askFn: makeAskFn() },
+    })
+    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
+    const askBtn = screen.getByTestId('ask-submit-btn')
+    expect(askBtn).toBeDisabled()
+  })
+
+  it('typing a question and clicking Ask calls askFn', async () => {
+    const user = userEvent.setup()
+    const askFn = makeAskFn('The reason is XYZ.')
+    render(DraftThread, {
+      props: { ...baseProps, askFn },
+    })
+    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
+    const textarea = screen.getByTestId('ask-textarea')
+    await user.type(textarea, 'Why is this coded here?')
+    await user.click(screen.getByTestId('ask-submit-btn'))
+    // askFn should have been called once
+    expect(askFn).toHaveBeenCalledOnce()
+    expect(askFn.mock.calls[0][0]).toBe('Why is this coded here?')
+  })
+
+  it('answer streams into the conversation area', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, {
+      props: { ...baseProps, askFn: makeAskFn('AI says: hello') },
+    })
+    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
+    await user.type(screen.getByTestId('ask-textarea'), 'My question')
+    await user.click(screen.getByTestId('ask-submit-btn'))
+    // Answer should appear in the conversation
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('ask-answer')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('ask-answer').textContent).toContain('AI says: hello')
+  })
+
+  it('askFn receives focus with correct path, line, and excerpt', async () => {
+    const user = userEvent.setup()
+    const askFn = makeAskFn()
+    render(DraftThread, {
+      props: { ...baseProps, path: 'src/b.ts', line: 55, askFn, excerpt: '-old\n+new' },
+    })
+    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
+    await user.type(screen.getByTestId('ask-textarea'), 'question')
+    await user.click(screen.getByTestId('ask-submit-btn'))
+    // Third argument should be the focus object
+    expect(askFn.mock.calls[0][2]).toEqual({
+      path: 'src/b.ts',
+      line: 55,
+      excerpt: '-old\n+new',
+    })
+  })
+
+  it('copy answer button is shown after answer completes', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, {
+      props: { ...baseProps, askFn: makeAskFn('Finished answer') },
+    })
+    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
+    await user.type(screen.getByTestId('ask-textarea'), 'q')
+    await user.click(screen.getByTestId('ask-submit-btn'))
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('copy-answer-btn')).toBeInTheDocument()
+    })
+  })
+
+  it('askDisabledReason is shown as hint instead of textarea when provided', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, {
+      props: {
+        ...baseProps,
+        askFn: makeAskFn(),
+        askDisabledReason: 'No API key configured.',
+      },
+    })
+    await user.click(screen.getByRole('tab', { name: /ask ai/i }))
+    expect(screen.getByTestId('ask-disabled-hint')).toHaveTextContent('No API key configured.')
+    expect(screen.queryByTestId('ask-textarea')).not.toBeInTheDocument()
+  })
+
+  it('comment mode is unaffected — save still works when no Ask AI interaction', async () => {
+    const user = userEvent.setup()
+    const onsave = vi.fn()
+    render(DraftThread, {
+      props: { ...baseProps, onsave, askFn: makeAskFn() },
+    })
+    // Stay in comment tab (default)
+    const textarea = screen.getByRole('textbox', { name: /comment body/i })
+    await user.type(textarea, 'Regular comment')
+    await user.click(screen.getByRole('button', { name: /save/i }))
+    expect(onsave).toHaveBeenCalledWith('Regular comment')
+  })
+})

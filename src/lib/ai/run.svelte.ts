@@ -35,7 +35,9 @@ import {
   alternativesPrompt,
   askPrompt,
   skillReviewPrompt,
+  type AskFocus,
 } from './tasks'
+export type { AskFocus }
 import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateSkillReviewResult } from './schemas'
 import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, SkillReviewResult } from './schemas'
 import type { Draft } from '../drafts/drafts.svelte'
@@ -85,7 +87,7 @@ export interface AiRun {
   start(): Promise<void>
   retry(task: TaskName): Promise<void>
   coach(drafts: Draft[]): Promise<CoachResult | { error: string }>
-  ask(question: string, onDelta: (t: string) => void): Promise<{ ok: true; answer: string } | { ok: false; error: string }>
+  ask(question: string, onDelta: (t: string) => void, focus?: AskFocus): Promise<{ ok: true; answer: string } | { ok: false; error: string }>
   runSkillReviews(onUpdate?: () => void): Promise<void>
 }
 
@@ -537,6 +539,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   async function ask(
     question: string,
     onDelta: (t: string) => void,
+    focus?: AskFocus,
   ): Promise<{ ok: true; answer: string } | { ok: false; error: string }> {
     // No-key check: same early-exit as start() and coach()
     const settings = getSettings()
@@ -562,7 +565,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
     // Pass previous exchanges to askPrompt (last ≤3 Q/A pairs).
     // Run stores up to 3 completed exchanges; passing them gives the LLM context.
-    const prompts = askPrompt(packedCtx, askHistory, question)
+    const prompts = askPrompt(packedCtx, askHistory, question, focus)
     const t1 = performance.now()
 
     try {

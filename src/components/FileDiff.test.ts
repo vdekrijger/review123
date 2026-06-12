@@ -296,3 +296,37 @@ describe('FileDiff — context expansion prop', () => {
     expect(expandButtons.length).toBeGreaterThan(0)
   })
 })
+
+// ---------------------------------------------------------------------------
+// FileDiff — askFn prop threading (line-level Ask AI feature)
+// ---------------------------------------------------------------------------
+
+describe('FileDiff — askFn prop', () => {
+  it('renders without error when askFn is not provided', () => {
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified' } })
+    expect(container.querySelector('article.file-diff')).toBeInTheDocument()
+  })
+
+  it('renders without error when askFn is provided', () => {
+    const askFn = vi.fn(async (_q: string, _onDelta: (t: string) => void) => ({
+      ok: true as const,
+      answer: 'AI answer',
+    }))
+    const { container } = render(FileDiff, {
+      props: { file: modified, mode: 'unified', askFn },
+    })
+    expect(container.querySelector('article.file-diff')).toBeInTheDocument()
+  })
+
+  it('renders without error when askDisabledReason is provided', () => {
+    const { container } = render(FileDiff, {
+      props: {
+        file: modified,
+        mode: 'unified',
+        askFn: vi.fn(),
+        askDisabledReason: 'No API key configured.',
+      },
+    })
+    expect(container.querySelector('article.file-diff')).toBeInTheDocument()
+  })
+})
