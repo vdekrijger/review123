@@ -814,6 +814,115 @@ describe('validateCoachResult', () => {
     }
     expect(validateCoachResult({ reviews: [fullReview] })).not.toBeNull()
   })
+
+  // --- v9: specificity / grounded (optional booleans) ---
+
+  it('v8 shape without specificity/grounded/reasons stays valid (old cached shape)', () => {
+    // validReview deliberately lacks all v9 fields
+    expect(validateCoachResult({ reviews: [validReview] })).not.toBeNull()
+  })
+
+  it('accepts specificity as true or false', () => {
+    for (const specificity of [true, false]) {
+      const x = { reviews: [{ ...validReview, specificity }] }
+      expect(validateCoachResult(x)).not.toBeNull()
+    }
+  })
+
+  it('returns null when specificity is present but not boolean', () => {
+    const x = { reviews: [{ ...validReview, specificity: 'yes' }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('accepts grounded as true or false', () => {
+    for (const grounded of [true, false]) {
+      const x = { reviews: [{ ...validReview, grounded }] }
+      expect(validateCoachResult(x)).not.toBeNull()
+    }
+  })
+
+  it('returns null when grounded is present but not boolean', () => {
+    const x = { reviews: [{ ...validReview, grounded: 1 }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  // --- v9: reasons (optional per-dimension rationale object) ---
+
+  const fullReasons = {
+    clarity: 'clear and complete',
+    tone: 'professional phrasing',
+    actionable: 'asks for a concrete rename',
+    accuracy: 'matches the change shown in the diff',
+    duplicate: 'no overlap with existing comments',
+    specificity: 'names the exact function and line',
+    grounded: 'every claim visible in the provided context',
+  }
+
+  it('accepts a full reasons object with all seven dimensions', () => {
+    const x = { reviews: [{ ...validReview, specificity: true, grounded: true, reasons: fullReasons }] }
+    expect(validateCoachResult(x)).not.toBeNull()
+  })
+
+  it('accepts a partial reasons object (missing entries tolerated)', () => {
+    const x = { reviews: [{ ...validReview, reasons: { tone: 'professional phrasing' } }] }
+    expect(validateCoachResult(x)).not.toBeNull()
+  })
+
+  it('accepts reasons: null (treated as absent)', () => {
+    const x = { reviews: [{ ...validReview, reasons: null }] }
+    expect(validateCoachResult(x)).not.toBeNull()
+  })
+
+  it('returns null when reasons is a string instead of an object', () => {
+    const x = { reviews: [{ ...validReview, reasons: 'all fine' }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when reasons is an array', () => {
+    const x = { reviews: [{ ...validReview, reasons: ['all fine'] }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when a reason value is a number', () => {
+    const x = { reviews: [{ ...validReview, reasons: { clarity: 5 } }] }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  // --- v9: verdictCoherence (optional run-level check) ---
+
+  it('accepts a result without verdictCoherence (old cached shape)', () => {
+    expect(validateCoachResult({ reviews: [validReview] })).not.toBeNull()
+  })
+
+  it('accepts verdictCoherence: null', () => {
+    const x = { reviews: [validReview], verdictCoherence: null }
+    expect(validateCoachResult(x)).not.toBeNull()
+  })
+
+  it('accepts a valid verdictCoherence object (coherent true and false)', () => {
+    for (const coherent of [true, false]) {
+      const x = {
+        reviews: [validReview],
+        verdictCoherence: { coherent, note: 'Two harsh blocking comments but verdict is Approve.' },
+      }
+      expect(validateCoachResult(x)).not.toBeNull()
+    }
+  })
+
+  it('returns null when verdictCoherence.coherent is not boolean', () => {
+    const x = { reviews: [validReview], verdictCoherence: { coherent: 'no', note: 'mismatch' } }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when verdictCoherence.note is not a string', () => {
+    const x = { reviews: [validReview], verdictCoherence: { coherent: false, note: 42 } }
+    expect(validateCoachResult(x)).toBeNull()
+  })
+
+  it('returns null when verdictCoherence is a string', () => {
+    const x = { reviews: [validReview], verdictCoherence: 'coherent' }
+    expect(validateCoachResult(x)).toBeNull()
+  })
 })
 
 // ---------------------------------------------------------------------------

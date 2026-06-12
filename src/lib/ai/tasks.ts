@@ -12,7 +12,7 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
-export const PROMPT_VERSION = 8
+export const PROMPT_VERSION = 9
 
 // ---------------------------------------------------------------------------
 // summarizePrompt — streaming plain-text summary + reading order
@@ -286,16 +286,35 @@ Do not include any text outside the JSON object.`
 // ---------------------------------------------------------------------------
 
 /**
+ * Options for coachPrompt (v9).
+ */
+export interface CoachPromptOptions {
+  /**
+   * The reviewer's currently-selected verdict. When provided, the prompt adds
+   * a run-level verdictCoherence check: do the drafts collectively match it?
+   */
+  verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
+  /**
+   * Packed PR diff context. When provided it is embedded as the payload's
+   * prContext field so accuracy/grounded can be assessed against real evidence.
+   */
+  contextText?: string
+}
+
+/**
  * Build prompts for the comment coach task.
  *
  * Output must be JSON-only, matching CoachResult:
  *   {
- *     reviews: CommentReview[]
+ *     reviews: CommentReview[],
+ *     verdictCoherence?: { coherent, note }   // only requested when options.verdict given
  *   }
  *
  * Per review comment: clarity 1–5, actionable boolean, tone, optional anti-bias
  * question when the comment states preference as defect, optional suggestion,
- * accuracy assessment against the diff, and duplicate detection.
+ * accuracy assessment against the diff, duplicate detection, specificity
+ * (concrete code vs vague vibes), grounded (claims verifiable in the provided
+ * context), and a one-line reason per dimension — for passing AND failing grades.
  *
  * When prComments are provided (existing PR comment bodies, capped at 30,
  * truncated to 200ch each), the system prompt instructs duplicate detection.
@@ -303,7 +322,22 @@ Do not include any text outside the JSON object.`
 export function coachPrompt(
   drafts: { index: number; path: string; line: number; body: string }[],
   prComments?: string[],
+  options?: CoachPromptOptions,
 ): { system: string; user: string } {
+  const verdictShapeLine = options?.verdict
+    ? `,
+  "verdictCoherence": { "coherent": <true if the drafts collectively match the chosen verdict, false otherwise>, "note": "<one clearly-worded sentence>" }`
+    : ''
+
+  const verdictRules = options?.verdict
+    ? `
+- verdictCoherence: ONE assessment for the whole run (not per comment). The input's \
+  chosenVerdict field is the verdict the reviewer is about to submit. Set coherent=false when \
+  the drafts collectively do not match it — e.g. harsh or blocking comments alongside \
+  "APPROVE", or unanimous praise alongside "REQUEST_CHANGES". note: one clearly-worded \
+  sentence naming the mismatch (or, when coherent, confirming the match).`
+    : ''
+
   const system = `You are a code review coach. Evaluate each draft review comment and respond \
 with JSON ONLY — no explanation, no markdown, no code fences. Your response must be valid JSON \
 that exactly matches this shape:
@@ -319,9 +353,20 @@ that exactly matches this shape:
       "suggestion": "<a reworded version of the comment that is clearer or kinder, or null>",
       "accuracy": "consistent" | "questionable" | "contradicted",
       "accuracyNote": "<explanation of why the claim is contradicted by the diff, or null>",
-      "duplicate": <true if this comment substantially repeats an existing PR comment, false otherwise>
+      "duplicate": <true if this comment substantially repeats an existing PR comment, false otherwise>,
+      "specificity": <true if the comment points at concrete code, false if it is vague>,
+      "grounded": <true if every claim the comment makes is verifiable in the provided PR context, false otherwise>,
+      "reasons": {
+        "clarity": "<one short line>",
+        "tone": "<one short line>",
+        "actionable": "<one short line>",
+        "accuracy": "<one short line>",
+        "duplicate": "<one short line>",
+        "specificity": "<one short line>",
+        "grounded": "<one short line>"
+      }
     }
-  ]
+  ]${verdictShapeLine}
 }
 
 Field rules:
@@ -336,7 +381,8 @@ Field rules:
   Otherwise null.
 - suggestion: include ONLY when a reword would materially improve clarity or tone. \
   Keep it concise. Otherwise null.
-- accuracy: assess whether the comment's claim matches what the diff actually shows.
+- accuracy: assess whether the comment's claim matches what the diff actually shows \
+  (the prContext field of the input, when present).
   - "consistent": the comment's claim is supported by the diff (this is the common case).
   - "questionable": the claim may be partially accurate or hard to verify from the diff alone.
   - "contradicted": the diff shows something that directly contradicts what the comment claims.
@@ -348,6 +394,25 @@ Field rules:
 - duplicate: true ONLY when the draft comment substantially repeats an existing PR comment \
   listed in the input. Minor overlap in topic is not enough — the substance must be the same. \
   false otherwise (the common case).
+- specificity: true only when the comment names the concrete code it concerns — identifiers, \
+  function or file names, or specific lines. false when it gestures at vague qualities \
+  ("this feels messy") without pointing at code.
+- grounded: true when every factual claim in the comment can be verified against the provided \
+  PR context. false when the comment asserts something not visible in the provided context.
+- reasons: REQUIRED for every review. One short line (maximum ~12 words) per dimension \
+  explaining the grade. Give a reason for passing grades as well as failing ones — e.g. \
+  "names the exact function and line" for a passing specificity, or "matches the change \
+  shown in the diff" for a consistent accuracy. Keys: clarity, tone, actionable, accuracy, \
+  duplicate, specificity, grounded.${verdictRules}
+
+Evidence discipline (IMPORTANT — apply to accuracy and grounded):
+- Ground every assessment in what you can SEE in the provided PR context. Do not speculate \
+  about code that is not shown.
+- When you cannot verify a claim because the relevant code is not in the provided context, \
+  say that in reasons.grounded ("couldn't verify against the provided context") instead of \
+  asserting the comment is wrong.
+- Prefer neutral, factual phrasing over alarm. Grades must reflect evidence, not worst-case \
+  speculation.
 
 Be brief and concrete. Do not pad. Do not include any text outside the JSON object.`
 
@@ -357,6 +422,8 @@ Be brief and concrete. Do not pad. Do not include any text outside the JSON obje
   const payload: unknown = {
     drafts: drafts.map((d) => ({ index: d.index, path: d.path, line: d.line, body: d.body })),
     ...(capped.length > 0 ? { existingPrComments: capped } : {}),
+    ...(options?.verdict ? { chosenVerdict: options.verdict } : {}),
+    ...(options?.contextText ? { prContext: options.contextText } : {}),
   }
 
   return { system, user: JSON.stringify(payload, null, 2) }
