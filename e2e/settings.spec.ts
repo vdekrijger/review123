@@ -326,3 +326,39 @@ test('ai models: switch to OpenAI → model dropdown updates → key saves → S
     timeout: 5_000,
   })
 })
+
+// ---------------------------------------------------------------------------
+// Progress bar setting: fieldset with Show/Hide radios (consistent with the
+// other Appearance groups), persists across reload
+// ---------------------------------------------------------------------------
+
+test('progress bar: Show/Hide radio fieldset persists showProgress=false after Hide + reload', async ({
+  page,
+}) => {
+  await blockExternal(page)
+
+  await page.goto('/')
+  await openSettings(page)
+
+  // The Progress bar group is a styled fieldset with radios (no bare checkbox)
+  const group = page.getByRole('group', { name: /progress bar/i })
+  await expect(group).toBeVisible()
+  const showRadio = group.getByRole('radio', { name: /^show$/i })
+  const hideRadio = group.getByRole('radio', { name: /^hide$/i })
+  await expect(showRadio).toBeChecked()
+
+  // Pick Hide — applies immediately (no Save needed)
+  await hideRadio.click()
+  await expect(hideRadio).toBeChecked()
+
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('review123:settings') ?? '{}'),
+  )
+  expect(stored.showProgress).toBe(false)
+
+  // Reload → Hide stays selected
+  await page.reload()
+  await expect(
+    page.getByRole('group', { name: /progress bar/i }).getByRole('radio', { name: /^hide$/i }),
+  ).toBeChecked()
+})

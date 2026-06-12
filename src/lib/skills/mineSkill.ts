@@ -8,7 +8,7 @@
  *   4. Call llmJsonWithRepair with the mining prompt → { name, content }
  *   5. Return the draft skill for the user to review + save (NOT auto-saved)
  *
- * Privacy note: comments are sent to DeepSeek for analysis.
+ * Privacy note: comments are sent to the active AI provider (settings.aiProvider) for analysis.
  * This module is a settings-time flow (not a review-time flow like tasks.ts).
  */
 
