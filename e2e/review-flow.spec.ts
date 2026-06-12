@@ -288,7 +288,8 @@ const TEST_INSIGHT_RESULT = {
   gaps: ['no test covers removal of removed line from feature.ts'],
 }
 
-// v8 contract: CoachResult with one review containing a suggestion + accuracy + duplicate
+// v9 contract: CoachResult with suggestion + accuracy + duplicate + specificity +
+// grounded + per-dimension reasons + run-level verdictCoherence
 const COACH_RESULT = {
   reviews: [
     {
@@ -301,8 +302,23 @@ const COACH_RESULT = {
       accuracy: 'consistent',
       accuracyNote: null,
       duplicate: false,
+      specificity: true,
+      grounded: true,
+      reasons: {
+        clarity: 'understandable but missing the why',
+        tone: 'abrupt phrasing without hostility',
+        actionable: 'asks for a concrete change',
+        accuracy: 'matches the change shown in the diff',
+        duplicate: 'no overlap with existing comments',
+        specificity: 'names the exact line it concerns',
+        grounded: 'every claim is visible in the provided hunk',
+      },
     },
   ],
+  verdictCoherence: {
+    coherent: false,
+    note: 'A blunt change request alongside a plain comment verdict reads fine, but double-check the verdict.',
+  },
 }
 
 // Plan F: AlternativesResult with one alternative-is-better entry to trigger glance chip
@@ -961,6 +977,20 @@ test('coach: seed draft, navigate to step 3, Coach my comments → suggestion ca
   await expect(
     page.getByText(/Consider rephrasing this as a question/i),
   ).toBeVisible({ timeout: 10_000 })
+
+  // v9: the new dimension chips render with self-evident labels
+  await expect(page.getByTestId('specificity-chip')).toHaveText(/points at concrete code/i)
+  await expect(page.getByTestId('grounded-chip')).toHaveText(/claims verifiable in diff/i)
+  await expect(page.getByTestId('accuracy-chip')).toHaveText(/matches the diff/i)
+
+  // v9: the per-dimension rationale list is expandable and carries the reasons
+  const reasonsDetails = page.getByTestId('coach-reasons')
+  await expect(reasonsDetails).toBeVisible()
+  await reasonsDetails.locator('summary').click()
+  await expect(reasonsDetails).toContainText('abrupt phrasing without hostility')
+
+  // v9: verdictCoherence.coherent=false → flag card at the top of the results
+  await expect(page.getByTestId('coherence-card')).toContainText(/double-check the verdict/i)
 
   // Click Apply — this should replace the draft body in the store
   const applyBtn = page.getByRole('button', { name: /apply/i })
