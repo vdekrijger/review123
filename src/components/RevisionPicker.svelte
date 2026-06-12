@@ -157,13 +157,12 @@
     opacity: 0.6;
   }
 
+  /* Chrome (surface, hairline, chevron) comes from the global select primitive
+     in app.css — only compact toolbar sizing is set here. */
   select {
-    background: var(--surface);
-    border: 1px solid var(--hairline);
-    border-radius: 3px;
-    color: inherit;
     font-size: 0.82rem;
-    padding: 0.15rem 0.3rem;
+    padding-block: 0.15rem;
+    padding-left: 0.4rem;
     max-width: 18rem;
   }
 
