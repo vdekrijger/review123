@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSettings, saveTokens, setGitlabToken, setTheme, setUiFont, setShowProgress, setTestFileDisplay, type Theme, type UiFont, type TestFileDisplay } from '../lib/settings/settings'
+  import { getSettings, saveTokens, setGitlabToken, setTheme, setUiFont, setShowProgress, setTestFileDisplay, setDiffWidth, type Theme, type UiFont, type TestFileDisplay, type DiffWidth } from '../lib/settings/settings'
   import { applyAppearance } from '../lib/settings/appearance.svelte'
   import { track } from '../lib/analytics/analytics'
   import { authState } from '../lib/auth/authState.svelte'
@@ -32,6 +32,7 @@
   let uiFont = $state<UiFont>(current.uiFont)
   let showProgress = $state<boolean>(current.showProgress)
   let testFileDisplay = $state<TestFileDisplay>(current.testFileDisplay)
+  let diffWidth = $state<DiffWidth>(current.diffWidth)
 
   // ---- Reviewer skills state ----
   let skills = $state<ReviewerSkill[]>(listSkills())
@@ -192,6 +193,11 @@
     setTestFileDisplay(value)
   }
 
+  function onDiffWidthChange(value: DiffWidth) {
+    diffWidth = value
+    setDiffWidth(value)
+  }
+
   function save() {
     try {
       const hadPat = !!current.githubPat
@@ -277,6 +283,18 @@
       <label>
         <input type="radio" name="testFileDisplay" value="dim" checked={testFileDisplay === 'dim'} onchange={() => onTestFileDisplayChange('dim')} />
         De-emphasize
+      </label>
+    </fieldset>
+
+    <fieldset aria-label="Diff width">
+      <legend>Diff width</legend>
+      <label>
+        <input type="radio" name="diffWidth" value="centered" checked={diffWidth === 'centered'} onchange={() => onDiffWidthChange('centered')} />
+        Centered
+      </label>
+      <label>
+        <input type="radio" name="diffWidth" value="full" checked={diffWidth === 'full'} onchange={() => onDiffWidthChange('full')} />
+        Full width
       </label>
     </fieldset>
   </section>

@@ -1,80 +1,58 @@
 /**
  * ReviewProgress component tests
  *
- * The component renders a 3px full-width progress bar with:
- *  - fill = weighted progress: 15% for reaching step 2 + 70% × (viewedCount/fileCount) + 15% when step 3 reached
- *  - role="progressbar" with aria-valuenow, aria-valuemax=100, aria-label
- *  - floating label on hover/focus showing "{viewedCount}/{fileCount} files viewed · {draftCount} drafts"
+ * The component renders a scroll-based progress bar for step 2 (Inspect) only.
+ * - Accepts a `percent` prop (0–100) computed by the parent from scroll position.
+ * - Shows ONLY on step 2; hidden on steps 1 and 3.
+ * - Inline variant label: "{percent}% · {viewedCount}/{fileCount} viewed"
+ * - role="progressbar" with aria-valuenow, aria-valuemax=100, aria-label
  */
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import ReviewProgress from './ReviewProgress.svelte'
 
 // ---------------------------------------------------------------------------
-// Percent math
+// percent prop — aria-valuenow reflects prop
 // ---------------------------------------------------------------------------
 
-describe('ReviewProgress — percent math', () => {
-  it('step 1, 0 files → 0%', () => {
-    render(ReviewProgress, { props: { viewedCount: 0, fileCount: 0, draftCount: 0, step: 1 } })
+describe('ReviewProgress — percent prop (scroll-based API)', () => {
+  it('aria-valuenow equals the percent prop passed in', () => {
+    render(ReviewProgress, { props: { percent: 42, viewedCount: 1, fileCount: 3, step: 2, inline: true } })
+    const bar = screen.getByRole('progressbar')
+    expect(bar.getAttribute('aria-valuenow')).toBe('42')
+  })
+
+  it('aria-valuenow is 0 when percent=0', () => {
+    render(ReviewProgress, { props: { percent: 0, viewedCount: 0, fileCount: 3, step: 2, inline: true } })
     const bar = screen.getByRole('progressbar')
     expect(bar.getAttribute('aria-valuenow')).toBe('0')
   })
 
-  it('step 1, 2/5 files viewed → 14% (only step weight 0, file portion = 0.7 * 2/5 = 28% but step 1 means only file progress without step-2 unlock... wait: step 1 = 0 weight, step 2 = 15%, so at step 1 the 15% step-2 bonus is not yet reached)', () => {
-    // step 1: weight = 0 (haven't reached step 2) + 0.7 * (2/5) + 0 = 28 → clamped
-    // Actually spec: 15% for reaching step 2 = only once you ARE on step 2+
-    // at step=1: 0 + 0.70 * (2/5) = 28
-    render(ReviewProgress, { props: { viewedCount: 2, fileCount: 5, draftCount: 0, step: 1 } })
-    const bar = screen.getByRole('progressbar')
-    expect(bar.getAttribute('aria-valuenow')).toBe('28')
-  })
-
-  it('step 2, 0 files viewed → 15%', () => {
-    render(ReviewProgress, { props: { viewedCount: 0, fileCount: 5, draftCount: 0, step: 2 } })
-    const bar = screen.getByRole('progressbar')
-    expect(bar.getAttribute('aria-valuenow')).toBe('15')
-  })
-
-  it('step 2, all 5 files viewed → 85%', () => {
-    // 15 + 70*1 + 0 = 85
-    render(ReviewProgress, { props: { viewedCount: 5, fileCount: 5, draftCount: 0, step: 2 } })
-    const bar = screen.getByRole('progressbar')
-    expect(bar.getAttribute('aria-valuenow')).toBe('85')
-  })
-
-  it('step 3, all files viewed → 100%', () => {
-    // 15 + 70*1 + 15 = 100
-    render(ReviewProgress, { props: { viewedCount: 5, fileCount: 5, draftCount: 0, step: 3 } })
+  it('aria-valuenow is 100 when percent=100', () => {
+    render(ReviewProgress, { props: { percent: 100, viewedCount: 3, fileCount: 3, step: 2, inline: true } })
     const bar = screen.getByRole('progressbar')
     expect(bar.getAttribute('aria-valuenow')).toBe('100')
   })
+})
 
-  it('step 3, 0 files (0 fileCount) → step-weight only: 15 + 0 + 15 = 30%', () => {
-    render(ReviewProgress, { props: { viewedCount: 0, fileCount: 0, draftCount: 0, step: 3 } })
-    const bar = screen.getByRole('progressbar')
-    expect(bar.getAttribute('aria-valuenow')).toBe('30')
+// ---------------------------------------------------------------------------
+// Step gating — only visible on step 2
+// ---------------------------------------------------------------------------
+
+describe('ReviewProgress — step gating (only shown on step 2)', () => {
+  it('renders progressbar on step 2', () => {
+    render(ReviewProgress, { props: { percent: 30, viewedCount: 1, fileCount: 3, step: 2, inline: true } })
+    expect(screen.getByRole('progressbar')).toBeInTheDocument()
   })
 
-  it('step 2, fileCount=0 → 15% (step weight only, no file div-by-zero)', () => {
-    render(ReviewProgress, { props: { viewedCount: 0, fileCount: 0, draftCount: 0, step: 2 } })
-    const bar = screen.getByRole('progressbar')
-    expect(bar.getAttribute('aria-valuenow')).toBe('15')
+  it('does NOT render progressbar on step 1 regardless of percent', () => {
+    render(ReviewProgress, { props: { percent: 50, viewedCount: 1, fileCount: 3, step: 1, inline: true } })
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
   })
 
-  it('clamps to 100 when overflows', () => {
-    // Step 3 + viewedCount > fileCount (shouldn't happen but be safe)
-    render(ReviewProgress, { props: { viewedCount: 10, fileCount: 5, draftCount: 0, step: 3 } })
-    const bar = screen.getByRole('progressbar')
-    const val = Number(bar.getAttribute('aria-valuenow'))
-    expect(val).toBeLessThanOrEqual(100)
-  })
-
-  it('clamps to 0 when negative (defensive)', () => {
-    render(ReviewProgress, { props: { viewedCount: 0, fileCount: 0, draftCount: 0, step: 1 } })
-    const bar = screen.getByRole('progressbar')
-    const val = Number(bar.getAttribute('aria-valuenow'))
-    expect(val).toBeGreaterThanOrEqual(0)
+  it('does NOT render progressbar on step 3 regardless of percent', () => {
+    render(ReviewProgress, { props: { percent: 100, viewedCount: 3, fileCount: 3, step: 3, inline: true } })
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
   })
 })
 
@@ -83,49 +61,56 @@ describe('ReviewProgress — percent math', () => {
 // ---------------------------------------------------------------------------
 
 describe('ReviewProgress — aria attributes', () => {
-  it('has role=progressbar', () => {
-    render(ReviewProgress, { props: { viewedCount: 0, fileCount: 2, draftCount: 0, step: 1 } })
+  it('has role=progressbar on step 2', () => {
+    render(ReviewProgress, { props: { percent: 0, viewedCount: 0, fileCount: 2, step: 2 } })
     expect(screen.getByRole('progressbar')).toBeInTheDocument()
   })
 
   it('has aria-valuemax=100', () => {
-    render(ReviewProgress, { props: { viewedCount: 0, fileCount: 2, draftCount: 0, step: 1 } })
+    render(ReviewProgress, { props: { percent: 0, viewedCount: 0, fileCount: 2, step: 2 } })
     expect(screen.getByRole('progressbar').getAttribute('aria-valuemax')).toBe('100')
   })
 
   it('aria-label contains "Review progress"', () => {
-    render(ReviewProgress, { props: { viewedCount: 0, fileCount: 2, draftCount: 0, step: 1 } })
+    render(ReviewProgress, { props: { percent: 25, viewedCount: 1, fileCount: 2, step: 2 } })
     const label = screen.getByRole('progressbar').getAttribute('aria-label') ?? ''
     expect(label.toLowerCase()).toContain('review progress')
   })
 
   it('aria-label includes the percentage', () => {
-    render(ReviewProgress, { props: { viewedCount: 0, fileCount: 2, draftCount: 0, step: 2 } })
+    render(ReviewProgress, { props: { percent: 25, viewedCount: 1, fileCount: 2, step: 2 } })
     const label = screen.getByRole('progressbar').getAttribute('aria-label') ?? ''
-    expect(label).toContain('15%')
+    expect(label).toContain('25%')
   })
 })
 
 // ---------------------------------------------------------------------------
-// Floating label (visible in DOM even if hidden visually until hover)
+// Label format ({percent}% · {viewedCount}/{fileCount} viewed)
 // ---------------------------------------------------------------------------
 
-describe('ReviewProgress — floating label', () => {
-  it('label text shows viewedCount/fileCount files viewed', () => {
-    const { container } = render(ReviewProgress, { props: { viewedCount: 3, fileCount: 7, draftCount: 0, step: 2 } })
-    expect(container.textContent).toContain('3/7 files viewed')
+describe('ReviewProgress — label format ({percent}% · {viewedCount}/{fileCount} viewed)', () => {
+  it('label contains percent and viewedCount/fileCount viewed', () => {
+    const { container } = render(ReviewProgress, {
+      props: { percent: 55, viewedCount: 2, fileCount: 4, step: 2, inline: true },
+    })
+    expect(container.textContent).toContain('55%')
+    expect(container.textContent).toContain('2/4 viewed')
   })
 
-  it('label text shows draftCount drafts', () => {
-    const { container } = render(ReviewProgress, { props: { viewedCount: 0, fileCount: 5, draftCount: 2, step: 2 } })
-    expect(container.textContent).toContain('2 drafts')
+  it('label shows 0% and 0/0 viewed when no files', () => {
+    const { container } = render(ReviewProgress, {
+      props: { percent: 0, viewedCount: 0, fileCount: 0, step: 2, inline: true },
+    })
+    expect(container.textContent).toContain('0%')
+    expect(container.textContent).toContain('0/0 viewed')
   })
 
-  it('label text is hidden visually (has tooltip/label class)', () => {
-    const { container } = render(ReviewProgress, { props: { viewedCount: 1, fileCount: 2, draftCount: 1, step: 2 } })
-    // The label element should exist (not rendered absent) — it just lives in DOM
-    const label = container.querySelector('.progress-label')
-    expect(label).not.toBeNull()
+  it('standalone label shows percent and viewed counts', () => {
+    const { container } = render(ReviewProgress, {
+      props: { percent: 75, viewedCount: 3, fileCount: 4, step: 2 },
+    })
+    expect(container.textContent).toContain('75%')
+    expect(container.textContent).toContain('3/4 viewed')
   })
 })
 
@@ -135,32 +120,31 @@ describe('ReviewProgress — floating label', () => {
 
 describe('ReviewProgress — inline variant', () => {
   it('inline=true renders role=progressbar with correct aria-valuenow', () => {
-    render(ReviewProgress, { props: { viewedCount: 0, fileCount: 5, draftCount: 0, step: 2, inline: true } })
+    render(ReviewProgress, { props: { percent: 40, viewedCount: 0, fileCount: 5, step: 2, inline: true } })
     const bar = screen.getByRole('progressbar')
     expect(bar).toBeInTheDocument()
-    expect(bar.getAttribute('aria-valuenow')).toBe('15')
+    expect(bar.getAttribute('aria-valuenow')).toBe('40')
     expect(bar.getAttribute('aria-valuemax')).toBe('100')
   })
 
   it('inline=true renders the percent label text', () => {
-    const { container } = render(ReviewProgress, { props: { viewedCount: 5, fileCount: 5, draftCount: 0, step: 2, inline: true } })
-    // 15 + 70 = 85%
+    const { container } = render(ReviewProgress, { props: { percent: 85, viewedCount: 5, fileCount: 5, step: 2, inline: true } })
     expect(container.textContent).toContain('85%')
   })
 
-  it('inline=true renders a progress track (6px-tall element)', () => {
-    const { container } = render(ReviewProgress, { props: { viewedCount: 0, fileCount: 2, draftCount: 0, step: 1, inline: true } })
+  it('inline=true renders a progress track element', () => {
+    const { container } = render(ReviewProgress, { props: { percent: 0, viewedCount: 0, fileCount: 2, step: 2, inline: true } })
     const track = container.querySelector('.progress-track-inline')
     expect(track).not.toBeNull()
   })
 
   it('inline=true does NOT render the standalone full-width .review-progress wrapper', () => {
-    const { container } = render(ReviewProgress, { props: { viewedCount: 0, fileCount: 2, draftCount: 0, step: 1, inline: true } })
+    const { container } = render(ReviewProgress, { props: { percent: 0, viewedCount: 0, fileCount: 2, step: 2, inline: true } })
     expect(container.querySelector('.review-progress')).toBeNull()
   })
 
-  it('inline=false (default) renders .review-progress (standalone)', () => {
-    const { container } = render(ReviewProgress, { props: { viewedCount: 0, fileCount: 2, draftCount: 0, step: 1 } })
+  it('inline=false (default) renders .review-progress (standalone) on step 2', () => {
+    const { container } = render(ReviewProgress, { props: { percent: 0, viewedCount: 0, fileCount: 2, step: 2 } })
     expect(container.querySelector('.review-progress')).not.toBeNull()
   })
 })

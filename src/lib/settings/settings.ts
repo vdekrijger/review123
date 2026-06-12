@@ -16,6 +16,7 @@ export type DiffMode = 'unified' | 'split'
 export type Theme = 'auto' | 'dark' | 'light'
 export type UiFont = 'plex' | 'system' | 'serif'
 export type TestFileDisplay = 'normal' | 'highlight' | 'dim'
+export type DiffWidth = 'centered' | 'full'
 
 export interface GithubAuth {
   token: string
@@ -35,6 +36,7 @@ export interface Settings {
   showProgress: boolean
   treeOpen: boolean
   testFileDisplay: TestFileDisplay
+  diffWidth: DiffWidth
 }
 
 const DEFAULTS: Settings = {
@@ -49,6 +51,7 @@ const DEFAULTS: Settings = {
   showProgress: true,
   treeOpen: false,
   testFileDisplay: 'normal',
+  diffWidth: 'centered',
 }
 
 function coerceGithubAuth(raw: unknown): GithubAuth | null {
@@ -105,6 +108,9 @@ function coerce(raw: unknown): Partial<Settings> {
   if (testFileDisplay === 'normal' || testFileDisplay === 'highlight' || testFileDisplay === 'dim') {
     result.testFileDisplay = testFileDisplay
   }
+
+  const diffWidth = obj['diffWidth']
+  if (diffWidth === 'centered' || diffWidth === 'full') result.diffWidth = diffWidth
 
   // Prefer explicit githubAuth; fall back to migrating legacy githubPat string
   if ('githubAuth' in obj) {
@@ -178,6 +184,7 @@ export const setUiFont = (font: UiFont) => save({ uiFont: font })
 export const setShowProgress = (show: boolean) => save({ showProgress: show })
 export const setTreeOpen = (open: boolean) => save({ treeOpen: open })
 export const setTestFileDisplay = (v: TestFileDisplay) => save({ testFileDisplay: v })
+export const setDiffWidth = (v: DiffWidth) => save({ diffWidth: v })
 
 /**
  * Save the GitLab personal access token (PAT).
