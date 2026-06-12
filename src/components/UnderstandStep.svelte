@@ -146,6 +146,30 @@
     if (filename.length >= max) return '…/' + filename.slice(-max)
     return '…/' + parts.slice(-2).join('/')
   }
+
+  // Verdict evidence: clamping + expand
+  const EVIDENCE_CLAMP = 5
+  let evidenceExpanded = $state(false)
+
+  // Parse an evidence item into an optional leading path chip + remaining text.
+  // The regex matches a recognizable file path: word chars, @, dots, hyphens, slashes,
+  // with a dot-extension. Captures the first such occurrence.
+  const PATH_RE = /[\w@./-]+\.[\w]+/
+
+  interface EvidenceRow {
+    path: string | null
+    text: string
+  }
+
+  function parseEvidenceItem(item: string): EvidenceRow {
+    const m = item.match(PATH_RE)
+    if (!m) return { path: null, text: item }
+    const path = m[0]
+    // Remove the path from the item text for the prose portion
+    const rest = item.slice(0, m.index).trimEnd() + item.slice(m.index! + path.length)
+    const text = rest.replace(/^[-–—:\s]+/, '').trimStart()
+    return { path, text: text || item }
+  }
 </script>
 
 <div class="understand-step">
@@ -397,11 +421,38 @@
       <AiPanel title="Verdict" state={run.verdict} onretry={() => run.retry('verdict')}>
         {#if verdict}
           {#if verdict.evidence.length > 0}
+            {@const visibleEvidence = evidenceExpanded
+              ? verdict.evidence
+              : verdict.evidence.slice(0, EVIDENCE_CLAMP)}
             <ul class="verdict-evidence">
-              {#each verdict.evidence as item}
-                <li>{item}</li>
+              {#each visibleEvidence as item (item)}
+                {@const row = parseEvidenceItem(item)}
+                <li class="verdict-evidence-row">
+                  {#if row.path}
+                    <button
+                      class="evidence-path-chip"
+                      onclick={() => onhotspot?.(row.path!)}
+                      title="Jump to {row.path}"
+                      aria-label="Jump to {row.path}"
+                    >{row.path}</button>
+                  {/if}
+                  <span class="evidence-text">
+                    <MarkdownView source={row.text} />
+                  </span>
+                </li>
               {/each}
             </ul>
+            {#if verdict.evidence.length > EVIDENCE_CLAMP}
+              <button
+                class="evidence-expander"
+                onclick={() => { evidenceExpanded = !evidenceExpanded }}
+                aria-expanded={evidenceExpanded}
+              >
+                {evidenceExpanded
+                  ? 'Show less'
+                  : `Show all ${verdict.evidence.length}`}
+              </button>
+            {/if}
           {/if}
           {#if verdict.notAnalyzed.length > 0}
             <div class="not-analyzed">
@@ -727,8 +778,86 @@
 
   .verdict-evidence {
     margin: 0 0 0.5rem 0;
-    padding-left: 1.5em;
+    padding-left: 0;
+    list-style: none;
     font-size: 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .verdict-evidence-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .verdict-evidence-row:last-child {
+    border-bottom: none;
+  }
+
+  .evidence-path-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    background: var(--surface-raised);
+    border: 1px solid var(--hairline);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--accent);
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    text-decoration: none;
+    transition: background 100ms;
+  }
+
+  .evidence-path-chip:hover {
+    background: var(--accent-subtle);
+    border-color: var(--accent);
+  }
+
+  .evidence-text {
+    font-family: var(--font-prose);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* MarkdownView inside evidence-text: inline, no block margins */
+  .evidence-text :global(.markdown-view) {
+    font-size: inherit;
+    line-height: inherit;
+  }
+
+  .evidence-text :global(p) {
+    margin: 0;
+  }
+
+  .evidence-text :global(code) {
+    font-size: 0.85em;
+    background: var(--surface-raised);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+  }
+
+  .evidence-expander {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 0.82rem;
+    color: var(--accent);
+    padding: 0.2rem 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .evidence-expander:hover {
+    opacity: 0.75;
   }
 
   .not-analyzed {
