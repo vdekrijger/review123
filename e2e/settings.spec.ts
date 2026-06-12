@@ -256,13 +256,14 @@ test('builtin-library: add Security Reviewer (OWASP-minded) from Built-in review
 })
 
 // ---------------------------------------------------------------------------
-// AI models (Plan F Task F3): provider switch + model dropdown + key save +
-// Save & test against a fixture-backed openai-compat endpoint.
+// AI models (Plan F Task F3 + provider context blocks): one card per provider
+// (radio + own model dropdown + key + Save & test). Save & test runs against
+// a fixture-backed openai-compat endpoint.
 // OpenAI's transport routes through the same-origin serverless proxy
 // (/api/llm/openai), which we intercept here — real adapter, fixture response.
 // ---------------------------------------------------------------------------
 
-test('ai models: switch to OpenAI → model dropdown updates → key saves → Save & test shows ok (fixture) and error (401 fixture)', async ({
+test('ai models: switch to OpenAI card → per-card model dropdown → key saves → Save & test shows ok (fixture) and error (401 fixture)', async ({
   page,
 }) => {
   await blockExternal(page)
@@ -279,33 +280,45 @@ test('ai models: switch to OpenAI → model dropdown updates → key saves → S
   await page.goto('/')
   await openSettings(page)
 
-  // Provider radio: switch DeepSeek → OpenAI
+  // One context card per provider; DeepSeek's card is active by default
+  const aiSection = page.locator('#ai-models')
+  await expect(aiSection.locator('.provider-card')).toHaveCount(4)
+  await expect(aiSection.locator('.provider-card[data-active="true"]')).toHaveCount(1)
+
+  // Provider radio (in the card header): switch DeepSeek → OpenAI
   const openaiRadio = page.getByRole('radio', { name: 'OpenAI' })
   await expect(openaiRadio).toBeVisible()
   await expect(page.getByRole('radio', { name: 'DeepSeek' })).toBeChecked()
   await openaiRadio.click()
   await expect(openaiRadio).toBeChecked()
 
-  // Model dropdown now lists OpenAI models with the provider default selected
-  const modelSelect = page.getByRole('combobox', { name: 'Model' })
-  await expect(modelSelect).toHaveValue('gpt-5.2')
+  // The accent emphasis moved to the OpenAI card
+  const openaiCard = aiSection.locator('.provider-card').filter({ has: openaiRadio })
+  await expect(openaiCard).toHaveAttribute('data-active', 'true')
+
+  // The OpenAI card's own dropdown lists only OpenAI models, default selected
+  const modelSelect = page.getByRole('combobox', { name: 'OpenAI model' })
+  await expect(modelSelect).toHaveValue('gpt-5.4')
   const optionValues = await modelSelect.locator('option').evaluateAll(
     (opts) => opts.map((o) => (o as HTMLOptionElement).value),
   )
-  expect(optionValues).toContain('o4-mini')
-  expect(optionValues).not.toContain('deepseek-chat')
+  expect(optionValues).toContain('gpt-5.4-mini')
+  expect(optionValues).not.toContain('deepseek-v4-flash')
+
+  // The DeepSeek card keeps its own dropdown (per-card models)
+  await expect(page.getByRole('combobox', { name: 'DeepSeek model' })).toHaveValue('deepseek-v4-flash')
 
   // Pick a non-default model — persisted as aiModel
-  await modelSelect.selectOption('o4-mini')
+  await modelSelect.selectOption('gpt-5.4-mini')
 
-  // Enter the OpenAI key and Save & test → saved first, then pinged
+  // Enter the OpenAI key (in the OpenAI card) and Save & test → saved first, then pinged
   await page.getByLabel(/OpenAI API key/i).fill('sk-test-openai-e2e')
   await page.getByRole('button', { name: /save & test openai/i }).click()
   await expect(page.getByText('✓ Connected')).toBeVisible({ timeout: 5_000 })
 
   // The ping went through the real openai-compat adapter: proxy header + active model
   expect(lastPingHeaders['x-user-openai-key']).toBe('sk-test-openai-e2e')
-  expect(lastPingBody?.model).toBe('o4-mini')
+  expect(lastPingBody?.model).toBe('gpt-5.4-mini')
   expect(lastPingBody?.max_tokens).toBe(1)
 
   // Settings were persisted (key save + provider + model)
@@ -313,7 +326,7 @@ test('ai models: switch to OpenAI → model dropdown updates → key saves → S
     JSON.parse(localStorage.getItem('review123:settings') ?? '{}'),
   )
   expect(stored.aiProvider).toBe('openai')
-  expect(stored.aiModel).toBe('o4-mini')
+  expect(stored.aiModel).toBe('gpt-5.4-mini')
   expect(stored.openaiKey).toBe('sk-test-openai-e2e')
 
   // Now swap the fixture to a 401 → Save & test shows the inline error state

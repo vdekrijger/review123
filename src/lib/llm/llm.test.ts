@@ -109,7 +109,7 @@ describe('llmComplete — status mappings', () => {
     vi.stubGlobal('fetch', f)
     await llmComplete({ system: 'the-system', user: 'the-user' })
     const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
-    expect(body.model).toBe('deepseek-chat')
+    expect(body.model).toBe('deepseek-v4-flash')
     expect(body.messages).toEqual([
       { role: 'system', content: 'the-system' },
       { role: 'user', content: 'the-user' },

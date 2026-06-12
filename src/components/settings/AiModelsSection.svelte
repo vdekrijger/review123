@@ -7,9 +7,9 @@
 
   const current = getSettings()
 
-  // Provider/model selection — saved immediately on change (like Appearance).
+  // Provider selection — saved immediately on change (like Appearance).
   let provider = $state<AiProvider>(current.aiProvider)
-  // Key fields — saved via the Save / Save & test buttons (atomic, like other key fields).
+  // Key fields — saved via the per-card Save & test button (atomic).
   let keys = $state<Record<LlmProviderId, string>>({
     deepseek: current.deepseekKey ?? '',
     openai: current.openaiKey ?? '',
@@ -18,30 +18,35 @@
   })
   let error = $state<string | null>(null)
 
-  const activeDef = $derived(PROVIDERS.find((p) => p.id === provider) ?? PROVIDERS[0])
-
-  // Model selection: empty aiModel setting means "use the provider default".
-  function resolveSelectedModel(): string {
-    const stored = getSettings().aiModel
-    return (stored && getModelDef(activeDef, stored)) ? stored : activeDef.defaultModel
+  // Per-provider model selection. Empty string means "use the provider default".
+  // Each card owns its provider's choice; only the ACTIVE provider's choice is
+  // persisted as aiModel. Selecting a provider radio applies that card's
+  // (possibly staged) model immediately.
+  let modelSel = $state<Record<LlmProviderId, string>>({
+    deepseek: '',
+    openai: '',
+    anthropic: '',
+    gemini: '',
+  })
+  {
+    // Seed the active provider's card from a stored aiModel when it's valid.
+    const activeDef = PROVIDERS.find((p) => p.id === current.aiProvider)
+    if (current.aiModel && activeDef && getModelDef(activeDef, current.aiModel)) {
+      modelSel[activeDef.id] = current.aiModel
+    }
   }
-  let selectedModel = $state(
-    (current.aiModel && PROVIDERS.find((p) => p.id === current.aiProvider && getModelDef(p, current.aiModel)))
-      ? current.aiModel
-      : ''
-  )
-  const selectedModelValue = $derived(selectedModel || activeDef.defaultModel)
 
   function onProviderChange(id: AiProvider) {
     provider = id
-    selectedModel = '' // reset to the new provider's default
     setAiProvider(id)
-    setAiModel('')
+    // Apply the card's staged model ('' = the new provider's default).
+    setAiModel(modelSel[id])
   }
 
-  function onModelChange(value: string) {
-    selectedModel = value
-    setAiModel(value)
+  function onModelChange(id: LlmProviderId, value: string) {
+    modelSel[id] = value
+    // Only the active provider's model selection is the app-wide aiModel.
+    if (id === provider) setAiModel(value)
   }
 
   const KEY_FIELD: Record<LlmProviderId, 'deepseekKey' | 'openaiKey' | 'anthropicKey' | 'geminiKey'> = {
@@ -61,8 +66,8 @@
     if (!hadKey && value) track('settings_key_added', { service: id })
   }
 
-  // ---- Per-row dirty tracking ----
-  // A key row is dirty when its field differs from the stored settings.
+  // ---- Per-card dirty tracking ----
+  // A key field is dirty when it differs from the stored settings.
   // Derived from the reactive settingsState facade so it resets after a save.
   const dirtyKeys = $derived.by(() => {
     const s = settingsState.current
@@ -73,7 +78,7 @@
     return result
   })
 
-  // ---- Per-row transient "Saved ✓" confirmation ----
+  // ---- Per-card transient "Saved ✓" confirmation ----
   let savedStates = $state<Record<LlmProviderId, boolean>>({
     deepseek: false,
     openai: false,
@@ -116,7 +121,7 @@
     try {
       // Only pass the selected model when testing the active provider;
       // otherwise the provider's default model is pinged.
-      const modelId = id === provider ? (selectedModel || undefined) : undefined
+      const modelId = id === provider ? (modelSel[id] || undefined) : undefined
       await llmTestConnection(id, modelId)
       testStates[id] = { status: 'ok' }
     } catch (e) {
@@ -130,37 +135,35 @@
   <p class="section-label">AI models</p>
   <p class="apply-note">Provider and model selection applies immediately. API keys are saved per provider with <em>Save &amp; test</em>.</p>
 
-  <fieldset>
-    <legend>Provider</legend>
+  <div class="provider-cards">
     {#each PROVIDERS as p (p.id)}
-      <label>
-        <input
-          type="radio"
-          name="aiProvider"
-          value={p.id}
-          checked={provider === p.id}
-          onchange={() => onProviderChange(p.id)}
-        />
-        {p.displayName}
-      </label>
-    {/each}
-  </fieldset>
+      <div class="provider-card" data-active={provider === p.id ? 'true' : 'false'}>
+        <div class="card-header">
+          <label class="provider-radio">
+            <input
+              type="radio"
+              name="aiProvider"
+              value={p.id}
+              checked={provider === p.id}
+              onchange={() => onProviderChange(p.id)}
+            />
+            <span class="provider-name">{p.displayName}</span>
+          </label>
+          <span class="use-hint" aria-hidden="true">{provider === p.id ? 'Active provider' : 'Use this provider'}</span>
+        </div>
 
-  <label class="model-label">Model
-    <select
-      value={selectedModelValue}
-      onchange={(e) => onModelChange((e.currentTarget as HTMLSelectElement).value)}
-    >
-      {#each activeDef.models as m (m.id)}
-        <option value={m.id}>{m.label}</option>
-      {/each}
-    </select>
-  </label>
+        <label class="model-label">{p.displayName} model
+          <select
+            value={modelSel[p.id] || p.defaultModel}
+            onchange={(e) => onModelChange(p.id, (e.currentTarget as HTMLSelectElement).value)}
+          >
+            {#each p.models as m (m.id)}
+              <option value={m.id}>{m.label}</option>
+            {/each}
+          </select>
+        </label>
 
-  <div class="key-list">
-    {#each PROVIDERS as p (p.id)}
-      <div class="key-row" data-active={provider === p.id ? 'true' : 'false'}>
-        <label>{p.displayName} API key
+        <label class="key-label">{p.displayName} API key
           <input type="password" bind:value={keys[p.id]} autocomplete="off" placeholder={p.keyHint} />
         </label>
         <div class="test-row">
@@ -182,15 +185,21 @@
             <span class="test-error" role="alert">{testStates[p.id].message}</span>
           {/if}
         </div>
+
+        <p class="privacy-line">
+          {#if p.id === 'openai'}
+            The OpenAI key transits our serverless proxy (OpenAI's API blocks browser requests) —
+            it is forwarded per-request and never stored or logged on the server.
+          {:else}
+            The {p.displayName} key is sent directly from your browser to {p.displayName}'s API.
+          {/if}
+        </p>
       </div>
     {/each}
   </div>
 
   <div class="hint privacy-note">
-    <p><strong>What's sent where:</strong> keys are stored only in this browser (localStorage).
-      DeepSeek, Anthropic and Gemini keys are sent directly from your browser to that provider's API.</p>
-    <p>The OpenAI key transits our serverless proxy (OpenAI's API blocks browser requests) —
-      it is forwarded per-request and never stored or logged on the server.</p>
+    <p><strong>What's sent where:</strong> keys are stored only in this browser (localStorage) — never on our servers.</p>
   </div>
   {#if error}<p role="alert">{error}</p>{/if}
 </section>
@@ -218,35 +227,62 @@
     margin: 0 0 0.75rem;
   }
 
-  fieldset {
-    border: 1px solid var(--hairline);
-    border-radius: 6px;
-    padding: 0.4rem 0.75rem 0.5rem;
-    margin: 0 0 0.5rem;
+  .provider-cards {
     display: flex;
-    gap: 1.25rem;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  /* One context block per provider: radio + model + key + Save & test. */
+  .provider-card {
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 0.65rem 0.85rem 0.6rem;
+    opacity: 0.72;
+  }
+
+  /* The ACTIVE provider's card keeps the accent-border emphasis. */
+  .provider-card[data-active='true'] {
+    opacity: 1;
+    border-color: var(--accent);
     background: var(--surface-raised);
   }
 
-  fieldset legend {
-    font-size: 0.85em;
-    color: var(--text-muted);
-    padding: 0 0.25rem;
+  .card-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.6rem;
+    margin-bottom: 0.5rem;
   }
 
-  fieldset label {
+  .provider-radio {
     display: flex;
     align-items: center;
-    gap: 0.35rem;
-    font-size: 0.9em;
+    gap: 0.4rem;
+    font-size: 0.95em;
     cursor: pointer;
     color: var(--text);
   }
 
+  .provider-name {
+    font-weight: 600;
+  }
+
+  .use-hint {
+    font-size: 0.78em;
+    color: var(--text-muted);
+  }
+
+  .provider-card[data-active='true'] .use-hint {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
   .model-label {
     display: block;
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.9em;
   }
 
   .model-label select {
@@ -254,29 +290,10 @@
     margin-top: 0.25rem;
   }
 
-  .key-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .key-row {
-    border: 1px solid var(--hairline);
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
-    opacity: 0.65;
-  }
-
-  /* The ACTIVE provider's key field is visually emphasized */
-  .key-row[data-active='true'] {
-    opacity: 1;
-    border-color: var(--accent);
-    background: var(--surface-raised);
-  }
-
-  .key-row label {
+  .key-label {
     display: block;
     margin-bottom: 0.35rem;
+    font-size: 0.9em;
   }
 
   .test-row {
@@ -290,7 +307,7 @@
     font-size: 0.85em;
   }
 
-  /* A dirty key row's button becomes prominent (accent) — saved-vs-not at a glance */
+  /* A dirty key field's button becomes prominent (accent) — saved-vs-not at a glance */
   .test-btn[data-dirty='true'] {
     border-color: var(--accent);
     color: var(--accent);
@@ -324,10 +341,16 @@
     color: #cf222e;
   }
 
+  .privacy-line {
+    font-size: 0.78em;
+    color: var(--text-muted);
+    margin: 0.5rem 0 0;
+  }
+
   .hint {
     font-size: 0.8em;
     color: var(--text-muted);
-    margin: 0.5rem 0;
+    margin: 0.75rem 0 0;
   }
 
   .privacy-note p {

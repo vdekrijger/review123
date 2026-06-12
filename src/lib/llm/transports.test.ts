@@ -77,19 +77,29 @@ describe('PROVIDERS — structure', () => {
     expect(ids).toEqual(['deepseek', 'openai', 'anthropic', 'gemini'])
   })
 
-  it('deepseek has transport openai-compat and default model deepseek-chat', () => {
+  it('deepseek has transport openai-compat and default model deepseek-v4-flash', () => {
     const p = getProvider('deepseek')!
     expect(p.transport).toBe('openai-compat')
-    expect(p.defaultModel).toBe('deepseek-chat')
+    expect(p.defaultModel).toBe('deepseek-v4-flash')
     expect(p.baseUrl).toBe('https://api.deepseek.com')
   })
 
-  it('openai has transport openai-compat and default model gpt-5.2', () => {
+  it('deepseek keeps the legacy deepseek-chat/-reasoner ids until their 2026-07-24 deprecation', () => {
+    const p = getProvider('deepseek')!
+    expect(getModelDef(p, 'deepseek-chat')).toBeDefined()
+    expect(getModelDef(p, 'deepseek-reasoner')).toBeDefined()
+  })
+
+  it('openai has transport openai-compat and default model gpt-5.4', () => {
     const p = getProvider('openai')!
     expect(p.transport).toBe('openai-compat')
-    expect(p.defaultModel).toBe('gpt-5.2')
+    expect(p.defaultModel).toBe('gpt-5.4')
     // Must route through proxy, not api.openai.com directly
     expect(p.baseUrl).toBe('/api/llm/openai')
+  })
+
+  it('openai keeps the previous default gpt-5.2 (still available)', () => {
+    expect(getModelDef(getProvider('openai')!, 'gpt-5.2')).toBeDefined()
   })
 
   it('anthropic has transport anthropic and default model claude-sonnet-4-6', () => {
@@ -99,16 +109,45 @@ describe('PROVIDERS — structure', () => {
     expect(p.baseUrl).toBe('https://api.anthropic.com')
   })
 
-  it('gemini has transport gemini and default model gemini-2.5-flash', () => {
+  it('anthropic lineup spans Fable 5 down to Haiku 4.5', () => {
+    const p = getProvider('anthropic')!
+    expect(getModelDef(p, 'claude-fable-5')).toBeDefined()
+    expect(getModelDef(p, 'claude-opus-4-8')).toBeDefined()
+    expect(getModelDef(p, 'claude-haiku-4-5')).toBeDefined()
+  })
+
+  it('gemini has transport gemini and default model gemini-3.5-flash', () => {
     const p = getProvider('gemini')!
     expect(p.transport).toBe('gemini')
-    expect(p.defaultModel).toBe('gemini-2.5-flash')
+    expect(p.defaultModel).toBe('gemini-3.5-flash')
     expect(p.baseUrl).toBe('https://generativelanguage.googleapis.com')
   })
 
-  it('all providers have at least one model', () => {
+  it('gemini keeps the previous default gemini-2.5-flash (still stable)', () => {
+    expect(getModelDef(getProvider('gemini')!, 'gemini-2.5-flash')).toBeDefined()
+  })
+
+  it('every provider ships 2-4 models', () => {
     for (const p of PROVIDERS) {
-      expect(p.models.length).toBeGreaterThan(0)
+      expect(p.models.length).toBeGreaterThanOrEqual(2)
+      expect(p.models.length).toBeLessThanOrEqual(4)
+    }
+  })
+
+  it('every model def has a non-empty id, a human label and a positive context window', () => {
+    for (const p of PROVIDERS) {
+      for (const m of p.models) {
+        expect(m.id).toBeTruthy()
+        expect(m.label).toBeTruthy()
+        expect(m.contextWindowTokens).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it('model ids are unique within each provider', () => {
+    for (const p of PROVIDERS) {
+      const ids = p.models.map((m) => m.id)
+      expect(new Set(ids).size).toBe(ids.length)
     }
   })
 
@@ -155,11 +194,11 @@ describe('getProvider', () => {
 describe('activeLlmConfig()', () => {
   beforeEach(() => localStorage.clear())
 
-  it('defaults to deepseek provider and deepseek-chat model when no settings stored', () => {
+  it('defaults to deepseek provider and deepseek-v4-flash model when no settings stored', () => {
     const cfg = activeLlmConfig()
     expect(cfg.provider.id).toBe('deepseek')
-    expect(cfg.model.id).toBe('deepseek-chat')
-    expect(cfg.budgetTokens).toBe(58_000)
+    expect(cfg.model.id).toBe('deepseek-v4-flash')
+    expect(cfg.budgetTokens).toBe(994_000)
   })
 
   it('returns anthropic provider and claude-sonnet-4-6 when aiProvider=anthropic and no aiModel', () => {
@@ -184,12 +223,22 @@ describe('activeLlmConfig()', () => {
     expect(cfg.model.id).toBe('claude-sonnet-4-6')
   })
 
-  it('returns openai provider with gpt-5.2 default when aiProvider=openai', () => {
+  it('falls back to defaultModel when a saved aiModel was removed in a lineup refresh', () => {
+    // o4-mini was a valid OpenAI model id before the June 2026 lineup refresh.
+    setAiProvider('openai')
+    setAiModel('o4-mini')
+    const cfg = activeLlmConfig()
+    expect(cfg.provider.id).toBe('openai')
+    expect(cfg.model.id).toBe('gpt-5.4')
+    expect(cfg.budgetTokens).toBe(994_000) // budget follows the fallback model
+  })
+
+  it('returns openai provider with gpt-5.4 default when aiProvider=openai', () => {
     setAiProvider('openai')
     const cfg = activeLlmConfig()
     expect(cfg.provider.id).toBe('openai')
-    expect(cfg.model.id).toBe('gpt-5.2')
-    expect(cfg.budgetTokens).toBe(122_000) // 128_000 - 4_000 - 2_000
+    expect(cfg.model.id).toBe('gpt-5.4')
+    expect(cfg.budgetTokens).toBe(994_000) // 1_000_000 - 4_000 - 2_000
   })
 })
 
@@ -251,12 +300,12 @@ describe('openai-compat — deepseek default path (regression)', () => {
     expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer sk-test')
   })
 
-  it('sends model deepseek-chat in body', async () => {
+  it('sends model deepseek-v4-flash (provider default) in body', async () => {
     const f = vi.fn().mockResolvedValue(makeJsonResponse({ choices: [{ message: { content: 'ok' } }] }))
     vi.stubGlobal('fetch', f)
     await llmComplete({ system: 's', user: 'u' })
     const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
-    expect(body.model).toBe('deepseek-chat')
+    expect(body.model).toBe('deepseek-v4-flash')
   })
 
   it('llmCompleteWithUsage captures usage', async () => {
@@ -470,7 +519,7 @@ describe('gemini transport — llmComplete', () => {
     const [url, init] = f.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('generativelanguage.googleapis.com')
     expect(url).toContain(':generateContent')
-    expect(url).toContain('gemini-2.5-flash')
+    expect(url).toContain('gemini-3.5-flash')
     expect((init.headers as Record<string, string>)['x-goog-api-key']).toBe('AIza-test-key')
   })
 
@@ -622,13 +671,13 @@ describe('openai-compat via proxy — correct headers', () => {
     expect(headers['x-user-openai-key']).toBe('sk-openai-test')
   })
 
-  it('sends model gpt-5.2 in body', async () => {
+  it('sends model gpt-5.4 (provider default) in body', async () => {
     const body = { choices: [{ message: { content: 'ok' } }] }
     const f = vi.fn().mockResolvedValue(makeJsonResponse(body))
     vi.stubGlobal('fetch', f)
     await llmComplete({ system: 's', user: 'u' })
     const reqBody = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
-    expect(reqBody.model).toBe('gpt-5.2')
+    expect(reqBody.model).toBe('gpt-5.4')
   })
 })
 
@@ -665,18 +714,24 @@ describe('cacheKey — model id component', () => {
 // ===========================================================================
 
 describe('activeLlmConfig() — budgetTokens from active model', () => {
-  it('deepseek-chat → 58_000 budget', () => {
+  it('deepseek-v4-flash (default, 1M context) → 994_000 budget', () => {
     // Default
-    expect(activeLlmConfig().budgetTokens).toBe(58_000)
+    expect(activeLlmConfig().budgetTokens).toBe(994_000)
   })
 
-  it('anthropic (claude-sonnet-4-6, 200k context) → 194_000 budget', () => {
+  it('anthropic (claude-sonnet-4-6, 1M context) → 994_000 budget', () => {
     setAiProvider('anthropic')
+    expect(activeLlmConfig().budgetTokens).toBe(994_000)
+  })
+
+  it('anthropic (claude-haiku-4-5, 200k context) → 194_000 budget', () => {
+    setAiProvider('anthropic')
+    setAiModel('claude-haiku-4-5')
     expect(activeLlmConfig().budgetTokens).toBe(194_000)
   })
 
-  it('gemini (gemini-2.5-flash, 1M context) → 994_000 budget', () => {
+  it('gemini (gemini-3.5-flash, 1_048_576 context) → 1_042_576 budget', () => {
     setAiProvider('gemini')
-    expect(activeLlmConfig().budgetTokens).toBe(994_000)
+    expect(activeLlmConfig().budgetTokens).toBe(1_042_576)
   })
 })
