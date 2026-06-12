@@ -227,9 +227,113 @@ interface GlMrListItem {
   web_url: string
 }
 
+/**
+ * GitLab events API payload (GET /events). For "commented on" events the
+ * note payload rides along under `note`; target_type is Note / DiffNote /
+ * DiscussionNote depending on where the comment was left.
+ * Reference: https://docs.gitlab.com/ee/api/events.html
+ */
+interface GlEvent {
+  target_type?: string | null
+  note?: {
+    body: string
+    noteable_type?: string
+    system?: boolean
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Mapping helpers
 // ---------------------------------------------------------------------------
+
+// Inline (not imported from mineSkill) to avoid a circular dependency.
+function stripLongFencesLocal(body: string): string {
+  return body.replace(/```[^\n]*\n([\s\S]*?)```/g, (match, inner: string) => {
+    const lines = inner.split('\n')
+    if (lines.length > 10) return ''
+    return match
+  })
+}
+
+/** Re-throw rate-limit API errors as a clear, user-facing Error. */
+function throwIfGitlabRateLimited(err: unknown): void {
+  if (err instanceof GitlabApiError && err.detail.kind === 'rate-limited') {
+    throw new Error(
+      `GitLab rate limit exceeded. Resets at ${err.detail.resetAt.toLocaleTimeString()}.`,
+    )
+  }
+}
+
+/** Repo-scoped mining: the user's own notes on recent MRs in one project. */
+async function getProjectScopedReviewComments(
+  repo: { owner: string; repo: string },
+  cap: number,
+): Promise<string[]> {
+  const pid = encodeURIComponent(`${repo.owner}/${repo.repo}`)
+
+  // Step 1: get authenticated username (shared viewer-identity code path)
+  const myUsername = await fetchViewerUsername()
+  if (myUsername == null) return []
+
+  // Step 2: fetch recent MRs (cap 15 MRs, ordered by updated_at)
+  const mrs = await glFetch<GlMrSummary[]>(
+    `/projects/${pid}/merge_requests?state=all&per_page=20&order_by=updated_at`,
+  )
+  const cappedMrs = mrs.slice(0, 15)
+
+  // Step 3: fetch notes per MR, filter by author + non-system
+  const allBodies: string[] = []
+  for (const mr of cappedMrs) {
+    if (allBodies.length >= cap) break
+    try {
+      const notes = await glFetch<GlMrNote[]>(
+        `/projects/${pid}/merge_requests/${mr.iid}/notes?per_page=100`,
+      )
+      for (const note of notes) {
+        if (note.system) continue
+        if (note.author.username !== myUsername) continue
+        const body = stripLongFencesLocal(note.body).trim()
+        if (body.length > 0) allBodies.push(body)
+        if (allBodies.length >= cap) break
+      }
+    } catch {
+      // non-fatal — skip this MR
+    }
+  }
+
+  return allBodies
+}
+
+/** Max pages of /events fetched in account-scoped mining. */
+const MINE_EVENT_PAGES = 3
+
+/**
+ * Account-scoped mining: the authenticated user's own "commented on" events
+ * across all projects (GET /events is self-scoped), filtered to MR notes.
+ */
+async function getAccountScopedReviewComments(cap: number): Promise<string[]> {
+  const bodies: string[] = []
+  try {
+    for (let page = 1; page <= MINE_EVENT_PAGES && bodies.length < cap; page++) {
+      const events = await glFetch<GlEvent[]>(
+        `/events?action=commented&per_page=100&page=${page}`,
+      )
+      if (!Array.isArray(events) || events.length === 0) break
+      for (const event of events) {
+        if (bodies.length >= cap) break
+        const note = event.note
+        if (!note || note.system) continue
+        if (note.noteable_type !== 'MergeRequest') continue
+        const body = stripLongFencesLocal(note.body).trim()
+        if (body.length > 0) bodies.push(body)
+      }
+    }
+  } catch (err) {
+    throwIfGitlabRateLimited(err)
+    throw err
+  }
+  return bodies
+}
 
 function mapMrState(state: string): 'open' | 'closed' {
   return state === 'opened' ? 'open' : 'closed'
@@ -666,52 +770,19 @@ export const gitlabProvider: ReviewProvider = {
     return `\`\`\`suggestion:-0+0\n${lines.join('\n')}\n\`\`\``
   },
 
-  async getMyReviewComments(
+  getMyReviewComments(
     repo: { owner: string; repo: string },
     cap: number,
   ): Promise<string[]> {
-    const pid = encodeURIComponent(`${repo.owner}/${repo.repo}`)
+    return getProjectScopedReviewComments(repo, cap)
+  },
 
-    // Inline stripLongFences to avoid circular dependency with mineSkill module
-    function stripLongFencesLocal(body: string): string {
-      return body.replace(/```[^\n]*\n([\s\S]*?)```/g, (match, inner: string) => {
-        const lines = inner.split('\n')
-        if (lines.length > 10) return ''
-        return match
-      })
-    }
-
-    // Step 1: get authenticated username
-    const myUsername = await fetchViewerUsername()
-    if (myUsername == null) return []
-
-    // Step 2: fetch recent MRs (cap 15 MRs, ordered by updated_at)
-    const mrs = await glFetch<GlMrSummary[]>(
-      `/projects/${pid}/merge_requests?state=all&per_page=20&order_by=updated_at`,
-    )
-    const cappedMrs = mrs.slice(0, 15)
-
-    // Step 3: fetch notes per MR, filter by author + non-system
-    const allBodies: string[] = []
-    for (const mr of cappedMrs) {
-      if (allBodies.length >= cap) break
-      try {
-        const notes = await glFetch<GlMrNote[]>(
-          `/projects/${pid}/merge_requests/${mr.iid}/notes?per_page=100`,
-        )
-        for (const note of notes) {
-          if (note.system) continue
-          if (note.author.username !== myUsername) continue
-          const body = stripLongFencesLocal(note.body).trim()
-          if (body.length > 0) allBodies.push(body)
-          if (allBodies.length >= cap) break
-        }
-      } catch {
-        // non-fatal — skip this MR
-      }
-    }
-
-    return allBodies
+  getMyAccountReviewComments(
+    cap: number,
+    repoFilter?: { owner: string; repo: string },
+  ): Promise<string[]> {
+    if (repoFilter) return getProjectScopedReviewComments(repoFilter, cap)
+    return getAccountScopedReviewComments(cap)
   },
 
   async getMyQueue(): Promise<QueueItem[]> {

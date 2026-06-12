@@ -1,5 +1,15 @@
 <script lang="ts">
+  import { settingsState } from '../lib/settings/settingsState.svelte'
+  import { getProvider } from '../lib/llm/providers'
+
   let { repo, onresult }: { repo: string; onresult: (accepted: boolean) => void } = $props()
+
+  // Name the ACTIVE provider (Plan F) — reactive via the settingsState facade.
+  const activeProviderId = $derived(settingsState.current.aiProvider)
+  const providerName = $derived(getProvider(activeProviderId)?.displayName ?? 'the AI provider')
+  // OpenAI is the only provider routed through our serverless proxy (api.openai.com
+  // has no browser CORS); all others are called directly from the browser.
+  const usesProxy = $derived(activeProviderId === 'openai')
 
   let dialogEl = $state<HTMLDialogElement | null>(null)
 
@@ -28,14 +38,19 @@
 >
   <h2>Allow AI analysis of private repository?</h2>
   <p>
-    Code from the private repository <strong>{repo}</strong> will be sent to DeepSeek for analysis.
+    Code from the private repository <strong>{repo}</strong> will be sent to {providerName} for analysis.
   </p>
   <p>
-    DeepSeek will receive the file contents and diffs from this pull request.
-    Your API key is stored locally in your browser and sent only to DeepSeek.
+    {providerName} will receive the file contents and diffs from this pull request.
+    {#if usesProxy}
+      Your API key and code transit our serverless proxy to reach {providerName} — they are never stored or logged there.
+      Your API key is stored locally in your browser.
+    {:else}
+      Your API key is stored locally in your browser and your code is sent directly from your browser to {providerName}.
+    {/if}
   </p>
   <div class="actions">
-    <button class="btn btn-primary" onclick={accept}>Send code to DeepSeek</button>
+    <button class="btn btn-primary" onclick={accept}>Send code to {providerName}</button>
     <button class="btn" onclick={decline}>Not now</button>
   </div>
 </dialog>

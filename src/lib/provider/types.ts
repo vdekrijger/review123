@@ -157,6 +157,24 @@ export interface ReviewProvider {
   ): Promise<string[]>
 
   /**
+   * Fetch the authenticated user's recent review comment bodies ACROSS repos
+   * (account-scoped). The provider resolves the authenticated identity itself
+   * (GitHub: GET /user → login; GitLab: GET /user → username) and gathers that
+   * user's recent PR/MR review comments. Returns comment bodies only (not
+   * metadata); code fences > 10 lines are stripped. Capped at `cap` comments.
+   *
+   * When `repoFilter` is provided, the search is narrowed to that single
+   * repository (delegates to the repo-scoped path).
+   *
+   * Optional — method presence implies capability (same pattern as getMyQueue).
+   * When absent, the UI should explain "not available for <Provider> yet".
+   */
+  getMyAccountReviewComments?(
+    cap: number,
+    repoFilter?: { owner: string; repo: string },
+  ): Promise<string[]>
+
+  /**
    * Return open PRs/MRs in the current user's review queue.
    * - authorIsMe=false → awaiting this user's review (reviewer-requested)
    * - authorIsMe=true  → authored by this user (open PRs)
