@@ -17,7 +17,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import SettingsPanel from './SettingsPanel.svelte'
-import { addSkill, listSkills, SKILLS_CAP, SKILL_CONTENT_CAP } from '../lib/skills/skills'
+import { addSkill, listSkills, removeSkill, SKILLS_CAP, SKILL_CONTENT_CAP } from '../lib/skills/skills'
+import { SAMPLE_SKILL_NAME } from '../lib/skills/sampleSkill'
 import { _resetAuthStateForTest } from '../lib/auth/authState.svelte'
 
 vi.mock('../lib/settings/appearance.svelte', () => ({
@@ -173,6 +174,70 @@ describe('SettingsPanel — Reviewer skills section', () => {
         // Acceptable: button hidden at cap
         expect(addBtn).toBeNull()
       }
+    })
+  })
+
+  describe('"Add sample reviewer" button', () => {
+    it('shows "Add sample reviewer" button when no sample skill exists', () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      expect(screen.getByRole('button', { name: /add sample reviewer/i })).toBeInTheDocument()
+    })
+
+    it('clicking "Add sample reviewer" installs sample skill and hides the button', async () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      const btn = screen.getByRole('button', { name: /add sample reviewer/i })
+      await userEvent.click(btn)
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /add sample reviewer/i })).not.toBeInTheDocument()
+      })
+      expect(listSkills().some(s => s.name === SAMPLE_SKILL_NAME)).toBe(true)
+    })
+
+    it('installed sample skill is enabled', async () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      await userEvent.click(screen.getByRole('button', { name: /add sample reviewer/i }))
+      await waitFor(() => {
+        const skills = listSkills()
+        const sample = skills.find(s => s.name === SAMPLE_SKILL_NAME)
+        expect(sample).toBeDefined()
+        expect(sample?.enabled).toBe(true)
+      })
+    })
+
+    it('sample skill name appears in the list after install', async () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      await userEvent.click(screen.getByRole('button', { name: /add sample reviewer/i }))
+      await waitFor(() => {
+        expect(screen.getByText(SAMPLE_SKILL_NAME)).toBeInTheDocument()
+      })
+    })
+
+    it('"Add sample reviewer" button reappears after the sample skill is deleted', async () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      // Install it
+      await userEvent.click(screen.getByRole('button', { name: /add sample reviewer/i }))
+      await waitFor(() => {
+        expect(screen.getByText(SAMPLE_SKILL_NAME)).toBeInTheDocument()
+      })
+      // Delete it — escape regex special chars in the skill name
+      const escapedName = SAMPLE_SKILL_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const deleteBtn = screen.getByRole('button', { name: new RegExp(`delete ${escapedName}`, 'i') })
+      await userEvent.click(deleteBtn)
+      // Button should reappear
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /add sample reviewer/i })).toBeInTheDocument()
+      })
+    })
+
+    it('hides "Add sample reviewer" button when the sample skill was pre-seeded', () => {
+      addSkill(SAMPLE_SKILL_NAME, 'some content')
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      expect(screen.queryByRole('button', { name: /add sample reviewer/i })).not.toBeInTheDocument()
+    })
+
+    it('shows caption "A general best-practices persona" under the button', () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      expect(screen.getByText(/A general best-practices persona/i)).toBeInTheDocument()
     })
   })
 })
