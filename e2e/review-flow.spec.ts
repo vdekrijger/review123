@@ -31,6 +31,9 @@ const BASE_SHA = 'def0987654321'
 
 const PR_URL = `https://github.com/${OWNER}/${REPO}/pull/${PR_NUMBER}`
 const APP_REVIEW_PATH = `/review/${OWNER}/${REPO}/${PR_NUMBER}`
+const APP_REVIEW_UNDERSTAND = `${APP_REVIEW_PATH}/understand`
+const APP_REVIEW_INSPECT = `${APP_REVIEW_PATH}/inspect`
+const APP_REVIEW_VERDICT = `${APP_REVIEW_PATH}/verdict`
 
 // A minimal patch with real +/- lines so the diff view renders colored rows
 const PATCH_WITH_LINES = `@@ -1,3 +1,4 @@
@@ -598,8 +601,8 @@ test('landing: paste PR URL navigates to review route', async ({ page }) => {
   await input.fill(PR_URL)
   await page.getByRole('button', { name: 'Review' }).click()
 
-  // Should navigate to the review route
-  await expect(page).toHaveURL(APP_REVIEW_PATH)
+  // Should navigate to the review route (URL canonicalized to /understand)
+  await expect(page).toHaveURL(APP_REVIEW_UNDERSTAND, { timeout: 5_000 })
 
   // PR title should appear once loaded
   await expect(
@@ -897,8 +900,7 @@ test('viewed-state: mark first file viewed → collapses → reload → still co
     page.getByRole('heading', { name: /Test PR: add feature/i }),
   ).toBeVisible({ timeout: 10_000 })
 
-  // Navigate back to step 2
-  await page.getByRole('button', { name: 'Next step' }).click()
+  // Step 2 is restored from URL (page was reloaded at /inspect)
   await expect(fileDiffs.first()).toBeVisible({ timeout: 5_000 })
 
   // After reload, first article should still be collapsed (persisted in localStorage)
@@ -1769,8 +1771,8 @@ test('compare-back: browser back while compare is active exits compare and stays
   // Wait for compare to activate — 1 file (src/feature.ts from makeCompareOneFile)
   await expect(page.locator('article.file-diff')).toHaveCount(1, { timeout: 8_000 })
 
-  // Verify we are in compare mode: URL is still the review path
-  await expect(page).toHaveURL(APP_REVIEW_PATH)
+  // Verify we are in compare mode: URL is still the inspect path
+  await expect(page).toHaveURL(APP_REVIEW_INSPECT)
 
   // Browser BACK — should exit compare, NOT navigate to the landing/homepage.
   // Use waitUntil: 'commit' because a same-URL popstate doesn't trigger a full
@@ -1780,6 +1782,39 @@ test('compare-back: browser back while compare is active exits compare and stays
   // After back: full diff is restored (2 files again) — give Svelte time to re-render
   await expect(page.locator('article.file-diff')).toHaveCount(2, { timeout: 8_000 })
 
-  // URL must still be the review route (not /  or anything else)
-  await expect(page).toHaveURL(APP_REVIEW_PATH)
+  // URL must still be the inspect route (not / or anything else)
+  await expect(page).toHaveURL(APP_REVIEW_INSPECT)
+})
+
+// ---------------------------------------------------------------------------
+// Test 20: browser back from verdict step lands on inspect URL
+// ---------------------------------------------------------------------------
+
+test('step-back: browser back from verdict returns to /inspect URL', async ({ page }) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (inspect) — URL becomes .../inspect
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page).toHaveURL(APP_REVIEW_INSPECT, { timeout: 3_000 })
+
+  // Navigate to step 3 (verdict) — URL becomes .../verdict
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page).toHaveURL(APP_REVIEW_VERDICT, { timeout: 3_000 })
+
+  // Browser back — should return to /inspect
+  await page.goBack({ waitUntil: 'commit' })
+  await expect(page).toHaveURL(APP_REVIEW_INSPECT, { timeout: 3_000 })
+
+  // Step 2 content should be visible (diff mode toggle)
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible({ timeout: 5_000 })
 })
