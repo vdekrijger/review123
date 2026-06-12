@@ -885,7 +885,7 @@ describe('gitlabProvider.getMyReviewComments', () => {
   })
 
   it('fetches /user then MRs then notes, returns own non-system comment bodies', async () => {
-    global.fetch = mockFetchSequence(
+    vi.stubGlobal('fetch', mockFetchSequence(
       { body: { username: 'alice' } },
       { body: [{ iid: 1 }] },
       { body: [
@@ -894,7 +894,7 @@ describe('gitlabProvider.getMyReviewComments', () => {
           { author: { username: 'alice' }, body: '', system: true },
         ]
       },
-    )
+    ))
 
     const result = await gitlabProvider.getMyReviewComments!(
       { owner: 'mygroup', repo: 'myproject' },
@@ -906,7 +906,7 @@ describe('gitlabProvider.getMyReviewComments', () => {
   })
 
   it('skips system notes', async () => {
-    global.fetch = mockFetchSequence(
+    vi.stubGlobal('fetch', mockFetchSequence(
       { body: { username: 'alice' } },
       { body: [{ iid: 1 }] },
       { body: [
@@ -914,7 +914,7 @@ describe('gitlabProvider.getMyReviewComments', () => {
           { author: { username: 'alice' }, body: 'Real comment', system: false },
         ]
       },
-    )
+    ))
 
     const result = await gitlabProvider.getMyReviewComments!(
       { owner: 'mygroup', repo: 'myproject' },
@@ -927,11 +927,11 @@ describe('gitlabProvider.getMyReviewComments', () => {
     const longFence = '```ts\n' + Array.from({length: 12}, (_, i) => `line${i}`).join('\n') + '\n```'
     const noteBody = `Before\n${longFence}\nAfter`
 
-    global.fetch = mockFetchSequence(
+    vi.stubGlobal('fetch', mockFetchSequence(
       { body: { username: 'alice' } },
       { body: [{ iid: 1 }] },
       { body: [{ author: { username: 'alice' }, body: noteBody, system: false }] },
-    )
+    ))
 
     const result = await gitlabProvider.getMyReviewComments!(
       { owner: 'mygroup', repo: 'myproject' },
@@ -947,11 +947,11 @@ describe('gitlabProvider.getMyReviewComments', () => {
       author: { username: 'alice' }, body: `comment ${i}`, system: false
     }))
 
-    global.fetch = mockFetchSequence(
+    vi.stubGlobal('fetch', mockFetchSequence(
       { body: { username: 'alice' } },
       { body: [{ iid: 1 }] },
       { body: manyNotes },
-    )
+    ))
 
     const result = await gitlabProvider.getMyReviewComments!(
       { owner: 'mygroup', repo: 'myproject' },
@@ -961,12 +961,12 @@ describe('gitlabProvider.getMyReviewComments', () => {
   })
 
   it('processes multiple MRs (cap 15 MRs)', async () => {
-    global.fetch = mockFetchSequence(
+    vi.stubGlobal('fetch', mockFetchSequence(
       { body: { username: 'alice' } },
       { body: [{ iid: 1 }, { iid: 2 }] },
       { body: [{ author: { username: 'alice' }, body: 'comment on MR1', system: false }] },
       { body: [{ author: { username: 'alice' }, body: 'comment on MR2', system: false }] },
-    )
+    ))
 
     const result = await gitlabProvider.getMyReviewComments!(
       { owner: 'mygroup', repo: 'myproject' },
