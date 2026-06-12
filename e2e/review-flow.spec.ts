@@ -804,10 +804,11 @@ test('tests-panel: glance chip shows covered/gap counts; open panel shows checkl
   await testsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
 
   // Covered checklist rows should be visible (2 covered items)
-  await expect(page.locator('.tests-covered-item')).toHaveCount(2)
+  // Scope to the tests-panel details so we don't count the rail's copy
+  await expect(page.locator('details.tests-panel .tests-covered-item')).toHaveCount(2)
 
   // Gap rows should also be visible (1 gap)
-  await expect(page.locator('.tests-gap-item')).toHaveCount(1)
+  await expect(page.locator('details.tests-panel .tests-gap-item')).toHaveCount(1)
 })
 
 // ---------------------------------------------------------------------------
@@ -1100,22 +1101,23 @@ test('alternatives-panel: glance chip appears when alternative-is-better; panel 
   const altPanel = page.locator('details.alternatives-panel')
   await altPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
 
-  // Problem statement should be visible
+  // Problem statement should be visible — scope to the alternatives panel
+  // to avoid the rail's copy matching too
   await expect(
-    page.getByText(/The PR introduces a global singleton cache/i),
+    page.locator('details.alternatives-panel').getByText(/The PR introduces a global singleton cache/i),
   ).toBeVisible({ timeout: 5_000 })
 
-  // Both alternative cards should be visible
-  await expect(page.locator('.alternative-card')).toHaveCount(2)
+  // Both alternative cards should be visible (scoped to the step-1 panel)
+  await expect(page.locator('details.alternatives-panel .alternative-card')).toHaveCount(2)
 
   // The "alternative-is-better" chip should show "Worth considering"
   await expect(
-    page.locator('.assessment-chip.assessment-alternative-is-better'),
+    page.locator('details.alternatives-panel .assessment-chip.assessment-alternative-is-better'),
   ).toContainText('Worth considering')
 
   // The "comparable" chip should show "Comparable"
   await expect(
-    page.locator('.assessment-chip.assessment-comparable'),
+    page.locator('details.alternatives-panel .assessment-chip.assessment-comparable'),
   ).toContainText('Comparable')
 })
 
