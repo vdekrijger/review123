@@ -6,6 +6,7 @@
   import VerdictPanel from './panels/VerdictPanel.svelte'
   import CiSummary from './CiSummary.svelte'
   import MarkdownView from './MarkdownView.svelte'
+  import Skeleton from './Skeleton.svelte'
   import { SECTION_REGISTRY } from './panels/sectionRegistry'
   import { track } from '../lib/analytics/analytics'
   import type { AiRun } from '../lib/ai/run.svelte'
@@ -29,6 +30,13 @@
 
   const attention = $derived(
     run.attention.status === 'done' ? (run.attention.value as AttentionResult) : undefined
+  )
+
+  // Hotspots pending: attention run hasn't settled yet ('idle' = queued before
+  // the run signals 'loading') — show a skeleton section instead of nothing so
+  // the section doesn't pop in late.
+  const attentionPending = $derived(
+    run.attention.status === 'idle' || run.attention.status === 'loading'
   )
 
   function levelIcon(level: 'high' | 'medium' | 'low'): string {
@@ -100,13 +108,22 @@
             <details class="rail-section-details" open>
               <summary class="rail-section-summary">Hotspots</summary>
               <div class="rail-section-body">
+                <!-- Legend: marker = AI-assessed attention level (AttentionResult.hotspots[].level) -->
+                <p class="hotspot-legend">
+                  <span class="legend-level level-high">⚠ high risk</span>
+                  <span class="legend-sep" aria-hidden="true">·</span>
+                  <span class="legend-level level-medium">◆ medium</span>
+                  <span class="legend-sep" aria-hidden="true">·</span>
+                  <span class="legend-level level-low">● low attention</span>
+                </p>
                 <ul class="hotspot-list">
                   {#each attention.hotspots as hotspot (hotspot.path)}
                     <li>
                       <button
                         class="hotspot-btn level-{hotspot.level}"
                         onclick={() => handleHotspot(hotspot.path)}
-                        aria-label={hotspot.path}
+                        aria-label="{hotspot.path} ({hotspot.level} attention)"
+                        title="{hotspot.level} attention — {hotspot.reason}"
                       >
                         <span class="hotspot-icon" aria-hidden="true">{levelIcon(hotspot.level)}</span>
                         <span class="hotspot-path">{hotspot.path}</span>
@@ -114,6 +131,13 @@
                     </li>
                   {/each}
                 </ul>
+              </div>
+            </details>
+          {:else if attentionPending}
+            <details class="rail-section-details rail-hotspots-pending" open>
+              <summary class="rail-section-summary">Hotspots</summary>
+              <div class="rail-section-body">
+                <Skeleton lines={3} />
               </div>
             </details>
           {/if}
@@ -287,39 +311,38 @@
     font-size: 0.82rem;
   }
 
+  /* Marker (rotating triangle) comes from the global details > summary
+     pattern in app.css — re-declaring a ::before here merges with it on the
+     same pseudo-element and renders a double chevron. Only sizing below. */
   .rail-section-summary {
-    cursor: pointer;
     padding: 0.55rem 0.75rem;
     font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
     letter-spacing: 0.05em;
     opacity: 0.7;
-    list-style: none;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    user-select: none;
-  }
-
-  .rail-section-summary::-webkit-details-marker { display: none; }
-
-  .rail-section-summary::before {
-    content: '›';
-    display: inline-block;
-    transition: transform 0.15s;
-    font-size: 1rem;
-    opacity: 0.5;
-    flex-shrink: 0;
-  }
-
-  details[open] > .rail-section-summary::before {
-    transform: rotate(90deg);
   }
 
   .rail-section-body {
     padding: 0.5rem 0.75rem 0.75rem;
   }
+
+  /* Hotspot legend — compact muted caption explaining the level markers */
+  .hotspot-legend {
+    margin: 0 0 0.4rem;
+    padding: 0 0.4rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.02em;
+    opacity: 0.75;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+  }
+
+  .legend-level { white-space: nowrap; }
+  .legend-level.level-high { color: var(--legend-removed-color); }
+  .legend-level.level-medium { color: var(--legend-changed-color); }
+  .legend-level.level-low { color: var(--text-muted); }
+  .legend-sep { color: var(--text-muted); }
 
   /* Hotspot list (rail-specific jump behaviour) */
   .hotspot-list {

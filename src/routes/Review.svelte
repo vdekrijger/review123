@@ -29,7 +29,7 @@
   import type { PrFile } from '../lib/github/types'
   import type { PrComment } from '../lib/github/comments'
   import type { PrCommit } from '../lib/github/commits'
-  import { slugify } from '../lib/slug'
+  import { jumpToFileDiff } from '../lib/diff/jumpToFile'
   import { migrateLegacyVisits, migrateLegacyViewed } from '../lib/provider/storeKeys'
   import { providerFor } from '../lib/provider/registry'
   import type { PrRefX } from '../lib/provider/types'
@@ -467,11 +467,13 @@
     return parseReadingOrder(aiRun.summary.value as string)
   })
 
+  // Jump to a file's diff card: SPA-navigate to the Inspect step when not
+  // already there (router pushState — never location.href, no page reload),
+  // then scroll to / expand the card via the shared file-tree mechanism.
   function handleHotspot(path: string) {
-    goStep(2)
-    // Scroll to file after step switch (next tick)
-    requestAnimationFrame(() => {
-      document.getElementById(`file-${slugify(path)}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    jumpToFileDiff(path, {
+      isInspectActive: step === 2,
+      navigateToInspect: () => goStep(2),
     })
   }
 
@@ -672,6 +674,7 @@
         coachFn={aiRun ? aiRun.coach : undefined}
         {prComments}
         provider={activeProvider}
+        authorLogin={load.state.meta.authorLogin}
       />
     {/if}
   {/if}

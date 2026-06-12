@@ -1109,6 +1109,59 @@ describe('coach() — prComments threading', () => {
 })
 
 // ---------------------------------------------------------------------------
+// coach() — v9: verdict + diff context threading
+// ---------------------------------------------------------------------------
+
+describe('coach() — verdict and diff context threading (v9)', () => {
+  function lastCoachUserPrompt(deps: ReturnType<typeof makeDeps>): Record<string, unknown> {
+    const callArgs = deps.llmJsonWithRepair.mock.calls.at(-1)!
+    const userPrompt: string = (callArgs[0] as { system: string; user: string }).user
+    return JSON.parse(userPrompt) as Record<string, unknown>
+  }
+
+  it('passes the chosen verdict into the prompt payload as chosenVerdict', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockResolvedValue(COACH_RESULT)
+
+    const run = createAiRun(makeInput(), deps)
+    await run.coach(DRAFT_FIXTURE, undefined, 'APPROVE')
+
+    expect(lastCoachUserPrompt(deps)['chosenVerdict']).toBe('APPROVE')
+  })
+
+  it('omits chosenVerdict when no verdict is given (backward compatible)', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockResolvedValue(COACH_RESULT)
+
+    const run = createAiRun(makeInput(), deps)
+    await run.coach(DRAFT_FIXTURE)
+
+    expect('chosenVerdict' in lastCoachUserPrompt(deps)).toBe(false)
+  })
+
+  it('packs the PR context and passes it as prContext (grounds accuracy/grounded)', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockResolvedValue(COACH_RESULT)
+
+    const run = createAiRun(makeInput(), deps)
+    await run.coach(DRAFT_FIXTURE)
+
+    expect(lastCoachUserPrompt(deps)['prContext']).toBe('some PR context')
+  })
+
+  it('still coaches when pack() fails — no prContext, no error', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockResolvedValue(COACH_RESULT)
+
+    const run = createAiRun(makeInput({ pack: async () => { throw new Error('pack broke') } }), deps)
+    const result = await run.coach(DRAFT_FIXTURE)
+
+    expect('error' in result).toBe(false)
+    expect('prContext' in lastCoachUserPrompt(deps)).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // ask() — on-demand free-form Q&A, never cached, consent gating
 // ---------------------------------------------------------------------------
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import FileDiff from './FileDiff.svelte'
   import type { SkillFinding } from './FileDiff.svelte'
+  import SkillFindingCard from './SkillFindingCard.svelte'
   import FileTree from './FileTree.svelte'
   import type { PrFile } from '../lib/github/types'
   import type { DiffMode } from '../lib/settings/settings'
@@ -14,6 +15,7 @@
   import type { createViewedStore } from '../lib/viewed/viewed.svelte'
   import type { PrComment } from '../lib/github/comments'
   import { slugify } from '../lib/slug'
+  import { scrollToFileCard } from '../lib/diff/jumpToFile'
   import type { SkillReviewEntry, AskFocus } from '../lib/ai/run.svelte'
   import type { SkillReviewResult } from '../lib/ai/schemas'
   import { listSkills } from '../lib/skills/skills'
@@ -142,25 +144,12 @@
   // Diff width: 'centered' (default) | 'full'
   const diffWidth = $derived<DiffWidth>(getSettings().diffWidth)
 
-  // ---- Viewport regime thresholds ----
-  // WIDE_THRESHOLD (≥1200px): left margin likely ≥ 340px; drawer fits purely in margin.
-  // NARROW_THRESHOLD (<900px): existing fixed-overlay mode (diff-column gets drawer-open offset).
-  // Between 900–1199px: drawer is a floating overlay (absolute, leftward, shadow + backdrop),
-  //   but NEVER pushes/shrinks the diff column.
-  // In ALL cases ≥900px, the diff column is never pushed — only visual elevation differs.
-  const WIDE_THRESHOLD = 1200
+  // ---- Viewport thresholds ----
+  // The margin-vs-inline drawer decision is pure CSS (see the drawer CSS block
+  // below — media query + .diff-full). No JS viewport tracking is needed for it.
+  // NARROW_THRESHOLD (<900px): after picking a file on a small screen we close
+  // the drawer so the diff gets its width back (checked at call time, no listener).
   const NARROW_THRESHOLD = 900
-  let isWideViewport = $state(typeof window !== 'undefined' ? window.innerWidth >= WIDE_THRESHOLD : false)
-  let isNarrowViewport = $state(typeof window !== 'undefined' ? window.innerWidth < NARROW_THRESHOLD : false)
-
-  $effect(() => {
-    function onResize() {
-      isWideViewport = window.innerWidth >= WIDE_THRESHOLD
-      isNarrowViewport = window.innerWidth < NARROW_THRESHOLD
-    }
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  })
 
   function toggleTree(): void {
     treeOpen = !treeOpen
@@ -184,16 +173,8 @@
 
   function handleTreeSelect(path: string): void {
     activePath = path
-    const slug = slugify(path)
-    const wrapper = document.getElementById(`file-${slug}`)
-    if (!wrapper) return
-    wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    // If the article inside is collapsed (viewed), click its header to expand
-    const article = wrapper.querySelector('article.file-diff.is-collapsed')
-    if (article) {
-      const header = article.querySelector('header') as HTMLElement | null
-      header?.click()
-    }
+    // Shared scroll + expand-if-collapsed mechanism (also used by hotspot jumps)
+    scrollToFileCard(path)
     // On narrow viewport (<900px), close the drawer after selecting a file
     if (window.innerWidth < NARROW_THRESHOLD) closeTree()
   }
@@ -317,11 +298,8 @@
       body: finding.body,
     })
     track('comment_drafted')
+    // "Added as draft" is session state — shown as a labeled state chip on the card
     addedDraftKeys = new Set([...addedDraftKeys, finding.key])
-    // Reset the "Added" confirmation state after 2s
-    setTimeout(() => {
-      addedDraftKeys = new Set([...addedDraftKeys].filter(k => k !== finding.key))
-    }, 2000)
   }
 
   // Show the run button when: skills exist + key present + runSkillReviewsFn provided
@@ -458,10 +436,13 @@
 {#if files.length === 0}
   <p>This PR has no changed files.</p>
 {:else}
-  <div class="inspect-layout" class:diff-full={diffWidth === 'full'} data-wide={isWideViewport ? 'true' : 'false'} data-diffwidth={diffWidth}>
-    <!-- Collapsible drawer: zero-width flex placeholder, nav panel extends LEFTWARD -->
-    <!-- DOM order: drawer first → tab second → diff column, so nav's right edge meets tab's LEFT edge -->
-    <div class="file-tree-drawer" data-open={treeOpen ? 'true' : 'false'} data-wide={isWideViewport ? 'true' : 'false'} aria-hidden={!treeOpen}>
+  <div class="inspect-layout" class:diff-full={diffWidth === 'full'} data-diffwidth={diffWidth}>
+    <!-- Collapsible drawer. Two CSS regimes (see drawer CSS block below):
+         MARGIN mode (centered + wide viewport): zero-width flex placeholder, nav extends LEFTWARD into the margin.
+         INLINE mode (full-width OR narrower viewport): in-flow 340px flex child right of the tab; diff shrinks while open.
+         DOM order: drawer first → tab second → diff column (margin mode anchors nav's right edge to the tab's LEFT edge;
+         inline mode reorders the tab visually via flex `order`). -->
+    <div class="file-tree-drawer" data-open={treeOpen ? 'true' : 'false'} aria-hidden={!treeOpen}>
       {#if treeOpen}
         <nav class="file-tree-nav" aria-label="File tree">
           <div class="tree-drawer-header">
@@ -497,17 +478,9 @@
       <span class="tree-toggle-label">Files</span>
     </button>
 
-    <!-- Backdrop: shown on overlay regimes (mid 900–1199px and narrow <900px) -->
-    <!-- On wide (≥1200px) centered mode: drawer fits in left margin — no backdrop needed. -->
-    <!-- On wide (≥1200px) full-width mode: NO left margin exists — must show backdrop. -->
-    {#if treeOpen && (!isWideViewport || diffWidth === 'full')}
-      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-      <div class="tree-backdrop" onclick={closeTree} aria-hidden="true"></div>
-    {/if}
-
-    <!-- Diff column: drawer-open only on narrow (<900px) for narrow-specific overlay offset -->
-    <!-- On ≥900px, the drawer is out-of-flow; diff-column is never pushed -->
-    <div class="diff-column" class:drawer-open={treeOpen && isNarrowViewport}>
+    <!-- No backdrop in any regime: the drawer never overlays the diff. In inline
+         mode it pushes the diff over (flex), in margin mode it dwells in the margin. -->
+    <div class="diff-column">
       {#each orderedFiles as file (file.filename)}
         <div id="file-{slugify(file.filename)}">
           {#if hotspotMap.has(file.filename)}
@@ -525,25 +498,17 @@
           {#if fileLevelSuggestionsByPath.has(file.filename)}
             {#each (fileLevelSuggestionsByPath.get(file.filename) ?? []) as suggestion (suggestion.key)}
               {#if !dismissedKeys.has(suggestion.key)}
-                <div class="skill-finding severity-{suggestion.severity}">
-                  <div class="skill-finding-header">
-                    <span class="skill-persona-label">{suggestion.skillName}</span>
-                    <span class="skill-severity-chip severity-chip-{suggestion.severity}">{suggestion.severity}</span>
-                  </div>
-                  <p class="skill-finding-body">{suggestion.body}</p>
-                  <div class="skill-finding-actions">
-                    <button
-                      class="skill-add-draft-btn"
-                      class:added={addedDraftKeys.has(suggestion.key)}
-                      onclick={() => addFindingAsDraft(suggestion)}
-                      disabled={addedDraftKeys.has(suggestion.key)}
-                      aria-label={addedDraftKeys.has(suggestion.key) ? 'Added to drafts' : 'Add as draft comment'}
-                    >{addedDraftKeys.has(suggestion.key) ? '✓ Added' : 'Add as draft'}</button>
-                    <button
-                      class="skill-dismiss-btn"
-                      onclick={() => dismissFinding(suggestion.key)}
-                    >Dismiss</button>
-                  </div>
+                <div class="file-level-finding">
+                <SkillFindingCard
+                  skillName={suggestion.skillName}
+                  severity={suggestion.severity}
+                  body={suggestion.body}
+                  line={suggestion.line}
+                  anchored={false}
+                  added={addedDraftKeys.has(suggestion.key)}
+                  onAdd={() => addFindingAsDraft(suggestion)}
+                  onDismiss={() => dismissFinding(suggestion.key)}
+                />
                 </div>
               {/if}
             {/each}
@@ -575,34 +540,34 @@
 <style>
   /*
    * ==========================================================================
-   * DRAWER CSS — THREE CONSOLIDATED REGIMES
+   * DRAWER CSS — TWO ADAPTIVE REGIMES (pure CSS, no JS viewport tracking)
    *
-   * REGIME A — Wide (≥1200px): drawer is absolutely positioned LEFTWARD of the
-   *   tab, opening into the left margin. Fits in margin when available; when
-   *   viewport is wide but margin < 340px, still floats (overlay, no diff push).
-   *   No backdrop. Diff column is NEVER touched.
+   * MARGIN mode — centered diff AND viewport ≥ 1750px (the left margin beside
+   *   the 70rem column can fit the whole 340px tree): the drawer wrapper is a
+   *   zero-width flex placeholder and the nav extends LEFTWARD into the margin.
+   *   The diff column never moves. Exactly the historical wide behaviour.
    *
-   * REGIME B — Mid (900–1199px): drawer is absolutely positioned LEFTWARD.
-   *   Same left-anchor as wide, but viewport narrower → drawer may overlay page
-   *   content to the left. Box-shadow for elevation. Backdrop click to close.
-   *   Diff column is NEVER pushed (same absolute positioning, out of flow).
+   * INLINE mode — everything else (full-width mode at ANY viewport, or a
+   *   viewport too narrow for the margin): the drawer becomes an in-flow
+   *   340px flex child to the RIGHT of its toggle tab, pushing the diff over.
+   *   The diff shrinks while the tree is open — no overlay, no backdrop, the
+   *   tree is always fully readable.
    *
-   * REGIME C — Narrow (<900px): existing fixed full-height overlay. Backdrop
-   *   covers whole screen. Diff column gets drawer-open class for visual
-   *   spacer offset (only this regime pushes the diff).
-   *
-   * BINDING REQUIREMENT: the diff is the most important part. The drawer must
-   * NEVER push/shrink/cover the diff column inline in regimes A or B.
+   * Threshold derivation (1750px): the centered column is 70rem = 1050px at the
+   * 15px root font plus 2 × 1rem .review padding → 1080px outer. The tree needs
+   * 340px left of the column's content edge: (1750 − 1080) / 2 + 15 ≈ 350px. ✓
    * ==========================================================================
    */
 
-  /* Inspect layout: relative+overflow-visible container for absolute drawer */
+  /* Inspect layout: relative+overflow-visible container for the drawer */
   .inspect-layout {
     position: relative;
     display: flex;
     align-items: flex-start;
     gap: 0;
     overflow: visible;
+    /* Tree width: 340px, but never wider than the viewport minus tab + gutters */
+    --tree-w: min(340px, calc(100vw - 80px));
   }
 
   /* Diff width: full mode overrides the content max-width via CSS custom property */
@@ -611,11 +576,13 @@
     max-width: none;
   }
 
-  /* ---- Toggle tab: slim vertical strip fixed to the content column's left edge ---- */
-  /* Matches top offset with the drawer header in all regimes */
+  /* ---- Toggle tab: slim vertical strip at the content column's left edge ---- */
+  /* INLINE mode (default): tab is visually FIRST (order -1) so the drawer opens
+     to the RIGHT of its toggle. Margin mode restores DOM order (drawer | tab). */
   .tree-toggle-tab {
+    order: -1;
     position: sticky;
-    top: 0.5rem; /* same top as drawer in regimes A/B */
+    top: 0.5rem; /* same top as the drawer in both regimes */
     flex-shrink: 0;
     width: 28px;
     height: calc(100vh - 5rem);
@@ -661,22 +628,22 @@
     user-select: none;
   }
 
-  /* ---- Collapsible drawer — zero-width flex spacer + absolutely-positioned content ----
+  /* ---- Collapsible drawer — sticky wrapper + nav panel anchored to its right edge ----
    *
-   * The wrapper (.file-tree-drawer) is a zero-width flex child — it never consumes
-   * flex space and therefore NEVER pushes the diff column in regimes A or B.
+   * The wrapper (.file-tree-drawer) is a sticky flex child. The nav panel
+   * (.file-tree-nav) is absolutely positioned inside it, anchored to the
+   * wrapper's RIGHT edge (right: 0).
    *
-   * The actual content panel (.file-tree-nav) is absolutely positioned relative to
-   * the wrapper (position: relative on the wrapper). Its right edge is anchored to the
-   * wrapper's right edge (right: 0), so the panel extends 340px LEFTWARD — into the left
-   * margin, never covering the diff column.
+   * INLINE mode (default): the open wrapper is var(--tree-w) wide, so the nav
+   *   exactly fills it IN FLOW — real flex space, the diff column shrinks.
+   * MARGIN mode (media override below): the open wrapper stays 0 wide, so the
+   *   nav extends 340px LEFTWARD into the page margin — out of flow, the diff
+   *   column never moves.
    *
-   * position: sticky on .file-tree-nav gives the scroll-following behaviour without
-   * participating in flex flow.
+   * position: sticky on the wrapper gives scroll-following in both regimes.
    */
   .file-tree-drawer {
-    /* Zero-width flex placeholder — takes no flex space, diff is NEVER pushed */
-    position: sticky; /* sticky so the zero-width anchor follows scroll */
+    position: sticky; /* sticky anchor follows scroll */
     top: 0.5rem;
     width: 0;
     flex-shrink: 0;
@@ -686,13 +653,20 @@
     overflow: visible; /* allow the absolutely-positioned nav to extend leftward */
   }
 
+  /* INLINE mode (default): the open drawer takes real flex space → diff shrinks */
+  .file-tree-drawer[data-open='true'] {
+    width: var(--tree-w);
+    margin: 0 0.75rem 0 0.5rem; /* breathing room: tab ←0.5rem→ tree ←0.75rem→ diff */
+  }
+
   .file-tree-nav {
-    /* Absolutely positioned panel extending 340px LEFTWARD from the wrapper's right edge */
+    /* Anchored to the wrapper's right edge; fills the wrapper in inline mode,
+       extends leftward past it (width 0) in margin mode */
     position: absolute;
-    right: 0; /* right edge meets the tab's left edge */
-    top: 0;   /* same top as the tab (wrapper is sticky at same offset) */
-    width: 340px;
-    box-sizing: border-box; /* total width = 340px including border + padding */
+    right: 0;
+    top: 0;
+    width: var(--tree-w);
+    box-sizing: border-box; /* total width = var(--tree-w) including border + padding */
     max-height: calc(100vh - 5rem);
     overflow-y: auto;
     background: var(--surface-raised);
@@ -700,8 +674,18 @@
     border-radius: 6px;
     padding: 0.5rem 0.25rem;
     scrollbar-width: thin;
-    /* Elevation: drawer floats over left margin with shadow */
     box-shadow: -2px 4px 20px rgba(0, 0, 0, 0.22);
+  }
+
+  /* ---- MARGIN mode: centered diff + viewport wide enough for the 340px tree ---- */
+  @media (min-width: 1750px) {
+    .inspect-layout:not(.diff-full) .file-tree-drawer[data-open='true'] {
+      width: 0;   /* zero-width placeholder again — nav extends into the margin */
+      margin: 0;
+    }
+    .inspect-layout:not(.diff-full) .tree-toggle-tab {
+      order: 0;   /* restore DOM order: drawer (leftward nav) | tab | diff */
+    }
   }
 
   /* Drawer header: "Files" label + ✕ close button */
@@ -747,56 +731,12 @@
     outline-offset: 1px;
   }
 
-  /* ---- Diff column: takes remaining flex space ---- */
-  /* NEVER receives drawer-open on ≥900px — drawer is absolutely positioned */
+  /* ---- Diff column: takes the remaining flex space ---- */
+  /* In inline mode the open drawer consumes flex space and the diff shrinks
+     naturally; in margin mode the drawer is out of flow and the diff is untouched. */
   .diff-column {
     min-width: 0;
     flex: 1;
-  }
-
-  /* ---- REGIME B: Mid-range (900–1199px) backdrop ---- */
-  /* Backdrop is rendered by Svelte when treeOpen && !isWideViewport */
-  /* On ≥900px it shows a semi-transparent overlay behind the drawer */
-  /* On <900px the narrow-viewport rules take over with fixed positioning */
-  @media (min-width: 900px) and (max-width: 1199px) {
-    .tree-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.2);
-      z-index: 15; /* below drawer (z-index 20) but above page content */
-      cursor: pointer;
-    }
-  }
-
-  /* ---- REGIME C: Narrow viewport (<900px) — fixed full-height overlay ---- */
-  @media (max-width: 899px) {
-    .file-tree-drawer[data-open="true"] {
-      position: fixed;
-      top: 0;
-      /* Left edge just past the toggle tab (tab is fixed at viewport left ~32px) */
-      left: 32px;
-      height: 100vh;
-      max-height: 100vh;
-      width: 340px;
-      overflow-y: auto;
-      z-index: 50;
-      box-shadow: 2px 0 16px rgba(0, 0, 0, 0.3);
-    }
-
-    .file-tree-nav {
-      height: 100%;
-      max-height: 100vh;
-      border-radius: 0 6px 6px 0;
-    }
-
-    /* Backdrop covers the full screen in narrow mode */
-    .tree-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.35);
-      z-index: 45;
-      cursor: pointer;
-    }
   }
 
   /* Mode toggle: active state via accent underline, consistent with stepper */
@@ -984,118 +924,8 @@
     padding: 0.15rem 0.6rem;
   }
 
-  /* ---- Skill finding annotations (dashed accent border) ---- */
-  .skill-finding {
-    border-radius: 4px;
-    padding: 0.5rem 0.75rem;
+  /* File-level (null-line) finding cards stack above the FileDiff */
+  .file-level-finding {
     margin-bottom: 0.4rem;
-    font-size: 0.85rem;
-    border-style: dashed;
-    border-width: 1px;
-  }
-
-  .skill-finding.severity-high {
-    border-color: var(--accent);
-    background: var(--legend-removed-bg);
-  }
-
-  .skill-finding.severity-medium {
-    border-color: var(--accent);
-    background: var(--legend-changed-bg);
-  }
-
-  .skill-finding.severity-low {
-    border-color: var(--border-subtle);
-    background: var(--surface-raised);
-  }
-
-  .skill-finding-header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.3rem;
-  }
-
-  .skill-persona-label {
-    font-size: 0.75rem;
-    font-weight: 600;
-    opacity: 0.75;
-    flex: 1;
-  }
-
-  .skill-severity-chip {
-    font-size: 0.7rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 0.1rem 0.45rem;
-    border-radius: 999px;
-  }
-
-  .severity-chip-high {
-    background: var(--legend-removed-bg);
-    color: var(--legend-removed-color);
-    border: 1px solid var(--legend-removed-border);
-  }
-
-  .severity-chip-medium {
-    background: var(--legend-changed-bg);
-    color: var(--legend-changed-color);
-    border: 1px solid var(--legend-changed-border);
-  }
-
-  .severity-chip-low {
-    background: var(--surface-raised);
-    color: var(--text-muted);
-    border: 1px solid var(--border-subtle);
-  }
-
-  .skill-finding-body {
-    margin: 0 0 0.4rem;
-    line-height: 1.4;
-  }
-
-  .skill-finding-actions {
-    display: flex;
-    gap: 0.4rem;
-  }
-
-  .skill-add-draft-btn {
-    font-size: 0.78rem;
-    padding: 0.18rem 0.55rem;
-    border-radius: 4px;
-    border: 1px solid var(--accent);
-    background: transparent;
-    color: var(--accent);
-    cursor: pointer;
-    font-weight: 500;
-  }
-
-  .skill-add-draft-btn:hover:not(:disabled) {
-    background: var(--legend-added-bg);
-  }
-
-  .skill-add-draft-btn.added {
-    background: var(--legend-added-bg);
-    border-color: var(--legend-added-border, var(--accent));
-    color: var(--legend-added-color, var(--accent));
-    cursor: default;
-    opacity: 0.85;
-  }
-
-  .skill-dismiss-btn {
-    font-size: 0.78rem;
-    padding: 0.18rem 0.55rem;
-    border-radius: 4px;
-    border: 1px solid var(--border-subtle);
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    opacity: 0.7;
-  }
-
-  .skill-dismiss-btn:hover {
-    opacity: 1;
-    background: var(--surface-raised);
   }
 </style>

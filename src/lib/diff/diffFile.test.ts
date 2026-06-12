@@ -185,6 +185,51 @@ describe('buildDiffFile — renamed file content keying', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// buildDiffFile — syntax highlighting (language detection + lowlight engine)
+// ---------------------------------------------------------------------------
+
+describe('buildDiffFile — syntax highlighting', () => {
+  it('detects the file language from the filename extension', () => {
+    const df = buildDiffFile(modified, 'unified')!
+    // The library's getLang() derives the language from the fileName we pass
+    // in buildDiffFile — no explicit fileLang wiring is needed.
+    expect(df._oldFileLang).toBe('ts')
+    expect(df._newFileLang).toBe('ts')
+  })
+
+  it('uses the built-in lowlight highlighter engine', () => {
+    const df = buildDiffFile(modified, 'unified')!
+    expect(df._getHighlighterName()).toBe('lowlight')
+  })
+
+  it('bare-hunk patch (no full contents) still produces syntax token lines', () => {
+    // GitHub's PR files API returns bare hunks; the envelope synthesized by
+    // buildDiffFile must be enough for the highlighter to tokenize lines.
+    const df = buildDiffFile(modified, 'unified')!
+    // New-file line 1 is `const a = 2`
+    const syntax = df.getNewSyntaxLine(1)
+    expect(syntax).toBeTruthy()
+    expect(syntax!.nodeList.length).toBeGreaterThan(0)
+  })
+
+  it('syntax tokens include an hljs keyword class for `const` (TS keyword)', () => {
+    const df = buildDiffFile(modified, 'unified')!
+    const syntax = df.getNewSyntaxLine(1)!
+    const classes = syntax.nodeList.flatMap(
+      ({ wrapper }) => (wrapper?.properties?.className as string[] | undefined) ?? [],
+    )
+    expect(classes).toContain('hljs-keyword')
+  })
+
+  it('split mode also produces syntax token lines on both sides', () => {
+    const df = buildDiffFile(modified, 'split')!
+    // Old-file line 1 is `const a = 1`, new-file line 1 is `const a = 2`
+    expect(df.getOldSyntaxLine(1)).toBeTruthy()
+    expect(df.getNewSyntaxLine(1)).toBeTruthy()
+  })
+})
+
 // EC-06b — fixtures now use real bare-hunk GitHub wire format.
 // buildDiffFile synthesises the envelope so the parser can locate hunks.
 describe('EC-06b: additions-only / deletions-only diff line classification', () => {

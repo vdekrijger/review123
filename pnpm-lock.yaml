@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@git-diff-view/svelte': 3a0d9c646b4824d0ac9485059fd9dc31e303707147df6650c736b16b21a49b9c
+
 importers:
 
   .:
@@ -22,7 +25,7 @@ importers:
         version: 0.1.5
       '@git-diff-view/svelte':
         specifier: ^0.1.5
-        version: 0.1.5(svelte@5.56.1)
+        version: 0.1.5(patch_hash=3a0d9c646b4824d0ac9485059fd9dc31e303707147df6650c736b16b21a49b9c)(svelte@5.56.1)
       diff:
         specifier: 8.0.4
         version: 8.0.4
@@ -1488,7 +1491,7 @@ snapshots:
       highlight.js: 11.11.1
       lowlight: 3.3.0
 
-  '@git-diff-view/svelte@0.1.5(svelte@5.56.1)':
+  '@git-diff-view/svelte@0.1.5(patch_hash=3a0d9c646b4824d0ac9485059fd9dc31e303707147df6650c736b16b21a49b9c)(svelte@5.56.1)':
     dependencies:
       '@git-diff-view/core': 0.1.5
       '@types/hast': 3.0.4

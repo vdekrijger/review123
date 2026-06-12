@@ -145,29 +145,14 @@
     font-size: 0.82rem;
   }
 
+  /* Marker (rotating triangle) comes from the global details > summary
+     pattern in app.css — re-declaring a ::before here merges with it on the
+     same pseudo-element and renders a double chevron. Only sizing below. */
   .ask-ai-summary {
     padding: 0.6rem 0.75rem;
-    cursor: pointer;
     font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
     letter-spacing: 0.05em;
     opacity: 0.7;
-    user-select: none;
-    list-style: none;
-  }
-
-  .ask-ai-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .ask-ai-summary::before {
-    content: '▸ ';
-    font-size: 0.7em;
-  }
-
-  details[open] .ask-ai-summary::before {
-    content: '▾ ';
   }
 
   .ask-ai-body {

@@ -18,6 +18,7 @@ import type { PrRef } from '../lib/github/parse'
 import type { SubmitOutcome } from '../lib/github/review'
 import type { CoachResult, CommentReview } from '../lib/ai/schemas'
 import type { Draft } from '../lib/drafts/drafts.svelte'
+import type { ReviewProvider } from '../lib/provider/types'
 
 const prRef: PrRef = { owner: 'alice', repo: 'widgets', number: 42 }
 const commitId = 'abc123'
@@ -487,7 +488,8 @@ describe('VerdictStep', () => {
       await user.click(screen.getByRole('button', { name: /coach my comments/i }))
 
       await waitFor(() => {
-        expect(screen.getByText('blunt')).toBeInTheDocument()
+        // v9 label clarifies the dimension: "tone: blunt" instead of bare "blunt"
+        expect(screen.getByText('tone: blunt')).toBeInTheDocument()
       })
     })
 
@@ -672,7 +674,8 @@ describe('VerdictStep', () => {
       await waitFor(() => {
         const chip = screen.getByTestId('accuracy-chip')
         expect(chip).toBeInTheDocument()
-        expect(chip.textContent).toContain('consistent')
+        // Self-evident label instead of the bare enum value
+        expect(chip.textContent).toContain('matches the diff')
         expect(chip.className).toMatch(/accuracy-consistent/)
       })
     })
@@ -695,7 +698,7 @@ describe('VerdictStep', () => {
 
       await waitFor(() => {
         const chip = screen.getByTestId('accuracy-chip')
-        expect(chip.textContent).toContain('questionable')
+        expect(chip.textContent).toContain('hard to verify against the diff')
         expect(chip.className).toMatch(/accuracy-questionable/)
       })
     })
@@ -719,9 +722,9 @@ describe('VerdictStep', () => {
 
       await waitFor(() => {
         const chip = screen.getByTestId('accuracy-chip')
-        expect(chip.textContent).toContain('contradicted')
+        expect(chip.textContent).toContain('contradicted by the diff')
         expect(chip.className).toMatch(/accuracy-contradicted/)
-        // The why should be in the chip title
+        // The why should be in the chip title (accuracyNote fallback when no reasons)
         expect(chip).toHaveAttribute('title', why)
         // The why should also appear below as text
         expect(screen.getByTestId('accuracy-note')).toHaveTextContent(why)
@@ -797,6 +800,172 @@ describe('VerdictStep', () => {
       })
 
       expect(screen.queryByTestId('duplicate-badge')).not.toBeInTheDocument()
+    })
+
+    // --- v9: per-dimension rationales (pass AND fail) ---
+
+    const FULL_REASONS = {
+      clarity: 'clear and complete ask',
+      tone: 'matches the tone of your other comments',
+      actionable: 'asks for a concrete rename',
+      accuracy: 'matches the change shown in the diff',
+      duplicate: 'no overlap with existing comments',
+      specificity: 'names the exact function and line',
+      grounded: 'every claim is visible in the provided hunk',
+    }
+
+    async function renderAndCoach(result: CoachResult) {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: okCoach(result) },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+      await waitFor(() => {
+        expect(screen.getByTestId('accuracy-chip')).toBeInTheDocument()
+      })
+      return user
+    }
+
+    it('passing chips carry their reason in the title so the user knows the check ran', async () => {
+      await renderAndCoach(makeCoachResult({ reasons: FULL_REASONS }))
+
+      expect(screen.getByTestId('tone-chip')).toHaveAttribute('title', FULL_REASONS.tone)
+      expect(screen.getByTestId('actionable-chip')).toHaveAttribute('title', FULL_REASONS.actionable)
+      expect(screen.getByTestId('accuracy-chip')).toHaveAttribute('title', FULL_REASONS.accuracy)
+    })
+
+    it('renders the expandable rationale list with one line per provided reason', async () => {
+      await renderAndCoach(makeCoachResult({ specificity: true, grounded: true, reasons: FULL_REASONS }))
+
+      const details = screen.getByTestId('coach-reasons')
+      expect(details).toBeInTheDocument()
+      expect(details.textContent).toContain('Why these grades?')
+      expect(details.textContent).toContain(FULL_REASONS.clarity)
+      expect(details.textContent).toContain(FULL_REASONS.tone)
+      expect(details.textContent).toContain(FULL_REASONS.specificity)
+      expect(details.textContent).toContain(FULL_REASONS.grounded)
+    })
+
+    it('rationale list shows only the reasons present (partial reasons tolerated)', async () => {
+      await renderAndCoach(makeCoachResult({ reasons: { tone: 'just the tone reason' } }))
+
+      const details = screen.getByTestId('coach-reasons')
+      expect(details.textContent).toContain('just the tone reason')
+      expect(details.textContent).not.toContain(FULL_REASONS.clarity)
+    })
+
+    it('old v8 shape (no reasons/specificity/grounded) renders without rationale list and without crashing', async () => {
+      // makeCoachResult default carries none of the v9 fields
+      await renderAndCoach(makeCoachResult())
+
+      expect(screen.queryByTestId('coach-reasons')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('specificity-chip')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('grounded-chip')).not.toBeInTheDocument()
+      // Existing chips still render
+      expect(screen.getByTestId('tone-chip')).toBeInTheDocument()
+      expect(screen.getByTestId('accuracy-chip')).toBeInTheDocument()
+    })
+
+    // --- v9: specificity + grounded chips ---
+
+    it('specificity chip: true renders the concrete-code pass label', async () => {
+      await renderAndCoach(makeCoachResult({ specificity: true, reasons: FULL_REASONS }))
+
+      const chip = screen.getByTestId('specificity-chip')
+      expect(chip.textContent).toMatch(/points at concrete code/i)
+      expect(chip.className).toMatch(/specificity-true/)
+      expect(chip).toHaveAttribute('title', FULL_REASONS.specificity)
+    })
+
+    it('specificity chip: false renders the vague warning label', async () => {
+      await renderAndCoach(makeCoachResult({ specificity: false }))
+
+      const chip = screen.getByTestId('specificity-chip')
+      expect(chip.textContent).toMatch(/vague/i)
+      expect(chip.className).toMatch(/specificity-false/)
+    })
+
+    it('grounded chip: true renders the verifiable-in-diff pass label', async () => {
+      await renderAndCoach(makeCoachResult({ grounded: true, reasons: FULL_REASONS }))
+
+      const chip = screen.getByTestId('grounded-chip')
+      expect(chip.textContent).toMatch(/claims verifiable in diff/i)
+      expect(chip.className).toMatch(/grounded-true/)
+      expect(chip).toHaveAttribute('title', FULL_REASONS.grounded)
+    })
+
+    it('grounded chip: false renders the not-verifiable warning label', async () => {
+      await renderAndCoach(makeCoachResult({ grounded: false }))
+
+      const chip = screen.getByTestId('grounded-chip')
+      expect(chip.textContent).toMatch(/not verifiable in diff/i)
+      expect(chip.className).toMatch(/grounded-false/)
+    })
+
+    // --- v9: clarified labels for the existing chips ---
+
+    it('tone chip is labelled "tone: ok" instead of a bare "ok"', async () => {
+      await renderAndCoach(makeCoachResult({ tone: 'ok' }))
+      expect(screen.getByTestId('tone-chip').textContent).toBe('tone: ok')
+    })
+
+    it('actionable=false chip reads "not actionable"', async () => {
+      await renderAndCoach(makeCoachResult({ actionable: false }))
+      expect(screen.getByTestId('actionable-chip').textContent).toMatch(/✗ not actionable/)
+    })
+
+    // --- v9: verdict-coherence flag card ---
+
+    it('coherence card shown at the top when comments do not match the verdict', async () => {
+      const note = 'Two harsh blocking comments but the verdict is Approve.'
+      await renderAndCoach({ ...makeCoachResult(), verdictCoherence: { coherent: false, note } })
+
+      const card = screen.getByTestId('coherence-card')
+      expect(card).toBeInTheDocument()
+      expect(card.textContent).toContain("Comments don't match your verdict")
+      expect(card.textContent).toContain(note)
+    })
+
+    it('coherence card NOT shown when comments match the verdict', async () => {
+      await renderAndCoach({
+        ...makeCoachResult(),
+        verdictCoherence: { coherent: true, note: 'Comments match the chosen verdict.' },
+      })
+
+      expect(screen.queryByTestId('coherence-card')).not.toBeInTheDocument()
+    })
+
+    it('coherence card NOT shown when verdictCoherence is absent (old shape)', async () => {
+      await renderAndCoach(makeCoachResult())
+
+      expect(screen.queryByTestId('coherence-card')).not.toBeInTheDocument()
+    })
+
+    // --- v9: verdict passed into coachFn ---
+
+    it('coachFn receives the currently-selected verdict as its third argument', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      const coachFn = vi.fn().mockResolvedValue(makeCoachResult())
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn },
+      })
+
+      await user.click(screen.getByRole('radio', { name: /approve/i }))
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => expect(coachFn).toHaveBeenCalledOnce())
+      expect(coachFn.mock.calls[0][2]).toBe('APPROVE')
     })
   })
 
@@ -916,7 +1085,7 @@ describe('VerdictStep', () => {
       return {
         id: 'gitlab' as const,
         displayName: 'GitLab',
-        capabilities: { atomicReview, resolvedThreads: true, checks: true, suggestions: true, compare: true },
+        capabilities: { atomicReview, resolvedThreads: true, checks: true, suggestions: true, compare: true, selfReviewBlocked: false },
         parseUrl: vi.fn(),
         getPrMeta: vi.fn(),
         getPrFiles: vi.fn(),
@@ -1056,5 +1225,224 @@ describe('VerdictStep', () => {
       // returnTo must be stored in sessionStorage so AuthCallback navigates back
       expect(sessionStorage.getItem('review123:returnTo')).toBe('/review/alice/widgets/42')
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Own-PR verdict gating
+// ---------------------------------------------------------------------------
+
+describe('own-PR verdict gating', () => {
+  function makeProvider(opts: {
+    id?: 'github' | 'gitlab' | 'bitbucket'
+    displayName?: string
+    selfReviewBlocked?: boolean
+  } = {}): ReviewProvider {
+    return {
+      id: opts.id ?? 'github',
+      displayName: opts.displayName ?? 'GitHub',
+      capabilities: {
+        resolvedThreads: true,
+        checks: true,
+        suggestions: true,
+        atomicReview: true,
+        compare: true,
+        selfReviewBlocked: opts.selfReviewBlocked ?? true,
+      },
+      parseUrl: vi.fn(),
+      getPrMeta: vi.fn(),
+      getPrFiles: vi.fn(),
+      getFileAtRef: vi.fn(),
+      getCiSummary: vi.fn(),
+      getComments: vi.fn(),
+      getResolvedCommentIds: vi.fn(),
+      getCommits: vi.fn(),
+      compareCommits: vi.fn(),
+      submitReview: vi.fn(),
+      authState: vi.fn().mockReturnValue({ configured: true, hint: '' }),
+      getViewerLogin: vi.fn().mockResolvedValue('alice'),
+    } as unknown as ReviewProvider
+  }
+
+  beforeEach(() => {
+    signOut()
+  })
+
+  it('disables Approve and Request changes on own PR; Comment stays enabled', async () => {
+    signIn()
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: 'alice',
+        resolveViewerFn: () => Promise.resolve('alice'),
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /approve/i })).toBeDisabled()
+    })
+    expect(screen.getByRole('radio', { name: /request changes/i })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: /comment/i })).toBeEnabled()
+  })
+
+  it('shows the muted own-PR explanation with the provider name', async () => {
+    signIn()
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: 'alice',
+        resolveViewerFn: () => Promise.resolve('alice'),
+      },
+    })
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/GitHub doesn't allow reviewing your own PR — you can still comment/i),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('matches viewer and author logins case-insensitively', async () => {
+    signIn()
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: 'ALICE',
+        resolveViewerFn: () => Promise.resolve('Alice'),
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /approve/i })).toBeDisabled()
+    })
+  })
+
+  it('does NOT gate when the viewer is not the author', async () => {
+    signIn()
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: 'bob',
+        resolveViewerFn: () => Promise.resolve('alice'),
+      },
+    })
+
+    // Give the async resolution a tick to land
+    await act(() => Promise.resolve())
+    expect(screen.getByRole('radio', { name: /approve/i })).toBeEnabled()
+    expect(screen.getByRole('radio', { name: /request changes/i })).toBeEnabled()
+    expect(screen.queryByText(/doesn't allow reviewing your own PR/i)).toBeNull()
+  })
+
+  it('does NOT gate on providers that allow self-review (GitLab)', async () => {
+    signIn()
+    const resolveViewerFn = vi.fn().mockResolvedValue('alice')
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider({ id: 'gitlab', displayName: 'GitLab', selfReviewBlocked: false }),
+        authorLogin: 'alice',
+        resolveViewerFn,
+      },
+    })
+
+    await act(() => Promise.resolve())
+    expect(screen.getByRole('radio', { name: /approve/i })).toBeEnabled()
+    expect(screen.getByRole('radio', { name: /request changes/i })).toBeEnabled()
+    // Identity is never even resolved for non-gating providers
+    expect(resolveViewerFn).not.toHaveBeenCalled()
+  })
+
+  it('does NOT gate when the author identity is unknown', async () => {
+    signIn()
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: null,
+        resolveViewerFn: () => Promise.resolve('alice'),
+      },
+    })
+
+    await act(() => Promise.resolve())
+    expect(screen.getByRole('radio', { name: /approve/i })).toBeEnabled()
+  })
+
+  it('does NOT gate when the viewer identity cannot be resolved', async () => {
+    signIn()
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: 'alice',
+        resolveViewerFn: () => Promise.resolve(null),
+      },
+    })
+
+    await act(() => Promise.resolve())
+    expect(screen.getByRole('radio', { name: /approve/i })).toBeEnabled()
+  })
+
+  it('resets a selected Approve verdict back to Comment when gating resolves', async () => {
+    signIn()
+    const user = userEvent.setup()
+    let resolveIdentity!: (v: string | null) => void
+    const gate = new Promise<string | null>((res) => { resolveIdentity = res })
+
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store: makeStore(),
+        prUrl,
+        submitFn: okSubmit,
+        provider: makeProvider(),
+        authorLogin: 'alice',
+        resolveViewerFn: () => gate,
+      },
+    })
+
+    // Identity not resolved yet → user can pick APPROVE
+    await user.click(screen.getByRole('radio', { name: /approve/i }))
+    expect(screen.getByRole('radio', { name: /approve/i })).toBeChecked()
+
+    resolveIdentity('alice')
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /approve/i })).toBeDisabled()
+    })
+    expect(screen.getByRole('radio', { name: /comment/i })).toBeChecked()
   })
 })

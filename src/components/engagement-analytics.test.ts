@@ -66,6 +66,7 @@ const meta: PrMeta = {
   headSha: 'head',
   private: false,
   changedFiles: 1,
+  authorLogin: null,
 }
 
 const files: PrFile[] = [
