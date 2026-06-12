@@ -4,6 +4,8 @@
   import { buildDiffFile, classifyFile } from '../lib/diff/diffFile'
   import type { PrFile } from '../lib/github/types'
   import type { DiffMode } from '../lib/settings/settings'
+  import { getSettings, type TestFileDisplay } from '../lib/settings/settings'
+  import { isTestFile } from '../lib/testFile'
   import type { Draft } from '../lib/drafts/drafts.svelte'
   import DraftThread from './DraftThread.svelte'
   import CommentThread from './CommentThread.svelte'
@@ -90,8 +92,9 @@
   })
 
   // When viewed → collapse diff body; user can re-expand by clicking header or unchecking
+  // Also collapse test files in dim mode by default (expandable by click)
   let manuallyExpanded = $state(false)
-  const collapsed = $derived(viewed && !manuallyExpanded)
+  const collapsed = $derived((viewed && !manuallyExpanded) || (isTest && testFileDisplay === 'dim' && !manuallyExpanded))
 
   function handleHeaderClick() {
     if (collapsed) manuallyExpanded = true
@@ -115,6 +118,18 @@
 
   const kind = $derived(classifyFile(file))
   const diffFile = $derived(kind === 'diff' ? buildDiffFile(file, mode, contents) : null)
+
+  // Copy-path state
+  let copyDone = $state(false)
+  async function copyPath() {
+    await navigator.clipboard.writeText(file.filename)
+    copyDone = true
+    setTimeout(() => { copyDone = false }, 1500)
+  }
+
+  // Test-file display
+  const testFileDisplay = $derived<TestFileDisplay>(getSettings().testFileDisplay)
+  const isTest = $derived(isTestFile(file.filename))
 
   // ---- Widget state -------------------------------------------------------
   // Only one widget open at a time. Cleared after save or cancel.
@@ -199,16 +214,25 @@
   }
 </script>
 
-<article class="file-diff" class:is-collapsed={collapsed}>
+<article class="file-diff" class:is-collapsed={collapsed} class:test-dim={isTest && testFileDisplay === 'dim'}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <header onclick={handleHeaderClick} class:clickable={collapsed}>
+  <header onclick={handleHeaderClick} class:clickable={collapsed} class:test-highlight={isTest && testFileDisplay === 'highlight'}>
     <code>{filename}</code>
     <div class="header-right">
       {#if changedSinceViewed}
         <span class="changed-badge" role="status">Changed since you viewed it</span>
       {/if}
-      <span class="stats">+{file.additions} −{file.deletions}</span>
+      <button class="copy-path-btn" aria-label="Copy file path" onclick={(e) => { e.stopPropagation(); copyPath() }}>
+        {#if copyDone}<span class="copy-done">Copied</span>{:else}<span class="copy-icon" aria-hidden="true">⎘</span>{/if}
+      </button>
+      <span class="stats">
+        <span class="stat-add">+{file.additions}</span>
+        <span class="stat-del"> −{file.deletions}</span>
+      </span>
+      {#if isTest && testFileDisplay === 'highlight'}
+        <span class="test-chip chip">test</span>
+      {/if}
       <label class="viewed-label">
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -365,6 +389,47 @@
     white-space: nowrap;
   }
   .is-collapsed { opacity: 0.85; }
+
+  /* Copy path button */
+  .copy-path-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    padding: 0 0.2rem;
+    font-size: 0.85rem;
+    line-height: 1;
+    border-radius: 3px;
+    transition: color 0.1s;
+  }
+  .copy-path-btn:hover { color: var(--text); }
+  .copy-icon { font-size: 0.9rem; }
+  .copy-done { font-size: 0.72rem; color: var(--legend-added-color); font-weight: 600; }
+
+  /* Colored stat counts */
+  .stat-add { color: var(--diff-add); }
+  .stat-del { color: var(--diff-del); }
+
+  /* Test chip */
+  .test-chip {
+    background: color-mix(in srgb, #f59e0b 15%, transparent);
+    border-color: #f59e0b88;
+    color: #d97706;
+    font-size: 0.68rem;
+    padding: 0.08rem 0.4rem;
+    border-radius: 999px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+  }
+
+  /* Test highlight: amber left border */
+  header.test-highlight {
+    border-left: 3px solid #f59e0b;
+  }
+
+  /* Test dim */
+  article.test-dim { opacity: 0.6; }
+  article.test-dim header { opacity: 0.8; }
   /* Apply the --font-mono token to the diff view container */
   :global(.unified-diff-table-wrapper),
   :global(.old-diff-table-wrapper),
