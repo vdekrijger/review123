@@ -174,3 +174,31 @@ describe('FileTree active highlight', () => {
     expect(container.querySelector('.file-row.active')).not.toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// FileTree — test-file flask glyph (task 6)
+// ---------------------------------------------------------------------------
+
+describe('FileTree — test-file flask glyph', () => {
+  it('test file row has a glyph element', () => {
+    const files: PrFile[] = [
+      { filename: 'src/foo.test.ts', status: 'modified', additions: 1, deletions: 0, patch: '' },
+      { filename: 'src/bar.ts', status: 'modified', additions: 1, deletions: 0, patch: '' },
+    ]
+    const { container } = render(FileTree, {
+      props: { files, attention: null, viewedStore: null, activePath: null, onselect: () => {} }
+    })
+    const glyphs = container.querySelectorAll('.test-glyph')
+    expect(glyphs.length).toBe(1)
+  })
+
+  it('non-test file row has no glyph element', () => {
+    const files: PrFile[] = [
+      { filename: 'src/bar.ts', status: 'modified', additions: 1, deletions: 0, patch: '' },
+    ]
+    const { container } = render(FileTree, {
+      props: { files, attention: null, viewedStore: null, activePath: null, onselect: () => {} }
+    })
+    expect(container.querySelector('.test-glyph')).not.toBeInTheDocument()
+  })
+})
