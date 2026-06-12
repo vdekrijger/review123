@@ -5,6 +5,8 @@ import { navigate } from '../lib/router/router.svelte'
 import * as queueModule from '../lib/provider/queue'
 import type { QueueItem } from '../lib/provider/types'
 import { addToHistory, clearHistory } from '../lib/history/history'
+import { setSectionCollapsed } from '../lib/landing/collapse'
+import { _setCaptureForTest } from '../lib/analytics/analytics'
 import userEvent from '@testing-library/user-event'
 
 // Mock navigate — all navigation checks use vi.mocked(navigate) calls
@@ -20,7 +22,7 @@ vi.mock('../lib/provider/registry', () => ({
       displayName: 'GitHub',
       authState: () => ({ configured: true, hint: '' }),
       getMyQueue: vi.fn(),
-      capabilities: { resolvedThreads: false, checks: false, suggestions: false, atomicReview: false, compare: false },
+      capabilities: { resolvedThreads: false, checks: false, suggestions: false, atomicReview: false, compare: false, selfReviewBlocked: false },
     }],
   ]),
   parseAnyUrl: vi.fn().mockReturnValue(null),
@@ -48,6 +50,83 @@ describe('Landing queue section', () => {
 
     render(Landing)
     expect(screen.getByText(/Loading your queue/i)).toBeTruthy()
+  })
+
+  it('shows skeleton rows while the initial fetch is in flight', () => {
+    vi.spyOn(queueModule, 'fetchAllQueues').mockReturnValue(new Promise(() => {}))
+
+    render(Landing)
+    const skeleton = screen.getByTestId('queue-skeleton')
+    expect(skeleton).toBeInTheDocument()
+    expect(skeleton).toHaveAttribute('aria-busy', 'true')
+  })
+
+  it('replaces skeletons with rows when the fetch resolves', async () => {
+    let resolveFetch!: (items: QueueItem[]) => void
+    vi.spyOn(queueModule, 'fetchAllQueues').mockReturnValue(
+      new Promise<QueueItem[]>((resolve) => { resolveFetch = resolve }),
+    )
+
+    render(Landing)
+    expect(screen.getByTestId('queue-skeleton')).toBeInTheDocument()
+
+    resolveFetch([makeItem('github', 'org', 'repo', 5, 'Resolved PR', false)])
+    await screen.findByText(/org\/repo#5/i)
+    expect(screen.queryByTestId('queue-skeleton')).not.toBeInTheDocument()
+  })
+
+  it('replaces skeletons with the empty state when the fetch resolves empty', async () => {
+    let resolveFetch!: (items: QueueItem[]) => void
+    vi.spyOn(queueModule, 'fetchAllQueues').mockReturnValue(
+      new Promise<QueueItem[]>((resolve) => { resolveFetch = resolve }),
+    )
+
+    render(Landing)
+    expect(screen.getByTestId('queue-skeleton')).toBeInTheDocument()
+
+    resolveFetch([])
+    await screen.findByText(/No PRs in your queue/i)
+    expect(screen.queryByTestId('queue-skeleton')).not.toBeInTheDocument()
+  })
+
+  it('refresh keeps existing rows visible but dimmed, with the refresh button disabled', async () => {
+    const item = makeItem('github', 'org', 'repo', 9, 'Existing PR', false)
+    let resolveRefresh!: (items: QueueItem[]) => void
+    vi.spyOn(queueModule, 'fetchAllQueues')
+      .mockResolvedValueOnce([item])
+      .mockReturnValueOnce(new Promise<QueueItem[]>((resolve) => { resolveRefresh = resolve }))
+
+    render(Landing)
+    await screen.findByText(/org\/repo#9/i)
+
+    const refreshBtn = screen.getByRole('button', { name: /refresh queue/i })
+    await fireEvent.click(refreshBtn)
+
+    // Rows stay visible (no skeleton swap), dimmed while in flight
+    expect(screen.getByText(/org\/repo#9/i)).toBeInTheDocument()
+    expect(screen.queryByTestId('queue-skeleton')).not.toBeInTheDocument()
+    const rows = screen.getByTestId('queue-rows')
+    expect(rows).toHaveAttribute('aria-busy', 'true')
+    expect(rows.classList.contains('refreshing')).toBe(true)
+    expect(refreshBtn).toBeDisabled()
+
+    resolveRefresh([makeItem('github', 'org', 'repo', 10, 'Fresh PR', false)])
+    await screen.findByText(/org\/repo#10/i)
+    expect(screen.getByTestId('queue-rows')).toHaveAttribute('aria-busy', 'false')
+    expect(refreshBtn).not.toBeDisabled()
+  })
+
+  it('refresh from the empty state shows skeletons (no rows to keep)', async () => {
+    vi.spyOn(queueModule, 'fetchAllQueues')
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(new Promise<QueueItem[]>(() => {}))
+
+    render(Landing)
+    await screen.findByText(/No PRs in your queue/i)
+
+    await fireEvent.click(screen.getByRole('button', { name: /refresh queue/i }))
+    expect(screen.getByTestId('queue-skeleton')).toBeInTheDocument()
+    expect(screen.queryByText(/No PRs in your queue/i)).not.toBeInTheDocument()
   })
 
   it('shows queue items grouped by awaiting/authored', async () => {
@@ -175,5 +254,127 @@ describe('Landing recent reviews', () => {
     const btn = screen.getByRole('button', { name: /mygroup\/myproject#7/i })
     await userEvent.click(btn)
     expect(navigate).toHaveBeenCalledWith('/review/gitlab/mygroup/myproject/7')
+  })
+})
+
+describe('Landing collapsible sections', () => {
+  const capture = vi.fn()
+
+  beforeEach(() => {
+    localStorage.clear()
+    clearHistory()
+    vi.mocked(navigate).mockClear()
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([])
+    queueModule._resetQueueCacheForTest()
+    capture.mockClear()
+    _setCaptureForTest(capture)
+  })
+
+  it('queue section header is a toggle button, expanded by default', async () => {
+    render(Landing)
+    const toggle = screen.getByRole('button', { name: /your review queue/i })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    await screen.findByText(/no prs in your queue/i)
+  })
+
+  it('clicking the queue header collapses the queue body', async () => {
+    render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    await userEvent.click(screen.getByRole('button', { name: /your review queue/i }))
+    expect(screen.getByRole('button', { name: /your review queue/i })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/no prs in your queue/i)).not.toBeInTheDocument()
+  })
+
+  it('clicking a collapsed queue header expands it again', async () => {
+    render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    const toggle = screen.getByRole('button', { name: /your review queue/i })
+    await userEvent.click(toggle)
+    await userEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText(/no prs in your queue/i)).toBeInTheDocument()
+  })
+
+  it('queue collapsed state persists to localStorage and is restored on mount', async () => {
+    const first = render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    await userEvent.click(screen.getByRole('button', { name: /your review queue/i }))
+    first.unmount()
+
+    render(Landing)
+    const toggle = screen.getByRole('button', { name: /your review queue/i })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/no prs in your queue/i)).not.toBeInTheDocument()
+  })
+
+  it('recent reviews header is a toggle button, expanded by default', () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
+    render(Landing)
+    const toggle = screen.getByRole('button', { name: /recent reviews/i })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText(/alice\/widgets#42/)).toBeInTheDocument()
+  })
+
+  it('clicking the recent header collapses the history list', async () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
+    render(Landing)
+    await userEvent.click(screen.getByRole('button', { name: /recent reviews/i }))
+    expect(screen.getByRole('button', { name: /recent reviews/i })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/alice\/widgets#42/)).not.toBeInTheDocument()
+  })
+
+  it('recent collapsed state is restored on mount', async () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
+    setSectionCollapsed('recent', true)
+    render(Landing)
+    expect(screen.getByRole('button', { name: /recent reviews/i })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/alice\/widgets#42/)).not.toBeInTheDocument()
+  })
+
+  it('sections collapse independently', async () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
+    render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    await userEvent.click(screen.getByRole('button', { name: /your review queue/i }))
+    // queue collapsed, recent still expanded
+    expect(screen.queryByText(/no prs in your queue/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/alice\/widgets#42/)).toBeInTheDocument()
+  })
+
+  it('toggle is keyboard accessible (Enter activates)', async () => {
+    render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    const toggle = screen.getByRole('button', { name: /your review queue/i })
+    toggle.focus()
+    await userEvent.keyboard('{Enter}')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('expanding a section emits section_expanded with id + landing surface only', async () => {
+    render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    const toggle = screen.getByRole('button', { name: /your review queue/i })
+    await userEvent.click(toggle) // collapse — no event
+    expect(capture).not.toHaveBeenCalled()
+    await userEvent.click(toggle) // expand — event
+    expect(capture).toHaveBeenCalledWith('section_expanded', { section: 'queue', surface: 'landing' })
+    expect(capture).toHaveBeenCalledTimes(1)
+  })
+
+  it('expanding recent emits section_expanded with section:recent', async () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
+    render(Landing)
+    const toggle = screen.getByRole('button', { name: /recent reviews/i })
+    await userEvent.click(toggle)
+    await userEvent.click(toggle)
+    expect(capture).toHaveBeenCalledWith('section_expanded', { section: 'recent', surface: 'landing' })
+  })
+
+  it('Refresh button does not toggle the queue collapse state', async () => {
+    render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    await userEvent.click(screen.getByRole('button', { name: /refresh queue/i }))
+    expect(screen.getByRole('button', { name: /your review queue/i })).toHaveAttribute('aria-expanded', 'true')
+    await screen.findByText(/no prs in your queue/i)
   })
 })

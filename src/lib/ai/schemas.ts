@@ -222,6 +222,29 @@ export function validateTestInsight(x: unknown): TestInsight | null {
 // CommentReview / CoachResult
 // ---------------------------------------------------------------------------
 
+/**
+ * Coach dimensions, in display order. Each can carry a one-line rationale in
+ * CommentReview.reasons (v9).
+ */
+export const COACH_DIMENSIONS = [
+  'clarity',
+  'tone',
+  'actionable',
+  'accuracy',
+  'duplicate',
+  'specificity',
+  'grounded',
+] as const
+
+export type CoachDimension = (typeof COACH_DIMENSIONS)[number]
+
+/**
+ * One-line rationale per dimension (v9). All entries optional — responses
+ * from older prompt versions (or models that omit them) lack these and must
+ * still render without crashing.
+ */
+export type CoachReasons = Partial<Record<CoachDimension, string>>
+
 export interface CommentReview {
   index: number
   clarity: 1 | 2 | 3 | 4 | 5
@@ -235,10 +258,36 @@ export interface CommentReview {
   accuracyNote: string | null
   /** True when the comment substantially repeats an existing PR comment. */
   duplicate: boolean
+  /**
+   * v9 (optional — older shapes lack it): true when the comment points at
+   * concrete code (identifiers, functions, lines) rather than vague vibes.
+   */
+  specificity?: boolean
+  /**
+   * v9 (optional — older shapes lack it): true when every claim the comment
+   * makes is verifiable in the diff/hunk context provided to the coach.
+   */
+  grounded?: boolean
+  /**
+   * v9 (optional — older shapes lack it): one-line rationale per dimension,
+   * for passing AND failing grades.
+   */
+  reasons?: CoachReasons | null
+}
+
+/**
+ * v9: one per coaching run — do the drafted comments collectively match the
+ * reviewer's chosen verdict?
+ */
+export interface VerdictCoherence {
+  coherent: boolean
+  note: string
 }
 
 export interface CoachResult {
   reviews: CommentReview[]
+  /** v9 (optional — older shapes lack it): comments-vs-verdict coherence check. */
+  verdictCoherence?: VerdictCoherence | null
 }
 
 const TONE_VALUES = new Set<string>(['ok', 'blunt', 'harsh'])
@@ -292,6 +341,36 @@ export function validateCoachResult(x: unknown): CoachResult | null {
 
     // duplicate — required boolean
     if (typeof review['duplicate'] !== 'boolean') return null
+
+    // specificity — OPTIONAL boolean (v9; absent in older shapes)
+    if ('specificity' in review && review['specificity'] !== undefined) {
+      if (typeof review['specificity'] !== 'boolean') return null
+    }
+
+    // grounded — OPTIONAL boolean (v9; absent in older shapes)
+    if ('grounded' in review && review['grounded'] !== undefined) {
+      if (typeof review['grounded'] !== 'boolean') return null
+    }
+
+    // reasons — OPTIONAL object of per-dimension strings (v9).
+    // Absent or null is tolerated (older shapes / models that omit it).
+    if ('reasons' in review && review['reasons'] !== undefined && review['reasons'] !== null) {
+      const reasons = review['reasons']
+      if (!isObject(reasons)) return null
+      for (const dim of COACH_DIMENSIONS) {
+        const value = reasons[dim]
+        if (value !== undefined && value !== null && typeof value !== 'string') return null
+      }
+    }
+  }
+
+  // verdictCoherence — OPTIONAL (v9). Absent or null is tolerated; when
+  // present it must be { coherent: boolean, note: string }.
+  if ('verdictCoherence' in x && x['verdictCoherence'] !== undefined && x['verdictCoherence'] !== null) {
+    const vc = x['verdictCoherence']
+    if (!isObject(vc)) return null
+    if (typeof vc['coherent'] !== 'boolean') return null
+    if (typeof vc['note'] !== 'string') return null
   }
 
   return x as unknown as CoachResult

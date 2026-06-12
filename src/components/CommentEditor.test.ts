@@ -2,6 +2,9 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import CommentEditor from './CommentEditor.svelte'
+// Raw component source for theme-token audits (jsdom cannot resolve CSS vars
+// from component <style> blocks, so we assert against the stylesheet source).
+import editorSource from './CommentEditor.svelte?raw'
 
 // Helper: get the textarea
 function getTextarea() {
@@ -239,5 +242,135 @@ describe('CommentEditor emoji support', () => {
     await userEvent.click(screen.getByRole('tab', { name: /preview/i }))
     const preview = document.querySelector('.preview')
     expect(preview?.textContent).toContain(':zzzz:')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Emoji picker (toolbar popover)
+// ---------------------------------------------------------------------------
+
+describe('CommentEditor — emoji picker popover', () => {
+  it('toolbar renders an "Insert emoji" button', () => {
+    render(CommentEditor, { props: { value: '', onchange: vi.fn() } })
+    expect(screen.getByRole('button', { name: /insert emoji/i })).toBeInTheDocument()
+  })
+
+  it('emoji button has aria-haspopup and starts collapsed (aria-expanded=false)', () => {
+    render(CommentEditor, { props: { value: '', onchange: vi.fn() } })
+    const btn = screen.getByRole('button', { name: /insert emoji/i })
+    expect(btn).toHaveAttribute('aria-haspopup', 'true')
+    expect(btn).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('clicking the emoji button opens the picker popover (aria-expanded=true)', async () => {
+    render(CommentEditor, { props: { value: '', onchange: vi.fn() } })
+    const btn = screen.getByRole('button', { name: /insert emoji/i })
+    await userEvent.click(btn)
+    expect(screen.getByTestId('emoji-picker')).toBeInTheDocument()
+    expect(btn).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('picker shows a curated grid of at least 20 emoji options', async () => {
+    render(CommentEditor, { props: { value: '', onchange: vi.fn() } })
+    await userEvent.click(screen.getByRole('button', { name: /insert emoji/i }))
+    const picker = screen.getByTestId('emoji-picker')
+    const options = picker.querySelectorAll('button.emoji-option')
+    expect(options.length).toBeGreaterThanOrEqual(20)
+  })
+
+  it('clicking an emoji inserts the unicode emoji at the cursor position', async () => {
+    const onchange = vi.fn()
+    render(CommentEditor, { props: { value: 'hello world', onchange } })
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    // Place cursor between "hello" and " world"
+    textarea.setSelectionRange(5, 5)
+    await userEvent.click(screen.getByRole('button', { name: /insert emoji/i }))
+    await userEvent.click(screen.getByRole('button', { name: '🎉' }))
+    const calls = onchange.mock.calls.map((c) => c[0])
+    expect(calls.some((v: string) => v === 'hello🎉 world')).toBe(true)
+  })
+
+  it('clicking an emoji at the end of text appends it', async () => {
+    const onchange = vi.fn()
+    render(CommentEditor, { props: { value: 'nice', onchange } })
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    textarea.setSelectionRange(4, 4)
+    await userEvent.click(screen.getByRole('button', { name: /insert emoji/i }))
+    await userEvent.click(screen.getByRole('button', { name: '👍' }))
+    const calls = onchange.mock.calls.map((c) => c[0])
+    expect(calls.some((v: string) => v === 'nice👍')).toBe(true)
+  })
+
+  it('clicking an emoji closes the popover', async () => {
+    render(CommentEditor, { props: { value: '', onchange: vi.fn() } })
+    await userEvent.click(screen.getByRole('button', { name: /insert emoji/i }))
+    await userEvent.click(screen.getByRole('button', { name: '🚀' }))
+    expect(screen.queryByTestId('emoji-picker')).not.toBeInTheDocument()
+  })
+
+  it('Escape closes the popover and returns focus to the emoji button', async () => {
+    render(CommentEditor, { props: { value: '', onchange: vi.fn() } })
+    const btn = screen.getByRole('button', { name: /insert emoji/i })
+    await userEvent.click(btn)
+    expect(screen.getByTestId('emoji-picker')).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByTestId('emoji-picker')).not.toBeInTheDocument()
+    expect(btn).toHaveFocus()
+  })
+
+  it('clicking the emoji button again toggles the popover closed', async () => {
+    render(CommentEditor, { props: { value: '', onchange: vi.fn() } })
+    const btn = screen.getByRole('button', { name: /insert emoji/i })
+    await userEvent.click(btn)
+    await userEvent.click(btn)
+    expect(screen.queryByTestId('emoji-picker')).not.toBeInTheDocument()
+  })
+
+  it('emoji options are real buttons (keyboard accessible)', async () => {
+    render(CommentEditor, { props: { value: '', onchange: vi.fn() } })
+    await userEvent.click(screen.getByRole('button', { name: /insert emoji/i }))
+    const option = screen.getByRole('button', { name: '🎉' })
+    expect(option.tagName).toBe('BUTTON')
+    expect(option).toHaveAttribute('type', 'button')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Theme readability — textarea must use design-system ink tokens, not
+// hardcoded / inherited colors (same class of bug as theme-audit PR #11).
+// jsdom cannot compute CSS custom properties from Svelte <style> blocks,
+// so these assert directly against the component stylesheet source.
+// ---------------------------------------------------------------------------
+
+describe('CommentEditor — theme readability tokens', () => {
+  /** Extract the body of the first CSS rule whose selector matches `selector`. */
+  function ruleBody(selector: string): string {
+    const styleBlock = editorSource.slice(editorSource.indexOf('<style>'))
+    const re = new RegExp(`(^|\\n)\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`)
+    const m = styleBlock.match(re)
+    return m ? m[2] : ''
+  }
+
+  it('textarea text color uses the primary ink token var(--text), not inherit/hardcoded', () => {
+    const body = ruleBody('textarea')
+    expect(body).toMatch(/color:\s*var\(--text\)/)
+    expect(body).not.toMatch(/color:\s*inherit/)
+    expect(body).not.toMatch(/color:\s*#/)
+  })
+
+  it('textarea background uses the surface token var(--surface), not transparent', () => {
+    const body = ruleBody('textarea')
+    expect(body).toMatch(/background:\s*var\(--surface\)/)
+    expect(body).not.toMatch(/background:\s*transparent/)
+  })
+
+  it('preview pane text color uses the primary ink token var(--text)', () => {
+    const body = ruleBody('.preview')
+    expect(body).toMatch(/color:\s*var\(--text\)/)
+  })
+
+  it('editor chrome borders use the hairline token, not hardcoded hex', () => {
+    const body = ruleBody('.comment-editor')
+    expect(body).toMatch(/border:\s*1px solid var\(--hairline\)/)
   })
 })

@@ -100,13 +100,22 @@
             <details class="rail-section-details" open>
               <summary class="rail-section-summary">Hotspots</summary>
               <div class="rail-section-body">
+                <!-- Legend: marker = AI-assessed attention level (AttentionResult.hotspots[].level) -->
+                <p class="hotspot-legend">
+                  <span class="legend-level level-high">⚠ high risk</span>
+                  <span class="legend-sep" aria-hidden="true">·</span>
+                  <span class="legend-level level-medium">◆ medium</span>
+                  <span class="legend-sep" aria-hidden="true">·</span>
+                  <span class="legend-level level-low">● low attention</span>
+                </p>
                 <ul class="hotspot-list">
                   {#each attention.hotspots as hotspot (hotspot.path)}
                     <li>
                       <button
                         class="hotspot-btn level-{hotspot.level}"
                         onclick={() => handleHotspot(hotspot.path)}
-                        aria-label={hotspot.path}
+                        aria-label="{hotspot.path} ({hotspot.level} attention)"
+                        title="{hotspot.level} attention — {hotspot.reason}"
                       >
                         <span class="hotspot-icon" aria-hidden="true">{levelIcon(hotspot.level)}</span>
                         <span class="hotspot-path">{hotspot.path}</span>
@@ -320,6 +329,25 @@
   .rail-section-body {
     padding: 0.5rem 0.75rem 0.75rem;
   }
+
+  /* Hotspot legend — compact muted caption explaining the level markers */
+  .hotspot-legend {
+    margin: 0 0 0.4rem;
+    padding: 0 0.4rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.02em;
+    opacity: 0.75;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+  }
+
+  .legend-level { white-space: nowrap; }
+  .legend-level.level-high { color: var(--legend-removed-color); }
+  .legend-level.level-medium { color: var(--legend-changed-color); }
+  .legend-level.level-low { color: var(--text-muted); }
+  .legend-sep { color: var(--text-muted); }
 
   /* Hotspot list (rail-specific jump behaviour) */
   .hotspot-list {

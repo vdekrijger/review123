@@ -88,7 +88,7 @@ export interface AiRun {
   readonly skillReviews: SkillReviewEntry[]
   start(): Promise<void>
   retry(task: TaskName): Promise<void>
-  coach(drafts: Draft[], prComments?: string[]): Promise<CoachResult | { error: string }>
+  coach(drafts: Draft[], prComments?: string[], verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'): Promise<CoachResult | { error: string }>
   ask(question: string, onDelta: (t: string) => void, focus?: AskFocus): Promise<{ ok: true; answer: string } | { ok: false; error: string }>
   runSkillReviews(onUpdate?: () => void): Promise<void>
 }
@@ -531,7 +531,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // coach(drafts) — on-demand, never cached, never run in start()
   // ---------------------------------------------------------------------------
 
-  async function coach(drafts: Draft[], prComments?: string[]): Promise<CoachResult | { error: string }> {
+  async function coach(
+    drafts: Draft[],
+    prComments?: string[],
+    verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT',
+  ): Promise<CoachResult | { error: string }> {
     // No-key check: same early-exit as start()
     if (!activeProviderHasKey()) {
       return { error: humanMessage('no-key') }
@@ -551,7 +555,21 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       body: d.body,
     }))
 
-    const prompts = coachPrompt(draftInputs, prComments)
+    // Pack context if not already packed (best-effort, mirrors ask()) — the
+    // diff context grounds the accuracy and grounded dimensions.
+    if (packedCtx === null) {
+      try {
+        packedCtx = await pack()
+      } catch {
+        // Continue without packed context — coach still grades the rest
+        packedCtx = { text: '', notAnalyzed: [], includedFiles: [], importGraph: '' }
+      }
+    }
+
+    const prompts = coachPrompt(draftInputs, prComments, {
+      ...(verdict !== undefined ? { verdict } : {}),
+      ...(packedCtx.text ? { contextText: packedCtx.text } : {}),
+    })
     const t1 = performance.now()
 
     try {

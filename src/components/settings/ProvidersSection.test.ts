@@ -10,13 +10,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import ProvidersSection from './ProvidersSection.svelte'
-import { getSettings, saveGithubAuth } from '../../lib/settings/settings'
+import { getSettings, saveGithubAuth, saveGitlabOAuth } from '../../lib/settings/settings'
 import { _resetAuthStateForTest } from '../../lib/auth/authState.svelte'
+import { _resetSettingsStateForTest } from '../../lib/settings/settingsState.svelte'
 
 beforeEach(() => {
   localStorage.clear()
+  sessionStorage.clear()
   _resetAuthStateForTest()
+  _resetSettingsStateForTest()
 })
+
+/** A GitLab OAuth bundle that is valid (not expired). */
+const validGitlabOAuth = {
+  token: 'glo_token123',
+  refreshToken: 'glr_refresh123',
+  expiresAt: Date.now() + 60 * 60 * 1000,
+}
 
 describe('ProvidersSection', () => {
   it('EC-04h: all token inputs have type="password" (masking)', async () => {
@@ -212,6 +222,118 @@ describe('ProvidersSection', () => {
       await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
 
       expect(getSettings().githubAuth).toBeNull()
+    })
+  })
+
+  describe('GitHub OAuth sign-in entry point', () => {
+    it('shows the official "Sign in with GitHub" button when signed out', () => {
+      render(ProvidersSection)
+      expect(screen.getByRole('button', { name: /sign in with github/i })).toBeInTheDocument()
+    })
+
+    it('hides the GitHub sign-in button and shows a GitHub sign-out when signed in via OAuth', () => {
+      saveGithubAuth({ token: 'gho_oauth123', method: 'oauth', scopes: ['public_repo'] })
+      _resetAuthStateForTest()
+      render(ProvidersSection)
+      expect(screen.queryByRole('button', { name: /sign in with github/i })).toBeNull()
+      expect(screen.getByRole('button', { name: /sign out of github/i })).toBeInTheDocument()
+    })
+
+    it('clicking GitHub sign-out clears githubAuth', async () => {
+      saveGithubAuth({ token: 'gho_oauth123', method: 'oauth', scopes: ['public_repo'] })
+      _resetAuthStateForTest()
+      render(ProvidersSection)
+      await userEvent.click(screen.getByRole('button', { name: /sign out of github/i }))
+      expect(getSettings().githubAuth).toBeNull()
+    })
+
+    it('GitHub sign-in stores returnTo = location.pathname so the user comes back to /settings', async () => {
+      Object.defineProperty(globalThis, 'location', {
+        value: { pathname: '/settings', origin: 'http://localhost', assign: vi.fn(), href: 'http://localhost/settings' },
+        writable: true,
+        configurable: true,
+      })
+      render(ProvidersSection)
+      await userEvent.click(screen.getByRole('button', { name: /sign in with github/i }))
+      expect(sessionStorage.getItem('review123:returnTo')).toBe('/settings')
+    })
+  })
+
+  describe('GitLab OAuth sign-in entry point', () => {
+    it('shows the "Sign in with GitLab" button when GitLab OAuth is not connected', () => {
+      render(ProvidersSection)
+      expect(screen.getByRole('button', { name: /sign in with gitlab/i })).toBeInTheDocument()
+    })
+
+    it('hides the GitLab sign-in button and shows signed-in state + sign-out when GitLab OAuth is connected', () => {
+      saveGitlabOAuth(validGitlabOAuth)
+      render(ProvidersSection)
+      expect(screen.queryByRole('button', { name: /sign in with gitlab/i })).toBeNull()
+      expect(screen.getByText(/gitlab: signed in via oauth/i)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /sign out of gitlab/i })).toBeInTheDocument()
+    })
+
+    it('clicking GitLab sign-out clears gitlabOAuth', async () => {
+      saveGitlabOAuth(validGitlabOAuth)
+      render(ProvidersSection)
+      await userEvent.click(screen.getByRole('button', { name: /sign out of gitlab/i }))
+      expect(getSettings().gitlabOAuth).toBeNull()
+    })
+
+    it('GitLab sign-in stores returnTo = location.pathname so the user comes back to /settings', async () => {
+      Object.defineProperty(globalThis, 'location', {
+        value: { pathname: '/settings', origin: 'http://localhost', assign: vi.fn(), href: 'http://localhost/settings' },
+        writable: true,
+        configurable: true,
+      })
+      render(ProvidersSection)
+      await userEvent.click(screen.getByRole('button', { name: /sign in with gitlab/i }))
+      expect(sessionStorage.getItem('review123:returnTo')).toBe('/settings')
+    })
+  })
+
+  describe('provider sessions are independent', () => {
+    it('being signed into GitHub does not affect the GitLab UI state', () => {
+      saveGithubAuth({ token: 'gho_oauth123', method: 'oauth', scopes: ['public_repo'] })
+      _resetAuthStateForTest()
+      render(ProvidersSection)
+      // GitHub: signed in
+      expect(screen.queryByRole('button', { name: /sign in with github/i })).toBeNull()
+      // GitLab: still signed out — sign-in button visible, status unchanged
+      expect(screen.getByRole('button', { name: /sign in with gitlab/i })).toBeInTheDocument()
+      expect(screen.getByText(/gitlab: not configured/i)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /sign out of gitlab/i })).toBeNull()
+    })
+
+    it('being signed into GitLab does not affect the GitHub UI state', () => {
+      saveGitlabOAuth(validGitlabOAuth)
+      render(ProvidersSection)
+      // GitLab: signed in
+      expect(screen.queryByRole('button', { name: /sign in with gitlab/i })).toBeNull()
+      // GitHub: still signed out — sign-in button visible, status unchanged
+      expect(screen.getByRole('button', { name: /sign in with github/i })).toBeInTheDocument()
+      expect(screen.getByText(/^not signed in$/i)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /sign out of github/i })).toBeNull()
+    })
+
+    it('GitHub sign-out leaves the GitLab session intact', async () => {
+      saveGithubAuth({ token: 'gho_oauth123', method: 'oauth', scopes: ['public_repo'] })
+      _resetAuthStateForTest()
+      saveGitlabOAuth(validGitlabOAuth)
+      render(ProvidersSection)
+      await userEvent.click(screen.getByRole('button', { name: /sign out of github/i }))
+      expect(getSettings().gitlabOAuth).toEqual(validGitlabOAuth)
+      expect(getSettings().githubAuth).toBeNull()
+    })
+
+    it('GitLab sign-out leaves the GitHub session intact', async () => {
+      saveGithubAuth({ token: 'gho_oauth123', method: 'oauth', scopes: ['public_repo'] })
+      _resetAuthStateForTest()
+      saveGitlabOAuth(validGitlabOAuth)
+      render(ProvidersSection)
+      await userEvent.click(screen.getByRole('button', { name: /sign out of gitlab/i }))
+      expect(getSettings().githubAuth).toEqual({ token: 'gho_oauth123', method: 'oauth', scopes: ['public_repo'] })
+      expect(getSettings().gitlabOAuth).toBeNull()
     })
   })
 })

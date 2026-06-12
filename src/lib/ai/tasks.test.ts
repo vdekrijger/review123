@@ -835,6 +835,112 @@ describe('coachPrompt', () => {
     // But a 200-char truncation should
     expect(user).toContain('x'.repeat(200))
   })
+
+  // --- v9: specificity + grounded dimensions ---
+
+  it('system prompt mentions specificity field with concrete-code rule', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toContain('specificity')
+    expect(system.toLowerCase()).toMatch(/concrete code|identifiers/)
+  })
+
+  it('system prompt mentions grounded field with verifiability rule', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toContain('grounded')
+    expect(system.toLowerCase()).toMatch(/verif/)
+  })
+
+  it('system prompt carries the evidence-discipline calibration block', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toContain('Evidence discipline')
+    expect(system).toMatch(/Ground every assessment in what you can SEE/i)
+    expect(system.toLowerCase()).toContain('provided context')
+    expect(system.toLowerCase()).toMatch(/neutral, factual phrasing over alarm/)
+  })
+
+  // --- v9: per-dimension reasons (pass AND fail) ---
+
+  it('system prompt requires a reasons object with all seven dimension keys', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toContain('reasons')
+    for (const dim of ['clarity', 'tone', 'actionable', 'accuracy', 'duplicate', 'specificity', 'grounded']) {
+      expect(system).toContain(`"${dim}"`)
+    }
+  })
+
+  it('system prompt instructs reasons for passing grades as well as failing ones', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toMatch(/passing grades as well as failing/i)
+  })
+
+  it('system prompt keeps reasons concise (one short line)', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system.toLowerCase()).toContain('one short line')
+    expect(system).toMatch(/12 words/)
+  })
+
+  // --- v9: verdict in context (coherence check) ---
+
+  it('user payload embeds chosenVerdict when verdict option is provided', () => {
+    const { user } = coachPrompt(drafts, undefined, { verdict: 'APPROVE' })
+    const parsed = JSON.parse(user)
+    expect(parsed.chosenVerdict).toBe('APPROVE')
+  })
+
+  it('system prompt requests verdictCoherence when verdict option is provided', () => {
+    const { system } = coachPrompt(drafts, undefined, { verdict: 'REQUEST_CHANGES' })
+    expect(system).toContain('verdictCoherence')
+    expect(system).toContain('coherent')
+    expect(system).toContain('note')
+    // The mismatch examples must be spelled out
+    expect(system).toMatch(/harsh or blocking comments alongside/i)
+    expect(system).toMatch(/unanimous praise alongside/i)
+  })
+
+  it('user payload has no chosenVerdict and system has no verdictCoherence when verdict absent', () => {
+    const { system, user } = coachPrompt(drafts)
+    const parsed = JSON.parse(user)
+    expect('chosenVerdict' in parsed).toBe(false)
+    expect(system).not.toContain('verdictCoherence')
+  })
+
+  // --- v9: diff context threading ---
+
+  it('user payload embeds prContext when contextText option is provided', () => {
+    const { user } = coachPrompt(drafts, undefined, { contextText: 'diff-context-marker-xyz' })
+    const parsed = JSON.parse(user)
+    expect(parsed.prContext).toContain('diff-context-marker-xyz')
+  })
+
+  it('user payload has no prContext when contextText is absent or empty', () => {
+    const { user: noOpts } = coachPrompt(drafts)
+    expect('prContext' in JSON.parse(noOpts)).toBe(false)
+    const { user: emptyCtx } = coachPrompt(drafts, undefined, { contextText: '' })
+    expect('prContext' in JSON.parse(emptyCtx)).toBe(false)
+  })
+
+  it('verdict + contextText + prComments combine into one valid JSON payload', () => {
+    const { user } = coachPrompt(drafts, ['Existing comment.'], {
+      verdict: 'COMMENT',
+      contextText: 'packed context',
+    })
+    const parsed = JSON.parse(user)
+    expect(parsed.drafts).toHaveLength(2)
+    expect(parsed.existingPrComments).toEqual(['Existing comment.'])
+    expect(parsed.chosenVerdict).toBe('COMMENT')
+    expect(parsed.prContext).toBe('packed context')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PROMPT_VERSION ≥ 9 (bumped for coach v9: reasons, specificity, grounded,
+// verdict coherence)
+// ---------------------------------------------------------------------------
+
+describe('PROMPT_VERSION v9', () => {
+  it('is at least 9 after the coach v9 prompt change', () => {
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(9)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1196,5 +1302,50 @@ describe('diagramsPrompt — import graph context section (ai-quality-round2)', 
 
   it('PROMPT_VERSION is at least 7 (bumped for import graph context)', () => {
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(7)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// askPrompt — typed comment text contract + concision (inline widget Ask AI)
+// ---------------------------------------------------------------------------
+
+describe('askPrompt — typed text contract and concision', () => {
+  const focus = { path: 'src/widget.ts', line: 12, excerpt: '-a\n+b' }
+
+  it('the typed comment text lands verbatim in the user prompt (with focus)', () => {
+    const typed = 'Is this loop accidentally quadratic?'
+    const { user } = askPrompt(makeCtx(), [], typed, focus)
+    expect(user).toContain(typed)
+  })
+
+  it('user prompt labels the typed text as the question to answer', () => {
+    const { user } = askPrompt(makeCtx(), [], 'why was this changed?', focus)
+    expect(user).toMatch(/Question:\s*why was this changed\?/)
+  })
+
+  it('system prompt instructs the model to answer the user\'s question directly', () => {
+    const { system } = askPrompt(makeCtx(), [], 'q', focus)
+    expect(system).toMatch(/answer the user'?s question directly/i)
+  })
+
+  it('system prompt contains the VERY concise 2-4 sentences instruction', () => {
+    const { system } = askPrompt(makeCtx(), [], 'q')
+    expect(system).toMatch(/very concise/i)
+    expect(system).toMatch(/2[-–]4 sentences/i)
+    expect(system).toMatch(/unless code/i)
+  })
+
+  it('concision instruction is present with and without focus', () => {
+    const withFocus = askPrompt(makeCtx(), [], 'q', focus).system
+    const withoutFocus = askPrompt(makeCtx(), [], 'q').system
+    expect(withFocus).toMatch(/2[-–]4 sentences/i)
+    expect(withoutFocus).toMatch(/2[-–]4 sentences/i)
+  })
+
+  it('focus grounding (path:line + excerpt) is retained alongside the typed question', () => {
+    const { system, user } = askPrompt(makeCtx(), [], 'my typed question', focus)
+    expect(system).toContain('src/widget.ts:12')
+    expect(user).toContain('-a\n+b')
+    expect(user).toContain('my typed question')
   })
 })

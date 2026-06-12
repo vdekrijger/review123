@@ -72,15 +72,17 @@
     </label>
   </fieldset>
 
-  <label class="progress-toggle">
-    <input
-      type="checkbox"
-      checked={showProgress}
-      onchange={(e) => onShowProgressChange((e.currentTarget as HTMLInputElement).checked)}
-      aria-label="Show review progress bar"
-    />
-    Show review progress bar
-  </label>
+  <fieldset aria-label="Progress bar">
+    <legend>Progress bar</legend>
+    <label>
+      <input type="radio" name="showProgress" value="show" checked={showProgress} onchange={() => onShowProgressChange(true)} />
+      Show
+    </label>
+    <label>
+      <input type="radio" name="showProgress" value="hide" checked={!showProgress} onchange={() => onShowProgressChange(false)} />
+      Hide
+    </label>
+  </fieldset>
 
   <fieldset aria-label="Test files">
     <legend>Test files</legend>
@@ -108,6 +110,7 @@
       <input type="radio" name="diffWidth" value="full" checked={diffWidth === 'full'} onchange={() => onDiffWidthChange('full')} />
       Full width
     </label>
+    <p class="field-note">Full = edge-to-edge diff at any screen size; Centered = comfortable reading column.</p>
   </fieldset>
 </section>
 
@@ -155,14 +158,10 @@
     color: var(--text);
   }
 
-  .progress-toggle {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.9em;
-    cursor: pointer;
-    color: var(--text);
-    margin-top: 0.25rem;
-    margin-bottom: 0.5rem;
+  .field-note {
+    flex-basis: 100%;
+    margin: 0;
+    font-size: 0.8em;
+    color: var(--text-muted);
   }
 </style>

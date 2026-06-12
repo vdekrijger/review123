@@ -10,30 +10,34 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks(id) {
-          // @git-diff-view (+ bundled highlight.js / lowlight) — large but stable.
-          // Splitting it out improves long-term caching.
-          if (
-            id.includes('node_modules/@git-diff-view') ||
-            id.includes('node_modules/highlight.js') ||
-            id.includes('node_modules/lowlight') ||
-            id.includes('node_modules/fast-diff')
-          ) {
-            return 'vendor-diff-view'
-          }
+        // Rolldown (Vite 8) advancedChunks — successor to manualChunks.
+        // Groups are matched in array order, and a matched module's dependency
+        // subtree is captured into the same group unless an EARLIER group
+        // claims it. With the previous manualChunks function the svelte
+        // runtime (shared by the entry and by @git-diff-view/svelte) was
+        // captured into vendor-diff-view, which dragged the whole diff view —
+        // including the lowlight/highlight.js syntax-highlight engine — into
+        // the entry's static import graph and would defeat the lazy-loading
+        // of the Review route.
+        advancedChunks: {
+          groups: [
+            // Svelte runtime FIRST so no vendor chunk swallows it.
+            { name: 'vendor-svelte', test: /node_modules[\\/]svelte[\\/]/ },
 
-          // posthog-js — heavyweight analytics SDK, completely stable.
-          if (id.includes('node_modules/posthog-js')) {
-            return 'vendor-posthog'
-          }
+            // @git-diff-view (+ bundled highlight.js / lowlight syntax
+            // engine) — large but stable, only loaded with the lazy Review
+            // route. Splitting it out improves long-term caching.
+            {
+              name: 'vendor-diff-view',
+              test: /node_modules[\\/](@git-diff-view[\\/]|highlight\.js[\\/]|lowlight[\\/]|fast-diff[\\/])/,
+            },
 
-          // marked + DOMPurify — markdown rendering pipeline.
-          if (
-            id.includes('node_modules/marked') ||
-            id.includes('node_modules/dompurify')
-          ) {
-            return 'vendor-markdown'
-          }
+            // posthog-js — heavyweight analytics SDK, completely stable.
+            { name: 'vendor-posthog', test: /node_modules[\\/]posthog-js[\\/]/ },
+
+            // marked + DOMPurify — markdown rendering pipeline.
+            { name: 'vendor-markdown', test: /node_modules[\\/](marked|dompurify)[\\/]/ },
+          ],
         },
       },
     },

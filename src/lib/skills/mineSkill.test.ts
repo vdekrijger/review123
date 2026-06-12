@@ -293,32 +293,32 @@ describe('stripLongFences (exported util)', () => {
 
 import { mineSkillPipeline } from './mineSkill'
 
-describe('mineSkillPipeline (provider-dispatched)', () => {
+describe('mineSkillPipeline (provider-dispatched, account-scoped)', () => {
   const mockLlm = vi.fn()
   const mockProvider = {
     id: 'github' as const,
     displayName: 'GitHub',
     authState: () => ({ configured: true, hint: 'ok' }),
-    getMyReviewComments: vi.fn(),
+    getMyAccountReviewComments: vi.fn(),
   }
 
   beforeEach(() => {
     vi.resetAllMocks()
     mockLlm.mockResolvedValue({ name: "alice's review style", content: 'Priorities...' })
-    mockProvider.getMyReviewComments.mockResolvedValue(['comment 1', 'comment 2'])
+    mockProvider.getMyAccountReviewComments.mockResolvedValue(['comment 1', 'comment 2'])
   })
 
-  it('returns error when provider has no getMyReviewComments', async () => {
+  it('returns error when provider has no getMyAccountReviewComments (bitbucket)', async () => {
     const providerWithoutMining = {
       id: 'bitbucket' as const,
       displayName: 'Bitbucket',
       authState: () => ({ configured: true, hint: 'ok' }),
-      // getMyReviewComments intentionally absent
+      // getMyAccountReviewComments intentionally absent
     }
 
     const result = await mineSkillPipeline(
       'bitbucket',
-      { owner: 'o', repo: 'r' },
+      null,
       { llmJsonWithRepair: mockLlm, provider: providerWithoutMining },
     )
     expect(result.ok).toBe(false)
@@ -333,29 +333,54 @@ describe('mineSkillPipeline (provider-dispatched)', () => {
 
     const result = await mineSkillPipeline(
       'github',
-      { owner: 'o', repo: 'r' },
+      null,
       { llmJsonWithRepair: mockLlm, provider: unauthProvider },
     )
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toContain('Please sign in to GitHub.')
   })
 
-  it('dispatches to provider.getMyReviewComments and runs LLM distillation', async () => {
+  it('account mode (null filter) dispatches with cap and no repoFilter', async () => {
+    const result = await mineSkillPipeline(
+      'github',
+      null,
+      { llmJsonWithRepair: mockLlm, provider: mockProvider },
+    )
+    expect(mockProvider.getMyAccountReviewComments).toHaveBeenCalledWith(150, undefined)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.skill.name).toBe("alice's review style")
+  })
+
+  it('passes the optional repoFilter through to the provider', async () => {
     const result = await mineSkillPipeline(
       'github',
       { owner: 'myorg', repo: 'myrepo' },
       { llmJsonWithRepair: mockLlm, provider: mockProvider },
     )
-    expect(mockProvider.getMyReviewComments).toHaveBeenCalledWith(
-      { owner: 'myorg', repo: 'myrepo' },
+    expect(mockProvider.getMyAccountReviewComments).toHaveBeenCalledWith(
       150,
+      { owner: 'myorg', repo: 'myrepo' },
     )
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.skill.name).toBe("alice's review style")
   })
 
-  it('returns error when getMyReviewComments returns empty array', async () => {
-    mockProvider.getMyReviewComments.mockResolvedValue([])
+  it('returns account-flavoured error when no comments found in account mode', async () => {
+    mockProvider.getMyAccountReviewComments.mockResolvedValue([])
+
+    const result = await mineSkillPipeline(
+      'github',
+      null,
+      { llmJsonWithRepair: mockLlm, provider: mockProvider },
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error).toMatch(/no.*comment/i)
+      expect(result.error).toMatch(/account/i)
+    }
+  })
+
+  it('returns repo-flavoured error when no comments found with a repo filter', async () => {
+    mockProvider.getMyAccountReviewComments.mockResolvedValue([])
 
     const result = await mineSkillPipeline(
       'github',
@@ -363,7 +388,21 @@ describe('mineSkillPipeline (provider-dispatched)', () => {
       { llmJsonWithRepair: mockLlm, provider: mockProvider },
     )
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error).toMatch(/no.*comment/i)
+    if (!result.ok) expect(result.error).toContain('o/r')
+  })
+
+  it('surfaces provider fetch errors (e.g. rate limit) as the error message', async () => {
+    mockProvider.getMyAccountReviewComments.mockRejectedValue(
+      new Error('GitHub rate limit exceeded. Try again after 12:00:00.'),
+    )
+
+    const result = await mineSkillPipeline(
+      'github',
+      null,
+      { llmJsonWithRepair: mockLlm, provider: mockProvider },
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/rate limit/i)
   })
 })
 

@@ -9,11 +9,16 @@
  *    now-nonexistent right margin. The fix uses data-rail-collapsed on .review
  *    combined with data-diffwidth=full on :root.
  *
- * 2. Tree drawer (Fix B): In full mode the drawer MUST always use overlay
- *    mode (never push the diff column) AND must show backdrop+overlay in all
- *    regimes when full-width — because there's no left margin to hide in.
+ * 2. Tree drawer (Fix B, ADAPTIVE contract): In full mode there is no left
+ *    margin, so the drawer opens INLINE — an in-flow flex child that pushes
+ *    the diff over while open. NO backdrop, NO overlay: the tree never covers
+ *    the diff. The same inline behaviour applies in centered mode on viewports
+ *    too narrow for the margin (< 1750px); only centered + wide uses the
+ *    margin-dwelling drawer. The regime switch is pure CSS (media query +
+ *    .diff-full class) — jsdom tests assert the structural hooks, the
+ *    geometry is proven in e2e/drawer-left.spec.ts.
  *
- * 3. Centered mode unchanged (regression guard).
+ * 3. Centered mode reading column unchanged (regression guard).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -125,58 +130,30 @@ describe('Fix A — CSS selectors: :root[data-diffwidth=full] .review[data-rail-
 // FIX B: Tree drawer — overlay mode in full-width at ALL viewports
 // ===========================================================================
 
-describe('Fix B — full-width mode: drawer is always overlay (never margin-dweller)', () => {
-  it('full-width + wide viewport (≥1200px) + open: diff-column does NOT get drawer-open class', async () => {
-    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1440)
-    setDiffWidth('full')
-    const { container } = render(InspectStep, {
-      props: {
-        files: makeFiles(['src/a.ts']),
-        changedFiles: 1,
-        mode: 'unified',
-        onmode: () => {},
-        draftStore: null,
-      },
+describe('Fix B — full-width mode: drawer opens inline (push, never overlay)', () => {
+  for (const width of [700, 1100, 1440, 1900]) {
+    it(`full-width @ ${width}px + open: NO backdrop and NO drawer-open class (inline flex push)`, async () => {
+      vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(width)
+      setDiffWidth('full')
+      const { container } = render(InspectStep, {
+        props: {
+          files: makeFiles(['src/a.ts']),
+          changedFiles: 1,
+          mode: 'unified',
+          onmode: () => {},
+          draftStore: null,
+        },
+      })
+      await userEvent.click(screen.getByRole('button', { name: /open file tree/i }))
+      // Inline mode: the drawer is a normal flex child — the diff shrinks via
+      // flex flow. No backdrop, no special class on the diff column.
+      expect(container.querySelector('.tree-backdrop')).toBeNull()
+      const diffCol = container.querySelector('.diff-column')
+      expect(diffCol?.classList.contains('drawer-open')).toBe(false)
     })
-    await userEvent.click(screen.getByRole('button', { name: /open file tree/i }))
-    const diffCol = container.querySelector('.diff-column')
-    expect(diffCol?.classList.contains('drawer-open')).toBe(false)
-  })
+  }
 
-  it('full-width + wide viewport + open: backdrop IS rendered (overlay needs dismiss)', async () => {
-    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1440)
-    setDiffWidth('full')
-    const { container } = render(InspectStep, {
-      props: {
-        files: makeFiles(['src/a.ts']),
-        changedFiles: 1,
-        mode: 'unified',
-        onmode: () => {},
-        draftStore: null,
-      },
-    })
-    await userEvent.click(screen.getByRole('button', { name: /open file tree/i }))
-    // In full-width mode, even wide viewport must show backdrop since there's no left margin
-    expect(container.querySelector('.tree-backdrop')).toBeInTheDocument()
-  })
-
-  it('full-width + mid viewport (900–1199px) + open: backdrop IS rendered', async () => {
-    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1100)
-    setDiffWidth('full')
-    const { container } = render(InspectStep, {
-      props: {
-        files: makeFiles(['src/a.ts']),
-        changedFiles: 1,
-        mode: 'unified',
-        onmode: () => {},
-        draftStore: null,
-      },
-    })
-    await userEvent.click(screen.getByRole('button', { name: /open file tree/i }))
-    expect(container.querySelector('.tree-backdrop')).toBeInTheDocument()
-  })
-
-  it('full-width + wide + open: inspect-layout has diff-full class (full mode active)', async () => {
+  it('full-width + open: inspect-layout has diff-full class (the CSS hook forcing inline mode)', async () => {
     vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1440)
     setDiffWidth('full')
     const { container } = render(InspectStep, {
@@ -191,24 +168,8 @@ describe('Fix B — full-width mode: drawer is always overlay (never margin-dwel
     await userEvent.click(screen.getByRole('button', { name: /open file tree/i }))
     const layout = container.querySelector('.inspect-layout')
     expect(layout?.classList.contains('diff-full')).toBe(true)
-  })
-
-  it('full-width + narrow (<900px) + open: narrow overlay still works (diff-column gets drawer-open)', async () => {
-    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(700)
-    setDiffWidth('full')
-    const { container } = render(InspectStep, {
-      props: {
-        files: makeFiles(['src/a.ts']),
-        changedFiles: 1,
-        mode: 'unified',
-        onmode: () => {},
-        draftStore: null,
-      },
-    })
-    await userEvent.click(screen.getByRole('button', { name: /open file tree/i }))
-    const diffCol = container.querySelector('.diff-column')
-    // Narrow regime is already overlay — this should still work the same in full mode
-    expect(diffCol?.classList.contains('drawer-open')).toBe(true)
+    // The open drawer wrapper carries data-open — the inline width rule keys off it
+    expect(container.querySelector('.file-tree-drawer')?.getAttribute('data-open')).toBe('true')
   })
 })
 
@@ -234,8 +195,8 @@ describe('Regression — centered mode drawer behavior unchanged', () => {
     expect(diffCol?.classList.contains('drawer-open')).toBe(false)
   })
 
-  it('centered + wide + open: NO backdrop rendered (fits in margin, no overlay needed)', async () => {
-    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1440)
+  it('centered + wide + open: NO backdrop rendered (margin mode, no overlay needed)', async () => {
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1900)
     const { container } = render(InspectStep, {
       props: {
         files: makeFiles(['src/a.ts']),
@@ -249,7 +210,7 @@ describe('Regression — centered mode drawer behavior unchanged', () => {
     expect(container.querySelector('.tree-backdrop')).not.toBeInTheDocument()
   })
 
-  it('centered + mid + open: backdrop rendered (not enough margin)', async () => {
+  it('centered + mid + open: NO backdrop either — inline mode pushes instead of overlaying', async () => {
     vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1100)
     const { container } = render(InspectStep, {
       props: {
@@ -261,7 +222,7 @@ describe('Regression — centered mode drawer behavior unchanged', () => {
       },
     })
     await userEvent.click(screen.getByRole('button', { name: /open file tree/i }))
-    expect(container.querySelector('.tree-backdrop')).toBeInTheDocument()
+    expect(container.querySelector('.tree-backdrop')).not.toBeInTheDocument()
   })
 })
 

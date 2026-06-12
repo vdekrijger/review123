@@ -1,10 +1,8 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// Port is overridable so parallel checkouts/worktrees can run e2e concurrently
-// without attaching to each other's preview servers (reuseExistingServer would
-// otherwise happily reuse a STALE server from a sibling worktree on the same
-// port and test the wrong build).
-const PORT = Number(process.env.PW_PORT ?? 4174)
+// Overridable so parallel checkouts/worktrees don't fight over one port
+// (a stale server on a shared port serves a foreign build → phantom failures).
+const PORT = Number(process.env.E2E_PORT ?? 4174)
 
 export default defineConfig({
   testDir: './e2e',
