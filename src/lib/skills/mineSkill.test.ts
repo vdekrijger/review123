@@ -15,6 +15,7 @@ import {
   MINE_COMMENTS_CAP,
   type RawPullComment,
 } from './mineSkill'
+import { githubProvider } from '../provider/github'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -287,5 +288,23 @@ describe('stripLongFences (exported util)', () => {
     const result = stripLongFences(body)
     expect(result).not.toContain('l10')
     expect(result).toContain('short')
+  })
+})
+
+describe('githubProvider.getMyReviewComments', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.resetAllMocks()
+  })
+
+  it('method exists on github provider', () => {
+    expect(typeof githubProvider.getMyReviewComments).toBe('function')
+  })
+
+  it('returns error-style rejection when no GitHub auth', async () => {
+    // No token in localStorage → ghFetch will fail
+    await expect(
+      githubProvider.getMyReviewComments!({ owner: 'o', repo: 'r' }, 150)
+    ).rejects.toThrow()
   })
 })
