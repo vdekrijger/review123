@@ -535,3 +535,58 @@ describe('DraftThread — action row (Leave comment / Ask AI / Cancel buttons)',
     expect(screen.getByRole('button', { name: /delete/i })).toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Ask-flow integration: the TYPED comment text lands in the constructed
+// ask prompt (via the askFn DI seam + the real askPrompt builder), and the
+// concision instruction is present in the system prompt.
+// ---------------------------------------------------------------------------
+
+import { askPrompt } from '../lib/ai/tasks'
+import type { AskFocus } from '../lib/ai/tasks'
+import type { PackedContext } from '../lib/context/pack'
+
+describe('DraftThread — typed text flows into the ask prompt (DI seam)', () => {
+  const ctx: PackedContext = { text: 'packed PR context', notAnalyzed: [], includedFiles: [] }
+
+  it('clicking Ask AI builds a prompt containing the typed text and the concision instruction', async () => {
+    const user = userEvent.setup()
+    let captured: { system: string; user: string } | null = null
+
+    // askFn DI seam wired through the REAL prompt builder, like run.ask does.
+    const askFn = vi.fn(async (q: string, onDelta: (t: string) => void, focus?: AskFocus) => {
+      captured = askPrompt(ctx, [], q, focus)
+      onDelta('answer')
+      return { ok: true as const, answer: 'answer' }
+    })
+
+    render(DraftThread, {
+      props: {
+        draft: null,
+        path: 'src/a.ts',
+        line: 7,
+        side: 'RIGHT' as const,
+        onsave: vi.fn(),
+        ondelete: vi.fn(),
+        oncancel: vi.fn(),
+        askFn,
+        excerpt: '-removed\n+added',
+      },
+    })
+
+    const textarea = screen.getByRole('textbox', { name: /comment body/i })
+    await user.type(textarea, 'Does this handle the empty case?')
+    await user.click(screen.getByRole('button', { name: /ask ai/i }))
+
+    await vi.waitFor(() => expect(askFn).toHaveBeenCalledOnce())
+    expect(captured).not.toBeNull()
+    // The typed text IS the question in the prompt
+    expect(captured!.user).toContain('Does this handle the empty case?')
+    // Line/hunk-excerpt grounding is retained
+    expect(captured!.system).toContain('src/a.ts:7')
+    expect(captured!.user).toContain('-removed\n+added')
+    // Concision instruction is present
+    expect(captured!.system).toMatch(/very concise/i)
+    expect(captured!.system).toMatch(/2[-–]4 sentences/i)
+  })
+})
