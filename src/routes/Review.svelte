@@ -14,6 +14,7 @@
   import { createAiRun } from '../lib/ai/run.svelte'
   import { packContext, fetchContents } from '../lib/context/pack'
   import { LLM_CONFIG } from '../lib/llm/config'
+  import { getProvider } from '../lib/llm/providers'
   import { parseReadingOrder } from '../lib/ai/tasks'
   import ConsentDialog from '../components/ConsentDialog.svelte'
   import UnderstandStep from '../components/UnderstandStep.svelte'
@@ -278,11 +279,13 @@
   // ---- AI run ----
   let aiRun: ReturnType<typeof createAiRun> | null = $state(null)
 
-  // Ask AI gating for the inline widget — mirrors ContextRail's askDisabledReason
+  // Ask AI gating for the inline widget — mirrors ContextRail's askDisabledReason.
+  // Names the ACTIVE provider (Plan F) — reactive via settingsState.
   function getInlineAskDisabledReason(): string | null {
     if (aiRun === null) return null
+    const providerName = getProvider(settingsState.current.aiProvider)?.displayName ?? 'provider'
     return aiRun.summary.status === 'no-key'
-      ? 'No API key configured. Add your DeepSeek key in Settings to use Ask AI.'
+      ? `No API key configured. Add your ${providerName} key in Settings to use Ask AI.`
       : null
   }
   const inlineAskDisabledReason = $derived(getInlineAskDisabledReason())
@@ -316,7 +319,7 @@
   })
 
   // showProgress: derived from settingsState so it updates live when the user
-  // toggles the setting in SettingsPanel without needing a remount.
+  // toggles the setting on the Settings page without needing a remount.
   const showProgress = $derived(settingsState.current.showProgress)
 
   // ConsentDialog: stored promise resolver

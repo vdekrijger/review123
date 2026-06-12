@@ -1,7 +1,7 @@
 /**
  * src/lib/skills/sampleSkill.ts — built-in sample reviewer skill.
  *
- * Exports SAMPLE_SKILL_NAME and SAMPLE_SKILL_CONTENT so the SettingsPanel
+ * Exports SAMPLE_SKILL_NAME and SAMPLE_SKILL_CONTENT so the Settings page
  * can offer a one-click "Add sample reviewer" button.
  */
 

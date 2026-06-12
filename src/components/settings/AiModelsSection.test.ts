@@ -1,63 +1,231 @@
 /**
  * AiModelsSection.test.ts
  *
- * Tests for the AI models settings section component.
- * These replace the DeepSeek key field tests from SettingsPanel.test.ts,
- * retargeted to the decomposed section component.
- * F1 will enrich this section with provider/model selection.
+ * Tests for the AI models settings section component (Plan F Task F3):
+ *   - provider radio (sourced from providers.ts defs — single source of truth)
+ *   - model dropdown per provider (default = provider's defaultModel)
+ *   - per-provider masked key fields with atomic save
+ *   - active provider's key field emphasized
+ *   - per-provider "Save & test" connection button (saves, then pings through
+ *     the real transport — mocked here)
+ *   - "what's sent where" privacy note
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/svelte'
+import { render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import AiModelsSection from './AiModelsSection.svelte'
-import { getSettings, saveTokens } from '../../lib/settings/settings'
+import { getSettings, saveTokens, setAiProvider, setAiModel } from '../../lib/settings/settings'
+import { PROVIDERS } from '../../lib/llm/providers'
+import { llmTestConnection, LlmError } from '../../lib/llm/llm'
+
+vi.mock('../../lib/llm/llm', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/llm/llm')>()
+  return { ...actual, llmTestConnection: vi.fn() }
+})
+
+const llmTestConnectionMock = vi.mocked(llmTestConnection)
 
 beforeEach(() => {
   localStorage.clear()
+  vi.clearAllMocks()
+  llmTestConnectionMock.mockResolvedValue(undefined)
 })
 
-describe('AiModelsSection', () => {
-  it('renders the DeepSeek API key input', () => {
+describe('AiModelsSection — provider radio', () => {
+  it('renders a radio per provider from PROVIDERS defs', () => {
     render(AiModelsSection)
-    expect(screen.getByLabelText(/deepseek api key/i)).toBeInTheDocument()
+    for (const p of PROVIDERS) {
+      expect(screen.getByRole('radio', { name: p.displayName })).toBeInTheDocument()
+    }
   })
 
-  it('DeepSeek key input is type=password (masking)', () => {
+  it('DeepSeek radio is checked by default', () => {
     render(AiModelsSection)
-    const input = screen.getByLabelText(/deepseek api key/i) as HTMLInputElement
-    expect(input.type).toBe('password')
+    const radio = screen.getByRole('radio', { name: 'DeepSeek' }) as HTMLInputElement
+    expect(radio.checked).toBe(true)
   })
 
-  it('DeepSeek key is NOT inside a details element (stays prominent)', () => {
+  it('selecting Anthropic persists aiProvider immediately and resets aiModel to default', async () => {
+    setAiModel('deepseek-reasoner')
     render(AiModelsSection)
-    const details = document.querySelector('details')
+    await userEvent.click(screen.getByRole('radio', { name: 'Anthropic' }))
+    expect(getSettings().aiProvider).toBe('anthropic')
+    // empty aiModel means "use the provider default"
+    expect(getSettings().aiModel).toBe('')
+  })
+
+  it('pre-selects the stored provider', () => {
+    setAiProvider('gemini')
+    render(AiModelsSection)
+    const radio = screen.getByRole('radio', { name: 'Gemini' }) as HTMLInputElement
+    expect(radio.checked).toBe(true)
+  })
+})
+
+describe('AiModelsSection — model dropdown', () => {
+  it('lists the active provider models with the provider default selected', () => {
+    render(AiModelsSection)
+    const select = screen.getByLabelText(/^model/i) as HTMLSelectElement
+    expect(select.value).toBe('deepseek-chat')
+    const optionValues = Array.from(select.options).map((o) => o.value)
+    expect(optionValues).toEqual(['deepseek-chat', 'deepseek-reasoner'])
+  })
+
+  it('switching provider repopulates the dropdown with that provider models', async () => {
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('radio', { name: 'Anthropic' }))
+    const select = screen.getByLabelText(/^model/i) as HTMLSelectElement
+    const optionValues = Array.from(select.options).map((o) => o.value)
+    expect(optionValues).toContain('claude-sonnet-4-6')
+    expect(optionValues).not.toContain('deepseek-chat')
+    expect(select.value).toBe('claude-sonnet-4-6') // provider default
+  })
+
+  it('choosing a model persists aiModel', async () => {
+    render(AiModelsSection)
+    const select = screen.getByLabelText(/^model/i)
+    await userEvent.selectOptions(select, 'deepseek-reasoner')
+    expect(getSettings().aiModel).toBe('deepseek-reasoner')
+  })
+
+  it('pre-selects a stored aiModel that belongs to the provider', () => {
+    setAiModel('deepseek-reasoner')
+    render(AiModelsSection)
+    const select = screen.getByLabelText(/^model/i) as HTMLSelectElement
+    expect(select.value).toBe('deepseek-reasoner')
+  })
+})
+
+describe('AiModelsSection — key fields', () => {
+  it('renders a masked key input per provider with the provider keyHint placeholder', () => {
+    render(AiModelsSection)
+    for (const p of PROVIDERS) {
+      const input = screen.getByLabelText(new RegExp(`${p.displayName} API key`, 'i')) as HTMLInputElement
+      expect(input.type).toBe('password')
+      expect(input.placeholder).toBe(p.keyHint)
+    }
+  })
+
+  it('the ACTIVE provider key row is emphasized (data-active)', () => {
+    setAiProvider('anthropic')
+    render(AiModelsSection)
+    const anthropicInput = screen.getByLabelText(/anthropic api key/i)
     const deepseekInput = screen.getByLabelText(/deepseek api key/i)
-    // deepseekInput must not be a descendant of details
-    expect(details?.contains(deepseekInput)).toBeFalsy()
+    expect(anthropicInput.closest('[data-active="true"]')).not.toBeNull()
+    expect(deepseekInput.closest('[data-active="true"]')).toBeNull()
   })
 
   it('typing a DeepSeek key and clicking Save stores it', async () => {
     render(AiModelsSection)
-    const keyInput = screen.getByLabelText(/deepseek api key/i)
-    await userEvent.type(keyInput, 'sk-test123')
-    await userEvent.click(screen.getByRole('button', { name: /save/i }))
+    await userEvent.type(screen.getByLabelText(/deepseek api key/i), 'sk-test123')
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
     expect(getSettings().deepseekKey).toBe('sk-test123')
+  })
+
+  it('Save stores all provider keys atomically', async () => {
+    render(AiModelsSection)
+    await userEvent.type(screen.getByLabelText(/anthropic api key/i), 'sk-ant-1')
+    await userEvent.type(screen.getByLabelText(/gemini api key/i), 'AIza-1')
+    await userEvent.type(screen.getByLabelText(/openai api key/i), 'sk-oa-1')
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    const s = getSettings()
+    expect(s.anthropicKey).toBe('sk-ant-1')
+    expect(s.geminiKey).toBe('AIza-1')
+    expect(s.openaiKey).toBe('sk-oa-1')
   })
 
   it('clearing the DeepSeek key saves null', async () => {
     saveTokens({ deepseekKey: 'sk-existing' })
     render(AiModelsSection)
-    const keyInput = screen.getByLabelText(/deepseek api key/i)
-    await userEvent.clear(keyInput)
-    await userEvent.click(screen.getByRole('button', { name: /save/i }))
+    await userEvent.clear(screen.getByLabelText(/deepseek api key/i))
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
     expect(getSettings().deepseekKey).toBeNull()
   })
 
-  it('pre-fills DeepSeek key from stored settings', () => {
-    saveTokens({ deepseekKey: 'sk-prefilled' })
+  it('pre-fills keys from stored settings', () => {
+    saveTokens({ deepseekKey: 'sk-prefilled', anthropicKey: 'sk-ant-prefilled' })
     render(AiModelsSection)
-    const keyInput = screen.getByLabelText(/deepseek api key/i) as HTMLInputElement
-    expect(keyInput.value).toBe('sk-prefilled')
+    expect((screen.getByLabelText(/deepseek api key/i) as HTMLInputElement).value).toBe('sk-prefilled')
+    expect((screen.getByLabelText(/anthropic api key/i) as HTMLInputElement).value).toBe('sk-ant-prefilled')
+  })
+
+  it('shows the "what\'s sent where" privacy note including the OpenAI proxy', () => {
+    render(AiModelsSection)
+    const note = screen.getByText(/sent directly from your browser/i)
+    expect(note).toBeInTheDocument()
+    expect(screen.getByText(/serverless proxy/i)).toBeInTheDocument()
+    expect(screen.getByText(/never stored or logged/i)).toBeInTheDocument()
+  })
+})
+
+describe('AiModelsSection — Save & test connection button', () => {
+  it('renders a Save & test button per provider', () => {
+    render(AiModelsSection)
+    for (const p of PROVIDERS) {
+      expect(
+        screen.getByRole('button', { name: new RegExp(`save & test ${p.displayName}`, 'i') }),
+      ).toBeInTheDocument()
+    }
+  })
+
+  it('saves the entered key FIRST, then pings that provider through the transport', async () => {
+    render(AiModelsSection)
+    await userEvent.type(screen.getByLabelText(/anthropic api key/i), 'sk-ant-new')
+    await userEvent.click(screen.getByRole('button', { name: /save & test anthropic/i }))
+    // Key was saved before the ping (test-what-you-typed via save-then-test)
+    expect(getSettings().anthropicKey).toBe('sk-ant-new')
+    expect(llmTestConnectionMock).toHaveBeenCalledWith('anthropic', undefined)
+  })
+
+  it('passes the selected model when testing the ACTIVE provider', async () => {
+    saveTokens({ deepseekKey: 'sk-ds' })
+    setAiModel('deepseek-reasoner')
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /save & test deepseek/i }))
+    expect(llmTestConnectionMock).toHaveBeenCalledWith('deepseek', 'deepseek-reasoner')
+  })
+
+  it('shows ok state on success', async () => {
+    saveTokens({ geminiKey: 'AIza-x' })
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /save & test gemini/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent(/connected/i)
+    })
+  })
+
+  it('shows the error message inline on failure', async () => {
+    llmTestConnectionMock.mockRejectedValue(new LlmError('auth', 'Unauthorized (401)'))
+    saveTokens({ deepseekKey: 'sk-bad' })
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /save & test deepseek/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/unauthorized/i)
+    })
+  })
+
+  it('testing with an empty key field shows a no-key error (saved null, transport throws)', async () => {
+    llmTestConnectionMock.mockRejectedValue(new LlmError('no-key', 'No DeepSeek API key configured'))
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /save & test deepseek/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/no deepseek api key/i)
+    })
+    expect(getSettings().deepseekKey).toBeNull()
+  })
+
+  it('disables the button while the test is in flight', async () => {
+    let resolvePing: () => void = () => {}
+    llmTestConnectionMock.mockImplementation(
+      () => new Promise<void>((resolve) => { resolvePing = resolve }),
+    )
+    saveTokens({ deepseekKey: 'sk-ds' })
+    render(AiModelsSection)
+    const btn = screen.getByRole('button', { name: /save & test deepseek/i })
+    await userEvent.click(btn)
+    expect(btn).toBeDisabled()
+    resolvePing()
+    await waitFor(() => expect(btn).not.toBeDisabled())
   })
 })

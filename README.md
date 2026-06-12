@@ -6,15 +6,33 @@ Paste a GitHub, GitLab, or Bitbucket pull request URL and get a guided three-ste
 
 ## AI features (Milestone C + D)
 
-Review 1-2-3 adds AI-assisted panels to the **Understand** step and smart workflow tools to the **Inspect** and **Verdict** steps, all powered by a BYO [DeepSeek](https://platform.deepseek.com/) API key. No key, no AI calls — the rest of the review flow works without it.
+Review 1-2-3 adds AI-assisted panels to the **Understand** step and smart workflow tools to the **Inspect** and **Verdict** steps, all powered by a bring-your-own API key for the AI provider of your choice: **DeepSeek** (default), **OpenAI**, **Anthropic**, or **Gemini**. No key, no AI calls — the rest of the review flow works without it.
 
-### BYO DeepSeek key
+### Choose your AI provider (BYOK)
 
-1. Obtain a key from [platform.deepseek.com](https://platform.deepseek.com/).
-2. Open **Settings** (gear icon, top-right) and paste the key in the **DeepSeek API key** field.
-3. The key is stored in `localStorage` only and is sent exclusively to `api.deepseek.com` — it never leaves your browser to any intermediate server.
+Open **Settings** (gear icon, top-right) → **AI models**. Pick a provider, pick a model, paste that provider's API key, then click **Save & test** to verify the connection with a minimal 1-token ping (never cached).
 
-### What gets sent to DeepSeek
+| Provider | Where to get a key | Default model | Other models |
+|---|---|---|---|
+| **DeepSeek** (default) | [platform.deepseek.com](https://platform.deepseek.com/) | `deepseek-chat` (V3) | `deepseek-reasoner` (R1) |
+| **OpenAI** | [platform.openai.com](https://platform.openai.com/api-keys) | `gpt-5.2` | `gpt-4.1`, `o4-mini` |
+| **Anthropic** | [console.anthropic.com](https://console.anthropic.com/settings/keys) | `claude-sonnet-4-6` | `claude-opus-4-5`, `claude-haiku-3-5` |
+| **Gemini** | [aistudio.google.com](https://aistudio.google.com/apikey) | `gemini-2.5-flash` | `gemini-2.5-pro` |
+
+An empty model selection means the provider's default model is used. The context-packing token budget is derived from the active model's context window.
+
+**OpenAI proxy note:** OpenAI's API does not allow direct browser (CORS) requests, so OpenAI calls are routed through this app's minimal serverless proxy (`/api/llm/openai`). Your key travels with each request in a header, is forwarded verbatim to `api.openai.com`, and is **never stored or logged** server-side. All other providers are called directly from your browser.
+
+### Privacy implications per provider
+
+| Provider | Key stored | Key sent to | Intermediary |
+|---|---|---|---|
+| DeepSeek | your browser's `localStorage` | `api.deepseek.com` | none — direct from browser |
+| OpenAI | your browser's `localStorage` | `api.openai.com` | this app's serverless proxy (pass-through; never stored/logged) |
+| Anthropic | your browser's `localStorage` | `api.anthropic.com` | none — direct from browser |
+| Gemini | your browser's `localStorage` | `generativelanguage.googleapis.com` | none — direct from browser |
+
+### What gets sent to the AI provider
 
 For each PR you review, up to five structured prompts are sent:
 
@@ -26,7 +44,7 @@ For each PR you review, up to five structured prompts are sent:
 | **Verdict** | 3-level behaviour verdict (preserved/minor/significant) + evidence | Same packed context + CI failure names & annotations |
 | **Test insight** | AI-inferred test coverage — which behaviors are tested and what gaps remain | Same packed context |
 
-The packed context includes file patches and, when they fit within the token budget (~58 000 tokens for `deepseek-chat`), the full before/after file contents. Lock files (`pnpm-lock.yaml`, `package-lock.json`, etc.) and minified/generated files are excluded automatically.
+The packed context includes file patches and, when they fit within the token budget (derived from the active model's context window — e.g. ~58 000 tokens for `deepseek-chat`), the full before/after file contents. Lock files (`pnpm-lock.yaml`, `package-lock.json`, etc.) and minified/generated files are excluded automatically.
 
 **What is NOT sent:** repository names, PR titles, PR numbers, your GitHub token, any reviewer identity, or PostHog analytics data.
 
@@ -38,7 +56,7 @@ Public repositories skip the gate entirely.
 
 ### Zero-token revisits via caching
 
-AI results are cached in IndexedDB keyed by `owner/repo#number@headSha + task + promptVersion`. Revisiting the same PR after the head SHA has not changed costs zero tokens. When the PR gets new commits the cache key changes and the panels re-run automatically.
+AI results are cached in IndexedDB keyed by `owner/repo#number@headSha + task + promptVersion + model id`. Revisiting the same PR after the head SHA has not changed costs zero tokens. When the PR gets new commits — or you switch provider/model — the cache key changes and the panels re-run automatically.
 
 ---
 
