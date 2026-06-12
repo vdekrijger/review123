@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import SettingsPanel from './SettingsPanel.svelte'
-import { getSettings, saveGithubAuth, setShowProgress, saveBitbucketAuth } from '../lib/settings/settings'
+import { getSettings, saveGithubAuth, setShowProgress } from '../lib/settings/settings'
 import { _resetAuthStateForTest } from '../lib/auth/authState.svelte'
 
 // Stub applyAppearance so SettingsPanel tests don't need real DOM env for it
@@ -276,5 +276,35 @@ describe('SettingsPanel — Bitbucket auth fields', () => {
     await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
     expect(onclose).not.toHaveBeenCalled()
     expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+
+  it('saving with token but empty email shows error, does not call onclose', async () => {
+    const onclose = vi.fn()
+    render(SettingsPanel, { props: { onclose } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const tokenInput = screen.getByLabelText(/bitbucket api token/i)
+    await userEvent.type(tokenInput, 'myapppassword123')
+    // email left empty
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(onclose).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+
+  it('clearing previously stored credentials saves null for bitbucketAuth', async () => {
+    // Pre-seed stored credentials
+    localStorage.setItem('review123:settings', JSON.stringify({ bitbucketAuth: { email: 'old@example.com', token: 'oldtoken' } }))
+    const onclose = vi.fn()
+    render(SettingsPanel, { props: { onclose } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    // Both fields are pre-filled from stored credentials; clear them
+    const emailInput = screen.getByLabelText(/bitbucket email address/i)
+    const tokenInput = screen.getByLabelText(/bitbucket api token/i)
+    await userEvent.clear(emailInput)
+    await userEvent.clear(tokenInput)
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(onclose).toHaveBeenCalledOnce()
+    expect(getSettings().bitbucketAuth).toBeNull()
   })
 })
