@@ -13,6 +13,15 @@
   import type { AskFocus } from '../lib/ai/tasks'
   import { excerptAround } from '../lib/diff/excerpt'
 
+  /** A skill finding scoped to a specific line in this file */
+  export interface SkillFinding {
+    skillName: string
+    line: number
+    severity: 'high' | 'medium' | 'low'
+    body: string
+    key: string
+  }
+
   interface Props {
     file: PrFile
     mode: DiffMode
@@ -47,9 +56,18 @@
      * Optional disabled hint for Ask AI gating (e.g. "No API key configured.").
      */
     askDisabledReason?: string | null
+    /**
+     * Line-bearing skill findings for this file, rendered inside the annotation
+     * area at their respective lines (not stacked above the file).
+     */
+    skillFindings?: SkillFinding[]
+    /**
+     * Called when the user clicks "Add as draft" on a skill finding inside FileDiff.
+     */
+    onAddSkillFindingDraft?: (finding: { body: string; line: number; key: string }) => Promise<void>
   }
 
-  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null }: Props = $props()
+  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft }: Props = $props()
 
   // Group existing comments by line (null-line comments go under a null key)
   const commentsByLine = $derived.by(() => {
@@ -212,6 +230,30 @@
     const sideStr = splitSideToSide(side)
     onRemoveDraft?.(line, sideStr)
   }
+
+  // ---- Skill findings (line-anchored) state -------------------------------
+
+  // Session-only dismissed finding keys within this FileDiff instance
+  let dismissedSkillKeys = $state<Set<string>>(new Set())
+  // Session-only "added" confirmation keys
+  let addedSkillKeys = $state<Set<string>>(new Set())
+
+  function dismissSkillFinding(key: string) {
+    dismissedSkillKeys = new Set([...dismissedSkillKeys, key])
+  }
+
+  async function handleAddSkillFindingDraft(finding: SkillFinding) {
+    if (onAddSkillFindingDraft) {
+      await onAddSkillFindingDraft({ body: finding.body, line: finding.line, key: finding.key })
+    }
+    addedSkillKeys = new Set([...addedSkillKeys, finding.key])
+    setTimeout(() => {
+      addedSkillKeys = new Set([...addedSkillKeys].filter(k => k !== finding.key))
+    }, 2000)
+  }
+
+  // Visible (non-dismissed) skill findings
+  const visibleSkillFindings = $derived(skillFindings.filter(f => !dismissedSkillKeys.has(f.key)))
 </script>
 
 <article class="file-diff" class:is-collapsed={collapsed} class:test-dim={isTest && testFileDisplay === 'dim'}>
@@ -327,6 +369,33 @@
               {askDisabledReason}
               excerpt={file.patch ? excerptAround(file.patch, draft.line, draft.side, 6) : ''}
             />
+          </div>
+        {/each}
+      </div>
+    {/if}
+
+    {#if visibleSkillFindings.length > 0}
+      <div class="skill-findings-annotations" aria-label="Skill review findings for this file">
+        {#each visibleSkillFindings as finding (finding.key)}
+          <div class="skill-finding severity-{finding.severity}">
+            <div class="skill-finding-header">
+              <span class="skill-persona-label">{finding.skillName}</span>
+              <span class="skill-severity-chip severity-chip-{finding.severity}">{finding.severity}</span>
+            </div>
+            <p class="skill-finding-body">{finding.body}</p>
+            <div class="skill-finding-actions">
+              <button
+                class="skill-add-draft-btn"
+                class:added={addedSkillKeys.has(finding.key)}
+                onclick={() => handleAddSkillFindingDraft(finding)}
+                disabled={addedSkillKeys.has(finding.key)}
+                aria-label={addedSkillKeys.has(finding.key) ? 'Added to drafts' : 'Add as draft comment'}
+              >{addedSkillKeys.has(finding.key) ? '✓ Added' : 'Add as draft'}</button>
+              <button
+                class="skill-dismiss-btn"
+                onclick={() => dismissSkillFinding(finding.key)}
+              >Dismiss</button>
+            </div>
           </div>
         {/each}
       </div>
@@ -521,5 +590,127 @@
   /* Expanded content padding */
   .resolved-thread[open] > :not(summary) {
     padding: 0.4rem;
+  }
+
+  /* ---- Skill findings annotations (line-anchored, dashed-accent style) ---- */
+  .skill-findings-annotations {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.5rem;
+    border-top: 1px solid var(--border-draft, var(--hairline));
+  }
+
+  .skill-finding {
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.85rem;
+    border-style: dashed;
+    border-width: 1px;
+  }
+
+  .skill-finding.severity-high {
+    border-color: var(--accent);
+    background: var(--legend-removed-bg);
+  }
+
+  .skill-finding.severity-medium {
+    border-color: var(--accent);
+    background: var(--legend-changed-bg);
+  }
+
+  .skill-finding.severity-low {
+    border-color: var(--border-subtle);
+    background: var(--surface-raised);
+  }
+
+  .skill-finding-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.3rem;
+  }
+
+  .skill-persona-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    opacity: 0.75;
+    flex: 1;
+  }
+
+  .skill-severity-chip {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+  }
+
+  .severity-chip-high {
+    background: var(--legend-removed-bg);
+    color: var(--legend-removed-color);
+    border: 1px solid var(--legend-removed-border);
+  }
+
+  .severity-chip-medium {
+    background: var(--legend-changed-bg);
+    color: var(--legend-changed-color);
+    border: 1px solid var(--legend-changed-border);
+  }
+
+  .severity-chip-low {
+    background: var(--surface-raised);
+    color: var(--text-muted);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .skill-finding-body {
+    margin: 0 0 0.4rem;
+    line-height: 1.4;
+  }
+
+  .skill-finding-actions {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .skill-add-draft-btn {
+    font-size: 0.78rem;
+    padding: 0.18rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--accent);
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+    font-weight: 500;
+  }
+
+  .skill-add-draft-btn:hover:not(:disabled) {
+    background: var(--legend-added-bg);
+  }
+
+  .skill-add-draft-btn.added {
+    background: var(--legend-added-bg);
+    border-color: var(--legend-added-border, var(--accent));
+    color: var(--legend-added-color, var(--accent));
+    cursor: default;
+    opacity: 0.85;
+  }
+
+  .skill-dismiss-btn {
+    font-size: 0.78rem;
+    padding: 0.18rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.7;
+  }
+
+  .skill-dismiss-btn:hover {
+    opacity: 1;
+    background: var(--surface-raised);
   }
 </style>

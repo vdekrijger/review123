@@ -19,6 +19,7 @@ describe('settings', () => {
       showProgress: true,
       treeOpen: false,
       testFileDisplay: 'normal',
+      diffWidth: 'centered',
     })
   })
 
@@ -62,6 +63,7 @@ describe('settings', () => {
       showProgress: true,
       treeOpen: false,
       testFileDisplay: 'normal',
+      diffWidth: 'centered',
     })
   })
 
