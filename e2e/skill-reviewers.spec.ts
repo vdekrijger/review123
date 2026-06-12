@@ -280,8 +280,8 @@ test('skill-reviewers: run my reviewers → suggestion appears → Add as draft 
     page.locator('.severity-chip-high'),
   ).toBeVisible()
 
-  // Initial draft count from sticky bar
-  const draftStatus = page.getByRole('status')
+  // Initial draft count from sticky bar (filter to the draft-count status element)
+  const draftStatus = page.locator('.draft-status')
   await expect(draftStatus).toContainText('0 comments', { timeout: 3_000 })
 
   // Click "Add as draft" button
@@ -339,6 +339,6 @@ test('skill-reviewers: dismiss hides the finding without affecting draft count',
     page.getByText(/Potential XSS vulnerability/i),
   ).not.toBeVisible({ timeout: 3_000 })
 
-  // Draft count stays at 0
-  await expect(page.getByRole('status')).toContainText('0 comments')
+  // Draft count stays at 0 (use class selector to avoid ambiguity with skill-run-status-bar)
+  await expect(page.locator('.draft-status')).toContainText('0 comments')
 })
