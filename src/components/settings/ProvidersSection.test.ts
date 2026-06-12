@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import ProvidersSection from './ProvidersSection.svelte'
-import { getSettings, saveGithubAuth, saveGitlabOAuth } from '../../lib/settings/settings'
+import { getSettings, saveGithubAuth, saveGitlabOAuth, saveTokens } from '../../lib/settings/settings'
 import { _resetAuthStateForTest } from '../../lib/auth/authState.svelte'
 import { _resetSettingsStateForTest } from '../../lib/settings/settingsState.svelte'
 
@@ -457,5 +457,73 @@ describe('ProvidersSection', () => {
       expect(screen.getByRole('button', { name: /sign in with github/i })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /sign in with gitlab/i })).toBeInTheDocument()
     })
+  })
+})
+
+describe('ProvidersSection — show/hide token toggles', () => {
+  it('GitHub PAT, GitLab token and Bitbucket token each get a "Show key" eye toggle', async () => {
+    render(ProvidersSection)
+    await userEvent.click(screen.getByText(/advanced.*personal access token/i))
+    const toggles = screen.getAllByRole('button', { name: 'Show key' })
+    expect(toggles).toHaveLength(3)
+    for (const toggle of toggles) {
+      expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    }
+  })
+
+  it('toggling reveals the GitHub PAT as plain text and back', async () => {
+    saveTokens({ githubPat: 'github_pat_secret' })
+    render(ProvidersSection)
+    const patInput = screen.getByLabelText(/github token/i) as HTMLInputElement
+    expect(patInput.type).toBe('password')
+    const toggle = patInput.closest('.secret-input')!.querySelector('button')!
+    await userEvent.click(toggle)
+    expect(patInput.type).toBe('text')
+    expect(patInput.value).toBe('github_pat_secret')
+    expect(toggle).toHaveAttribute('aria-label', 'Hide key')
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    await userEvent.click(toggle)
+    expect(patInput.type).toBe('password')
+  })
+
+  it('the Bitbucket email stays a plain masked field (not a token — no toggle)', async () => {
+    render(ProvidersSection)
+    await userEvent.click(screen.getByText(/advanced.*personal access token/i))
+    const emailInput = screen.getByLabelText(/bitbucket email address/i) as HTMLInputElement
+    expect(emailInput.type).toBe('password')
+    expect(emailInput.closest('.secret-input')).toBeNull()
+  })
+})
+
+describe('ProvidersSection — invalid key characters rejected at save', () => {
+  it('an em dash in the GitHub PAT shows the friendly error and saves nothing', async () => {
+    render(ProvidersSection)
+    await userEvent.type(screen.getByLabelText(/github token/i), 'github_pat—oops')
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent(/invalid character/i)
+    expect(alert).toHaveTextContent(/re-copy it from the provider/i)
+    expect(getSettings().githubPat).toBeNull()
+  })
+
+  it('an em dash in the GitLab token shows the friendly error and saves nothing', async () => {
+    render(ProvidersSection)
+    await userEvent.type(screen.getByLabelText(/gitlab personal access token/i), 'glpat—oops')
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(screen.getByRole('alert')).toHaveTextContent(/invalid character/i)
+    expect(getSettings().gitlabToken).toBeNull()
+  })
+})
+
+describe('ProvidersSection — advanced disclosure stays open while typing', () => {
+  it('typing in an advanced field does not snap the panel shut (regression: a one-way open attribute was re-applied by the grouped template effect on every state change)', async () => {
+    saveGithubAuth({ token: 'ghp_existing_pat', method: 'pat', scopes: [] })
+    render(ProvidersSection)
+    const details = document.querySelector('#providers details') as HTMLDetailsElement
+    expect(details.open).toBe(true)
+    await userEvent.type(screen.getByLabelText(/github token/i), '-suffix')
+    expect(details.open).toBe(true)
+    await userEvent.type(screen.getByLabelText(/gitlab host/i), 'gitlab.corp.example')
+    expect(details.open).toBe(true)
   })
 })

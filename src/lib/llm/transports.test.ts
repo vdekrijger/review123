@@ -24,6 +24,7 @@ import {
   llmStream,
   llmStreamWithUsage,
   LlmError,
+  INVALID_KEY_CHAR_MESSAGE,
 } from './llm'
 import {
   setDeepseekKey,
@@ -733,5 +734,61 @@ describe('activeLlmConfig() — budgetTokens from active model', () => {
   it('gemini (gemini-3.5-flash, 1_048_576 context) → 1_042_576 budget', () => {
     setAiProvider('gemini')
     expect(activeLlmConfig().budgetTokens).toBe(1_042_576)
+  })
+})
+
+// ===========================================================================
+// Header-character TypeError mapping (belt-and-braces for keys saved BEFORE
+// save-time sanitization landed): fetch throws a TypeError when a header
+// value (the key) contains a non-ISO-8859-1 character — the raw engine
+// message ("Cannot convert value to ByteString…") must never surface.
+// ===========================================================================
+
+describe('invalid header character → friendly LlmError (all transports)', () => {
+  const FIREFOX_BYTESTRING_ERROR = new TypeError(
+    'Window.fetch: Cannot convert value to ByteString because the character at index 49 has value 8212 which is greater than 255.',
+  )
+  const CHROME_HEADER_ERROR = new TypeError("Failed to execute 'fetch' on 'Window': Invalid value")
+
+  it('openai-compat (deepseek): maps the Firefox ByteString TypeError to a friendly auth LlmError', async () => {
+    setDeepseekKey('sk-legacy-saved-before-fix')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(FIREFOX_BYTESTRING_ERROR))
+    const err = (await llmComplete({ system: 's', user: 'u' }).then(
+      () => null,
+      (e: unknown) => e,
+    )) as LlmError
+    expect(err).toBeInstanceOf(LlmError)
+    expect(err.kind).toBe('auth')
+    expect(err.message).toBe(INVALID_KEY_CHAR_MESSAGE)
+    expect(err.message).not.toMatch(/ByteString|8212/)
+  })
+
+  it('anthropic: maps the Chrome invalid-value TypeError to the same friendly message', async () => {
+    setAiProvider('anthropic')
+    setAnthropicKey('sk-ant-legacy')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(CHROME_HEADER_ERROR))
+    await expect(llmComplete({ system: 's', user: 'u' })).rejects.toMatchObject({
+      kind: 'auth',
+      message: INVALID_KEY_CHAR_MESSAGE,
+    })
+  })
+
+  it('gemini: maps the ByteString TypeError on the streaming path too', async () => {
+    setAiProvider('gemini')
+    setGeminiKey('AIza-legacy')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(FIREFOX_BYTESTRING_ERROR))
+    await expect(llmStream({ system: 's', user: 'u' }, () => {})).rejects.toMatchObject({
+      kind: 'auth',
+      message: INVALID_KEY_CHAR_MESSAGE,
+    })
+  })
+
+  it('a generic network TypeError ("Failed to fetch") still maps to kind network', async () => {
+    setDeepseekKey('sk-ds-ok')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    await expect(llmComplete({ system: 's', user: 'u' })).rejects.toMatchObject({
+      kind: 'network',
+      message: 'Failed to fetch',
+    })
   })
 })

@@ -242,6 +242,44 @@ describe('SettingsPage scrollspy', () => {
     })
   })
 
+  // Top-edge regression (user report): at scrollTop ≈ 0 the page header
+  // pushes a short Appearance section's successor above the midline and
+  // "Providers & access" was highlighted while the user read Appearance.
+  it('keeps Appearance active when the observer fires at the very top (short first section under the page header)', async () => {
+    render(SettingsPage)
+    stubSectionTop('appearance', 130) // page header above it is in view
+    stubSectionTop('providers', 350) // already above the midline (400)!
+    stubSectionTop('ai-models', 900)
+    stubSectionTop('skills', 1500)
+    getObserverCallback()()
+    await Promise.resolve()
+    expect(navLink(/appearance/i)).toHaveAttribute('aria-current', 'true')
+    expect(navLink(/providers & access/i)).not.toHaveAttribute('aria-current')
+  })
+
+  it('returns to Appearance when scrolling back to the very top (passive scroll listener, not only the observer)', async () => {
+    render(SettingsPage)
+    // Mid-page: providers dominates
+    stubSectionTop('appearance', -500)
+    stubSectionTop('providers', 100)
+    stubSectionTop('ai-models', 700)
+    stubSectionTop('skills', 1300)
+    getObserverCallback()()
+    await vi.waitFor(() => {
+      expect(navLink(/providers & access/i)).toHaveAttribute('aria-current', 'true')
+    })
+    // Back at the top — only a scroll event fires (no IO threshold crossing)
+    stubSectionTop('appearance', 130)
+    stubSectionTop('providers', 350)
+    stubSectionTop('ai-models', 900)
+    stubSectionTop('skills', 1500)
+    window.dispatchEvent(new Event('scroll'))
+    await vi.waitFor(() => {
+      expect(navLink(/appearance/i)).toHaveAttribute('aria-current', 'true')
+    })
+    expect(navLink(/providers & access/i)).not.toHaveAttribute('aria-current')
+  })
+
   it('suppresses observer updates right after a nav click (no flicker during smooth scroll)', async () => {
     render(SettingsPage)
     await userEvent.click(navLink(/ai models/i))
