@@ -1231,11 +1231,16 @@ test('inspect: context-line expand affordance renders when full file contents ar
 })
 
 // ---------------------------------------------------------------------------
-// Test 12: Ask AI — open rail → type question → answer streams in →
-//          second question retains first in view
+// Test 12: Ask AI removed from context rail (line-level widget supersedes it)
+//
+// Per product decision: the rail no longer hosts an Ask AI panel.
+// The AskAi component lives in the line-level DraftThread widget path.
+// This test verifies:
+//   1. The rail does NOT contain a details.ask-ai-section.
+//   2. The rail DOES contain registry-driven sections (ci-details + pr-description).
 // ---------------------------------------------------------------------------
 
-test('ask-ai: open rail, type question, answer streams in; second question retains first in view', async ({
+test('ask-ai: NOT in context rail; rail shows ci-details and pr-description sections', async ({
   page,
 }) => {
   await setupRoutes(page)
@@ -1254,48 +1259,19 @@ test('ask-ai: open rail, type question, answer streams in; second question retai
   const rail = page.locator('aside.context-rail')
   await expect(rail).toBeVisible()
 
-  // Open the Ask AI section (it is inside a <details> element)
-  const askSection = rail.locator('details.ask-ai-section')
-  await expect(askSection).toBeVisible({ timeout: 5_000 })
-  await askSection.evaluate((el: HTMLDetailsElement) => { el.open = true })
+  // Ask AI section must NOT be in the rail body
+  await expect(rail.locator('details.ask-ai-section')).not.toBeVisible()
 
-  // Find the textarea and type a question with "ask-marker" so the DeepSeek fixture
-  // route recognizes it as an Ask AI request
-  const textarea = askSection.getByRole('textbox')
-  await expect(textarea).toBeVisible()
-  await textarea.fill('ask-marker: Why is this coded here?')
+  // Registry sections must be present — CI details and PR description now included
+  // Collect all <details> summary texts in the rail body
+  const railBody = rail.locator('.rail-body')
+  const summaryTexts = await railBody.locator('details > summary').allTextContents()
+  const lower = summaryTexts.map((t) => t.toLowerCase())
 
-  // Submit with the Ask button — use JS click to bypass the draft-bar overlay
-  const askBtn = askSection.getByRole('button', { name: /ask/i })
-  await expect(askBtn).toBeEnabled()
-  await askBtn.evaluate((el: HTMLButtonElement) => el.click())
-
-  // The answer should stream in
-  await expect(
-    askSection.getByText(/This code is in this location/i),
-  ).toBeVisible({ timeout: 15_000 })
-
-  // First question should still be visible in the conversation
-  await expect(
-    askSection.getByText(/ask-marker: Why is this coded here\?/i),
-  ).toBeVisible()
-
-  // Second question — verify history retained from first
-  await textarea.fill('ask-marker second-ask: What about the tests?')
-  await askBtn.evaluate((el: HTMLButtonElement) => el.click())
-
-  // Second answer should appear
-  await expect(
-    askSection.getByText(/second answer confirms context was retained/i),
-  ).toBeVisible({ timeout: 15_000 })
-
-  // Both questions should remain visible in the conversation
-  await expect(
-    askSection.getByText(/ask-marker: Why is this coded here\?/i),
-  ).toBeVisible()
-  await expect(
-    askSection.getByText(/This code is in this location/i),
-  ).toBeVisible()
+  // ci-details section
+  expect(lower.some((t) => t.includes('ci'))).toBe(true)
+  // pr-description section
+  expect(lower.some((t) => t.includes('pr description') || t.includes('original pr'))).toBe(true)
 })
 
 // ---------------------------------------------------------------------------
