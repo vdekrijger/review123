@@ -215,6 +215,64 @@ describe('DraftThread', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Multi-line: startLine / range label in header
+// ---------------------------------------------------------------------------
+
+describe('DraftThread — multi-line startLine', () => {
+  it('shows "Lines {start}–{end}" when draft has startLine < line', () => {
+    const draft: Draft = {
+      ...baseDraft,
+      line: 10,
+      startLine: 7,
+    }
+    render(DraftThread, {
+      props: {
+        draft,
+        path: 'src/a.ts',
+        line: 10,
+        side: 'RIGHT',
+        onsave: vi.fn(),
+        ondelete: vi.fn(),
+        oncancel: vi.fn(),
+      },
+    })
+    expect(screen.getByText(/lines 7.{1,3}10/i)).toBeInTheDocument()
+  })
+
+  it('shows "Comment at line {n}" when no startLine (single-line)', () => {
+    render(DraftThread, {
+      props: {
+        draft: baseDraft,
+        path: 'src/a.ts',
+        line: 5,
+        side: 'RIGHT',
+        onsave: vi.fn(),
+        ondelete: vi.fn(),
+        oncancel: vi.fn(),
+      },
+    })
+    expect(screen.getByText(/comment at line 5/i)).toBeInTheDocument()
+  })
+
+  it('startLine prop passed to new draft mode shows from-line input', () => {
+    render(DraftThread, {
+      props: {
+        draft: null,
+        path: 'src/a.ts',
+        line: 10,
+        side: 'RIGHT',
+        startLine: 7,
+        onsave: vi.fn(),
+        ondelete: vi.fn(),
+        oncancel: vi.fn(),
+      },
+    })
+    // Should display a range label in the header
+    expect(screen.getByText(/lines 7.{1,3}10/i)).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Fix-B: widget stays open with saved draft view (EC-FIX-B-01)
 // ---------------------------------------------------------------------------
 

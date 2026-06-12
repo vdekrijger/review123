@@ -58,13 +58,22 @@
 {/if}
 
 <style>
+  :global(:root) {
+    --topbar-h: 2.75rem;
+  }
+
   .topbar {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 0.5rem 1rem;
+    height: var(--topbar-h);
+    box-sizing: border-box;
     background: var(--surface);
     border-bottom: 1px solid var(--hairline);
+    position: sticky;
+    top: 0;
+    z-index: 200;
   }
   .topbar a {
     font-weight: 700;

@@ -12,9 +12,15 @@
     value: string
     onchange: (v: string) => void
     onsubmit?: () => void
+    /**
+     * When provided, shows a "Suggest change" toolbar button that inserts a
+     * GitHub-style suggestion fence with these lines pre-filled for the user to edit.
+     * Pass the original source line(s) for the anchored line/range.
+     */
+    suggestionSource?: string[]
   }
 
-  let { value, onchange, onsubmit }: Props = $props()
+  let { value, onchange, onsubmit, suggestionSource }: Props = $props()
 
   let mode: 'write' | 'preview' = $state('write')
   let textareaEl: HTMLTextAreaElement | undefined = $state()
@@ -134,6 +140,12 @@
     })
   }
 
+  function onSuggestChange() {
+    if (!suggestionSource) return
+    const fence = `\`\`\`suggestion\n${suggestionSource.join('\n')}\n\`\`\``
+    insertAt(fence)
+  }
+
   // ---- Keyboard shortcut ----
 
   function onKeydown(e: KeyboardEvent) {
@@ -174,6 +186,9 @@
       <button type="button" aria-label="Code block" onclick={onCodeBlock} title="Code block (``` block ```)"><code>```</code></button>
       <button type="button" aria-label="Link" onclick={onLink} title="Link ([text](url))">🔗</button>
       <button type="button" aria-label="List" onclick={onList} title="Unordered list (- item)">•</button>
+      {#if suggestionSource}
+        <button type="button" aria-label="Suggest change" onclick={onSuggestChange} title="Insert suggestion block (```suggestion ...```)">±</button>
+      {/if}
     </div>
 
     <!-- Editor -->

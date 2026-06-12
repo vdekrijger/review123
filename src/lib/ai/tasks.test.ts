@@ -1050,3 +1050,74 @@ describe('askPrompt with focus', () => {
     expect(user).toContain('Qnew')
   })
 })
+
+// ---------------------------------------------------------------------------
+// testInsightPrompt — gaps grouping instruction (ai-quality-round2)
+// Gaps must start with file path + colon so the UI can group them by file.
+// ---------------------------------------------------------------------------
+
+describe('testInsightPrompt — gaps file-path instruction (ai-quality-round2)', () => {
+  it('system prompt instructs gaps to start with the file path + colon', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    // Must contain an instruction that gaps start with a file path followed by a colon
+    expect(system).toMatch(/gaps.*start.*file|start.*with.*file.*path|file path.*colon|file.*:.*colon/i)
+  })
+
+  it('system prompt mentions colon separator for gaps grouping', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    // The colon separator for grouping must be mentioned
+    expect(system).toMatch(/colon|file:|\bpath\b.*colon/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// diagramsPrompt — import graph section (ai-quality-round2)
+// ---------------------------------------------------------------------------
+
+describe('diagramsPrompt — import graph context section (ai-quality-round2)', () => {
+  it('includes importGraph section when ctx.importGraph is provided', () => {
+    const ctx: PackedContext = {
+      text: 'PR context text',
+      notAnalyzed: [],
+      includedFiles: [],
+      importGraph: 'src/foo.ts -> src/bar.ts\nsrc/foo.ts -> (external) lodash x1',
+    }
+    const { system } = diagramsPrompt(ctx)
+    expect(system).toMatch(/module relationships|import graph/i)
+    expect(system).toContain('src/foo.ts -> src/bar.ts')
+  })
+
+  it('omits import graph section when ctx.importGraph is empty or absent', () => {
+    const ctxEmpty: PackedContext = {
+      text: 'PR context',
+      notAnalyzed: [],
+      includedFiles: [],
+      importGraph: '',
+    }
+    const { system: sysEmpty } = diagramsPrompt(ctxEmpty)
+    expect(sysEmpty).not.toMatch(/## Module relationships/)
+
+    const ctxAbsent: PackedContext = {
+      text: 'PR context',
+      notAnalyzed: [],
+      includedFiles: [],
+    }
+    const { system: sysAbsent } = diagramsPrompt(ctxAbsent)
+    expect(sysAbsent).not.toMatch(/## Module relationships/)
+  })
+
+  it('instructs model to ground nodes/edges in real import relationships', () => {
+    const ctx: PackedContext = {
+      text: 'PR context',
+      notAnalyzed: [],
+      includedFiles: [],
+      importGraph: 'src/a.ts -> src/b.ts',
+    }
+    const { system } = diagramsPrompt(ctx)
+    expect(system).toMatch(/ground.*real|real.*relationship|appear.*import graph|import graph.*nodes/i)
+  })
+
+  it('PROMPT_VERSION is at least 7 (bumped for import graph context)', () => {
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(7)
+  })
+})

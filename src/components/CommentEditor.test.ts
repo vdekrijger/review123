@@ -167,6 +167,51 @@ describe('CommentEditor', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Suggest Change button
+// ---------------------------------------------------------------------------
+
+describe('CommentEditor — Suggest Change button', () => {
+  it('does NOT render "Suggest change" button when suggestionSource is absent', () => {
+    render(CommentEditor, { props: { value: '', onchange: vi.fn() } })
+    expect(screen.queryByRole('button', { name: /suggest change/i })).not.toBeInTheDocument()
+  })
+
+  it('renders "Suggest change" button when suggestionSource is provided', () => {
+    render(CommentEditor, { props: { value: '', onchange: vi.fn(), suggestionSource: ['const x = 1'] } })
+    expect(screen.getByRole('button', { name: /suggest change/i })).toBeInTheDocument()
+  })
+
+  it('clicking "Suggest change" inserts suggestion fence with original lines at cursor', async () => {
+    const onchange = vi.fn()
+    render(CommentEditor, { props: { value: '', onchange, suggestionSource: ['const x = 1', 'const y = 2'] } })
+    const textarea = getTextarea()
+    textarea.setSelectionRange(0, 0)
+    await userEvent.click(screen.getByRole('button', { name: /suggest change/i }))
+    const calls = onchange.mock.calls.map((c) => c[0])
+    const inserted = calls[calls.length - 1] as string
+    expect(inserted).toContain('```suggestion')
+    expect(inserted).toContain('const x = 1')
+    expect(inserted).toContain('const y = 2')
+    expect(inserted).toContain('```')
+  })
+
+  it('suggestion fence is inserted after existing text (at cursor)', async () => {
+    const onchange = vi.fn()
+    render(CommentEditor, { props: { value: 'existing text\n', onchange, suggestionSource: ['old line'] } })
+    const textarea = getTextarea()
+    // Place cursor at end
+    const len = 'existing text\n'.length
+    textarea.setSelectionRange(len, len)
+    await userEvent.click(screen.getByRole('button', { name: /suggest change/i }))
+    const calls = onchange.mock.calls.map((c) => c[0])
+    const inserted = calls[calls.length - 1] as string
+    expect(inserted).toContain('existing text\n')
+    expect(inserted).toContain('```suggestion')
+    expect(inserted).toContain('old line')
+  })
+})
+
 describe('CommentEditor emoji support', () => {
   it('direct emoji character (😄) typed into textarea is preserved via onchange', async () => {
     const onchange = vi.fn()

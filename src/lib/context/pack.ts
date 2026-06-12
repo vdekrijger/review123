@@ -32,6 +32,8 @@ export interface PackedContext {
   notAnalyzed: string[]
   /** Files whose content was included in full. */
   includedFiles: string[]
+  /** Compact import-graph text extracted from file contents. Empty string when unavailable. */
+  importGraph?: string
 }
 
 export interface PackContextInput {
@@ -92,7 +94,7 @@ export function packContext(input: PackContextInput): PackedContext {
 
   // EC-16a: zero files is valid
   if (files.length === 0 && !ci) {
-    return { text: '', notAnalyzed: [], includedFiles: [] }
+    return { text: '', notAnalyzed: [], includedFiles: [], importGraph: '' }
   }
 
   let remainingTokens = budgetTokens
@@ -199,7 +201,191 @@ export function packContext(input: PackContextInput): PackedContext {
   }
 
   const text = parts.join('\n\n')
-  return { text, notAnalyzed, includedFiles }
+  const importGraph = extractImportGraph(
+    eligibleFiles.map(f => f.filename),
+    contents,
+  )
+  return { text, notAnalyzed, includedFiles, importGraph }
+}
+
+// ---------------------------------------------------------------------------
+// extractImportGraph — pure function (ai-quality-round2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract a compact import-graph text block from the given files and their
+ * contents.  For each file whose after-content (or before-content for deleted)
+ * is available, regex-extract import/require/from statements, resolve relative
+ * paths against the set of changed files, and emit:
+ *
+ *   path -> resolved-changed-path          (one line per resolved intra-PR dep)
+ *   path -> (external) pkg x<n>            (aggregated external packages, one line per file)
+ *
+ * Language detection is by file extension:
+ *   .ts/.tsx/.js/.jsx/.mjs/.cjs — ES import / require
+ *   .py                          — from .x import y (relative) or import x
+ *   .rs                          — use x::y (best-effort, treated as external)
+ *
+ * Caps output at 80 lines.
+ */
+export function extractImportGraph(
+  files: string[],
+  contents: Map<string, { before: string | null; after: string | null }>,
+): string {
+  const fileSet = new Set(files)
+  const lines: string[] = []
+
+  const CAP = 80
+
+  for (const filePath of files) {
+    if (lines.length >= CAP) break
+
+    const entry = contents.get(filePath)
+    if (!entry) continue
+
+    // Use after if available, else before (deleted files)
+    const src = entry.after ?? entry.before
+    if (!src) continue
+
+    const ext = filePath.split('.').at(-1) ?? ''
+    const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '.'
+
+    const resolvedDeps: string[] = []
+    const externalPkgs: string[] = []
+
+    if (['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'].includes(ext)) {
+      // ES import: import ... from '...'
+      const importRe = /from\s+['"]([^'"]+)['"]/g
+      // require: require('...')
+      const requireRe = /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g
+
+      const extractModules = (re: RegExp): string[] => {
+        const mods: string[] = []
+        let m: RegExpExecArray | null
+        while ((m = re.exec(src)) !== null) {
+          mods.push(m[1])
+        }
+        return mods
+      }
+
+      const mods = [...extractModules(importRe), ...extractModules(requireRe)]
+
+      for (const mod of mods) {
+        if (mod.startsWith('.')) {
+          // Relative import — resolve against dir
+          const resolved = resolveRelativePath(dir, mod, fileSet)
+          if (resolved) {
+            resolvedDeps.push(resolved)
+          }
+          // else: relative but not in PR — skip
+        } else {
+          // External package — extract package name (handle scoped packages)
+          const pkgName = mod.startsWith('@')
+            ? mod.split('/').slice(0, 2).join('/')
+            : mod.split('/')[0]
+          externalPkgs.push(pkgName)
+        }
+      }
+    } else if (ext === 'py') {
+      // Python: from .x import y  OR  from x import y  OR  import x
+      const fromRelRe = /^from\s+(\.+[\w.]*)\s+import/gm
+      const fromAbsRe = /^from\s+([\w][\w.]*)\s+import/gm
+
+      let m: RegExpExecArray | null
+      while ((m = fromRelRe.exec(src)) !== null) {
+        const dotModule = m[1]
+        const resolved = resolvePythonRelative(dir, dotModule, fileSet)
+        if (resolved) {
+          resolvedDeps.push(resolved)
+        }
+      }
+      while ((m = fromAbsRe.exec(src)) !== null) {
+        externalPkgs.push(m[1].split('.')[0])
+      }
+    }
+
+    // Deduplicate
+    const uniqueDeps = [...new Set(resolvedDeps)]
+    const externalCount = new Map<string, number>()
+    for (const pkg of externalPkgs) {
+      externalCount.set(pkg, (externalCount.get(pkg) ?? 0) + 1)
+    }
+
+    for (const dep of uniqueDeps) {
+      if (lines.length >= CAP) break
+      lines.push(`${filePath} -> ${dep}`)
+    }
+
+    if (externalCount.size > 0 && lines.length < CAP) {
+      const extLine = [...externalCount.entries()]
+        .map(([pkg, n]) => `${pkg} x${n}`)
+        .join(', ')
+      lines.push(`${filePath} -> (external) ${extLine}`)
+    }
+  }
+
+  return lines.join('\n')
+}
+
+/**
+ * Resolve a relative JS/TS import path to a file in the PR file set.
+ * Tries: exact, .ts, .tsx, .js, .jsx, /index.ts, /index.js extensions.
+ */
+function resolveRelativePath(dir: string, mod: string, fileSet: Set<string>): string | null {
+  const base = dir === '.' ? mod.replace(/^\.\//, '') : joinPath(dir, mod)
+
+  const candidates = [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.js`,
+    `${base}.jsx`,
+    `${base}/index.ts`,
+    `${base}/index.js`,
+  ]
+
+  for (const c of candidates) {
+    if (fileSet.has(c)) return c
+  }
+  return null
+}
+
+/**
+ * Resolve a Python relative dotted import (e.g. ".bar", "..utils.foo") to a file.
+ * Dots mean "current package" levels up; remainder is the submodule.
+ */
+function resolvePythonRelative(dir: string, dotModule: string, fileSet: Set<string>): string | null {
+  // Count leading dots
+  let dots = 0
+  while (dots < dotModule.length && dotModule[dots] === '.') dots++
+  const rest = dotModule.slice(dots).replace(/\./g, '/')
+
+  // Navigate up (dots - 1) directories from dir
+  let parts = dir.split('/').filter(Boolean)
+  for (let i = 0; i < dots - 1; i++) parts = parts.slice(0, -1)
+  const base = rest ? [...parts, rest].join('/') : parts.join('/')
+
+  const candidates = [`${base}.py`, `${base}/__init__.py`]
+  for (const c of candidates) {
+    if (fileSet.has(c)) return c
+  }
+  return null
+}
+
+/**
+ * Simple path join: join dir + relative path, normalizing ".." and ".".
+ */
+function joinPath(dir: string, rel: string): string {
+  const parts = [...dir.split('/'), ...rel.split('/')]
+  const resolved: string[] = []
+  for (const p of parts) {
+    if (p === '..') {
+      resolved.pop()
+    } else if (p !== '.' && p !== '') {
+      resolved.push(p)
+    }
+  }
+  return resolved.join('/')
 }
 
 // ---------------------------------------------------------------------------

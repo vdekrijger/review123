@@ -559,7 +559,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         packedCtx = await pack()
       } catch {
         // Continue without packed context — use empty context
-        packedCtx = { text: '', notAnalyzed: [], includedFiles: [] }
+        packedCtx = { text: '', notAnalyzed: [], includedFiles: [], importGraph: '' }
       }
     }
 

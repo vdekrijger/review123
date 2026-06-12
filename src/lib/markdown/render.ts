@@ -107,18 +107,53 @@ const PURIFY_CONFIG: Parameters<typeof purify.sanitize>[1] = {
   ],
 }
 
+// ---------------------------------------------------------------------------
+// Suggestion fence renderer
+// ---------------------------------------------------------------------------
+
+/**
+ * Pre-process src to replace ```suggestion ... ``` fences with a custom
+ * HTML block BEFORE marked parses it. We output a safe <div> structure that
+ * DOMPurify will preserve (we add 'suggestion-block' to the allowed classes via
+ * ADD_ATTR is not needed — DOMPurify keeps class by default on divs).
+ *
+ * The replacement happens at the raw-string level so the inner content is
+ * treated as plain text (HTML-escaped), preventing XSS from the suggestion body.
+ *
+ * The output is intentionally simple so DOMPurify does not strip it.
+ */
+function processSuggestionFences(src: string): string {
+  return src.replace(/```suggestion\r?\n([\s\S]*?)```/g, (_match, inner: string) => {
+    // HTML-escape the inner code content to prevent injection
+    const escaped = inner
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+    return (
+      `<div class="suggestion-block">` +
+      `<div class="suggestion-header">Suggested change</div>` +
+      `<pre class="suggestion-code"><code>${escaped}</code></pre>` +
+      `</div>\n`
+    )
+  })
+}
+
 /**
  * Render Markdown to sanitized HTML.
  *
  * Also expands GitHub-style :emoji: shortcodes before passing through marked,
  * so the preview matches what GitHub renders server-side.
  *
+ * Also renders ```suggestion fences as distinct styled blocks.
+ *
  * @param src - Raw Markdown string (may contain user-supplied content).
  * @returns Safe HTML string. Safe to embed via {@html} — sanitization is done here.
  */
 export function renderMarkdown(src: string): string {
+  // Process suggestion fences before emoji expansion or marked parsing
+  const withSuggestions = processSuggestionFences(src)
   // Expand :emoji: shortcodes before rendering so they appear in the HTML
-  const withEmoji = replaceEmojiShortcodes(src)
+  const withEmoji = replaceEmojiShortcodes(withSuggestions)
   // marked 18: parse() with async:false returns string synchronously
   const rawHtml = marked(withEmoji, { gfm: true, breaks: true, async: false }) as string
   return purify.sanitize(rawHtml, PURIFY_CONFIG)
