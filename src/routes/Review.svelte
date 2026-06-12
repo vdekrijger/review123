@@ -448,6 +448,8 @@
         {viewedStore}
         prComments={isCompareActive ? [] : prComments}
         {contentsMap}
+        skillReviews={aiRun?.skillReviews ?? []}
+        runSkillReviewsFn={aiRun != null ? (() => { void aiRun!.runSkillReviews() }) : null}
       />
     {:else}
       <VerdictStep
