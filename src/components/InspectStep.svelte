@@ -381,7 +381,7 @@
 {#if files.length === 0}
   <p>This PR has no changed files.</p>
 {:else}
-  <div class="inspect-layout" class:diff-full={diffWidth === 'full'} data-wide={isWideViewport ? 'true' : 'false'}>
+  <div class="inspect-layout" class:diff-full={diffWidth === 'full'} data-wide={isWideViewport ? 'true' : 'false'} data-diffwidth={diffWidth}>
     <!-- Collapsible drawer: zero-width flex placeholder, nav panel extends LEFTWARD -->
     <!-- DOM order: drawer first → tab second → diff column, so nav's right edge meets tab's LEFT edge -->
     <div class="file-tree-drawer" data-open={treeOpen ? 'true' : 'false'} data-wide={isWideViewport ? 'true' : 'false'} aria-hidden={!treeOpen}>
@@ -421,8 +421,9 @@
     </button>
 
     <!-- Backdrop: shown on overlay regimes (mid 900–1199px and narrow <900px) -->
-    <!-- On wide (≥1200px), no backdrop needed — drawer fits in left margin -->
-    {#if treeOpen && !isWideViewport}
+    <!-- On wide (≥1200px) centered mode: drawer fits in left margin — no backdrop needed. -->
+    <!-- On wide (≥1200px) full-width mode: NO left margin exists — must show backdrop. -->
+    {#if treeOpen && (!isWideViewport || diffWidth === 'full')}
       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
       <div class="tree-backdrop" onclick={closeTree} aria-hidden="true"></div>
     {/if}
