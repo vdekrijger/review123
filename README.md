@@ -109,7 +109,7 @@ Set these in `.env.local` locally; configure them in the Vercel dashboard for pr
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `VITE_POSTHOG_KEY` | No | — | PostHog project API key. Analytics are disabled when absent. |
-| `VITE_POSTHOG_HOST` | No | `https://us.i.posthog.com` | PostHog ingestion host. |
+| `VITE_POSTHOG_HOST` | No | `https://us.i.posthog.com` | PostHog ingestion host. Use `https://eu.i.posthog.com` for EU data residency. |
 | `VITE_GITHUB_CLIENT_ID` | No | — | GitHub OAuth App client ID (build-time, public). Sign-in button is hidden when absent. |
 | `GITHUB_OAUTH_CLIENT_ID` | No | — | GitHub OAuth App client ID (server-side, Vercel only). Required for OAuth sign-in. |
 | `GITHUB_OAUTH_CLIENT_SECRET` | No | — | GitHub OAuth App client secret (server-side, Vercel only). Never exposed to the browser. |
@@ -269,6 +269,10 @@ If your review submission fails with a permission error, the organization may re
 ## Privacy
 
 PostHog receives only coarse, allowlisted event metadata (see [`src/lib/analytics/analytics.ts`](src/lib/analytics/analytics.ts)). Code content, diffs, repository names, and private repo identifiers are never sent. Your GitHub PAT and DeepSeek API key are stored in `localStorage` only and are sent exclusively to their respective services.
+
+**Session replay:** PostHog session replay is enabled with strict text masking (`maskAllInputs: true`, `maskTextSelector: '*'`). All text — including any code visible in the UI — is masked in replays. Only interaction patterns and layout are recorded.
+
+**Exception capture:** Unhandled JavaScript errors are forwarded to PostHog error tracking. Stack traces may include file paths but never code content or diff text.
 
 **Drafts & privacy:** Comment drafts are stored entirely in your browser's IndexedDB — they never leave your device until you click "Submit review". At that point the draft bodies are sent directly to GitHub's API as part of the review submission payload; they are not sent to any other server, and they are not included in PostHog analytics events.
 
