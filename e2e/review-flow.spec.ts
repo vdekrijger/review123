@@ -639,9 +639,12 @@ test('review flow: diff renders with red/green rows, AI panels populate, CI show
   await expect(page.locator('.ci-badge.ci-fail')).toBeVisible({ timeout: 10_000 })
 
   // PR description is inside a collapsed <details> — open it first to check
+  // Scope to the understand-step so we don't match the rail copy (meta is now also in the rail)
   const prDescDetails = page.locator('details.pr-description-details')
   await prDescDetails.evaluate((el: HTMLDetailsElement) => { el.open = true })
-  await expect(page.getByText('This PR adds a new feature for testing.')).toBeVisible()
+  await expect(
+    page.locator('.understand-step').getByText('This PR adds a new feature for testing.')
+  ).toBeVisible()
 
   // AI summary should appear (may be in pre.prose while streaming or .prose-md when done)
   // Use containsText directly: it waits for text to appear and ignores empty/zero-size containers
@@ -1445,7 +1448,7 @@ test('resolved-threads: resolved thread renders collapsed with ✓ Resolved summ
 //          marking a file viewed
 // ---------------------------------------------------------------------------
 
-test('progress-bar: rendered inside sticky footer; percent increases after marking file viewed', async ({
+test('progress-bar: only shown on step 2; displays percent number and viewed counts', async ({
   page,
 }) => {
   await setupRoutes(page)
@@ -1460,47 +1463,44 @@ test('progress-bar: rendered inside sticky footer; percent increases after marki
     page.getByRole('heading', { name: /Test PR: add feature/i }),
   ).toBeVisible({ timeout: 10_000 })
 
-  // Progress bar should be visible inside the sticky footer (.draft-bar)
+  // Progress bar should NOT be visible on step 1 (Understand)
   const stickyFooter = page.locator('.draft-bar')
   await expect(stickyFooter).toBeVisible({ timeout: 5_000 })
+  await expect(
+    stickyFooter.getByRole('progressbar', { name: /review progress/i })
+  ).not.toBeVisible()
+
+  // Navigate to step 2 (Inspect) — progress bar should appear
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
 
   const progressBar = stickyFooter.getByRole('progressbar', { name: /review progress/i })
   await expect(progressBar).toBeVisible({ timeout: 5_000 })
 
-  // At step 1 with 0 files viewed → 0%
-  const initialPercent = Number(await progressBar.getAttribute('aria-valuenow'))
-  expect(initialPercent).toBe(0)
+  // aria-valuenow must be a number 0–100 (scroll-based)
+  const pct = Number(await progressBar.getAttribute('aria-valuenow'))
+  expect(pct).toBeGreaterThanOrEqual(0)
+  expect(pct).toBeLessThanOrEqual(100)
 
-  // Navigate to step 2 (Inspect) — progress should jump to 15%
-  await page.getByRole('button', { name: 'Next step' }).click()
-  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
-
-  const step2Percent = Number(await progressBar.getAttribute('aria-valuenow'))
-  expect(step2Percent).toBe(15)
+  // The label text contains a percent number (e.g. "0% · 0/2 viewed")
+  const progressText = await stickyFooter.locator('.progress-pct').textContent()
+  expect(progressText).toMatch(/\d+%/)
+  expect(progressText).toContain('viewed')
 
   // Wait for file diffs to appear
   await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 5_000 })
 
-  // Mark the first file as viewed
-  const firstViewedCheckbox = page.locator('input.viewed-checkbox').first()
-  await expect(firstViewedCheckbox).toBeVisible()
-  await firstViewedCheckbox.evaluate((el: HTMLInputElement) => {
-    el.checked = true
-    el.dispatchEvent(new Event('change', { bubbles: true }))
-  })
-
-  // After marking 1 of 2 files viewed → 15 + 70*(1/2) = 50%
-  await expect(async () => {
-    const pct = Number(await progressBar.getAttribute('aria-valuenow'))
-    expect(pct).toBeGreaterThan(step2Percent)
-  }).toPass({ timeout: 5_000 })
+  // Navigate to step 3 (Verdict) — progress bar should disappear
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(
+    stickyFooter.getByRole('progressbar', { name: /review progress/i })
+  ).not.toBeVisible()
 
   // The Prev/Next buttons in the footer should use the .btn class (themed)
   const prevBtn = stickyFooter.getByRole('button', { name: /previous step/i })
   const nextBtn = stickyFooter.getByRole('button', { name: /next step/i })
   await expect(prevBtn).toBeVisible()
   await expect(nextBtn).toBeVisible()
-  // .btn class means font-family is --font-ui (IBM Plex Sans), border is --hairline, bg is --surface-raised
   const prevClass = await prevBtn.getAttribute('class')
   expect(prevClass).toContain('btn')
 })

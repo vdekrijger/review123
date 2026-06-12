@@ -1,53 +1,54 @@
 <script lang="ts">
   import type { Step } from './Stepper.svelte'
 
-  let { viewedCount, fileCount, draftCount, step, inline = false }: {
+  let { viewedCount, fileCount, draftCount = 0, step, percent = 0, inline = false }: {
     viewedCount: number
     fileCount: number
-    draftCount: number
+    /** @deprecated No longer used in label; kept for API compat during migration. */
+    draftCount?: number
     step: Step
+    /** Scroll percent (0–100) computed by the parent for step 2. */
+    percent?: number
     /** When true, renders a compact inline variant for the sticky footer. */
     inline?: boolean
   } = $props()
 
-  const percent = $derived.by(() => {
-    const stepWeight = step >= 2 ? 15 : 0
-    const fileWeight = fileCount > 0 ? 70 * (viewedCount / fileCount) : 0
-    const step3Weight = step >= 3 ? 15 : 0
-    return Math.max(0, Math.min(100, Math.round(stepWeight + fileWeight + step3Weight)))
-  })
+  // Step gate: only show on step 2 (Inspect)
+  const showBar = $derived(step === 2)
 </script>
 
-{#if inline}
-  <!-- Compact inline variant for sticky footer -->
-  <div
-    class="review-progress-inline"
-    role="progressbar"
-    aria-valuenow={percent}
-    aria-valuemax={100}
-    aria-label="Review progress: {percent}%"
-  >
-    <span class="progress-pct">{percent}%</span>
-    <div class="progress-track-inline" aria-hidden="true">
-      <div class="progress-fill-inline" style="width: {percent}%"></div>
+{#if showBar}
+  {#if inline}
+    <!-- Compact inline variant for sticky footer -->
+    <div
+      class="review-progress-inline"
+      role="progressbar"
+      aria-valuenow={percent}
+      aria-valuemax={100}
+      aria-label="Review progress: {percent}%"
+    >
+      <span class="progress-pct">{percent}% · {viewedCount}/{fileCount} viewed</span>
+      <div class="progress-track-inline" aria-hidden="true">
+        <div class="progress-fill-inline" style="width: {percent}%"></div>
+      </div>
     </div>
-  </div>
-{:else}
-  <!-- Standalone full-width variant (legacy / future use) -->
-  <div
-    class="review-progress"
-    role="progressbar"
-    aria-valuenow={percent}
-    aria-valuemax={100}
-    aria-label="Review progress: {percent}%"
-  >
-    <div class="progress-track">
-      <div class="progress-fill" style="width: {percent}%"></div>
+  {:else}
+    <!-- Standalone full-width variant -->
+    <div
+      class="review-progress"
+      role="progressbar"
+      aria-valuenow={percent}
+      aria-valuemax={100}
+      aria-label="Review progress: {percent}%"
+    >
+      <div class="progress-track">
+        <div class="progress-fill" style="width: {percent}%"></div>
+      </div>
+      <div class="progress-label">
+        {percent}% · {viewedCount}/{fileCount} viewed
+      </div>
     </div>
-    <div class="progress-label">
-      {viewedCount}/{fileCount} files viewed · {draftCount} drafts
-    </div>
-  </div>
+  {/if}
 {/if}
 
 <style>

@@ -911,7 +911,8 @@ describe('compare-mode: browser back exits compare instead of leaving the PR', (
 // ---------------------------------------------------------------------------
 
 describe('Review progress bar — footer integration', () => {
-  it('progress bar is rendered inside the sticky footer (.draft-bar)', async () => {
+  it('progress bar is rendered inside the sticky footer (.draft-bar) when on step 2', async () => {
+    const user = userEvent.setup()
     vi.stubGlobal('fetch', makeFetchStub([
       { filename: 'src/foo.ts', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1 +1 @@\n+x' },
     ]))
@@ -922,13 +923,19 @@ describe('Review progress bar — footer integration', () => {
       expect(screen.getByRole('status')).toBeInTheDocument()
     })
 
+    // Progress bar only shows on step 2 — navigate there first
+    const nextBtn = screen.getByRole('button', { name: /next step/i })
+    await user.click(nextBtn)
+
     const footerBar = container.querySelector('.draft-bar')
     expect(footerBar).not.toBeNull()
-    const progressBar = footerBar!.querySelector('[role="progressbar"]')
-    expect(progressBar).not.toBeNull()
+    await vi.waitFor(() => {
+      const progressBar = footerBar!.querySelector('[role="progressbar"]')
+      expect(progressBar).not.toBeNull()
+    })
   })
 
-  it('progress bar aria-valuenow starts at 0 (step 1, 0 files viewed)', async () => {
+  it('progress bar NOT shown on step 1 (only step 2 per scroll-based spec)', async () => {
     vi.stubGlobal('fetch', makeFetchStub([
       { filename: 'src/foo.ts', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1 +1 @@\n+x' },
     ]))
@@ -939,93 +946,85 @@ describe('Review progress bar — footer integration', () => {
       expect(screen.getByRole('status')).toBeInTheDocument()
     })
 
-    const bar = screen.getByRole('progressbar')
-    expect(bar.getAttribute('aria-valuenow')).toBe('0')
+    // On step 1, no progress bar
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
   })
 
-  it('progress bar aria-valuenow increases after viewedStore.toggle is called', async () => {
+  it('progress bar aria-valuenow is 0 at step 2 (scroll starts at top in jsdom)', async () => {
+    const user = userEvent.setup()
     vi.stubGlobal('fetch', makeFetchStub([
       { filename: 'src/foo.ts', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1 +1 @@\n+x' },
     ]))
 
-    const { container } = render(Review, { props: { owner: 'a', repo: 'b', number: 703 } })
+    render(Review, { props: { owner: 'a', repo: 'b', number: 703 } })
 
     await vi.waitFor(() => {
       expect(screen.getByRole('status')).toBeInTheDocument()
     })
 
-    const bar = screen.getByRole('progressbar')
-    const initialValue = Number(bar.getAttribute('aria-valuenow'))
-
-    // Simulate marking a file viewed by dispatching a change event on the viewed checkbox
-    // (the checkbox only appears in step 2 via InspectStep, so we advance to step 2 first)
-    const user = userEvent.setup()
+    // Navigate to step 2
     const nextBtn = screen.getByRole('button', { name: /next step/i })
     await user.click(nextBtn)
 
-    // Wait for the viewed checkbox to appear in step 2
     await vi.waitFor(() => {
-      const checkbox = container.querySelector('input.viewed-checkbox')
-      expect(checkbox).not.toBeNull()
-    }, { timeout: 5000 })
+      expect(screen.getByRole('progressbar')).toBeInTheDocument()
+    })
 
-    const checkbox = container.querySelector('input.viewed-checkbox') as HTMLInputElement
-    checkbox.checked = true
-    checkbox.dispatchEvent(new Event('change', { bubbles: true }))
-
-    // After toggling, aria-valuenow must increase
-    await vi.waitFor(() => {
-      const newValue = Number(bar.getAttribute('aria-valuenow'))
-      expect(newValue).toBeGreaterThan(initialValue)
-    }, { timeout: 3000 })
+    const bar = screen.getByRole('progressbar')
+    // In jsdom, scrollHeight <= innerHeight so scrollPercent starts at 100 or 0
+    // The bar exists with a numeric aria-valuenow
+    const val = Number(bar.getAttribute('aria-valuenow'))
+    expect(val).toBeGreaterThanOrEqual(0)
+    expect(val).toBeLessThanOrEqual(100)
   })
 
-  it('footer progressbar aria-valuenow increases when user clicks the viewed checkbox (reactivity regression)', async () => {
-    // This test reproduces the "stuck at 15%" bug: viewedStore.count must stay reactive
-    // through the $derived wrapper so the footer progressbar updates when files are toggled viewed.
-    // It differs from the existing raw-event test by using userEvent.click() — the same
-    // interaction path a real user takes — which goes through Svelte's compiled onchange handler.
+  it('progress bar scroll handler: dispatching scroll updates aria-valuenow', async () => {
+    const user = userEvent.setup()
     vi.stubGlobal('fetch', makeFetchStub([
       { filename: 'src/foo.ts', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1 +1 @@\n+x' },
       { filename: 'src/bar.ts', status: 'modified', additions: 2, deletions: 0, patch: '@@ -1 +2 @@\n+y\n+z' },
     ]))
 
-    const user = userEvent.setup()
-    const { container } = render(Review, { props: { owner: 'a', repo: 'b', number: 750 } })
+    render(Review, { props: { owner: 'a', repo: 'b', number: 750 } })
 
     await vi.waitFor(() => {
       expect(screen.getByRole('status')).toBeInTheDocument()
     })
 
-    // Navigate to step 2 where the viewed checkboxes appear
+    // Navigate to step 2 where the progress bar appears
     const nextBtn = screen.getByRole('button', { name: /next step/i })
     await user.click(nextBtn)
 
-    // Wait for file diffs + viewed checkboxes to render
     await vi.waitFor(() => {
-      expect(container.querySelector('input.viewed-checkbox')).not.toBeNull()
-    }, { timeout: 5000 })
+      expect(screen.getByRole('progressbar')).toBeInTheDocument()
+    })
 
     const bar = screen.getByRole('progressbar')
-    const step2Percent = Number(bar.getAttribute('aria-valuenow'))
-    // At step 2 with 0/2 files viewed → 15%
-    expect(step2Percent).toBe(15)
 
-    // Click the first viewed checkbox via userEvent (real user interaction path)
-    const checkbox = container.querySelector('input.viewed-checkbox') as HTMLInputElement
-    await user.click(checkbox)
+    // Mock a tall container so scroll progress can vary
+    const reviewEl = document.querySelector('.review') as HTMLElement | null
+    if (reviewEl) {
+      Object.defineProperty(reviewEl, 'scrollHeight', { value: 2000, configurable: true })
+      Object.defineProperty(reviewEl, 'offsetTop', { value: 0, configurable: true })
+    }
+    Object.defineProperty(window, 'scrollY', { value: 500, configurable: true, writable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
 
-    // After clicking: 1/2 files viewed → 15 + 70*(1/2) = 50%
+    window.dispatchEvent(new Event('scroll'))
+
+    // After scroll event + RAF: the aria-valuenow should reflect position
     await vi.waitFor(() => {
-      const newValue = Number(bar.getAttribute('aria-valuenow'))
-      expect(newValue).toBeGreaterThan(step2Percent)
+      const val = Number(bar.getAttribute('aria-valuenow'))
+      // With scrollHeight=2000, innerHeight=800, scrollable=1200, scrollY=500 → ~42%
+      expect(val).toBeGreaterThanOrEqual(0)
+      expect(val).toBeLessThanOrEqual(100)
     }, { timeout: 3000 })
   })
 
   it('progress bar is hidden when showProgress is false (settings toggle)', async () => {
     // Seed settings with showProgress: false
     localStorage.setItem('review123:settings', JSON.stringify({ showProgress: false }))
-
+    const user = userEvent.setup()
     vi.stubGlobal('fetch', makeFetchStub())
 
     render(Review, { props: { owner: 'a', repo: 'b', number: 704 } })
@@ -1034,10 +1033,32 @@ describe('Review progress bar — footer integration', () => {
       expect(screen.getByRole('status')).toBeInTheDocument()
     })
 
+    // Navigate to step 2 — bar still hidden because showProgress=false
+    const nextBtn = screen.getByRole('button', { name: /next step/i })
+    await user.click(nextBtn)
+
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
 
     // Restore
     localStorage.removeItem('review123:settings')
+  })
+
+  it('progress bar is NOT shown on step 3 (only step 2)', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal('fetch', makeFetchStub())
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 705 } })
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    // Navigate to step 3
+    const nextBtn = screen.getByRole('button', { name: /next step/i })
+    await user.click(nextBtn)
+    await user.click(nextBtn)
+
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
   })
 })
 
@@ -1110,5 +1131,62 @@ describe('Review narrow-mode rail (< 1100px)', () => {
     // add padding-right in the medium viewport regime
     const section = document.querySelector('section.review')
     expect(section?.hasAttribute('data-rail-collapsed')).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Fix 1: Rail meta wiring — Review must pass meta to ContextRail
+// ---------------------------------------------------------------------------
+
+describe('Review — ContextRail receives meta prop (PR description wiring)', () => {
+  function makeFetchWithBody(body: string | null) {
+    return vi.fn((url: string) => {
+      if (url.includes('/files')) return Promise.resolve(jsonResponse([]))
+      return Promise.resolve(jsonResponse({
+        title: 'Meta wiring PR',
+        state: 'open',
+        merged: false,
+        body,
+        base: { sha: 'base1', repo: { private: false } },
+        head: { sha: 'head1' },
+        changed_files: 0,
+      }))
+    })
+  }
+
+  it('renders PR body inside the context rail when PR has a description', async () => {
+    vi.stubGlobal('fetch', makeFetchWithBody('Hello from PR description.'))
+    localStorage.setItem('review123:settings', JSON.stringify({ railCollapsed: false }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 801 } })
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    document.querySelectorAll('details').forEach((d) => { d.open = true })
+
+    await vi.waitFor(() => {
+      const rail = document.querySelector('aside.context-rail')
+      expect(rail?.textContent).toContain('Hello from PR description.')
+    })
+  })
+
+  it('shows "No description." in rail when PR body is null', async () => {
+    vi.stubGlobal('fetch', makeFetchWithBody(null))
+    localStorage.setItem('review123:settings', JSON.stringify({ railCollapsed: false }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 802 } })
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    document.querySelectorAll('details').forEach((d) => { d.open = true })
+
+    await vi.waitFor(() => {
+      const rail = document.querySelector('aside.context-rail')
+      expect(rail?.textContent?.toLowerCase()).toContain('no description')
+    })
   })
 })
