@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens, saveGithubAuth,
-  setTheme, setUiFont, setShowProgress, setTreeOpen,
+  setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay,
 } from './settings'
 
 describe('settings', () => {
@@ -18,6 +18,7 @@ describe('settings', () => {
       uiFont: 'plex',
       showProgress: true,
       treeOpen: false,
+      testFileDisplay: 'normal',
     })
   })
 
@@ -60,6 +61,7 @@ describe('settings', () => {
       uiFont: 'plex',
       showProgress: true,
       treeOpen: false,
+      testFileDisplay: 'normal',
     })
   })
 
@@ -228,6 +230,33 @@ describe('settings', () => {
     it('returns defaults includes treeOpen false', () => {
       const s = getSettings()
       expect(s).toHaveProperty('treeOpen', false)
+    })
+  })
+
+  describe('testFileDisplay', () => {
+    it('defaults to normal', () => {
+      expect(getSettings().testFileDisplay).toBe('normal')
+    })
+
+    it('setTestFileDisplay persists highlight', () => {
+      setTestFileDisplay('highlight')
+      expect(getSettings().testFileDisplay).toBe('highlight')
+    })
+
+    it('setTestFileDisplay persists dim', () => {
+      setTestFileDisplay('dim')
+      expect(getSettings().testFileDisplay).toBe('dim')
+    })
+
+    it('setTestFileDisplay persists normal', () => {
+      setTestFileDisplay('highlight')
+      setTestFileDisplay('normal')
+      expect(getSettings().testFileDisplay).toBe('normal')
+    })
+
+    it('coerces invalid testFileDisplay back to normal', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ testFileDisplay: 'glow' }))
+      expect(getSettings().testFileDisplay).toBe('normal')
     })
   })
 })
