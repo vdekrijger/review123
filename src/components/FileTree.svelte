@@ -68,7 +68,7 @@
   {:else}
     <!-- Directory node -->
     <details class="dir-node" open>
-      <summary class="dir-summary">
+      <summary class="dir-summary" style="text-transform: none; letter-spacing: normal; font-weight: normal; font-family: var(--font-mono); font-size: 12.5px;">
         <span class="dir-name">{node.name}</span>
       </summary>
       <ul class="dir-children" role="group">
