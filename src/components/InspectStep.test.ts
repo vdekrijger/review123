@@ -106,3 +106,64 @@ describe('InspectStep — viewedStore wiring', () => {
     expect(container.querySelector('article.file-diff.is-collapsed')).not.toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// InspectStep — toolbar btn class (task 5, item 1)
+// ---------------------------------------------------------------------------
+
+describe('InspectStep — toolbar btn classes', () => {
+  it('Unified button has class btn', () => {
+    const files = makeFiles(['a.ts'])
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null } })
+    const buttons = container.querySelectorAll('.mode-toggle button')
+    const unifiedBtn = [...buttons].find(b => b.textContent?.trim() === 'Unified')
+    expect(unifiedBtn).toBeTruthy()
+    expect(unifiedBtn!.classList.contains('btn')).toBe(true)
+  })
+
+  it('Side-by-side button has class btn', () => {
+    const files = makeFiles(['a.ts'])
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'split', onmode: () => {}, draftStore: null } })
+    const buttons = container.querySelectorAll('.mode-toggle button')
+    const splitBtn = [...buttons].find(b => b.textContent?.trim() === 'Side-by-side')
+    expect(splitBtn).toBeTruthy()
+    expect(splitBtn!.classList.contains('btn')).toBe(true)
+  })
+
+  it('active mode button has aria-pressed=true', () => {
+    const files = makeFiles(['a.ts'])
+    render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null } })
+    const unifiedBtn = screen.getByRole('button', { name: 'Unified' })
+    expect(unifiedBtn.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('inactive mode button has aria-pressed=false', () => {
+    const files = makeFiles(['a.ts'])
+    render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null } })
+    const splitBtn = screen.getByRole('button', { name: 'Side-by-side' })
+    expect(splitBtn.getAttribute('aria-pressed')).toBe('false')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// InspectStep — sticky drawer structural styles (task 5, item 3)
+// ---------------------------------------------------------------------------
+
+describe('InspectStep — sticky drawer structure', () => {
+  it('file-tree-drawer has data-wide attribute', () => {
+    const files = makeFiles(['a.ts'])
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null } })
+    const drawer = container.querySelector('.file-tree-drawer')
+    expect(drawer).toBeInTheDocument()
+    // data-wide attribute is present (value depends on jsdom viewport, accept either)
+    expect(drawer!.hasAttribute('data-wide')).toBe(true)
+  })
+
+  it('inspect-layout has data-wide attribute', () => {
+    const files = makeFiles(['a.ts'])
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null } })
+    const layout = container.querySelector('.inspect-layout')
+    expect(layout).toBeInTheDocument()
+    expect(layout!.hasAttribute('data-wide')).toBe(true)
+  })
+})

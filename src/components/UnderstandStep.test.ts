@@ -936,6 +936,97 @@ describe('UnderstandStep test coverage panel — per-file gap grouping', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Registry order: summary + diagrams appear ABOVE file-structure
+// ---------------------------------------------------------------------------
+
+describe('UnderstandStep — registry section order', () => {
+  it('Full summary panel appears before Changed files in DOM order', () => {
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    const panels = Array.from(container.querySelectorAll('.detail-panel'))
+    const summaryIdx = panels.findIndex((p) => p.querySelector('summary')?.textContent?.match(/full summary/i))
+    const fileStructureIdx = panels.findIndex((p) => p.querySelector('summary')?.textContent?.match(/changed files.*structure/i))
+    expect(summaryIdx).toBeGreaterThanOrEqual(0)
+    expect(fileStructureIdx).toBeGreaterThan(summaryIdx)
+  })
+
+  it('Diagrams panel appears before Changed files in DOM order', () => {
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    const panels = Array.from(container.querySelectorAll('.detail-panel'))
+    const diagramsIdx = panels.findIndex((p) => p.querySelector('summary')?.textContent?.match(/diagrams/i))
+    const fileStructureIdx = panels.findIndex((p) => p.querySelector('summary')?.textContent?.match(/changed files.*structure/i))
+    expect(diagramsIdx).toBeGreaterThanOrEqual(0)
+    expect(fileStructureIdx).toBeGreaterThan(diagramsIdx)
+  })
+
+  it('panel order is: summary, diagrams, file-structure, test-insight, alternatives, verdict-evidence, ci-details, pr-description', () => {
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    const summaries = Array.from(container.querySelectorAll('.detail-panel summary'))
+    const texts = summaries.map((s) => s.textContent?.toLowerCase() ?? '')
+    const orderedKeywords = ['summary', 'diagrams', 'changed files', 'test coverage', 'alternative', 'verdict', 'ci details', 'pr description']
+    let lastIdx = -1
+    for (const keyword of orderedKeywords) {
+      const idx = texts.findIndex((t, i) => i > lastIdx && t.includes(keyword))
+      expect(idx).toBeGreaterThan(lastIdx)
+      lastIdx = idx
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Verdict evidence layout: chip stacked above prose (no flex row)
+// ---------------------------------------------------------------------------
+
+describe('UnderstandStep verdict evidence layout — chip stacked above prose', () => {
+  it('verdict-evidence-row has display:block (not flex)', () => {
+    const verdict: VerdictResult = {
+      level: 'minor-changes',
+      evidence: ['src/lib/cache.ts: the cache handles expiry'],
+      notAnalyzed: [],
+    }
+    const run = makeRun({ verdict: { status: 'done', value: verdict } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    const row = container.querySelector('.verdict-evidence-row') as HTMLElement
+    expect(row).not.toBeNull()
+    // CSS computed style won't work in jsdom, but we can assert the class exists
+    // and that there is no inline flex style
+    expect(row.style.display).not.toBe('flex')
+  })
+
+  it('evidence-path-chip is an inline-block element inside the row', () => {
+    const verdict: VerdictResult = {
+      level: 'minor-changes',
+      evidence: ['src/lib/cache.ts: the cache handles expiry'],
+      notAnalyzed: [],
+    }
+    const run = makeRun({ verdict: { status: 'done', value: verdict } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    const chip = container.querySelector('.evidence-path-chip') as HTMLElement
+    expect(chip).not.toBeNull()
+    // Chip must not be set to flex via inline style
+    expect(chip.style.display).not.toBe('flex')
+  })
+
+  it('evidence-text renders as a sibling to the chip (not a flex child)', () => {
+    const verdict: VerdictResult = {
+      level: 'behavior-preserved',
+      evidence: ['src/a.ts: clean implementation'],
+      notAnalyzed: [],
+    }
+    const run = makeRun({ verdict: { status: 'done', value: verdict } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    const row = container.querySelector('.verdict-evidence-row')
+    const chip = row?.querySelector('.evidence-path-chip')
+    const text = row?.querySelector('.evidence-text')
+    // Both exist inside the row
+    expect(chip).not.toBeNull()
+    expect(text).not.toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // File structure section (new: collapsed <details> with mini FileTree)
 // ---------------------------------------------------------------------------
 

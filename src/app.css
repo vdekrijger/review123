@@ -15,6 +15,10 @@
   --accent:         #4db6a0;
   --accent-subtle:  rgba(77,182,160,.12);
 
+  /* ── Diff text colors (used by FileDiff stat counts) ── */
+  --diff-add:   var(--legend-added-color);
+  --diff-del:   var(--legend-removed-color);
+
   /* ── Legacy surface vars (keep for components not yet swept) ── */
   --surface-overlay: var(--surface-raised);
   --surface-banner:  #1a3050;

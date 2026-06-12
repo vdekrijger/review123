@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/svelte'
+import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import SettingsPanel from './SettingsPanel.svelte'
 import { getSettings, saveGithubAuth, setShowProgress } from '../lib/settings/settings'
@@ -93,9 +93,9 @@ describe('SettingsPanel', () => {
       render(SettingsPanel, { props: { onclose: vi.fn() } })
       const themeGroup = screen.getByRole('group', { name: /theme/i })
       expect(themeGroup).toBeInTheDocument()
-      expect(screen.getByRole('radio', { name: /auto/i })).toBeInTheDocument()
-      expect(screen.getByRole('radio', { name: /light/i })).toBeInTheDocument()
-      expect(screen.getByRole('radio', { name: /dark/i })).toBeInTheDocument()
+      expect(within(themeGroup).getByRole('radio', { name: /^auto$/i })).toBeInTheDocument()
+      expect(within(themeGroup).getByRole('radio', { name: /^light$/i })).toBeInTheDocument()
+      expect(within(themeGroup).getByRole('radio', { name: /^dark$/i })).toBeInTheDocument()
     })
 
     it('renders Font radiogroup with Plex, System, Serif options', () => {
@@ -117,7 +117,8 @@ describe('SettingsPanel', () => {
 
     it('selecting Light theme persists in getSettings', async () => {
       render(SettingsPanel, { props: { onclose: vi.fn() } })
-      await userEvent.click(screen.getByRole('radio', { name: /light/i }))
+      const themeGroup = screen.getByRole('group', { name: /theme/i })
+      await userEvent.click(within(themeGroup).getByRole('radio', { name: /^light$/i }))
       expect(getSettings().theme).toBe('light')
     })
 
@@ -189,5 +190,38 @@ describe('PAT scope guidance', () => {
     expect(details?.textContent).toMatch(/Checks: Read/)
     expect(details?.textContent).toMatch(/public_repo/)
     expect(details?.textContent).toMatch(/Configure SSO/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SettingsPanel — testFileDisplay radio row (task 7)
+// ---------------------------------------------------------------------------
+
+describe('SettingsPanel — testFileDisplay setting', () => {
+  beforeEach(() => { localStorage.clear() })
+
+  it('renders Test files radio fieldset', () => {
+    render(SettingsPanel, { props: { onclose: () => {} } })
+    expect(screen.getByRole('group', { name: /test files/i })).toBeInTheDocument()
+  })
+
+  it('Normal radio is checked by default', () => {
+    render(SettingsPanel, { props: { onclose: () => {} } })
+    const normalRadio = screen.getByRole('radio', { name: /^normal$/i })
+    expect((normalRadio as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('Highlight radio changes setting to highlight on click', async () => {
+    render(SettingsPanel, { props: { onclose: () => {} } })
+    const highlightRadio = screen.getByRole('radio', { name: /^highlight$/i })
+    await fireEvent.click(highlightRadio)
+    expect(getSettings().testFileDisplay).toBe('highlight')
+  })
+
+  it('De-emphasize radio changes setting to dim on click', async () => {
+    render(SettingsPanel, { props: { onclose: () => {} } })
+    const dimRadio = screen.getByRole('radio', { name: /de-emphasize/i })
+    await fireEvent.click(dimRadio)
+    expect(getSettings().testFileDisplay).toBe('dim')
   })
 })

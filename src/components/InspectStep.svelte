@@ -274,8 +274,8 @@
 </script>
 
 <div class="mode-toggle" role="group" aria-label="Diff mode">
-  <button class:active={mode === 'unified'} aria-pressed={mode === 'unified'} onclick={() => onmode('unified')}>Unified</button>
-  <button class:active={mode === 'split'} aria-pressed={mode === 'split'} onclick={() => onmode('split')}>Side-by-side</button>
+  <button class="btn" class:btn-active={mode === 'unified'} aria-pressed={mode === 'unified'} onclick={() => onmode('unified')}>Unified</button>
+  <button class="btn" class:btn-active={mode === 'split'} aria-pressed={mode === 'split'} onclick={() => onmode('split')}>Side-by-side</button>
   {#if showRunButton}
     <button
       class="run-reviewers-btn"
@@ -354,9 +354,18 @@
     </button>
 
     <!-- Collapsible drawer -->
-    <div class="file-tree-drawer" data-open={treeOpen ? 'true' : 'false'} aria-hidden={!treeOpen}>
+    <div class="file-tree-drawer" data-open={treeOpen ? 'true' : 'false'} data-wide={isWideViewport ? 'true' : 'false'} aria-hidden={!treeOpen}>
       {#if treeOpen}
         <nav class="file-tree-nav" aria-label="File tree">
+          <div class="tree-drawer-header">
+            <span class="tree-drawer-title">Files</span>
+            <button
+              class="tree-drawer-close"
+              onclick={closeTree}
+              aria-label="Close file tree"
+              title="Close file tree (Escape)"
+            >✕</button>
+          </div>
           <FileTree
             {files}
             {attention}
@@ -447,25 +456,22 @@
     gap: 0;
   }
 
-  /* ---- Wide viewport: drawer floats into left margin (absolute positioning) ---- */
-  /* When viewport ≥ 1200px the centered 70rem content has free left margin space.  */
-  /* The drawer is absolutely positioned to the left of the toggle tab, so the      */
-  /* diff column keeps its full width and is never pushed.                           */
+  /* ---- Wide viewport (≥1200px): drawer is sticky in the left margin, own scroll ---- */
   @media (min-width: 1200px) {
-    .file-tree-drawer[data-open="true"] {
-      position: absolute;
-      /* Place drawer to the left of the toggle tab (28px wide).                    */
-      /* right: 100% positions the right edge of the drawer at the left edge of     */
-      /* its containing block. We add a 4px gap.                                    */
-      right: calc(100% - 28px + 4px);
-      top: 0;
+    .inspect-layout[data-wide="true"] .file-tree-drawer[data-open="true"] {
+      position: sticky;
+      top: 3.5rem; /* below topbar (~56px) */
+      align-self: flex-start;
+      max-height: calc(100vh - 3.5rem);
+      overflow-y: auto;
       z-index: 10;
       box-shadow: -2px 4px 16px rgba(0,0,0,0.18);
     }
 
-    .file-tree-nav {
-      /* On wide viewport the drawer doesn't need a left margin since it's absolute */
+    .inspect-layout[data-wide="true"] .file-tree-nav {
       margin-left: 0;
+      max-height: none; /* parent handles scrolling */
+      overflow-y: visible;
     }
   }
 
@@ -532,19 +538,63 @@
   }
 
   .file-tree-drawer[data-open="true"] {
-    width: 260px;
+    width: 320px;
   }
 
   .file-tree-nav {
-    width: 260px;
+    width: 320px;
     max-height: calc(100vh - 5rem);
     overflow-y: auto;
     background: var(--surface-raised);
+    /* Single border lives here on the drawer nav; no extra border on tree root */
     border: 1px solid var(--border-subtle);
     border-radius: 6px;
     padding: 0.5rem 0.25rem;
     scrollbar-width: thin;
     margin-left: 0.25rem;
+  }
+
+  /* Drawer header: "Files" label + ✕ close button */
+  .tree-drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.3rem 0.5rem 0.3rem 0.5rem;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 0.25rem;
+  }
+
+  .tree-drawer-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    user-select: none;
+  }
+
+  .tree-drawer-close {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    line-height: 1;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .tree-drawer-close:hover {
+    color: var(--text);
+    background: var(--surface-hover, color-mix(in srgb, var(--surface-raised) 80%, var(--text) 10%));
+  }
+
+  .tree-drawer-close:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   /* ---- Diff column: takes remaining space; gains margin when drawer open ---- */
@@ -590,7 +640,16 @@
     }
   }
 
-  .mode-toggle button.active { font-weight: 700; }
+  /* Mode toggle: active state via accent underline, consistent with stepper */
+  .mode-toggle .btn-active {
+    border-bottom: 2px solid var(--accent);
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .mode-toggle .btn {
+    border-radius: 4px 4px 0 0; /* flat bottom, pairs with underline indicator */
+  }
+  .run-reviewers-btn { margin-left: auto; }
 
   .hotspot-badge {
     display: flex;

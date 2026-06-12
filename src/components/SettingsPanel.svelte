@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSettings, saveTokens, setTheme, setUiFont, setShowProgress, type Theme, type UiFont } from '../lib/settings/settings'
+  import { getSettings, saveTokens, setTheme, setUiFont, setShowProgress, setTestFileDisplay, type Theme, type UiFont, type TestFileDisplay } from '../lib/settings/settings'
   import { applyAppearance } from '../lib/settings/appearance.svelte'
   import { track } from '../lib/analytics/analytics'
   import { authState } from '../lib/auth/authState.svelte'
@@ -30,6 +30,7 @@
   let theme = $state<Theme>(current.theme)
   let uiFont = $state<UiFont>(current.uiFont)
   let showProgress = $state<boolean>(current.showProgress)
+  let testFileDisplay = $state<TestFileDisplay>(current.testFileDisplay)
 
   // ---- Reviewer skills state ----
   let skills = $state<ReviewerSkill[]>(listSkills())
@@ -185,6 +186,11 @@
     setShowProgress(value)
   }
 
+  function onTestFileDisplayChange(value: TestFileDisplay) {
+    testFileDisplay = value
+    setTestFileDisplay(value)
+  }
+
   function save() {
     try {
       const hadPat = !!current.githubPat
@@ -253,6 +259,22 @@
       />
       Show review progress bar
     </label>
+
+    <fieldset aria-label="Test files">
+      <legend>Test files</legend>
+      <label>
+        <input type="radio" name="testFileDisplay" value="normal" checked={testFileDisplay === 'normal'} onchange={() => onTestFileDisplayChange('normal')} />
+        Normal
+      </label>
+      <label>
+        <input type="radio" name="testFileDisplay" value="highlight" checked={testFileDisplay === 'highlight'} onchange={() => onTestFileDisplayChange('highlight')} />
+        Highlight
+      </label>
+      <label>
+        <input type="radio" name="testFileDisplay" value="dim" checked={testFileDisplay === 'dim'} onchange={() => onTestFileDisplayChange('dim')} />
+        De-emphasize
+      </label>
+    </fieldset>
   </section>
 
   <p class="auth-status">{authStatusLine}</p>
@@ -528,6 +550,21 @@
     font-size: 0.8em;
     color: var(--text-muted);
     margin: 0.5rem 0;
+  }
+
+  /* PAT scope hint sits inside <details> — align its left edge with the label/input above it
+     and give each paragraph comfortable vertical breathing room. */
+  .pat-scope-hint {
+    margin: 0.25rem 0.75rem 0.75rem;
+    line-height: 1.4;
+  }
+
+  .pat-scope-hint p {
+    margin: 0 0 0.5rem;
+  }
+
+  .pat-scope-hint p:last-child {
+    margin-bottom: 0;
   }
 
   /* ---- Reviewer skills ---- */

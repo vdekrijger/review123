@@ -15,6 +15,7 @@ function notifyAuthMutated(): void {
 export type DiffMode = 'unified' | 'split'
 export type Theme = 'auto' | 'dark' | 'light'
 export type UiFont = 'plex' | 'system' | 'serif'
+export type TestFileDisplay = 'normal' | 'highlight' | 'dim'
 
 export interface GithubAuth {
   token: string
@@ -32,6 +33,7 @@ export interface Settings {
   uiFont: UiFont
   showProgress: boolean
   treeOpen: boolean
+  testFileDisplay: TestFileDisplay
 }
 
 const DEFAULTS: Settings = {
@@ -44,6 +46,7 @@ const DEFAULTS: Settings = {
   uiFont: 'plex',
   showProgress: true,
   treeOpen: false,
+  testFileDisplay: 'normal',
 }
 
 function coerceGithubAuth(raw: unknown): GithubAuth | null {
@@ -91,6 +94,11 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const treeOpen = obj['treeOpen']
   if (typeof treeOpen === 'boolean') result.treeOpen = treeOpen
+
+  const testFileDisplay = obj['testFileDisplay']
+  if (testFileDisplay === 'normal' || testFileDisplay === 'highlight' || testFileDisplay === 'dim') {
+    result.testFileDisplay = testFileDisplay
+  }
 
   // Prefer explicit githubAuth; fall back to migrating legacy githubPat string
   if ('githubAuth' in obj) {
@@ -163,3 +171,4 @@ export const setTheme = (theme: Theme) => save({ theme })
 export const setUiFont = (font: UiFont) => save({ uiFont: font })
 export const setShowProgress = (show: boolean) => save({ showProgress: show })
 export const setTreeOpen = (open: boolean) => save({ treeOpen: open })
+export const setTestFileDisplay = (v: TestFileDisplay) => save({ testFileDisplay: v })
