@@ -197,6 +197,33 @@
   // ---- AI run ----
   let aiRun: ReturnType<typeof createAiRun> | null = $state(null)
   let railCollapsed = $state(getSettings().railCollapsed)
+
+  // Narrow viewport detection: below 1100px the rail auto-collapses and
+  // expansions are transient (not persisted to settings).
+  const NARROW_BREAKPOINT = 1100
+  let isNarrow = $state(
+    typeof window !== 'undefined' && window.innerWidth < NARROW_BREAKPOINT
+  )
+
+  $effect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia(`(max-width: ${NARROW_BREAKPOINT - 1}px)`)
+    function handleChange(e: MediaQueryListEvent) {
+      isNarrow = e.matches
+      // When entering narrow mode, force collapse (overlay behaviour)
+      if (e.matches) {
+        railCollapsed = true
+      }
+    }
+    mq.addEventListener('change', handleChange)
+    // Initialize: if currently narrow, force collapse regardless of stored pref
+    if (mq.matches) {
+      isNarrow = true
+      railCollapsed = true
+    }
+    return () => mq.removeEventListener('change', handleChange)
+  })
+
   // showProgress: read once at mount (same pattern as railCollapsed).
   // To pick up changes from SettingsPanel without re-mounting Review, the
   // SettingsPanel checkbox calls setShowProgress immediately (like theme),
@@ -378,7 +405,14 @@
         run={aiRun}
         onhotspot={handleHotspot}
         collapsed={railCollapsed}
-        oncollapse={(c) => { railCollapsed = c; setRailCollapsed(c) }}
+        oncollapse={(c) => {
+          railCollapsed = c
+          // At narrow widths, the expanded state is transient — don't persist it
+          if (!isNarrow) {
+            setRailCollapsed(c)
+          }
+        }}
+        onbackdropclick={() => { railCollapsed = true }}
       />
     {/if}
 
