@@ -870,6 +870,114 @@ describe('suggestionFence', () => {
 })
 
 // ---------------------------------------------------------------------------
+// getMyReviewComments
+// ---------------------------------------------------------------------------
+
+describe('gitlabProvider.getMyReviewComments', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setGitlabToken('test-token')
+    vi.resetAllMocks()
+  })
+
+  it('method exists on gitlab provider', () => {
+    expect(typeof gitlabProvider.getMyReviewComments).toBe('function')
+  })
+
+  it('fetches /user then MRs then notes, returns own non-system comment bodies', async () => {
+    global.fetch = mockFetchSequence(
+      { body: { username: 'alice' } },
+      { body: [{ iid: 1 }] },
+      { body: [
+          { author: { username: 'alice' }, body: 'Great refactor', system: false },
+          { author: { username: 'bob' },   body: 'Looks good', system: false },
+          { author: { username: 'alice' }, body: '', system: true },
+        ]
+      },
+    )
+
+    const result = await gitlabProvider.getMyReviewComments!(
+      { owner: 'mygroup', repo: 'myproject' },
+      150,
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toBe('Great refactor')
+  })
+
+  it('skips system notes', async () => {
+    global.fetch = mockFetchSequence(
+      { body: { username: 'alice' } },
+      { body: [{ iid: 1 }] },
+      { body: [
+          { author: { username: 'alice' }, body: 'System event', system: true },
+          { author: { username: 'alice' }, body: 'Real comment', system: false },
+        ]
+      },
+    )
+
+    const result = await gitlabProvider.getMyReviewComments!(
+      { owner: 'mygroup', repo: 'myproject' },
+      150,
+    )
+    expect(result).toEqual(['Real comment'])
+  })
+
+  it('strips code fences longer than 10 lines', async () => {
+    const longFence = '```ts\n' + Array.from({length: 12}, (_, i) => `line${i}`).join('\n') + '\n```'
+    const noteBody = `Before\n${longFence}\nAfter`
+
+    global.fetch = mockFetchSequence(
+      { body: { username: 'alice' } },
+      { body: [{ iid: 1 }] },
+      { body: [{ author: { username: 'alice' }, body: noteBody, system: false }] },
+    )
+
+    const result = await gitlabProvider.getMyReviewComments!(
+      { owner: 'mygroup', repo: 'myproject' },
+      150,
+    )
+    expect(result[0]).toContain('Before')
+    expect(result[0]).toContain('After')
+    expect(result[0]).not.toContain('line11')
+  })
+
+  it('caps total comments at the cap parameter', async () => {
+    const manyNotes = Array.from({ length: 200 }, (_, i) => ({
+      author: { username: 'alice' }, body: `comment ${i}`, system: false
+    }))
+
+    global.fetch = mockFetchSequence(
+      { body: { username: 'alice' } },
+      { body: [{ iid: 1 }] },
+      { body: manyNotes },
+    )
+
+    const result = await gitlabProvider.getMyReviewComments!(
+      { owner: 'mygroup', repo: 'myproject' },
+      150,
+    )
+    expect(result.length).toBeLessThanOrEqual(150)
+  })
+
+  it('processes multiple MRs (cap 15 MRs)', async () => {
+    global.fetch = mockFetchSequence(
+      { body: { username: 'alice' } },
+      { body: [{ iid: 1 }, { iid: 2 }] },
+      { body: [{ author: { username: 'alice' }, body: 'comment on MR1', system: false }] },
+      { body: [{ author: { username: 'alice' }, body: 'comment on MR2', system: false }] },
+    )
+
+    const result = await gitlabProvider.getMyReviewComments!(
+      { owner: 'mygroup', repo: 'myproject' },
+      150,
+    )
+    expect(result).toContain('comment on MR1')
+    expect(result).toContain('comment on MR2')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Registry: GitLab is now registered and parseAnyUrl works
 // ---------------------------------------------------------------------------
 

@@ -204,6 +204,20 @@ interface GlCompare {
   diffs: GlCompareFile[]
 }
 
+interface GlUser {
+  username: string
+}
+
+interface GlMrSummary {
+  iid: number
+}
+
+interface GlMrNote {
+  author: { username: string }
+  body: string
+  system: boolean
+}
+
 // ---------------------------------------------------------------------------
 // Mapping helpers
 // ---------------------------------------------------------------------------
@@ -622,6 +636,54 @@ export const gitlabProvider: ReviewProvider = {
    */
   suggestionFence(lines: string[]): string {
     return `\`\`\`suggestion:-0+0\n${lines.join('\n')}\n\`\`\``
+  },
+
+  async getMyReviewComments(
+    repo: { owner: string; repo: string },
+    cap: number,
+  ): Promise<string[]> {
+    const pid = encodeURIComponent(`${repo.owner}/${repo.repo}`)
+
+    // Inline stripLongFences to avoid circular dependency with mineSkill module
+    function stripLongFencesLocal(body: string): string {
+      return body.replace(/```[^\n]*\n([\s\S]*?)```/g, (match, inner: string) => {
+        const lines = inner.split('\n')
+        if (lines.length > 10) return ''
+        return match
+      })
+    }
+
+    // Step 1: get authenticated username
+    const me = await glFetch<GlUser>('/user')
+    const myUsername = me.username
+
+    // Step 2: fetch recent MRs (cap 15 MRs, ordered by updated_at)
+    const mrs = await glFetch<GlMrSummary[]>(
+      `/projects/${pid}/merge_requests?state=all&per_page=20&order_by=updated_at`,
+    )
+    const cappedMrs = mrs.slice(0, 15)
+
+    // Step 3: fetch notes per MR, filter by author + non-system
+    const allBodies: string[] = []
+    for (const mr of cappedMrs) {
+      if (allBodies.length >= cap) break
+      try {
+        const notes = await glFetch<GlMrNote[]>(
+          `/projects/${pid}/merge_requests/${mr.iid}/notes?per_page=100`,
+        )
+        for (const note of notes) {
+          if (note.system) continue
+          if (note.author.username !== myUsername) continue
+          const body = stripLongFencesLocal(note.body).trim()
+          if (body.length > 0) allBodies.push(body)
+          if (allBodies.length >= cap) break
+        }
+      } catch {
+        // non-fatal — skip this MR
+      }
+    }
+
+    return allBodies
   },
 }
 
