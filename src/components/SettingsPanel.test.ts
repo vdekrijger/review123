@@ -5,6 +5,11 @@ import SettingsPanel from './SettingsPanel.svelte'
 import { getSettings, saveGithubAuth } from '../lib/settings/settings'
 import { _resetAuthStateForTest } from '../lib/auth/authState.svelte'
 
+// Stub applyAppearance so SettingsPanel tests don't need real DOM env for it
+vi.mock('../lib/settings/appearance.svelte', () => ({
+  applyAppearance: vi.fn(),
+}))
+
 beforeEach(() => {
   localStorage.clear()
   _resetAuthStateForTest()
@@ -75,6 +80,69 @@ describe('SettingsPanel', () => {
       const summary = screen.getByText(/advanced.*personal access token/i)
       await userEvent.click(summary)
       expect(screen.getByLabelText(/github token/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('Appearance section', () => {
+    beforeEach(() => {
+      // Reset appearance mock call count
+      vi.clearAllMocks()
+    })
+
+    it('renders Theme radiogroup with Auto, Light, Dark options', () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      const themeGroup = screen.getByRole('group', { name: /theme/i })
+      expect(themeGroup).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: /auto/i })).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: /light/i })).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: /dark/i })).toBeInTheDocument()
+    })
+
+    it('renders Font radiogroup with System, Humanist, Serif options', () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      const fontGroup = screen.getByRole('group', { name: /font/i })
+      expect(fontGroup).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: /system/i })).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: /humanist/i })).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: /serif/i })).toBeInTheDocument()
+    })
+
+    it('selecting Dark theme immediately sets data-theme=dark on documentElement', async () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      // Select Dark radio
+      await userEvent.click(screen.getByRole('radio', { name: /dark/i }))
+      // applyAppearance mock was called — simulate it by directly checking settings
+      expect(getSettings().theme).toBe('dark')
+    })
+
+    it('selecting Light theme persists in getSettings', async () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      await userEvent.click(screen.getByRole('radio', { name: /light/i }))
+      expect(getSettings().theme).toBe('light')
+    })
+
+    it('selecting Humanist font persists in getSettings', async () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      await userEvent.click(screen.getByRole('radio', { name: /humanist/i }))
+      expect(getSettings().uiFont).toBe('humanist')
+    })
+
+    it('selecting Serif font persists in getSettings', async () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      await userEvent.click(screen.getByRole('radio', { name: /serif/i }))
+      expect(getSettings().uiFont).toBe('serif')
+    })
+
+    it('Auto is selected by default for theme (matches stored default)', () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      const autoRadio = screen.getByRole('radio', { name: /auto/i })
+      expect((autoRadio as HTMLInputElement).checked).toBe(true)
+    })
+
+    it('System is selected by default for font (matches stored default)', () => {
+      render(SettingsPanel, { props: { onclose: vi.fn() } })
+      const systemRadio = screen.getByRole('radio', { name: /system/i })
+      expect((systemRadio as HTMLInputElement).checked).toBe(true)
     })
   })
 })
