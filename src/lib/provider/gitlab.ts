@@ -51,8 +51,10 @@ export function parseGitlabUrl(input: string): ParseResult {
     return { ok: false, error: 'Not a valid URL' }
   }
 
-  if (url.hostname !== 'gitlab.com') {
-    return { ok: false, error: `Not a gitlab.com URL (got ${url.hostname})` }
+  const configuredHost = getSettings().gitlabHost
+  const allowedHosts = new Set(['gitlab.com', configuredHost])
+  if (!allowedHosts.has(url.hostname)) {
+    return { ok: false, error: `Not a recognized GitLab URL (got ${url.hostname})` }
   }
 
   // Path must contain /-/merge_requests/{iid}

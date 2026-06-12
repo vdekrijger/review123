@@ -14,12 +14,13 @@
  */
 
 const PROVIDER_PREFIX_RE = /^(github|gitlab|bitbucket):/
+const GITLAB_HOST_PREFIX_RE = /^gitlab@[^:]+:/
 
 /**
- * Return true if the key already has a provider prefix.
+ * Return true if the key already has a provider prefix (including gitlab@host: form).
  */
 export function isQualified(key: string): boolean {
-  return PROVIDER_PREFIX_RE.test(key)
+  return PROVIDER_PREFIX_RE.test(key) || GITLAB_HOST_PREFIX_RE.test(key)
 }
 
 /**
@@ -47,11 +48,37 @@ export function qualifyPrKey(prKey: string, providerId = 'github'): string {
 }
 
 /**
+ * Qualify a GitLab prId with host awareness.
+ * - Default host (gitlab.com) → "gitlab:owner/repo#N"
+ * - Non-default host         → "gitlab@host:owner/repo#N"
+ * If already qualified, returns as-is.
+ *
+ * Migration-safe: existing default-host keys remain "gitlab:..." unchanged.
+ */
+export function qualifyGitlabId(prId: string, host: string): string {
+  if (isQualified(prId)) return prId
+  if (host === 'gitlab.com') return `gitlab:${prId}`
+  return `gitlab@${host}:${prId}`
+}
+
+/**
+ * Qualify a GitLab prKey (owner/repo#N@sha) with host awareness.
+ * - Default host (gitlab.com) → "gitlab:owner/repo#N@sha"
+ * - Non-default host         → "gitlab@host:owner/repo#N@sha"
+ * If already qualified, returns as-is.
+ */
+export function qualifyGitlabKey(prKey: string, host: string): string {
+  if (isQualified(prKey)) return prKey
+  if (host === 'gitlab.com') return `gitlab:${prKey}`
+  return `gitlab@${host}:${prKey}`
+}
+
+/**
  * Strip the provider prefix from a key, returning the legacy form.
  * If not qualified, returns as-is.
  */
 export function unqualify(key: string): string {
-  return key.replace(PROVIDER_PREFIX_RE, '')
+  return key.replace(PROVIDER_PREFIX_RE, '').replace(GITLAB_HOST_PREFIX_RE, '')
 }
 
 // ---------------------------------------------------------------------------

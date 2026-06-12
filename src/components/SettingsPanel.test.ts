@@ -348,6 +348,55 @@ describe('SettingsPanel — save does not log out OAuth user', () => {
 })
 
 // ---------------------------------------------------------------------------
+// SettingsPanel — GitLab host field (self-hosted instances)
+// ---------------------------------------------------------------------------
+
+describe('SettingsPanel — GitLab host field', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetAuthStateForTest()
+  })
+
+  it('renders a GitLab host input inside the Advanced section', async () => {
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const hostInput = screen.getByLabelText(/gitlab host/i)
+    expect(hostInput).toBeInTheDocument()
+  })
+
+  it('GitLab host input has placeholder "gitlab.com"', async () => {
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const hostInput = screen.getByLabelText(/gitlab host/i) as HTMLInputElement
+    expect(hostInput.placeholder).toBe('gitlab.com')
+  })
+
+  it('typing a custom host and saving persists it in settings', async () => {
+    const onclose = vi.fn()
+    render(SettingsPanel, { props: { onclose } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const hostInput = screen.getByLabelText(/gitlab host/i)
+    await userEvent.clear(hostInput)
+    await userEvent.type(hostInput, 'gitlab.mycompany.com')
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(onclose).toHaveBeenCalledOnce()
+    expect(getSettings().gitlabHost).toBe('gitlab.mycompany.com')
+  })
+
+  it('GitLab host input is pre-filled from stored settings', async () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ gitlabHost: 'mygitlab.corp' }))
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const hostInput = screen.getByLabelText(/gitlab host/i) as HTMLInputElement
+    expect(hostInput.value).toBe('mygitlab.corp')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // SettingsPanel — mine-skill gate copy (Bug 3 regression)
 // ---------------------------------------------------------------------------
 

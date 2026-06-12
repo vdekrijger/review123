@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSettings, saveTokens, setGitlabToken, saveBitbucketAuth, setTheme, setUiFont, setShowProgress, setTestFileDisplay, setDiffWidth, type Theme, type UiFont, type TestFileDisplay, type DiffWidth } from '../lib/settings/settings'
+  import { getSettings, saveTokens, setGitlabToken, setGitlabHost, saveBitbucketAuth, setTheme, setUiFont, setShowProgress, setTestFileDisplay, setDiffWidth, type Theme, type UiFont, type TestFileDisplay, type DiffWidth } from '../lib/settings/settings'
   import { applyAppearance } from '../lib/settings/appearance.svelte'
   import { track } from '../lib/analytics/analytics'
   import { authState } from '../lib/auth/authState.svelte'
@@ -27,6 +27,7 @@
   let pat = $state(current.githubPat ?? '')
   let deepseek = $state(current.deepseekKey ?? '')
   let gitlabTokenInput = $state(current.gitlabToken ?? '')
+  let gitlabHostInput = $state(current.gitlabHost)
   let bitbucketEmail = $state(current.bitbucketAuth?.email ?? '')
   let bitbucketToken = $state(current.bitbucketAuth?.token ?? '')
   let error = $state<string | null>(null)
@@ -221,6 +222,8 @@
       saveTokens(tokensPatch)
 
       setGitlabToken(gitlabTokenInput.trim() === '' ? null : gitlabTokenInput)
+      const hostTrimmed = gitlabHostInput.trim()
+      setGitlabHost(hostTrimmed === '' ? 'gitlab.com' : hostTrimmed)
       const emailTrimmed = bitbucketEmail.trim()
       const tokenTrimmed = bitbucketToken.trim()
       if (emailTrimmed === '' && tokenTrimmed === '') {
@@ -335,6 +338,12 @@
         <em>Pull requests: Read &amp; write</em>, <em>Contents: Read</em>, and <em>Checks: Read</em>.</p>
       <p><strong>Classic token:</strong> the <code>public_repo</code> scope (or <code>repo</code> for private
         repositories). In a SAML/SSO organization, click <em>Configure SSO → Authorize</em> on the token afterwards.</p>
+    </div>
+    <label>GitLab host
+      <input type="text" bind:value={gitlabHostInput} autocomplete="off" placeholder="gitlab.com" aria-label="GitLab host" />
+    </label>
+    <div class="hint pat-scope-hint">
+      <p>Self-hosted instances supported. Enter a hostname (e.g. <code>gitlab.mycompany.com</code>). Leave as <code>gitlab.com</code> for the default.</p>
     </div>
     <label>GitLab token (PAT)
       <input type="password" bind:value={gitlabTokenInput} autocomplete="off" placeholder="glpat_… (scope: api)" aria-label="GitLab personal access token" />

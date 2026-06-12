@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { glFetch, glFetchPage, glFetchRaw, GitlabApiError } from './gitlabClient'
-import { setGitlabToken } from '../settings/settings'
+import { setGitlabToken, setGitlabHost } from '../settings/settings'
 import { jsonResponse } from '../../test-helpers'
 
 function mockFetch(body: unknown, status = 200, headers: Record<string, string> = {}) {
@@ -108,6 +108,52 @@ describe('glFetchPage', () => {
   it('maps errors just like glFetch', async () => {
     vi.stubGlobal('fetch', mockFetch({}, 401))
     await expect(glFetchPage('/x')).rejects.toMatchObject({ detail: { kind: 'unauthorized' } })
+  })
+})
+
+describe('self-hosted GitLab base URL', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('glFetch uses https://gitlab.com/api/v4 by default', async () => {
+    const f = vi.fn().mockResolvedValue(jsonResponse({ id: 1 }))
+    vi.stubGlobal('fetch', f)
+    await glFetch<{ id: number }>('/projects/1')
+    expect(f.mock.calls[0][0]).toContain('https://gitlab.com/api/v4/projects/1')
+  })
+
+  it('glFetch uses custom host when gitlabHost is configured', async () => {
+    setGitlabHost('gitlab.mycompany.com')
+    const f = vi.fn().mockResolvedValue(jsonResponse({ id: 1 }))
+    vi.stubGlobal('fetch', f)
+    await glFetch<{ id: number }>('/projects/1')
+    expect(f.mock.calls[0][0]).toContain('https://gitlab.mycompany.com/api/v4/projects/1')
+    expect(f.mock.calls[0][0]).not.toContain('gitlab.com')
+  })
+
+  it('glFetch recomputes base URL per request (second request picks up new host)', async () => {
+    const f = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse({})))
+    vi.stubGlobal('fetch', f)
+    await glFetch('/a')
+    setGitlabHost('custom.host.io')
+    await glFetch('/b')
+    expect(f.mock.calls[0][0]).toContain('gitlab.com')
+    expect(f.mock.calls[1][0]).toContain('custom.host.io')
+  })
+
+  it('glFetchPage uses custom host when gitlabHost is configured', async () => {
+    setGitlabHost('mygitlab.corp')
+    const f = vi.fn().mockResolvedValue(jsonResponse([1], { 'X-Next-Page': '' }))
+    vi.stubGlobal('fetch', f)
+    await glFetchPage('/items')
+    expect(f.mock.calls[0][0]).toContain('https://mygitlab.corp/api/v4/items')
+  })
+
+  it('glFetchRaw uses custom host when gitlabHost is configured', async () => {
+    setGitlabHost('gitlab.example.org')
+    const f = vi.fn().mockResolvedValue(new Response('content', { status: 200 }))
+    vi.stubGlobal('fetch', f)
+    await glFetchRaw('/projects/1/repository/files/foo/raw?ref=main')
+    expect(f.mock.calls[0][0]).toContain('https://gitlab.example.org/api/v4')
   })
 })
 

@@ -3,6 +3,8 @@ import {
   isQualified,
   qualifyPrId,
   qualifyPrKey,
+  qualifyGitlabId,
+  qualifyGitlabKey,
   unqualify,
   migrateLegacyVisits,
   migrateLegacyViewed,
@@ -55,6 +57,48 @@ describe('qualifyPrKey', () => {
 
   it('uses the given provider prefix', () => {
     expect(qualifyPrKey('owner/repo#1@sha', 'bitbucket')).toBe('bitbucket:owner/repo#1@sha')
+  })
+})
+
+describe('qualifyGitlabId', () => {
+  it('uses gitlab: prefix for the default host (gitlab.com)', () => {
+    expect(qualifyGitlabId('owner/repo#42', 'gitlab.com')).toBe('gitlab:owner/repo#42')
+  })
+
+  it('uses gitlab@host: prefix for a non-default host', () => {
+    expect(qualifyGitlabId('owner/repo#42', 'gitlab.mycompany.com')).toBe('gitlab@gitlab.mycompany.com:owner/repo#42')
+  })
+
+  it('passes through an already-qualified gitlab: key unchanged', () => {
+    expect(qualifyGitlabId('gitlab:owner/repo#42', 'gitlab.com')).toBe('gitlab:owner/repo#42')
+  })
+
+  it('passes through an already-qualified gitlab@host: key unchanged', () => {
+    expect(qualifyGitlabId('gitlab@myhost.com:owner/repo#42', 'myhost.com')).toBe('gitlab@myhost.com:owner/repo#42')
+  })
+})
+
+describe('qualifyGitlabKey', () => {
+  it('uses gitlab: prefix for the default host (gitlab.com)', () => {
+    expect(qualifyGitlabKey('owner/repo#42@sha', 'gitlab.com')).toBe('gitlab:owner/repo#42@sha')
+  })
+
+  it('uses gitlab@host: prefix for a non-default host', () => {
+    expect(qualifyGitlabKey('owner/repo#42@sha', 'mygitlab.corp')).toBe('gitlab@mygitlab.corp:owner/repo#42@sha')
+  })
+
+  it('passes through an already-qualified gitlab: key unchanged', () => {
+    expect(qualifyGitlabKey('gitlab:owner/repo#42@sha', 'gitlab.com')).toBe('gitlab:owner/repo#42@sha')
+  })
+})
+
+describe('isQualified — gitlab@host: form', () => {
+  it('returns true for gitlab@host: qualified key', () => {
+    expect(isQualified('gitlab@myhost.com:owner/repo#1')).toBe(true)
+  })
+
+  it('returns false for a partial match (no colon)', () => {
+    expect(isQualified('gitlab@myhost.com')).toBe(false)
   })
 })
 
