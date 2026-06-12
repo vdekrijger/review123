@@ -225,7 +225,7 @@
           Summarizing…
         </span>
       {:else if tldr}
-        <p class="tldr-text">{tldr}</p>
+        <p class="tldr-text tldr-done"><MarkdownView source={tldr} /></p>
       {/if}
     </div>
 
@@ -484,6 +484,18 @@
     font-weight: 400;
     font-size: 0.9rem;
     opacity: 0.8;
+  }
+
+  /* MarkdownView inside done-state TL;DR: constrain to inline, no block margin */
+  .tldr-done :global(.markdown-view) {
+    font-size: inherit;
+    line-height: inherit;
+    display: inline;
+  }
+
+  .tldr-done :global(p) {
+    margin: 0;
+    display: inline;
   }
 
   .glance-loading-inline {

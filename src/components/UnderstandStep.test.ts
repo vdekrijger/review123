@@ -163,6 +163,20 @@ describe('UnderstandStep glance card — TL;DR', () => {
     render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
     expect(screen.getByText(/Add a DeepSeek key/i)).toBeInTheDocument()
   })
+
+  it('done-state TL;DR with backticks renders a <code> element (not raw backticks)', () => {
+    const summaryWithCode =
+      'This PR updates `handleError`. More details here.\n\n===READING-ORDER===\nsrc/a.ts\n===END==='
+    const run = makeRun({ summary: { status: 'done', value: summaryWithCode } })
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    const tldrRow = container.querySelector('.glance-row-tldr')
+    expect(tldrRow).not.toBeNull()
+    const codeEl = tldrRow!.querySelector('code')
+    expect(codeEl).not.toBeNull()
+    expect(codeEl!.textContent).toBe('handleError')
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 # Review 1-2-3
 
-Paste a GitHub PR URL and get a guided three-step review: **Understand → Inspect → Verdict**. The app fetches the PR metadata and full diff, walks you through each step with AI-assisted context (summary, attention hotspots, before/after architecture diagrams, and a behaviour verdict — arriving in upcoming milestones), lets you inspect every changed file in unified or side-by-side diff view, and when you are ready submits your review comment directly to GitHub. Everything runs in the browser; your tokens and keys never leave your machine.
+Paste a GitHub, GitLab, or Bitbucket pull request URL and get a guided three-step review: **Understand → Inspect → Verdict**. The app fetches the PR/MR metadata and full diff, walks you through each step with AI-assisted context (summary, attention hotspots, before/after architecture diagrams, and a behaviour verdict), lets you inspect every changed file in unified or side-by-side diff view, and when you are ready submits your review comment directly to the hosting platform. Everything runs in the browser; your tokens and keys never leave your machine.
 
 ---
 
@@ -76,6 +76,8 @@ In the **Verdict** step, when you have one or more drafted comments and a DeepSe
 
 **Milestone D:** Review intelligence — status-aware change-map diagrams, AI-inferred test insight panel, viewed-file state with persistence, since-last-visit interdiff banner, and comment coach with apply/dismiss.
 
+**Milestone E:** Multi-provider support — GitLab merge requests and Bitbucket Cloud pull requests use the same 1-2-3 flow. Provider-qualified storage keys, non-atomic submission copy in the Verdict step, and Bitbucket/GitLab auth fields in Settings.
+
 Milestone specs and criteria matrices live in [`docs/superpowers/specs/`](docs/superpowers/specs/).
 
 ---
@@ -143,6 +145,89 @@ To enable "Sign in with GitHub" you need a GitHub OAuth App and a Vercel deploym
 - **Full OAuth via `vercel dev`:** Run `vercel dev` instead of `pnpm dev`. It picks up environment variables from Vercel and routes `/api/*` to the serverless functions, giving you a full OAuth round-trip locally.
 
 When `VITE_GITHUB_CLIENT_ID` is absent the Sign-in button is hidden and the app works in PAT-only mode — forks and local dev work with zero OAuth setup.
+
+---
+
+## GitLab setup
+
+Review 1-2-3 supports GitLab merge requests natively. Authentication uses a Personal Access Token (PAT).
+
+### Create a GitLab PAT
+
+1. Go to **GitLab → User Settings → Access Tokens** (or your GitLab instance's equivalent).
+2. Click **Add new token**.
+3. Give it a name (e.g. "review123"), set an expiry, and select the **`api`** scope.
+4. Click **Create personal access token** and copy the token (it starts with `glpat_`).
+5. Open the app **Settings** panel (gear icon), expand **Advanced**, paste the token in **GitLab token (PAT)**, and save.
+
+The token is stored in `localStorage` only and sent exclusively to `https://gitlab.com/api/v4`. It never leaves your browser to any intermediate server.
+
+### What is supported on GitLab
+
+| Feature | Supported |
+|---|---|
+| MR metadata and description | Yes |
+| Full diff (paginated, including subgroups) | Yes |
+| Inline review comments | Yes |
+| MR approval | Yes |
+| CI pipelines and job status | Yes |
+| Resolved thread markers | Yes |
+| Revision comparison (commit picker) | Yes |
+| Inline code suggestions (`suggestion:-0+0` fence) | Yes |
+| **Atomic review submission** | **No** — each comment is posted individually; see below |
+
+**Submission semantics:** GitLab has no batched review API. When you click **Submit review**, the app posts each inline comment as a separate discussion, then optionally posts the overall body as a note, then approves or requests changes. The verdict step shows a notice explaining this. If some comments fail to post, the error message lists which ones — your drafts are not cleared so you can retry.
+
+---
+
+## Bitbucket setup
+
+Review 1-2-3 supports Bitbucket Cloud pull requests. Authentication uses your Bitbucket email address and an App password (API token).
+
+### Create a Bitbucket App password
+
+1. Go to **Bitbucket → Personal settings → App passwords** (direct link: `https://bitbucket.org/account/settings/app-passwords/`).
+2. Click **Create app password**.
+3. Give it a label (e.g. "review123") and select the **Pull requests: Read** and **Pull requests: Write** permissions.
+4. Click **Create** and copy the password.
+5. Open the app **Settings** panel, expand **Advanced**, and fill in:
+   - **Bitbucket email** — your Bitbucket account email
+   - **Bitbucket API token** — the app password you just created
+6. Click **Save**.
+
+Both fields are stored in `localStorage` only and sent exclusively to `https://api.bitbucket.org`. They never leave your browser.
+
+### What is supported on Bitbucket
+
+| Feature | Supported |
+|---|---|
+| PR metadata and description | Yes |
+| Full diff (diffstat + raw unified diff) | Yes |
+| Inline review comments | Yes |
+| PR approval | Yes |
+| PR request-changes | Yes |
+| Build/CI status | Yes |
+| **Resolved thread markers** | **No** — Bitbucket does not surface resolved state via API |
+| **Revision comparison (commit picker)** | **No** — compare API not supported in v1 |
+| **Inline code suggestions** | **No** — Bitbucket does not support suggestion fences |
+| **Atomic review submission** | **No** — each comment is posted individually; see below |
+
+**Submission semantics:** Same as GitLab — no batched review API. Each inline comment is posted individually. The verdict step shows a notice. Partial failures list the failed comments without clearing your drafts.
+
+---
+
+## Provider capability comparison
+
+| Capability | GitHub | GitLab | Bitbucket |
+|---|---|---|---|
+| Inline comments | Yes | Yes | Yes |
+| Approval | Yes | Yes | Yes |
+| Request changes | Yes | Note-based | Yes |
+| CI status | Yes | Yes | Yes |
+| Resolved thread markers | Yes | Yes | No |
+| Revision comparison | Yes | Yes | No |
+| Inline code suggestions | Yes (` ```suggestion `) | Yes (` ```suggestion:-0+0 `) | No |
+| Atomic review submission | Yes | No | No |
 
 ---
 

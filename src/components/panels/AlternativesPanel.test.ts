@@ -59,3 +59,49 @@ describe('AlternativesPanel', () => {
     expect(screen.getByText(/No meaningfully different alternatives/i)).toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Markdown rendering — tradeoffs and rationale are AI text fields
+// ---------------------------------------------------------------------------
+
+describe('AlternativesPanel — markdown in tradeoffs and rationale', () => {
+  it('tradeoffs with backticks renders a <code> element', () => {
+    const result: AlternativesResult = {
+      problem: 'Caching strategy.',
+      alternatives: [
+        {
+          approach: 'Use Redis',
+          tradeoffs: 'Requires `REDIS_URL` env var to be set',
+          assessment: 'alternative-is-better',
+          rationale: 'More scalable.',
+        },
+      ],
+    }
+    const { container } = render(AlternativesPanel, {
+      props: { run: makeRun({ alternatives: { status: 'done', value: result } }) },
+    })
+    const codeEl = container.querySelector('.alternative-tradeoffs code')
+    expect(codeEl).not.toBeNull()
+    expect(codeEl!.textContent).toBe('REDIS_URL')
+  })
+
+  it('rationale with backticks renders a <code> element', () => {
+    const result: AlternativesResult = {
+      problem: 'Caching strategy.',
+      alternatives: [
+        {
+          approach: 'Use Redis',
+          tradeoffs: 'External dependency.',
+          assessment: 'alternative-is-better',
+          rationale: 'The `cache.get` API is more ergonomic.',
+        },
+      ],
+    }
+    const { container } = render(AlternativesPanel, {
+      props: { run: makeRun({ alternatives: { status: 'done', value: result } }) },
+    })
+    const codeEl = container.querySelector('.alternative-rationale code')
+    expect(codeEl).not.toBeNull()
+    expect(codeEl!.textContent).toBe('cache.get')
+  })
+})

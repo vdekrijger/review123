@@ -303,6 +303,39 @@ describe('settings', () => {
     })
   })
 
+  describe('saveTokens — OAuth preservation (Bug 1 regression)', () => {
+    it('saveTokens with githubPat: null does NOT clear githubAuth when method is oauth', () => {
+      // Seed OAuth auth
+      saveGithubAuth({ token: 'gho_oauth_token', method: 'oauth', scopes: ['repo'] })
+      expect(getSettings().githubAuth?.method).toBe('oauth')
+
+      // Simulate SettingsPanel.save() with empty PAT field while oauth is active
+      saveTokens({ githubPat: null, deepseekKey: null })
+
+      // githubAuth must be preserved
+      expect(getSettings().githubAuth).toEqual({ token: 'gho_oauth_token', method: 'oauth', scopes: ['repo'] })
+    })
+
+    it('saveTokens with githubPat: null DOES clear githubAuth when method is pat', () => {
+      saveGithubAuth({ token: 'ghp_pat', method: 'pat', scopes: [] })
+      expect(getSettings().githubAuth?.method).toBe('pat')
+
+      saveTokens({ githubPat: null, deepseekKey: null })
+
+      expect(getSettings().githubAuth).toBeNull()
+    })
+
+    it('saveTokens with a non-empty githubPat while method is oauth switches to pat method', () => {
+      saveGithubAuth({ token: 'gho_oauth', method: 'oauth', scopes: ['repo'] })
+
+      saveTokens({ githubPat: 'ghp_newpat', deepseekKey: null })
+
+      const s = getSettings()
+      expect(s.githubAuth).toEqual({ token: 'ghp_newpat', method: 'pat', scopes: [] })
+      expect(s.githubPat).toBe('ghp_newpat')
+    })
+  })
+
   describe('bitbucketAuth', () => {
     it('defaults to null', () => {
       expect(getSettings().bitbucketAuth).toBeNull()

@@ -910,6 +910,77 @@ describe('VerdictStep', () => {
     })
   })
 
+  // ---- Non-atomic note ----
+  describe('non-atomic note', () => {
+    function makeGitLabProvider(atomicReview: boolean) {
+      return {
+        id: 'gitlab' as const,
+        displayName: 'GitLab',
+        capabilities: { atomicReview, resolvedThreads: true, checks: true, suggestions: true, compare: true },
+        parseUrl: vi.fn(),
+        getPrMeta: vi.fn(),
+        getPrFiles: vi.fn(),
+        getFileAtRef: vi.fn(),
+        getCiSummary: vi.fn(),
+        getComments: vi.fn(),
+        getResolvedCommentIds: vi.fn(),
+        getCommits: vi.fn(),
+        compareCommits: vi.fn(),
+        submitReview: vi.fn(),
+        authState: vi.fn().mockReturnValue({ configured: true, hint: '' }),
+      }
+    }
+
+    it('non-atomic note: shown when provider.capabilities.atomicReview is false', () => {
+      signIn()
+      render(VerdictStep, {
+        props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, provider: makeGitLabProvider(false) },
+      })
+      expect(screen.getByText(/On GitLab, submitting posts each comment individually/i)).toBeInTheDocument()
+    })
+
+    it('non-atomic note: NOT shown when provider.capabilities.atomicReview is true', () => {
+      signIn()
+      render(VerdictStep, {
+        props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, provider: makeGitLabProvider(true) },
+      })
+      expect(screen.queryByText(/On GitLab, submitting posts each comment individually/i)).toBeNull()
+    })
+
+    it('non-atomic note: NOT shown when provider prop is absent', () => {
+      signIn()
+      render(VerdictStep, {
+        props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit },
+      })
+      expect(screen.queryByText(/submitting posts each comment individually/i)).toBeNull()
+    })
+  })
+
+  // ---- Partial-failure: drafts NOT cleared ----
+  describe('partial failure', () => {
+    it('partial-failure: drafts NOT cleared, error message shown in alert', async () => {
+      signIn()
+      const user = userEvent.setup()
+      const errorMessage = '2 of 3 inline comment(s) failed to post: src/a.ts:1 — 403 Forbidden; src/b.ts:2 — timeout'
+      const submitFn = vi.fn().mockResolvedValue({ ok: false, kind: 'other', message: errorMessage })
+
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'Comment A' })
+      await store.upsert({ path: 'src/b.ts', line: 2, side: 'RIGHT', body: 'Comment B' })
+      await store.upsert({ path: 'src/c.ts', line: 3, side: 'RIGHT', body: 'Comment C' })
+      expect(store.count).toBe(3)
+
+      render(VerdictStep, { props: { prRef, commitId, store, prUrl, submitFn } })
+      await user.click(screen.getByRole('radio', { name: /approve/i }))
+      await user.click(screen.getByRole('button', { name: /submit review/i }))
+
+      await waitFor(() => { expect(screen.getByRole('alert')).toBeInTheDocument() })
+      expect(screen.getByRole('alert').textContent).toContain('2 of 3 inline comment(s) failed')
+      // Drafts must NOT be cleared
+      expect(store.count).toBe(3)
+    })
+  })
+
   // OAuth auth: saveGithubAuth as alternative auth seeding
   describe('auth via saveGithubAuth (OAuth)', () => {
     it('shows form when signed in via OAuth', () => {

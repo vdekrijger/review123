@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import SettingsPanel from './SettingsPanel.svelte'
-import { getSettings, saveGithubAuth, setShowProgress } from '../lib/settings/settings'
+import { getSettings, saveGithubAuth, saveTokens, setShowProgress } from '../lib/settings/settings'
 import { _resetAuthStateForTest } from '../lib/auth/authState.svelte'
 
 // Stub applyAppearance so SettingsPanel tests don't need real DOM env for it
@@ -224,5 +224,144 @@ describe('SettingsPanel — testFileDisplay setting', () => {
     const dimRadio = screen.getByRole('radio', { name: /de-emphasize/i })
     await fireEvent.click(dimRadio)
     expect(getSettings().testFileDisplay).toBe('dim')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SettingsPanel — Bitbucket auth fields (task 49)
+// ---------------------------------------------------------------------------
+
+describe('SettingsPanel — Bitbucket auth fields', () => {
+  beforeEach(() => { localStorage.clear() })
+
+  it('Bitbucket email and token inputs are type=password (masked)', async () => {
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const emailInput = screen.getByLabelText(/bitbucket email address/i)
+    const tokenInput = screen.getByLabelText(/bitbucket api token/i)
+    expect((emailInput as HTMLInputElement).type).toBe('password')
+    expect((tokenInput as HTMLInputElement).type).toBe('password')
+  })
+
+  it('saving Bitbucket credentials stores them via saveBitbucketAuth', async () => {
+    const onclose = vi.fn()
+    render(SettingsPanel, { props: { onclose } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const emailInput = screen.getByLabelText(/bitbucket email address/i)
+    const tokenInput = screen.getByLabelText(/bitbucket api token/i)
+    await userEvent.type(emailInput, 'user@example.com')
+    await userEvent.type(tokenInput, 'myapppassword123')
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(onclose).toHaveBeenCalledOnce()
+    expect(getSettings().bitbucketAuth).toEqual({ email: 'user@example.com', token: 'myapppassword123' })
+  })
+
+  it('Bitbucket hint text is present in the Advanced section', () => {
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    const details = document.querySelector('details')
+    expect(details?.textContent).toMatch(/Pull requests: Write/)
+    expect(details?.textContent).toMatch(/App passwords/)
+  })
+
+  it('saving with email but empty token shows error, does not call onclose', async () => {
+    const onclose = vi.fn()
+    render(SettingsPanel, { props: { onclose } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const emailInput = screen.getByLabelText(/bitbucket email address/i)
+    await userEvent.type(emailInput, 'user@example.com')
+    // token left empty
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(onclose).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+
+  it('saving with token but empty email shows error, does not call onclose', async () => {
+    const onclose = vi.fn()
+    render(SettingsPanel, { props: { onclose } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const tokenInput = screen.getByLabelText(/bitbucket api token/i)
+    await userEvent.type(tokenInput, 'myapppassword123')
+    // email left empty
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(onclose).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+
+  it('clearing previously stored credentials saves null for bitbucketAuth', async () => {
+    // Pre-seed stored credentials
+    localStorage.setItem('review123:settings', JSON.stringify({ bitbucketAuth: { email: 'old@example.com', token: 'oldtoken' } }))
+    const onclose = vi.fn()
+    render(SettingsPanel, { props: { onclose } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    // Both fields are pre-filled from stored credentials; clear them
+    const emailInput = screen.getByLabelText(/bitbucket email address/i)
+    const tokenInput = screen.getByLabelText(/bitbucket api token/i)
+    await userEvent.clear(emailInput)
+    await userEvent.clear(tokenInput)
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(onclose).toHaveBeenCalledOnce()
+    expect(getSettings().bitbucketAuth).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SettingsPanel — OAuth logout regression (Bug 1)
+// ---------------------------------------------------------------------------
+
+describe('SettingsPanel — save does not log out OAuth user', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetAuthStateForTest()
+  })
+
+  it('saving with empty PAT field while signed in via OAuth preserves githubAuth', async () => {
+    // Seed OAuth auth
+    saveGithubAuth({ token: 'gho_oauth123', method: 'oauth', scopes: ['repo'] })
+    _resetAuthStateForTest()
+
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    // PAT field is empty (user did not type anything)
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    // OAuth auth must be untouched
+    expect(getSettings().githubAuth).toEqual({ token: 'gho_oauth123', method: 'oauth', scopes: ['repo'] })
+  })
+
+  it('PAT user clearing the PAT field still clears githubAuth', async () => {
+    saveGithubAuth({ token: 'ghp_existing', method: 'pat', scopes: [] })
+    _resetAuthStateForTest()
+
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const patInput = screen.getByLabelText(/github token/i)
+    await userEvent.clear(patInput)
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    expect(getSettings().githubAuth).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SettingsPanel — mine-skill gate copy (Bug 3 regression)
+// ---------------------------------------------------------------------------
+
+describe('SettingsPanel — mine-skill gate copy (Bug 3 regression)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetAuthStateForTest()
+  })
+
+  it('mine-gate hint says "from the top bar" not "(above)"', async () => {
+    // No auth seeded → gate hint should show
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    const hint = screen.getByText(/sign in with github from the top bar to use this feature/i)
+    expect(hint).toBeInTheDocument()
+    expect(screen.queryByText(/sign in with github \(above\)/i)).not.toBeInTheDocument()
   })
 })

@@ -9,7 +9,7 @@
   let history = $state<HistoryEntry[]>(getHistory())
 
   const MESSAGES: Record<string, string> = {
-    empty: 'Please enter a GitHub PR URL.',
+    empty: 'Please enter a GitHub, GitLab, or Bitbucket pull request URL.',
     'not-github': 'That URL is not on github.com.',
     'not-a-pr-url': 'That does not look like a pull request URL (expected …/owner/repo/pull/123).',
   }
@@ -33,7 +33,8 @@
   }
 
   function navigateToPr(entry: HistoryEntry) {
-    navigate(`/review/github/${entry.owner}/${entry.repo}/${entry.number}`)
+    const provider = entry.provider ?? 'github'
+    navigate(`/review/${provider}/${entry.owner}/${entry.repo}/${entry.number}`)
   }
 
   function handleClearHistory() {
@@ -44,9 +45,9 @@
 
 <section class="landing">
   <h1>Review 1‑2‑3</h1>
-  <p>Paste a GitHub pull request URL to start a guided review.</p>
+  <p>Paste a GitHub, GitLab, or Bitbucket pull request URL to start a guided review.</p>
   <form onsubmit={submit}>
-    <input type="text" bind:value={input} placeholder="https://github.com/owner/repo/pull/123" aria-label="Pull request URL" />
+    <input type="text" bind:value={input} placeholder="https://github.com/owner/repo/pull/123 or gitlab.com/…" aria-label="Pull request URL" />
     <button type="submit">Review</button>
   </form>
   {#if error}<p role="alert" class="error">{error}</p>{/if}

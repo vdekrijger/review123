@@ -30,6 +30,24 @@ function makeRun(overrides: Partial<AiRun>): AiRun {
   }
 }
 
+describe('VerdictPanel — explainer text', () => {
+  it('shows the muted one-line explainer at the top of the panel', () => {
+    const verdict: VerdictResult = {
+      level: 'minor-changes',
+      evidence: ['src/foo.ts: clean'],
+      notAnalyzed: [],
+    }
+    render(VerdictPanel, {
+      props: { run: makeRun({ verdict: { status: 'done', value: verdict } }) },
+    })
+    expect(
+      screen.getByText(
+        /the specific observations the AI based the behavior verdict on/i
+      )
+    ).toBeInTheDocument()
+  })
+})
+
 describe('VerdictPanel', () => {
   it('shows no-key message when verdict status is no-key', () => {
     render(VerdictPanel, { props: { run: makeRun({ verdict: { status: 'no-key' } }) } })

@@ -1,5 +1,6 @@
 <script lang="ts">
   import AiPanel from '../AiPanel.svelte'
+  import MarkdownView from '../MarkdownView.svelte'
   import type { AiRun } from '../../lib/ai/run.svelte'
   import type { TestInsight } from '../../lib/ai/schemas'
 
@@ -61,7 +62,7 @@
           <li class="tests-covered-item">
             <span class="tests-covered-check">✓</span>
             <span class="tests-covered-content">
-              <span class="tests-covered-behavior">{item.behavior}</span>
+              <span class="tests-covered-behavior"><MarkdownView source={item.behavior} /></span>
               <span class="tests-covered-meta">
                 {item.test} ·
                 <button
@@ -93,7 +94,7 @@
           {#each group.items as item (item)}
             <li class="tests-gap-item">
               <span class="tests-gap-icon">⚠</span>
-              <span class="tests-gap-text">{item}</span>
+              <span class="tests-gap-text"><MarkdownView source={item} /></span>
             </li>
           {/each}
         </ul>
@@ -191,6 +192,19 @@
 
   .tests-gap-text {
     opacity: 0.9;
+  }
+
+  /* MarkdownView inside gap/behavior: inline-level, no block margins */
+  .tests-gap-text :global(.markdown-view),
+  .tests-covered-behavior :global(.markdown-view) {
+    font-size: inherit;
+    line-height: inherit;
+    display: inline;
+  }
+
+  .tests-gap-text :global(p),
+  .tests-covered-behavior :global(p) {
+    margin: 0;
   }
 
   .tests-gap-file-header {

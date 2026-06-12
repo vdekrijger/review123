@@ -18,6 +18,7 @@ export interface HistoryEntry {
   number: number
   title: string
   viewedAt: number // timestamp (ms since epoch)
+  provider?: 'github' | 'gitlab' | 'bitbucket' // optional for backward compat
 }
 
 function isValidEntry(raw: unknown): raw is HistoryEntry {

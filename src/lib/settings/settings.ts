@@ -12,6 +12,14 @@ function notifyAuthMutated(): void {
   _onAuthMutated?.()
 }
 
+let _onSettingsMutated: (() => void) | null = null
+export function _registerSettingsRefresh(fn: () => void): void {
+  _onSettingsMutated = fn
+}
+function notifySettingsMutated(): void {
+  _onSettingsMutated?.()
+}
+
 export type DiffMode = 'unified' | 'split'
 export type Theme = 'auto' | 'dark' | 'light'
 export type UiFont = 'plex' | 'system' | 'serif'
@@ -153,6 +161,7 @@ export function getSettings(): Settings {
 
 function save(patch: Partial<Settings>): void {
   localStorage.setItem(KEY, JSON.stringify({ ...getSettings(), ...patch }))
+  notifySettingsMutated()
 }
 
 function validateToken(field: 'githubPat' | 'deepseekKey', value: string | null): string | null {
@@ -168,11 +177,20 @@ export function saveTokens(patch: { githubPat?: string | null; deepseekKey?: str
   if ('githubPat' in patch) update.githubPat = validateToken('githubPat', patch.githubPat ?? null)
   if ('deepseekKey' in patch) update.deepseekKey = validateToken('deepseekKey', patch.deepseekKey ?? null)
 
-  // Also maintain githubAuth in sync with githubPat changes
+  // Sync githubAuth with githubPat changes — but preserve OAuth tokens:
+  // clearing the PAT field while signed in via OAuth must not wipe the OAuth token.
   if ('githubPat' in update) {
-    update.githubAuth = update.githubPat
-      ? { token: update.githubPat, method: 'pat', scopes: [] }
-      : null
+    if (update.githubPat) {
+      // Explicit non-empty PAT write → switch to PAT method
+      update.githubAuth = { token: update.githubPat, method: 'pat', scopes: [] }
+    } else {
+      // githubPat cleared — only wipe githubAuth if the current method is 'pat' (or null)
+      const currentMethod = getSettings().githubAuth?.method
+      if (currentMethod !== 'oauth') {
+        update.githubAuth = null
+      }
+      // If method === 'oauth', githubAuth is intentionally left untouched
+    }
   }
 
   save(update)
