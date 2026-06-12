@@ -164,8 +164,18 @@
       // but avoids blocking render. Load completes asynchronously.
       store.load()
 
-      // Record this PR in the recent-reviews history
-      addToHistory({ owner, repo, number, title: meta.title })
+      // Record this PR in the recent-reviews history. The full file stats are
+      // already loaded here, so persist the diff size too — the landing page
+      // shows it on history rows without any extra network.
+      const files = load.state.files
+      addToHistory({
+        owner,
+        repo,
+        number,
+        title: meta.title,
+        additions: files.reduce((sum, f) => sum + f.additions, 0),
+        deletions: files.reduce((sum, f) => sum + f.deletions, 0),
+      })
 
       // Read last visit BEFORE recording the new one
       const prior = lastVisit(prId)
