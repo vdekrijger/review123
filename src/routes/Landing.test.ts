@@ -77,11 +77,13 @@ describe('Landing recent reviews', () => {
     expect(screen.getByText(/b\/s#2/)).toBeInTheDocument()
   })
 
-  it('placeholder mentions github, gitlab, bitbucket', () => {
+  it('description copy and placeholder mention github and gitlab; description also mentions bitbucket', () => {
     render(Landing)
     const input = screen.getByRole('textbox')
     expect(input).toHaveAttribute('placeholder', expect.stringMatching(/github/i))
     expect(input).toHaveAttribute('placeholder', expect.stringMatching(/gitlab/i))
+    // The description paragraph (not placeholder) mentions all three providers
+    expect(screen.getByText(/github.*gitlab.*bitbucket/i)).toBeInTheDocument()
   })
 
   it('gitlab history entry navigates to /review/gitlab route', async () => {
