@@ -1,9 +1,11 @@
 /**
  * e2e/review-queue.spec.ts — Your review queue feature on the landing page.
  *
- * Two scenarios:
+ * Three scenarios:
  *   (a) GitHub: seed auth + intercept search API → queue row appears → click navigates
  *   (b) GitLab: seed token + intercept /user + MR list → queue row appears
+ *   (c) GitHub with delayed fixture: skeleton shows while fetch is in flight,
+ *       then rows replace it
  */
 
 import { test, expect } from '@playwright/test'
@@ -149,4 +151,55 @@ test('gitlab queue: row appears on landing when signed in via token', async ({ p
 
   const queueRow = page.getByRole('button', { name: new RegExp(`${GL_OWNER}/${GL_REPO}#${GL_MR}`, 'i') })
   await expect(queueRow).toBeVisible({ timeout: 10_000 })
+})
+
+// ---------------------------------------------------------------------------
+// Test (c): loading skeleton while the queue fetch is in flight
+// ---------------------------------------------------------------------------
+
+test('github queue: skeleton shows while fetch is delayed, then rows replace it', async ({ page }) => {
+  await page.route('**/*posthog.com/**', (route) => route.abort())
+  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+  await page.route('**/api.deepseek.com/**', (route) => route.abort())
+
+  await page.route('**/api.github.com/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    const q = url.searchParams.get('q') ?? ''
+
+    if (path === '/search/issues') {
+      // Delayed fixture — keep the fetch in flight long enough to observe the skeleton
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      const item = {
+        number: GH_PR,
+        title: 'Queue test PR',
+        updated_at: new Date(Date.now() - 300_000).toISOString(),
+        repository_url: `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}`,
+      }
+      const isAuthor = q.includes('author:')
+      return route.fulfill({
+        json: { total_count: isAuthor ? 0 : 1, items: isAuthor ? [] : [item] },
+      })
+    }
+
+    return route.fulfill({ json: [] })
+  })
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, {
+    githubAuth: { token: 'ghp_test_queue', method: 'pat', scopes: [] },
+    deepseekKey: '',
+  })
+
+  await page.goto('/')
+
+  // While the search response is delayed, the skeleton must be visible
+  const skeleton = page.getByTestId('queue-skeleton')
+  await expect(skeleton).toBeVisible({ timeout: 5_000 })
+
+  // Once the fixture resolves, rows replace the skeleton
+  const queueRow = page.getByRole('button', { name: new RegExp(`${GH_OWNER}/${GH_REPO}#${GH_PR}`, 'i') })
+  await expect(queueRow).toBeVisible({ timeout: 10_000 })
+  await expect(skeleton).toBeHidden()
 })
