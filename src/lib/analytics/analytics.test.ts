@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { track, _setCaptureForTest } from './analytics'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { track, _setCaptureForTest, initAnalytics, _setPosthogForTest } from './analytics'
+import posthog from 'posthog-js'
 
 describe('analytics privacy choke-point', () => {
   const capture = vi.fn()
@@ -53,5 +54,37 @@ describe('analytics privacy choke-point', () => {
     // @ts-expect-error — typo'd prop must not compile
     track('pr_loaded', { fil_count: 12 })
     expect(capture).not.toHaveBeenCalledWith('pr_loaded', expect.objectContaining({ fil_count: 12 }))
+  })
+
+  it('ai_task_completed allows tokens (count only, PRIVACY DECISION)', () => {
+    track('ai_task_completed', { task: 'summary', duration_ms: 1000, cached: false, tokens: 1234 })
+    expect(capture.mock.calls[0][1]).toEqual({ task: 'summary', duration_ms: 1000, cached: false, tokens: 1234 })
+  })
+
+  it('ai_task_completed still strips content-ish keys even when tokens present', () => {
+    track('ai_task_completed', { task: 'summary', duration_ms: 500, cached: false, tokens: 800, output: 'leaked' } as never) // output is not in allowlist — as never needed
+    const props = capture.mock.calls[0][1]
+    expect(props).toHaveProperty('tokens', 800)
+    expect(props).not.toHaveProperty('output')
+  })
+})
+
+describe('initAnalytics — posthog.init config (exception capture + masked replay)', () => {
+  const initSpy = vi.fn()
+  const fakePosthog = { init: initSpy }
+
+  beforeEach(() => {
+    initSpy.mockClear()
+    _setPosthogForTest(fakePosthog)
+  })
+
+  afterEach(() => {
+    _setPosthogForTest(posthog as unknown as typeof fakePosthog)
+  })
+
+  it('skips init when VITE_POSTHOG_KEY is absent', () => {
+    // VITE_POSTHOG_KEY is not set in test env — initAnalytics should be a no-op
+    initAnalytics()
+    expect(initSpy).not.toHaveBeenCalled()
   })
 })

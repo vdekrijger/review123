@@ -14,7 +14,9 @@ import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import {
   llmStream as defaultLlmStream,
+  llmStreamWithUsage as defaultLlmStreamWithUsage,
   llmJsonWithRepair as defaultLlmJsonWithRepair,
+  llmJsonWithRepairWithUsage as defaultLlmJsonWithRepairWithUsage,
   LlmError,
 } from '../llm/llm'
 import {
@@ -110,7 +112,9 @@ export interface AiRunInput {
 
 interface AiRunDeps {
   llmStream: typeof defaultLlmStream
+  llmStreamWithUsage: typeof defaultLlmStreamWithUsage
   llmJsonWithRepair: typeof defaultLlmJsonWithRepair
+  llmJsonWithRepairWithUsage: typeof defaultLlmJsonWithRepairWithUsage
   getCached: typeof defaultGetCached
   setCached: typeof defaultSetCached
   gateAi: typeof defaultGateAi
@@ -141,14 +145,18 @@ function humanMessage(kind: string): string {
 export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun {
   const {
     llmStream,
+    llmStreamWithUsage,
     llmJsonWithRepair,
+    llmJsonWithRepairWithUsage,
     getCached,
     setCached,
     gateAi,
     track,
   }: AiRunDeps = {
     llmStream: defaultLlmStream,
+    llmStreamWithUsage: defaultLlmStreamWithUsage,
     llmJsonWithRepair: defaultLlmJsonWithRepair,
+    llmJsonWithRepairWithUsage: defaultLlmJsonWithRepairWithUsage,
     getCached: defaultGetCached,
     setCached: defaultSetCached,
     gateAi: defaultGateAi,
@@ -197,16 +205,22 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     let accumulated = ''
 
     try {
-      const result = await llmStream(prompts, (delta: string) => {
+      const streamResult = await llmStreamWithUsage(prompts, (delta: string) => {
         accumulated += delta
         summaryState.status = 'streaming'
         summaryState.value = accumulated
       })
       // Only cache after complete success (EC-17d / EC-12f)
-      await setCached<string>(key, result)
+      await setCached<string>(key, streamResult.content)
       summaryState.status = 'done'
-      summaryState.value = result
-      track('ai_task_completed', { task: 'summary', duration_ms: Math.round(performance.now() - t1), cached: false })
+      summaryState.value = streamResult.content
+      const summaryTokens = streamResult.usage?.total_tokens
+      track('ai_task_completed', {
+        task: 'summary',
+        duration_ms: Math.round(performance.now() - t1),
+        cached: false,
+        ...(summaryTokens !== undefined ? { tokens: summaryTokens } : {}),
+      })
     } catch (err) {
       // Partial stream NEVER cached — do not call setCached here
       const kind = err instanceof LlmError ? err.kind : 'unknown'
@@ -233,14 +247,19 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const prompts = attentionPrompt(ctx)
 
     try {
-      const result = await llmJsonWithRepair<AttentionResult>(
+      const { result: attentionResult, usage: attentionUsage } = await llmJsonWithRepairWithUsage<AttentionResult>(
         { system: prompts.system, user: prompts.user },
         validateAttention,
       )
-      await setCached<AttentionResult>(key, result)
+      await setCached<AttentionResult>(key, attentionResult)
       attentionState.status = 'done'
-      attentionState.value = result
-      track('ai_task_completed', { task: 'attention', duration_ms: Math.round(performance.now() - t1), cached: false })
+      attentionState.value = attentionResult
+      track('ai_task_completed', {
+        task: 'attention',
+        duration_ms: Math.round(performance.now() - t1),
+        cached: false,
+        ...(attentionUsage?.total_tokens !== undefined ? { tokens: attentionUsage.total_tokens } : {}),
+      })
     } catch (err) {
       const kind = err instanceof LlmError ? err.kind : 'unknown'
       attentionState.status = 'error'
@@ -266,14 +285,19 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const prompts = diagramsPrompt(ctx)
 
     try {
-      const result = await llmJsonWithRepair<GraphResult>(
+      const { result: diagramsResult, usage: diagramsUsage } = await llmJsonWithRepairWithUsage<GraphResult>(
         { system: prompts.system, user: prompts.user },
         validateGraphResult,
       )
-      await setCached<GraphResult>(key, result)
+      await setCached<GraphResult>(key, diagramsResult)
       diagramsState.status = 'done'
-      diagramsState.value = result
-      track('ai_task_completed', { task: 'diagrams', duration_ms: Math.round(performance.now() - t1), cached: false })
+      diagramsState.value = diagramsResult
+      track('ai_task_completed', {
+        task: 'diagrams',
+        duration_ms: Math.round(performance.now() - t1),
+        cached: false,
+        ...(diagramsUsage?.total_tokens !== undefined ? { tokens: diagramsUsage.total_tokens } : {}),
+      })
     } catch (err) {
       const kind = err instanceof LlmError ? err.kind : 'unknown'
       diagramsState.status = 'error'
@@ -299,14 +323,19 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const prompts = testInsightPrompt(ctx)
 
     try {
-      const result = await llmJsonWithRepair<TestInsight>(
+      const { result: testsResult, usage: testsUsage } = await llmJsonWithRepairWithUsage<TestInsight>(
         { system: prompts.system, user: prompts.user },
         validateTestInsight,
       )
-      await setCached<TestInsight>(key, result)
+      await setCached<TestInsight>(key, testsResult)
       testsState.status = 'done'
-      testsState.value = result
-      track('ai_task_completed', { task: 'tests', duration_ms: Math.round(performance.now() - t1), cached: false })
+      testsState.value = testsResult
+      track('ai_task_completed', {
+        task: 'tests',
+        duration_ms: Math.round(performance.now() - t1),
+        cached: false,
+        ...(testsUsage?.total_tokens !== undefined ? { tokens: testsUsage.total_tokens } : {}),
+      })
     } catch (err) {
       const kind = err instanceof LlmError ? err.kind : 'unknown'
       testsState.status = 'error'
@@ -332,14 +361,19 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const prompts = alternativesPrompt(ctx)
 
     try {
-      const result = await llmJsonWithRepair<AlternativesResult>(
+      const { result: alternativesResult, usage: alternativesUsage } = await llmJsonWithRepairWithUsage<AlternativesResult>(
         { system: prompts.system, user: prompts.user },
         validateAlternativesResult,
       )
-      await setCached<AlternativesResult>(key, result)
+      await setCached<AlternativesResult>(key, alternativesResult)
       alternativesState.status = 'done'
-      alternativesState.value = result
-      track('ai_task_completed', { task: 'alternatives', duration_ms: Math.round(performance.now() - t1), cached: false })
+      alternativesState.value = alternativesResult
+      track('ai_task_completed', {
+        task: 'alternatives',
+        duration_ms: Math.round(performance.now() - t1),
+        cached: false,
+        ...(alternativesUsage?.total_tokens !== undefined ? { tokens: alternativesUsage.total_tokens } : {}),
+      })
     } catch (err) {
       const kind = err instanceof LlmError ? err.kind : 'unknown'
       alternativesState.status = 'error'
@@ -365,17 +399,22 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const prompts = verdictPrompt(ctx, ciData)
 
     try {
-      const result = await llmJsonWithRepair<VerdictResult>(
+      const { result: verdictResult, usage: verdictUsage } = await llmJsonWithRepairWithUsage<VerdictResult>(
         { system: prompts.system, user: prompts.user },
         validateVerdict,
       )
       // Merge notAnalyzed: union of packed context's notAnalyzed + model's own list (EC-15c)
-      const merged = [...new Set([...ctx.notAnalyzed, ...result.notAnalyzed])]
-      const finalResult: VerdictResult = { ...result, notAnalyzed: merged }
+      const merged = [...new Set([...ctx.notAnalyzed, ...verdictResult.notAnalyzed])]
+      const finalResult: VerdictResult = { ...verdictResult, notAnalyzed: merged }
       await setCached<VerdictResult>(key, finalResult)
       verdictState.status = 'done'
       verdictState.value = finalResult
-      track('ai_task_completed', { task: 'verdict', duration_ms: Math.round(performance.now() - t1), cached: false })
+      track('ai_task_completed', {
+        task: 'verdict',
+        duration_ms: Math.round(performance.now() - t1),
+        cached: false,
+        ...(verdictUsage?.total_tokens !== undefined ? { tokens: verdictUsage.total_tokens } : {}),
+      })
     } catch (err) {
       const kind = err instanceof LlmError ? err.kind : 'unknown'
       verdictState.status = 'error'
@@ -515,12 +554,17 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const t1 = performance.now()
 
     try {
-      const result = await llmJsonWithRepair<CoachResult>(
+      const { result: coachResult, usage: coachUsage } = await llmJsonWithRepairWithUsage<CoachResult>(
         { system: prompts.system, user: prompts.user },
         validateCoachResult,
       )
-      track('ai_task_completed', { task: 'coach', duration_ms: Math.round(performance.now() - t1), cached: false })
-      return result
+      track('ai_task_completed', {
+        task: 'coach',
+        duration_ms: Math.round(performance.now() - t1),
+        cached: false,
+        ...(coachUsage?.total_tokens !== undefined ? { tokens: coachUsage.total_tokens } : {}),
+      })
+      return coachResult
     } catch (err) {
       const kind = err instanceof LlmError ? err.kind : 'unknown'
       track('ai_task_failed', { task: 'coach', reason: kind })
@@ -569,12 +613,17 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const t1 = performance.now()
 
     try {
-      const answer = await llmStream(prompts, onDelta)
+      const askStreamResult = await llmStreamWithUsage(prompts, onDelta)
       // Store exchange in history; shift oldest out so we keep at most 3
-      askHistory.push({ q: question, a: answer })
+      askHistory.push({ q: question, a: askStreamResult.content })
       while (askHistory.length > 3) askHistory.shift()
-      track('ai_task_completed', { task: 'ask', duration_ms: Math.round(performance.now() - t1), cached: false })
-      return { ok: true, answer }
+      track('ai_task_completed', {
+        task: 'ask',
+        duration_ms: Math.round(performance.now() - t1),
+        cached: false,
+        ...(askStreamResult.usage?.total_tokens !== undefined ? { tokens: askStreamResult.usage.total_tokens } : {}),
+      })
+      return { ok: true, answer: askStreamResult.content }
     } catch (err) {
       const kind = err instanceof LlmError ? err.kind : 'unknown'
       track('ai_task_failed', { task: 'ask', reason: kind })
@@ -646,20 +695,21 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         const prompts = skillReviewPrompt(ctx, { name: skill.name, content: skill.content })
 
         try {
-          const result = await llmJsonWithRepair<SkillReviewResult>(
+          const { result: skillResult, usage: skillUsage } = await llmJsonWithRepairWithUsage<SkillReviewResult>(
             { system: prompts.system, user: prompts.user },
             validateSkillReviewResult,
           )
-          await setCached<SkillReviewResult>(key, result)
+          await setCached<SkillReviewResult>(key, skillResult)
           skillReviewsState[idx] = {
             skillId: skill.id,
             name: skill.name,
-            state: { status: 'done', value: result },
+            state: { status: 'done', value: skillResult },
           }
           track('ai_task_completed', {
             task: 'skill-review',
             duration_ms: Math.round(performance.now() - t0),
             cached: false,
+            ...(skillUsage?.total_tokens !== undefined ? { tokens: skillUsage.total_tokens } : {}),
           })
         } catch (err) {
           const kind = err instanceof LlmError ? err.kind : 'unknown'

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { llmComplete, llmStream, llmJsonWithRepair, LlmError } from './llm'
+import { llmComplete, llmCompleteWithUsage, llmStream, llmStreamWithUsage, llmJsonWithRepair, llmJsonWithRepairWithUsage, LlmError } from './llm'
 import { setDeepseekKey } from '../settings/settings'
 
 // ---------------------------------------------------------------------------
@@ -482,5 +482,128 @@ describe('llmJsonWithRepair', () => {
       llmJsonWithRepair({ system: 's', user: 'u' }, (x) => x)
     ).rejects.toMatchObject({ kind: 'no-key' })
     expect(f).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// llmCompleteWithUsage — returns { content, usage }
+// ---------------------------------------------------------------------------
+
+describe('llmCompleteWithUsage — usage parsing', () => {
+  beforeEach(() => {
+    setDeepseekKey('sk-test')
+  })
+
+  it('returns content and usage when response includes usage', async () => {
+    const body = {
+      choices: [{ message: { content: 'hello' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse(body)))
+    const result = await llmCompleteWithUsage({ system: 'sys', user: 'usr' })
+    expect(result.content).toBe('hello')
+    expect(result.usage).toEqual({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 })
+  })
+
+  it('returns usage as undefined when usage is absent from response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse(completionBody('hi'))))
+    const result = await llmCompleteWithUsage({ system: 'sys', user: 'usr' })
+    expect(result.content).toBe('hi')
+    expect(result.usage).toBeUndefined()
+  })
+
+  it('still throws on HTTP errors', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse({}, 401)))
+    await expect(llmCompleteWithUsage({ system: 's', user: 'u' })).rejects.toMatchObject({ kind: 'auth' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// llmStreamWithUsage — parses usage from final SSE chunk
+// ---------------------------------------------------------------------------
+
+describe('llmStreamWithUsage — usage parsing from final SSE chunk', () => {
+  beforeEach(() => {
+    setDeepseekKey('sk-test')
+  })
+
+  it('returns accumulated content and usage from final chunk', async () => {
+    const usageChunk = `data: ${JSON.stringify({
+      choices: [],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    })}\n\n`
+    const chunks = [sseEvent('Hello'), sseEvent(' world'), usageChunk, DONE_LINE]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(makeStream(chunks), { status: 200 })))
+
+    const deltas: string[] = []
+    const result = await llmStreamWithUsage({ system: 's', user: 'u' }, (d) => deltas.push(d))
+    expect(result.content).toBe('Hello world')
+    expect(result.usage).toEqual({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 })
+    expect(deltas).toEqual(['Hello', ' world'])
+  })
+
+  it('returns usage as undefined when no usage chunk present', async () => {
+    const chunks = [sseEvent('hi'), DONE_LINE]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(makeStream(chunks), { status: 200 })))
+
+    const result = await llmStreamWithUsage({ system: 's', user: 'u' }, () => {})
+    expect(result.content).toBe('hi')
+    expect(result.usage).toBeUndefined()
+  })
+
+  it('sends stream_options: { include_usage: true } in request body', async () => {
+    const chunks = [sseEvent('ok'), DONE_LINE]
+    const f = vi.fn().mockResolvedValue(new Response(makeStream(chunks), { status: 200 }))
+    vi.stubGlobal('fetch', f)
+    await llmStreamWithUsage({ system: 's', user: 'u' }, () => {})
+    const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
+    expect(body.stream_options).toEqual({ include_usage: true })
+  })
+
+  it('still throws on HTTP errors', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 429 })))
+    await expect(llmStreamWithUsage({ system: 's', user: 'u' }, () => {})).rejects.toMatchObject({ kind: 'rate-limited' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// llmJsonWithRepairWithUsage
+// ---------------------------------------------------------------------------
+
+describe('llmJsonWithRepairWithUsage — returns usage from first attempt', () => {
+  beforeEach(() => {
+    setDeepseekKey('sk-test')
+  })
+
+  it('returns result and usage on first-attempt success', async () => {
+    const body = {
+      choices: [{ message: { content: '{"x":1}' } }],
+      usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse(body)))
+    const { result, usage } = await llmJsonWithRepairWithUsage({ system: 's', user: 'u' }, (x) => x)
+    expect(result).toEqual({ x: 1 })
+    expect(usage).toEqual({ prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 })
+  })
+
+  it('returns usage from first attempt even when repair retry needed', async () => {
+    const firstBody = {
+      choices: [{ message: { content: 'bad-json' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+    }
+    const secondBody = { choices: [{ message: { content: '{"ok":true}' } }] }
+    const f = vi.fn()
+      .mockResolvedValueOnce(makeJsonResponse(firstBody))
+      .mockResolvedValueOnce(makeJsonResponse(secondBody))
+    vi.stubGlobal('fetch', f)
+    const { result, usage } = await llmJsonWithRepairWithUsage({ system: 's', user: 'u' }, (x) => x)
+    expect(result).toEqual({ ok: true })
+    expect(usage?.total_tokens).toBe(12)
+  })
+
+  it('returns usage as undefined when absent', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse(completionBody('{"x":1}'))))
+    const { usage } = await llmJsonWithRepairWithUsage({ system: 's', user: 'u' }, (x) => x)
+    expect(usage).toBeUndefined()
   })
 })
