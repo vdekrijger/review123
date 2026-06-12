@@ -13,7 +13,7 @@ describe('Landing', () => {
     history.replaceState(null, '', '/')
     render(Landing)
     await userEvent.click(screen.getByRole('button', { name: /review/i }))
-    expect(screen.getByRole('alert')).toHaveTextContent(/enter a github pr url/i)
+    expect(screen.getByRole('alert')).toHaveTextContent(/enter a github, gitlab, or bitbucket pull request url/i)
     expect(location.pathname).toBe('/')
   })
 
@@ -75,5 +75,20 @@ describe('Landing recent reviews', () => {
     render(Landing)
     expect(screen.getByText(/a\/r#1/)).toBeInTheDocument()
     expect(screen.getByText(/b\/s#2/)).toBeInTheDocument()
+  })
+
+  it('placeholder mentions github, gitlab, bitbucket', () => {
+    render(Landing)
+    const input = screen.getByRole('textbox')
+    expect(input).toHaveAttribute('placeholder', expect.stringMatching(/github/i))
+    expect(input).toHaveAttribute('placeholder', expect.stringMatching(/gitlab/i))
+  })
+
+  it('gitlab history entry navigates to /review/gitlab route', async () => {
+    addToHistory({ owner: 'mygroup', repo: 'myproject', number: 7, title: 'MR title', provider: 'gitlab' })
+    render(Landing)
+    const btn = screen.getByRole('button', { name: /mygroup\/myproject#7/i })
+    await userEvent.click(btn)
+    expect(location.pathname).toBe('/review/gitlab/mygroup/myproject/7')
   })
 })
