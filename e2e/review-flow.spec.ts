@@ -146,6 +146,31 @@ function makeIssueComments() {
   ]
 }
 
+/**
+ * GraphQL response that marks comment id 1001 (from makeReviewComments) as resolved.
+ * The databaseId matches the REST id used in makeReviewComments().
+ */
+function makeResolvedThreadsGraphQL() {
+  return {
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: [
+              {
+                isResolved: true,
+                comments: {
+                  nodes: [{ databaseId: 1001 }],
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  }
+}
+
 // Two commits for the PR (used by revision picker tests)
 const COMMIT_1_SHA = '111111aaaaaaa'
 const COMMIT_2_SHA = '222222bbbbbbb' // head commit
@@ -354,7 +379,7 @@ function seedDraftScript(prKey: string) {
 
 async function setupRoutes(
   page: import('@playwright/test').Page,
-  opts: { withGithubAuth?: boolean } = {},
+  opts: { withGithubAuth?: boolean; withResolvedThreads?: boolean } = {},
 ) {
   // Block PostHog analytics
   await page.route('**/*posthog.com/**', (route) => route.abort())
@@ -450,6 +475,25 @@ async function setupRoutes(
     // PR issue comments: /repos/:owner/:repo/issues/:number/comments
     if (path === `/repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments`) {
       return route.fulfill({ json: makeIssueComments() })
+    }
+
+    // GraphQL endpoint: /graphql — used for resolved thread state
+    if (path === '/graphql' && route.request().method() === 'POST') {
+      if (opts.withResolvedThreads) {
+        return route.fulfill({ json: makeResolvedThreadsGraphQL() })
+      }
+      // Default: no resolved threads
+      return route.fulfill({
+        json: {
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: { nodes: [] },
+              },
+            },
+          },
+        },
+      })
     }
 
     // Fallback — return empty JSON rather than aborting so the app doesn't crash
@@ -1250,4 +1294,164 @@ test('ask-ai: open rail, type question, answer streams in; second question retai
   await expect(
     askSection.getByText(/This code is in this location/i),
   ).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// Test 13: File tree explorer visible in Inspect view; clicking second file
+//          scrolls that article into view
+// ---------------------------------------------------------------------------
+
+test('file-tree: visible in step 2; clicking second file in tree scrolls to its article', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Wait for file diffs to appear
+  await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 5_000 })
+
+  // File tree nav should be visible
+  const treeNav = page.locator('nav[aria-label="File tree"]')
+  await expect(treeNav).toBeVisible()
+
+  // The fixture has 2 files: src/feature.ts and src/old-utils.ts
+  // Both should appear as buttons in the file tree
+  const fileButtons = treeNav.getByRole('button')
+  await expect(fileButtons).toHaveCount(2)
+
+  // Get the second file button (src/old-utils.ts)
+  const secondFileBtn = fileButtons.nth(1)
+  const secondFileName = await secondFileBtn.textContent()
+  expect(secondFileName).toMatch(/old-utils\.ts/)
+
+  // Click the second file in the tree
+  await secondFileBtn.click()
+
+  // The second article should now be visible in the viewport
+  // (scrolled to) — assert via locator visibility
+  const secondArticle = page.locator('article.file-diff').nth(1)
+  await expect(secondArticle).toBeVisible({ timeout: 5_000 })
+  await expect(secondArticle).toBeInViewport({ ratio: 0.1 })
+})
+
+// ---------------------------------------------------------------------------
+// Test 14: Resolved comment threads — collapsed with indicator, expandable
+// ---------------------------------------------------------------------------
+
+test('resolved-threads: resolved thread renders collapsed with ✓ Resolved summary; expanding shows full thread', async ({
+  page,
+}) => {
+  // Use auth so the GraphQL call fires; withResolvedThreads so comment 1001 is marked resolved
+  await setupRoutes(page, { withGithubAuth: true, withResolvedThreads: true })
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(true))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect) where comments appear
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // The resolved thread (comment 1001) should render as a collapsed <details>
+  // with a summary showing "✓ Resolved"
+  const resolvedDetails = page.locator('details.resolved-thread')
+  await expect(resolvedDetails).toBeVisible({ timeout: 8_000 })
+
+  // Summary should contain "Resolved" label
+  const summary = resolvedDetails.locator('summary.resolved-summary')
+  await expect(summary).toBeVisible()
+  await expect(summary).toContainText('Resolved')
+
+  // Summary should contain author and truncated body from the fixture comment
+  await expect(summary).toContainText('reviewer-bot')
+  await expect(summary).toContainText('This inline comment is on src/feature.ts line 2')
+
+  // The full CommentThread should NOT be visible while collapsed
+  // (details element is closed, content is hidden from the accessibility tree)
+  await expect(resolvedDetails).not.toHaveAttribute('open')
+
+  // Expand the details by clicking the summary
+  await summary.click()
+
+  // After expanding, the full CommentThread content should be visible.
+  // Scope to the comment-body div to distinguish from the summary snippet.
+  await expect(
+    resolvedDetails.locator('.comment-body').first(),
+  ).toBeVisible({ timeout: 3_000 })
+
+  // details should now be open
+  await expect(resolvedDetails).toHaveAttribute('open', '')
+})
+
+// ---------------------------------------------------------------------------
+// Test 15: Review progress bar — visible at step 2, percent increases after
+//          marking a file viewed
+// ---------------------------------------------------------------------------
+
+test('progress-bar: visible when PR loaded; percent increases after marking file viewed', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Progress bar should be visible (role=progressbar)
+  const progressBar = page.getByRole('progressbar', { name: /review progress/i })
+  await expect(progressBar).toBeVisible({ timeout: 5_000 })
+
+  // At step 1 with 0 files viewed → 0%
+  const initialPercent = Number(await progressBar.getAttribute('aria-valuenow'))
+  expect(initialPercent).toBe(0)
+
+  // Navigate to step 2 (Inspect) — progress should jump to 15%
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  const step2Percent = Number(await progressBar.getAttribute('aria-valuenow'))
+  expect(step2Percent).toBe(15)
+
+  // Wait for file diffs to appear
+  await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 5_000 })
+
+  // Mark the first file as viewed
+  const firstViewedCheckbox = page.locator('input.viewed-checkbox').first()
+  await expect(firstViewedCheckbox).toBeVisible()
+  await firstViewedCheckbox.evaluate((el: HTMLInputElement) => {
+    el.checked = true
+    el.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+
+  // After marking 1 of 2 files viewed → 15 + 70*(1/2) = 50%
+  await expect(async () => {
+    const pct = Number(await progressBar.getAttribute('aria-valuenow'))
+    expect(pct).toBeGreaterThan(step2Percent)
+  }).toPass({ timeout: 5_000 })
 })

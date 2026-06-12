@@ -146,6 +146,30 @@
     if (filename.length >= max) return '…/' + filename.slice(-max)
     return '…/' + parts.slice(-2).join('/')
   }
+
+  // Verdict evidence: clamping + expand
+  const EVIDENCE_CLAMP = 5
+  let evidenceExpanded = $state(false)
+
+  // Parse an evidence item into an optional leading path chip + remaining text.
+  // The regex matches a recognizable file path: word chars, @, dots, hyphens, slashes,
+  // with a dot-extension. Captures the first such occurrence.
+  const PATH_RE = /[\w@./-]+\.[\w]+/
+
+  interface EvidenceRow {
+    path: string | null
+    text: string
+  }
+
+  function parseEvidenceItem(item: string): EvidenceRow {
+    const m = item.match(PATH_RE)
+    if (!m) return { path: null, text: item }
+    const path = m[0]
+    // Remove the path from the item text for the prose portion
+    const rest = item.slice(0, m.index).trimEnd() + item.slice(m.index! + path.length)
+    const text = rest.replace(/^[-–—:\s]+/, '').trimStart()
+    return { path, text: text || item }
+  }
 </script>
 
 <div class="understand-step">
@@ -368,7 +392,7 @@
             <div class="alternatives-list">
               {#each alternatives.alternatives as alt (alt.approach)}
                 <div class="alternative-card">
-                  <p class="alternative-approach">{alt.approach.split('.')[0] + (alt.approach.includes('.') ? '.' : '')}</p>
+                  <p class="alternative-approach">{alt.approach}</p>
                   <p class="alternative-tradeoffs">{alt.tradeoffs}</p>
                   <span
                     class="assessment-chip assessment-{alt.assessment}"
@@ -397,11 +421,38 @@
       <AiPanel title="Verdict" state={run.verdict} onretry={() => run.retry('verdict')}>
         {#if verdict}
           {#if verdict.evidence.length > 0}
+            {@const visibleEvidence = evidenceExpanded
+              ? verdict.evidence
+              : verdict.evidence.slice(0, EVIDENCE_CLAMP)}
             <ul class="verdict-evidence">
-              {#each verdict.evidence as item}
-                <li>{item}</li>
+              {#each visibleEvidence as item (item)}
+                {@const row = parseEvidenceItem(item)}
+                <li class="verdict-evidence-row">
+                  {#if row.path}
+                    <button
+                      class="evidence-path-chip"
+                      onclick={() => onhotspot?.(row.path!)}
+                      title="Jump to {row.path}"
+                      aria-label="Jump to {row.path}"
+                    >{row.path}</button>
+                  {/if}
+                  <span class="evidence-text">
+                    <MarkdownView source={row.text} />
+                  </span>
+                </li>
               {/each}
             </ul>
+            {#if verdict.evidence.length > EVIDENCE_CLAMP}
+              <button
+                class="evidence-expander"
+                onclick={() => { evidenceExpanded = !evidenceExpanded }}
+                aria-expanded={evidenceExpanded}
+              >
+                {evidenceExpanded
+                  ? 'Show less'
+                  : `Show all ${verdict.evidence.length}`}
+              </button>
+            {/if}
           {/if}
           {#if verdict.notAnalyzed.length > 0}
             <div class="not-analyzed">
@@ -450,8 +501,8 @@
   /* ===== Glance Card ===== */
 
   .glance-card {
-    background: #8880;
-    border: 1px solid #8882;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
     border-radius: 8px;
     padding: 0.75rem 1rem;
     display: flex;
@@ -481,25 +532,28 @@
   }
 
   .verdict-level.level-behavior-preserved {
-    color: #1a7f37;
-    background: #1a7f3715;
+    color: var(--legend-added-color);
+    background: var(--legend-added-bg);
+    border-color: var(--legend-added-border);
   }
 
   .verdict-level.level-minor-changes {
-    color: #9a6700;
-    background: #9a670015;
+    color: var(--legend-changed-color);
+    background: var(--legend-changed-bg);
+    border-color: var(--legend-changed-border);
   }
 
   .verdict-level.level-significant-changes {
-    color: #cf222e;
-    background: #cf222e15;
+    color: var(--legend-removed-color);
+    background: var(--legend-removed-bg);
+    border-color: var(--legend-removed-border);
   }
 
   .glance-loading-pill {
     font-size: 0.8rem;
     opacity: 0.6;
     padding: 0.2rem 0.6rem;
-    border: 1px solid #8884;
+    border: 1px solid var(--hairline);
     border-radius: 12px;
   }
 
@@ -508,13 +562,13 @@
     font-weight: 500;
     padding: 0.2rem 0.5rem;
     border-radius: 10px;
-    background: #8882;
+    background: var(--surface-raised);
     white-space: nowrap;
   }
 
-  .ci-badge.ci-pass { color: #1a7f37; background: #1a7f3715; }
-  .ci-badge.ci-fail { color: #cf222e; background: #cf222e15; }
-  .ci-badge.ci-pending { color: #9a6700; background: #9a670015; }
+  .ci-badge.ci-pass { color: var(--legend-added-color); background: var(--legend-added-bg); }
+  .ci-badge.ci-fail { color: var(--legend-removed-color); background: var(--legend-removed-bg); }
+  .ci-badge.ci-pending { color: var(--legend-changed-color); background: var(--legend-changed-bg); }
 
   .file-count {
     font-size: 0.85rem;
@@ -529,8 +583,8 @@
     white-space: nowrap;
   }
 
-  .additions { color: #1a7f37; font-weight: 500; }
-  .deletions { color: #cf222e; font-weight: 500; }
+  .additions { color: var(--legend-added-color); font-weight: 500; }
+  .deletions { color: var(--legend-removed-color); font-weight: 500; }
 
   /* Row 2 — TL;DR */
 
@@ -689,8 +743,8 @@
     border-radius: 2px;
   }
 
-  .churn-add { background: #1a7f37; }
-  .churn-del { background: #cf222e; }
+  .churn-add { background: var(--accent); }
+  .churn-del { background: var(--legend-removed-color); }
 
   .churn-nums {
     display: flex;
@@ -702,28 +756,14 @@
   /* ===== Detail panels ===== */
 
   .detail-panel {
-    border: 1px solid #8882;
+    border: 1px solid var(--hairline);
     border-radius: 6px;
     overflow: hidden;
   }
 
-  .detail-summary {
-    padding: 0.5rem 0.75rem;
-    cursor: pointer;
-    font-size: 0.9rem;
-    font-weight: 500;
-    list-style: none;
-    user-select: none;
-    background: #8880;
-  }
-
-  .detail-summary::-webkit-details-marker { display: none; }
-  .detail-summary::before { content: '▶ '; font-size: 0.7em; opacity: 0.6; }
-  details[open] > .detail-summary::before { content: '▼ '; }
-
   .detail-body {
     padding: 0.75rem;
-    border-top: 1px solid #8882;
+    border-top: 1px solid var(--hairline);
   }
 
   .detail-body .prose {
@@ -738,8 +778,86 @@
 
   .verdict-evidence {
     margin: 0 0 0.5rem 0;
-    padding-left: 1.5em;
+    padding-left: 0;
+    list-style: none;
     font-size: 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .verdict-evidence-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .verdict-evidence-row:last-child {
+    border-bottom: none;
+  }
+
+  .evidence-path-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    background: var(--surface-raised);
+    border: 1px solid var(--hairline);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--accent);
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    text-decoration: none;
+    transition: background 100ms;
+  }
+
+  .evidence-path-chip:hover {
+    background: var(--accent-subtle);
+    border-color: var(--accent);
+  }
+
+  .evidence-text {
+    font-family: var(--font-prose);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* MarkdownView inside evidence-text: inline, no block margins */
+  .evidence-text :global(.markdown-view) {
+    font-size: inherit;
+    line-height: inherit;
+  }
+
+  .evidence-text :global(p) {
+    margin: 0;
+  }
+
+  .evidence-text :global(code) {
+    font-size: 0.85em;
+    background: var(--surface-raised);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+  }
+
+  .evidence-expander {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 0.82rem;
+    color: var(--accent);
+    padding: 0.2rem 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .evidence-expander:hover {
+    opacity: 0.75;
   }
 
   .not-analyzed {
@@ -787,12 +905,12 @@
   .tests-chip:hover { background: #8881; }
 
   .tests-chip-covered {
-    color: #1a7f37;
+    color: var(--legend-added-color);
     font-weight: 500;
   }
 
   .tests-chip-gaps {
-    color: #9a6700;
+    color: var(--legend-changed-color);
     font-weight: 500;
   }
 
@@ -824,7 +942,7 @@
   .tests-covered-item:last-child { border-bottom: none; }
 
   .tests-covered-check {
-    color: #1a7f37;
+    color: var(--legend-added-color);
     font-weight: 700;
     flex-shrink: 0;
     margin-top: 0.05rem;
@@ -851,7 +969,7 @@
     border: none;
     padding: 0;
     cursor: pointer;
-    color: #2563eb;
+    color: var(--accent);
     font-size: inherit;
     font-family: var(--font-mono, monospace);
     text-decoration: underline;
@@ -864,7 +982,7 @@
     margin: 0 0 0.4rem;
     font-size: 0.85rem;
     font-weight: 600;
-    color: #9a6700;
+    color: var(--legend-changed-color);
   }
 
   .tests-gap-item {
@@ -876,7 +994,7 @@
   }
 
   .tests-gap-icon {
-    color: #9a6700;
+    color: var(--legend-changed-color);
     font-weight: 700;
     flex-shrink: 0;
   }
@@ -936,9 +1054,9 @@
 
   .alternative-card {
     padding: 0.65rem 0.75rem;
-    border: 1px solid #8882;
+    border: 1px solid var(--hairline);
     border-radius: 6px;
-    background: #8880;
+    background: var(--surface);
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
@@ -969,23 +1087,25 @@
   }
 
   .assessment-chip.assessment-pr-is-better {
-    color: #1a7f37;
-    background: #1a7f3715;
+    color: var(--legend-added-color);
+    background: var(--legend-added-bg);
+    border-color: var(--legend-added-border);
   }
 
   .assessment-chip.assessment-comparable {
-    color: #57606a;
-    background: #57606a10;
+    color: var(--text-muted);
+    background: var(--surface-raised);
   }
 
   .assessment-chip.assessment-alternative-is-better {
-    color: #b45309;
-    background: #d9770615;
+    color: var(--legend-changed-color);
+    background: var(--legend-changed-bg);
+    border-color: var(--legend-changed-border);
   }
 
   .assessment-chip.assessment-different-goals {
-    color: #0550ae;
-    background: #0550ae10;
+    color: var(--text-muted);
+    background: var(--surface-raised);
   }
 
   .alternative-rationale {

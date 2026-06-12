@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { PrCommit } from '../lib/github/commits'
+  import { relativeTime } from '../lib/time'
 
   let {
     commits,
@@ -25,7 +26,7 @@
   const baseOption = $derived({ value: baseSha, label: 'PR base' })
   const commitOptions = $derived(commits.map(c => ({
     value: c.sha,
-    label: `${c.shortSha} ${c.message.length > 40 ? c.message.slice(0, 40) + '…' : c.message}`,
+    label: `${c.shortSha} · ${relativeTime(c.authoredAt)} · ${c.message.length > 40 ? c.message.slice(0, 40) + '…' : c.message}`,
   })))
 
   // Current selections — use $derived to track active, with local override via $state
@@ -94,6 +95,13 @@
     {/each}
   </select>
 
+  {#if fromSha !== baseSha}
+    {@const fromCommit = commits.find(c => c.sha === fromSha)}
+    {#if fromCommit}
+      <span class="picker-age" aria-label="From commit age">{relativeTime(fromCommit.authoredAt)}</span>
+    {/if}
+  {/if}
+
   <button
     class="picker-apply"
     onclick={handleApply}
@@ -129,19 +137,20 @@
     align-items: center;
     gap: 0.4rem;
     flex-wrap: wrap;
-    background: var(--surface-raised, #1a1a2e);
-    border: 1px solid var(--border, #3a4060);
-    border-left: 3px solid var(--border-banner-accent, #4a90d0);
+    background: var(--surface-raised);
+    border: 1px solid var(--hairline);
+    border-left: 3px solid var(--accent);
     border-radius: 4px;
     padding: 0.4rem 0.75rem;
     font-size: 0.85rem;
     margin-bottom: 0.5rem;
-    color: var(--text, #c8dff0);
+    color: var(--text);
   }
 
   .picker-label {
     font-weight: 500;
     white-space: nowrap;
+    color: var(--text-muted);
   }
 
   .picker-arrow {
@@ -149,8 +158,8 @@
   }
 
   select {
-    background: var(--surface, #13131f);
-    border: 1px solid var(--border, #3a4060);
+    background: var(--surface);
+    border: 1px solid var(--hairline);
     border-radius: 3px;
     color: inherit;
     font-size: 0.82rem;
@@ -158,15 +167,23 @@
     max-width: 18rem;
   }
 
+  .picker-age {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
   .picker-apply {
-    background: var(--border-banner-accent, #4a90d0);
-    border: none;
-    border-radius: 3px;
-    color: #fff;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    color: #0a1410;
     cursor: pointer;
     font-size: 0.82rem;
+    font-weight: 600;
     padding: 0.15rem 0.6rem;
     white-space: nowrap;
+    transition: filter 150ms;
   }
 
   .picker-apply:disabled {
@@ -175,7 +192,7 @@
   }
 
   .picker-apply:not(:disabled):hover {
-    filter: brightness(1.15);
+    filter: brightness(1.1);
   }
 
   .picker-divider {
@@ -185,7 +202,7 @@
   .picker-quick {
     background: none;
     border: none;
-    color: #6ab4f0;
+    color: var(--accent);
     cursor: pointer;
     font-size: 0.82rem;
     text-decoration: underline;
@@ -199,6 +216,6 @@
   }
 
   .picker-quick:not(:disabled):hover {
-    color: #90ccff;
+    opacity: 0.75;
   }
 </style>

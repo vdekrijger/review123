@@ -1,27 +1,13 @@
 <script lang="ts">
   import type { PrComment } from '../lib/github/comments'
   import MarkdownView from './MarkdownView.svelte'
+  import { relativeTime } from '../lib/time'
 
   interface Props {
     comments: PrComment[]
   }
 
   let { comments }: Props = $props()
-
-  export function relativeTime(createdAt: string): string {
-    const now = Date.now()
-    const created = new Date(createdAt).getTime()
-    const diffMs = now - created
-    const diffSec = Math.floor(diffMs / 1000)
-    const diffMin = Math.floor(diffSec / 60)
-    const diffHours = Math.floor(diffMin / 60)
-    const diffDays = Math.floor(diffHours / 24)
-
-    if (diffSec < 60) return 'just now'
-    if (diffMin < 60) return `${diffMin}m ago`
-    if (diffHours < 24) return `${diffHours}h ago`
-    return `${diffDays}d ago`
-  }
 
   // Build ordered thread: top-level comments in order, each followed by replies
   const orderedComments = $derived.by(() => {
@@ -87,16 +73,18 @@
     gap: 0.5rem;
   }
 
+  /* Thread uses a left rail (2px subtle border) not a filled block */
   .comment-item {
-    border-left: 3px solid #8883;
-    padding: 0.4rem 0.6rem;
+    border-left: 2px solid var(--border-subtle, var(--hairline));
+    padding: 0.4rem 0.75rem;
     border-radius: 0 4px 4px 0;
-    background: #8880;
+    background: var(--surface);
+    max-width: 80ch;
   }
 
   .comment-item.reply {
     margin-left: 1.5rem;
-    border-left-color: #8885;
+    border-left-color: var(--hairline);
   }
 
   .comment-header {
@@ -104,7 +92,8 @@
     align-items: center;
     gap: 0.4rem;
     margin-bottom: 0.25rem;
-    font-size: 0.82rem;
+    font-size: 12px;
+    color: var(--text-muted);
   }
 
   .avatar {
@@ -120,8 +109,8 @@
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    background: #6b7280;
-    color: #fff;
+    background: var(--text-muted);
+    color: var(--surface);
     font-size: 0.75rem;
     font-weight: 600;
     flex-shrink: 0;
@@ -130,6 +119,7 @@
 
   .comment-author {
     font-weight: 600;
+    color: var(--text);
   }
 
   .comment-time {
@@ -139,6 +129,83 @@
   }
 
   .comment-body {
-    font-size: 0.88rem;
+    font-family: var(--font-prose);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    overflow-wrap: break-word;
+  }
+
+  /* Prose code blocks inside comments */
+  .comment-body :global(pre) {
+    background: var(--surface-raised);
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+  }
+
+  .comment-body :global(code) {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background: var(--surface-raised);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+  }
+
+  .comment-body :global(pre code) {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+  }
+
+  /* <details> inside comment bodies — styled like our collapsible primitives but smaller */
+  .comment-body :global(details) {
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    margin: 0.4rem 0;
+    font-size: 0.88em;
+  }
+
+  .comment-body :global(details summary) {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 0.88em;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+
+  /* Tables inside comment bodies */
+  .comment-body :global(table) {
+    border-collapse: collapse;
+    font-size: 0.85em;
+    max-width: 100%;
+    overflow-x: auto;
+    display: block;
+  }
+
+  .comment-body :global(th),
+  .comment-body :global(td) {
+    border: 1px solid var(--hairline);
+    padding: 0.25rem 0.5rem;
+    text-align: left;
+  }
+
+  .comment-body :global(th) {
+    background: var(--surface-raised);
+    font-weight: 600;
+  }
+
+  /* Images and long links */
+  .comment-body :global(img) {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .comment-body :global(a) {
+    overflow-wrap: break-word;
+    word-break: break-all;
   }
 </style>

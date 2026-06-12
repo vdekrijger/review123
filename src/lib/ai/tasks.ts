@@ -12,7 +12,7 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
-export const PROMPT_VERSION = 5
+export const PROMPT_VERSION = 6
 
 // ---------------------------------------------------------------------------
 // summarizePrompt — streaming plain-text summary + reading order
@@ -90,6 +90,17 @@ Field rules:
 - testFlags: files where behavior changed but no corresponding test file was added or modified. \
   IMPORTANT: test mapping is inferred by reading the code — it is NOT measured coverage data. \
   Label your notes accordingly. Omit the flag if a test file clearly covers the change.
+
+Evidence discipline (IMPORTANT — apply to every hotspot and testFlag):
+- Ground every claim in what you can SEE in the provided context. The diff shows ALL changes \
+  in this PR — if a signature/type change comes with updated call sites in the same diff, \
+  that is a completed refactor: do NOT flag hypothetical breakage.
+- Only flag consumer/breakage risk when (a) a file in the context references the changed symbol \
+  WITHOUT being updated, or (b) the "not analyzed" truncation list prevents verification — then \
+  SAY THAT explicitly ("couldn't verify consumers outside the provided context") instead of \
+  asserting breakage.
+- Prefer neutral, factual phrasing over alarm. Severity must reflect evidence, not worst-case \
+  speculation.
 
 Do not include any text outside the JSON object.`
 
@@ -361,9 +372,20 @@ Level definitions:
   break callers.
 
 Evidence rules:
-- Each evidence bullet must be concrete and reference specific files or code. \
-  Do not write generic descriptions.
+- Each evidence bullet must cite observed facts (file + what changed) rather than speculative \
+  consequences. Do not write generic descriptions.
 - List anything you could not assess (missing context, files not provided, etc.) in notAnalyzed.
+
+Evidence discipline (IMPORTANT — apply to every evidence item and level choice):
+- Ground every claim in what you can SEE in the provided context. The diff shows ALL changes \
+  in this PR — if a signature/type change comes with updated call sites in the same diff, \
+  that is a completed refactor: do NOT flag hypothetical breakage.
+- Only flag consumer/breakage risk when (a) a file in the context references the changed symbol \
+  WITHOUT being updated, or (b) the "not analyzed" truncation list prevents verification — then \
+  SAY THAT explicitly ("couldn't verify consumers outside the provided context") instead of \
+  asserting breakage.
+- Prefer neutral, factual phrasing over alarm. Severity must reflect evidence, not worst-case \
+  speculation.
 
 Do not include any text outside the JSON object.`
 
@@ -491,6 +513,68 @@ If a question asks about something you cannot see in the provided context, respo
   parts.push(`\n\nQuestion: ${question}`)
 
   return { system, user: parts.join('') }
+}
+
+// ---------------------------------------------------------------------------
+// skillReviewPrompt — JSON SkillReviewResult per reviewer persona
+// ---------------------------------------------------------------------------
+
+/**
+ * Build prompts for a skill (persona) review task.
+ *
+ * system: "You are the reviewer persona defined below" + the skill content
+ *         fenced; instructs JSON-only output matching SkillReviewResult.
+ * user:   ctx.text (the packed PR context)
+ *
+ * NOTE: No PROMPT_VERSION participation — the orchestrator uses a content-hash
+ * cache key (djb2 of skill content) so editing a skill invalidates its cache.
+ */
+export function skillReviewPrompt(
+  ctx: PackedContext,
+  skill: { name: string; content: string },
+): { system: string; user: string } {
+  const system = `You are the reviewer persona defined below. Your job is to review the pull \
+request in the user message and apply ONLY this persona's priorities, style, and standards. \
+Do not adopt any other reviewer perspective.
+
+Persona name: ${skill.name}
+
+Persona definition:
+\`\`\`
+${skill.content}
+\`\`\`
+
+Your findings must be:
+- Concrete and anchored to actual files and lines visible in the PR context.
+- At most 15 findings total (≤15). If you have more candidates, keep only the most important ones.
+- Severity must be rated according to THIS persona's own standards: "high", "medium", or "low".
+
+Respond with JSON ONLY — no explanation, no markdown outside the JSON, no code fences. \
+Your response must be valid JSON that exactly matches this shape:
+
+{
+  "skillName": "${skill.name}",
+  "findings": [
+    {
+      "path": "<file path from the PR context>",
+      "line": <line number as integer, or null for file-level findings>,
+      "severity": "high" | "medium" | "low",
+      "body": "<concrete finding text>"
+    }
+  ]
+}
+
+Field rules:
+- skillName: must be exactly "${skill.name}".
+- findings: an array of 0–15 findings. Only include findings for files that appear in the PR changes.
+- path: must be a file path that actually appears in the PR diff context. Do not invent paths.
+- line: the specific line number (integer) the finding applies to, or null if it is a file-level concern.
+- severity: exactly one of "high", "medium", "low" — rated by this persona's own standards.
+- body: a clear, actionable description of the finding.
+
+Do not include any text outside the JSON object.`
+
+  return { system, user: ctx.text }
 }
 
 // ---------------------------------------------------------------------------

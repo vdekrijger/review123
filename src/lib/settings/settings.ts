@@ -14,7 +14,7 @@ function notifyAuthMutated(): void {
 
 export type DiffMode = 'unified' | 'split'
 export type Theme = 'auto' | 'dark' | 'light'
-export type UiFont = 'system' | 'humanist' | 'serif'
+export type UiFont = 'plex' | 'system' | 'serif'
 
 export interface GithubAuth {
   token: string
@@ -30,6 +30,7 @@ export interface Settings {
   railCollapsed: boolean
   theme: Theme
   uiFont: UiFont
+  showProgress: boolean
 }
 
 const DEFAULTS: Settings = {
@@ -39,7 +40,8 @@ const DEFAULTS: Settings = {
   githubAuth: null,
   railCollapsed: false,
   theme: 'auto',
-  uiFont: 'system',
+  uiFont: 'plex',
+  showProgress: true,
 }
 
 function coerceGithubAuth(raw: unknown): GithubAuth | null {
@@ -75,7 +77,15 @@ function coerce(raw: unknown): Partial<Settings> {
   if (theme === 'auto' || theme === 'dark' || theme === 'light') result.theme = theme
 
   const uiFont = obj['uiFont']
-  if (uiFont === 'system' || uiFont === 'humanist' || uiFont === 'serif') result.uiFont = uiFont
+  // 'humanist' was the old name for system-font choice — coerce to 'system'
+  if (uiFont === 'plex' || uiFont === 'system' || uiFont === 'serif') {
+    result.uiFont = uiFont
+  } else if (uiFont === 'humanist') {
+    result.uiFont = 'system'
+  }
+
+  const showProgress = obj['showProgress']
+  if (typeof showProgress === 'boolean') result.showProgress = showProgress
 
   // Prefer explicit githubAuth; fall back to migrating legacy githubPat string
   if ('githubAuth' in obj) {
@@ -146,3 +156,4 @@ export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
 export const setRailCollapsed = (collapsed: boolean) => save({ railCollapsed: collapsed })
 export const setTheme = (theme: Theme) => save({ theme })
 export const setUiFont = (font: UiFont) => save({ uiFont: font })
+export const setShowProgress = (show: boolean) => save({ showProgress: show })

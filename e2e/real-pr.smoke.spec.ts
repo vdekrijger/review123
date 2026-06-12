@@ -61,6 +61,6 @@ test.describe('real-network smoke: public PR diff renders', () => {
     await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 15_000 })
 
     // The added file should be listed
-    await expect(page.getByText('my_note.txt')).toBeVisible()
+    await expect(page.locator('article.file-diff').getByText('my_note.txt').first()).toBeVisible()
   })
 })

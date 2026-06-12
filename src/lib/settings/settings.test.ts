@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens, saveGithubAuth,
-  setTheme, setUiFont,
+  setTheme, setUiFont, setShowProgress,
 } from './settings'
 
 describe('settings', () => {
@@ -15,7 +15,8 @@ describe('settings', () => {
       githubAuth: null,
       railCollapsed: false,
       theme: 'auto',
-      uiFont: 'system',
+      uiFont: 'plex',
+      showProgress: true,
     })
   })
 
@@ -55,7 +56,8 @@ describe('settings', () => {
       githubAuth: null,
       railCollapsed: false,
       theme: 'auto',
-      uiFont: 'system',
+      uiFont: 'plex',
+      showProgress: true,
     })
   })
 
@@ -147,13 +149,13 @@ describe('settings', () => {
   })
 
   describe('uiFont', () => {
-    it('defaults to system', () => {
-      expect(getSettings().uiFont).toBe('system')
+    it('defaults to plex', () => {
+      expect(getSettings().uiFont).toBe('plex')
     })
 
-    it('setUiFont persists humanist', () => {
-      setUiFont('humanist')
-      expect(getSettings().uiFont).toBe('humanist')
+    it('setUiFont persists system', () => {
+      setUiFont('system')
+      expect(getSettings().uiFont).toBe('system')
     })
 
     it('setUiFont persists serif', () => {
@@ -161,15 +163,42 @@ describe('settings', () => {
       expect(getSettings().uiFont).toBe('serif')
     })
 
-    it('setUiFont persists system', () => {
+    it('setUiFont persists plex', () => {
       setUiFont('serif')
-      setUiFont('system')
-      expect(getSettings().uiFont).toBe('system')
+      setUiFont('plex')
+      expect(getSettings().uiFont).toBe('plex')
     })
 
-    it('coerces invalid uiFont value back to default (system)', () => {
+    it('coerces invalid uiFont value back to default (plex)', () => {
       localStorage.setItem('review123:settings', JSON.stringify({ uiFont: 'comic-sans' }))
+      expect(getSettings().uiFont).toBe('plex')
+    })
+
+    it('coerces legacy "humanist" value to "system"', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ uiFont: 'humanist' }))
       expect(getSettings().uiFont).toBe('system')
+    })
+  })
+
+  describe('showProgress', () => {
+    it('defaults to true', () => {
+      expect(getSettings().showProgress).toBe(true)
+    })
+
+    it('setShowProgress persists false', () => {
+      setShowProgress(false)
+      expect(getSettings().showProgress).toBe(false)
+    })
+
+    it('setShowProgress persists true', () => {
+      setShowProgress(false)
+      setShowProgress(true)
+      expect(getSettings().showProgress).toBe(true)
+    })
+
+    it('coerces invalid showProgress value back to default (true)', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ showProgress: 'yes' }))
+      expect(getSettings().showProgress).toBe(true)
     })
   })
 })

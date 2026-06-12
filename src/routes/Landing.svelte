@@ -67,15 +67,57 @@
 </section>
 
 <style>
-  .landing { max-width: 40rem; margin: 15vh auto 0; padding: 0 1rem; text-align: center; }
-  form { display: flex; gap: 0.5rem; }
-  input { flex: 1; padding: 0.6rem; font-size: 1rem; }
-  button[type="submit"] { padding: 0.6rem 1.2rem; }
-  .error { color: #c33; }
+  .landing {
+    max-width: 40rem;
+    margin: 12vh auto 0;
+    padding: 0 1.5rem;
+    text-align: center;
+  }
+
+  form {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1.5rem;
+  }
+
+  form input[type="text"] {
+    flex: 1;
+    font-size: 1rem;
+  }
+
+  form button[type="submit"] {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.4rem 1.2rem;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: var(--accent);
+    color: #0a1410;
+    font-family: var(--font-ui);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: filter 150ms ease;
+  }
+
+  form button[type="submit"]:hover {
+    filter: brightness(1.1);
+  }
+
+  .error {
+    color: var(--legend-removed-color);
+    font-size: 0.9rem;
+    margin-top: 0.5rem;
+  }
 
   .recent-reviews {
-    margin-top: 2rem;
+    margin-top: 2.5rem;
     text-align: left;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
   }
 
   .recent-header {
@@ -86,11 +128,11 @@
   }
 
   .recent-title {
-    font-size: 0.9rem;
+    font-size: 0.8125rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    opacity: 0.6;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
     margin: 0;
   }
 
@@ -99,14 +141,15 @@
     border: none;
     cursor: pointer;
     font-size: 0.8rem;
-    opacity: 0.5;
+    color: var(--text-muted);
     padding: 0.1rem 0.4rem;
     border-radius: 4px;
+    transition: color 150ms;
   }
 
   .clear-btn:hover {
-    opacity: 0.8;
-    background: #8881;
+    color: var(--text);
+    background: var(--surface-raised);
   }
 
   .recent-list {
@@ -115,7 +158,7 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: 0.2rem;
   }
 
   .recent-item {
@@ -131,25 +174,26 @@
     cursor: pointer;
     font-size: 0.9rem;
     text-align: left;
-    padding: 0.25rem 0.5rem;
+    padding: 0.3rem 0.5rem;
     border-radius: 4px;
     width: 100%;
-    color: inherit;
+    color: var(--text);
+    transition: background 100ms;
   }
 
   .recent-link:hover {
-    background: #8881;
+    background: var(--surface-raised);
   }
 
   .recent-ref {
     font-family: var(--font-mono);
-    font-size: 0.85rem;
-    opacity: 0.8;
+    font-size: 0.83rem;
+    color: var(--text-muted);
     flex-shrink: 0;
   }
 
   .recent-sep {
-    opacity: 0.4;
+    color: var(--text-muted);
     margin: 0 0.2rem;
     flex-shrink: 0;
   }

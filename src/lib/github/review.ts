@@ -77,12 +77,15 @@ export async function submitReview(
             kind: 'unauthorized',
             message: 'You are not authenticated. Please sign in or add a GitHub token in Settings.',
           }
-        case 'forbidden':
+        case 'forbidden': {
+          const verbatimMsg = detail.message || 'You do not have permission to submit a review on this pull request.'
+          const patGuidance = ' If you can review this PR in your browser, the repository\'s organization likely restricts OAuth apps. Use a fine-grained PAT instead (Settings → Advanced) — those are not subject to org OAuth-app policies. Org admins can also approve this app.'
           return {
             ok: false,
             kind: 'forbidden',
-            message: 'You do not have permission to submit a review on this pull request.',
+            message: verbatimMsg + patGuidance,
           }
+        }
         case 'unprocessable': {
           const msg = detail.message
           if (/own pull request/i.test(msg)) {

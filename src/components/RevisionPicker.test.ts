@@ -71,10 +71,10 @@ describe('RevisionPicker — options render', () => {
     const options = Array.from(selects[0].querySelectorAll('option'))
     const commitOpt = options.find(o => o.value === 'abc123def456789')
     expect(commitOpt).toBeDefined()
-    // 7 chars shortSha + space + 40 chars + '…'
+    // 7 chars shortSha + " · " + age(~7) + " · " + 40 chars + '…'
     expect(commitOpt!.textContent).toContain('abc123d')
     expect(commitOpt!.textContent).toContain('…')
-    expect(commitOpt!.textContent!.length).toBeLessThan(60)
+    expect(commitOpt!.textContent!.length).toBeLessThan(80)
   })
 
   it('renders commit message as-is when <= 40 chars', () => {
@@ -235,5 +235,45 @@ describe('RevisionPicker — ordering guard', () => {
     await user.selectOptions(toSelect, COMMITS[2].sha) // head
 
     expect(screen.getByRole('button', { name: /apply revision comparison/i })).not.toBeDisabled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Age display
+// ---------------------------------------------------------------------------
+
+describe('RevisionPicker — age display', () => {
+  it('option label includes shortSha, age, and message', () => {
+    renderPicker()
+    const selects = screen.getAllByRole('combobox')
+    const options = Array.from(selects[0].querySelectorAll('option'))
+    const commitOpt = options.find(o => o.value === COMMITS[0].sha)
+    expect(commitOpt).toBeDefined()
+    // Label should match pattern: "aaa1111 · Xd ago · feat: first commit"
+    expect(commitOpt!.textContent).toMatch(/aaa1111/)
+    expect(commitOpt!.textContent).toMatch(/ago/)
+    expect(commitOpt!.textContent).toMatch(/feat: first commit/)
+  })
+
+  it('truncated long message still includes age', () => {
+    const longMsg = 'a'.repeat(50)
+    const commits = [makeCommit('abc123def456789', longMsg)]
+    renderPicker({ commits })
+    const selects = screen.getAllByRole('combobox')
+    const options = Array.from(selects[0].querySelectorAll('option'))
+    const commitOpt = options.find(o => o.value === 'abc123def456789')
+    expect(commitOpt!.textContent).toMatch(/ago/)
+    expect(commitOpt!.textContent).toMatch(/…/)
+  })
+
+  it('existing length-check still holds: option text shorter than truncation limit', () => {
+    const longMsg = 'a'.repeat(50)
+    const commits = [makeCommit('abc123def456789', longMsg)]
+    renderPicker({ commits })
+    const selects = screen.getAllByRole('combobox')
+    const options = Array.from(selects[0].querySelectorAll('option'))
+    const commitOpt = options.find(o => o.value === 'abc123def456789')
+    // shortSha(7) + " · " + age(~7) + " · " + 40 chars + "…" = ~60 chars; < 80 is reasonable
+    expect(commitOpt!.textContent!.length).toBeLessThan(80)
   })
 })

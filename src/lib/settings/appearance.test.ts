@@ -45,11 +45,12 @@ describe('applyAppearance', () => {
     expect(document.documentElement.hasAttribute('data-theme')).toBe(false)
   })
 
-  it('sets data-font=humanist when uiFont is humanist', async () => {
-    setUiFont('humanist')
+  it('removes data-font attribute when uiFont is plex (default)', async () => {
+    document.documentElement.setAttribute('data-font', 'serif') // pre-set
+    setUiFont('plex')
     const { applyAppearance } = await import('./appearance.svelte')
     applyAppearance()
-    expect(document.documentElement.getAttribute('data-font')).toBe('humanist')
+    expect(document.documentElement.hasAttribute('data-font')).toBe(false)
   })
 
   it('sets data-font=serif when uiFont is serif', async () => {
@@ -59,12 +60,11 @@ describe('applyAppearance', () => {
     expect(document.documentElement.getAttribute('data-font')).toBe('serif')
   })
 
-  it('removes data-font attribute when uiFont is system', async () => {
-    document.documentElement.setAttribute('data-font', 'serif')
+  it('sets data-font=system when uiFont is system (overrides default Plex)', async () => {
     setUiFont('system')
     const { applyAppearance } = await import('./appearance.svelte')
     applyAppearance()
-    expect(document.documentElement.hasAttribute('data-font')).toBe(false)
+    expect(document.documentElement.getAttribute('data-font')).toBe('system')
   })
 })
 

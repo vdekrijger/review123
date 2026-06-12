@@ -4,6 +4,7 @@
   import InspectStep from '../components/InspectStep.svelte'
   import RevisionPicker from '../components/RevisionPicker.svelte'
   import { getSettings, setDiffMode, setRailCollapsed, type DiffMode } from '../lib/settings/settings'
+  import ReviewProgress from '../components/ReviewProgress.svelte'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
   import { createDraftStore } from '../lib/drafts/drafts.svelte'
   import VerdictStep from '../components/VerdictStep.svelte'
@@ -27,6 +28,8 @@
   import type { PrCommit } from '../lib/github/commits'
   import { getPrComments } from '../lib/github/comments'
   import type { PrComment } from '../lib/github/comments'
+  import { getResolvedCommentIds } from '../lib/github/threads'
+  import { slugify } from '../lib/slug'
 
   const RETURN_KEY = 'review123:returnTo'
 
@@ -194,6 +197,12 @@
   // ---- AI run ----
   let aiRun: ReturnType<typeof createAiRun> | null = $state(null)
   let railCollapsed = $state(getSettings().railCollapsed)
+  // showProgress: read once at mount (same pattern as railCollapsed).
+  // To pick up changes from SettingsPanel without re-mounting Review, the
+  // SettingsPanel checkbox calls setShowProgress immediately (like theme),
+  // but Review itself does not re-read. A page reload or a remount via the
+  // {#key} block in App.svelte will pick up the new value.
+  let showProgress = $state(getSettings().showProgress)
 
   // ConsentDialog: stored promise resolver
   let consentDialogVisible = $state(false)
@@ -240,6 +249,7 @@
 
   // PR comments state
   let prComments: PrComment[] = $state([])
+  let resolvedCommentIds: Set<number> = $state(new Set())
   let commentsError = $state(false)
   let commentsDismissed = $state(false)
   let commentsLoaded = $state(false)
@@ -290,14 +300,18 @@
     }
   })
 
-  // Fetch PR comments once when PR is ready (non-blocking, silent on failure)
+  // Fetch PR comments + resolved thread state once when PR is ready (non-blocking, silent on failure)
   let commentsInitialized = false
   $effect(() => {
     if (load.state.status === 'ready' && !commentsInitialized) {
       commentsInitialized = true
-      getPrComments({ owner, repo, number }).then(
-        (comments) => {
+      Promise.all([
+        getPrComments({ owner, repo, number }),
+        getResolvedCommentIds({ owner, repo, number }),
+      ]).then(
+        ([comments, resolved]) => {
           prComments = comments
+          resolvedCommentIds = resolved
           commentsLoaded = true
         },
         () => {
@@ -318,8 +332,7 @@
     goStep(2)
     // Scroll to file after step switch (next tick)
     requestAnimationFrame(() => {
-      const slug = path.replace(/[^a-zA-Z0-9]/g, '-')
-      document.getElementById(`file-${slug}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      document.getElementById(`file-${slugify(path)}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }
 
@@ -447,7 +460,10 @@
         readingOrder={isCompareActive ? [] : readingOrder}
         {viewedStore}
         prComments={isCompareActive ? [] : prComments}
+        resolvedCommentIds={isCompareActive ? new Set() : resolvedCommentIds}
         {contentsMap}
+        skillReviews={aiRun?.skillReviews ?? []}
+        runSkillReviewsFn={aiRun != null ? (() => { void aiRun!.runSkillReviews() }) : null}
       />
     {:else}
       <VerdictStep
@@ -460,6 +476,16 @@
     {/if}
   {/if}
 </section>
+
+<!-- Progress bar — shown once the PR is loaded, when showProgress is enabled -->
+{#if load.state.status === 'ready' && showProgress}
+  <ReviewProgress
+    viewedCount={viewedStore.count}
+    fileCount={load.state.files.length}
+    draftCount={draftStore?.count ?? 0}
+    {step}
+  />
+{/if}
 
 <!-- EC-07i: Sticky bottom bar — shown once the PR is loaded -->
 {#if load.state.status === 'ready'}

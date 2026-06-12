@@ -170,6 +170,17 @@ This override is deliberate friction — using it should be an explicit, documen
 
 ---
 
+## Troubleshooting
+
+### "Resource not accessible by integration" / 403 on review submission
+
+If your review submission fails with a permission error, the organization may restrict OAuth app access.
+
+1. **Check or request org access for the OAuth app** — visit the app's connections page and click **Request** (or **Grant** if you are an org admin): `https://github.com/settings/connections/applications/<your-oauth-client-id>`. The app shows a direct link to this page in the error message when a Client ID is configured.
+2. **PAT workaround** — if you cannot obtain org approval, generate a fine-grained Personal Access Token scoped to the repository (Settings → Advanced in the app) and paste it in the app's Settings panel. Fine-grained PATs are not subject to org OAuth-app policies.
+
+---
+
 ## Privacy
 
 PostHog receives only coarse, allowlisted event metadata (see [`src/lib/analytics/analytics.ts`](src/lib/analytics/analytics.ts)). Code content, diffs, repository names, and private repo identifiers are never sent. Your GitHub PAT and DeepSeek API key are stored in `localStorage` only and are sent exclusively to their respective services.

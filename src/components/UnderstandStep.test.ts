@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
+import userEvent from '@testing-library/user-event'
 import UnderstandStep from './UnderstandStep.svelte'
 import type { AiRun } from '../lib/ai/run.svelte'
 import type { VerdictResult, AttentionResult, TestInsight } from '../lib/ai/schemas'
@@ -37,10 +38,12 @@ function makeRun(overrides: Partial<AiRun>): AiRun {
     verdict: { status: 'idle' },
     tests: { status: 'idle' },
     alternatives: { status: 'idle' },
+    skillReviews: [],
     start: async () => {},
     retry: async () => {},
     coach: async () => ({ error: 'no-key' }),
     ask: async () => ({ ok: false, error: 'no-key' }),
+    runSkillReviews: async () => {},
     ...overrides,
   }
 }
@@ -627,5 +630,216 @@ describe('UnderstandStep alternatives panel', () => {
     render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
     openAllDetails()
     expect(screen.getByText('Avoids shared state leaks across concurrent requests.')).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Fix: alternative card titles must render FULL approach text (no truncation)
+// Regression: approach containing "e.g." was cut off at first period
+// ---------------------------------------------------------------------------
+
+describe('UnderstandStep alternatives panel — full approach text (no truncation)', () => {
+  it('renders the full approach text including text after a period', () => {
+    const withPeriod: AlternativesResult = {
+      problem: 'A problem.',
+      alternatives: [
+        {
+          approach: 'Use a context object to make the edit mode transition instantaneous (e.g. via a flag).',
+          tradeoffs: 'Tradeoffs here.',
+          assessment: 'pr-is-better',
+          rationale: 'Simple is better.',
+        },
+      ],
+    }
+    const run = makeRun({ alternatives: { status: 'done', value: withPeriod } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    // The full text must be visible — not truncated at the first period
+    expect(
+      screen.getByText(
+        'Use a context object to make the edit mode transition instantaneous (e.g. via a flag).'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('does NOT show a truncated version (split at first period) of the approach', () => {
+    const withPeriod: AlternativesResult = {
+      problem: 'A problem.',
+      alternatives: [
+        {
+          approach: 'Use a context object to make the edit mode transition instantaneous (e.g. via a flag).',
+          tradeoffs: 'Tradeoffs here.',
+          assessment: 'pr-is-better',
+          rationale: 'Simple is better.',
+        },
+      ],
+    }
+    const run = makeRun({ alternatives: { status: 'done', value: withPeriod } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    // The truncated version "Use a context object to make the edit mode transition instantaneous (e."
+    // must NOT appear as the card heading
+    const cards = document.querySelectorAll('.alternative-card .alternative-approach')
+    expect(cards.length).toBe(1)
+    expect(cards[0].textContent).not.toBe('Use a context object to make the edit mode transition instantaneous (e.')
+  })
+
+  it('approach with no period renders its full text', () => {
+    const noPeriod: AlternativesResult = {
+      problem: 'A problem.',
+      alternatives: [
+        {
+          approach: 'Extract logic into a separate module for better testability',
+          tradeoffs: 'Tradeoffs.',
+          assessment: 'comparable',
+          rationale: 'Either works.',
+        },
+      ],
+    }
+    const run = makeRun({ alternatives: { status: 'done', value: noPeriod } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(
+      screen.getByText('Extract logic into a separate module for better testability')
+    ).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Verdict evidence panel — MarkdownView, path chips, clamping + expand
+// ---------------------------------------------------------------------------
+
+describe('UnderstandStep verdict evidence panel', () => {
+  it('renders evidence items with MarkdownView (code spans become <code>)', () => {
+    const verdict: VerdictResult = {
+      level: 'behavior-preserved',
+      evidence: ['The `getCache` function works correctly'],
+      notAnalyzed: [],
+    }
+    const run = makeRun({ verdict: { status: 'done', value: verdict } })
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    openAllDetails()
+    // MarkdownView renders backtick-wrapped text as <code> elements
+    const codeEl = container.querySelector('.evidence-text code')
+    expect(codeEl).not.toBeNull()
+    expect(codeEl!.textContent).toBe('getCache')
+  })
+
+  it('renders a path chip when evidence item contains a recognizable path', () => {
+    const verdict: VerdictResult = {
+      level: 'minor-changes',
+      evidence: ['src/lib/cache.ts: the cache correctly handles expiry'],
+      notAnalyzed: [],
+    }
+    const run = makeRun({ verdict: { status: 'done', value: verdict } })
+    render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    openAllDetails()
+    const chip = screen.getByRole('button', { name: /jump to src\/lib\/cache\.ts/i })
+    expect(chip).toBeInTheDocument()
+    expect(chip.textContent).toContain('src/lib/cache.ts')
+  })
+
+  it('path chip click calls onhotspot with the path', async () => {
+    const user = userEvent.setup()
+    const onhotspot = vi.fn()
+    const verdict: VerdictResult = {
+      level: 'minor-changes',
+      evidence: ['src/lib/cache.ts: handles edge case'],
+      notAnalyzed: [],
+    }
+    const run = makeRun({ verdict: { status: 'done', value: verdict } })
+    render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run, onhotspot },
+    })
+    openAllDetails()
+    const chip = screen.getByRole('button', { name: /jump to src\/lib\/cache\.ts/i })
+    await user.click(chip)
+    expect(onhotspot).toHaveBeenCalledWith('src/lib/cache.ts')
+  })
+
+  it('does not render a path chip when evidence item has no file path', () => {
+    const verdict: VerdictResult = {
+      level: 'behavior-preserved',
+      evidence: ['All public APIs are unchanged'],
+      notAnalyzed: [],
+    }
+    const run = makeRun({ verdict: { status: 'done', value: verdict } })
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    openAllDetails()
+    expect(container.querySelector('.evidence-path-chip')).toBeNull()
+  })
+
+  it('clamps to first 5 evidence items by default', () => {
+    const verdict: VerdictResult = {
+      level: 'behavior-preserved',
+      evidence: ['item 1', 'item 2', 'item 3', 'item 4', 'item 5', 'item 6', 'item 7'],
+      notAnalyzed: [],
+    }
+    const run = makeRun({ verdict: { status: 'done', value: verdict } })
+    render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    openAllDetails()
+    // item 6 and 7 should not be visible
+    expect(screen.queryByText('item 6')).not.toBeInTheDocument()
+    expect(screen.queryByText('item 7')).not.toBeInTheDocument()
+    // item 5 should be visible
+    expect(screen.getByText('item 5')).toBeInTheDocument()
+  })
+
+  it('shows "Show all N" expander button when more than 5 items', () => {
+    const verdict: VerdictResult = {
+      level: 'behavior-preserved',
+      evidence: Array.from({ length: 7 }, (_, i) => `item ${i + 1}`),
+      notAnalyzed: [],
+    }
+    const run = makeRun({ verdict: { status: 'done', value: verdict } })
+    render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    openAllDetails()
+    const expander = screen.getByRole('button', { name: /show all 7/i })
+    expect(expander).toBeInTheDocument()
+  })
+
+  it('expands to show all items when "Show all N" is clicked', async () => {
+    const user = userEvent.setup()
+    const verdict: VerdictResult = {
+      level: 'behavior-preserved',
+      evidence: Array.from({ length: 7 }, (_, i) => `item ${i + 1}`),
+      notAnalyzed: [],
+    }
+    const run = makeRun({ verdict: { status: 'done', value: verdict } })
+    render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    openAllDetails()
+    const expander = screen.getByRole('button', { name: /show all 7/i })
+    await user.click(expander)
+    // All items now visible
+    expect(screen.getByText('item 6')).toBeInTheDocument()
+    expect(screen.getByText('item 7')).toBeInTheDocument()
+    // Button now says "Show less"
+    expect(screen.getByRole('button', { name: /show less/i })).toBeInTheDocument()
+  })
+
+  it('does not show expander when 5 or fewer evidence items', () => {
+    const verdict: VerdictResult = {
+      level: 'behavior-preserved',
+      evidence: ['item 1', 'item 2', 'item 3'],
+      notAnalyzed: [],
+    }
+    const run = makeRun({ verdict: { status: 'done', value: verdict } })
+    render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    openAllDetails()
+    expect(screen.queryByRole('button', { name: /show all/i })).not.toBeInTheDocument()
   })
 })

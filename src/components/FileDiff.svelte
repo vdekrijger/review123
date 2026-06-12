@@ -16,6 +16,8 @@
     drafts?: Draft[]
     /** Existing PR comments for this file */
     comments?: PrComment[]
+    /** Set of comment databaseIds that belong to resolved review threads */
+    resolvedCommentIds?: Set<number>
     /** Called when the user saves a comment at a given line */
     onAddDraft?: (line: number, side: 'LEFT' | 'RIGHT', body: string) => void
     /** Called when the user deletes a comment at a given line */
@@ -34,7 +36,7 @@
     contents?: { before: string | null; after: string | null }
   }
 
-  let { file, mode, drafts = [], comments = [], onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents }: Props = $props()
+  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents }: Props = $props()
 
   // Group existing comments by line (null-line comments go under a null key)
   const commentsByLine = $derived.by(() => {
@@ -47,6 +49,26 @@
     }
     return map
   })
+
+  /**
+   * Returns the root (top-level) comment of a thread group.
+   * The root is the first comment with inReplyTo === null; falls back to the
+   * first comment in the array if all are replies (orphan scenario).
+   */
+  function rootComment(group: PrComment[]): PrComment {
+    return group.find((c) => c.inReplyTo === null) ?? group[0]
+  }
+
+  /** Whether a thread group is resolved (root comment id in resolvedCommentIds) */
+  function isResolved(group: PrComment[]): boolean {
+    return resolvedCommentIds.has(rootComment(group).id)
+  }
+
+  /** Truncates body to ~60 chars for the resolved summary line */
+  function truncateBody(body: string, maxLen = 60): string {
+    const oneLine = body.replace(/\s+/g, ' ').trim()
+    return oneLine.length > maxLen ? oneLine.slice(0, maxLen) + '…' : oneLine
+  }
 
   // Ordered line keys (non-null first, sorted numerically; null last)
   const lineKeys = $derived.by(() => {
@@ -122,16 +144,37 @@
     return { oldFile, newFile }
   })
 
+  // ---- Flash-highlight state for newly saved annotation entries (Fix-B) ----
+  // Set of "line|side" strings that should flash after widget save
+  let flashKeys = $state<Set<string>>(new Set())
+
+  function addFlash(line: number, side: 'LEFT' | 'RIGHT') {
+    const key = `${line}|${side}`
+    flashKeys = new Set([...flashKeys, key])
+    // Remove flash class after animation completes (1.5s)
+    setTimeout(() => {
+      flashKeys = new Set([...flashKeys].filter(k => k !== key))
+    }, 1600)
+  }
+
   // ---- Helpers for DraftThread handlers ----------------------------------
 
   function handleWidgetSave(line: number, side: SplitSide, body: string) {
     const sideStr = splitSideToSide(side)
     onAddDraft?.(line, sideStr, body)
-    openWidget = null
+    // Fix-B: DO NOT close the widget — stay open showing the saved draft in read view.
+    // The widget will re-render with existingDraft set (since drafts prop updates).
+    // onClose is NOT called here; only called on explicit cancel/delete.
+    addFlash(line, sideStr)
   }
 
-  function handleWidgetCancel() {
-    openWidget = null
+  function handleWidgetCancel(hasDraft: boolean, onClose: () => void) {
+    // Fix-B: only close if there is no draft saved for this line
+    if (!hasDraft) {
+      onClose()
+      openWidget = null
+    }
+    // If there's a draft, cancel means "go back to read view" (handled inside DraftThread)
   }
 
   function handleExtendSave(line: number, side: SplitSide, body: string) {
@@ -196,16 +239,17 @@
           line={lineNumber}
           side={splitSideToSide(side)}
           onsave={(body) => {
+            // Fix-B: do NOT call onClose here — widget stays open showing saved draft
             handleWidgetSave(lineNumber, side, body)
-            onClose()
           }}
           ondelete={() => {
             handleExtendDelete(lineNumber, side)
             onClose()
+            openWidget = null
           }}
           oncancel={() => {
-            handleWidgetCancel()
-            onClose()
+            // Fix-B: only close widget if no draft saved for this line
+            handleWidgetCancel(existingDraft !== undefined, onClose)
           }}
         />
       {/snippet}
@@ -229,16 +273,19 @@
          limitation), so we render saved drafts here as a reliable fallback. -->
     {#if drafts.length > 0}
       <div class="draft-annotations" aria-label="Draft comments on this file">
-        {#each drafts as draft (draft.line + '|' + draft.side)}
-          <DraftThread
-            {draft}
-            path={file.filename}
-            line={draft.line}
-            side={draft.side}
-            onsave={(body) => handleExtendSave(draft.line, sideToSplitSide(draft.side), body)}
-            ondelete={() => handleExtendDelete(draft.line, sideToSplitSide(draft.side))}
-            oncancel={() => {}}
-          />
+        {#each drafts as draft (draft.line + '|' + draft.side + '|' + (draft.n ?? 0))}
+          {@const flashKey = `${draft.line}|${draft.side}`}
+          <div class="annotation-entry" class:flash={flashKeys.has(flashKey)}>
+            <DraftThread
+              {draft}
+              path={file.filename}
+              line={draft.line}
+              side={draft.side}
+              onsave={(body) => handleExtendSave(draft.line, sideToSplitSide(draft.side), body)}
+              ondelete={() => handleExtendDelete(draft.line, sideToSplitSide(draft.side))}
+              oncancel={() => {}}
+            />
+          </div>
         {/each}
       </div>
     {/if}
@@ -246,11 +293,24 @@
     {#if comments.length > 0}
       <div class="existing-comments" aria-label="Existing review comments">
         {#each lineKeys as lineKey (lineKey)}
+          {@const group = commentsByLine.get(lineKey)!}
+          {@const root = rootComment(group)}
           <div class="existing-line-group">
             <div class="existing-line-label">
-              {lineKey !== null ? `Line ${lineKey}` : 'General'} — {commentsByLine.get(lineKey)!.length} comment{commentsByLine.get(lineKey)!.length === 1 ? '' : 's'}
+              {lineKey !== null ? `Line ${lineKey}` : 'General'} — {group.length} comment{group.length === 1 ? '' : 's'}
             </div>
-            <CommentThread comments={commentsByLine.get(lineKey)!} />
+            {#if isResolved(group)}
+              <details class="resolved-thread">
+                <summary class="resolved-summary">
+                  <span class="resolved-check" aria-hidden="true">✓</span>
+                  <span class="resolved-label">Resolved</span>
+                  <span class="resolved-snippet">{root.author}: {truncateBody(root.body)}</span>
+                </summary>
+                <CommentThread comments={group} />
+              </details>
+            {:else}
+              <CommentThread comments={group} />
+            {/if}
           </div>
         {/each}
       </div>
@@ -260,11 +320,11 @@
 </article>
 
 <style>
-  .file-diff { border: 1px solid #8884; border-radius: 6px; margin-bottom: 1rem; overflow: hidden; }
-  header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: #8881; }
-  header code { font-family: var(--font-mono); }
+  .file-diff { border: 1px solid var(--hairline); border-radius: 6px; margin-bottom: 1rem; overflow: hidden; }
+  header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: var(--surface-raised); }
+  header code { font-family: var(--font-mono); font-size: 0.8125rem; }
   header.clickable { cursor: pointer; }
-  header.clickable:hover { background: #8882; }
+  header.clickable:hover { background: color-mix(in srgb, var(--hairline) 30%, var(--surface-raised)); }
   .header-right { display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0; }
   .note { padding: 0.8rem; opacity: 0.7; }
   .viewed-label {
@@ -281,9 +341,9 @@
     font-size: 0.75rem;
     padding: 0.15rem 0.4rem;
     border-radius: 3px;
-    background: #9a67000a;
-    color: #9a6700;
-    border: 1px solid #9a670033;
+    background: var(--legend-changed-bg);
+    color: var(--legend-changed-color);
+    border: 1px solid var(--legend-changed-border);
     white-space: nowrap;
   }
   .is-collapsed { opacity: 0.85; }
@@ -293,11 +353,23 @@
   :global(.new-diff-table-wrapper) {
     font-family: var(--font-mono) !important;
   }
-  .draft-annotations { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.5rem; border-top: 1px solid #f0b44444; }
+  .draft-annotations { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.5rem; border-top: 1px solid var(--border-draft); }
+
+  /* Fix-B: flash-highlight animation on the annotation entry after widget save */
+  @keyframes flash-new-draft {
+    0%   { background: var(--legend-changed-bg); }
+    80%  { background: var(--legend-changed-bg); }
+    100% { background: transparent; }
+  }
+
+  .annotation-entry.flash {
+    animation: flash-new-draft 1.5s ease-out forwards;
+    border-radius: 4px;
+  }
 
   .existing-comments {
-    border-top: 1px solid #4a90d044;
-    background: #1a3050 08;
+    border-top: 1px solid var(--border-banner);
+    background: var(--surface-banner);
     padding: 0.5rem;
     display: flex;
     flex-direction: column;
@@ -315,7 +387,56 @@
     opacity: 0.6;
     font-family: var(--font-mono);
     padding: 0.1rem 0.25rem;
-    border-left: 2px solid #4a90d077;
+    border-left: 2px solid var(--border-banner-accent);
     margin-bottom: 0.15rem;
+  }
+
+  /* Resolved thread — collapsed <details> */
+  .resolved-thread {
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .resolved-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.6rem;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    background: var(--surface-raised);
+    list-style: none;
+    user-select: none;
+  }
+
+  .resolved-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .resolved-check {
+    color: var(--accent);
+    font-size: 0.85rem;
+    flex-shrink: 0;
+  }
+
+  .resolved-label {
+    font-weight: 600;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .resolved-snippet {
+    opacity: 0.7;
+    font-size: 0.78rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Expanded content padding */
+  .resolved-thread[open] > :not(summary) {
+    padding: 0.4rem;
   }
 </style>
