@@ -150,6 +150,9 @@
   function toggleTree(): void {
     treeOpen = !treeOpen
     setTreeOpen(treeOpen)
+    if (treeOpen) {
+      track('drawer_opened')
+    }
   }
 
   function closeTree(): void {

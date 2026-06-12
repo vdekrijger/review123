@@ -322,4 +322,6 @@ PostHog receives only coarse, allowlisted event metadata (see [`src/lib/analytic
 
 **Drafts & privacy:** Comment drafts are stored entirely in your browser's IndexedDB — they never leave your device until you click "Submit review". At that point the draft bodies are sent directly to GitHub's API as part of the review submission payload; they are not sent to any other server, and they are not included in PostHog analytics events.
 
+**Engagement events:** Section-expand, file-expand, drawer, rail, and step events carry only stable section identifiers (e.g. `summary`, `diagrams`) and surface/origin labels — never file paths, diff content, PR titles, or any user-generated text.
+
 <!-- OAuth enabled: requires VITE_GITHUB_CLIENT_ID at build time -->

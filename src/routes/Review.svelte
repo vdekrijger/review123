@@ -32,6 +32,7 @@
   import { migrateLegacyVisits, migrateLegacyViewed } from '../lib/provider/storeKeys'
   import { providerFor } from '../lib/provider/registry'
   import type { PrRefX } from '../lib/provider/types'
+  import { track } from '../lib/analytics/analytics'
 
   const RETURN_KEY = 'review123:returnTo'
 
@@ -80,6 +81,11 @@
   )
   let mode = $state<DiffMode>(getSettings().diffMode)
   function setMode(m: DiffMode) { mode = m; setDiffMode(m) }
+
+  // Track step changes — fires on initial render and whenever step changes.
+  $effect(() => {
+    track('step_viewed', { step: String(step) })
+  })
 
   /** Clamp n to 1..3 and navigate to the corresponding step URL */
   function goStep(n: number) {
