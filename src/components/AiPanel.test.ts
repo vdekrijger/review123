@@ -63,3 +63,45 @@ describe('AiPanel — no-key hint names the ACTIVE provider', () => {
     expect(sessionStorage.getItem('review123:settingsReturnTo')).not.toBeNull()
   })
 })
+
+describe('AiPanel — pending skeleton from the FIRST render (no blank gap)', () => {
+  it('renders the skeleton when status is idle (run not yet signalled loading)', () => {
+    const { container } = render(AiPanel, {
+      props: { title: 'Summary', state: { status: 'idle' as const }, onretry: vi.fn() },
+    })
+    expect(container.querySelector('.ai-panel-loading .skeleton-block')).not.toBeNull()
+    // No spinner — content-shaped skeleton only
+    expect(container.querySelector('.spinner')).toBeNull()
+  })
+
+  it('renders the skeleton when status is loading', () => {
+    const { container } = render(AiPanel, {
+      props: { title: 'Summary', state: { status: 'loading' as const }, onretry: vi.fn() },
+    })
+    expect(container.querySelector('.ai-panel-loading .skeleton-block')).not.toBeNull()
+  })
+
+  it('respects skeletonVariant="block" (diagrams shape)', () => {
+    const { container } = render(AiPanel, {
+      props: {
+        title: 'Diagrams',
+        state: { status: 'idle' as const },
+        onretry: vi.fn(),
+        skeletonVariant: 'block' as const,
+      },
+    })
+    expect(container.querySelector('.ai-panel-loading .skeleton-rect')).not.toBeNull()
+  })
+
+  it('respects skeletonVariant="cards" (test coverage / alternatives shape)', () => {
+    const { container } = render(AiPanel, {
+      props: {
+        title: 'Test coverage (AI-inferred)',
+        state: { status: 'loading' as const },
+        onretry: vi.fn(),
+        skeletonVariant: 'cards' as const,
+      },
+    })
+    expect(container.querySelectorAll('.ai-panel-loading .skeleton-card')).toHaveLength(2)
+  })
+})
