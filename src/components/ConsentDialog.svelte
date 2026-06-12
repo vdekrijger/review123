@@ -1,6 +1,15 @@
 <script lang="ts">
   let { repo, onresult }: { repo: string; onresult: (accepted: boolean) => void } = $props()
 
+  let dialogEl = $state<HTMLDialogElement | null>(null)
+
+  $effect(() => {
+    if (!dialogEl) return
+    if (!dialogEl.open) {
+      dialogEl.showModal()
+    }
+  })
+
   function accept() {
     onresult(true)
   }
@@ -8,21 +17,14 @@
   function decline() {
     onresult(false)
   }
-
-  function onkeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      decline()
-    }
-  }
 </script>
 
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <dialog
-  open
+  bind:this={dialogEl}
   aria-label="Allow AI analysis"
   aria-modal="true"
-  onkeydown={onkeydown}
+  oncancel={(e) => { e.preventDefault(); decline() }}
+  onclick={(e) => { if (e.target === e.currentTarget) decline() }}
 >
   <h2>Allow AI analysis of private repository?</h2>
   <p>
@@ -40,6 +42,11 @@
 
 <style>
   /* dialog base styles come from app.css */
+
+  dialog::backdrop {
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(2px);
+  }
 
   .actions {
     display: flex;

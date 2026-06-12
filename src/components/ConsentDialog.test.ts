@@ -25,11 +25,12 @@ describe('ConsentDialog', () => {
     expect(onresult).toHaveBeenCalledWith(false)
   })
 
-  it('Esc key calls onresult(false)', async () => {
+  it('Esc key (native cancel event) calls onresult(false)', async () => {
     const onresult = vi.fn()
     render(ConsentDialog, { props: { repo: 'owner/private', onresult } })
     const dialog = screen.getByRole('dialog')
-    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    // Real modal dialogs fire a 'cancel' event (not keydown) when Esc is pressed
+    dialog.dispatchEvent(new Event('cancel', { bubbles: false, cancelable: true }))
     expect(onresult).toHaveBeenCalledWith(false)
   })
 

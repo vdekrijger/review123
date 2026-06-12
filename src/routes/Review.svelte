@@ -505,16 +505,6 @@
   {/if}
 </section>
 
-<!-- Progress bar — shown once the PR is loaded, when showProgress is enabled -->
-{#if load.state.status === 'ready' && showProgress}
-  <ReviewProgress
-    viewedCount={viewedStore.count}
-    fileCount={load.state.files.length}
-    draftCount={draftStore?.count ?? 0}
-    {step}
-  />
-{/if}
-
 <!-- EC-07i: Sticky bottom bar — shown once the PR is loaded -->
 {#if load.state.status === 'ready'}
   <div class="draft-bar">
@@ -525,13 +515,22 @@
             Drafts won't survive closing this tab (browser storage unavailable)
           </span>
         {/if}
-        <span class="draft-count">
+        <span class="draft-count text-muted">
           {draftStore?.count ?? 0} comment{(draftStore?.count ?? 0) === 1 ? '' : 's'} drafted{#if viewedStore.count > 0}&nbsp;&middot; viewed {viewedStore.count}/{load.state.files.length}{/if}
         </span>
       </span>
+      {#if showProgress}
+        <ReviewProgress
+          viewedCount={viewedStore.count}
+          fileCount={load.state.files.length}
+          draftCount={draftStore?.count ?? 0}
+          {step}
+          inline
+        />
+      {/if}
       <div class="step-nav">
         <button
-          class="step-btn"
+          class="btn"
           disabled={!canPrev}
           onclick={() => goStep(step - 1)}
           aria-label="Previous step"
@@ -539,7 +538,7 @@
           ← Prev
         </button>
         <button
-          class="step-btn"
+          class="btn"
           disabled={!canNext}
           onclick={() => goStep(step + 1)}
           aria-label="Next step"
@@ -663,8 +662,8 @@
     left: 0;
     right: 0;
     z-index: 100;
-    background: var(--surface-raised, #1a1a2e);
-    border-top: 1px solid #4444;
+    background: var(--surface-raised);
+    border-top: 1px solid var(--hairline);
     padding: 0.5rem 1rem;
   }
 
@@ -674,21 +673,20 @@
     display: flex;
     align-items: center;
     gap: 1rem;
-    justify-content: space-between;
-    flex-wrap: wrap;
   }
 
   .draft-status {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    flex-wrap: wrap;
+    flex-shrink: 0;
   }
 
   .draft-count {
-    font-size: 0.9rem;
-    font-weight: 500;
+    font-size: 0.85rem;
+    font-weight: 400;
     white-space: nowrap;
+    color: var(--text-muted);
   }
 
   .storage-warning {
@@ -701,24 +699,6 @@
     display: flex;
     gap: 0.5rem;
     align-items: center;
-  }
-
-  .step-btn {
-    background: #4444;
-    border: 1px solid #6666;
-    color: inherit;
-    border-radius: 4px;
-    padding: 0.25rem 0.75rem;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-
-  .step-btn:hover:not(:disabled) {
-    background: #6666;
-  }
-
-  .step-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+    flex-shrink: 0;
   }
 </style>

@@ -31,6 +31,7 @@ export interface Settings {
   theme: Theme
   uiFont: UiFont
   showProgress: boolean
+  treeOpen: boolean
 }
 
 const DEFAULTS: Settings = {
@@ -42,6 +43,7 @@ const DEFAULTS: Settings = {
   theme: 'auto',
   uiFont: 'plex',
   showProgress: true,
+  treeOpen: false,
 }
 
 function coerceGithubAuth(raw: unknown): GithubAuth | null {
@@ -86,6 +88,9 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const showProgress = obj['showProgress']
   if (typeof showProgress === 'boolean') result.showProgress = showProgress
+
+  const treeOpen = obj['treeOpen']
+  if (typeof treeOpen === 'boolean') result.treeOpen = treeOpen
 
   // Prefer explicit githubAuth; fall back to migrating legacy githubPat string
   if ('githubAuth' in obj) {
@@ -157,3 +162,4 @@ export const setRailCollapsed = (collapsed: boolean) => save({ railCollapsed: co
 export const setTheme = (theme: Theme) => save({ theme })
 export const setUiFont = (font: UiFont) => save({ uiFont: font })
 export const setShowProgress = (show: boolean) => save({ showProgress: show })
+export const setTreeOpen = (open: boolean) => save({ treeOpen: open })
