@@ -437,7 +437,7 @@
 
 <section class="review" data-rail-collapsed={String(railCollapsed)}>
   {#if load.state.status === 'loading'}
-    <div class="pr-loading" role="status">
+    <div class="pr-loading" aria-busy="true">
       <Skeleton header lines={1} />
       <div class="skeleton-stepper-ghost" aria-hidden="true">
         <span class="skeleton-step-btn"></span>
