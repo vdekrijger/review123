@@ -1,6 +1,7 @@
 <script lang="ts">
   import FileDiff from './FileDiff.svelte'
   import type { SkillFinding } from './FileDiff.svelte'
+  import SkillFindingCard from './SkillFindingCard.svelte'
   import FileTree from './FileTree.svelte'
   import type { PrFile } from '../lib/github/types'
   import type { DiffMode } from '../lib/settings/settings'
@@ -303,11 +304,8 @@
       body: finding.body,
     })
     track('comment_drafted')
+    // "Added as draft" is session state — shown as a labeled state chip on the card
     addedDraftKeys = new Set([...addedDraftKeys, finding.key])
-    // Reset the "Added" confirmation state after 2s
-    setTimeout(() => {
-      addedDraftKeys = new Set([...addedDraftKeys].filter(k => k !== finding.key))
-    }, 2000)
   }
 
   // Show the run button when: skills exist + key present + runSkillReviewsFn provided
@@ -453,25 +451,17 @@
           {#if fileLevelSuggestionsByPath.has(file.filename)}
             {#each (fileLevelSuggestionsByPath.get(file.filename) ?? []) as suggestion (suggestion.key)}
               {#if !dismissedKeys.has(suggestion.key)}
-                <div class="skill-finding severity-{suggestion.severity}">
-                  <div class="skill-finding-header">
-                    <span class="skill-persona-label">{suggestion.skillName}</span>
-                    <span class="skill-severity-chip severity-chip-{suggestion.severity}">{suggestion.severity}</span>
-                  </div>
-                  <p class="skill-finding-body">{suggestion.body}</p>
-                  <div class="skill-finding-actions">
-                    <button
-                      class="skill-add-draft-btn"
-                      class:added={addedDraftKeys.has(suggestion.key)}
-                      onclick={() => addFindingAsDraft(suggestion)}
-                      disabled={addedDraftKeys.has(suggestion.key)}
-                      aria-label={addedDraftKeys.has(suggestion.key) ? 'Added to drafts' : 'Add as draft comment'}
-                    >{addedDraftKeys.has(suggestion.key) ? '✓ Added' : 'Add as draft'}</button>
-                    <button
-                      class="skill-dismiss-btn"
-                      onclick={() => dismissFinding(suggestion.key)}
-                    >Dismiss</button>
-                  </div>
+                <div class="file-level-finding">
+                <SkillFindingCard
+                  skillName={suggestion.skillName}
+                  severity={suggestion.severity}
+                  body={suggestion.body}
+                  line={suggestion.line}
+                  anchored={false}
+                  added={addedDraftKeys.has(suggestion.key)}
+                  onAdd={() => addFindingAsDraft(suggestion)}
+                  onDismiss={() => dismissFinding(suggestion.key)}
+                />
                 </div>
               {/if}
             {/each}
@@ -901,118 +891,8 @@
     padding: 0.15rem 0.6rem;
   }
 
-  /* ---- Skill finding annotations (dashed accent border) ---- */
-  .skill-finding {
-    border-radius: 4px;
-    padding: 0.5rem 0.75rem;
+  /* File-level (null-line) finding cards stack above the FileDiff */
+  .file-level-finding {
     margin-bottom: 0.4rem;
-    font-size: 0.85rem;
-    border-style: dashed;
-    border-width: 1px;
-  }
-
-  .skill-finding.severity-high {
-    border-color: var(--accent);
-    background: var(--legend-removed-bg);
-  }
-
-  .skill-finding.severity-medium {
-    border-color: var(--accent);
-    background: var(--legend-changed-bg);
-  }
-
-  .skill-finding.severity-low {
-    border-color: var(--border-subtle);
-    background: var(--surface-raised);
-  }
-
-  .skill-finding-header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.3rem;
-  }
-
-  .skill-persona-label {
-    font-size: 0.75rem;
-    font-weight: 600;
-    opacity: 0.75;
-    flex: 1;
-  }
-
-  .skill-severity-chip {
-    font-size: 0.7rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 0.1rem 0.45rem;
-    border-radius: 999px;
-  }
-
-  .severity-chip-high {
-    background: var(--legend-removed-bg);
-    color: var(--legend-removed-color);
-    border: 1px solid var(--legend-removed-border);
-  }
-
-  .severity-chip-medium {
-    background: var(--legend-changed-bg);
-    color: var(--legend-changed-color);
-    border: 1px solid var(--legend-changed-border);
-  }
-
-  .severity-chip-low {
-    background: var(--surface-raised);
-    color: var(--text-muted);
-    border: 1px solid var(--border-subtle);
-  }
-
-  .skill-finding-body {
-    margin: 0 0 0.4rem;
-    line-height: 1.4;
-  }
-
-  .skill-finding-actions {
-    display: flex;
-    gap: 0.4rem;
-  }
-
-  .skill-add-draft-btn {
-    font-size: 0.78rem;
-    padding: 0.18rem 0.55rem;
-    border-radius: 4px;
-    border: 1px solid var(--accent);
-    background: transparent;
-    color: var(--accent);
-    cursor: pointer;
-    font-weight: 500;
-  }
-
-  .skill-add-draft-btn:hover:not(:disabled) {
-    background: var(--legend-added-bg);
-  }
-
-  .skill-add-draft-btn.added {
-    background: var(--legend-added-bg);
-    border-color: var(--legend-added-border, var(--accent));
-    color: var(--legend-added-color, var(--accent));
-    cursor: default;
-    opacity: 0.85;
-  }
-
-  .skill-dismiss-btn {
-    font-size: 0.78rem;
-    padding: 0.18rem 0.55rem;
-    border-radius: 4px;
-    border: 1px solid var(--border-subtle);
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    opacity: 0.7;
-  }
-
-  .skill-dismiss-btn:hover {
-    opacity: 1;
-    background: var(--surface-raised);
   }
 </style>
