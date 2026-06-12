@@ -69,7 +69,12 @@
 
   // Derive signed-in status reactively from authState so the UI flips live
   // when the user completes OAuth (EC-REACT: no reload required).
-  const isSignedIn = $derived(authState.auth !== null)
+  // For non-GitHub providers, use the provider's own authState().configured check.
+  const isSignedIn = $derived(
+    provider && provider.id !== 'github'
+      ? provider.authState().configured
+      : authState.auth !== null
+  )
 
   const clientId = import.meta.env.VITE_GITHUB_CLIENT_ID as string | undefined
 

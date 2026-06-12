@@ -11,7 +11,6 @@
   import VerdictStep from '../components/VerdictStep.svelte'
   import { createAiRun } from '../lib/ai/run.svelte'
   import { packContext, fetchContents } from '../lib/context/pack'
-  import { getCiSummary } from '../lib/github/checks'
   import { LLM_CONFIG } from '../lib/llm/config'
   import { parseReadingOrder } from '../lib/ai/tasks'
   import ConsentDialog from '../components/ConsentDialog.svelte'
@@ -21,18 +20,16 @@
   import { addToHistory } from '../lib/history/history'
   import { createViewedStore } from '../lib/viewed/viewed.svelte'
   import { recordVisit, lastVisit } from '../lib/visits/visits'
-  import { compareCommits } from '../lib/github/compare'
-  import { getPrCommits } from '../lib/github/commits'
   import { GithubApiError } from '../lib/github/types'
   import type { CiSummary } from '../lib/github/checks'
   import type { AttentionResult } from '../lib/ai/schemas'
   import type { PrFile } from '../lib/github/types'
-  import type { PrCommit } from '../lib/github/commits'
-  import { getPrComments } from '../lib/github/comments'
   import type { PrComment } from '../lib/github/comments'
-  import { getResolvedCommentIds } from '../lib/github/threads'
+  import type { PrCommit } from '../lib/github/commits'
   import { slugify } from '../lib/slug'
   import { migrateLegacyVisits, migrateLegacyViewed } from '../lib/provider/storeKeys'
+  import { providerFor } from '../lib/provider/registry'
+  import type { PrRefX } from '../lib/provider/types'
 
   const RETURN_KEY = 'review123:returnTo'
 
@@ -47,6 +44,15 @@
   // $derived so Svelte tracks it reactively (avoids state_referenced_locally warning).
   // In practice this never changes within a mount because App.svelte uses {#key} with provider.
   const providerId = $derived(providerProp ?? 'github')
+  // Derive the provider instance so provider-specific API methods can be used.
+  const activeProvider = $derived(providerFor(providerId))
+  // PrRefX for provider-aware API calls
+  const prRefX = $derived<PrRefX>({
+    provider: providerId as PrRefX['provider'],
+    owner,
+    repo,
+    number,
+  })
 
   // Run silent key migration once on mount — copies legacy "owner/repo#n" keys to
   // "github:owner/repo#n" in localStorage so old visit/viewed data is not lost.
@@ -55,7 +61,13 @@
   // Relies on the {#key} remount in App.svelte: props never change within a
   // mount, so createPrLoad is called exactly once per PR navigation. Removing
   // the key would cause duplicate fetches + stale draft store.
-  const load = $derived.by(() => createPrLoad({ owner, repo, number }))
+  const load = $derived.by(() => createPrLoad(
+    { owner, repo, number },
+    {
+      getPrMeta: (ref) => activeProvider.getPrMeta({ ...ref, provider: providerId as PrRefX['provider'] }),
+      getPrFiles: (ref) => activeProvider.getPrFiles({ ...ref, provider: providerId as PrRefX['provider'] }),
+    },
+  ))
   // When App.svelte passes step={route.step} we use it directly. When Review is
   // rendered without a parent (e.g. integration tests), fall back to router.route
   // so navigate() calls are reflected here reactively.
@@ -145,7 +157,7 @@
   $effect(() => {
     if (step === 2 && load.state.status === 'ready' && !commitsInitializedForStep2) {
       commitsInitializedForStep2 = true
-      getPrCommits({ owner, repo, number }).then(
+      activeProvider.getCommits(prRefX).then(
         (commits) => { prCommits = commits },
         () => { pickerHidden = true },
       )
@@ -160,7 +172,7 @@
     compareSource = 'banner'
     compareError = null
     try {
-      const files = await compareCommits({ owner, repo }, prevVisitSha, load.state.meta.headSha)
+      const files = await activeProvider.compareCommits({ owner, repo }, prevVisitSha, load.state.meta.headSha)
       compareMode = { files, label: 'since your last visit' }
       compareStatus = 'idle'
       // Push a flagged history entry so browser back exits compare instead of leaving the PR
@@ -185,7 +197,7 @@
     const fromShort = from === load.state.meta.baseSha ? 'base' : from.slice(0, 7)
     const toShort = to.slice(0, 7)
     try {
-      const files = await compareCommits({ owner, repo }, from, to)
+      const files = await activeProvider.compareCommits({ owner, repo }, from, to)
       compareMode = { files, label: `${fromShort}…${toShort}` }
       pickerActive = { from, to }
       compareStatus = 'idle'
@@ -322,9 +334,9 @@
 
   // CI fetch — memoized
   let ciPromise: Promise<CiSummary | null> | null = null
-  function getCi(ref: { owner: string; repo: string; number: number }, headSha: string) {
+  function getCi(_ref: { owner: string; repo: string; number: number }, headSha: string) {
     if (!ciPromise) {
-      ciPromise = getCiSummary(ref, headSha).catch(() => null)
+      ciPromise = activeProvider.getCiSummary(prRefX, headSha).catch(() => null)
     }
     return ciPromise
   }
@@ -404,8 +416,8 @@
     if (load.state.status === 'ready' && !commentsInitialized) {
       commentsInitialized = true
       Promise.all([
-        getPrComments({ owner, repo, number }),
-        getResolvedCommentIds({ owner, repo, number }),
+        activeProvider.getComments(prRefX),
+        activeProvider.getResolvedCommentIds(prRefX),
       ]).then(
         ([comments, resolved]) => {
           prComments = comments
@@ -653,6 +665,7 @@
         prUrl={`https://github.com/${owner}/${repo}/pull/${number}`}
         coachFn={aiRun ? aiRun.coach : undefined}
         {prComments}
+        provider={activeProvider}
       />
     {/if}
   {/if}
