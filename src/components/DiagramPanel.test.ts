@@ -6,7 +6,7 @@
  * The initialize spy lets us assert that securityLevel:'strict' is passed
  * (EC-14j).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import DiagramPanel from './DiagramPanel.svelte'
@@ -33,6 +33,13 @@ vi.mock('../lib/diagram/mermaidInit', () => ({
     mockInitialize({ securityLevel: 'strict', startOnLoad: false })
     return { initialize: mockInitialize, render: mockRender }
   },
+}))
+
+// appearance module — mock so resolvedTheme can be controlled per-test
+const mockResolvedTheme = vi.fn<() => 'dark' | 'light'>().mockReturnValue('dark')
+vi.mock('../lib/settings/appearance.svelte', () => ({
+  resolvedTheme: () => mockResolvedTheme(),
+  applyAppearance: vi.fn(),
 }))
 
 // ---------------------------------------------------------------------------
@@ -381,6 +388,52 @@ describe('D1 — change-map rendering', () => {
     await user.click(changeMapBtn)
 
     expect(screen.getByRole('dialog', { name: /diagram full screen/i })).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Palette — DiagramPanel passes resolvedTheme() palette to graphToMermaid
+// ---------------------------------------------------------------------------
+
+describe('DiagramPanel — palette passed to graphToMermaid', () => {
+  let spy: MockInstance
+
+  beforeEach(async () => {
+    const mermaidMod = await import('../lib/diagram/mermaid')
+    // Spy and still call through (wrap the real function)
+    spy = vi.spyOn(mermaidMod, 'graphToMermaid')
+  })
+
+  afterEach(() => {
+    spy?.mockRestore()
+    mockResolvedTheme.mockReturnValue('dark')
+  })
+
+  it('passes palette:"light" to graphToMermaid when resolvedTheme returns light', async () => {
+    mockResolvedTheme.mockReturnValue('light')
+
+    const result = makeResult({ withChangeMap: true })
+    render(DiagramPanel, { props: { result, panelState: 'idle' } })
+
+    await waitFor(() => expect(spy).toHaveBeenCalled())
+
+    // The call for the changeMap should include palette: 'light'
+    const changeMapCall = spy.mock.calls.find(([, , opts]) => opts?.palette !== undefined)
+    expect(changeMapCall).toBeDefined()
+    expect(changeMapCall![2]).toEqual({ palette: 'light' })
+  })
+
+  it('passes palette:"dark" to graphToMermaid when resolvedTheme returns dark', async () => {
+    mockResolvedTheme.mockReturnValue('dark')
+
+    const result = makeResult({ withChangeMap: true })
+    render(DiagramPanel, { props: { result, panelState: 'idle' } })
+
+    await waitFor(() => expect(spy).toHaveBeenCalled())
+
+    const changeMapCall = spy.mock.calls.find(([, , opts]) => opts?.palette !== undefined)
+    expect(changeMapCall).toBeDefined()
+    expect(changeMapCall![2]).toEqual({ palette: 'dark' })
   })
 })
 

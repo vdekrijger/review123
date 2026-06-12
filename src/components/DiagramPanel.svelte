@@ -24,6 +24,7 @@
   import { graphToMermaid } from '../lib/diagram/mermaid'
   import { getMermaid } from '../lib/diagram/mermaidInit'
   import type { GraphResult } from '../lib/diagram/types'
+  import { resolvedTheme } from '../lib/settings/appearance.svelte'
 
   interface Props {
     result: GraphResult | null
@@ -69,7 +70,7 @@
     if (!result?.changeMap || !changeMapContainer) return
 
     const { changeMap, kind } = result
-    const changeMapMermaid = graphToMermaid(changeMap, kind).mermaid
+    const changeMapMermaid = graphToMermaid(changeMap, kind, { palette: resolvedTheme() }).mermaid
 
     let cancelled = false
 
@@ -406,27 +407,27 @@
   }
 
   .legend-added {
-    background: #1a4731;
-    border-color: #2ea44f;
-    color: #7ee2a8;
+    background: var(--legend-added-bg, #1a4731);
+    border-color: var(--legend-added-border, #2ea44f);
+    color: var(--legend-added-color, #7ee2a8);
   }
 
   .legend-removed {
-    background: #4a1a1a;
-    border-color: #d73a49;
-    color: #f0a3a3;
+    background: var(--legend-removed-bg, #4a1a1a);
+    border-color: var(--legend-removed-border, #d73a49);
+    color: var(--legend-removed-color, #f0a3a3);
   }
 
   .legend-changed {
-    background: #4a3a10;
-    border-color: #d4a72c;
-    color: #ffd86e;
+    background: var(--legend-changed-bg, #4a3a10);
+    border-color: var(--legend-changed-border, #d4a72c);
+    color: var(--legend-changed-color, #ffd86e);
   }
 
   .legend-unchanged {
-    background: #2a2a2e;
-    border-color: #555;
-    color: #aaa;
+    background: var(--legend-unchanged-bg, #2a2a2e);
+    border-color: var(--legend-unchanged-border, #555);
+    color: var(--legend-unchanged-color, #aaa);
   }
 
   .toggle-btn {

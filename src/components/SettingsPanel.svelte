@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { getSettings, saveTokens } from '../lib/settings/settings'
+  import { getSettings, saveTokens, setTheme, setUiFont, type Theme, type UiFont } from '../lib/settings/settings'
+  import { applyAppearance } from '../lib/settings/appearance.svelte'
   import { track } from '../lib/analytics/analytics'
   import { authState } from '../lib/auth/authState.svelte'
 
@@ -8,6 +9,8 @@
   let pat = $state(current.githubPat ?? '')
   let deepseek = $state(current.deepseekKey ?? '')
   let error = $state<string | null>(null)
+  let theme = $state<Theme>(current.theme)
+  let uiFont = $state<UiFont>(current.uiFont)
 
   // authStatusLine is derived from the reactive authState so it updates live
   // when the user saves a PAT or signs in/out via OAuth.
@@ -24,6 +27,18 @@
   // Advanced disclosure is open by default only when PAT is the active auth method,
   // so existing PAT users aren't confused by a closed section hiding their token.
   const advancedOpen = $derived(authState.auth?.method === 'pat')
+
+  function onThemeChange(value: Theme) {
+    theme = value
+    setTheme(value)
+    applyAppearance()
+  }
+
+  function onFontChange(value: UiFont) {
+    uiFont = value
+    setUiFont(value)
+    applyAppearance()
+  }
 
   function save() {
     try {
@@ -44,6 +59,42 @@
 
 <dialog open aria-label="Settings">
   <h2>Settings</h2>
+
+  <section aria-label="Appearance — applies immediately">
+    <p class="section-label">Appearance <span class="immediate-note">(applies immediately)</span></p>
+    <fieldset>
+      <legend>Theme</legend>
+      <label>
+        <input type="radio" name="theme" value="auto" checked={theme === 'auto'} onchange={() => onThemeChange('auto')} />
+        Auto
+      </label>
+      <label>
+        <input type="radio" name="theme" value="light" checked={theme === 'light'} onchange={() => onThemeChange('light')} />
+        Light
+      </label>
+      <label>
+        <input type="radio" name="theme" value="dark" checked={theme === 'dark'} onchange={() => onThemeChange('dark')} />
+        Dark
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Font</legend>
+      <label>
+        <input type="radio" name="uiFont" value="system" checked={uiFont === 'system'} onchange={() => onFontChange('system')} />
+        System
+      </label>
+      <label>
+        <input type="radio" name="uiFont" value="humanist" checked={uiFont === 'humanist'} onchange={() => onFontChange('humanist')} />
+        Humanist
+      </label>
+      <label>
+        <input type="radio" name="uiFont" value="serif" checked={uiFont === 'serif'} onchange={() => onFontChange('serif')} />
+        Serif
+      </label>
+    </fieldset>
+  </section>
+
   <p class="auth-status">{authStatusLine}</p>
   <label>DeepSeek API key
     <input type="password" bind:value={deepseek} autocomplete="off" placeholder="sk-…" />
@@ -65,4 +116,44 @@
   details { margin: 0.5rem 0; }
   details summary { cursor: pointer; font-size: 0.9em; opacity: 0.8; }
   details label { display: block; margin-top: 0.5rem; }
+
+  section[aria-label^="Appearance"] {
+    margin-bottom: 1rem;
+  }
+
+  .section-label {
+    font-size: 0.9em;
+    font-weight: 600;
+    margin: 0 0 0.4rem;
+  }
+
+  .immediate-note {
+    font-weight: normal;
+    opacity: 0.7;
+    font-size: 0.85em;
+  }
+
+  fieldset {
+    border: 1px solid #8882;
+    border-radius: 4px;
+    padding: 0.4rem 0.75rem 0.5rem;
+    margin: 0 0 0.5rem;
+    display: flex;
+    gap: 1.25rem;
+    flex-wrap: wrap;
+  }
+
+  fieldset legend {
+    font-size: 0.85em;
+    opacity: 0.7;
+    padding: 0 0.25rem;
+  }
+
+  fieldset label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.9em;
+    cursor: pointer;
+  }
 </style>

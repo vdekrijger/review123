@@ -21,14 +21,22 @@ export interface MermaidResult {
 }
 
 /**
- * Mermaid classDef declarations for each NodeStatus.
+ * Mermaid classDef declarations for each NodeStatus, keyed by palette.
  * Emitted once (after the header) when any node or edge carries a status.
  */
-const CLASS_DEFS: Record<NodeStatus, string> = {
-  added:     'classDef added fill:#1a4731,stroke:#2ea44f,color:#7ee2a8',
-  removed:   'classDef removed fill:#4a1a1a,stroke:#d73a49,color:#f0a3a3,stroke-dasharray: 5 5',
-  changed:   'classDef changed fill:#4a3a10,stroke:#d4a72c,color:#ffd86e',
-  unchanged: 'classDef unchanged fill:#2a2a2e,stroke:#555,color:#aaa',
+const CLASS_DEFS: Record<'dark' | 'light', Record<NodeStatus, string>> = {
+  dark: {
+    added:     'classDef added fill:#1a4731,stroke:#2ea44f,color:#7ee2a8',
+    removed:   'classDef removed fill:#4a1a1a,stroke:#d73a49,color:#f0a3a3,stroke-dasharray: 5 5',
+    changed:   'classDef changed fill:#4a3a10,stroke:#d4a72c,color:#ffd86e',
+    unchanged: 'classDef unchanged fill:#2a2a2e,stroke:#555,color:#aaa',
+  },
+  light: {
+    added:     'classDef added fill:#dcffe4,stroke:#2ea44f,color:#1a7f37',
+    removed:   'classDef removed fill:#ffe5e5,stroke:#d73a49,color:#cb2431,stroke-dasharray: 5 5',
+    changed:   'classDef changed fill:#fff5cc,stroke:#d4a72c,color:#9a6700',
+    unchanged: 'classDef unchanged fill:#f0f0f2,stroke:#bbb,color:#666',
+  },
 }
 
 const STATUS_ORDER: NodeStatus[] = ['added', 'removed', 'changed', 'unchanged']
@@ -56,7 +64,12 @@ const STATUS_ORDER: NodeStatus[] = ['added', 'removed', 'changed', 'unchanged']
  * @param _kind  The diagram kind ('flow' | 'module') — currently both use
  *               flowchart TD; reserved for future layout variation.
  */
-export function graphToMermaid(g: Graph, _kind: 'flow' | 'module' = 'flow'): MermaidResult {
+export function graphToMermaid(
+  g: Graph,
+  _kind: 'flow' | 'module' = 'flow',
+  options?: { palette?: 'dark' | 'light' }
+): MermaidResult {
+  const palette = options?.palette ?? 'dark'
   if (g.nodes.length === 0) {
     return { mermaid: '', dropped: [] }
   }
@@ -87,9 +100,10 @@ export function graphToMermaid(g: Graph, _kind: 'flow' | 'module' = 'flow'): Mer
 
   // Emit classDef lines once, in deterministic order, when statuses are present
   if (hasAnyStatus) {
+    const defs = CLASS_DEFS[palette]
     for (const status of STATUS_ORDER) {
       if (usedStatuses.has(status)) {
-        lines.push(`    ${CLASS_DEFS[status]}`)
+        lines.push(`    ${defs[status]}`)
       }
     }
   }
