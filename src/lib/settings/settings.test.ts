@@ -3,6 +3,7 @@ import {
   getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens, saveGithubAuth,
   setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay, setGitlabToken,
   saveBitbucketAuth, setGitlabHost,
+  setOpenaiKey, setAnthropicKey, setGeminiKey, setAiProvider, setAiModel,
 } from './settings'
 
 describe('settings', () => {
@@ -12,6 +13,11 @@ describe('settings', () => {
     expect(getSettings()).toEqual({
       githubPat: null,
       deepseekKey: null,
+      aiProvider: 'deepseek',
+      aiModel: '',
+      openaiKey: null,
+      anthropicKey: null,
+      geminiKey: null,
       diffMode: 'unified',
       githubAuth: null,
       gitlabToken: null,
@@ -60,6 +66,11 @@ describe('settings', () => {
     expect(getSettings()).toEqual({
       githubPat: null,
       deepseekKey: null,
+      aiProvider: 'deepseek',
+      aiModel: '',
+      openaiKey: null,
+      anthropicKey: null,
+      geminiKey: null,
       diffMode: 'unified',
       githubAuth: null,
       gitlabToken: null,
@@ -463,6 +474,118 @@ describe('settings', () => {
     it('getSettings defaults include bitbucketAuth: null', () => {
       const s = getSettings()
       expect(s).toHaveProperty('bitbucketAuth', null)
+    })
+  })
+
+  describe('AI provider + model settings (Plan F)', () => {
+    it('aiProvider defaults to deepseek', () => {
+      expect(getSettings().aiProvider).toBe('deepseek')
+    })
+
+    it('setAiProvider persists anthropic', () => {
+      setAiProvider('anthropic')
+      expect(getSettings().aiProvider).toBe('anthropic')
+    })
+
+    it('setAiProvider persists gemini', () => {
+      setAiProvider('gemini')
+      expect(getSettings().aiProvider).toBe('gemini')
+    })
+
+    it('setAiProvider persists openai', () => {
+      setAiProvider('openai')
+      expect(getSettings().aiProvider).toBe('openai')
+    })
+
+    it('coerces invalid aiProvider to default (deepseek)', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ aiProvider: 'gpt5000' }))
+      expect(getSettings().aiProvider).toBe('deepseek')
+    })
+
+    it('aiModel defaults to empty string', () => {
+      expect(getSettings().aiModel).toBe('')
+    })
+
+    it('setAiModel persists the model id', () => {
+      setAiModel('claude-sonnet-4-6')
+      expect(getSettings().aiModel).toBe('claude-sonnet-4-6')
+    })
+
+    it('coerces non-string aiModel to default (empty string)', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ aiModel: 42 }))
+      expect(getSettings().aiModel).toBe('')
+    })
+  })
+
+  describe('AI key settings — openaiKey / anthropicKey / geminiKey (Plan F)', () => {
+    it('all three AI keys default to null', () => {
+      const s = getSettings()
+      expect(s.openaiKey).toBeNull()
+      expect(s.anthropicKey).toBeNull()
+      expect(s.geminiKey).toBeNull()
+    })
+
+    it('setOpenaiKey stores and retrieves a key', () => {
+      setOpenaiKey('sk-openai-123')
+      expect(getSettings().openaiKey).toBe('sk-openai-123')
+    })
+
+    it('setOpenaiKey(null) clears the key', () => {
+      setOpenaiKey('sk-openai-123')
+      setOpenaiKey(null)
+      expect(getSettings().openaiKey).toBeNull()
+    })
+
+    it('setOpenaiKey trims whitespace', () => {
+      setOpenaiKey('  sk-openai-trimmed  ')
+      expect(getSettings().openaiKey).toBe('sk-openai-trimmed')
+    })
+
+    it('setOpenaiKey rejects empty string', () => {
+      expect(() => setOpenaiKey('')).toThrow('empty')
+    })
+
+    it('setAnthropicKey stores and retrieves a key', () => {
+      setAnthropicKey('sk-ant-abc')
+      expect(getSettings().anthropicKey).toBe('sk-ant-abc')
+    })
+
+    it('setAnthropicKey(null) clears the key', () => {
+      setAnthropicKey('sk-ant-abc')
+      setAnthropicKey(null)
+      expect(getSettings().anthropicKey).toBeNull()
+    })
+
+    it('setAnthropicKey rejects empty string', () => {
+      expect(() => setAnthropicKey('')).toThrow('empty')
+    })
+
+    it('setGeminiKey stores and retrieves a key', () => {
+      setGeminiKey('AIza-gemini-key')
+      expect(getSettings().geminiKey).toBe('AIza-gemini-key')
+    })
+
+    it('setGeminiKey(null) clears the key', () => {
+      setGeminiKey('AIza-gemini-key')
+      setGeminiKey(null)
+      expect(getSettings().geminiKey).toBeNull()
+    })
+
+    it('setGeminiKey rejects empty string', () => {
+      expect(() => setGeminiKey('')).toThrow('empty')
+    })
+
+    it('saveTokens accepts anthropicKey + geminiKey atomically', () => {
+      saveTokens({ anthropicKey: 'sk-ant-x', geminiKey: 'AIza-y' })
+      const s = getSettings()
+      expect(s.anthropicKey).toBe('sk-ant-x')
+      expect(s.geminiKey).toBe('AIza-y')
+    })
+
+    it('saveTokens throws and leaves storage unchanged when openaiKey is whitespace', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ openaiKey: 'sk-openai-original' }))
+      expect(() => saveTokens({ openaiKey: '  ' })).toThrow()
+      expect(getSettings().openaiKey).toBe('sk-openai-original')
     })
   })
 })

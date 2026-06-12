@@ -48,9 +48,21 @@ export interface GitlabOAuth {
   expiresAt: number
 }
 
+export type AiProvider = 'deepseek' | 'openai' | 'anthropic' | 'gemini'
+
 export interface Settings {
   githubPat: string | null
   deepseekKey: string | null
+  /** Active AI provider selection. Default 'deepseek'. */
+  aiProvider: AiProvider
+  /** Active model id within the selected provider. Empty string = use provider default. */
+  aiModel: string
+  /** OpenAI API key (routed via serverless proxy). */
+  openaiKey: string | null
+  /** Anthropic API key (direct browser access with anthropic-dangerous-direct-browser-access header). */
+  anthropicKey: string | null
+  /** Google Gemini API key. */
+  geminiKey: string | null
   diffMode: DiffMode
   githubAuth: GithubAuth | null
   gitlabToken: string | null
@@ -70,6 +82,11 @@ export interface Settings {
 const DEFAULTS: Settings = {
   githubPat: null,
   deepseekKey: null,
+  aiProvider: 'deepseek',
+  aiModel: '',
+  openaiKey: null,
+  anthropicKey: null,
+  geminiKey: null,
   diffMode: 'unified',
   githubAuth: null,
   gitlabToken: null,
@@ -131,6 +148,23 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const deepseekKey = obj['deepseekKey']
   if (typeof deepseekKey === 'string' || deepseekKey === null) result.deepseekKey = deepseekKey
+
+  const aiProvider = obj['aiProvider']
+  if (aiProvider === 'deepseek' || aiProvider === 'openai' || aiProvider === 'anthropic' || aiProvider === 'gemini') {
+    result.aiProvider = aiProvider
+  }
+
+  const aiModel = obj['aiModel']
+  if (typeof aiModel === 'string') result.aiModel = aiModel
+
+  const openaiKey = obj['openaiKey']
+  if (typeof openaiKey === 'string' || openaiKey === null) result.openaiKey = openaiKey as string | null
+
+  const anthropicKey = obj['anthropicKey']
+  if (typeof anthropicKey === 'string' || anthropicKey === null) result.anthropicKey = anthropicKey as string | null
+
+  const geminiKey = obj['geminiKey']
+  if (typeof geminiKey === 'string' || geminiKey === null) result.geminiKey = geminiKey as string | null
 
   const gitlabToken = obj['gitlabToken']
   if (typeof gitlabToken === 'string') result.gitlabToken = gitlabToken
@@ -203,18 +237,27 @@ function save(patch: Partial<Settings>): void {
   notifySettingsMutated()
 }
 
-function validateToken(field: 'githubPat' | 'deepseekKey', value: string | null): string | null {
+function validateToken(field: 'githubPat' | 'deepseekKey' | 'openaiKey' | 'anthropicKey' | 'geminiKey', value: string | null): string | null {
   if (value === null) return null
   const trimmed = value.trim()
   if (!trimmed) throw new Error(`${field} must not be empty`)
   return trimmed
 }
 
-export function saveTokens(patch: { githubPat?: string | null; deepseekKey?: string | null }): void {
+export function saveTokens(patch: {
+  githubPat?: string | null
+  deepseekKey?: string | null
+  openaiKey?: string | null
+  anthropicKey?: string | null
+  geminiKey?: string | null
+}): void {
   // Validate all first (atomic — throw before writing anything)
   const update: Partial<Settings> = {}
   if ('githubPat' in patch) update.githubPat = validateToken('githubPat', patch.githubPat ?? null)
   if ('deepseekKey' in patch) update.deepseekKey = validateToken('deepseekKey', patch.deepseekKey ?? null)
+  if ('openaiKey' in patch) update.openaiKey = validateToken('openaiKey', patch.openaiKey ?? null)
+  if ('anthropicKey' in patch) update.anthropicKey = validateToken('anthropicKey', patch.anthropicKey ?? null)
+  if ('geminiKey' in patch) update.geminiKey = validateToken('geminiKey', patch.geminiKey ?? null)
 
   // Sync githubAuth with githubPat changes — but preserve OAuth tokens:
   // clearing the PAT field while signed in via OAuth must not wipe the OAuth token.
@@ -253,6 +296,11 @@ export function saveGithubAuth(auth: GithubAuth | null): void {
 
 export const setGithubPat = (v: string | null) => saveTokens({ githubPat: v })
 export const setDeepseekKey = (v: string | null) => saveTokens({ deepseekKey: v })
+export const setOpenaiKey = (v: string | null) => saveTokens({ openaiKey: v })
+export const setAnthropicKey = (v: string | null) => saveTokens({ anthropicKey: v })
+export const setGeminiKey = (v: string | null) => saveTokens({ geminiKey: v })
+export const setAiProvider = (v: AiProvider) => save({ aiProvider: v })
+export const setAiModel = (v: string) => save({ aiModel: v })
 export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
 export const setRailCollapsed = (collapsed: boolean) => save({ railCollapsed: collapsed })
 export const setTheme = (theme: Theme) => save({ theme })
