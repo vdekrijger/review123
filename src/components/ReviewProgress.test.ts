@@ -128,3 +128,39 @@ describe('ReviewProgress — floating label', () => {
     expect(label).not.toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Inline (footer) variant
+// ---------------------------------------------------------------------------
+
+describe('ReviewProgress — inline variant', () => {
+  it('inline=true renders role=progressbar with correct aria-valuenow', () => {
+    render(ReviewProgress, { props: { viewedCount: 0, fileCount: 5, draftCount: 0, step: 2, inline: true } })
+    const bar = screen.getByRole('progressbar')
+    expect(bar).toBeInTheDocument()
+    expect(bar.getAttribute('aria-valuenow')).toBe('15')
+    expect(bar.getAttribute('aria-valuemax')).toBe('100')
+  })
+
+  it('inline=true renders the percent label text', () => {
+    const { container } = render(ReviewProgress, { props: { viewedCount: 5, fileCount: 5, draftCount: 0, step: 2, inline: true } })
+    // 15 + 70 = 85%
+    expect(container.textContent).toContain('85%')
+  })
+
+  it('inline=true renders a progress track (6px-tall element)', () => {
+    const { container } = render(ReviewProgress, { props: { viewedCount: 0, fileCount: 2, draftCount: 0, step: 1, inline: true } })
+    const track = container.querySelector('.progress-track-inline')
+    expect(track).not.toBeNull()
+  })
+
+  it('inline=true does NOT render the standalone full-width .review-progress wrapper', () => {
+    const { container } = render(ReviewProgress, { props: { viewedCount: 0, fileCount: 2, draftCount: 0, step: 1, inline: true } })
+    expect(container.querySelector('.review-progress')).toBeNull()
+  })
+
+  it('inline=false (default) renders .review-progress (standalone)', () => {
+    const { container } = render(ReviewProgress, { props: { viewedCount: 0, fileCount: 2, draftCount: 0, step: 1 } })
+    expect(container.querySelector('.review-progress')).not.toBeNull()
+  })
+})

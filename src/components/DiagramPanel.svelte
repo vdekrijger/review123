@@ -41,6 +41,14 @@
   // Overlay state
   let overlayOpen = $state(false)
   let overlayContent = $state('')
+  let overlayDialogEl = $state<HTMLDialogElement | null>(null)
+
+  $effect(() => {
+    if (!overlayDialogEl) return
+    if (!overlayDialogEl.open) {
+      overlayDialogEl.showModal()
+    }
+  })
 
   // Before/After toggle (visible only when changeMap is present)
   let showBeforeAfter = $state(false)
@@ -317,10 +325,11 @@
 {#if overlayOpen}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <dialog
-    open
+    bind:this={overlayDialogEl}
     class="diagram-overlay"
     aria-label="Diagram full screen"
     onclick={onBackdropClick}
+    oncancel={(e) => { e.preventDefault(); closeOverlay() }}
     onkeydown={onDialogKeydown}
   >
     <div class="overlay-content">
@@ -497,32 +506,29 @@
     margin: 0;
   }
 
-  /* EC-14k: full-screen overlay */
+  /* EC-14k: full-screen overlay — now a true modal via showModal() */
   .diagram-overlay {
-    position: fixed;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    max-width: 100%;
-    max-height: 100%;
-    margin: 0;
+    width: 92vw;
+    height: 88vh;
+    max-width: 92vw;
+    max-height: 88vh;
     padding: 0;
     border: none;
+    background: transparent;
+    overflow: visible;
+  }
+
+  .diagram-overlay::backdrop {
     background: rgba(0, 0, 0, 0.75);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
+    backdrop-filter: blur(2px);
   }
 
   .overlay-content {
     background: var(--surface-overlay, #fff);
     border-radius: 8px;
     padding: 2rem;
-    width: 92vw;
-    height: 88vh;
-    max-width: 92vw;
-    max-height: 88vh;
+    width: 100%;
+    height: 100%;
     overflow: auto;
     position: relative;
     display: flex;

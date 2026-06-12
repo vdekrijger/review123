@@ -21,3 +21,20 @@ if (typeof jsdom !== 'undefined' && jsdom.window) {
     configurable: true,
   })
 }
+
+// HTMLDialogElement polyfill for jsdom (jsdom ≤ 29 does not implement
+// showModal / close). Components call showModal() on mount to get true
+// top-layer behaviour; without these stubs vitest tests would throw.
+// The polyfill is minimal: showModal() sets open=true, close() sets
+// open=false. A guard prevents double-polyfilling if a future jsdom
+// version adds native support.
+if (typeof HTMLDialogElement !== 'undefined' && !HTMLDialogElement.prototype.showModal) {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    if (this.open) throw new DOMException('The dialog is already open.', 'InvalidStateError')
+    this.open = true
+  }
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, _returnValue?: string) {
+    if (!this.open) return
+    this.open = false
+  }
+}

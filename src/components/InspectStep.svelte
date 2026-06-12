@@ -3,7 +3,7 @@
   import FileTree from './FileTree.svelte'
   import type { PrFile } from '../lib/github/types'
   import type { DiffMode } from '../lib/settings/settings'
-  import { getSettings } from '../lib/settings/settings'
+  import { getSettings, setTreeOpen } from '../lib/settings/settings'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
   import { draftKey } from '../lib/drafts/drafts.svelte'
   import { track } from '../lib/analytics/analytics'
@@ -107,6 +107,27 @@
   // Active path: set on tree click only (no IntersectionObserver)
   let activePath = $state<string | null>(null)
 
+  // Collapsible tree drawer — default false (diff-first); read from settings on mount
+  let treeOpen = $state(getSettings().treeOpen)
+  let toggleTabEl = $state<HTMLButtonElement | null>(null)
+
+  function toggleTree(): void {
+    treeOpen = !treeOpen
+    setTreeOpen(treeOpen)
+  }
+
+  function closeTree(): void {
+    if (!treeOpen) return
+    treeOpen = false
+    setTreeOpen(false)
+    // Return focus to toggle tab
+    toggleTabEl?.focus()
+  }
+
+  function handleKeyDown(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && treeOpen) closeTree()
+  }
+
   function handleTreeSelect(path: string): void {
     activePath = path
     const slug = slugify(path)
@@ -119,6 +140,8 @@
       const header = article.querySelector('header') as HTMLElement | null
       header?.click()
     }
+    // On narrow viewport (<900px), close the drawer after selecting a file
+    if (window.innerWidth < 900) closeTree()
   }
 
   // ---------------------------------------------------------------------------
@@ -210,20 +233,48 @@
 {#if files.length < changedFiles}
   <p role="alert">Showing {files.length} of {changedFiles} changed files — the list was truncated.</p>
 {/if}
+<svelte:document onkeydown={handleKeyDown} />
+
 {#if files.length === 0}
   <p>This PR has no changed files.</p>
 {:else}
   <div class="inspect-layout">
-    <nav class="file-tree-nav" aria-label="File tree">
-      <FileTree
-        {files}
-        {attention}
-        {viewedStore}
-        {activePath}
-        onselect={handleTreeSelect}
-      />
-    </nav>
-    <div class="diff-column">
+    <!-- Slim toggle tab fixed to the left edge -->
+    <button
+      bind:this={toggleTabEl}
+      class="tree-toggle-tab"
+      aria-expanded={treeOpen}
+      aria-label={treeOpen ? 'Close file tree' : 'Open file tree'}
+      onclick={toggleTree}
+      title={treeOpen ? 'Close file tree (Escape)' : 'Open file tree'}
+    >
+      <span class="tree-toggle-icon" aria-hidden="true">{treeOpen ? '‹' : '☰'}</span>
+      <span class="tree-toggle-label">Files</span>
+    </button>
+
+    <!-- Collapsible drawer -->
+    <div class="file-tree-drawer" data-open={treeOpen ? 'true' : 'false'} aria-hidden={!treeOpen}>
+      {#if treeOpen}
+        <nav class="file-tree-nav" aria-label="File tree">
+          <FileTree
+            {files}
+            {attention}
+            {viewedStore}
+            {activePath}
+            onselect={handleTreeSelect}
+          />
+        </nav>
+      {/if}
+    </div>
+
+    <!-- Narrow-viewport backdrop (overlays content when drawer open on <900px) -->
+    {#if treeOpen}
+      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+      <div class="tree-backdrop" onclick={closeTree} aria-hidden="true"></div>
+    {/if}
+
+    <!-- Diff column: gets margin-left when drawer is open on wide viewport -->
+    <div class="diff-column" class:drawer-open={treeOpen}>
       {#each orderedFiles as file (file.filename)}
         <div id="file-{slugify(file.filename)}">
           {#if hotspotMap.has(file.filename)}
@@ -281,17 +332,82 @@
 {/if}
 
 <style>
-  /* Two-column layout: tree ~240px sticky left, diffs right */
+  /* Inspect layout: relative container for the drawer + toggle tab */
   .inspect-layout {
-    display: grid;
-    grid-template-columns: 240px 1fr;
-    gap: 0.5rem;
-    align-items: start;
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+  }
+
+  /* ---- Toggle tab: slim vertical strip on the left edge ---- */
+  .tree-toggle-tab {
+    position: sticky;
+    top: 0.5rem;
+    flex-shrink: 0;
+    width: 28px;
+    height: calc(100vh - 5rem);
+    max-height: calc(100vh - 5rem);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 0.75rem 0 0.5rem;
+    gap: 0.4rem;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    cursor: pointer;
+    color: inherit;
+    font-size: 0.78rem;
+    z-index: 10;
+    transition: background 0.15s;
+    align-self: flex-start;
+  }
+
+  .tree-toggle-tab:hover {
+    background: var(--surface-hover, color-mix(in srgb, var(--surface-raised) 80%, var(--text) 10%));
+  }
+
+  .tree-toggle-tab:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .tree-toggle-icon {
+    font-size: 1rem;
+    line-height: 1;
+  }
+
+  .tree-toggle-label {
+    writing-mode: vertical-lr;
+    text-orientation: mixed;
+    transform: rotate(180deg);
+    font-size: 0.7rem;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    user-select: none;
+  }
+
+  /* ---- Collapsible drawer ---- */
+  .file-tree-drawer {
+    /* When closed: zero width, no overflow */
+    width: 0;
+    overflow: hidden;
+    flex-shrink: 0;
+    transition: width 0.2s ease;
+    position: sticky;
+    top: 0.5rem;
+    align-self: flex-start;
+    max-height: calc(100vh - 5rem);
+  }
+
+  .file-tree-drawer[data-open="true"] {
+    width: 260px;
   }
 
   .file-tree-nav {
-    position: sticky;
-    top: 0.5rem;
+    width: 260px;
     max-height: calc(100vh - 5rem);
     overflow-y: auto;
     background: var(--surface-raised);
@@ -299,22 +415,49 @@
     border-radius: 6px;
     padding: 0.5rem 0.25rem;
     scrollbar-width: thin;
+    margin-left: 0.25rem;
   }
 
+  /* ---- Diff column: takes remaining space; gains margin when drawer open ---- */
   .diff-column {
     min-width: 0;
+    flex: 1;
+    transition: none; /* margin change handled by flex; instant */
   }
 
-  /* Narrow viewport: tree collapses to a toggle button */
+  /* ---- Narrow viewport (<900px): drawer overlays (backdrop) instead of pushing ---- */
   @media (max-width: 900px) {
-    .inspect-layout {
-      grid-template-columns: 1fr;
+    .file-tree-drawer[data-open="true"] {
+      position: fixed;
+      top: 0;
+      left: 32px; /* just past the toggle tab */
+      height: 100vh;
+      max-height: 100vh;
+      z-index: 50;
+      box-shadow: 2px 0 12px rgba(0,0,0,0.2);
     }
 
     .file-tree-nav {
-      position: static;
-      max-height: 200px;
-      border-radius: 4px;
+      height: 100%;
+      max-height: 100vh;
+      border-radius: 0 6px 6px 0;
+      margin-left: 0;
+    }
+
+    /* Backdrop covers the rest of the screen */
+    .tree-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+      z-index: 45;
+      cursor: pointer;
+    }
+  }
+
+  /* Hide backdrop on wide viewport */
+  @media (min-width: 901px) {
+    .tree-backdrop {
+      display: none;
     }
   }
 
