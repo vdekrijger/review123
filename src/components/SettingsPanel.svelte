@@ -7,7 +7,7 @@
     listSkills, addSkill, updateSkill, removeSkill, toggleSkill,
     SKILLS_CAP, SKILL_CONTENT_CAP, type ReviewerSkill,
   } from '../lib/skills/skills'
-  import { SAMPLE_SKILL_NAME, SAMPLE_SKILL_CONTENT } from '../lib/skills/sampleSkill'
+  import { BUILTIN_SKILLS } from '../lib/skills/builtinSkills'
   import { mineSkillPipeline } from '../lib/skills/mineSkill'
   import { llmJsonWithRepair } from '../lib/llm/llm'
   import { ghFetch } from '../lib/github/client'
@@ -125,10 +125,11 @@
     skills = listSkills()
   }
 
-  const hasSampleSkill = $derived(skills.some(s => s.name === SAMPLE_SKILL_NAME))
+  // Set of installed skill names for O(1) lookup
+  const installedSkillNames = $derived(new Set(skills.map(s => s.name)))
 
-  function handleAddSampleSkill() {
-    addSkill(SAMPLE_SKILL_NAME, SAMPLE_SKILL_CONTENT)
+  function handleAddBuiltinSkill(name: string, content: string) {
+    addSkill(name, content)
     refreshSkills()
   }
 
@@ -419,16 +420,29 @@
       </ul>
     {/if}
 
-    {#if !hasSampleSkill}
-      <div class="sample-skill-row">
-        <button
-          class="add-skill-btn sample-skill-btn"
-          onclick={handleAddSampleSkill}
-          disabled={skills.length >= SKILLS_CAP}
-        >Add sample reviewer</button>
-        <p class="sample-skill-caption">A general best-practices persona — duplicate and edit it to make your own.</p>
-      </div>
-    {/if}
+    <!-- Built-in reviewers library -->
+    <div class="builtin-section">
+      <p class="section-label builtin-label">Built-in reviewers</p>
+      <ul class="builtin-list">
+        {#each BUILTIN_SKILLS as builtin (builtin.id)}
+          <li class="builtin-entry" data-builtin-id={builtin.id}>
+            <div class="builtin-info">
+              <span class="builtin-name">{builtin.name}</span>
+              <span class="builtin-tagline">{builtin.tagline}</span>
+            </div>
+            {#if !installedSkillNames.has(builtin.name)}
+              <button
+                class="builtin-add-btn"
+                onclick={() => handleAddBuiltinSkill(builtin.name, builtin.content)}
+                disabled={skills.length >= SKILLS_CAP}
+                aria-label="Add {builtin.name}"
+                title={skills.length >= SKILLS_CAP ? `Cannot add more than ${SKILLS_CAP} reviewer skills` : undefined}
+              >Add</button>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    </div>
 
     {#if !addSkillOpen}
       <button
@@ -734,16 +748,6 @@
     gap: 0.5rem;
   }
 
-  .sample-skill-row {
-    margin-bottom: 0.5rem;
-  }
-
-  .sample-skill-caption {
-    font-size: 0.8em;
-    color: var(--text-muted);
-    margin: 0.2rem 0 0;
-  }
-
   /* ---- Skill edit button ---- */
   .skill-item-wrapper {
     display: flex;
@@ -919,5 +923,81 @@
     border-radius: 4px;
     padding: 0.35rem 0.6rem;
     margin: 0;
+  }
+
+  /* ---- Built-in reviewers library ---- */
+  .builtin-section {
+    margin-bottom: 0.75rem;
+  }
+
+  .builtin-label {
+    margin-bottom: 0.4rem;
+  }
+
+  .builtin-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .builtin-entry {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.88em;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--hairline);
+    border-radius: 5px;
+    background: var(--surface-raised);
+  }
+
+  .builtin-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+
+  .builtin-name {
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .builtin-tagline {
+    font-size: 0.85em;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .builtin-add-btn {
+    font-size: 0.8em;
+    padding: 0.15rem 0.55rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .builtin-add-btn:not(:disabled):hover {
+    background: var(--surface);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .builtin-add-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 </style>

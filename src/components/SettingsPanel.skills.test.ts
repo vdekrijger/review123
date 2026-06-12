@@ -43,11 +43,11 @@ describe('SettingsPanel — Reviewer skills section', () => {
   })
 
   it('lists stored skills with their names', () => {
-    addSkill('Security Reviewer', 'check for XSS')
-    addSkill('Performance Reviewer', 'check for N+1')
+    addSkill('My Custom Security Reviewer', 'check for XSS')
+    addSkill('My Custom Performance Reviewer', 'check for N+1')
     render(SettingsPanel, { props: { onclose: vi.fn() } })
-    expect(screen.getByText('Security Reviewer')).toBeInTheDocument()
-    expect(screen.getByText('Performance Reviewer')).toBeInTheDocument()
+    expect(screen.getByText('My Custom Security Reviewer')).toBeInTheDocument()
+    expect(screen.getByText('My Custom Performance Reviewer')).toBeInTheDocument()
   })
 
   it('shows enabled toggle for each skill', () => {
@@ -177,25 +177,30 @@ describe('SettingsPanel — Reviewer skills section', () => {
     })
   })
 
-  describe('"Add sample reviewer" button', () => {
-    it('shows "Add sample reviewer" button when no sample skill exists', () => {
+  describe('pragmatic sample skill via built-in library', () => {
+    // The sample skill is now the "pragmatic" entry in the Built-in reviewers library.
+    // Its Add button is aria-label="Add Pragmatic Senior Reviewer (sample)".
+    const escapedSampleName = SAMPLE_SKILL_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const addPragmaticRegex = new RegExp(`add ${escapedSampleName}`, 'i')
+
+    it('shows an [Add] button for the pragmatic skill when not installed', () => {
       render(SettingsPanel, { props: { onclose: vi.fn() } })
-      expect(screen.getByRole('button', { name: /add sample reviewer/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: addPragmaticRegex })).toBeInTheDocument()
     })
 
-    it('clicking "Add sample reviewer" installs sample skill and hides the button', async () => {
+    it('clicking [Add] for pragmatic installs the sample skill and hides its button', async () => {
       render(SettingsPanel, { props: { onclose: vi.fn() } })
-      const btn = screen.getByRole('button', { name: /add sample reviewer/i })
+      const btn = screen.getByRole('button', { name: addPragmaticRegex })
       await userEvent.click(btn)
       await waitFor(() => {
-        expect(screen.queryByRole('button', { name: /add sample reviewer/i })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: addPragmaticRegex })).not.toBeInTheDocument()
       })
       expect(listSkills().some(s => s.name === SAMPLE_SKILL_NAME)).toBe(true)
     })
 
-    it('installed sample skill is enabled', async () => {
+    it('installed pragmatic skill is enabled', async () => {
       render(SettingsPanel, { props: { onclose: vi.fn() } })
-      await userEvent.click(screen.getByRole('button', { name: /add sample reviewer/i }))
+      await userEvent.click(screen.getByRole('button', { name: addPragmaticRegex }))
       await waitFor(() => {
         const skills = listSkills()
         const sample = skills.find(s => s.name === SAMPLE_SKILL_NAME)
@@ -204,40 +209,43 @@ describe('SettingsPanel — Reviewer skills section', () => {
       })
     })
 
-    it('sample skill name appears in the list after install', async () => {
+    it('pragmatic skill name appears in the installed skills list after install', async () => {
       render(SettingsPanel, { props: { onclose: vi.fn() } })
-      await userEvent.click(screen.getByRole('button', { name: /add sample reviewer/i }))
+      await userEvent.click(screen.getByRole('button', { name: addPragmaticRegex }))
       await waitFor(() => {
-        expect(screen.getByText(SAMPLE_SKILL_NAME)).toBeInTheDocument()
+        // Skill name appears in the .skill-name list (installed skills section)
+        const nameEls = document.querySelectorAll('.skill-name')
+        const found = Array.from(nameEls).some(el => el.textContent?.includes(SAMPLE_SKILL_NAME))
+        expect(found).toBe(true)
       })
     })
 
-    it('"Add sample reviewer" button reappears after the sample skill is deleted', async () => {
+    it('[Add] button for pragmatic reappears after the sample skill is deleted', async () => {
       render(SettingsPanel, { props: { onclose: vi.fn() } })
       // Install it
-      await userEvent.click(screen.getByRole('button', { name: /add sample reviewer/i }))
+      await userEvent.click(screen.getByRole('button', { name: addPragmaticRegex }))
       await waitFor(() => {
-        expect(screen.getByText(SAMPLE_SKILL_NAME)).toBeInTheDocument()
+        const nameEls = document.querySelectorAll('.skill-name')
+        expect(Array.from(nameEls).some(el => el.textContent?.includes(SAMPLE_SKILL_NAME))).toBe(true)
       })
-      // Delete it — escape regex special chars in the skill name
-      const escapedName = SAMPLE_SKILL_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const deleteBtn = screen.getByRole('button', { name: new RegExp(`delete ${escapedName}`, 'i') })
+      // Delete it
+      const deleteBtn = screen.getByRole('button', { name: new RegExp(`delete ${escapedSampleName}`, 'i') })
       await userEvent.click(deleteBtn)
-      // Button should reappear
+      // Add button should reappear in the built-in list
       await waitFor(() => {
-        expect(screen.getByRole('button', { name: /add sample reviewer/i })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: addPragmaticRegex })).toBeInTheDocument()
       })
     })
 
-    it('hides "Add sample reviewer" button when the sample skill was pre-seeded', () => {
+    it('[Add] button for pragmatic is absent when the sample skill was pre-seeded', () => {
       addSkill(SAMPLE_SKILL_NAME, 'some content')
       render(SettingsPanel, { props: { onclose: vi.fn() } })
-      expect(screen.queryByRole('button', { name: /add sample reviewer/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: addPragmaticRegex })).not.toBeInTheDocument()
     })
 
-    it('shows caption "A general best-practices persona" under the button', () => {
+    it('shows the pragmatic tagline in the built-in library', () => {
       render(SettingsPanel, { props: { onclose: vi.fn() } })
-      expect(screen.getByText(/A general best-practices persona/i)).toBeInTheDocument()
+      expect(screen.getByText(/Correctness, intent, hygiene/i)).toBeInTheDocument()
     })
   })
 })
