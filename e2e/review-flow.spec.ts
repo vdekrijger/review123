@@ -1301,7 +1301,7 @@ test('ask-ai: open rail, type question, answer streams in; second question retai
 //          scrolls that article into view
 // ---------------------------------------------------------------------------
 
-test('file-tree: visible in step 2; clicking second file in tree scrolls to its article', async ({
+test('file-tree: drawer closed by default; toggle opens tree; clicking second file scrolls to its article', async ({
   page,
 }) => {
   await setupRoutes(page)
@@ -1323,8 +1323,20 @@ test('file-tree: visible in step 2; clicking second file in tree scrolls to its 
   // Wait for file diffs to appear
   await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 5_000 })
 
-  // File tree nav should be visible
+  // Drawer is closed by default: toggle tab exists with aria-expanded="false"
+  const toggleTab = page.locator('.tree-toggle-tab')
+  await expect(toggleTab).toBeVisible()
+  await expect(toggleTab).toHaveAttribute('aria-expanded', 'false')
+
+  // File tree nav should NOT be visible when drawer is closed
   const treeNav = page.locator('nav[aria-label="File tree"]')
+  await expect(treeNav).not.toBeVisible()
+
+  // Open the drawer by clicking the toggle tab
+  await toggleTab.click()
+  await expect(toggleTab).toHaveAttribute('aria-expanded', 'true')
+
+  // Now the file tree nav should be visible
   await expect(treeNav).toBeVisible()
 
   // The fixture has 2 files: src/feature.ts and src/old-utils.ts
