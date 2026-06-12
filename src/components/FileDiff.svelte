@@ -8,6 +8,8 @@
   import DraftThread from './DraftThread.svelte'
   import CommentThread from './CommentThread.svelte'
   import type { PrComment } from '../lib/github/comments'
+  import type { AskFocus } from '../lib/ai/tasks'
+  import { excerptAround } from '../lib/diff/excerpt'
 
   interface Props {
     file: PrFile
@@ -34,9 +36,18 @@
      * diff renders hunk-only without expansion affordances.
      */
     contents?: { before: string | null; after: string | null }
+    /**
+     * Optional Ask AI function threaded from Review via InspectStep.
+     * When provided, DraftThread shows a "Comment | Ask AI" tab toggle.
+     */
+    askFn?: ((q: string, onDelta: (t: string) => void, focus?: AskFocus) => Promise<{ ok: true; answer: string } | { ok: false; error: string }>) | null
+    /**
+     * Optional disabled hint for Ask AI gating (e.g. "No API key configured.").
+     */
+    askDisabledReason?: string | null
   }
 
-  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents }: Props = $props()
+  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null }: Props = $props()
 
   // Group existing comments by line (null-line comments go under a null key)
   const commentsByLine = $derived.by(() => {
@@ -233,6 +244,7 @@
         {@const existingDraft = drafts.find(
           (d) => d.line === lineNumber && sideToSplitSide(d.side) === side,
         )}
+        {@const lineExcerpt = file.patch ? excerptAround(file.patch, lineNumber, splitSideToSide(side), 6) : ''}
         <DraftThread
           draft={existingDraft ?? null}
           path={file.filename}
@@ -251,6 +263,9 @@
             // Fix-B: only close widget if no draft saved for this line
             handleWidgetCancel(existingDraft !== undefined, onClose)
           }}
+          {askFn}
+          {askDisabledReason}
+          excerpt={lineExcerpt}
         />
       {/snippet}
 
@@ -284,6 +299,9 @@
               onsave={(body) => handleExtendSave(draft.line, sideToSplitSide(draft.side), body)}
               ondelete={() => handleExtendDelete(draft.line, sideToSplitSide(draft.side))}
               oncancel={() => {}}
+              {askFn}
+              {askDisabledReason}
+              excerpt={file.patch ? excerptAround(file.patch, draft.line, draft.side, 6) : ''}
             />
           </div>
         {/each}

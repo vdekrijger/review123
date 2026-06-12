@@ -1233,3 +1233,70 @@ describe('ask() — error mapping', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// ask() — focus parameter (line-level Ask AI)
+// ---------------------------------------------------------------------------
+
+describe('ask() — focus parameter', () => {
+  it('ask with focus passes focus to askPrompt: system prompt contains path:line', async () => {
+    const deps = makeDeps()
+    const capturedArgs: unknown[] = []
+    deps.llmStream.mockImplementation(async (prompts: unknown, _onDelta: (d: string) => void) => {
+      capturedArgs.push(prompts)
+      return 'answer with focus'
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.ask('Why is this here?', () => {}, {
+      path: 'src/target.ts',
+      line: 77,
+      excerpt: '-old\n+new',
+    })
+
+    expect(capturedArgs.length).toBe(1)
+    const prompts = capturedArgs[0] as { system: string; user: string }
+    // System prompt should reference the specific location
+    expect(prompts.system).toContain('src/target.ts:77')
+    // User prompt should include the excerpt
+    expect(prompts.user).toContain('-old\n+new')
+  })
+
+  it('ask without focus does not inject location directive in system prompt', async () => {
+    const deps = makeDeps()
+    const capturedArgs: unknown[] = []
+    deps.llmStream.mockImplementation(async (prompts: unknown, _onDelta: (d: string) => void) => {
+      capturedArgs.push(prompts)
+      return 'plain answer'
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.ask('What is this PR about?', () => {})
+
+    const prompts = capturedArgs[0] as { system: string; user: string }
+    expect(prompts.system).not.toContain('src/target.ts:77')
+    expect(prompts.system).not.toContain('specific change at')
+  })
+
+  it('ask with focus: history entries are unchanged (focus does not leak into stored history)', async () => {
+    const deps = makeDeps()
+    const allPrompts: Array<{ system: string; user: string }> = []
+    deps.llmStream.mockImplementation(async (prompts: unknown, _onDelta: (d: string) => void) => {
+      allPrompts.push(prompts as { system: string; user: string })
+      return 'answer'
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    // First ask WITH focus
+    await run.ask('Q with focus', () => {}, { path: 'src/a.ts', line: 10, excerpt: '+added' })
+    // Second ask WITHOUT focus — history from first ask should be present in user prompt
+    await run.ask('Q without focus', () => {})
+
+    expect(allPrompts.length).toBe(2)
+    // Second prompt's user content should contain history from first ask
+    expect(allPrompts[1].user).toContain('Q with focus')
+    expect(allPrompts[1].user).toContain('answer')
+    // Second prompt's system should NOT contain the focus location (no focus passed)
+    expect(allPrompts[1].system).not.toContain('src/a.ts:10')
+  })
+})

@@ -487,6 +487,20 @@ Do not include any text outside the JSON object.`
 // ---------------------------------------------------------------------------
 
 /**
+ * Optional line-level focus for askPrompt.
+ *
+ * When provided, the system prompt is augmented to direct the AI to address
+ * the specific change at path:line first, then broader context.
+ * The excerpt is the hunk snippet around that line (e.g. ±6 lines from
+ * excerptAround() in src/lib/diff/excerpt.ts).
+ */
+export interface AskFocus {
+  path: string
+  line: number
+  excerpt: string
+}
+
+/**
  * Build prompts for the ask task.
  *
  * System persona: senior engineer code explainer, grounded ONLY in the provided
@@ -494,23 +508,38 @@ Do not include any text outside the JSON object.`
  *
  * User prompt: ctx.text + last ≤3 Q/A pairs from history + the new question.
  *
+ * When focus is provided, the system prompt adds a line-level direction clause
+ * and the excerpt is included in the user prompt before the question.
+ *
  * NOTE: No PROMPT_VERSION bump needed — answers are never cached.
  */
 export function askPrompt(
   ctx: PackedContext,
   history: { q: string; a: string }[],
   question: string,
+  focus?: AskFocus,
 ): { system: string; user: string } {
-  const system = `You are a senior engineer code explainer. Your job is to answer questions \
+  let system = `You are a senior engineer code explainer. Your job is to answer questions \
 about a pull request based ONLY on the provided context. You must be grounded only in the \
 provided context — do not invent or assume information that is not visible in the context. \
 If a question asks about something you cannot see in the provided context, respond: \
 "I can't see that in the provided context." Keep answers concise and specific.`
 
+  if (focus) {
+    system += `\n\nThe question concerns the specific change at ${focus.path}:${focus.line}. \
+Address THIS location first, then broader context only if relevant.`
+  }
+
   // Take last ≤3 Q/A pairs
   const recentHistory = history.slice(-3)
 
   const parts: string[] = [ctx.text]
+
+  if (focus) {
+    parts.push(
+      `\n\nFocused location: ${focus.path}:${focus.line}\nCode excerpt:\n\`\`\`\n${focus.excerpt}\n\`\`\``,
+    )
+  }
 
   if (recentHistory.length > 0) {
     parts.push('\n\nPrevious questions and answers:')

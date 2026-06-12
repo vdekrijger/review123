@@ -11,7 +11,7 @@
   import type { createViewedStore } from '../lib/viewed/viewed.svelte'
   import type { PrComment } from '../lib/github/comments'
   import { slugify } from '../lib/slug'
-  import type { SkillReviewEntry } from '../lib/ai/run.svelte'
+  import type { SkillReviewEntry, AskFocus } from '../lib/ai/run.svelte'
   import type { SkillReviewResult } from '../lib/ai/schemas'
   import { listSkills } from '../lib/skills/skills'
 
@@ -29,6 +29,8 @@
     contentsMap = null,
     skillReviews = [],
     runSkillReviewsFn = null,
+    askFn = null,
+    askDisabledReason = null,
   }: {
     files: PrFile[]
     changedFiles: number
@@ -51,6 +53,15 @@
     skillReviews?: SkillReviewEntry[]
     /** Optional callback to trigger runSkillReviews on the AiRun instance */
     runSkillReviewsFn?: (() => void) | null
+    /**
+     * Optional Ask AI function — when provided, DraftThread widgets show the
+     * "Comment | Ask AI" tab toggle. Threaded from Review via AiRun.ask.
+     */
+    askFn?: ((q: string, onDelta: (t: string) => void, focus?: AskFocus) => Promise<{ ok: true; answer: string } | { ok: false; error: string }>) | null
+    /**
+     * Optional disabled hint for Ask AI gating (e.g. "No API key configured.").
+     */
+    askDisabledReason?: string | null
   } = $props()
 
   function commentsForFile(path: string): PrComment[] {
@@ -340,6 +351,8 @@
             changedSinceViewed={viewedStore?.changedSinceViewed(file.filename, file.patch) ?? false}
             onToggleViewed={() => viewedStore?.toggle(file.filename, file.patch)}
             contents={contentsMap?.get(file.filename)}
+            {askFn}
+            {askDisabledReason}
           />
         </div>
       {/each}
