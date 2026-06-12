@@ -106,3 +106,18 @@ describe('VerdictPanel', () => {
     expect(onhotspot).toHaveBeenCalledWith('src/bar.ts')
   })
 })
+
+describe('VerdictPanel — pending skeleton (text-shaped)', () => {
+  it('shows the text-line skeleton when verdict is idle (pending, no blank gap)', () => {
+    const { container } = render(VerdictPanel, { props: { run: makeRun({}) } })
+    expect(container.querySelector('.ai-panel-loading .skeleton-block')).not.toBeNull()
+    expect(container.querySelectorAll('.skeleton-line').length).toBeGreaterThan(0)
+  })
+
+  it('shows the skeleton when verdict is loading', () => {
+    const { container } = render(VerdictPanel, {
+      props: { run: makeRun({ verdict: { status: 'loading' } }) },
+    })
+    expect(container.querySelector('.ai-panel-loading .skeleton-block')).not.toBeNull()
+  })
+})

@@ -185,6 +185,51 @@ describe('buildDiffFile — renamed file content keying', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// buildDiffFile — syntax highlighting (language detection + lowlight engine)
+// ---------------------------------------------------------------------------
+
+describe('buildDiffFile — syntax highlighting', () => {
+  it('detects the file language from the filename extension', () => {
+    const df = buildDiffFile(modified, 'unified')!
+    // The library's getLang() derives the language from the fileName we pass
+    // in buildDiffFile — no explicit fileLang wiring is needed.
+    expect(df._oldFileLang).toBe('ts')
+    expect(df._newFileLang).toBe('ts')
+  })
+
+  it('uses the built-in lowlight highlighter engine', () => {
+    const df = buildDiffFile(modified, 'unified')!
+    expect(df._getHighlighterName()).toBe('lowlight')
+  })
+
+  it('bare-hunk patch (no full contents) still produces syntax token lines', () => {
+    // GitHub's PR files API returns bare hunks; the envelope synthesized by
+    // buildDiffFile must be enough for the highlighter to tokenize lines.
+    const df = buildDiffFile(modified, 'unified')!
+    // New-file line 1 is `const a = 2`
+    const syntax = df.getNewSyntaxLine(1)
+    expect(syntax).toBeTruthy()
+    expect(syntax!.nodeList.length).toBeGreaterThan(0)
+  })
+
+  it('syntax tokens include an hljs keyword class for `const` (TS keyword)', () => {
+    const df = buildDiffFile(modified, 'unified')!
+    const syntax = df.getNewSyntaxLine(1)!
+    const classes = syntax.nodeList.flatMap(
+      ({ wrapper }) => (wrapper?.properties?.className as string[] | undefined) ?? [],
+    )
+    expect(classes).toContain('hljs-keyword')
+  })
+
+  it('split mode also produces syntax token lines on both sides', () => {
+    const df = buildDiffFile(modified, 'split')!
+    // Old-file line 1 is `const a = 1`, new-file line 1 is `const a = 2`
+    expect(df.getOldSyntaxLine(1)).toBeTruthy()
+    expect(df.getNewSyntaxLine(1)).toBeTruthy()
+  })
+})
+
 // EC-06b — fixtures now use real bare-hunk GitHub wire format.
 // buildDiffFile synthesises the envelope so the parser can locate hunks.
 describe('EC-06b: additions-only / deletions-only diff line classification', () => {
@@ -222,5 +267,37 @@ describe('EC-06b: additions-only / deletions-only diff line classification', () 
     const { addCount, delCount } = countDiffLines(df)
     expect(delCount).toBeGreaterThanOrEqual(2)
     expect(addCount).toBe(0)
+  })
+})
+
+describe('buildDiffFile with patchOverride (hide whitespace)', () => {
+  const before = 'a\nfoo bar\nkeep\nreal change\nend\n'
+  const after = 'a\nfoo  bar\nkeep\nreal CHANGE\nend\n'
+  const wsFile: PrFile = {
+    filename: 'src/ws.ts', status: 'modified', additions: 2, deletions: 2,
+    // Provider patch shows BOTH the ws-only change and the real change
+    patch: '@@ -2,4 +2,4 @@ a\n-foo bar\n+foo  bar\n keep\n-real change\n+real CHANGE\n end',
+  }
+
+  it('renders the override patch instead of the provider patch', () => {
+    const recomputed = '@@ -1,5 +1,5 @@\n a\n foo  bar\n keep\n-real change\n+real CHANGE\n end\n'
+    const df = buildDiffFile(wsFile, 'unified', { before, after }, recomputed)!
+    expect(df).not.toBeNull()
+    const { addCount, delCount } = countDiffLines(df)
+    // Only the real change remains — ws-only line is context now
+    expect(addCount).toBe(1)
+    expect(delCount).toBe(1)
+  })
+
+  it('without override the provider patch shows the ws-only change too', () => {
+    const df = buildDiffFile(wsFile, 'unified', { before, after })!
+    const { addCount, delCount } = countDiffLines(df)
+    expect(addCount).toBe(2)
+    expect(delCount).toBe(2)
+  })
+
+  it('returns null when file has no provider patch even with an override', () => {
+    const noPatch: PrFile = { filename: 'img.png', status: 'modified', additions: 0, deletions: 0 }
+    expect(buildDiffFile(noPatch, 'unified', undefined, '@@ -1 +1 @@\n-a\n+b\n')).toBeNull()
   })
 })

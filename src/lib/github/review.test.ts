@@ -121,13 +121,26 @@ describe('submitReview', () => {
     expect(message).toContain('OAuth apps')
   })
 
-  it('maps 422 with "own pull request" to self-approve with verbatim message (EC-09e)', async () => {
+  it('maps 422 with "own pull request" to self-approve with a friendly message (EC-09e)', async () => {
     const githubMsg = 'Can not approve your own pull request'
     vi.stubGlobal('fetch', mockFetch(422, { message: githubMsg }))
 
     const result = await submitReview(ref, 'APPROVE', '', [], commitId)
 
-    expect(result).toMatchObject({ ok: false, kind: 'self-approve', message: githubMsg })
+    expect(result).toMatchObject({ ok: false, kind: 'self-approve' })
+    const { message } = result as { ok: false; message: string }
+    // Friendly explanation instead of GitHub's terse 422 body
+    expect(message).toMatch(/doesn't allow approving or requesting changes on your own pull request/i)
+    // Tells the user the way out
+    expect(message).toMatch(/comment/i)
+  })
+
+  it('maps 422 with "own pull request" on REQUEST_CHANGES to self-approve too', async () => {
+    vi.stubGlobal('fetch', mockFetch(422, { message: 'Can not request changes on your own pull request' }))
+
+    const result = await submitReview(ref, 'REQUEST_CHANGES', '', [], commitId)
+
+    expect(result).toMatchObject({ ok: false, kind: 'self-approve' })
   })
 
   it('maps other 422 to invalid-anchor with verbatim message (EC-09f)', async () => {

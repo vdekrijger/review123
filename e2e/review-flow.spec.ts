@@ -401,7 +401,7 @@ function seedDraftScript(prKey: string) {
 
 async function setupRoutes(
   page: import('@playwright/test').Page,
-  opts: { withGithubAuth?: boolean; withResolvedThreads?: boolean } = {},
+  opts: { withGithubAuth?: boolean; withResolvedThreads?: boolean; aiDelayMs?: number } = {},
 ) {
   // Block PostHog analytics
   await page.route('**/*posthog.com/**', (route) => route.abort())
@@ -525,6 +525,11 @@ async function setupRoutes(
 
   // ---- DeepSeek API — single handler, dispatches by request body ----------
   await page.route('**/api.deepseek.com/**', async (route) => {
+    // Optional artificial latency — used by the AI-skeleton test to observe
+    // the pending state before any AI content arrives.
+    if (opts.aiDelayMs) {
+      await new Promise((resolve) => setTimeout(resolve, opts.aiDelayMs))
+    }
     let body: { stream?: boolean; messages?: Array<{ role: string; content: string }> } = {}
     try {
       body = route.request().postDataJSON() as typeof body
@@ -1950,4 +1955,334 @@ test('step-back: browser back from verdict returns to /inspect URL', async ({ pa
 
   // Step 2 content should be visible (diff mode toggle)
   await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible({ timeout: 5_000 })
+})
+
+// ---------------------------------------------------------------------------
+// Syntax highlighting: hljs token spans render in unified + split mode, and
+// token colors stay readable against add/remove row backgrounds in both the
+// light and dark diff themes (diffViewTheme is wired to the app theme).
+// ---------------------------------------------------------------------------
+
+// A TypeScript patch with real keywords so lowlight produces hljs-keyword
+// tokens on context, removed AND added lines.
+const TS_KEYWORD_PATCH = [
+  '@@ -1,4 +1,5 @@',
+  ' const keep = 1',
+  '-export function removed(arg: string) { return arg }',
+  '+export function added(arg: number) { return arg * 2 }',
+  '+const extra: number = 42',
+  ' const tail = 2',
+].join('\n')
+
+function makeTsPrFiles() {
+  return [
+    {
+      filename: 'src/typed.ts',
+      status: 'modified',
+      patch: TS_KEYWORD_PATCH,
+      additions: 2,
+      deletions: 1,
+    },
+  ]
+}
+
+/**
+ * Computes the minimum WCAG contrast ratio between every hljs-keyword token
+ * and its effective (alpha-composited) row background inside the first
+ * file-diff article. Returns null when no token spans are present.
+ */
+async function minKeywordContrast(page: import('@playwright/test').Page): Promise<number | null> {
+  return page.evaluate(() => {
+    const spans = [...document.querySelectorAll('article.file-diff span.hljs-keyword')]
+    if (spans.length === 0) return null
+
+    const parseColor = (c: string): number[] => {
+      const m = c.match(/[\d.]+/g)?.map(Number) ?? [0, 0, 0, 0]
+      if (m.length === 3) m.push(1)
+      return m
+    }
+    const luminance = (r: number, g: number, b: number): number => {
+      const f = (v: number) => {
+        v /= 255
+        return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+      }
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+    }
+    // Effective background: composite every ancestor backgroundColor (handles
+    // the library's semi-transparent add/del row colors in dark mode).
+    const effectiveBg = (el: Element): number[] => {
+      const stack: number[][] = []
+      let cur: Element | null = el
+      while (cur) {
+        stack.push(parseColor(getComputedStyle(cur).backgroundColor))
+        cur = cur.parentElement
+      }
+      let [r, g, b] = [255, 255, 255]
+      for (const [cr, cg, cb, ca] of stack.reverse()) {
+        r = cr * ca + r * (1 - ca)
+        g = cg * ca + g * (1 - ca)
+        b = cb * ca + b * (1 - ca)
+      }
+      return [r, g, b]
+    }
+
+    let min = Infinity
+    for (const span of spans) {
+      const [fr, fg, fb] = parseColor(getComputedStyle(span).color)
+      const [br, bg, bb] = effectiveBg(span)
+      const l1 = luminance(fr, fg, fb)
+      const l2 = luminance(br, bg, bb)
+      const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05)
+      min = Math.min(min, ratio)
+    }
+    return min
+  })
+}
+
+test('syntax-highlighting: TS keywords get hljs spans in unified + split (light theme)', async ({
+  page,
+}, testInfo) => {
+  await setupRoutes(page)
+  // Override just the files endpoint with a TypeScript fixture — registered
+  // after setupRoutes, so Playwright's LIFO route matching picks it first;
+  // all other GitHub API calls fall back to the shared dispatcher.
+  await page.route('**/api.github.com/**', async (route) => {
+    if (new URL(route.request().url()).pathname === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) {
+      return route.fulfill({ json: makeTsPrFiles() })
+    }
+    return route.fallback()
+  })
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_INSPECT)
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  const article = page.locator('article.file-diff').first()
+  await expect(article).toBeVisible({ timeout: 5_000 })
+
+  // The diff view wrapper is themed and uses the built-in lowlight engine
+  const wrapper = article.locator('.diff-tailwindcss-wrapper')
+  await expect(wrapper).toHaveAttribute('data-theme', 'light')
+  await expect(wrapper).toHaveAttribute('data-highlighter', 'lowlight')
+
+  // Unified mode: a TS keyword ends up inside an hljs token span
+  await expect(
+    article.locator('span.hljs-keyword', { hasText: 'export' }).first(),
+  ).toBeVisible({ timeout: 5_000 })
+  await expect(
+    article.locator('span.hljs-keyword', { hasText: 'const' }).first(),
+  ).toBeVisible()
+
+  // Token colors must stay readable on add/remove/context row backgrounds
+  const unifiedContrast = await minKeywordContrast(page)
+  expect(unifiedContrast).not.toBeNull()
+  expect(unifiedContrast!).toBeGreaterThan(2.5)
+
+  await testInfo.attach('diff-unified-light', {
+    body: await article.screenshot(),
+    contentType: 'image/png',
+  })
+
+  // Split mode: keyword tokens render too (both sides share the same engine)
+  await page.getByRole('button', { name: 'Side-by-side' }).click()
+  await expect(page.getByRole('button', { name: 'Side-by-side' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  await expect(
+    article.locator('span.hljs-keyword', { hasText: 'export' }).first(),
+  ).toBeVisible({ timeout: 5_000 })
+
+  const splitContrast = await minKeywordContrast(page)
+  expect(splitContrast).not.toBeNull()
+  expect(splitContrast!).toBeGreaterThan(2.5)
+
+  await testInfo.attach('diff-split-light', {
+    body: await article.screenshot(),
+    contentType: 'image/png',
+  })
+})
+
+test('syntax-highlighting: dark app theme switches the diff to dark tokens, still readable', async ({
+  page,
+}, testInfo) => {
+  await setupRoutes(page)
+  await page.route('**/api.github.com/**', async (route) => {
+    if (new URL(route.request().url()).pathname === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) {
+      return route.fulfill({ json: makeTsPrFiles() })
+    }
+    return route.fallback()
+  })
+  // Seed the app theme to dark — FileDiff resolves it and passes
+  // diffViewTheme="dark" to DiffView.
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, { ...seedSettings(false), theme: 'dark' })
+
+  await page.goto(APP_REVIEW_INSPECT)
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  const article = page.locator('article.file-diff').first()
+  await expect(article).toBeVisible({ timeout: 5_000 })
+
+  // Diff view wrapper follows the app theme
+  const wrapper = article.locator('.diff-tailwindcss-wrapper')
+  await expect(wrapper).toHaveAttribute('data-theme', 'dark')
+
+  // Keyword tokens render in dark mode too
+  await expect(
+    article.locator('span.hljs-keyword', { hasText: 'export' }).first(),
+  ).toBeVisible({ timeout: 5_000 })
+
+  // Dark token colors must stay readable on the dark add/remove backgrounds
+  const darkContrast = await minKeywordContrast(page)
+  expect(darkContrast).not.toBeNull()
+  expect(darkContrast!).toBeGreaterThan(2.5)
+
+  await testInfo.attach('diff-unified-dark', {
+    body: await article.screenshot(),
+    contentType: 'image/png',
+  })
+})
+
+// ---------------------------------------------------------------------------
+// AI skeletons — pending AI sections show content-shaped skeletons from the
+// first render (no blank gap, no late spinner pop-in), then real content
+// replaces them. Uses aiDelayMs to hold all DeepSeek responses back.
+// ---------------------------------------------------------------------------
+
+test('ai-skeletons: expanded AI sections show skeletons while pending, content replaces them', async ({
+  page,
+}) => {
+  await setupRoutes(page, { aiDelayMs: 3_000 })
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load — AI run starts now, but all LLM responses are delayed
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Open the page summary + diagrams + tests panels while AI is still pending
+  const summaryPanel = page.locator('details.summary-panel')
+  await summaryPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+  const diagramsPanel = page.locator('details.diagrams-panel')
+  await diagramsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+  const testsPanel = page.locator('details.tests-panel')
+  await testsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+
+  // Skeletons must be visible immediately — content-shaped per section
+  await expect(summaryPanel.locator('.ai-panel-loading .skeleton-block')).toBeVisible({ timeout: 2_000 })
+  await expect(diagramsPanel.locator('.skeleton-rect')).toBeVisible()
+  await expect(testsPanel.locator('.skeleton-card')).toHaveCount(2)
+
+  // The context rail (open Summary section by default) shows a skeleton too
+  const rail = page.locator('aside.context-rail')
+  await expect(rail.locator('.ai-panel-loading .skeleton-block').first()).toBeVisible()
+
+  // Eventually the real content replaces the skeleton (delayed fixtures resolve)
+  await expect(summaryPanel).toContainText('This PR adds a new feature', { timeout: 20_000 })
+  await expect(summaryPanel.locator('.ai-panel-loading')).toHaveCount(0)
+  await expect(testsPanel.locator('.tests-covered-item')).toHaveCount(2, { timeout: 20_000 })
+  await expect(testsPanel.locator('.skeleton-card')).toHaveCount(0)
+})
+
+// ---------------------------------------------------------------------------
+// Test 21: instant step navigation — no PR refetch, no loading skeleton
+// ---------------------------------------------------------------------------
+
+test('step-nav: 1→2→3→back→forward is instant — no PR refetch, no loading skeleton', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+
+  // Count PR-load fetches (meta + files). Registered AFTER setupRoutes so this
+  // handler runs first (Playwright routes are LIFO); fallback() passes the
+  // request through to the setupRoutes dispatcher.
+  let prLoadFetches = 0
+  await page.route('**/api.github.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (
+      path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}` ||
+      path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`
+    ) {
+      prLoadFetches++
+    }
+    await route.fallback()
+  })
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  // Track every APPEARANCE of the PR loading skeleton (.pr-loading). The
+  // initial page load legitimately shows it; step navigation must never
+  // re-show it. A polling check via expect(...).toHaveCount(0) could miss a
+  // brief flash, so we observe DOM mutations instead.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __skeletonAppearances: number }
+    w.__skeletonAppearances = 0
+    let wasPresent = false
+    const check = () => {
+      const present = document.querySelector('.pr-loading') !== null
+      if (present && !wasPresent) w.__skeletonAppearances++
+      wasPresent = present
+    }
+    new MutationObserver(check).observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    })
+  })
+
+  await page.goto(APP_REVIEW_UNDERSTAND)
+  const heading = page.getByRole('heading', { name: /Test PR: add feature/i })
+  await expect(heading).toBeVisible({ timeout: 10_000 })
+
+  const initialAppearances = await page.evaluate(
+    () => (window as unknown as { __skeletonAppearances: number }).__skeletonAppearances,
+  )
+  expect(prLoadFetches).toBe(2) // 1× meta + 1× files from the initial load
+
+  // Step 1 → 2
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page).toHaveURL(APP_REVIEW_INSPECT)
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Step 2 → 3
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page).toHaveURL(APP_REVIEW_VERDICT)
+
+  // Browser back: verdict → inspect
+  await page.goBack({ waitUntil: 'commit' })
+  await expect(page).toHaveURL(APP_REVIEW_INSPECT)
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Browser back: inspect → understand
+  await page.goBack({ waitUntil: 'commit' })
+  await expect(page).toHaveURL(APP_REVIEW_UNDERSTAND)
+  await expect(page.locator('.understand-step')).toBeVisible()
+
+  // Browser forward: understand → inspect
+  await page.goForward({ waitUntil: 'commit' })
+  await expect(page).toHaveURL(APP_REVIEW_INSPECT)
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // The PR title stayed rendered and the skeleton never re-appeared
+  await expect(heading).toBeVisible()
+  const finalAppearances = await page.evaluate(
+    () => (window as unknown as { __skeletonAppearances: number }).__skeletonAppearances,
+  )
+  expect(finalAppearances).toBe(initialAppearances)
+
+  // And the PR was fetched exactly once — no refetch on any step change
+  expect(prLoadFetches).toBe(2)
 })
