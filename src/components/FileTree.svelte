@@ -93,7 +93,7 @@
 
   .dir-children {
     padding-left: 0.75rem;
-    border-left: 1px solid #3a4060;
+    border-left: 1px solid var(--border-subtle);
     margin-left: 0.5rem;
   }
 
@@ -101,7 +101,7 @@
     cursor: pointer;
     padding: 0.15rem 0.25rem;
     font-size: 0.78rem;
-    color: #8a9bb0;
+    color: var(--text-muted);
     user-select: none;
     list-style: none;
   }
@@ -109,7 +109,7 @@
   .dir-summary::-webkit-details-marker { display: none; }
 
   .dir-name {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-size: 0.78rem;
   }
 
@@ -119,8 +119,8 @@
   }
 
   .file-row.active .file-btn {
-    background: #2a3a58;
-    color: #c8dff0;
+    background: var(--accent-subtle, color-mix(in srgb, var(--accent) 15%, transparent));
+    color: var(--text);
   }
 
   .file-row.viewed .file-btn {
@@ -144,11 +144,11 @@
   }
 
   .file-btn:hover {
-    background: #1e2a40;
+    background: var(--surface-raised);
   }
 
   .file-name {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-size: 12.5px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -165,11 +165,11 @@
   }
 
   .additions {
-    color: #3fb950;
+    color: var(--legend-added-color);
   }
 
   .deletions {
-    color: #f85149;
+    color: var(--legend-removed-color);
   }
 
   .hotspot-dot {
@@ -180,13 +180,13 @@
     display: inline-block;
   }
 
-  .hotspot-dot.level-high { background: #cf222e; }
-  .hotspot-dot.level-medium { background: #9a6700; }
-  .hotspot-dot.level-low { background: #888; }
+  .hotspot-dot.level-high { background: var(--legend-removed-color); }
+  .hotspot-dot.level-medium { background: var(--legend-changed-color); }
+  .hotspot-dot.level-low { background: var(--text-muted); }
 
   .viewed-check {
     font-size: 10px;
-    color: #3fb950;
+    color: var(--legend-added-color);
     opacity: 0.6;
     flex-shrink: 0;
   }
