@@ -533,6 +533,10 @@ export interface AskFocus {
  * When focus is provided, the system prompt adds a line-level direction clause
  * and the excerpt is included in the user prompt before the question.
  *
+ * Contract (inline widget Ask AI): the user's typed comment text IS the
+ * question — the system prompt directs the model to answer it directly and to
+ * be VERY concise (2-4 sentences unless code is needed).
+ *
  * NOTE: No PROMPT_VERSION bump needed — answers are never cached.
  */
 export function askPrompt(
@@ -545,7 +549,11 @@ export function askPrompt(
 about a pull request based ONLY on the provided context. You must be grounded only in the \
 provided context — do not invent or assume information that is not visible in the context. \
 If a question asks about something you cannot see in the provided context, respond: \
-"I can't see that in the provided context." Keep answers concise and specific.`
+"I can't see that in the provided context." Keep answers concise and specific.
+
+Answer the user's question directly — the text after "Question:" is the user's own words and \
+is exactly what they want answered; do not substitute a generic explanation of the change. \
+Be VERY concise: 2-4 sentences, unless code is needed to illustrate the answer.`
 
   if (focus) {
     system += `\n\nThe question concerns the specific change at ${focus.path}:${focus.line}. \

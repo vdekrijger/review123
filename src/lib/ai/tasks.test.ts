@@ -1198,3 +1198,48 @@ describe('diagramsPrompt — import graph context section (ai-quality-round2)', 
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(7)
   })
 })
+
+// ---------------------------------------------------------------------------
+// askPrompt — typed comment text contract + concision (inline widget Ask AI)
+// ---------------------------------------------------------------------------
+
+describe('askPrompt — typed text contract and concision', () => {
+  const focus = { path: 'src/widget.ts', line: 12, excerpt: '-a\n+b' }
+
+  it('the typed comment text lands verbatim in the user prompt (with focus)', () => {
+    const typed = 'Is this loop accidentally quadratic?'
+    const { user } = askPrompt(makeCtx(), [], typed, focus)
+    expect(user).toContain(typed)
+  })
+
+  it('user prompt labels the typed text as the question to answer', () => {
+    const { user } = askPrompt(makeCtx(), [], 'why was this changed?', focus)
+    expect(user).toMatch(/Question:\s*why was this changed\?/)
+  })
+
+  it('system prompt instructs the model to answer the user\'s question directly', () => {
+    const { system } = askPrompt(makeCtx(), [], 'q', focus)
+    expect(system).toMatch(/answer the user'?s question directly/i)
+  })
+
+  it('system prompt contains the VERY concise 2-4 sentences instruction', () => {
+    const { system } = askPrompt(makeCtx(), [], 'q')
+    expect(system).toMatch(/very concise/i)
+    expect(system).toMatch(/2[-–]4 sentences/i)
+    expect(system).toMatch(/unless code/i)
+  })
+
+  it('concision instruction is present with and without focus', () => {
+    const withFocus = askPrompt(makeCtx(), [], 'q', focus).system
+    const withoutFocus = askPrompt(makeCtx(), [], 'q').system
+    expect(withFocus).toMatch(/2[-–]4 sentences/i)
+    expect(withoutFocus).toMatch(/2[-–]4 sentences/i)
+  })
+
+  it('focus grounding (path:line + excerpt) is retained alongside the typed question', () => {
+    const { system, user } = askPrompt(makeCtx(), [], 'my typed question', focus)
+    expect(system).toContain('src/widget.ts:12')
+    expect(user).toContain('-a\n+b')
+    expect(user).toContain('my typed question')
+  })
+})
