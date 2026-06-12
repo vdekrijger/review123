@@ -32,9 +32,10 @@ import {
   verdictPrompt,
   testInsightPrompt,
   coachPrompt,
+  alternativesPrompt,
 } from './tasks'
-import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult } from './schemas'
-import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult } from './schemas'
+import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult } from './schemas'
+import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult } from './schemas'
 import type { Draft } from '../drafts/drafts.svelte'
 
 // ---------------------------------------------------------------------------
@@ -53,7 +54,7 @@ export interface PanelState<T> {
 // Task names (used as cache key discriminants + analytics)
 // ---------------------------------------------------------------------------
 
-type TaskName = 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests'
+type TaskName = 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests' | 'alternatives'
 
 // ---------------------------------------------------------------------------
 // AiRun public interface
@@ -65,6 +66,7 @@ export interface AiRun {
   readonly diagrams: PanelState<GraphResult>
   readonly verdict: PanelState<VerdictResult>
   readonly tests: PanelState<TestInsight>
+  readonly alternatives: PanelState<AlternativesResult>
   start(): Promise<void>
   retry(task: TaskName): Promise<void>
   coach(drafts: Draft[]): Promise<CoachResult | { error: string }>
@@ -143,6 +145,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   const diagramsState = $state<PanelState<GraphResult>>({ status: 'idle' })
   const verdictState = $state<PanelState<VerdictResult>>({ status: 'idle' })
   const testsState = $state<PanelState<TestInsight>>({ status: 'idle' })
+  const alternativesState = $state<PanelState<AlternativesResult>>({ status: 'idle' })
 
   // Packed context — kept in closure so retry can reuse it without re-packing
   // (unless the initial pack failed, in which case retry re-packs)
@@ -290,6 +293,39 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
   }
 
+  async function runAlternativesTask(ctx: PackedContext): Promise<void> {
+    const key = cacheKey(prKey, 'alternatives', PROMPT_VERSION)
+
+    const t0 = performance.now()
+    const hit = await getCached<AlternativesResult>(key)
+    if (hit !== null) {
+      alternativesState.status = 'done'
+      alternativesState.value = hit
+      track('ai_task_completed', { task: 'alternatives', duration_ms: Math.round(performance.now() - t0), cached: true })
+      return
+    }
+
+    alternativesState.status = 'loading'
+    const t1 = performance.now()
+    const prompts = alternativesPrompt(ctx)
+
+    try {
+      const result = await llmJsonWithRepair<AlternativesResult>(
+        { system: prompts.system, user: prompts.user },
+        validateAlternativesResult,
+      )
+      await setCached<AlternativesResult>(key, result)
+      alternativesState.status = 'done'
+      alternativesState.value = result
+      track('ai_task_completed', { task: 'alternatives', duration_ms: Math.round(performance.now() - t1), cached: false })
+    } catch (err) {
+      const kind = err instanceof LlmError ? err.kind : 'unknown'
+      alternativesState.status = 'error'
+      alternativesState.error = humanMessage(kind)
+      track('ai_task_failed', { task: 'alternatives', reason: kind })
+    }
+  }
+
   async function runVerdictTask(ctx: PackedContext, ciData: CiSummary | null): Promise<void> {
     const key = cacheKey(prKey, 'verdict', PROMPT_VERSION)
 
@@ -336,12 +372,14 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     diagramsState.status = status
     verdictState.status = status
     testsState.status = status
+    alternativesState.status = status
     if (error !== undefined) {
       summaryState.error = error
       attentionState.error = error
       diagramsState.error = error
       verdictState.error = error
       testsState.error = error
+      alternativesState.error = error
     }
   }
 
@@ -394,12 +432,13 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       return
     }
 
-    // Run all five tasks in parallel, each isolated (EC-12c / EC-13g)
+    // Run all six tasks in parallel, each isolated (EC-12c / EC-13g)
     await Promise.all([
       runSummaryTask(ctx),
       runAttentionTask(ctx),
       runDiagramsTask(ctx),
       runTestsTask(ctx),
+      runAlternativesTask(ctx),
       runVerdictTask(ctx, ciData),
     ])
   }
@@ -422,6 +461,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     if (task === 'attention') return runAttentionTask(ctx)
     if (task === 'diagrams') return runDiagramsTask(ctx)
     if (task === 'tests') return runTestsTask(ctx)
+    if (task === 'alternatives') return runAlternativesTask(ctx)
   }
 
   // ---------------------------------------------------------------------------
@@ -476,6 +516,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     get diagrams() { return diagramsState },
     get verdict() { return verdictState },
     get tests() { return testsState },
+    get alternatives() { return alternativesState },
     start,
     retry,
     coach,

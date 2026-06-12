@@ -20,7 +20,7 @@ import { createAiRun } from './run.svelte'
 import { LlmError } from '../llm/llm'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
-import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult } from './schemas'
+import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult } from './schemas'
 
 // ---------------------------------------------------------------------------
 // Fixture data
@@ -59,6 +59,18 @@ const TEST_INSIGHT_RESULT: TestInsight = {
   gaps: ['src/bar.ts has no test coverage'],
 }
 
+const ALTERNATIVES_RESULT: AlternativesResult = {
+  problem: 'The PR adds a global singleton cache without isolation.',
+  alternatives: [
+    {
+      approach: 'Use a module-scoped Map passed via dependency injection.',
+      tradeoffs: 'Better isolation but requires passing context. More boilerplate.',
+      assessment: 'alternative-is-better',
+      rationale: 'Avoids shared state across tests and requests.',
+    },
+  ],
+}
+
 // ---------------------------------------------------------------------------
 // Default llmJsonWithRepair implementation that dispatches by validator result
 // Returns appropriate fixture based on which validator accepts the result.
@@ -68,7 +80,7 @@ type ValidateFn = (x: unknown) => unknown
 
 function defaultJsonDispatch(_opts: unknown, validate: ValidateFn): unknown {
   // Try each fixture in order — return the first one the validator accepts
-  for (const candidate of [ATTENTION_RESULT, GRAPH_RESULT, TEST_INSIGHT_RESULT, VERDICT_RESULT]) {
+  for (const candidate of [ATTENTION_RESULT, GRAPH_RESULT, TEST_INSIGHT_RESULT, ALTERNATIVES_RESULT, VERDICT_RESULT]) {
     if (validate(candidate) !== null) return candidate
   }
   return ATTENTION_RESULT // fallback
@@ -153,6 +165,7 @@ describe('no-key path (EC-12a)', () => {
     expect(run.attention.status).toBe('no-key')
     expect(run.diagrams.status).toBe('no-key')
     expect(run.verdict.status).toBe('no-key')
+    expect(run.alternatives.status).toBe('no-key')
 
     expect(deps.gateAi).not.toHaveBeenCalled()
     expect(deps.llmStream).not.toHaveBeenCalled()
@@ -183,6 +196,7 @@ describe('declined path (EC-11c)', () => {
     expect(run.attention.status).toBe('declined')
     expect(run.diagrams.status).toBe('declined')
     expect(run.verdict.status).toBe('declined')
+    expect(run.alternatives.status).toBe('declined')
 
     expect(deps.llmStream).not.toHaveBeenCalled()
     expect(deps.llmJsonWithRepair).not.toHaveBeenCalled()
@@ -237,13 +251,14 @@ describe('cache-hit (EC-17a, track cached:true)', () => {
     expect((attentionTrack![1] as Record<string, unknown>)['cached']).toBe(true)
   })
 
-  it('all five tasks cache hit: no llm calls at all', async () => {
+  it('all six tasks cache hit: no llm calls at all', async () => {
     const deps = makeDeps()
     deps.getCached.mockImplementation(async (key: string) => {
       if (key.includes('summary')) return 'cached summary'
       if (key.includes('attention')) return ATTENTION_RESULT
       if (key.includes('diagrams')) return GRAPH_RESULT
       if (key.includes('tests')) return TEST_INSIGHT_RESULT
+      if (key.includes('alternatives')) return ALTERNATIVES_RESULT
       if (key.includes('verdict')) return VERDICT_RESULT
       return null
     })
@@ -258,6 +273,7 @@ describe('cache-hit (EC-17a, track cached:true)', () => {
     expect(run.attention.status).toBe('done')
     expect(run.diagrams.status).toBe('done')
     expect(run.tests.status).toBe('done')
+    expect(run.alternatives.status).toBe('done')
     expect(run.verdict.status).toBe('done')
   })
 })
@@ -550,6 +566,8 @@ describe('retry single task', () => {
       if (asGraph !== null) return asGraph
       const asTests = validate(TEST_INSIGHT_RESULT)
       if (asTests !== null) return asTests
+      const asAlternatives = validate(ALTERNATIVES_RESULT)
+      if (asAlternatives !== null) return asAlternatives
       verdictCallCount++
       if (verdictCallCount === 1) throw new LlmError('server', 'verdict broke')
       return VERDICT_RESULT
@@ -656,7 +674,7 @@ describe('duration_ms as number', () => {
     await run.start()
 
     const completedCalls = deps.track.mock.calls.filter((c: unknown[]) => c[0] === 'ai_task_completed')
-    expect(completedCalls.length).toBe(5) // summary + attention + diagrams + tests + verdict
+    expect(completedCalls.length).toBe(6) // summary + attention + diagrams + tests + alternatives + verdict
 
     for (const call of completedCalls) {
       const props = call[1] as Record<string, unknown>
@@ -795,6 +813,113 @@ describe('tests panel (D2)', () => {
 
     expect(run.tests.status).toBe('done')
     expect(run.tests.value).toEqual(TEST_INSIGHT_RESULT)
+    // Other panels unchanged by retry
+    expect(run.summary.status).toBe(summaryStatusBeforeRetry)
+    expect(run.attention.status).toBe(attentionStatusBeforeRetry)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// alternatives panel (Plan F) — sixth parallel task
+// ---------------------------------------------------------------------------
+
+describe('alternatives panel (Plan F)', () => {
+  it('alternatives cache hit: done + track cached:true, no llmJsonWithRepair call for alternatives', async () => {
+    const deps = makeDeps()
+    deps.getCached.mockImplementation(async (key: string) => {
+      if (key.includes('alternatives')) return ALTERNATIVES_RESULT
+      return null
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.alternatives.status).toBe('done')
+    expect(run.alternatives.value).toEqual(ALTERNATIVES_RESULT)
+
+    const altTrack = deps.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_completed' && (c[1] as Record<string, unknown>)['task'] === 'alternatives',
+    )
+    expect(altTrack).toBeTruthy()
+    expect((altTrack![1] as Record<string, unknown>)['cached']).toBe(true)
+  })
+
+  it('alternatives failure does not affect summary, attention, diagrams, tests, or verdict', async () => {
+    const deps = makeDeps()
+
+    deps.llmStream.mockImplementation(async (_opts: unknown, onDelta: (d: string) => void) => {
+      onDelta('summary text')
+      return 'summary text'
+    })
+
+    // Make alternatives task fail
+    deps.llmJsonWithRepair.mockImplementation(async (_opts: unknown, validate: ValidateFn) => {
+      const asAlternatives = validate(ALTERNATIVES_RESULT)
+      if (asAlternatives !== null) {
+        throw new LlmError('server', 'alternatives task broke')
+      }
+      const asAttention = validate(ATTENTION_RESULT)
+      if (asAttention !== null) return asAttention
+      const asGraph = validate(GRAPH_RESULT)
+      if (asGraph !== null) return asGraph
+      const asTests = validate(TEST_INSIGHT_RESULT)
+      if (asTests !== null) return asTests
+      return VERDICT_RESULT
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    // alternatives should fail
+    expect(run.alternatives.status).toBe('error')
+    expect(run.alternatives.error).toBeTruthy()
+    // other panels should succeed
+    expect(run.summary.status).toBe('done')
+    expect(run.attention.status).toBe('done')
+    expect(run.diagrams.status).toBe('done')
+    expect(run.tests.status).toBe('done')
+    expect(run.verdict.status).toBe('done')
+
+    // ai_task_failed should be tracked for alternatives
+    const failedCall = deps.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_failed' && (c[1] as Record<string, unknown>)['task'] === 'alternatives',
+    )
+    expect(failedCall).toBeTruthy()
+    expect((failedCall![1] as Record<string, unknown>)['reason']).toBe('server')
+  })
+
+  it('retry(alternatives) re-runs only alternatives, other panels unaffected', async () => {
+    const deps = makeDeps()
+
+    let altCallCount = 0
+    deps.llmJsonWithRepair.mockImplementation(async (_opts: unknown, validate: ValidateFn) => {
+      const asAlternatives = validate(ALTERNATIVES_RESULT)
+      if (asAlternatives !== null) {
+        altCallCount++
+        if (altCallCount === 1) throw new LlmError('server', 'alternatives broke first time')
+        return asAlternatives
+      }
+      const asAttention = validate(ATTENTION_RESULT)
+      if (asAttention !== null) return asAttention
+      const asGraph = validate(GRAPH_RESULT)
+      if (asGraph !== null) return asGraph
+      const asTests = validate(TEST_INSIGHT_RESULT)
+      if (asTests !== null) return asTests
+      return VERDICT_RESULT
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.alternatives.status).toBe('error')
+    const summaryStatusBeforeRetry = run.summary.status
+    const attentionStatusBeforeRetry = run.attention.status
+
+    // Retry alternatives only
+    await run.retry('alternatives')
+
+    expect(run.alternatives.status).toBe('done')
+    expect(run.alternatives.value).toEqual(ALTERNATIVES_RESULT)
     // Other panels unchanged by retry
     expect(run.summary.status).toBe(summaryStatusBeforeRetry)
     expect(run.attention.status).toBe(attentionStatusBeforeRetry)

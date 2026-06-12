@@ -27,6 +27,7 @@ function makeRun(attn?: AttentionResult): AiRun {
     diagrams: { status: 'idle' },
     verdict: { status: 'idle' },
     tests: { status: 'idle' },
+    alternatives: { status: 'idle' },
     start: async () => {},
     retry: async () => {},
     coach: async () => ({ error: 'no-key' }),

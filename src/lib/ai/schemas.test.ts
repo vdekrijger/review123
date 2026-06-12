@@ -14,6 +14,7 @@ import {
   validateGraphResult,
   validateTestInsight,
   validateCoachResult,
+  validateAlternativesResult,
 } from './schemas'
 
 // ---------------------------------------------------------------------------
@@ -731,5 +732,155 @@ describe('validateCoachResult', () => {
     expect(validateCoachResult('coach')).toBeNull()
     expect(validateCoachResult(42)).toBeNull()
     expect(validateCoachResult([])).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// validateAlternativesResult (Plan F)
+// ---------------------------------------------------------------------------
+
+describe('validateAlternativesResult', () => {
+  const validAlt = {
+    problem: 'The PR introduces a global mutable singleton for caching.',
+    alternatives: [
+      {
+        approach: 'Use a module-level WeakMap keyed by request context.',
+        tradeoffs: 'Better isolation but requires passing context everywhere.',
+        assessment: 'alternative-is-better',
+        rationale: 'Avoids shared state leaks across requests.',
+      },
+      {
+        approach: 'Keep PR approach but add a reset function for tests.',
+        tradeoffs: 'Minimal change but still a singleton.',
+        assessment: 'comparable',
+        rationale: 'Acceptable if tests are the only concern.',
+      },
+    ],
+  }
+
+  it('accepts a valid AlternativesResult', () => {
+    expect(validateAlternativesResult(validAlt)).toEqual(validAlt)
+  })
+
+  it('accepts valid with empty alternatives array', () => {
+    const x = { problem: 'Nothing obvious.', alternatives: [] }
+    expect(validateAlternativesResult(x)).toEqual(x)
+  })
+
+  it('accepts all four valid assessment enum values', () => {
+    const assessments = ['pr-is-better', 'comparable', 'alternative-is-better', 'different-goals']
+    for (const assessment of assessments) {
+      const x = {
+        problem: 'some problem',
+        alternatives: [{ approach: 'a', tradeoffs: 't', assessment, rationale: 'r' }],
+      }
+      expect(validateAlternativesResult(x)).not.toBeNull()
+    }
+  })
+
+  it('accepts extra top-level keys (tolerant of extras)', () => {
+    const withExtras = { ...validAlt, meta: { v: 1 }, unexpectedField: 'ignored' }
+    const result = validateAlternativesResult(withExtras)
+    expect(result).not.toBeNull()
+    expect(result?.problem).toBe(validAlt.problem)
+  })
+
+  it('accepts extra keys on alternative objects', () => {
+    const withExtras = {
+      problem: 'p',
+      alternatives: [
+        { approach: 'a', tradeoffs: 't', assessment: 'pr-is-better', rationale: 'r', extra: 'ok' },
+      ],
+    }
+    expect(validateAlternativesResult(withExtras)).not.toBeNull()
+  })
+
+  // Strict: invalid assessment enum
+  it('returns null for invalid assessment enum string', () => {
+    const bad = {
+      problem: 'p',
+      alternatives: [{ approach: 'a', tradeoffs: 't', assessment: 'better', rationale: 'r' }],
+    }
+    expect(validateAlternativesResult(bad)).toBeNull()
+  })
+
+  it('returns null for numeric assessment value', () => {
+    const bad = {
+      problem: 'p',
+      alternatives: [{ approach: 'a', tradeoffs: 't', assessment: 1, rationale: 'r' }],
+    }
+    expect(validateAlternativesResult(bad)).toBeNull()
+  })
+
+  it('returns null when problem is missing', () => {
+    const { problem: _p, ...rest } = validAlt
+    expect(validateAlternativesResult(rest)).toBeNull()
+  })
+
+  it('returns null when problem is not a string', () => {
+    const bad = { ...validAlt, problem: 42 }
+    expect(validateAlternativesResult(bad)).toBeNull()
+  })
+
+  it('returns null when alternatives is missing', () => {
+    const { alternatives: _a, ...rest } = validAlt
+    expect(validateAlternativesResult(rest)).toBeNull()
+  })
+
+  it('returns null when alternatives is not an array', () => {
+    const bad = { ...validAlt, alternatives: {} }
+    expect(validateAlternativesResult(bad)).toBeNull()
+  })
+
+  it('returns null when an alternative is not an object', () => {
+    const bad = { problem: 'p', alternatives: ['not-an-object'] }
+    expect(validateAlternativesResult(bad)).toBeNull()
+  })
+
+  it('returns null when approach is missing from alternative', () => {
+    const bad = {
+      problem: 'p',
+      alternatives: [{ tradeoffs: 't', assessment: 'pr-is-better', rationale: 'r' }],
+    }
+    expect(validateAlternativesResult(bad)).toBeNull()
+  })
+
+  it('returns null when approach is not a string', () => {
+    const bad = {
+      problem: 'p',
+      alternatives: [{ approach: 123, tradeoffs: 't', assessment: 'pr-is-better', rationale: 'r' }],
+    }
+    expect(validateAlternativesResult(bad)).toBeNull()
+  })
+
+  it('returns null when tradeoffs is missing from alternative', () => {
+    const bad = {
+      problem: 'p',
+      alternatives: [{ approach: 'a', assessment: 'pr-is-better', rationale: 'r' }],
+    }
+    expect(validateAlternativesResult(bad)).toBeNull()
+  })
+
+  it('returns null when rationale is missing from alternative', () => {
+    const bad = {
+      problem: 'p',
+      alternatives: [{ approach: 'a', tradeoffs: 't', assessment: 'pr-is-better' }],
+    }
+    expect(validateAlternativesResult(bad)).toBeNull()
+  })
+
+  it('returns null when assessment is missing from alternative', () => {
+    const bad = {
+      problem: 'p',
+      alternatives: [{ approach: 'a', tradeoffs: 't', rationale: 'r' }],
+    }
+    expect(validateAlternativesResult(bad)).toBeNull()
+  })
+
+  it('returns null for non-object input', () => {
+    expect(validateAlternativesResult(null)).toBeNull()
+    expect(validateAlternativesResult('string')).toBeNull()
+    expect(validateAlternativesResult(42)).toBeNull()
+    expect(validateAlternativesResult([])).toBeNull()
   })
 })
