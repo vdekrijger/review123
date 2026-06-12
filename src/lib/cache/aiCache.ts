@@ -20,10 +20,16 @@
 
 /**
  * Builds a deterministic cache key.
- * Distinct for every (prKey, task, promptVersion) triple (EC-17b/c/i).
+ * Distinct for every (prKey, task, promptVersion, modelId) tuple (EC-17b/c/i).
+ *
+ * modelId is included so that switching providers/models produces cache misses
+ * rather than returning stale results from a different model.
+ * Migration note: old keys (without model segment) simply miss — acceptable,
+ * they will just re-run the task once and then cache under the new key shape.
  */
-export function cacheKey(prKey: string, task: string, promptVersion: number): string {
-  return `${prKey}|${task}|v${promptVersion}`
+export function cacheKey(prKey: string, task: string, promptVersion: number, modelId?: string): string {
+  const modelSegment = modelId ? `|m:${modelId}` : ''
+  return `${prKey}|${task}|v${promptVersion}${modelSegment}`
 }
 
 // ---------------------------------------------------------------------------
