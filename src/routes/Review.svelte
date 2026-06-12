@@ -347,7 +347,7 @@
   <ConsentDialog repo={consentDialogRepo} onresult={handleConsentResult} />
 {/if}
 
-<section class="review">
+<section class="review" data-rail-collapsed={String(railCollapsed)}>
   {#if load.state.status === 'loading'}
     <p>Loading {owner}/{repo}#{number}…</p>
   {:else if load.state.status === 'error'}
@@ -524,6 +524,18 @@
 
 <style>
   .review { max-width: 70rem; margin: 0 auto; padding: 1rem; padding-bottom: 5rem; }
+
+  /*
+   * Medium regime (1100–1443px): rail is 300px fixed, but the viewport doesn't have
+   * enough free space for it without covering content. Push content right so the
+   * expanded rail never overlaps interactive elements (e.g. the "Full diff" button).
+   * Only applies when the rail is expanded (data-rail-collapsed="false").
+   */
+  @media (max-width: 1443px) and (min-width: 1100px) {
+    .review:not([data-rail-collapsed="true"]) {
+      padding-right: calc(300px + 1rem);
+    }
+  }
   .muted { opacity: 0.6; }
 
   .comments-error-note {

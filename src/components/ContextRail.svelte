@@ -14,9 +14,10 @@
     onhotspot: (path: string) => void
     collapsed: boolean
     oncollapse: (c: boolean) => void
+    onbackdropclick?: () => void
   }
 
-  let { run, onhotspot, collapsed, oncollapse }: Props = $props()
+  let { run, onhotspot, collapsed, oncollapse, onbackdropclick }: Props = $props()
 
   const attention = $derived(
     run.attention.status === 'done' ? (run.attention.value as AttentionResult) : undefined
@@ -41,6 +42,13 @@
   )
 </script>
 
+<div
+  class="rail-backdrop"
+  class:visible={!collapsed}
+  role="presentation"
+  onclick={onbackdropclick}
+  aria-hidden="true"
+></div>
 <aside class="context-rail" class:collapsed>
   <div class="rail-header">
     <span class="rail-title">Context</span>
@@ -133,11 +141,12 @@
     right: 0;
     top: var(--topbar-h, 2.75rem);
     height: calc(100vh - var(--topbar-h, 2.75rem));
-    /* Responsive width: fill the space between content column edge and viewport.
-       --content-max mirrors the Review.svelte max-width (70rem ≈ 1120px).
-       clamp keeps a min of 300px and caps at 480px.
-       On narrow viewports (no leftover space) the rail overlays as before. */
-    width: clamp(300px, calc((100vw - var(--content-max, 70rem)) / 1 - 24px), 480px);
+    /*
+     * Wide viewport (≥1444px): free space ≥ 300px — fill half the surplus, capped at 480px.
+     * Medium viewport (1100–1443px): overridden to 300px fixed by media query below.
+     * Narrow viewport (<1100px): collapsed by default, overlay when open (media query below).
+     */
+    width: clamp(300px, calc((100vw - var(--content-max, 70rem)) / 2 - 24px), 480px);
     background: var(--surface);
     border-left: 1px solid var(--hairline);
     overflow-y: auto;
@@ -149,6 +158,37 @@
 
   .context-rail.collapsed {
     width: 1.75rem;
+  }
+
+  /* Medium regime (1100–1443px): not enough free space beside content → fix rail at 300px */
+  @media (max-width: 1443px) and (min-width: 1100px) {
+    .context-rail:not(.collapsed) {
+      width: 300px;
+    }
+  }
+
+  /* Narrow regime (<1100px): collapsed by default; expanded = overlay on top of everything */
+  @media (max-width: 1099px) {
+    .context-rail:not(.collapsed) {
+      width: 300px;
+      z-index: 300; /* above topbar (z-index: 200) */
+      box-shadow: -4px 0 16px rgba(0, 0, 0, 0.4);
+    }
+  }
+
+  /* Backdrop: hidden by default, visible only in narrow mode when rail is open */
+  .rail-backdrop {
+    display: none;
+  }
+
+  @media (max-width: 1099px) {
+    .rail-backdrop.visible {
+      display: block;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.4);
+      z-index: 299; /* just below the rail (300) */
+    }
   }
 
   .rail-header {
