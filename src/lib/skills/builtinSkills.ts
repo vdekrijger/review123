@@ -23,10 +23,27 @@ export interface BuiltinSkill {
 }
 
 // ---------------------------------------------------------------------------
+// Shared calibration — appended to every built-in persona (anti-fatigue, v10)
+// ---------------------------------------------------------------------------
+
+/**
+ * One shared discipline block for all 6 personas (not per-persona rewrites).
+ * Exported so tests can assert it is present on every built-in skill.
+ */
+export const SHARED_CALIBRATION = `
+## Shared calibration (applies on top of this persona's own discipline)
+- Evidence gate: only flag what you can cite (file and line in the diff) AND where you can state the concrete harm — what breaks, or who gets hurt. No "consider...", "might want to...", "ensure that..." without a stated failure mode. If the harm depends on conditions not visible in the diff, say "couldn't verify" or stay silent — never assert.
+- At most 5 findings: report the top findings by severity × confidence; note omitted lower-confidence observations in one line, never as extra findings.
+- Brevity: one sentence of what + where, one sentence of why it matters, optional fix in at most one sentence. No restating the diff, no praise padding, no methodology narration.
+- Silence is a valid answer: "No significant issues from this lens." is a GOOD and expected outcome on clean code.
+- Never repeat a point an existing PR comment already makes.
+- Severity honesty: nits are nits — label them low; never inflate.`
+
+// ---------------------------------------------------------------------------
 // Built-in library
 // ---------------------------------------------------------------------------
 
-export const BUILTIN_SKILLS: BuiltinSkill[] = [
+const BASE_SKILLS: BuiltinSkill[] = [
   {
     id: 'architecture',
     name: 'Architecture & Design Reviewer',
@@ -111,3 +128,9 @@ Every finding must name WHERE the scale comes from (user data? files? requests?)
     content: SAMPLE_SKILL_CONTENT,
   },
 ]
+
+/** All 6 personas with the shared anti-fatigue calibration appended. */
+export const BUILTIN_SKILLS: BuiltinSkill[] = BASE_SKILLS.map((skill) => ({
+  ...skill,
+  content: `${skill.content}\n${SHARED_CALIBRATION}`,
+}))

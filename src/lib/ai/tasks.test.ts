@@ -1349,3 +1349,179 @@ describe('askPrompt — typed text contract and concision', () => {
     expect(user).toContain('my typed question')
   })
 })
+
+// ---------------------------------------------------------------------------
+// PROMPT_VERSION v10 — anti-fatigue calibration across review-output prompts
+// ---------------------------------------------------------------------------
+
+describe('PROMPT_VERSION v10', () => {
+  it('is at least 10 (bumped for anti-fatigue calibration — cache invalidation)', () => {
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(10)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Shared anti-fatigue block — present in every JSON review-output prompt
+// ---------------------------------------------------------------------------
+
+describe('anti-fatigue calibration block (v10)', () => {
+  const systems: Record<string, string> = {
+    attention: attentionPrompt(makeCtx()).system,
+    verdict: verdictPrompt(makeCtx(), null).system,
+    testInsight: testInsightPrompt(makeCtx()).system,
+    alternatives: alternativesPrompt(makeCtx()).system,
+  }
+
+  for (const [task, system] of Object.entries(systems)) {
+    it(`${task}: carries the evidence gate (cite + concrete harm)`, () => {
+      expect(system).toMatch(/Evidence gate/i)
+      expect(system).toMatch(/what breaks, or who gets hurt/i)
+      expect(system).toMatch(/stated failure mode/i)
+    })
+
+    it(`${task}: bans hedge phrasing without a failure mode ("consider...", "might want to...")`, () => {
+      expect(system).toContain('"consider..."')
+      expect(system).toContain('"might want to..."')
+      expect(system).toContain('"ensure that..."')
+    })
+
+    it(`${task}: instructs "couldn't verify" or silence over assertion`, () => {
+      expect(system).toMatch(/couldn't verify/i)
+      expect(system).toMatch(/never assert/i)
+    })
+
+    it(`${task}: carries the brevity format (what+where / why it matters)`, () => {
+      expect(system).toMatch(/WHAT \+ WHERE/i)
+      expect(system).toMatch(/WHY IT MATTERS/i)
+      expect(system).toMatch(/no praise padding, no methodology narration/i)
+    })
+
+    it(`${task}: states silence is a valid, GOOD answer`, () => {
+      expect(system).toMatch(/Silence is a valid answer/i)
+      expect(system).toMatch(/GOOD and expected outcome/i)
+    })
+
+    it(`${task}: carries severity honesty (nits are nits, never inflate)`, () => {
+      expect(system).toMatch(/nits are nits/i)
+      expect(system).toMatch(/never inflate/i)
+    })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// attentionPrompt — hard cap + omission note (v10)
+// ---------------------------------------------------------------------------
+
+describe('attentionPrompt — anti-fatigue caps (v10)', () => {
+  it('caps hotspots at 5, ranked by severity × confidence', () => {
+    const { system } = attentionPrompt(makeCtx())
+    expect(system).toMatch(/at most 5 hotspots/i)
+    expect(system).toMatch(/severity × confidence/i)
+  })
+
+  it('instructs the one-line lower-confidence omission note', () => {
+    const { system } = attentionPrompt(makeCtx())
+    expect(system).toMatch(/lower-confidence observations omitted/i)
+  })
+
+  it('states an empty hotspots array is a GOOD outcome', () => {
+    const { system } = attentionPrompt(makeCtx())
+    expect(system).toMatch(/empty hotspots array\s+is a GOOD/i)
+    expect(system).toMatch(/do\s+not invent hotspots/i)
+  })
+
+  it('constrains hotspot reasons to the two-sentence format', () => {
+    const { system } = attentionPrompt(makeCtx())
+    expect(system).toMatch(/one sentence of WHAT \+ WHERE plus one sentence of WHY IT MATTERS/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// verdictPrompt — evidence caps (v10)
+// ---------------------------------------------------------------------------
+
+describe('verdictPrompt — anti-fatigue caps (v10)', () => {
+  it('caps evidence at 5 one-sentence bullets', () => {
+    const { system } = verdictPrompt(makeCtx(), null)
+    expect(system).toMatch(/at most 5 evidence bullets/i)
+    expect(system).toMatch(/ONE sentence/i)
+  })
+
+  it('bans diff restating and padding in evidence', () => {
+    const { system } = verdictPrompt(makeCtx(), null)
+    expect(system).toMatch(/do not restate the diff/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// testInsightPrompt — gap caps + tightened prose (v10)
+// ---------------------------------------------------------------------------
+
+describe('testInsightPrompt — anti-fatigue caps (v10)', () => {
+  it('caps gaps at 5, ranked by severity × confidence', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system).toMatch(/at most 5 gaps/i)
+    expect(system).toMatch(/severity × confidence/i)
+  })
+
+  it('instructs the one-line "General: N lower-confidence observations omitted" gap', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system).toMatch(/General: N lower-confidence observations omitted/i)
+  })
+
+  it('states an empty gaps array is a GOOD outcome on well-tested changes', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system).toMatch(/empty gaps array is a GOOD/i)
+    expect(system).toMatch(/do\s+not invent gaps/i)
+  })
+
+  it('tightens covered behavior descriptions to one short sentence (≤15 words)', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system).toMatch(/ONE short sentence/i)
+    expect(system).toMatch(/15 words/i)
+  })
+
+  it('requires each gap to name the concrete harm of leaving it untested', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system).toMatch(/concrete harm of leaving it untested/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// alternativesPrompt — card prose caps (v10)
+// ---------------------------------------------------------------------------
+
+describe('alternativesPrompt — anti-fatigue caps (v10)', () => {
+  it('caps approach at 2 sentences', () => {
+    const { system } = alternativesPrompt(makeCtx())
+    expect(system).toMatch(/approach: a concrete description[^.]*AT MOST 2 sentences/i)
+  })
+
+  it('caps tradeoffs at 2 sentences (one gain, one cost)', () => {
+    const { system } = alternativesPrompt(makeCtx())
+    expect(system).toMatch(/tradeoffs:[^.]*AT MOST 2 sentences/i)
+  })
+
+  it('states an empty alternatives array is a GOOD outcome', () => {
+    const { system } = alternativesPrompt(makeCtx())
+    expect(system).toMatch(/empty alternatives array is a GOOD/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// summarizePrompt — length-cap drift audit (v10)
+// ---------------------------------------------------------------------------
+
+describe('summarizePrompt — anti-fatigue (v10)', () => {
+  it('keeps the ~120-word cap', () => {
+    const { system } = summarizePrompt(makeCtx())
+    expect(system).toContain('~120 words maximum')
+  })
+
+  it('bans praise padding, methodology narration, and diff restating in the prose', () => {
+    const { system } = summarizePrompt(makeCtx())
+    expect(system).toMatch(/no praise padding/i)
+    expect(system).toMatch(/no methodology narration/i)
+    expect(system).toMatch(/do not restate the diff/i)
+  })
+})
