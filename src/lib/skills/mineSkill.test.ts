@@ -307,4 +307,39 @@ describe('githubProvider.getMyReviewComments', () => {
       githubProvider.getMyReviewComments!({ owner: 'o', repo: 'r' }, 150)
     ).rejects.toThrow()
   })
+
+  it('returns filtered comment bodies for the authenticated user', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ login: 'alice' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([
+        { user: { login: 'alice' }, body: 'alice comment 1' },
+        { user: { login: 'bob' },   body: 'bob comment' },
+        { user: { login: 'alice' }, body: 'alice comment 2' },
+      ]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 })) // page 2 empty
+    )
+
+    const result = await githubProvider.getMyReviewComments!(
+      { owner: 'myorg', repo: 'myrepo' },
+      150,
+    )
+    expect(result).toEqual(['alice comment 1', 'alice comment 2'])
+  })
+
+  it('caps results at the cap parameter', async () => {
+    const manyComments = Array.from({ length: 10 }, (_, i) => ({
+      user: { login: 'alice' }, body: `comment ${i}`,
+    }))
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ login: 'alice' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(manyComments), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }))
+    )
+
+    const result = await githubProvider.getMyReviewComments!(
+      { owner: 'myorg', repo: 'myrepo' },
+      3,
+    )
+    expect(result.length).toBeLessThanOrEqual(3)
+  })
 })
