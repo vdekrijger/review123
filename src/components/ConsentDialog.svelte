@@ -33,18 +33,13 @@
     Your API key is stored locally in your browser and sent only to DeepSeek.
   </p>
   <div class="actions">
-    <button onclick={accept}>Send code to DeepSeek</button>
-    <button onclick={decline}>Not now</button>
+    <button class="btn btn-primary" onclick={accept}>Send code to DeepSeek</button>
+    <button class="btn" onclick={decline}>Not now</button>
   </div>
 </dialog>
 
 <style>
-  dialog {
-    border: 1px solid #ccc;
-    border-radius: 8px;
-    padding: 1.5rem;
-    max-width: 480px;
-  }
+  /* dialog base styles come from app.css */
 
   .actions {
     display: flex;

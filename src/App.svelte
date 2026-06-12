@@ -34,11 +34,11 @@
       <span class="auth-badge" aria-label="Authentication method">
         {authState.auth.method === 'oauth' ? 'GitHub ✓' : 'PAT ✓'}
       </span>
-      <button onclick={handleSignOut}>Sign out</button>
+      <button class="btn" onclick={handleSignOut}>Sign out</button>
     {:else if clientId}
       <GitHubSignInButton onclick={handleSignIn} />
     {/if}
-    <button aria-label="Settings" onclick={() => (settingsOpen = true)}>⚙</button>
+    <button class="btn" aria-label="Settings" onclick={() => (settingsOpen = true)}>⚙</button>
   </div>
 </header>
 
@@ -58,8 +58,28 @@
 {/if}
 
 <style>
-  .topbar { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 1rem; border-bottom: 1px solid #8884; }
-  .topbar a { font-weight: 700; text-decoration: none; color: inherit; }
-  .topbar-right { display: flex; align-items: center; gap: 0.5rem; }
-  .auth-badge { font-size: 0.85em; opacity: 0.8; }
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    background: var(--surface);
+    border-bottom: 1px solid var(--hairline);
+  }
+  .topbar a {
+    font-weight: 700;
+    text-decoration: none;
+    color: var(--text);
+    font-size: 1rem;
+    letter-spacing: -0.01em;
+  }
+  .topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .auth-badge {
+    font-size: 0.85em;
+    color: var(--text-muted);
+  }
 </style>

@@ -107,15 +107,41 @@
   </details>
   <p class="hint">Keys are stored only in this browser (localStorage) and sent only to their own services.</p>
   {#if error}<p role="alert">{error}</p>{/if}
-  <button onclick={save}>Save</button>
-  <button onclick={onclose}>Cancel</button>
+  <button class="btn btn-primary" onclick={save}>Save</button>
+  <button class="btn" onclick={onclose}>Cancel</button>
 </dialog>
 
 <style>
-  .auth-status { font-size: 0.9em; opacity: 0.8; margin-bottom: 0.75rem; }
-  details { margin: 0.5rem 0; }
-  details summary { cursor: pointer; font-size: 0.9em; opacity: 0.8; }
-  details label { display: block; margin-top: 0.5rem; }
+  /* dialog base from app.css; override only layout-specific things */
+  dialog {
+    max-width: 520px;
+  }
+
+  .auth-status {
+    font-size: 0.9em;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+  }
+
+  details {
+    margin: 0.5rem 0;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  details summary {
+    /* override global uppercase for this context */
+    text-transform: none;
+    letter-spacing: normal;
+    font-size: 0.9em;
+    color: var(--text-muted);
+  }
+
+  details label {
+    display: block;
+    margin: 0.5rem 0.75rem;
+  }
 
   section[aria-label^="Appearance"] {
     margin-bottom: 1rem;
@@ -125,27 +151,29 @@
     font-size: 0.9em;
     font-weight: 600;
     margin: 0 0 0.4rem;
+    color: var(--text);
   }
 
   .immediate-note {
     font-weight: normal;
-    opacity: 0.7;
+    color: var(--text-muted);
     font-size: 0.85em;
   }
 
   fieldset {
-    border: 1px solid #8882;
-    border-radius: 4px;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
     padding: 0.4rem 0.75rem 0.5rem;
     margin: 0 0 0.5rem;
     display: flex;
     gap: 1.25rem;
     flex-wrap: wrap;
+    background: var(--surface-raised);
   }
 
   fieldset legend {
     font-size: 0.85em;
-    opacity: 0.7;
+    color: var(--text-muted);
     padding: 0 0.25rem;
   }
 
@@ -155,5 +183,12 @@
     gap: 0.35rem;
     font-size: 0.9em;
     cursor: pointer;
+    color: var(--text);
+  }
+
+  .hint {
+    font-size: 0.8em;
+    color: var(--text-muted);
+    margin: 0.5rem 0;
   }
 </style>
