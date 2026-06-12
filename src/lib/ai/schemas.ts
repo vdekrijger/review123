@@ -229,6 +229,12 @@ export interface CommentReview {
   tone: 'ok' | 'blunt' | 'harsh'
   biasQuestion: string | null
   suggestion: string | null
+  /** Does the comment's claim match what the diff actually shows? */
+  accuracy: 'consistent' | 'questionable' | 'contradicted'
+  /** When accuracy is 'contradicted', explains why. Otherwise null. */
+  accuracyNote: string | null
+  /** True when the comment substantially repeats an existing PR comment. */
+  duplicate: boolean
 }
 
 export interface CoachResult {
@@ -237,6 +243,7 @@ export interface CoachResult {
 
 const TONE_VALUES = new Set<string>(['ok', 'blunt', 'harsh'])
 const CLARITY_VALUES = new Set<number>([1, 2, 3, 4, 5])
+const ACCURACY_VALUES = new Set<string>(['consistent', 'questionable', 'contradicted'])
 
 /**
  * Validate an unknown value as CoachResult.
@@ -275,6 +282,16 @@ export function validateCoachResult(x: unknown): CoachResult | null {
     // suggestion — required, must be string or null
     if (!('suggestion' in review)) return null
     if (review['suggestion'] !== null && typeof review['suggestion'] !== 'string') return null
+
+    // accuracy — required string enum
+    if (typeof review['accuracy'] !== 'string' || !ACCURACY_VALUES.has(review['accuracy'] as string)) return null
+
+    // accuracyNote — required, must be string or null
+    if (!('accuracyNote' in review)) return null
+    if (review['accuracyNote'] !== null && typeof review['accuracyNote'] !== 'string') return null
+
+    // duplicate — required boolean
+    if (typeof review['duplicate'] !== 'boolean') return null
   }
 
   return x as unknown as CoachResult

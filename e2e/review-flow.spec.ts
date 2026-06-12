@@ -285,7 +285,7 @@ const TEST_INSIGHT_RESULT = {
   gaps: ['no test covers removal of removed line from feature.ts'],
 }
 
-// v4 contract: CoachResult with one review containing a suggestion
+// v8 contract: CoachResult with one review containing a suggestion + accuracy + duplicate
 const COACH_RESULT = {
   reviews: [
     {
@@ -295,6 +295,9 @@ const COACH_RESULT = {
       tone: 'blunt',
       biasQuestion: null,
       suggestion: 'Consider rephrasing this as a question to encourage discussion.',
+      accuracy: 'consistent',
+      accuracyNote: null,
+      duplicate: false,
     },
   ],
 }
@@ -1535,32 +1538,33 @@ test('inline-ask-ai: seed draft, step 2, switch widget tab to Ask AI, ask stream
   const draftAnnotations = page.locator('.draft-annotations')
   await expect(draftAnnotations).toBeVisible({ timeout: 5_000 })
 
-  // The DraftThread widget should have Comment and Ask AI tabs
-  // (since aiRun.ask is provided and deepseekKey is set)
-  const commentTab = draftAnnotations.getByRole('tab', { name: /comment/i })
-  const askAiTab = draftAnnotations.getByRole('tab', { name: /ask ai/i })
-  await expect(commentTab).toBeVisible({ timeout: 5_000 })
-  await expect(askAiTab).toBeVisible()
+  // New action-row UI: No tabs — instead there is a single editor surface
+  // with "Leave comment" + "Ask AI" + "Cancel" buttons at the bottom.
+  // Tab buttons must NOT be present.
+  await expect(draftAnnotations.getByRole('tab', { name: /comment/i })).not.toBeVisible()
+  await expect(draftAnnotations.getByRole('tab', { name: /ask ai/i })).not.toBeVisible()
 
-  // Comment tab should be active by default
-  await expect(commentTab).toHaveAttribute('aria-selected', 'true')
+  // The comment body textarea is always visible (single surface)
+  // Click Edit to open the editor if the draft is in view mode
+  const editBtn = draftAnnotations.getByRole('button', { name: /edit/i })
+  if (await editBtn.isVisible()) {
+    await editBtn.evaluate((el: HTMLButtonElement) => el.click())
+  }
 
-  // Switch to Ask AI tab — use JS click to bypass the context-rail overlay
-  // (same pattern as the Ask AI rail tests in test 12)
-  await askAiTab.evaluate((el: HTMLButtonElement) => el.click())
-  await expect(askAiTab).toHaveAttribute('aria-selected', 'true')
+  // The "Ask AI" action button should be visible in the action row
+  const askAiBtn = draftAnnotations.getByRole('button', { name: /ask ai/i })
+  await expect(askAiBtn).toBeVisible({ timeout: 5_000 })
 
-  // Ask textarea should be visible
-  const askTextarea = draftAnnotations.getByRole('textbox', { name: /ask a question about this line/i })
-  await expect(askTextarea).toBeVisible()
+  // The comment body textarea is the single editor surface
+  const commentTextarea = draftAnnotations.getByRole('textbox', { name: /comment body/i })
+  await expect(commentTextarea).toBeVisible()
 
-  // Type a question — include "ask-marker" so the fixture route recognizes it
-  await askTextarea.evaluate((el: HTMLTextAreaElement, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })) }, 'ask-marker: Why is this change needed?')
+  // Type a question into the textarea — include "ask-marker" so the fixture route recognizes it
+  await commentTextarea.evaluate((el: HTMLTextAreaElement, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })) }, 'ask-marker: Why is this change needed?')
 
-  // Click Ask button via JS to bypass overlay
-  const askBtn = draftAnnotations.getByRole('button', { name: /^ask$/i })
-  await expect(askBtn).toBeEnabled()
-  await askBtn.evaluate((el: HTMLButtonElement) => el.click())
+  // Click Ask AI button via JS to bypass overlay
+  await expect(askAiBtn).toBeEnabled()
+  await askAiBtn.evaluate((el: HTMLButtonElement) => el.click())
 
   // The answer should stream in from the fixture
   await expect(

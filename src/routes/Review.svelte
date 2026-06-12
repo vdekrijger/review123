@@ -553,6 +553,7 @@
         store={draftStore ?? createDraftStore(`${owner}/${repo}#${number}`)}
         prUrl={`https://github.com/${owner}/${repo}/pull/${number}`}
         coachFn={aiRun ? aiRun.coach : undefined}
+        {prComments}
       />
     {/if}
   {/if}
