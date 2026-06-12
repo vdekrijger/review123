@@ -296,34 +296,14 @@
     font-size: 0.82rem;
   }
 
+  /* Marker (rotating triangle) comes from the global details > summary
+     pattern in app.css — re-declaring a ::before here merges with it on the
+     same pseudo-element and renders a double chevron. Only sizing below. */
   .rail-section-summary {
-    cursor: pointer;
     padding: 0.55rem 0.75rem;
     font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
     letter-spacing: 0.05em;
     opacity: 0.7;
-    list-style: none;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    user-select: none;
-  }
-
-  .rail-section-summary::-webkit-details-marker { display: none; }
-
-  .rail-section-summary::before {
-    content: '›';
-    display: inline-block;
-    transition: transform 0.15s;
-    font-size: 1rem;
-    opacity: 0.5;
-    flex-shrink: 0;
-  }
-
-  details[open] > .rail-section-summary::before {
-    transform: rotate(90deg);
   }
 
   .rail-section-body {

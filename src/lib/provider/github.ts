@@ -39,6 +39,15 @@ function toRef(ref: PrRefX): { owner: string; repo: string; number: number } {
 }
 
 // ---------------------------------------------------------------------------
+// Viewer identity (shared by getViewerLogin and the mining helpers)
+// ---------------------------------------------------------------------------
+
+async function fetchViewerLogin(): Promise<string | null> {
+  const user = await ghFetch<{ login?: string }>('/user')
+  return user.login ?? null
+}
+
+// ---------------------------------------------------------------------------
 // Mining helpers (account- and repo-scoped review comment harvesting)
 // ---------------------------------------------------------------------------
 
@@ -70,9 +79,9 @@ async function getRepoScopedReviewComments(
   repo: { owner: string; repo: string },
   cap: number,
 ): Promise<string[]> {
-  // Step 1: resolve authenticated login
-  const user = await ghFetch<{ login: string }>('/user')
-  const login = user.login
+  // Step 1: resolve authenticated login (shared viewer-identity code path)
+  const login = await fetchViewerLogin()
+  if (login == null) return []
 
   // Step 2: fetch up to 3 pages of PR review comments
   const MINE_PAGES = 3
@@ -110,8 +119,10 @@ async function getAccountScopedReviewComments(cap: number): Promise<string[]> {
   let login: string
   let items: GhSearchItem[]
   try {
-    const user = await ghFetch<{ login: string }>('/user')
-    login = user.login
+    // Resolve authenticated login via the shared viewer-identity code path.
+    const viewer = await fetchViewerLogin()
+    if (viewer == null) return []
+    login = viewer
     const q = encodeURIComponent(`type:pr commenter:${login}`)
     const res = await ghFetch<{ items?: GhSearchItem[] }>(
       `/search/issues?q=${q}&sort=updated&order=desc&per_page=${MINE_MAX_PRS}`,
@@ -174,6 +185,7 @@ export const githubProvider: ReviewProvider = {
     suggestions: true,
     atomicReview: true,
     compare: true,
+    selfReviewBlocked: true, // 422 "Can not approve your own pull request"
   },
 
   parseUrl(input: string): ParseResult {
@@ -329,5 +341,9 @@ export const githubProvider: ReviewProvider = {
     }
 
     return [...seen.values()]
+  },
+
+  getViewerLogin(): Promise<string | null> {
+    return fetchViewerLogin()
   },
 }

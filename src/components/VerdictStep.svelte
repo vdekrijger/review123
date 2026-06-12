@@ -18,6 +18,8 @@
   import { authState } from '../lib/auth/authState.svelte'
   import { beginSignIn } from '../lib/auth/auth'
   import { submitReview, type Verdict, type SubmitOutcome } from '../lib/github/review'
+  import { resolveViewerLogin } from '../lib/provider/viewer'
+  import { isSelfReviewGated } from '../lib/provider/selfReview'
   import { renderMarkdown } from '../lib/markdown/render'
   import { track } from '../lib/analytics/analytics'
   import { activeProviderHasKey } from '../lib/llm/config'
@@ -64,9 +66,31 @@
      * no non-atomic note is shown (GitHub behaviour).
      */
     provider?: ReviewProvider
+    /**
+     * The PR author's provider-canonical login (PrMeta.authorLogin). Used with
+     * the resolved viewer identity to gate Approve / Request changes on the
+     * viewer's own PR. Absent/null → no gating.
+     */
+    authorLogin?: string | null
+    /**
+     * Override viewer identity resolution — DI seam for tests. Defaults to the
+     * session-cached resolveViewerLogin.
+     */
+    resolveViewerFn?: (provider: ReviewProvider) => Promise<string | null>
   }
 
-  let { prRef, commitId, store, prUrl, submitFn = submitReview, coachFn, prComments = [], provider }: Props = $props()
+  let {
+    prRef,
+    commitId,
+    store,
+    prUrl,
+    submitFn = submitReview,
+    coachFn,
+    prComments = [],
+    provider,
+    authorLogin = null,
+    resolveViewerFn = resolveViewerLogin,
+  }: Props = $props()
 
   // Derive signed-in status reactively from authState so the UI flips live
   // when the user completes OAuth (EC-REACT: no reload required).
@@ -91,6 +115,33 @@
   let submitError = $state<{ kind: string; message: string } | null>(null)
   let success = $state(false)
   let clientHint = $state<string | null>(null)
+
+  // ---- Own-PR verdict gating ----
+  // Resolve the viewer identity only when it can matter: signed in, on a
+  // provider that rejects self-review, with a known PR author.
+  let viewerLogin = $state<string | null>(null)
+
+  $effect(() => {
+    if (!provider || !provider.capabilities.selfReviewBlocked) return
+    if (!isSignedIn || authorLogin == null) return
+    let cancelled = false
+    resolveViewerFn(provider).then((login) => {
+      if (!cancelled) viewerLogin = login
+    })
+    return () => {
+      cancelled = true
+    }
+  })
+
+  const selfReviewGated = $derived(
+    isSelfReviewGated(provider?.capabilities.selfReviewBlocked ?? false, viewerLogin, authorLogin),
+  )
+
+  // If gating resolves after the user already picked a blocked verdict, fall
+  // back to COMMENT so the submit button never sends a doomed request.
+  $effect(() => {
+    if (selfReviewGated && verdict !== 'COMMENT') verdict = 'COMMENT'
+  })
 
   // ---- Coach state ----
   let coachPending = $state(false)
@@ -417,14 +468,19 @@
         <input type="radio" name="verdict" value="COMMENT" bind:group={verdict} />
         Comment
       </label>
-      <label class="verdict-label">
-        <input type="radio" name="verdict" value="APPROVE" bind:group={verdict} />
+      <label class="verdict-label" class:verdict-label-disabled={selfReviewGated}>
+        <input type="radio" name="verdict" value="APPROVE" bind:group={verdict} disabled={selfReviewGated} />
         Approve
       </label>
-      <label class="verdict-label">
-        <input type="radio" name="verdict" value="REQUEST_CHANGES" bind:group={verdict} />
+      <label class="verdict-label" class:verdict-label-disabled={selfReviewGated}>
+        <input type="radio" name="verdict" value="REQUEST_CHANGES" bind:group={verdict} disabled={selfReviewGated} />
         Request changes
       </label>
+      {#if selfReviewGated && provider}
+        <p class="self-review-note">
+          {provider.displayName} doesn't allow reviewing your own PR — you can still comment.
+        </p>
+      {/if}
     </fieldset>
 
     {#if provider && !provider.capabilities.atomicReview}
@@ -548,6 +604,17 @@
     font-size: 0.85rem;
     color: var(--text-muted);
     margin: 0;
+  }
+
+  .verdict-label-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .self-review-note {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin: 0.25rem 0 0;
   }
 
   .submit-btn {

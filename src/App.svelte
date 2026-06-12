@@ -1,7 +1,6 @@
 <script lang="ts">
   import { router, startRouter, navigate } from './lib/router/router.svelte'
   import Landing from './routes/Landing.svelte'
-  import Review from './routes/Review.svelte'
   import AuthCallback from './routes/AuthCallback.svelte'
   import SettingsPage from './routes/SettingsPage.svelte'
   import GitHubSignInButton from './components/GitHubSignInButton.svelte'
@@ -12,6 +11,20 @@
   const SETTINGS_RETURN_KEY = 'review123:settingsReturnTo'
 
   startRouter()
+
+  // Lazy-load the Review route (the diff viewer and its vendor-diff-view chunk,
+  // which bundles the lowlight/highlight.js syntax-highlight engine, plus the
+  // markdown pipeline). Keeping it out of the entry's static import graph means
+  // none of that is fetched until a review is actually opened — bundle
+  // discipline for the highlighter engine.
+  let Review = $state<typeof import('./routes/Review.svelte').default | null>(null)
+  $effect(() => {
+    if (router.route.name === 'review' && !Review) {
+      void import('./routes/Review.svelte').then((m) => {
+        Review = m.default
+      })
+    }
+  })
 
   async function handleSignIn() {
     sessionStorage.setItem(RETURN_KEY, location.pathname)
@@ -52,9 +65,13 @@
   <Landing />
 {:else if router.route.name === 'review'}
   {@const route = router.route}
-  {#key `${route.provider}/${route.owner}/${route.repo}/${route.number}`}
-    <Review owner={route.owner} repo={route.repo} number={route.number} step={route.step} provider={route.provider} />
-  {/key}
+  {#if Review}
+    {#key `${route.provider}/${route.owner}/${route.repo}/${route.number}`}
+      <Review owner={route.owner} repo={route.repo} number={route.number} step={route.step} provider={route.provider} />
+    {/key}
+  {:else}
+    <section class="route-loading" aria-busy="true"><p>Loading review…</p></section>
+  {/if}
 {:else if router.route.name === 'auth-callback'}
   <AuthCallback />
 {:else if router.route.name === 'settings'}
@@ -96,6 +113,10 @@
   }
   .auth-badge {
     font-size: 0.85em;
+    color: var(--text-muted);
+  }
+  .route-loading {
+    padding: 2rem 1rem;
     color: var(--text-muted);
   }
 </style>
