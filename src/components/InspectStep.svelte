@@ -148,9 +148,9 @@
     border-left: 3px solid currentColor;
   }
 
-  .hotspot-badge.level-high { color: #cf222e; background: #cf222e0a; }
-  .hotspot-badge.level-medium { color: #9a6700; background: #9a67000a; }
-  .hotspot-badge.level-low { color: #444; background: #8881; }
+  .hotspot-badge.level-high { color: var(--legend-removed-color); background: var(--legend-removed-bg); }
+  .hotspot-badge.level-medium { color: var(--legend-changed-color); background: var(--legend-changed-bg); }
+  .hotspot-badge.level-low { color: var(--text-muted); background: var(--surface-raised); }
 
   .hotspot-level {
     font-weight: 700;
@@ -171,8 +171,8 @@
     border-radius: 4px;
     font-size: 0.8rem;
     margin-bottom: 0.25rem;
-    background: #9a67000a;
-    color: #9a6700;
-    border-left: 3px solid #9a6700;
+    background: var(--legend-changed-bg);
+    color: var(--legend-changed-color);
+    border-left: 3px solid var(--legend-changed-border);
   }
 </style>

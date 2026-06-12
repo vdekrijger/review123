@@ -260,11 +260,11 @@
 </article>
 
 <style>
-  .file-diff { border: 1px solid #8884; border-radius: 6px; margin-bottom: 1rem; overflow: hidden; }
-  header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: #8881; }
-  header code { font-family: var(--font-mono); }
+  .file-diff { border: 1px solid var(--hairline); border-radius: 6px; margin-bottom: 1rem; overflow: hidden; }
+  header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: var(--surface-raised); }
+  header code { font-family: var(--font-mono); font-size: 0.8125rem; }
   header.clickable { cursor: pointer; }
-  header.clickable:hover { background: #8882; }
+  header.clickable:hover { background: color-mix(in srgb, var(--hairline) 30%, var(--surface-raised)); }
   .header-right { display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0; }
   .note { padding: 0.8rem; opacity: 0.7; }
   .viewed-label {
@@ -281,9 +281,9 @@
     font-size: 0.75rem;
     padding: 0.15rem 0.4rem;
     border-radius: 3px;
-    background: #9a67000a;
-    color: #9a6700;
-    border: 1px solid #9a670033;
+    background: var(--legend-changed-bg);
+    color: var(--legend-changed-color);
+    border: 1px solid var(--legend-changed-border);
     white-space: nowrap;
   }
   .is-collapsed { opacity: 0.85; }
@@ -293,11 +293,11 @@
   :global(.new-diff-table-wrapper) {
     font-family: var(--font-mono) !important;
   }
-  .draft-annotations { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.5rem; border-top: 1px solid #f0b44444; }
+  .draft-annotations { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.5rem; border-top: 1px solid var(--border-draft); }
 
   .existing-comments {
-    border-top: 1px solid #4a90d044;
-    background: #1a3050 08;
+    border-top: 1px solid var(--border-banner);
+    background: var(--surface-banner);
     padding: 0.5rem;
     display: flex;
     flex-direction: column;
@@ -315,7 +315,7 @@
     opacity: 0.6;
     font-family: var(--font-mono);
     padding: 0.1rem 0.25rem;
-    border-left: 2px solid #4a90d077;
+    border-left: 2px solid var(--border-banner-accent);
     margin-bottom: 0.15rem;
   }
 </style>

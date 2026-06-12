@@ -72,7 +72,7 @@
     display: inline-block;
     width: 160px;
     height: 1em;
-    background: #e0e0e0;
+    background: var(--surface-raised);
     border-radius: 4px;
     animation: pulse 1.4s ease-in-out infinite;
   }
@@ -83,15 +83,15 @@
   }
 
   .ci-pass {
-    color: #1a7f37;
+    color: var(--legend-added-color);
   }
 
   .ci-pending {
-    color: #9a6700;
+    color: var(--legend-changed-color);
   }
 
   .ci-failures-summary {
-    color: #cf222e;
+    color: var(--legend-removed-color);
     margin: 0 0 0.5em;
   }
 

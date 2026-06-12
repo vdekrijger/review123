@@ -450,8 +450,8 @@
   /* ===== Glance Card ===== */
 
   .glance-card {
-    background: #8880;
-    border: 1px solid #8882;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
     border-radius: 8px;
     padding: 0.75rem 1rem;
     display: flex;
@@ -481,25 +481,28 @@
   }
 
   .verdict-level.level-behavior-preserved {
-    color: #1a7f37;
-    background: #1a7f3715;
+    color: var(--legend-added-color);
+    background: var(--legend-added-bg);
+    border-color: var(--legend-added-border);
   }
 
   .verdict-level.level-minor-changes {
-    color: #9a6700;
-    background: #9a670015;
+    color: var(--legend-changed-color);
+    background: var(--legend-changed-bg);
+    border-color: var(--legend-changed-border);
   }
 
   .verdict-level.level-significant-changes {
-    color: #cf222e;
-    background: #cf222e15;
+    color: var(--legend-removed-color);
+    background: var(--legend-removed-bg);
+    border-color: var(--legend-removed-border);
   }
 
   .glance-loading-pill {
     font-size: 0.8rem;
     opacity: 0.6;
     padding: 0.2rem 0.6rem;
-    border: 1px solid #8884;
+    border: 1px solid var(--hairline);
     border-radius: 12px;
   }
 
@@ -508,13 +511,13 @@
     font-weight: 500;
     padding: 0.2rem 0.5rem;
     border-radius: 10px;
-    background: #8882;
+    background: var(--surface-raised);
     white-space: nowrap;
   }
 
-  .ci-badge.ci-pass { color: #1a7f37; background: #1a7f3715; }
-  .ci-badge.ci-fail { color: #cf222e; background: #cf222e15; }
-  .ci-badge.ci-pending { color: #9a6700; background: #9a670015; }
+  .ci-badge.ci-pass { color: var(--legend-added-color); background: var(--legend-added-bg); }
+  .ci-badge.ci-fail { color: var(--legend-removed-color); background: var(--legend-removed-bg); }
+  .ci-badge.ci-pending { color: var(--legend-changed-color); background: var(--legend-changed-bg); }
 
   .file-count {
     font-size: 0.85rem;
@@ -529,8 +532,8 @@
     white-space: nowrap;
   }
 
-  .additions { color: #1a7f37; font-weight: 500; }
-  .deletions { color: #cf222e; font-weight: 500; }
+  .additions { color: var(--legend-added-color); font-weight: 500; }
+  .deletions { color: var(--legend-removed-color); font-weight: 500; }
 
   /* Row 2 — TL;DR */
 
@@ -689,8 +692,8 @@
     border-radius: 2px;
   }
 
-  .churn-add { background: #1a7f37; }
-  .churn-del { background: #cf222e; }
+  .churn-add { background: var(--accent); }
+  .churn-del { background: var(--legend-removed-color); }
 
   .churn-nums {
     display: flex;
@@ -702,28 +705,14 @@
   /* ===== Detail panels ===== */
 
   .detail-panel {
-    border: 1px solid #8882;
+    border: 1px solid var(--hairline);
     border-radius: 6px;
     overflow: hidden;
   }
 
-  .detail-summary {
-    padding: 0.5rem 0.75rem;
-    cursor: pointer;
-    font-size: 0.9rem;
-    font-weight: 500;
-    list-style: none;
-    user-select: none;
-    background: #8880;
-  }
-
-  .detail-summary::-webkit-details-marker { display: none; }
-  .detail-summary::before { content: '▶ '; font-size: 0.7em; opacity: 0.6; }
-  details[open] > .detail-summary::before { content: '▼ '; }
-
   .detail-body {
     padding: 0.75rem;
-    border-top: 1px solid #8882;
+    border-top: 1px solid var(--hairline);
   }
 
   .detail-body .prose {
@@ -787,12 +776,12 @@
   .tests-chip:hover { background: #8881; }
 
   .tests-chip-covered {
-    color: #1a7f37;
+    color: var(--legend-added-color);
     font-weight: 500;
   }
 
   .tests-chip-gaps {
-    color: #9a6700;
+    color: var(--legend-changed-color);
     font-weight: 500;
   }
 
@@ -824,7 +813,7 @@
   .tests-covered-item:last-child { border-bottom: none; }
 
   .tests-covered-check {
-    color: #1a7f37;
+    color: var(--legend-added-color);
     font-weight: 700;
     flex-shrink: 0;
     margin-top: 0.05rem;
@@ -851,7 +840,7 @@
     border: none;
     padding: 0;
     cursor: pointer;
-    color: #2563eb;
+    color: var(--accent);
     font-size: inherit;
     font-family: var(--font-mono, monospace);
     text-decoration: underline;
@@ -864,7 +853,7 @@
     margin: 0 0 0.4rem;
     font-size: 0.85rem;
     font-weight: 600;
-    color: #9a6700;
+    color: var(--legend-changed-color);
   }
 
   .tests-gap-item {
@@ -876,7 +865,7 @@
   }
 
   .tests-gap-icon {
-    color: #9a6700;
+    color: var(--legend-changed-color);
     font-weight: 700;
     flex-shrink: 0;
   }
@@ -936,9 +925,9 @@
 
   .alternative-card {
     padding: 0.65rem 0.75rem;
-    border: 1px solid #8882;
+    border: 1px solid var(--hairline);
     border-radius: 6px;
-    background: #8880;
+    background: var(--surface);
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
@@ -969,23 +958,25 @@
   }
 
   .assessment-chip.assessment-pr-is-better {
-    color: #1a7f37;
-    background: #1a7f3715;
+    color: var(--legend-added-color);
+    background: var(--legend-added-bg);
+    border-color: var(--legend-added-border);
   }
 
   .assessment-chip.assessment-comparable {
-    color: #57606a;
-    background: #57606a10;
+    color: var(--text-muted);
+    background: var(--surface-raised);
   }
 
   .assessment-chip.assessment-alternative-is-better {
-    color: #b45309;
-    background: #d9770615;
+    color: var(--legend-changed-color);
+    background: var(--legend-changed-bg);
+    border-color: var(--legend-changed-border);
   }
 
   .assessment-chip.assessment-different-goals {
-    color: #0550ae;
-    background: #0550ae10;
+    color: var(--text-muted);
+    background: var(--surface-raised);
   }
 
   .alternative-rationale {

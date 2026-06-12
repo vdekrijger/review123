@@ -203,10 +203,10 @@
         <div class="changemap-header">
           <span class="changemap-title">Change Map</span>
           <div class="legend" aria-label="Change map legend">
-            <span class="legend-chip legend-added">Added</span>
-            <span class="legend-chip legend-removed">Removed</span>
-            <span class="legend-chip legend-changed">Changed</span>
-            <span class="legend-chip legend-unchanged">Unchanged</span>
+            <span class="chip legend-chip legend-added">Added</span>
+            <span class="chip legend-chip legend-removed">Removed</span>
+            <span class="chip legend-chip legend-changed">Changed</span>
+            <span class="chip legend-chip legend-unchanged">Unchanged</span>
           </div>
           <button
             class="toggle-btn"
@@ -407,34 +407,34 @@
   }
 
   .legend-added {
-    background: var(--legend-added-bg, #1a4731);
-    border-color: var(--legend-added-border, #2ea44f);
-    color: var(--legend-added-color, #7ee2a8);
+    background: var(--legend-added-bg);
+    border-color: var(--legend-added-border);
+    color: var(--legend-added-color);
   }
 
   .legend-removed {
-    background: var(--legend-removed-bg, #4a1a1a);
-    border-color: var(--legend-removed-border, #d73a49);
-    color: var(--legend-removed-color, #f0a3a3);
+    background: var(--legend-removed-bg);
+    border-color: var(--legend-removed-border);
+    color: var(--legend-removed-color);
   }
 
   .legend-changed {
-    background: var(--legend-changed-bg, #4a3a10);
-    border-color: var(--legend-changed-border, #d4a72c);
-    color: var(--legend-changed-color, #ffd86e);
+    background: var(--legend-changed-bg);
+    border-color: var(--legend-changed-border);
+    color: var(--legend-changed-color);
   }
 
   .legend-unchanged {
-    background: var(--legend-unchanged-bg, #2a2a2e);
-    border-color: var(--legend-unchanged-border, #555);
-    color: var(--legend-unchanged-color, #aaa);
+    background: var(--legend-unchanged-bg);
+    border-color: var(--legend-unchanged-border);
+    color: var(--legend-unchanged-color);
   }
 
   .toggle-btn {
     margin-left: auto;
     font-size: 0.78rem;
     padding: 0.2rem 0.6rem;
-    border: 1px solid #8883;
+    border: 1px solid var(--hairline);
     background: transparent;
     border-radius: 4px;
     cursor: pointer;
@@ -445,7 +445,7 @@
 
   .toggle-btn:hover {
     opacity: 1;
-    background: #8881;
+    background: var(--surface-raised);
   }
 
   .diagram-container--full {
@@ -459,7 +459,7 @@
   }
 
   .diagram-side {
-    border: 1px solid #8883;
+    border: 1px solid var(--hairline);
     border-radius: 6px;
     padding: 0.75rem;
     overflow: hidden;
@@ -481,7 +481,7 @@
   }
 
   .diagram-container:focus-visible {
-    outline: 2px solid #2563eb;
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 
