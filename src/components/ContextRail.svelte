@@ -1,10 +1,13 @@
 <script lang="ts">
-  import DiagramPanel from './DiagramPanel.svelte'
   import AskAi from './AskAi.svelte'
+  import SummaryPanel from './panels/SummaryPanel.svelte'
+  import DiagramsSection from './panels/DiagramsSection.svelte'
+  import TestInsightPanel from './panels/TestInsightPanel.svelte'
+  import AlternativesPanel from './panels/AlternativesPanel.svelte'
+  import VerdictPanel from './panels/VerdictPanel.svelte'
   import { track } from '../lib/analytics/analytics'
-  import { stripReadingOrder } from '../lib/ai/tasks'
   import type { AiRun } from '../lib/ai/run.svelte'
-  import type { AttentionResult, GraphResult, VerdictResult } from '../lib/ai/schemas'
+  import type { AttentionResult } from '../lib/ai/schemas'
 
   interface Props {
     run: AiRun
@@ -17,14 +20,6 @@
 
   const attention = $derived(
     run.attention.status === 'done' ? (run.attention.value as AttentionResult) : undefined
-  )
-
-  const verdict = $derived(
-    run.verdict.status === 'done' ? (run.verdict.value as VerdictResult) : undefined
-  )
-
-  const diagrams = $derived(
-    run.diagrams.status === 'done' ? (run.diagrams.value as GraphResult) : undefined
   )
 
   function levelIcon(level: 'high' | 'medium' | 'low'): string {
@@ -60,69 +55,74 @@
 
   {#if !collapsed}
     <div class="rail-body">
-      <!-- Summary — strip reading order for display; InspectStep uses parsed order -->
-      {#if run.summary.status === 'done' || run.summary.status === 'streaming'}
-        <details class="rail-section" open>
-          <summary>Summary</summary>
-          <p class="rail-summary-text">
-            {run.summary.status === 'done'
-              ? stripReadingOrder(run.summary.value as string)
-              : (run.summary.value as string)}
-          </p>
-        </details>
-      {:else if run.summary.status === 'loading'}
-        <div class="rail-section">
-          <span class="rail-loading">Loading summary…</span>
+
+      <!-- Summary -->
+      <details class="rail-section-details" open>
+        <summary class="rail-section-summary">Summary</summary>
+        <div class="rail-section-body">
+          <SummaryPanel {run} />
         </div>
-      {/if}
+      </details>
 
       <!-- Diagrams -->
-      {#if diagrams}
-        <div class="rail-section">
-          <h4 class="rail-section-title">Diagrams</h4>
-          <DiagramPanel result={diagrams} panelState="idle" />
+      <details class="rail-section-details">
+        <summary class="rail-section-summary">Diagrams</summary>
+        <div class="rail-section-body">
+          <DiagramsSection {run} />
         </div>
-      {/if}
+      </details>
 
-      <!-- Hotspots -->
+      <!-- Hotspots (rail-specific: jump behaviour) -->
       {#if attention && attention.hotspots.length > 0}
-        <div class="rail-section">
-          <h4 class="rail-section-title">Hotspots</h4>
-          <ul class="hotspot-list">
-            {#each attention.hotspots as hotspot (hotspot.path)}
-              <li>
-                <button
-                  class="hotspot-btn level-{hotspot.level}"
-                  onclick={() => handleHotspot(hotspot.path)}
-                  aria-label={hotspot.path}
-                >
-                  <span class="hotspot-icon" aria-hidden="true">{levelIcon(hotspot.level)}</span>
-                  <span class="hotspot-path">{hotspot.path}</span>
-                </button>
-              </li>
-            {/each}
-          </ul>
-        </div>
+        <details class="rail-section-details" open>
+          <summary class="rail-section-summary">Hotspots</summary>
+          <div class="rail-section-body">
+            <ul class="hotspot-list">
+              {#each attention.hotspots as hotspot (hotspot.path)}
+                <li>
+                  <button
+                    class="hotspot-btn level-{hotspot.level}"
+                    onclick={() => handleHotspot(hotspot.path)}
+                    aria-label={hotspot.path}
+                  >
+                    <span class="hotspot-icon" aria-hidden="true">{levelIcon(hotspot.level)}</span>
+                    <span class="hotspot-path">{hotspot.path}</span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          </div>
+        </details>
       {/if}
 
-      <!-- Tests touched -->
-      {#if attention}
-        <div class="rail-section">
-          <h4 class="rail-section-title">Tests</h4>
-          <span class="tests-count">{attention.testFlags.length} AI-inferred</span>
+      <!-- Test coverage (AI-inferred) -->
+      <details class="rail-section-details">
+        <summary class="rail-section-summary">Test coverage (AI-inferred)</summary>
+        <div class="rail-section-body">
+          <TestInsightPanel {run} {onhotspot} />
         </div>
-      {/if}
+      </details>
 
-      <!-- Verdict level -->
-      {#if verdict}
-        <div class="rail-section">
-          <h4 class="rail-section-title">Verdict</h4>
-          <span class="verdict-pill level-{verdict.level}">{verdict.level}</span>
+      <!-- Verdict evidence -->
+      <details class="rail-section-details">
+        <summary class="rail-section-summary">Verdict evidence</summary>
+        <div class="rail-section-body">
+          <VerdictPanel {run} {onhotspot} />
         </div>
-      {/if}
+      </details>
+
+      <!-- Alternative approaches -->
+      <details class="rail-section-details">
+        <summary class="rail-section-summary">Alternative approaches (AI)</summary>
+        <div class="rail-section-body">
+          <AlternativesPanel {run} />
+        </div>
+      </details>
 
       <!-- Ask AI -->
-      <AskAi ask={run.ask} disabledReason={askDisabledReason} />
+      <div class="rail-section-ask">
+        <AskAi ask={run.ask} disabledReason={askDisabledReason} />
+      </div>
     </div>
   {/if}
 </aside>
@@ -199,34 +199,47 @@
     flex: 1;
   }
 
-  .rail-section {
-    padding: 0.75rem;
+  /* Each section is a <details> expander */
+  .rail-section-details {
     border-bottom: 1px solid var(--hairline);
     font-size: 0.82rem;
   }
 
-  .rail-section-title {
-    margin: 0 0 0.4rem;
+  .rail-section-summary {
+    cursor: pointer;
+    padding: 0.55rem 0.75rem;
     font-size: 0.75rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    opacity: 0.6;
+    opacity: 0.7;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    user-select: none;
   }
 
-  .rail-summary-text {
-    margin: 0.4rem 0 0;
-    font-size: 0.8rem;
-    line-height: 1.4;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
+  .rail-section-summary::-webkit-details-marker { display: none; }
 
-  .rail-loading {
-    font-size: 0.8rem;
+  .rail-section-summary::before {
+    content: '›';
+    display: inline-block;
+    transition: transform 0.15s;
+    font-size: 1rem;
     opacity: 0.5;
+    flex-shrink: 0;
   }
 
+  details[open] > .rail-section-summary::before {
+    transform: rotate(90deg);
+  }
+
+  .rail-section-body {
+    padding: 0.5rem 0.75rem 0.75rem;
+  }
+
+  /* Hotspot list (rail-specific jump behaviour) */
   .hotspot-list {
     list-style: none;
     margin: 0;
@@ -268,23 +281,7 @@
     word-break: break-all;
   }
 
-  .tests-count {
-    font-size: 0.8rem;
-    opacity: 0.8;
+  .rail-section-ask {
+    padding: 0.75rem;
   }
-
-  .verdict-pill {
-    display: inline-block;
-    padding: 0.15rem 0.5rem;
-    border-radius: 10px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    border: 1px solid currentColor;
-  }
-
-  .verdict-pill.level-behavior-preserved { color: var(--legend-added-color); }
-  .verdict-pill.level-minor-changes { color: var(--legend-changed-color); }
-  .verdict-pill.level-significant-changes { color: var(--legend-removed-color); }
 </style>

@@ -149,3 +149,51 @@ describe('ContextRail responsive width', () => {
     expect(aside?.classList.contains('collapsed')).toBe(false)
   })
 })
+
+describe('ContextRail content parity — shared panels', () => {
+  it('renders Summary section header when expanded', () => {
+    render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    // The <details> summary element for the Summary panel should be present
+    const summaries = document.querySelectorAll('details > summary')
+    const texts = Array.from(summaries).map((s) => s.textContent?.toLowerCase() ?? '')
+    expect(texts.some((t) => t.includes('summary'))).toBe(true)
+  })
+
+  it('renders Verdict evidence section header when expanded', () => {
+    render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const summaries = document.querySelectorAll('details > summary')
+    const texts = Array.from(summaries).map((s) => s.textContent?.toLowerCase() ?? '')
+    expect(texts.some((t) => t.includes('verdict'))).toBe(true)
+  })
+
+  it('renders Test coverage section header when expanded', () => {
+    render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const summaries = document.querySelectorAll('details > summary')
+    const texts = Array.from(summaries).map((s) => s.textContent?.toLowerCase() ?? '')
+    expect(texts.some((t) => t.includes('test'))).toBe(true)
+  })
+
+  it('renders Alternative approaches section header when expanded', () => {
+    render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const summaries = document.querySelectorAll('details > summary')
+    const texts = Array.from(summaries).map((s) => s.textContent?.toLowerCase() ?? '')
+    expect(texts.some((t) => t.includes('alternative'))).toBe(true)
+  })
+
+  it('does NOT render sections when collapsed', () => {
+    render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: true, oncollapse: vi.fn() },
+    })
+    // Collapsed rail has no body — no section summaries
+    const summaries = document.querySelectorAll('details > summary')
+    expect(summaries.length).toBe(0)
+  })
+})
