@@ -346,3 +346,22 @@ describe('SettingsPanel — save does not log out OAuth user', () => {
     expect(getSettings().githubAuth).toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// SettingsPanel — mine-skill gate copy (Bug 3 regression)
+// ---------------------------------------------------------------------------
+
+describe('SettingsPanel — mine-skill gate copy (Bug 3 regression)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetAuthStateForTest()
+  })
+
+  it('mine-gate hint says "from the top bar" not "(above)"', async () => {
+    // No auth seeded → gate hint should show
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    const hint = screen.getByText(/sign in with github from the top bar to use this feature/i)
+    expect(hint).toBeInTheDocument()
+    expect(screen.queryByText(/sign in with github \(above\)/i)).not.toBeInTheDocument()
+  })
+})

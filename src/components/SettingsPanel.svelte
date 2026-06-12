@@ -473,7 +473,7 @@
       <p class="hint mine-hint">Analyzes your past review comments to build a personalized reviewer persona.</p>
 
       {#if !hasGithubAuth}
-        <p class="mine-gate-hint">Sign in with GitHub (above) to use this feature.</p>
+        <p class="mine-gate-hint">Sign in with GitHub from the top bar to use this feature.</p>
       {:else if !hasDeepseekKey}
         <p class="mine-gate-hint">Add a DeepSeek API key (above) to use this feature.</p>
       {:else}
