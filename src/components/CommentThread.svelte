@@ -1,27 +1,13 @@
 <script lang="ts">
   import type { PrComment } from '../lib/github/comments'
   import MarkdownView from './MarkdownView.svelte'
+  import { relativeTime } from '../lib/time'
 
   interface Props {
     comments: PrComment[]
   }
 
   let { comments }: Props = $props()
-
-  export function relativeTime(createdAt: string): string {
-    const now = Date.now()
-    const created = new Date(createdAt).getTime()
-    const diffMs = now - created
-    const diffSec = Math.floor(diffMs / 1000)
-    const diffMin = Math.floor(diffSec / 60)
-    const diffHours = Math.floor(diffMin / 60)
-    const diffDays = Math.floor(diffHours / 24)
-
-    if (diffSec < 60) return 'just now'
-    if (diffMin < 60) return `${diffMin}m ago`
-    if (diffHours < 24) return `${diffHours}h ago`
-    return `${diffDays}d ago`
-  }
 
   // Build ordered thread: top-level comments in order, each followed by replies
   const orderedComments = $derived.by(() => {
