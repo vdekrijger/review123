@@ -16,6 +16,7 @@
   import type { PrComment } from '../lib/github/comments'
   import { slugify } from '../lib/slug'
   import { scrollToFileCard } from '../lib/diff/jumpToFile'
+  import { observeDiffColHeight } from '../lib/tree/diffColHeight'
   import type { SkillReviewEntry, AskFocus } from '../lib/ai/run.svelte'
   import type { SkillReviewResult } from '../lib/ai/schemas'
   import { listSkills } from '../lib/skills/skills'
@@ -150,6 +151,21 @@
   // NARROW_THRESHOLD (<900px): after picking a file on a small screen we close
   // the drawer so the diff gets its width back (checked at call time, no listener).
   const NARROW_THRESHOLD = 900
+
+  // ---- Tree height clamp (--diff-col-h) ----
+  // The open tree nav must never be taller than the diff column it accompanies.
+  // CSS can't read a sibling's height, so a ResizeObserver on the diff column
+  // mirrors its height into --diff-col-h on .inspect-layout; the nav's
+  // max-height clamps to min(viewport cap, max(12rem, that height)).
+  // NOTE: this observes CONTENT height only — the margin-vs-inline drawer
+  // decision above stays pure CSS with no viewport listeners (PR #59 contract).
+  let layoutEl = $state<HTMLDivElement | null>(null)
+  let diffColEl = $state<HTMLDivElement | null>(null)
+
+  $effect(() => {
+    if (!layoutEl || !diffColEl) return
+    return observeDiffColHeight(diffColEl, layoutEl)
+  })
 
   function toggleTree(): void {
     treeOpen = !treeOpen
@@ -436,7 +452,7 @@
 {#if files.length === 0}
   <p>This PR has no changed files.</p>
 {:else}
-  <div class="inspect-layout" class:diff-full={diffWidth === 'full'} data-diffwidth={diffWidth}>
+  <div class="inspect-layout" class:diff-full={diffWidth === 'full'} data-diffwidth={diffWidth} bind:this={layoutEl}>
     <!-- Collapsible drawer. Two CSS regimes (see drawer CSS block below):
          MARGIN mode (centered + wide viewport): zero-width flex placeholder, nav extends LEFTWARD into the margin.
          INLINE mode (full-width OR narrower viewport): in-flow 340px flex child right of the tab; diff shrinks while open.
@@ -480,7 +496,7 @@
 
     <!-- No backdrop in any regime: the drawer never overlays the diff. In inline
          mode it pushes the diff over (flex), in margin mode it dwells in the margin. -->
-    <div class="diff-column">
+    <div class="diff-column" bind:this={diffColEl}>
       {#each orderedFiles as file (file.filename)}
         <div id="file-{slugify(file.filename)}">
           {#if hotspotMap.has(file.filename)}
@@ -667,7 +683,13 @@
     top: 0;
     width: var(--tree-w);
     box-sizing: border-box; /* total width = var(--tree-w) including border + padding */
-    max-height: calc(100vh - 5rem);
+    /* Clamp: min(viewport cap, diff column height) — the tree must never run
+       past the end of the diff it accompanies. --diff-col-h is kept current by
+       a ResizeObserver on .diff-column (see observeDiffColHeight). The 12rem
+       floor keeps the tree usable beside a tiny diff: a tree squashed to three
+       rows is worse than a slight overhang. Applies in BOTH drawer regimes —
+       this same element is the visible panel in inline and margin mode. */
+    max-height: min(calc(100vh - 5rem), max(12rem, var(--diff-col-h, 100vh)));
     overflow-y: auto;
     background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
