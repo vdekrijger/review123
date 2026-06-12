@@ -1,9 +1,11 @@
 <script lang="ts">
   import FileDiff from './FileDiff.svelte'
+  import type { SkillFinding } from './FileDiff.svelte'
   import FileTree from './FileTree.svelte'
   import type { PrFile } from '../lib/github/types'
   import type { DiffMode } from '../lib/settings/settings'
   import { getSettings, setTreeOpen } from '../lib/settings/settings'
+  import type { DiffWidth } from '../lib/settings/settings'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
   import { draftKey } from '../lib/drafts/drafts.svelte'
   import { track } from '../lib/analytics/analytics'
@@ -122,6 +124,9 @@
   let treeOpen = $state(getSettings().treeOpen)
   let toggleTabEl = $state<HTMLButtonElement | null>(null)
 
+  // Diff width: 'centered' (default) | 'full'
+  const diffWidth = $derived<DiffWidth>(getSettings().diffWidth)
+
   // Wide-viewport detection: viewport ≥ 1200px means enough left margin space to float the drawer
   // without pushing the diff column (70rem ≈ 1120px, so 1200px gives ~40px + 260px drawer margin)
   // Threshold: 70rem (1120px) + 28px (toggle) + 260px (drawer) + 32px padding = ~1440px
@@ -201,9 +206,13 @@
   })
 
   // Per-file skill suggestions, filtered to only paths in the PR
-  // Shape: Map<path, { skillName, finding, reviewIdx, findingIdx }[]>
+  // Split into two maps: file-level (null line) stays above the file in InspectStep;
+  // line-bearing findings are passed into FileDiff via skillFindings prop.
+  // Shape: Map<path, entry[]>
+  type SuggestionEntry = { skillName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string }
+
   const skillSuggestionsByPath = $derived.by(() => {
-    const map = new Map<string, { skillName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string }[]>()
+    const map = new Map<string, SuggestionEntry[]>()
     for (const review of skillReviews) {
       if (review.state.status !== 'done' || !review.state.value) continue
       const result = review.state.value as SkillReviewResult
@@ -220,6 +229,34 @@
         })
         map.set(finding.path, arr)
       }
+    }
+    return map
+  })
+
+  // File-level (null-line) suggestions — rendered above the FileDiff
+  const fileLevelSuggestionsByPath = $derived.by(() => {
+    const map = new Map<string, SuggestionEntry[]>()
+    for (const [path, suggestions] of skillSuggestionsByPath) {
+      const fileLevelOnly = suggestions.filter(s => s.line === null)
+      if (fileLevelOnly.length > 0) map.set(path, fileLevelOnly)
+    }
+    return map
+  })
+
+  // Line-bearing suggestions — passed to FileDiff as skillFindings prop
+  const lineSkillFindingsByPath = $derived.by(() => {
+    const map = new Map<string, SkillFinding[]>()
+    for (const [path, suggestions] of skillSuggestionsByPath) {
+      const lineOnly = suggestions
+        .filter(s => s.line !== null && !dismissedKeys.has(s.key))
+        .map(s => ({
+          skillName: s.skillName,
+          line: s.line as number,
+          severity: s.severity,
+          body: s.body,
+          key: s.key,
+        }))
+      if (lineOnly.length > 0) map.set(path, lineOnly)
     }
     return map
   })
@@ -339,7 +376,7 @@
 {#if files.length === 0}
   <p>This PR has no changed files.</p>
 {:else}
-  <div class="inspect-layout" data-wide={isWideViewport ? 'true' : 'false'}>
+  <div class="inspect-layout" class:diff-full={diffWidth === 'full'} data-wide={isWideViewport ? 'true' : 'false'}>
     <!-- Slim toggle tab fixed to the left edge -->
     <button
       bind:this={toggleTabEl}
@@ -400,8 +437,8 @@
               AI-inferred — not measured coverage
             </div>
           {/if}
-          {#if skillSuggestionsByPath.has(file.filename)}
-            {#each (skillSuggestionsByPath.get(file.filename) ?? []) as suggestion (suggestion.key)}
+          {#if fileLevelSuggestionsByPath.has(file.filename)}
+            {#each (fileLevelSuggestionsByPath.get(file.filename) ?? []) as suggestion (suggestion.key)}
               {#if !dismissedKeys.has(suggestion.key)}
                 <div class="skill-finding severity-{suggestion.severity}">
                   <div class="skill-finding-header">
@@ -440,6 +477,8 @@
             contents={contentsMap?.get(file.filename)}
             {askFn}
             {askDisabledReason}
+            skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
+            onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key })}
           />
         </div>
       {/each}
@@ -456,22 +495,50 @@
     gap: 0;
   }
 
-  /* ---- Wide viewport (≥1200px): drawer is sticky in the left margin, own scroll ---- */
+  /* Diff width: full mode overrides the content max-width via CSS custom property */
+  .inspect-layout.diff-full {
+    --content-max: none;
+    max-width: none;
+  }
+
+  /* ---- Wide viewport (≥1200px): drawer is absolutely positioned RIGHTWARD of the tab,
+         within the left margin — does NOT consume flex space, diff column stays full width ---- */
   @media (min-width: 1200px) {
+    /* The drawer in wide mode floats absolutely; it does not participate in flex layout */
+    .inspect-layout[data-wide="true"] .file-tree-drawer {
+      position: absolute;
+      /* Align with the left edge of the tab (tab is 28px wide) — drawer opens to the right */
+      left: 28px; /* immediately right of the toggle tab */
+      top: 0; /* same top as the tab/layout start */
+      width: 0;
+      overflow: hidden;
+      max-height: calc(100vh - 5rem);
+      z-index: 20;
+      transition: width 0.2s ease;
+      /* Remove sticky/flex positioning that was causing leftward drift */
+      align-self: auto;
+    }
+
     .inspect-layout[data-wide="true"] .file-tree-drawer[data-open="true"] {
       position: sticky;
-      top: 3.5rem; /* below topbar (~56px) */
-      align-self: flex-start;
-      max-height: calc(100vh - 3.5rem);
+      top: 0.5rem; /* same as the toggle tab top */
+      left: 0; /* sticks within its absolute context; the flex placement handles horizontal */
+      width: 320px;
+      max-height: calc(100vh - 5rem);
       overflow-y: auto;
-      z-index: 10;
-      box-shadow: -2px 4px 16px rgba(0,0,0,0.18);
+      z-index: 20;
+      box-shadow: 2px 4px 16px rgba(0,0,0,0.18);
     }
 
     .inspect-layout[data-wide="true"] .file-tree-nav {
       margin-left: 0;
       max-height: none; /* parent handles scrolling */
       overflow-y: visible;
+    }
+
+    /* Diff column must NOT shrink when drawer opens in wide mode — drawer is out-of-flow */
+    .inspect-layout[data-wide="true"] .diff-column {
+      margin-left: 0 !important;
     }
   }
 
