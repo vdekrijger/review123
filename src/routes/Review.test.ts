@@ -715,3 +715,75 @@ describe('Review progress bar — footer integration', () => {
     localStorage.removeItem('review123:settings')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Narrow-viewport rail behaviour (layout regression fix)
+// ---------------------------------------------------------------------------
+
+describe('Review narrow-mode rail (< 1100px)', () => {
+  // Capture the original innerWidth descriptor so we can restore it
+  const origInnerWidth = Object.getOwnPropertyDescriptor(window, 'innerWidth')
+
+  function stubNarrowViewport() {
+    Object.defineProperty(window, 'innerWidth', {
+      value: 800,
+      writable: true,
+      configurable: true,
+    })
+    // Stub matchMedia so the narrow breakpoint query (max-width: 1099px) matches
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('max-width: 1099px'),
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+  }
+
+  function restoreViewport() {
+    if (origInnerWidth) {
+      Object.defineProperty(window, 'innerWidth', origInnerWidth)
+    }
+    vi.unstubAllGlobals()
+    // Re-stub fetch to avoid the unstubAllGlobals clearing it mid-test — callers restore on their own
+  }
+
+  afterEach(() => {
+    restoreViewport()
+  })
+
+  it('rail is collapsed by default at narrow viewport regardless of stored preference', async () => {
+    stubNarrowViewport()
+    // Seed settings with railCollapsed: false (wide-mode preference)
+    localStorage.setItem('review123:settings', JSON.stringify({ railCollapsed: false }))
+    vi.stubGlobal('fetch', makeFetchStub())
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 900 } })
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    // The aside should have the "collapsed" class even though stored pref is false
+    const aside = document.querySelector('aside.context-rail')
+    // In narrow mode the $effect fires synchronously via the matchMedia stub (matches=true),
+    // forcing railCollapsed=true and propagating the collapsed prop to ContextRail.
+    expect(aside?.classList.contains('collapsed')).toBe(true)
+  })
+
+  it('section.review has data-rail-collapsed attribute set when PR loads', async () => {
+    vi.stubGlobal('fetch', makeFetchStub())
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 902 } })
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    // data-rail-collapsed must be present — CSS media query uses it to conditionally
+    // add padding-right in the medium viewport regime
+    const section = document.querySelector('section.review')
+    expect(section?.hasAttribute('data-rail-collapsed')).toBe(true)
+  })
+})

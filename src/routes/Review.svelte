@@ -197,6 +197,33 @@
   // ---- AI run ----
   let aiRun: ReturnType<typeof createAiRun> | null = $state(null)
   let railCollapsed = $state(getSettings().railCollapsed)
+
+  // Narrow viewport detection: below 1100px the rail auto-collapses and
+  // expansions are transient (not persisted to settings).
+  const NARROW_BREAKPOINT = 1100
+  let isNarrow = $state(
+    typeof window !== 'undefined' && window.innerWidth < NARROW_BREAKPOINT
+  )
+
+  $effect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const mq = window.matchMedia(`(max-width: ${NARROW_BREAKPOINT - 1}px)`)
+    function handleChange(e: MediaQueryListEvent) {
+      isNarrow = e.matches
+      // When entering narrow mode, force collapse (overlay behaviour)
+      if (e.matches) {
+        railCollapsed = true
+      }
+    }
+    mq.addEventListener('change', handleChange)
+    // Initialize: if currently narrow, force collapse regardless of stored pref
+    if (mq.matches) {
+      isNarrow = true
+      railCollapsed = true
+    }
+    return () => mq.removeEventListener('change', handleChange)
+  })
+
   // showProgress: read once at mount (same pattern as railCollapsed).
   // To pick up changes from SettingsPanel without re-mounting Review, the
   // SettingsPanel checkbox calls setShowProgress immediately (like theme),
@@ -347,7 +374,7 @@
   <ConsentDialog repo={consentDialogRepo} onresult={handleConsentResult} />
 {/if}
 
-<section class="review">
+<section class="review" data-rail-collapsed={String(railCollapsed)}>
   {#if load.state.status === 'loading'}
     <p>Loading {owner}/{repo}#{number}…</p>
   {:else if load.state.status === 'error'}
@@ -378,7 +405,14 @@
         run={aiRun}
         onhotspot={handleHotspot}
         collapsed={railCollapsed}
-        oncollapse={(c) => { railCollapsed = c; setRailCollapsed(c) }}
+        oncollapse={(c) => {
+          railCollapsed = c
+          // At narrow widths, the expanded state is transient — don't persist it
+          if (!isNarrow) {
+            setRailCollapsed(c)
+          }
+        }}
+        onbackdropclick={() => { railCollapsed = true }}
       />
     {/if}
 
@@ -524,6 +558,18 @@
 
 <style>
   .review { max-width: 70rem; margin: 0 auto; padding: 1rem; padding-bottom: 5rem; }
+
+  /*
+   * Medium regime (1100–1443px): rail is 300px fixed, but the viewport doesn't have
+   * enough free space for it without covering content. Push content right so the
+   * expanded rail never overlaps interactive elements (e.g. the "Full diff" button).
+   * Only applies when the rail is expanded (data-rail-collapsed="false").
+   */
+  @media (max-width: 1443px) and (min-width: 1100px) {
+    .review:not([data-rail-collapsed="true"]) {
+      padding-right: calc(300px + 1rem);
+    }
+  }
   .muted { opacity: 0.6; }
 
   .comments-error-note {
