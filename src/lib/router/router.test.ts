@@ -48,6 +48,24 @@ describe('matchRoute — step URLs', () => {
   })
 })
 
+describe('matchRoute — settings route', () => {
+  it('/settings → settings route without section', () => {
+    expect(matchRoute('/settings')).toEqual({ name: 'settings', section: undefined })
+  })
+  it('/settings/appearance → settings route with section=appearance', () => {
+    expect(matchRoute('/settings/appearance')).toEqual({ name: 'settings', section: 'appearance' })
+  })
+  it('/settings/providers → settings route with section=providers', () => {
+    expect(matchRoute('/settings/providers')).toEqual({ name: 'settings', section: 'providers' })
+  })
+  it('/settings/ai-models → settings route with section=ai-models', () => {
+    expect(matchRoute('/settings/ai-models')).toEqual({ name: 'settings', section: 'ai-models' })
+  })
+  it('/settings/skills → settings route with section=skills', () => {
+    expect(matchRoute('/settings/skills')).toEqual({ name: 'settings', section: 'skills' })
+  })
+})
+
 describe('matchRoute — provider-qualified URLs', () => {
   it('/review/github/owner/repo/42 → provider form step 1', () => {
     expect(matchRoute('/review/github/sveltejs/svelte/42')).toEqual({
