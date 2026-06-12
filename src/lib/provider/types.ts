@@ -111,4 +111,14 @@ export interface ReviewProvider {
   authState(): { configured: boolean; hint: string }
 
   capabilities: ProviderCapabilities
+
+  /**
+   * Return a provider-flavoured suggestion fence for the given source lines.
+   * GitHub: ```suggestion ... ```
+   * GitLab: ```suggestion:-0+0 ... ```
+   *
+   * Optional — only present when capabilities.suggestions is true.
+   * Callers check capabilities.suggestions before using this method.
+   */
+  suggestionFence?(lines: string[]): string
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { providerFor, parseAnyUrl, PROVIDERS } from './registry'
 import { githubProvider } from './github'
+import { gitlabProvider } from './gitlab'
 
 describe('providerFor', () => {
   it('returns the github provider for "github"', () => {
@@ -15,8 +16,16 @@ describe('providerFor', () => {
     expect(() => providerFor('')).toThrow()
   })
 
-  it('PROVIDERS map contains exactly "github" initially', () => {
+  it('PROVIDERS map contains "github"', () => {
     expect([...PROVIDERS.keys()]).toContain('github')
+  })
+
+  it('PROVIDERS map contains "gitlab"', () => {
+    expect([...PROVIDERS.keys()]).toContain('gitlab')
+  })
+
+  it('returns the gitlab provider for "gitlab"', () => {
+    expect(providerFor('gitlab')).toBe(gitlabProvider)
   })
 })
 
@@ -53,7 +62,15 @@ describe('parseAnyUrl', () => {
     expect(parseAnyUrl('not a url at all')).toBeNull()
   })
 
-  it('returns null for a gitlab.com URL (not yet supported)', () => {
-    expect(parseAnyUrl('https://gitlab.com/owner/repo/-/merge_requests/1')).toBeNull()
+  it('parses a gitlab.com MR URL now that GitLab is registered', () => {
+    const result = parseAnyUrl('https://gitlab.com/owner/repo/-/merge_requests/1')
+    expect(result).not.toBeNull()
+    expect(result!.provider.id).toBe('gitlab')
+    expect(result!.ref).toEqual({
+      provider: 'gitlab',
+      owner: 'owner',
+      repo: 'repo',
+      number: 1,
+    })
   })
 })

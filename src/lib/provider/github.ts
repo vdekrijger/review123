@@ -117,4 +117,8 @@ export const githubProvider: ReviewProvider = {
     }
     return { configured: false, hint: 'No GitHub token configured. Add one in Settings.' }
   },
+
+  suggestionFence(lines: string[]): string {
+    return `\`\`\`suggestion\n${lines.join('\n')}\n\`\`\``
+  },
 }
