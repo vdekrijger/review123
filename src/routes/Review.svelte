@@ -130,6 +130,8 @@
       const files = await compareCommits({ owner, repo }, prevVisitSha, load.state.meta.headSha)
       compareMode = { files, label: 'since your last visit' }
       compareStatus = 'idle'
+      // Push a flagged history entry so browser back exits compare instead of leaving the PR
+      history.pushState({ review123Compare: true }, '', location.pathname)
     } catch (e) {
       if (e instanceof GithubApiError && e.detail.kind === 'not-found') {
         compareError = "Couldn't compare — the previous revision may have been force-pushed away."
@@ -154,6 +156,8 @@
       compareMode = { files, label: `${fromShort}…${toShort}` }
       pickerActive = { from, to }
       compareStatus = 'idle'
+      // Push a flagged history entry so browser back exits compare instead of leaving the PR
+      history.pushState({ review123Compare: true }, '', location.pathname)
     } catch (e) {
       if (e instanceof GithubApiError && e.detail.kind === 'not-found') {
         compareError = "Couldn't compare commits — one revision may no longer exist."
@@ -170,13 +174,37 @@
 
   // ---- Shared exit / dismiss ----
 
-  function exitCompareMode() {
+  /**
+   * Clear compare state. When called from a UI button ("Full diff"), if the
+   * current history entry is the compare-flagged one, call history.back() so
+   * the stack stays clean. When called from the popstate handler (fromPopstate
+   * = true), skip history.back() — the pop already consumed the entry.
+   */
+  function exitCompareMode(fromPopstate = false) {
     compareMode = null
     compareStatus = 'idle'
     compareError = null
     compareSource = null
     pickerActive = null
+    if (!fromPopstate && history.state?.review123Compare) {
+      history.back()
+    }
   }
+
+  // Listen for browser back while compare is active: consume the pop and exit
+  // compare mode instead of navigating away.
+  $effect(() => {
+    function handlePopstate(e: PopStateEvent) {
+      // Only intercept when compare is active. The router's own listener will
+      // re-match the same pathname (same route, no remount) — exitCompareMode
+      // here runs in the same microtask and clears state before any re-render.
+      if (compareMode !== null) {
+        exitCompareMode(true)
+      }
+    }
+    window.addEventListener('popstate', handlePopstate)
+    return () => { window.removeEventListener('popstate', handlePopstate) }
+  })
 
   function dismissBanner() {
     prevVisitSha = null
@@ -441,7 +469,7 @@
             <button class="banner-dismiss" onclick={dismissBanner} aria-label="Dismiss">×</button>
           {:else if isCompareActive && compareSource === 'banner'}
             Showing {compareMode!.files.length} file{compareMode!.files.length === 1 ? '' : 's'} changed since your last visit
-            · <button class="banner-btn" onclick={exitCompareMode}>Show full diff</button>
+            · <button class="banner-btn" onclick={() => exitCompareMode()}>Show full diff</button>
             <button class="banner-dismiss" onclick={dismissBanner} aria-label="Dismiss">×</button>
           {:else}
             <!-- Banner is idle but picker is active — show simplified banner with dismiss -->
@@ -461,7 +489,7 @@
         {:else if compareStatus === 'error' && compareSource === 'picker'}
           <div class="picker-error" role="alert">
             {compareError}
-            <button class="banner-btn" onclick={exitCompareMode}>Dismiss</button>
+            <button class="banner-btn" onclick={() => exitCompareMode()}>Dismiss</button>
           </div>
         {:else}
           <RevisionPicker
