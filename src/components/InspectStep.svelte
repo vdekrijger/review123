@@ -177,6 +177,29 @@
   // Build a Set of paths in this PR for filtering
   const prPathSet = $derived(new Set(files.map(f => f.filename)))
 
+  // Auto-scroll to first finding's file when a run completes with findings
+  let prevRunning = $state(false)
+  $effect(() => {
+    const nowRunning = isRunning
+    if (prevRunning && !nowRunning) {
+      // Run just finished — find first finding across all done reviews
+      for (const review of skillReviews) {
+        if (review.state.status !== 'done' || !review.state.value) continue
+        const result = review.state.value as { findings?: { path: string }[] }
+        const firstValid = result.findings?.find(f => prPathSet.has(f.path))
+        if (firstValid) {
+          const slug = slugify(firstValid.path)
+          const el = document.getElementById(`file-${slug}`)
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }
+          break
+        }
+      }
+    }
+    prevRunning = nowRunning
+  })
+
   // Per-file skill suggestions, filtered to only paths in the PR
   // Shape: Map<path, { skillName, finding, reviewIdx, findingIdx }[]>
   const skillSuggestionsByPath = $derived.by(() => {
@@ -222,7 +245,10 @@
     dismissedKeys = new Set([...dismissedKeys, key])
   }
 
-  async function addFindingAsDraft(finding: { findingPath: string; line: number | null; body: string }) {
+  // Add-as-draft confirmation: track which finding keys have been "added" (session-only)
+  let addedDraftKeys = $state<Set<string>>(new Set())
+
+  async function addFindingAsDraft(finding: { findingPath: string; line: number | null; body: string; key: string }) {
     if (!draftStore) return
     await draftStore.upsert({
       path: finding.findingPath,
@@ -231,23 +257,72 @@
       body: finding.body,
     })
     track('comment_drafted')
+    addedDraftKeys = new Set([...addedDraftKeys, finding.key])
+    // Reset the "Added" confirmation state after 2s
+    setTimeout(() => {
+      addedDraftKeys = new Set([...addedDraftKeys].filter(k => k !== finding.key))
+    }, 2000)
   }
 
   // Show the run button when: skills exist + key present + runSkillReviewsFn provided
   const enabledSkillCount = $derived(listSkills().filter(s => s.enabled).length)
   const hasKey = $derived(!!getSettings().deepseekKey)
   const showRunButton = $derived(enabledSkillCount > 0 && hasKey && runSkillReviewsFn !== null)
+
+  // Running state: true when any skill entry is in loading status
+  const isRunning = $derived(skillReviews.some(e => e.state.status === 'loading'))
 </script>
 
 <div class="mode-toggle" role="group" aria-label="Diff mode">
-  <button class:active={mode === 'unified'} aria-pressed={mode === 'unified'} onclick={() => onmode('unified')}>Unified</button>
-  <button class:active={mode === 'split'} aria-pressed={mode === 'split'} onclick={() => onmode('split')}>Side-by-side</button>
+  <button class="btn" class:btn-active={mode === 'unified'} aria-pressed={mode === 'unified'} onclick={() => onmode('unified')}>Unified</button>
+  <button class="btn" class:btn-active={mode === 'split'} aria-pressed={mode === 'split'} onclick={() => onmode('split')}>Side-by-side</button>
   {#if showRunButton}
-    <button class="run-reviewers-btn" onclick={() => runSkillReviewsFn?.()}>
-      Run my reviewers ({enabledSkillCount})
+    <button
+      class="run-reviewers-btn"
+      class:running={isRunning}
+      onclick={() => !isRunning && runSkillReviewsFn?.()}
+      disabled={isRunning}
+      aria-busy={isRunning}
+    >
+      {#if isRunning}
+        <span class="run-spinner" aria-hidden="true"></span>Running…
+      {:else}
+        Run my reviewers ({enabledSkillCount})
+      {/if}
     </button>
   {/if}
 </div>
+
+{#if skillReviews.length > 0}
+  <div class="skill-run-status-bar" role="status" aria-label="Reviewer run status">
+    {#each skillReviews as entry (entry.skillId)}
+      <span class="skill-run-entry">
+        <span class="skill-run-name">{entry.name}</span>
+        {#if entry.state.status === 'loading'}
+          <span class="skill-status-chip chip-running" aria-label="Running">
+            <span class="chip-spinner" aria-hidden="true"></span>running
+          </span>
+        {:else if entry.state.status === 'done'}
+          {@const findingCount = (entry.state.value as { findings?: unknown[] } | undefined)?.findings?.filter((f: unknown) => {
+            const finding = f as { path?: string }
+            return prPathSet.has(finding.path ?? '')
+          }).length ?? 0}
+          <span class="skill-status-chip chip-done" aria-label="Done, {findingCount} finding{findingCount !== 1 ? 's' : ''}">
+            ✓ {findingCount} finding{findingCount !== 1 ? 's' : ''}
+          </span>
+        {:else if entry.state.status === 'error'}
+          <span class="skill-status-chip chip-error" aria-label="Error, retry available">
+            ↻ error
+          </span>
+        {:else}
+          <span class="skill-status-chip chip-queued" aria-label="Queued">
+            ⏳ queued
+          </span>
+        {/if}
+      </span>
+    {/each}
+  </div>
+{/if}
 
 {#if skillPersonaSummaries.length > 0}
   <div class="skill-summaries">
@@ -279,9 +354,18 @@
     </button>
 
     <!-- Collapsible drawer -->
-    <div class="file-tree-drawer" data-open={treeOpen ? 'true' : 'false'} aria-hidden={!treeOpen}>
+    <div class="file-tree-drawer" data-open={treeOpen ? 'true' : 'false'} data-wide={isWideViewport ? 'true' : 'false'} aria-hidden={!treeOpen}>
       {#if treeOpen}
         <nav class="file-tree-nav" aria-label="File tree">
+          <div class="tree-drawer-header">
+            <span class="tree-drawer-title">Files</span>
+            <button
+              class="tree-drawer-close"
+              onclick={closeTree}
+              aria-label="Close file tree"
+              title="Close file tree (Escape)"
+            >✕</button>
+          </div>
           <FileTree
             {files}
             {attention}
@@ -328,8 +412,11 @@
                   <div class="skill-finding-actions">
                     <button
                       class="skill-add-draft-btn"
+                      class:added={addedDraftKeys.has(suggestion.key)}
                       onclick={() => addFindingAsDraft(suggestion)}
-                    >Add as draft</button>
+                      disabled={addedDraftKeys.has(suggestion.key)}
+                      aria-label={addedDraftKeys.has(suggestion.key) ? 'Added to drafts' : 'Add as draft comment'}
+                    >{addedDraftKeys.has(suggestion.key) ? '✓ Added' : 'Add as draft'}</button>
                     <button
                       class="skill-dismiss-btn"
                       onclick={() => dismissFinding(suggestion.key)}
@@ -369,25 +456,22 @@
     gap: 0;
   }
 
-  /* ---- Wide viewport: drawer floats into left margin (absolute positioning) ---- */
-  /* When viewport ≥ 1200px the centered 70rem content has free left margin space.  */
-  /* The drawer is absolutely positioned to the left of the toggle tab, so the      */
-  /* diff column keeps its full width and is never pushed.                           */
+  /* ---- Wide viewport (≥1200px): drawer is sticky in the left margin, own scroll ---- */
   @media (min-width: 1200px) {
-    .file-tree-drawer[data-open="true"] {
-      position: absolute;
-      /* Place drawer to the left of the toggle tab (28px wide).                    */
-      /* right: 100% positions the right edge of the drawer at the left edge of     */
-      /* its containing block. We add a 4px gap.                                    */
-      right: calc(100% - 28px + 4px);
-      top: 0;
+    .inspect-layout[data-wide="true"] .file-tree-drawer[data-open="true"] {
+      position: sticky;
+      top: 3.5rem; /* below topbar (~56px) */
+      align-self: flex-start;
+      max-height: calc(100vh - 3.5rem);
+      overflow-y: auto;
       z-index: 10;
       box-shadow: -2px 4px 16px rgba(0,0,0,0.18);
     }
 
-    .file-tree-nav {
-      /* On wide viewport the drawer doesn't need a left margin since it's absolute */
+    .inspect-layout[data-wide="true"] .file-tree-nav {
       margin-left: 0;
+      max-height: none; /* parent handles scrolling */
+      overflow-y: visible;
     }
   }
 
@@ -454,19 +538,63 @@
   }
 
   .file-tree-drawer[data-open="true"] {
-    width: 260px;
+    width: 320px;
   }
 
   .file-tree-nav {
-    width: 260px;
+    width: 320px;
     max-height: calc(100vh - 5rem);
     overflow-y: auto;
     background: var(--surface-raised);
+    /* Single border lives here on the drawer nav; no extra border on tree root */
     border: 1px solid var(--border-subtle);
     border-radius: 6px;
     padding: 0.5rem 0.25rem;
     scrollbar-width: thin;
     margin-left: 0.25rem;
+  }
+
+  /* Drawer header: "Files" label + ✕ close button */
+  .tree-drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.3rem 0.5rem 0.3rem 0.5rem;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 0.25rem;
+  }
+
+  .tree-drawer-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    user-select: none;
+  }
+
+  .tree-drawer-close {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    line-height: 1;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .tree-drawer-close:hover {
+    color: var(--text);
+    background: var(--surface-hover, color-mix(in srgb, var(--surface-raised) 80%, var(--text) 10%));
+  }
+
+  .tree-drawer-close:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   /* ---- Diff column: takes remaining space; gains margin when drawer open ---- */
@@ -512,7 +640,16 @@
     }
   }
 
-  .mode-toggle button.active { font-weight: 700; }
+  /* Mode toggle: active state via accent underline, consistent with stepper */
+  .mode-toggle .btn-active {
+    border-bottom: 2px solid var(--accent);
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .mode-toggle .btn {
+    border-radius: 4px 4px 0 0; /* flat bottom, pairs with underline indicator */
+  }
+  .run-reviewers-btn { margin-left: auto; }
 
   .hotspot-badge {
     display: flex;
@@ -565,10 +702,100 @@
     font-weight: 500;
     cursor: pointer;
     transition: background 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
   }
 
-  .run-reviewers-btn:hover {
+  .run-reviewers-btn:hover:not(:disabled) {
     background: var(--surface-raised);
+  }
+
+  .run-reviewers-btn:disabled {
+    cursor: default;
+    opacity: 0.85;
+  }
+
+  .run-spinner {
+    display: inline-block;
+    width: 0.75em;
+    height: 0.75em;
+    border: 2px solid var(--text-muted);
+    border-top-color: var(--text);
+    border-radius: 50%;
+    animation: run-spin 0.6s linear infinite;
+    flex-shrink: 0;
+  }
+
+  @keyframes run-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* ---- Per-reviewer run status bar ---- */
+  .skill-run-status-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    padding: 0.4rem 0;
+    font-size: 0.8rem;
+    align-items: center;
+  }
+
+  .skill-run-entry {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .skill-run-name {
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .skill-status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .chip-queued {
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+  }
+
+  .chip-running {
+    background: var(--legend-changed-bg);
+    border: 1px solid var(--legend-changed-border);
+    color: var(--legend-changed-color);
+  }
+
+  .chip-done {
+    background: var(--legend-added-bg);
+    border: 1px solid var(--legend-added-border);
+    color: var(--legend-added-color);
+  }
+
+  .chip-error {
+    background: var(--legend-removed-bg);
+    border: 1px solid var(--legend-removed-border);
+    color: var(--legend-removed-color);
+    cursor: pointer;
+  }
+
+  .chip-spinner {
+    display: inline-block;
+    width: 0.65em;
+    height: 0.65em;
+    border: 1.5px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: run-spin 0.6s linear infinite;
   }
 
   /* ---- Skill persona summaries ---- */
@@ -675,8 +902,16 @@
     font-weight: 500;
   }
 
-  .skill-add-draft-btn:hover {
+  .skill-add-draft-btn:hover:not(:disabled) {
     background: var(--legend-added-bg);
+  }
+
+  .skill-add-draft-btn.added {
+    background: var(--legend-added-bg);
+    border-color: var(--legend-added-border, var(--accent));
+    color: var(--legend-added-color, var(--accent));
+    cursor: default;
+    opacity: 0.85;
   }
 
   .skill-dismiss-btn {

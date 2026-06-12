@@ -1,13 +1,17 @@
 <script lang="ts">
-  import AskAi from './AskAi.svelte'
   import SummaryPanel from './panels/SummaryPanel.svelte'
   import DiagramsSection from './panels/DiagramsSection.svelte'
   import TestInsightPanel from './panels/TestInsightPanel.svelte'
   import AlternativesPanel from './panels/AlternativesPanel.svelte'
   import VerdictPanel from './panels/VerdictPanel.svelte'
+  import CiSummary from './CiSummary.svelte'
+  import MarkdownView from './MarkdownView.svelte'
+  import { SECTION_REGISTRY } from './panels/sectionRegistry'
   import { track } from '../lib/analytics/analytics'
   import type { AiRun } from '../lib/ai/run.svelte'
   import type { AttentionResult } from '../lib/ai/schemas'
+  import type { CiSummary as CiSummaryType } from '../lib/github/checks'
+  import type { PrMeta } from '../lib/github/types'
 
   interface Props {
     run: AiRun
@@ -15,9 +19,13 @@
     collapsed: boolean
     oncollapse: (c: boolean) => void
     onbackdropclick?: () => void
+    /** Forwarded so the registry can render ci-details and pr-description. */
+    ci?: CiSummaryType | null
+    ciError?: boolean
+    meta?: PrMeta | null
   }
 
-  let { run, onhotspot, collapsed, oncollapse, onbackdropclick }: Props = $props()
+  let { run, onhotspot, collapsed, oncollapse, onbackdropclick, ci = null, ciError = false, meta = null }: Props = $props()
 
   const attention = $derived(
     run.attention.status === 'done' ? (run.attention.value as AttentionResult) : undefined
@@ -33,13 +41,6 @@
     onhotspot(path)
     track('hotspot_clicked')
   }
-
-  // disabledReason: show hint when no API key available
-  const askDisabledReason = $derived(
-    run.summary.status === 'no-key'
-      ? 'No API key configured. Add your DeepSeek key in Settings to use Ask AI.'
-      : null
-  )
 </script>
 
 <div
@@ -64,73 +65,94 @@
   {#if !collapsed}
     <div class="rail-body">
 
-      <!-- Summary -->
-      <details class="rail-section-details" open>
-        <summary class="rail-section-summary">Summary</summary>
-        <div class="rail-section-body">
-          <SummaryPanel {run} />
-        </div>
-      </details>
+      {#each SECTION_REGISTRY.filter((s) => s.show.rail) as section (section.id)}
 
-      <!-- Diagrams -->
-      <details class="rail-section-details">
-        <summary class="rail-section-summary">Diagrams</summary>
-        <div class="rail-section-body">
-          <DiagramsSection {run} />
-        </div>
-      </details>
+        {#if section.id === 'summary'}
+          <details class="rail-section-details" open={section.defaultOpen.rail}>
+            <summary class="rail-section-summary">{section.title}</summary>
+            <div class="rail-section-body">
+              <SummaryPanel {run} />
+            </div>
+          </details>
 
-      <!-- Hotspots (rail-specific: jump behaviour) -->
-      {#if attention && attention.hotspots.length > 0}
-        <details class="rail-section-details" open>
-          <summary class="rail-section-summary">Hotspots</summary>
-          <div class="rail-section-body">
-            <ul class="hotspot-list">
-              {#each attention.hotspots as hotspot (hotspot.path)}
-                <li>
-                  <button
-                    class="hotspot-btn level-{hotspot.level}"
-                    onclick={() => handleHotspot(hotspot.path)}
-                    aria-label={hotspot.path}
-                  >
-                    <span class="hotspot-icon" aria-hidden="true">{levelIcon(hotspot.level)}</span>
-                    <span class="hotspot-path">{hotspot.path}</span>
-                  </button>
-                </li>
-              {/each}
-            </ul>
-          </div>
-        </details>
-      {/if}
+          <!-- Hotspots injected after Summary (rail-specific: jump behaviour) -->
+          {#if attention && attention.hotspots.length > 0}
+            <details class="rail-section-details" open>
+              <summary class="rail-section-summary">Hotspots</summary>
+              <div class="rail-section-body">
+                <ul class="hotspot-list">
+                  {#each attention.hotspots as hotspot (hotspot.path)}
+                    <li>
+                      <button
+                        class="hotspot-btn level-{hotspot.level}"
+                        onclick={() => handleHotspot(hotspot.path)}
+                        aria-label={hotspot.path}
+                      >
+                        <span class="hotspot-icon" aria-hidden="true">{levelIcon(hotspot.level)}</span>
+                        <span class="hotspot-path">{hotspot.path}</span>
+                      </button>
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            </details>
+          {/if}
 
-      <!-- Test coverage (AI-inferred) -->
-      <details class="rail-section-details">
-        <summary class="rail-section-summary">Test coverage (AI-inferred)</summary>
-        <div class="rail-section-body">
-          <TestInsightPanel {run} {onhotspot} />
-        </div>
-      </details>
+        {:else if section.id === 'diagrams'}
+          <details class="rail-section-details" open={section.defaultOpen.rail}>
+            <summary class="rail-section-summary">{section.title}</summary>
+            <div class="rail-section-body">
+              <DiagramsSection {run} />
+            </div>
+          </details>
 
-      <!-- Verdict evidence -->
-      <details class="rail-section-details">
-        <summary class="rail-section-summary">Verdict evidence</summary>
-        <div class="rail-section-body">
-          <VerdictPanel {run} {onhotspot} />
-        </div>
-      </details>
+        {:else if section.id === 'test-insight'}
+          <details class="rail-section-details" open={section.defaultOpen.rail}>
+            <summary class="rail-section-summary">{section.title}</summary>
+            <div class="rail-section-body">
+              <TestInsightPanel {run} {onhotspot} />
+            </div>
+          </details>
 
-      <!-- Alternative approaches -->
-      <details class="rail-section-details">
-        <summary class="rail-section-summary">Alternative approaches (AI)</summary>
-        <div class="rail-section-body">
-          <AlternativesPanel {run} />
-        </div>
-      </details>
+        {:else if section.id === 'alternatives'}
+          <details class="rail-section-details" open={section.defaultOpen.rail}>
+            <summary class="rail-section-summary">{section.title}</summary>
+            <div class="rail-section-body">
+              <AlternativesPanel {run} />
+            </div>
+          </details>
 
-      <!-- Ask AI -->
-      <div class="rail-section-ask">
-        <AskAi ask={run.ask} disabledReason={askDisabledReason} />
-      </div>
+        {:else if section.id === 'verdict-evidence'}
+          <details class="rail-section-details" open={section.defaultOpen.rail}>
+            <summary class="rail-section-summary">{section.title}</summary>
+            <div class="rail-section-body">
+              <VerdictPanel {run} {onhotspot} />
+            </div>
+          </details>
+
+        {:else if section.id === 'ci-details'}
+          <details class="rail-section-details" open={section.defaultOpen.rail}>
+            <summary class="rail-section-summary">{section.title}</summary>
+            <div class="rail-section-body">
+              <CiSummary {ci} error={ciError} />
+            </div>
+          </details>
+
+        {:else if section.id === 'pr-description'}
+          <details class="rail-section-details" open={section.defaultOpen.rail}>
+            <summary class="rail-section-summary">{section.title}</summary>
+            <div class="rail-section-body">
+              {#if meta?.body}
+                <MarkdownView source={meta.body} />
+              {:else}
+                <p class="no-desc">No description.</p>
+              {/if}
+            </div>
+          </details>
+
+        {/if}
+      {/each}
+
     </div>
   {/if}
 </aside>
@@ -321,7 +343,10 @@
     word-break: break-all;
   }
 
-  .rail-section-ask {
-    padding: 0.75rem;
+  .no-desc {
+    margin: 0;
+    font-style: italic;
+    opacity: 0.6;
+    font-size: 0.9rem;
   }
 </style>

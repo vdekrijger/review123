@@ -52,6 +52,13 @@
   // ---- Viewed store — keyed by owner/repo#number (NO sha — survives pushes) ---
   const prId = $derived(`${owner}/${repo}#${number}`)
   const viewedStore = $derived(createViewedStore(prId))
+  // Explicit $derived for the count so Svelte 5 always tracks the entries $state
+  // signal through the $derived boundary. Without this, reading viewedStore.count
+  // directly in the template may not re-render when entries updates (the $derived
+  // caches the object reference; the inner $state getter is read outside a tracked
+  // derived node). The explicit derived creates a proper signal dependency chain:
+  // entries → viewedCount → footer progressbar + draft-status text.
+  const viewedCountDerived = $derived(viewedStore.count)
 
   // ---- Draft store — created once per PR+headSha (after the PR loads) -----
   // We keep a single store instance; it persists across step switches.
@@ -563,12 +570,12 @@
           </span>
         {/if}
         <span class="draft-count text-muted">
-          {draftStore?.count ?? 0} comment{(draftStore?.count ?? 0) === 1 ? '' : 's'} drafted{#if viewedStore.count > 0}&nbsp;&middot; viewed {viewedStore.count}/{load.state.files.length}{/if}
+          {draftStore?.count ?? 0} comment{(draftStore?.count ?? 0) === 1 ? '' : 's'} drafted{#if viewedCountDerived > 0}&nbsp;&middot; viewed {viewedCountDerived}/{load.state.files.length}{/if}
         </span>
       </span>
       {#if showProgress}
         <ReviewProgress
-          viewedCount={viewedStore.count}
+          viewedCount={viewedCountDerived}
           fileCount={load.state.files.length}
           draftCount={draftStore?.count ?? 0}
           {step}

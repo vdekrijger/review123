@@ -3,6 +3,7 @@
   import type { PrFile } from '../lib/github/types'
   import type { AttentionResult } from '../lib/ai/schemas'
   import type { createViewedStore } from '../lib/viewed/viewed.svelte'
+  import { isTestFile } from '../lib/testFile'
 
   let {
     files,
@@ -54,6 +55,9 @@
         {#if isViewed}
           <span class="viewed-check" aria-label="Viewed">✓</span>
         {/if}
+        {#if isTestFile(node.file.filename)}
+          <span class="test-glyph" aria-label="Test file" title="Test file">⚗</span>
+        {/if}
       </button>
     </div>
   {:else if node.name === ''}
@@ -68,7 +72,7 @@
   {:else}
     <!-- Directory node -->
     <details class="dir-node" open>
-      <summary class="dir-summary">
+      <summary class="dir-summary" style="text-transform: none; letter-spacing: normal; font-weight: normal; font-family: var(--font-mono); font-size: 12.5px;">
         <span class="dir-name">{node.name}</span>
       </summary>
       <ul class="dir-children" role="group">
@@ -189,5 +193,12 @@
     color: var(--legend-added-color);
     opacity: 0.6;
     flex-shrink: 0;
+  }
+
+  .test-glyph {
+    font-size: 10px;
+    opacity: 0.65;
+    flex-shrink: 0;
+    color: var(--legend-changed-color);
   }
 </style>

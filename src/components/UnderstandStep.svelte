@@ -27,6 +27,7 @@
   import TestInsightPanel from './panels/TestInsightPanel.svelte'
   import AlternativesPanel from './panels/AlternativesPanel.svelte'
   import VerdictPanel from './panels/VerdictPanel.svelte'
+  import { SECTION_REGISTRY } from './panels/sectionRegistry'
   import { stripReadingOrder } from '../lib/ai/tasks'
   import type { PrMeta, PrFile } from '../lib/github/types'
   import type { CiSummary as CiSummaryType } from '../lib/github/checks'
@@ -285,81 +286,84 @@
 
   </section>
 
-  <!-- ===== COLLAPSED DETAIL PANELS ===== -->
+  <!-- ===== COLLAPSED DETAIL PANELS (registry order) ===== -->
 
-  <!-- Changed files structure (mini FileTree, read-only) -->
-  <details class="detail-panel file-structure-panel">
-    <summary class="detail-summary">Changed files — structure</summary>
-    <div class="detail-body file-structure-body">
-      <FileTree
-        {files}
-        attention={attention}
-        viewedStore={null}
-        activePath={null}
-        onselect={(path) => onhotspot?.(path)}
-      />
-    </div>
-  </details>
+  {#each SECTION_REGISTRY.filter((s) => s.show.page) as section (section.id)}
+    {#if section.id === 'summary'}
+      <details class="detail-panel summary-panel" open={section.defaultOpen.page}>
+        <summary class="detail-summary">{section.title}</summary>
+        <div class="detail-body">
+          <SummaryPanel {run} />
+        </div>
+      </details>
 
-  <!-- Full summary -->
-  <details class="detail-panel summary-panel">
-    <summary class="detail-summary">Full summary</summary>
-    <div class="detail-body">
-      <SummaryPanel {run} />
-    </div>
-  </details>
+    {:else if section.id === 'diagrams'}
+      <details class="detail-panel diagrams-panel" open={section.defaultOpen.page}>
+        <summary class="detail-summary">{section.title}</summary>
+        <div class="detail-body">
+          <DiagramsSection {run} />
+        </div>
+      </details>
 
-  <!-- Diagrams -->
-  <details class="detail-panel diagrams-panel">
-    <summary class="detail-summary">Diagrams</summary>
-    <div class="detail-body">
-      <DiagramsSection {run} />
-    </div>
-  </details>
+    {:else if section.id === 'file-structure'}
+      <details class="detail-panel file-structure-panel" open={section.defaultOpen.page}>
+        <summary class="detail-summary">{section.title}</summary>
+        <div class="detail-body file-structure-body">
+          <FileTree
+            {files}
+            attention={attention}
+            viewedStore={null}
+            activePath={null}
+            onselect={(path) => onhotspot?.(path)}
+          />
+        </div>
+      </details>
 
-  <!-- Test coverage (AI-inferred) -->
-  <details class="detail-panel tests-panel" bind:this={testsPanelEl}>
-    <summary class="detail-summary">Test coverage (AI-inferred)</summary>
-    <div class="detail-body">
-      <TestInsightPanel {run} {onhotspot} />
-    </div>
-  </details>
+    {:else if section.id === 'test-insight'}
+      <details class="detail-panel tests-panel" bind:this={testsPanelEl} open={section.defaultOpen.page}>
+        <summary class="detail-summary">{section.title}</summary>
+        <div class="detail-body">
+          <TestInsightPanel {run} {onhotspot} />
+        </div>
+      </details>
 
-  <!-- Alternative approaches (AI) -->
-  <details class="detail-panel alternatives-panel" bind:this={alternativesPanelEl}>
-    <summary class="detail-summary">Alternative approaches (AI)</summary>
-    <div class="detail-body">
-      <AlternativesPanel {run} />
-    </div>
-  </details>
+    {:else if section.id === 'alternatives'}
+      <details class="detail-panel alternatives-panel" bind:this={alternativesPanelEl} open={section.defaultOpen.page}>
+        <summary class="detail-summary">{section.title}</summary>
+        <div class="detail-body">
+          <AlternativesPanel {run} />
+        </div>
+      </details>
 
-  <!-- Verdict evidence -->
-  <details class="detail-panel verdict-panel">
-    <summary class="detail-summary">Verdict evidence</summary>
-    <div class="detail-body">
-      <VerdictPanel {run} {onhotspot} />
-    </div>
-  </details>
+    {:else if section.id === 'verdict-evidence'}
+      <details class="detail-panel verdict-panel" open={section.defaultOpen.page}>
+        <summary class="detail-summary">{section.title}</summary>
+        <div class="detail-body">
+          <VerdictPanel {run} {onhotspot} />
+        </div>
+      </details>
 
-  <!-- CI details -->
-  <details class="detail-panel ci-panel">
-    <summary class="detail-summary">CI details</summary>
-    <div class="detail-body">
-      <CiSummary {ci} error={ciError} />
-    </div>
-  </details>
+    {:else if section.id === 'ci-details'}
+      <details class="detail-panel ci-panel" open={section.defaultOpen.page}>
+        <summary class="detail-summary">{section.title}</summary>
+        <div class="detail-body">
+          <CiSummary {ci} error={ciError} />
+        </div>
+      </details>
 
-  <!-- Original PR description -->
-  <details class="detail-panel pr-description-details">
-    <summary class="detail-summary">Original PR description</summary>
-    <div class="detail-body pr-description-body">
-      {#if meta.body}
-        <MarkdownView source={meta.body} />
-      {:else}
-        <p class="no-desc">No description.</p>
-      {/if}
-    </div>
-  </details>
+    {:else if section.id === 'pr-description'}
+      <details class="detail-panel pr-description-details" open={section.defaultOpen.page}>
+        <summary class="detail-summary">{section.title}</summary>
+        <div class="detail-body pr-description-body">
+          {#if meta.body}
+            <MarkdownView source={meta.body} />
+          {:else}
+            <p class="no-desc">No description.</p>
+          {/if}
+        </div>
+      </details>
+    {/if}
+  {/each}
 
 </div>
 
