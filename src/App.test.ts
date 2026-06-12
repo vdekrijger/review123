@@ -142,6 +142,38 @@ describe('EC-05k: closed/merged PR renders correctly', () => {
   })
 })
 
+describe('App — Review route is lazy-loaded (bundle discipline)', () => {
+  let originalFetch: typeof fetch
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch
+    _resetStartedForTest()
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+    vi.restoreAllMocks()
+  })
+
+  it('shows the loading fallback synchronously, then the lazy Review chunk renders', async () => {
+    history.replaceState(null, '', '/review/a/b/1')
+    vi.stubGlobal('fetch', makeFetchStub())
+
+    render(App)
+
+    // Synchronously after render the dynamic import() has not resolved yet,
+    // so the route-loading fallback is shown instead of the Review component.
+    // This proves Review (and the vendor-diff-view chunk with the lowlight
+    // highlight engine it drags in) is NOT in the entry's static import graph.
+    expect(document.querySelector('.route-loading')).toBeInTheDocument()
+    expect(document.querySelector('.review')).not.toBeInTheDocument()
+
+    // Once the lazy chunk wires up, the Review route renders fully.
+    expect(await screen.findByText(/PR-ONE/)).toBeTruthy()
+    expect(document.querySelector('.route-loading')).not.toBeInTheDocument()
+  })
+})
+
 describe('App review→review navigation', () => {
   let originalFetch: typeof fetch
 

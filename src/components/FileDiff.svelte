@@ -115,6 +115,31 @@
   const testFileDisplay = $derived<TestFileDisplay>(settingsState.current.testFileDisplay)
   const isTest = $derived(isTestFile(file.filename))
 
+  // ---- Diff view theme ----------------------------------------------------
+  // The library scopes its syntax-highlight token colors (hljs-*) and diff row
+  // backgrounds by a data-theme attribute on its own wrapper, driven by the
+  // diffViewTheme prop. Resolve the app theme setting ('auto' via matchMedia)
+  // reactively so the diff restyles live when the user flips the theme.
+  let prefersDark = $state(
+    typeof window !== 'undefined' &&
+      (window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false),
+  )
+  $effect(() => {
+    const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!mq?.addEventListener) return
+    prefersDark = mq.matches
+    const onChange = (e: MediaQueryListEvent) => {
+      prefersDark = e.matches
+    }
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  })
+  const diffTheme = $derived.by((): 'light' | 'dark' => {
+    const t = settingsState.current.theme
+    if (t === 'dark' || t === 'light') return t
+    return prefersDark ? 'dark' : 'light'
+  })
+
   // When viewed → collapse diff body; user can re-expand by clicking header or unchecking
   // dim mode reduces opacity only — it does NOT collapse the file
   let manuallyExpanded = $state(false)
@@ -307,6 +332,7 @@
       {diffFile}
       diffViewMode={mode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
       diffViewHighlight={true}
+      diffViewTheme={diffTheme}
       diffViewWrap={true}
       diffViewAddWidget={true}
       {extendData}

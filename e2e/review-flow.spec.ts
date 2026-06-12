@@ -1951,3 +1951,197 @@ test('step-back: browser back from verdict returns to /inspect URL', async ({ pa
   // Step 2 content should be visible (diff mode toggle)
   await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible({ timeout: 5_000 })
 })
+
+// ---------------------------------------------------------------------------
+// Syntax highlighting: hljs token spans render in unified + split mode, and
+// token colors stay readable against add/remove row backgrounds in both the
+// light and dark diff themes (diffViewTheme is wired to the app theme).
+// ---------------------------------------------------------------------------
+
+// A TypeScript patch with real keywords so lowlight produces hljs-keyword
+// tokens on context, removed AND added lines.
+const TS_KEYWORD_PATCH = [
+  '@@ -1,4 +1,5 @@',
+  ' const keep = 1',
+  '-export function removed(arg: string) { return arg }',
+  '+export function added(arg: number) { return arg * 2 }',
+  '+const extra: number = 42',
+  ' const tail = 2',
+].join('\n')
+
+function makeTsPrFiles() {
+  return [
+    {
+      filename: 'src/typed.ts',
+      status: 'modified',
+      patch: TS_KEYWORD_PATCH,
+      additions: 2,
+      deletions: 1,
+    },
+  ]
+}
+
+/**
+ * Computes the minimum WCAG contrast ratio between every hljs-keyword token
+ * and its effective (alpha-composited) row background inside the first
+ * file-diff article. Returns null when no token spans are present.
+ */
+async function minKeywordContrast(page: import('@playwright/test').Page): Promise<number | null> {
+  return page.evaluate(() => {
+    const spans = [...document.querySelectorAll('article.file-diff span.hljs-keyword')]
+    if (spans.length === 0) return null
+
+    const parseColor = (c: string): number[] => {
+      const m = c.match(/[\d.]+/g)?.map(Number) ?? [0, 0, 0, 0]
+      if (m.length === 3) m.push(1)
+      return m
+    }
+    const luminance = (r: number, g: number, b: number): number => {
+      const f = (v: number) => {
+        v /= 255
+        return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+      }
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+    }
+    // Effective background: composite every ancestor backgroundColor (handles
+    // the library's semi-transparent add/del row colors in dark mode).
+    const effectiveBg = (el: Element): number[] => {
+      const stack: number[][] = []
+      let cur: Element | null = el
+      while (cur) {
+        stack.push(parseColor(getComputedStyle(cur).backgroundColor))
+        cur = cur.parentElement
+      }
+      let [r, g, b] = [255, 255, 255]
+      for (const [cr, cg, cb, ca] of stack.reverse()) {
+        r = cr * ca + r * (1 - ca)
+        g = cg * ca + g * (1 - ca)
+        b = cb * ca + b * (1 - ca)
+      }
+      return [r, g, b]
+    }
+
+    let min = Infinity
+    for (const span of spans) {
+      const [fr, fg, fb] = parseColor(getComputedStyle(span).color)
+      const [br, bg, bb] = effectiveBg(span)
+      const l1 = luminance(fr, fg, fb)
+      const l2 = luminance(br, bg, bb)
+      const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05)
+      min = Math.min(min, ratio)
+    }
+    return min
+  })
+}
+
+test('syntax-highlighting: TS keywords get hljs spans in unified + split (light theme)', async ({
+  page,
+}, testInfo) => {
+  await setupRoutes(page)
+  // Override just the files endpoint with a TypeScript fixture — registered
+  // after setupRoutes, so Playwright's LIFO route matching picks it first;
+  // all other GitHub API calls fall back to the shared dispatcher.
+  await page.route('**/api.github.com/**', async (route) => {
+    if (new URL(route.request().url()).pathname === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) {
+      return route.fulfill({ json: makeTsPrFiles() })
+    }
+    return route.fallback()
+  })
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_INSPECT)
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  const article = page.locator('article.file-diff').first()
+  await expect(article).toBeVisible({ timeout: 5_000 })
+
+  // The diff view wrapper is themed and uses the built-in lowlight engine
+  const wrapper = article.locator('.diff-tailwindcss-wrapper')
+  await expect(wrapper).toHaveAttribute('data-theme', 'light')
+  await expect(wrapper).toHaveAttribute('data-highlighter', 'lowlight')
+
+  // Unified mode: a TS keyword ends up inside an hljs token span
+  await expect(
+    article.locator('span.hljs-keyword', { hasText: 'export' }).first(),
+  ).toBeVisible({ timeout: 5_000 })
+  await expect(
+    article.locator('span.hljs-keyword', { hasText: 'const' }).first(),
+  ).toBeVisible()
+
+  // Token colors must stay readable on add/remove/context row backgrounds
+  const unifiedContrast = await minKeywordContrast(page)
+  expect(unifiedContrast).not.toBeNull()
+  expect(unifiedContrast!).toBeGreaterThan(2.5)
+
+  await testInfo.attach('diff-unified-light', {
+    body: await article.screenshot(),
+    contentType: 'image/png',
+  })
+
+  // Split mode: keyword tokens render too (both sides share the same engine)
+  await page.getByRole('button', { name: 'Side-by-side' }).click()
+  await expect(page.getByRole('button', { name: 'Side-by-side' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  await expect(
+    article.locator('span.hljs-keyword', { hasText: 'export' }).first(),
+  ).toBeVisible({ timeout: 5_000 })
+
+  const splitContrast = await minKeywordContrast(page)
+  expect(splitContrast).not.toBeNull()
+  expect(splitContrast!).toBeGreaterThan(2.5)
+
+  await testInfo.attach('diff-split-light', {
+    body: await article.screenshot(),
+    contentType: 'image/png',
+  })
+})
+
+test('syntax-highlighting: dark app theme switches the diff to dark tokens, still readable', async ({
+  page,
+}, testInfo) => {
+  await setupRoutes(page)
+  await page.route('**/api.github.com/**', async (route) => {
+    if (new URL(route.request().url()).pathname === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) {
+      return route.fulfill({ json: makeTsPrFiles() })
+    }
+    return route.fallback()
+  })
+  // Seed the app theme to dark — FileDiff resolves it and passes
+  // diffViewTheme="dark" to DiffView.
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, { ...seedSettings(false), theme: 'dark' })
+
+  await page.goto(APP_REVIEW_INSPECT)
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  const article = page.locator('article.file-diff').first()
+  await expect(article).toBeVisible({ timeout: 5_000 })
+
+  // Diff view wrapper follows the app theme
+  const wrapper = article.locator('.diff-tailwindcss-wrapper')
+  await expect(wrapper).toHaveAttribute('data-theme', 'dark')
+
+  // Keyword tokens render in dark mode too
+  await expect(
+    article.locator('span.hljs-keyword', { hasText: 'export' }).first(),
+  ).toBeVisible({ timeout: 5_000 })
+
+  // Dark token colors must stay readable on the dark add/remove backgrounds
+  const darkContrast = await minKeywordContrast(page)
+  expect(darkContrast).not.toBeNull()
+  expect(darkContrast!).toBeGreaterThan(2.5)
+
+  await testInfo.attach('diff-unified-dark', {
+    body: await article.screenshot(),
+    contentType: 'image/png',
+  })
+})
