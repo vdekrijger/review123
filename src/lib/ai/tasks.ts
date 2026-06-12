@@ -452,6 +452,48 @@ Do not include any text outside the JSON object.`
 }
 
 // ---------------------------------------------------------------------------
+// askPrompt — free-form Q&A grounded in PR context (Ask AI feature)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build prompts for the ask task.
+ *
+ * System persona: senior engineer code explainer, grounded ONLY in the provided
+ * context. Answers "I can't see that in the provided context" rather than inventing.
+ *
+ * User prompt: ctx.text + last ≤3 Q/A pairs from history + the new question.
+ *
+ * NOTE: No PROMPT_VERSION bump needed — answers are never cached.
+ */
+export function askPrompt(
+  ctx: PackedContext,
+  history: { q: string; a: string }[],
+  question: string,
+): { system: string; user: string } {
+  const system = `You are a senior engineer code explainer. Your job is to answer questions \
+about a pull request based ONLY on the provided context. You must be grounded only in the \
+provided context — do not invent or assume information that is not visible in the context. \
+If a question asks about something you cannot see in the provided context, respond: \
+"I can't see that in the provided context." Keep answers concise and specific.`
+
+  // Take last ≤3 Q/A pairs
+  const recentHistory = history.slice(-3)
+
+  const parts: string[] = [ctx.text]
+
+  if (recentHistory.length > 0) {
+    parts.push('\n\nPrevious questions and answers:')
+    for (const { q, a } of recentHistory) {
+      parts.push(`\nQ: ${q}\nA: ${a}`)
+    }
+  }
+
+  parts.push(`\n\nQuestion: ${question}`)
+
+  return { system, user: parts.join('') }
+}
+
+// ---------------------------------------------------------------------------
 // parseReadingOrder — extract file paths from summary text
 // ---------------------------------------------------------------------------
 

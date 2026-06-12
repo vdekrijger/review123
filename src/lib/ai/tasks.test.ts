@@ -16,6 +16,7 @@ import {
   testInsightPrompt,
   coachPrompt,
   alternativesPrompt,
+  askPrompt,
   parseReadingOrder,
   stripReadingOrder,
 } from './tasks'
@@ -822,5 +823,86 @@ describe('alternativesPrompt', () => {
     const ctx = makeCtx('my context text')
     const { user } = alternativesPrompt(ctx)
     expect(user).toBe('my context text')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// askPrompt (Ask AI feature)
+// ---------------------------------------------------------------------------
+
+describe('askPrompt', () => {
+  it('returns object with system and user strings', () => {
+    const { system, user } = askPrompt(makeCtx(), [], 'Why is this here?')
+    expect(typeof system).toBe('string')
+    expect(typeof user).toBe('string')
+  })
+
+  it('user prompt contains ctx.text', () => {
+    const ctx = makeCtx('ask-context-unique-xyz')
+    const { user } = askPrompt(ctx, [], 'my question')
+    expect(user).toContain('ask-context-unique-xyz')
+  })
+
+  it('user prompt contains the question', () => {
+    const ctx = makeCtx('some context')
+    const { user } = askPrompt(ctx, [], 'Why is this coded here?')
+    expect(user).toContain('Why is this coded here?')
+  })
+
+  it('system prompt contains senior-engineer code explainer persona', () => {
+    const { system } = askPrompt(makeCtx(), [], 'question')
+    expect(system.toLowerCase()).toMatch(/senior engineer|senior-engineer|code explainer|senior.*engineer/i)
+  })
+
+  it('system prompt says grounded only in the provided context', () => {
+    const { system } = askPrompt(makeCtx(), [], 'question')
+    // Must say it's grounded ONLY in the provided context
+    expect(system.toLowerCase()).toMatch(/provided context|grounded.*context|context.*provided/i)
+  })
+
+  it('system prompt contains hallucination guard — says "I can\'t see that" or similar', () => {
+    const { system } = askPrompt(makeCtx(), [], 'question')
+    // Must instruct the model to say it can't see rather than invent
+    expect(system).toMatch(/can't see|cannot see|not.*in.*context|not visible.*context/i)
+  })
+
+  it('user prompt includes last ≤3 Q&A pairs from history', () => {
+    const history = [
+      { q: 'First question', a: 'First answer' },
+      { q: 'Second question', a: 'Second answer' },
+    ]
+    const { user } = askPrompt(makeCtx(), history, 'New question')
+    expect(user).toContain('First question')
+    expect(user).toContain('First answer')
+    expect(user).toContain('Second question')
+    expect(user).toContain('Second answer')
+    expect(user).toContain('New question')
+  })
+
+  it('user prompt includes only last 3 Q&A pairs when history is longer than 3', () => {
+    const history = [
+      { q: 'Q1', a: 'A1' },
+      { q: 'Q2', a: 'A2' },
+      { q: 'Q3', a: 'A3' },
+      { q: 'Q4', a: 'A4' }, // this is #4, should be included
+    ]
+    // Only the last 3 should be included (Q2-Q4), not Q1/A1
+    const { user } = askPrompt(makeCtx(), history, 'Q5')
+    expect(user).not.toContain('Q1')
+    expect(user).not.toContain('A1')
+    expect(user).toContain('Q2')
+    expect(user).toContain('Q4')
+    expect(user).toContain('Q5')
+  })
+
+  it('user prompt with empty history contains no Q&A noise', () => {
+    const { user } = askPrompt(makeCtx('the context'), [], 'What does this do?')
+    expect(user).toContain('the context')
+    expect(user).toContain('What does this do?')
+  })
+
+  it('system prompt instructs concise answers', () => {
+    const { system } = askPrompt(makeCtx(), [], 'question')
+    expect(system.toLowerCase()).toMatch(/concise|brief|short/i)
   })
 })
