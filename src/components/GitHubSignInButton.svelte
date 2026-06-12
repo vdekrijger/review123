@@ -5,6 +5,8 @@
    * Props:
    *   onclick  - Handler fired when the button is clicked (sync or async).
    *   label    - Button text (default: "Sign in with GitHub").
+   *   compact  - When true, collapses to an icon-only chip below 700px
+   *              (for the navbar); the accessible name is preserved.
    *
    * Style: GitHub brand button — dark #24292f background, white text, Octocat
    * mark inline SVG, 6px radius, 8px 16px padding, font-weight 500.
@@ -16,12 +18,13 @@
   interface Props {
     onclick: () => void | Promise<void>
     label?: string
+    compact?: boolean
   }
 
-  let { onclick, label = 'Sign in with GitHub' }: Props = $props()
+  let { onclick, label = 'Sign in with GitHub', compact = false }: Props = $props()
 </script>
 
-<button type="button" class="gh-signin-btn" {onclick}>
+<button type="button" class="gh-signin-btn" class:compact aria-label={label} {onclick}>
   <!-- Official GitHub Octocat mark — viewBox 0 0 16 16 -->
   <svg
     class="gh-mark"
@@ -42,7 +45,7 @@
          0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"
     />
   </svg>
-  {label}
+  <span class="btn-label">{label}</span>
 </button>
 
 <style>
@@ -81,5 +84,15 @@
     width: 18px;
     height: 18px;
     flex-shrink: 0;
+  }
+
+  /* Compact mode (navbar): icon-only chip on narrow screens */
+  @media (max-width: 700px) {
+    .gh-signin-btn.compact {
+      padding: 8px 10px;
+    }
+    .gh-signin-btn.compact .btn-label {
+      display: none;
+    }
   }
 </style>
