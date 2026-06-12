@@ -10,6 +10,7 @@ import { render, screen } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import SettingsPage from './SettingsPage.svelte'
 import { _resetAuthStateForTest } from '../lib/auth/authState.svelte'
+import { _resetSettingsStateForTest } from '../lib/settings/settingsState.svelte'
 import { navigate } from '../lib/router/router.svelte'
 
 // Stub applyAppearance so tests don't need real DOM env for it
@@ -26,6 +27,7 @@ vi.mock('../lib/router/router.svelte', async (importOriginal) => {
 beforeEach(() => {
   localStorage.clear()
   _resetAuthStateForTest()
+  _resetSettingsStateForTest()
   sessionStorage.clear()
   vi.clearAllMocks()
 })
@@ -79,5 +81,44 @@ describe('SettingsPage', () => {
     const backBtn = screen.getByRole('button', { name: /back/i })
     await userEvent.click(backBtn)
     expect(navigate).toHaveBeenCalledWith('/')
+  })
+})
+
+describe('SettingsPage — save scope', () => {
+  it('exactly ONE plain "Save" button exists on the page, inside the Providers section (no floating/global save)', () => {
+    render(SettingsPage)
+    const saveButtons = screen.getAllByRole('button', { name: /^save$/i })
+    expect(saveButtons).toHaveLength(1)
+    const providersSection = screen.getByRole('region', { name: /providers and access/i })
+    expect(providersSection.contains(saveButtons[0])).toBe(true)
+  })
+
+  it('the Providers Save persists ONLY Providers edits — a pending AI key edit is not saved', async () => {
+    render(SettingsPage)
+
+    // Edit a field in the AI models section (do NOT save it)
+    await userEvent.type(screen.getByLabelText(/deepseek api key/i), 'sk-should-not-persist')
+
+    // Edit a field in the Providers section and save THAT section
+    const providersSection = screen.getByRole('region', { name: /providers and access/i })
+    await userEvent.click(screen.getByText(/advanced.*personal access token/i))
+    await userEvent.type(screen.getByLabelText(/github token/i), 'github_pat_scoped')
+    const { getSettings } = await import('../lib/settings/settings')
+    const saveBtn = screen.getAllByRole('button', { name: /^save$/i })[0]
+    expect(providersSection.contains(saveBtn)).toBe(true)
+    await userEvent.click(saveBtn)
+
+    expect(getSettings().githubPat).toBe('github_pat_scoped')
+    expect(getSettings().deepseekKey).toBeNull()
+  })
+
+  it('Appearance section advertises immediate apply and has no Save button', () => {
+    render(SettingsPage)
+    const appearance = screen.getByRole('region', { name: /appearance/i })
+    expect(appearance.textContent).toMatch(/applies immediately/i)
+    const saveButtons = screen.getAllByRole('button', { name: /^save$/i })
+    for (const btn of saveButtons) {
+      expect(appearance.contains(btn)).toBe(false)
+    }
   })
 })

@@ -20,17 +20,35 @@
   let bitbucketToken = $state(current.bitbucketAuth?.token ?? '')
   let error = $state<string | null>(null)
 
-  // authStatusLine is derived from the reactive authState so it updates live
-  // when the user saves a PAT or signs in/out via OAuth.
-  const authStatusLine = $derived.by(() => {
-    const auth = authState.auth
-    if (!auth) return 'Not signed in'
-    if (auth.method === 'oauth') {
-      const scopeList = auth.scopes.length > 0 ? auth.scopes.join(', ') : 'none'
-      return `Signed in via GitHub (scopes: ${scopeList})`
-    }
-    return 'Using PAT'
+  // ---- Dirty tracking ----
+  // The section is dirty when any field differs from the stored settings.
+  // Compared against the reactive settingsState facade so the flag resets
+  // automatically after a save (settings.ts notifies the facade on write).
+  const dirty = $derived.by(() => {
+    const s = settingsState.current
+    return (
+      pat.trim() !== (s.githubPat ?? '') ||
+      gitlabTokenInput.trim() !== (s.gitlabToken ?? '') ||
+      (gitlabHostInput.trim() || 'gitlab.com') !== s.gitlabHost ||
+      bitbucketEmail.trim() !== (s.bitbucketAuth?.email ?? '') ||
+      bitbucketToken.trim() !== (s.bitbucketAuth?.token ?? '')
+    )
   })
+
+  // ---- Transient "Saved ✓" confirmation ----
+  let savedVisible = $state(false)
+  let savedTimer: ReturnType<typeof setTimeout> | undefined
+  function showSaved() {
+    savedVisible = true
+    clearTimeout(savedTimer)
+    savedTimer = setTimeout(() => {
+      savedVisible = false
+    }, 2000)
+  }
+
+  // GitHub OAuth connected → compact chip; otherwise a plain status line.
+  const githubOauthConnected = $derived(authState.auth?.method === 'oauth')
+  const authStatusLine = $derived(authState.auth?.method === 'pat' ? 'Using PAT' : 'Not signed in')
 
   // Advanced disclosure is open by default only when PAT is the active auth method,
   // so existing PAT users aren't confused by a closed section hiding their token.
@@ -49,15 +67,9 @@
     return !!oauth && Date.now() < oauth.expiresAt
   })
 
-  const gitlabStatusLine = $derived.by(() => {
-    if (gitlabOauthConnected) {
-      return 'GitLab: signed in via OAuth'
-    }
-    if (settingsState.current.gitlabToken) {
-      return 'GitLab: using PAT'
-    }
-    return 'GitLab: not configured'
-  })
+  const gitlabStatusLine = $derived(
+    settingsState.current.gitlabToken ? 'GitLab: using PAT' : 'GitLab: not configured',
+  )
 
   async function handleGithubSignIn() {
     try {
@@ -88,9 +100,10 @@
 
   export function save() {
     try {
-      const hadPat = !!current.githubPat
-      const hadGitlab = !!current.gitlabToken
-      const hadBitbucket = !!current.bitbucketAuth
+      const before = getSettings()
+      const hadPat = !!before.githubPat
+      const hadGitlab = !!before.gitlabToken
+      const hadBitbucket = !!before.bitbucketAuth
 
       // Belt-and-braces: when signed in via OAuth and PAT field is empty,
       // omit githubPat from the patch so saveTokens does not clear githubAuth.
@@ -117,6 +130,16 @@
       if (!hadGitlab && gitlabTokenInput.trim()) track('settings_key_added', { service: 'gitlab' })
       if (!hadBitbucket && emailTrimmed && tokenTrimmed) track('settings_key_added', { service: 'bitbucket' })
       error = null
+      // Sync local fields from the stored (trimmed/normalized) values so the
+      // section reads clean immediately — e.g. a host entered as an origin URL
+      // is shown as the normalized hostname that was actually saved.
+      const saved = getSettings()
+      pat = saved.githubPat ?? ''
+      gitlabTokenInput = saved.gitlabToken ?? ''
+      gitlabHostInput = saved.gitlabHost
+      bitbucketEmail = saved.bitbucketAuth?.email ?? ''
+      bitbucketToken = saved.bitbucketAuth?.token ?? ''
+      showSaved()
       return true
     } catch (e) {
       error = (e as Error).message
@@ -128,27 +151,45 @@
 <section id="providers" aria-label="Providers and access">
   <p class="section-label">Providers &amp; access</p>
 
-  <p class="auth-status">{authStatusLine}
-    {#if authState.auth?.method === 'oauth'}
-      <button class="sign-out-link" aria-label="Sign out of GitHub" onclick={handleGithubSignOut}>Sign out</button>
-    {/if}
-  </p>
-  {#if !authState.auth && githubClientId}
-    <div class="oauth-row">
-      <GitHubSignInButton onclick={handleGithubSignIn} />
+  {#if githubOauthConnected}
+    <div class="connected-chip">
+      <span class="chip-check" aria-hidden="true">✓</span>
+      <span class="chip-text">GitHub · connected</span>
+      <button
+        class="chip-signout"
+        aria-label="Sign out of GitHub"
+        title="Sign out of GitHub"
+        onclick={handleGithubSignOut}
+      >✕</button>
     </div>
+  {:else}
+    <p class="auth-status">{authStatusLine}</p>
+    {#if !authState.auth && githubClientId}
+      <div class="oauth-row">
+        <GitHubSignInButton onclick={handleGithubSignIn} />
+      </div>
+    {/if}
   {/if}
 
-  <p class="auth-status gitlab-status">{gitlabStatusLine}
-    {#if gitlabOauthConnected}
-      <button class="sign-out-link" aria-label="Sign out of GitLab" onclick={handleGitlabSignOut}>Sign out</button>
-    {/if}
-  </p>
-  {#if !gitlabOauthConnected && gitlabClientId}
-    <div class="oauth-row">
-      <GitLabSignInButton onclick={handleGitlabSignIn} />
+  {#if gitlabOauthConnected}
+    <div class="connected-chip">
+      <span class="chip-check" aria-hidden="true">✓</span>
+      <span class="chip-text">GitLab · connected</span>
+      <button
+        class="chip-signout"
+        aria-label="Sign out of GitLab"
+        title="Sign out of GitLab"
+        onclick={handleGitlabSignOut}
+      >✕</button>
     </div>
-    <p class="hint">Sign in with GitLab OAuth (recommended). Tokens are refreshed automatically. For self-hosted instances, set the GitLab host under Advanced first.</p>
+  {:else}
+    <p class="auth-status gitlab-status">{gitlabStatusLine}</p>
+    {#if gitlabClientId}
+      <div class="oauth-row">
+        <GitLabSignInButton onclick={handleGitlabSignIn} />
+      </div>
+      <p class="hint">Sign in with GitLab OAuth (recommended). Tokens are refreshed automatically. For self-hosted instances, set the GitLab host under Advanced first.</p>
+    {/if}
   {/if}
 
   <details open={advancedOpen}>
@@ -189,13 +230,20 @@
   {#if error}<p role="alert">{error}</p>{/if}
 
   <div class="save-row">
-    <button class="btn btn-primary" onclick={save}>Save</button>
+    <button class="btn btn-primary" onclick={save} disabled={!dirty}>Save</button>
+    {#if dirty}<span class="dirty-hint">Unsaved changes</span>{/if}
+    <span class="saved-note" class:visible={savedVisible} aria-live="polite">{savedVisible ? 'Saved ✓' : ''}</span>
   </div>
 </section>
 
 <style>
+  /* Bounded section card: the Save button at the bottom visibly belongs to
+     THIS section's fields — never floating between sections. */
   section {
-    margin-bottom: 2rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
   }
 
   .section-label {
@@ -211,18 +259,44 @@
     margin-bottom: 0.75rem;
   }
 
-  .auth-status .sign-out-link {
-    margin-left: 0.4rem;
+  /* Compact connected chip: status + sign-out merged into one row */
+  .connected-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    padding: 0.2rem 0.3rem 0.2rem 0.65rem;
+    margin: 0 0.5rem 0.6rem 0;
+    font-size: 0.88em;
+    background: var(--surface-raised);
+    color: var(--text);
   }
 
-  .sign-out-link {
-    font-size: 0.85em;
-    background: none;
+  .chip-check {
+    color: var(--ok, #1a7f37);
+    font-weight: 700;
+  }
+
+  .chip-signout {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.35rem;
+    height: 1.35rem;
     border: none;
-    color: var(--accent);
+    border-radius: 50%;
+    background: none;
+    color: var(--text-muted);
     cursor: pointer;
+    font-size: 0.9em;
+    line-height: 1;
     padding: 0;
-    text-decoration: underline;
+  }
+
+  .chip-signout:hover {
+    background: var(--hairline);
+    color: var(--text);
   }
 
   .oauth-row {
@@ -267,7 +341,31 @@
     margin-bottom: 0;
   }
 
+  /* The save row is separated from the fields by a hairline but stays inside
+     the section card, so its scope is unambiguous. */
   .save-row {
     margin-top: 1rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid var(--hairline);
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+  }
+
+  .dirty-hint {
+    font-size: 0.85em;
+    font-style: italic;
+    color: var(--text-muted);
+  }
+
+  .saved-note {
+    font-size: 0.85em;
+    color: var(--ok, #1a7f37);
+    opacity: 0;
+    transition: opacity 0.35s ease;
+  }
+
+  .saved-note.visible {
+    opacity: 1;
   }
 </style>

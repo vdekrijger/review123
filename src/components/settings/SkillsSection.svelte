@@ -345,8 +345,12 @@
 </section>
 
 <style>
+  /* Bounded section card — skills persist on toggle/add, no Save button. */
   .skills-section {
-    margin-bottom: 2rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
   }
 
   .section-label {

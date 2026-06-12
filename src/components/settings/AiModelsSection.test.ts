@@ -16,6 +16,7 @@ import { render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import AiModelsSection from './AiModelsSection.svelte'
 import { getSettings, saveTokens, setAiProvider, setAiModel } from '../../lib/settings/settings'
+import { _resetSettingsStateForTest } from '../../lib/settings/settingsState.svelte'
 import { PROVIDERS } from '../../lib/llm/providers'
 import { llmTestConnection, LlmError } from '../../lib/llm/llm'
 
@@ -28,6 +29,7 @@ const llmTestConnectionMock = vi.mocked(llmTestConnection)
 
 beforeEach(() => {
   localStorage.clear()
+  _resetSettingsStateForTest()
   vi.clearAllMocks()
   llmTestConnectionMock.mockResolvedValue(undefined)
 })
@@ -116,30 +118,28 @@ describe('AiModelsSection — key fields', () => {
     expect(deepseekInput.closest('[data-active="true"]')).toBeNull()
   })
 
-  it('typing a DeepSeek key and clicking Save stores it', async () => {
+  it('typing a DeepSeek key and clicking its Save & test stores it', async () => {
     render(AiModelsSection)
     await userEvent.type(screen.getByLabelText(/deepseek api key/i), 'sk-test123')
-    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /save & test deepseek/i }))
     expect(getSettings().deepseekKey).toBe('sk-test123')
   })
 
-  it('Save stores all provider keys atomically', async () => {
+  it('per-key save is SCOPED: saving Anthropic does not persist a pending Gemini edit', async () => {
     render(AiModelsSection)
     await userEvent.type(screen.getByLabelText(/anthropic api key/i), 'sk-ant-1')
     await userEvent.type(screen.getByLabelText(/gemini api key/i), 'AIza-1')
-    await userEvent.type(screen.getByLabelText(/openai api key/i), 'sk-oa-1')
-    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /save & test anthropic/i }))
     const s = getSettings()
     expect(s.anthropicKey).toBe('sk-ant-1')
-    expect(s.geminiKey).toBe('AIza-1')
-    expect(s.openaiKey).toBe('sk-oa-1')
+    expect(s.geminiKey).toBeNull() // still only in the field — its own Save & test persists it
   })
 
-  it('clearing the DeepSeek key saves null', async () => {
+  it('clearing the DeepSeek key and clicking its Save & test saves null', async () => {
     saveTokens({ deepseekKey: 'sk-existing' })
     render(AiModelsSection)
     await userEvent.clear(screen.getByLabelText(/deepseek api key/i))
-    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /save & test deepseek/i }))
     expect(getSettings().deepseekKey).toBeNull()
   })
 
@@ -227,5 +227,61 @@ describe('AiModelsSection — Save & test connection button', () => {
     expect(btn).toBeDisabled()
     resolvePing()
     await waitFor(() => expect(btn).not.toBeDisabled())
+  })
+})
+
+describe('AiModelsSection — save UX (zero ambiguous buttons)', () => {
+  it('has NO section-level Save button — keys persist only via per-key Save & test', () => {
+    render(AiModelsSection)
+    expect(screen.queryByRole('button', { name: /^save$/i })).toBeNull()
+  })
+
+  it('labels provider & model selection as applying immediately', () => {
+    render(AiModelsSection)
+    expect(screen.getByText(/applies immediately/i)).toBeInTheDocument()
+  })
+
+  it('typing in a key field shows an "unsaved" hint in THAT row only', async () => {
+    render(AiModelsSection)
+    expect(screen.queryByText(/unsaved/i)).toBeNull()
+    await userEvent.type(screen.getByLabelText(/anthropic api key/i), 'sk-ant-dirty')
+    const hints = screen.getAllByText(/unsaved/i)
+    expect(hints).toHaveLength(1)
+    const anthropicRow = screen.getByLabelText(/anthropic api key/i).closest('.key-row')
+    expect(anthropicRow?.contains(hints[0])).toBe(true)
+  })
+
+  it('the unsaved hint clears after Save & test persists the key', async () => {
+    render(AiModelsSection)
+    await userEvent.type(screen.getByLabelText(/gemini api key/i), 'AIza-dirty')
+    expect(screen.getByText(/unsaved/i)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /save & test gemini/i }))
+    expect(screen.queryByText(/unsaved/i)).toBeNull()
+  })
+
+  it('shows a transient "Saved ✓" (aria-live polite) after Save & test persists a changed key', async () => {
+    render(AiModelsSection)
+    await userEvent.type(screen.getByLabelText(/deepseek api key/i), 'sk-new')
+    await userEvent.click(screen.getByRole('button', { name: /save & test deepseek/i }))
+    const saved = screen.getByText(/saved ✓/i)
+    expect(saved).toBeInTheDocument()
+    expect(saved.closest('[aria-live="polite"]')).not.toBeNull()
+    await waitFor(() => expect(screen.queryByText(/saved ✓/i)).toBeNull(), { timeout: 3500 })
+  })
+
+  it('does NOT show "Saved ✓" when Save & test runs on an unchanged key (pure re-test)', async () => {
+    saveTokens({ deepseekKey: 'sk-unchanged' })
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /save & test deepseek/i }))
+    expect(screen.queryByText(/saved ✓/i)).toBeNull()
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/connected/i))
+  })
+
+  it('a dirty key row marks its Save & test button as prominent (data-dirty)', async () => {
+    render(AiModelsSection)
+    const btn = screen.getByRole('button', { name: /save & test openai/i })
+    expect(btn).not.toHaveAttribute('data-dirty', 'true')
+    await userEvent.type(screen.getByLabelText(/openai api key/i), 'sk-oa-dirty')
+    expect(btn).toHaveAttribute('data-dirty', 'true')
   })
 })

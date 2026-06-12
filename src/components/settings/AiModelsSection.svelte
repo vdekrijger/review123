@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getSettings, saveTokens, setAiProvider, setAiModel, type AiProvider } from '../../lib/settings/settings'
+  import { settingsState } from '../../lib/settings/settingsState.svelte'
   import { PROVIDERS, getModelDef, type LlmProviderId } from '../../lib/llm/providers'
   import { llmTestConnection, LlmError } from '../../lib/llm/llm'
   import { track } from '../../lib/analytics/analytics'
@@ -55,29 +56,37 @@
     const hadKey = !!getSettings()[field]
     const value = keys[id].trim()
     saveTokens({ [field]: value === '' ? null : keys[id] })
+    // Sync the field to the stored (trimmed) value so the row reads clean.
+    keys[id] = getSettings()[field] ?? ''
     if (!hadKey && value) track('settings_key_added', { service: id })
   }
 
-  export function save() {
-    try {
-      // Atomic: saveTokens validates every field before writing anything.
-      const settings = getSettings()
-      const patch: Partial<Record<(typeof KEY_FIELD)[LlmProviderId], string | null>> = {}
-      for (const p of PROVIDERS) {
-        patch[KEY_FIELD[p.id]] = keys[p.id].trim() === '' ? null : keys[p.id]
-      }
-      saveTokens(patch)
-      for (const p of PROVIDERS) {
-        if (!settings[KEY_FIELD[p.id]] && keys[p.id].trim()) {
-          track('settings_key_added', { service: p.id })
-        }
-      }
-      error = null
-      return true
-    } catch (e) {
-      error = (e as Error).message
-      return false
+  // ---- Per-row dirty tracking ----
+  // A key row is dirty when its field differs from the stored settings.
+  // Derived from the reactive settingsState facade so it resets after a save.
+  const dirtyKeys = $derived.by(() => {
+    const s = settingsState.current
+    const result = {} as Record<LlmProviderId, boolean>
+    for (const p of PROVIDERS) {
+      result[p.id] = keys[p.id].trim() !== (s[KEY_FIELD[p.id]] ?? '')
     }
+    return result
+  })
+
+  // ---- Per-row transient "Saved ✓" confirmation ----
+  let savedStates = $state<Record<LlmProviderId, boolean>>({
+    deepseek: false,
+    openai: false,
+    anthropic: false,
+    gemini: false,
+  })
+  const savedTimers: Partial<Record<LlmProviderId, ReturnType<typeof setTimeout>>> = {}
+  function showSaved(id: LlmProviderId) {
+    savedStates[id] = true
+    clearTimeout(savedTimers[id])
+    savedTimers[id] = setTimeout(() => {
+      savedStates[id] = false
+    }, 2000)
   }
 
   // ---- Per-provider connection test (Save & test) ----
@@ -93,9 +102,13 @@
 
   async function handleSaveAndTest(id: LlmProviderId) {
     testStates[id] = { status: 'testing' }
+    const wasDirty = dirtyKeys[id]
     try {
       saveKey(id) // test what's in the field: save first, then ping (button says so)
       error = null
+      // Only confirm "Saved" when something actually changed — a re-test of an
+      // unchanged key is not a save.
+      if (wasDirty) showSaved(id)
     } catch (e) {
       testStates[id] = { status: 'error', message: (e as Error).message }
       return
@@ -115,6 +128,7 @@
 
 <section id="ai-models" aria-label="AI models">
   <p class="section-label">AI models</p>
+  <p class="apply-note">Provider and model selection applies immediately. API keys are saved per provider with <em>Save &amp; test</em>.</p>
 
   <fieldset>
     <legend>Provider</legend>
@@ -152,6 +166,7 @@
         <div class="test-row">
           <button
             class="btn test-btn"
+            data-dirty={dirtyKeys[p.id] ? 'true' : 'false'}
             onclick={() => handleSaveAndTest(p.id)}
             disabled={testStates[p.id].status === 'testing'}
             aria-label="Save & test {p.displayName} connection"
@@ -159,6 +174,8 @@
           >
             {testStates[p.id].status === 'testing' ? 'Testing…' : 'Save & test'}
           </button>
+          {#if dirtyKeys[p.id]}<span class="dirty-hint">Unsaved changes</span>{/if}
+          <span class="saved-note" class:visible={savedStates[p.id]} aria-live="polite">{savedStates[p.id] ? 'Saved ✓' : ''}</span>
           {#if testStates[p.id].status === 'ok'}
             <span class="test-ok" role="status">✓ Connected</span>
           {:else if testStates[p.id].status === 'error'}
@@ -176,15 +193,16 @@
       it is forwarded per-request and never stored or logged on the server.</p>
   </div>
   {#if error}<p role="alert">{error}</p>{/if}
-
-  <div class="save-row">
-    <button class="btn btn-primary" onclick={save}>Save</button>
-  </div>
 </section>
 
 <style>
+  /* Bounded section card — saving here is per-key (Save & test); provider and
+     model apply immediately, so there is no section-level Save button. */
   section {
-    margin-bottom: 2rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
   }
 
   .section-label {
@@ -192,6 +210,12 @@
     font-weight: 600;
     margin: 0 0 0.4rem;
     color: var(--text);
+  }
+
+  .apply-note {
+    font-size: 0.8em;
+    color: var(--text-muted);
+    margin: 0 0 0.75rem;
   }
 
   fieldset {
@@ -266,6 +290,30 @@
     font-size: 0.85em;
   }
 
+  /* A dirty key row's button becomes prominent (accent) — saved-vs-not at a glance */
+  .test-btn[data-dirty='true'] {
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .dirty-hint {
+    font-size: 0.85em;
+    font-style: italic;
+    color: var(--text-muted);
+  }
+
+  .saved-note {
+    font-size: 0.85em;
+    color: var(--ok, #1a7f37);
+    opacity: 0;
+    transition: opacity 0.35s ease;
+  }
+
+  .saved-note.visible {
+    opacity: 1;
+  }
+
   .test-ok {
     font-size: 0.85em;
     color: var(--ok, #1a7f37);
@@ -284,9 +332,5 @@
 
   .privacy-note p {
     margin: 0 0 0.35rem;
-  }
-
-  .save-row {
-    margin-top: 1rem;
   }
 </style>
