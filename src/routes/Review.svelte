@@ -22,6 +22,8 @@
   import type { CiSummary } from '../lib/github/checks'
   import type { AttentionResult } from '../lib/ai/schemas'
   import type { PrFile } from '../lib/github/types'
+  import { getPrComments } from '../lib/github/comments'
+  import type { PrComment } from '../lib/github/comments'
 
   const RETURN_KEY = 'review123:returnTo'
 
@@ -158,6 +160,12 @@
     return ciPromise
   }
 
+  // PR comments state
+  let prComments: PrComment[] = $state([])
+  let commentsError = $state(false)
+  let commentsDismissed = $state(false)
+  let commentsLoaded = $state(false)
+
   // CI display state (for UnderstandStep)
   let ciData: CiSummary | null = $state(null)
   let ciError = $state(false)
@@ -196,6 +204,24 @@
       getCi({ owner, repo, number }, meta.headSha).then(
         (ci) => { ciData = ci },
         () => { ciError = true },
+      )
+    }
+  })
+
+  // Fetch PR comments once when PR is ready (non-blocking, silent on failure)
+  let commentsInitialized = false
+  $effect(() => {
+    if (load.state.status === 'ready' && !commentsInitialized) {
+      commentsInitialized = true
+      getPrComments({ owner, repo, number }).then(
+        (comments) => {
+          prComments = comments
+          commentsLoaded = true
+        },
+        () => {
+          commentsError = true
+          commentsLoaded = true
+        },
       )
     }
   })
@@ -284,6 +310,16 @@
           {/if}
         </div>
       {/if}
+      {#if commentsError && !commentsDismissed}
+        <div class="comments-error-note" role="alert">
+          Couldn't load existing comments.
+          <button
+            class="comments-dismiss-btn"
+            aria-label="Dismiss comments error"
+            onclick={() => { commentsDismissed = true }}
+          >×</button>
+        </div>
+      {/if}
       <InspectStep
         files={compareMode === 'active' && sinceLastVisit !== null ? sinceLastVisit : load.state.files}
         changedFiles={compareMode === 'active' && sinceLastVisit !== null ? sinceLastVisit.length : load.state.meta.changedFiles}
@@ -293,6 +329,7 @@
         attention={compareMode === 'active' ? null : (aiRun?.attention.status === 'done' ? aiRun.attention.value as AttentionResult : null)}
         readingOrder={compareMode === 'active' ? [] : readingOrder}
         {viewedStore}
+        prComments={compareMode === 'active' ? [] : prComments}
       />
     {:else}
       <VerdictStep
@@ -345,6 +382,35 @@
 <style>
   .review { max-width: 70rem; margin: 0 auto; padding: 1rem; padding-bottom: 5rem; }
   .muted { opacity: 0.6; }
+
+  .comments-error-note {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #1a1a2e;
+    border: 1px solid #8883;
+    border-left: 3px solid #9a6700;
+    border-radius: 4px;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
+    color: #c8d0e0;
+    margin-bottom: 0.5rem;
+  }
+
+  .comments-dismiss-btn {
+    background: none;
+    border: none;
+    color: #6a8090;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 0.25rem;
+    margin-left: auto;
+  }
+
+  .comments-dismiss-btn:hover {
+    color: #90a8b8;
+  }
 
   .visit-banner {
     display: flex;

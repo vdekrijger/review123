@@ -6,12 +6,16 @@
   import type { DiffMode } from '../lib/settings/settings'
   import type { Draft } from '../lib/drafts/drafts.svelte'
   import DraftThread from './DraftThread.svelte'
+  import CommentThread from './CommentThread.svelte'
+  import type { PrComment } from '../lib/github/comments'
 
   interface Props {
     file: PrFile
     mode: DiffMode
     /** Drafts that belong to this file */
     drafts?: Draft[]
+    /** Existing PR comments for this file */
+    comments?: PrComment[]
     /** Called when the user saves a comment at a given line */
     onAddDraft?: (line: number, side: 'LEFT' | 'RIGHT', body: string) => void
     /** Called when the user deletes a comment at a given line */
@@ -24,7 +28,27 @@
     onToggleViewed?: () => void
   }
 
-  let { file, mode, drafts = [], onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed }: Props = $props()
+  let { file, mode, drafts = [], comments = [], onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed }: Props = $props()
+
+  // Group existing comments by line (null-line comments go under a null key)
+  const commentsByLine = $derived.by(() => {
+    const map = new Map<number | null, PrComment[]>()
+    for (const c of comments) {
+      const key = c.line
+      const arr = map.get(key) ?? []
+      arr.push(c)
+      map.set(key, arr)
+    }
+    return map
+  })
+
+  // Ordered line keys (non-null first, sorted numerically; null last)
+  const lineKeys = $derived.by(() => {
+    const keys = [...commentsByLine.keys()]
+    const nonNull = (keys.filter((k) => k !== null) as number[]).sort((a, b) => a - b)
+    const hasNull = keys.includes(null)
+    return hasNull ? ([...nonNull, null] as (number | null)[]) : nonNull
+  })
 
   // When viewed → collapse diff body; user can re-expand by clicking header or unchecking
   let manuallyExpanded = $state(false)
@@ -212,6 +236,19 @@
         {/each}
       </div>
     {/if}
+
+    {#if comments.length > 0}
+      <div class="existing-comments" aria-label="Existing review comments">
+        {#each lineKeys as lineKey (lineKey)}
+          <div class="existing-line-group">
+            <div class="existing-line-label">
+              {lineKey !== null ? `Line ${lineKey}` : 'General'} — {commentsByLine.get(lineKey)!.length} comment{commentsByLine.get(lineKey)!.length === 1 ? '' : 's'}
+            </div>
+            <CommentThread comments={commentsByLine.get(lineKey)!} />
+          </div>
+        {/each}
+      </div>
+    {/if}
   {/if}
   {/if}
 </article>
@@ -251,4 +288,28 @@
     font-family: var(--font-mono) !important;
   }
   .draft-annotations { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.5rem; border-top: 1px solid #f0b44444; }
+
+  .existing-comments {
+    border-top: 1px solid #4a90d044;
+    background: #1a3050 08;
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .existing-line-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .existing-line-label {
+    font-size: 0.75rem;
+    opacity: 0.6;
+    font-family: var(--font-mono);
+    padding: 0.1rem 0.25rem;
+    border-left: 2px solid #4a90d077;
+    margin-bottom: 0.15rem;
+  }
 </style>

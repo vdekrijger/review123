@@ -120,6 +120,32 @@ function makeAnnotations() {
   ]
 }
 
+function makeReviewComments() {
+  return [
+    {
+      id: 1001,
+      user: { login: 'reviewer-bot', avatar_url: null },
+      body: 'This inline comment is on src/feature.ts line 2.',
+      created_at: '2024-01-01T10:00:00Z',
+      path: 'src/feature.ts',
+      line: 2,
+      side: 'RIGHT',
+      in_reply_to_id: null,
+    },
+  ]
+}
+
+function makeIssueComments() {
+  return [
+    {
+      id: 2001,
+      user: { login: 'general-reviewer', avatar_url: null },
+      body: 'Overall this PR looks good but needs cleanup.',
+      created_at: '2024-01-01T09:00:00Z',
+    },
+  ]
+}
+
 // DeepSeek SSE response for streaming summary
 function makeDeepSeekStreamResponse(text: string): string {
   const words = text.split(' ')
@@ -336,6 +362,16 @@ async function setupRoutes(
           html_url: `https://github.com/${OWNER}/${REPO}/pull/${PR_NUMBER}#pullrequestreview-1`,
         },
       })
+    }
+
+    // PR review comments: /repos/:owner/:repo/pulls/:number/comments
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/comments`) {
+      return route.fulfill({ json: makeReviewComments() })
+    }
+
+    // PR issue comments: /repos/:owner/:repo/issues/:number/comments
+    if (path === `/repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments`) {
+      return route.fulfill({ json: makeIssueComments() })
     }
 
     // Fallback — return empty JSON rather than aborting so the app doesn't crash
@@ -790,4 +826,38 @@ test('coach: seed draft, navigate to step 3, Coach my comments → suggestion ca
   await expect(
     recapSection.getByText(/Consider rephrasing this as a question/i),
   ).toBeVisible({ timeout: 5_000 })
+})
+
+// ---------------------------------------------------------------------------
+// Test 9: existing PR comments — inline comment in step 2
+// ---------------------------------------------------------------------------
+
+test('existing comments: inline review comment visible in step 2, no error note shown', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Inline review comment on src/feature.ts should appear
+  await expect(
+    page.getByText(/This inline comment is on src\/feature\.ts line 2\./i)
+  ).toBeVisible({ timeout: 8_000 })
+
+  // No error note — comments loaded successfully
+  await expect(
+    page.getByText(/couldn't load existing comments/i)
+  ).not.toBeVisible()
 })

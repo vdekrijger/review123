@@ -495,7 +495,130 @@ describe('Since-last-visit — 404 graceful fallback', () => {
       expect(screen.getByText(/force-pushed away/i)).toBeInTheDocument()
     })
 
-    // Banner is dismissible
-    expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument()
+    // Banner is dismissible (the ×-button on the visit banner has aria-label="Dismiss")
+    const dismissBtns = screen.getAllByRole('button', { name: /dismiss/i })
+    expect(dismissBtns.length).toBeGreaterThanOrEqual(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PR comments integration — EC-REVIEW-COMM
+// ---------------------------------------------------------------------------
+
+describe('Review — PR comments integration (EC-REVIEW-COMM)', () => {
+  const PR_NUMBER = 999
+
+  function makeFileComment(overrides = {}) {
+    return {
+      id: 1,
+      user: { login: 'reviewer', avatar_url: null },
+      body: 'Please fix this.',
+      created_at: new Date().toISOString(),
+      path: 'src/feature.ts',
+      line: 5,
+      side: 'RIGHT',
+      in_reply_to_id: null,
+      ...overrides,
+    }
+  }
+
+  function makeIssueComment(overrides = {}) {
+    return {
+      id: 100,
+      user: { login: 'author', avatar_url: null },
+      body: 'Great work overall!',
+      created_at: new Date().toISOString(),
+      ...overrides,
+    }
+  }
+
+  function makeFetchWithComments(fileComments: unknown[] = [], issueComments: unknown[] = []) {
+    return vi.fn((url: string) => {
+      if (url.includes('/files')) {
+        return Promise.resolve(jsonResponse([{
+          filename: 'src/feature.ts',
+          status: 'modified',
+          patch: '@@ -1,2 +1,2 @@\n-old\n+new',
+          additions: 1,
+          deletions: 1,
+        }]))
+      }
+      if (url.includes(`/pulls/${PR_NUMBER}/comments`)) {
+        return Promise.resolve(jsonResponse(fileComments))
+      }
+      if (url.includes(`/issues/${PR_NUMBER}/comments`)) {
+        return Promise.resolve(jsonResponse(issueComments))
+      }
+      if (url.includes('/check-runs')) return Promise.resolve(jsonResponse({ total_count: 0, check_runs: [] }))
+      return Promise.resolve(jsonResponse(makePrMeta()))
+    })
+  }
+
+  it('shows inline file comment after loading step 2 (inspect)', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal('fetch', makeFetchWithComments([makeFileComment()], []))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: PR_NUMBER } })
+
+    await vi.waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+
+    // Navigate to step 2
+    await user.click(screen.getByRole('button', { name: /next step/i }))
+
+    // Wait for existing comment to appear
+    await vi.waitFor(() => {
+      expect(screen.getByText(/Please fix this\./i)).toBeInTheDocument()
+    }, { timeout: 5000 })
+  })
+
+  it('shows comment failure note when comments fetch fails (silent degradation)', async () => {
+    const user = userEvent.setup()
+
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/files')) return Promise.resolve(jsonResponse([]))
+      if (url.includes(`/pulls/${PR_NUMBER}/comments`) || url.includes(`/issues/${PR_NUMBER}/comments`)) {
+        return Promise.reject(new Error('network error'))
+      }
+      if (url.includes('/check-runs')) return Promise.resolve(jsonResponse({ total_count: 0, check_runs: [] }))
+      return Promise.resolve(jsonResponse(makePrMeta()))
+    }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: PR_NUMBER } })
+    await vi.waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+
+    // Navigate to step 2
+    await user.click(screen.getByRole('button', { name: /next step/i }))
+
+    // A dismissible inline note should appear
+    await vi.waitFor(() => {
+      expect(screen.getByText(/couldn't load existing comments/i)).toBeInTheDocument()
+    }, { timeout: 5000 })
+  })
+
+  it('failure note is dismissible', async () => {
+    const user = userEvent.setup()
+
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/files')) return Promise.resolve(jsonResponse([]))
+      if (url.includes(`/pulls/${PR_NUMBER}/comments`) || url.includes(`/issues/${PR_NUMBER}/comments`)) {
+        return Promise.reject(new Error('network error'))
+      }
+      if (url.includes('/check-runs')) return Promise.resolve(jsonResponse({ total_count: 0, check_runs: [] }))
+      return Promise.resolve(jsonResponse(makePrMeta()))
+    }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: PR_NUMBER } })
+    await vi.waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /next step/i }))
+
+    await vi.waitFor(() => {
+      expect(screen.getByText(/couldn't load existing comments/i)).toBeInTheDocument()
+    }, { timeout: 5000 })
+
+    // Dismiss it
+    const dismissBtn = screen.getByRole('button', { name: /dismiss comments error/i })
+    await user.click(dismissBtn)
+
+    expect(screen.queryByText(/couldn't load existing comments/i)).not.toBeInTheDocument()
   })
 })

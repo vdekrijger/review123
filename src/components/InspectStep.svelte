@@ -7,6 +7,7 @@
   import { track } from '../lib/analytics/analytics'
   import type { AttentionResult } from '../lib/ai/schemas'
   import type { createViewedStore } from '../lib/viewed/viewed.svelte'
+  import type { PrComment } from '../lib/github/comments'
 
   let {
     files,
@@ -17,6 +18,7 @@
     attention = null,
     readingOrder = [],
     viewedStore = null,
+    prComments = [],
   }: {
     files: PrFile[]
     changedFiles: number
@@ -26,7 +28,12 @@
     attention?: AttentionResult | null
     readingOrder?: string[]
     viewedStore?: ReturnType<typeof createViewedStore> | null
+    prComments?: PrComment[]
   } = $props()
+
+  function commentsForFile(path: string): PrComment[] {
+    return prComments.filter((c) => c.path === path)
+  }
 
   function draftsForFile(path: string) {
     return draftStore?.drafts.filter((d) => d.path === path) ?? []
@@ -108,6 +115,7 @@
         {file}
         {mode}
         drafts={draftsForFile(file.filename)}
+        comments={commentsForFile(file.filename)}
         onAddDraft={(line, side, body) => handleAddDraft(file.filename, line, side, body)}
         onRemoveDraft={(line, side) => handleRemoveDraft(file.filename, line, side)}
         viewed={viewedStore?.isViewed(file.filename, file.patch) ?? false}
