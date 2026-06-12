@@ -2,6 +2,9 @@
   import type { Snippet } from 'svelte'
   import type { PanelStatus } from '../lib/ai/run.svelte'
   import Skeleton from './Skeleton.svelte'
+  import { settingsState } from '../lib/settings/settingsState.svelte'
+  import { getProvider } from '../lib/llm/providers'
+  import { navigate } from '../lib/router/router.svelte'
 
   interface Props {
     title: string
@@ -11,6 +14,19 @@
   }
 
   let { title, state, onretry, children }: Props = $props()
+
+  // Name the ACTIVE provider in the no-key hint (Plan F) — reactive via settingsState.
+  const providerName = $derived(
+    getProvider(settingsState.current.aiProvider)?.displayName ?? 'provider',
+  )
+  // "an Anthropic key" vs "a DeepSeek key"
+  const article = $derived(/^[aeiou]/i.test(providerName) ? 'an' : 'a')
+
+  function goToSettings(e: MouseEvent) {
+    e.preventDefault()
+    sessionStorage.setItem('review123:settingsReturnTo', location.pathname)
+    navigate('/settings')
+  }
 </script>
 
 {#if state.status === 'loading'}
@@ -25,7 +41,7 @@
   </div>
 {:else if state.status === 'no-key'}
   <div class="ai-panel-no-key">
-    Add a DeepSeek key in <a href="#settings">Settings</a>
+    Add {article} {providerName} key in <a href="/settings" onclick={goToSettings}>Settings</a>
   </div>
 {:else if state.status === 'declined'}
   <div class="ai-panel-declined">

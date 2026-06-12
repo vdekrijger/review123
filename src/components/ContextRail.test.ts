@@ -13,11 +13,14 @@ vi.mock('../lib/analytics/analytics', () => ({
 }))
 
 vi.mock('../lib/settings/settings', () => ({
-  getSettings: () => ({ railCollapsed: false }),
+  getSettings: () => ({ railCollapsed: false, aiProvider: 'deepseek' }),
   setRailCollapsed: vi.fn(),
   setDiffMode: vi.fn(),
   saveTokens: vi.fn(),
   saveGithubAuth: vi.fn(),
+  // settingsState.svelte.ts registers itself on import (AiPanel → settingsState)
+  _registerSettingsRefresh: vi.fn(),
+  _registerAuthRefresh: vi.fn(),
 }))
 
 function makeRun(attn?: AttentionResult): AiRun {

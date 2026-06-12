@@ -5,6 +5,7 @@
   import type { PrFile } from '../lib/github/types'
   import type { DiffMode } from '../lib/settings/settings'
   import { getSettings, setTreeOpen } from '../lib/settings/settings'
+  import { activeProviderHasKey } from '../lib/llm/config'
   import type { DiffWidth } from '../lib/settings/settings'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
   import { draftKey } from '../lib/drafts/drafts.svelte'
@@ -311,7 +312,8 @@
 
   // Show the run button when: skills exist + key present + runSkillReviewsFn provided
   const enabledSkillCount = $derived(listSkills().filter(s => s.enabled).length)
-  const hasKey = $derived(!!getSettings().deepseekKey)
+  // Run button gates on the ACTIVE provider's key (Plan F), not deepseekKey
+  const hasKey = $derived(activeProviderHasKey())
   const showRunButton = $derived(enabledSkillCount > 0 && hasKey && runSkillReviewsFn !== null)
 
   // Running state: true when any skill entry is in loading status

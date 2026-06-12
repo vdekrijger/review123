@@ -254,3 +254,75 @@ test('builtin-library: add Security Reviewer (OWASP-minded) from Built-in review
   const skillCheckbox = page.locator('.skill-item').filter({ hasText: 'Security Reviewer (OWASP-minded)' }).locator('input[type="checkbox"]')
   await expect(skillCheckbox).toBeChecked()
 })
+
+// ---------------------------------------------------------------------------
+// AI models (Plan F Task F3): provider switch + model dropdown + key save +
+// Save & test against a fixture-backed openai-compat endpoint.
+// OpenAI's transport routes through the same-origin serverless proxy
+// (/api/llm/openai), which we intercept here — real adapter, fixture response.
+// ---------------------------------------------------------------------------
+
+test('ai models: switch to OpenAI → model dropdown updates → key saves → Save & test shows ok (fixture) and error (401 fixture)', async ({
+  page,
+}) => {
+  await blockExternal(page)
+
+  // Fixture-backed openai-compat endpoint (success first)
+  let lastPingBody: Record<string, unknown> | null = null
+  let lastPingHeaders: Record<string, string> = {}
+  await page.route('**/api/llm/openai/chat/completions', async (route) => {
+    lastPingBody = route.request().postDataJSON() as Record<string, unknown>
+    lastPingHeaders = route.request().headers()
+    return route.fulfill({ json: { choices: [{ message: { content: 'ok' } }] } })
+  })
+
+  await page.goto('/')
+  await openSettings(page)
+
+  // Provider radio: switch DeepSeek → OpenAI
+  const openaiRadio = page.getByRole('radio', { name: 'OpenAI' })
+  await expect(openaiRadio).toBeVisible()
+  await expect(page.getByRole('radio', { name: 'DeepSeek' })).toBeChecked()
+  await openaiRadio.click()
+  await expect(openaiRadio).toBeChecked()
+
+  // Model dropdown now lists OpenAI models with the provider default selected
+  const modelSelect = page.getByRole('combobox', { name: 'Model' })
+  await expect(modelSelect).toHaveValue('gpt-5.2')
+  const optionValues = await modelSelect.locator('option').evaluateAll(
+    (opts) => opts.map((o) => (o as HTMLOptionElement).value),
+  )
+  expect(optionValues).toContain('o4-mini')
+  expect(optionValues).not.toContain('deepseek-chat')
+
+  // Pick a non-default model — persisted as aiModel
+  await modelSelect.selectOption('o4-mini')
+
+  // Enter the OpenAI key and Save & test → saved first, then pinged
+  await page.getByLabel(/OpenAI API key/i).fill('sk-test-openai-e2e')
+  await page.getByRole('button', { name: /save & test openai/i }).click()
+  await expect(page.getByText('✓ Connected')).toBeVisible({ timeout: 5_000 })
+
+  // The ping went through the real openai-compat adapter: proxy header + active model
+  expect(lastPingHeaders['x-user-openai-key']).toBe('sk-test-openai-e2e')
+  expect(lastPingBody?.model).toBe('o4-mini')
+  expect(lastPingBody?.max_tokens).toBe(1)
+
+  // Settings were persisted (key save + provider + model)
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('review123:settings') ?? '{}'),
+  )
+  expect(stored.aiProvider).toBe('openai')
+  expect(stored.aiModel).toBe('o4-mini')
+  expect(stored.openaiKey).toBe('sk-test-openai-e2e')
+
+  // Now swap the fixture to a 401 → Save & test shows the inline error state
+  await page.unroute('**/api/llm/openai/chat/completions')
+  await page.route('**/api/llm/openai/chat/completions', (route) =>
+    route.fulfill({ status: 401, json: { error: { message: 'bad key' } } }),
+  )
+  await page.getByRole('button', { name: /save & test openai/i }).click()
+  await expect(page.getByRole('alert').filter({ hasText: /unauthorized/i })).toBeVisible({
+    timeout: 5_000,
+  })
+})
