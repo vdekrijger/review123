@@ -63,6 +63,11 @@ export interface Settings {
   anthropicKey: string | null
   /** Google Gemini API key. */
   geminiKey: string | null
+  /**
+   * Deep review (agentic) — lets the AI read extra files / search the repo
+   * before flagging findings. Opt-in: slower and uses more tokens (Plan G).
+   */
+  aiDeepReview: boolean
   diffMode: DiffMode
   /** Hide whitespace-only changes in diffs (like GitHub's ?w=1). */
   hideWhitespace: boolean
@@ -89,6 +94,7 @@ const DEFAULTS: Settings = {
   openaiKey: null,
   anthropicKey: null,
   geminiKey: null,
+  aiDeepReview: false,
   diffMode: 'unified',
   hideWhitespace: false,
   githubAuth: null,
@@ -171,6 +177,9 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const geminiKey = obj['geminiKey']
   if (typeof geminiKey === 'string' || geminiKey === null) result.geminiKey = geminiKey as string | null
+
+  const aiDeepReview = obj['aiDeepReview']
+  if (typeof aiDeepReview === 'boolean') result.aiDeepReview = aiDeepReview
 
   const gitlabToken = obj['gitlabToken']
   if (typeof gitlabToken === 'string') result.gitlabToken = gitlabToken
@@ -359,6 +368,7 @@ export const setAnthropicKey = (v: string | null) => saveTokens({ anthropicKey: 
 export const setGeminiKey = (v: string | null) => saveTokens({ geminiKey: v })
 export const setAiProvider = (v: AiProvider) => save({ aiProvider: v })
 export const setAiModel = (v: string) => save({ aiModel: v })
+export const setAiDeepReview = (v: boolean) => save({ aiDeepReview: v })
 export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
 export const setHideWhitespace = (hide: boolean) => save({ hideWhitespace: hide })
 export const setRailCollapsed = (collapsed: boolean) => save({ railCollapsed: collapsed })

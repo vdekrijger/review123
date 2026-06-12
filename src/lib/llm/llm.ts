@@ -124,7 +124,8 @@ function isHeaderCharError(err: unknown): boolean {
   )
 }
 
-function mapFetchError(err: unknown): never {
+// Exported for llmToolLoop.ts (Plan G) — shared transport plumbing, not public API.
+export function mapFetchError(err: unknown): never {
   if (err instanceof DOMException && err.name === 'TimeoutError') {
     throw new LlmError('timeout', err.message)
   }
@@ -134,7 +135,8 @@ function mapFetchError(err: unknown): never {
   throw new LlmError('network', err instanceof Error ? err.message : String(err))
 }
 
-function mapHttpStatus(status: number): never {
+// Exported for llmToolLoop.ts (Plan G) — shared transport plumbing, not public API.
+export function mapHttpStatus(status: number): never {
   if (status === 401) throw new LlmError('auth', 'Unauthorized (401)')
   if (status === 429) throw new LlmError('rate-limited', 'Rate limited (429)')
   throw new LlmError('server', `Server error (${status})`)
@@ -152,7 +154,8 @@ function parseSseLine(line: string): string | null {
 // Key resolution per provider
 // ---------------------------------------------------------------------------
 
-function getKeyForProvider(provider: LlmProviderDef): string {
+// Exported for llmToolLoop.ts (Plan G) — shared transport plumbing, not public API.
+export function getKeyForProvider(provider: LlmProviderDef): string {
   const keyName = PROVIDER_KEY_FIELDS[provider.id]
   if (!keyName) throw new LlmError('no-key', `No key mapping for provider ${provider.id}`)
   const settings = getSettings()
@@ -165,7 +168,8 @@ function getKeyForProvider(provider: LlmProviderDef): string {
 // openai-compat transport — covers deepseek direct + openai via proxy
 // ===========================================================================
 
-function buildOpenAICompatHeaders(key: string, providerId: string): Record<string, string> {
+// Exported for llmToolLoop.ts (Plan G) — shared transport plumbing, not public API.
+export function buildOpenAICompatHeaders(key: string, providerId: string): Record<string, string> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${key}`,
@@ -350,7 +354,8 @@ async function openaiCompatStream(
 // JSON mode: prompt-enforced — no response_format (llmJsonWithRepair handles repair)
 // ===========================================================================
 
-function buildAnthropicHeaders(key: string): Record<string, string> {
+// Exported for llmToolLoop.ts (Plan G) — shared transport plumbing, not public API.
+export function buildAnthropicHeaders(key: string): Record<string, string> {
   return {
     'Content-Type': 'application/json',
     'x-api-key': key,
@@ -543,7 +548,8 @@ async function anthropicStream(
 // Usage: usageMetadata { promptTokenCount, candidatesTokenCount, totalTokenCount }
 // ===========================================================================
 
-function buildGeminiHeaders(key: string): Record<string, string> {
+// Exported for llmToolLoop.ts (Plan G) — shared transport plumbing, not public API.
+export function buildGeminiHeaders(key: string): Record<string, string> {
   return {
     'Content-Type': 'application/json',
     'x-goog-api-key': key,

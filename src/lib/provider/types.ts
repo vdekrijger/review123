@@ -195,6 +195,18 @@ export interface ReviewProvider {
   ): Promise<string[]>
 
   /**
+   * Search code in a repository (Plan G deep review tool). Returns a compact
+   * plain-text result list (path + matched fragments) suitable for feeding
+   * back to an LLM as a tool result. Throws on API errors (auth, rate limit) —
+   * the deep-review toolkit converts those into tool-result errors.
+   *
+   * Optional — capability by method presence (GitHub-only in v1; GitLab has a
+   * search API too but is not wired yet, Bitbucket has none usable here).
+   * When absent, the deep-review tool list simply omits search_code.
+   */
+  searchCode?(repo: { owner: string; repo: string }, query: string): Promise<string>
+
+  /**
    * Return open PRs/MRs in the current user's review queue.
    * - authorIsMe=false → awaiting this user's review (reviewer-requested)
    * - authorIsMe=true  → authored by this user (open PRs)

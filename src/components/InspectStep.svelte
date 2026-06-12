@@ -422,6 +422,10 @@
           <span class="skill-status-chip chip-running" aria-label="Running">
             <span class="chip-spinner" aria-hidden="true"></span>running
           </span>
+          {#if entry.state.activity && entry.state.activity.length > 0}
+            <!-- Deep review: latest tool activity line from the agentic loop -->
+            <span class="skill-tool-activity" aria-live="polite">{entry.state.activity[entry.state.activity.length - 1]}</span>
+          {/if}
         {:else if entry.state.status === 'done'}
           {@const findingCount = (entry.state.value as { findings?: unknown[] } | undefined)?.findings?.filter((f: unknown) => {
             const finding = f as { path?: string }
@@ -434,6 +438,11 @@
           {:else}
             <span class="skill-status-chip chip-done" aria-label="Done, {findingCount} finding{findingCount !== 1 ? 's' : ''}">
               ✓ {findingCount} finding{findingCount !== 1 ? 's' : ''}
+            </span>
+          {/if}
+          {#if entry.state.toolCallsUsed !== undefined && entry.state.toolCallsUsed > 0}
+            <span class="skill-deep-note" title="Deep review: this reviewer verified suspicions with tools before flagging">
+              verified with {entry.state.toolCallsUsed} tool {entry.state.toolCallsUsed === 1 ? 'call' : 'calls'}
             </span>
           {/if}
         {:else if entry.state.status === 'error'}
@@ -906,6 +915,21 @@
     font-size: 0.72rem;
     font-weight: 600;
     letter-spacing: 0.02em;
+  }
+
+  .skill-tool-activity {
+    font-size: 0.72rem;
+    font-family: var(--font-mono, monospace);
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 18rem;
+  }
+
+  .skill-deep-note {
+    font-size: 0.72rem;
+    color: var(--text-muted);
   }
 
   .chip-queued {

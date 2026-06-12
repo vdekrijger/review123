@@ -429,6 +429,16 @@
         },
         ci: () => getCi({ owner, repo, number }, meta.headSha),
         ask: showConsentDialog,
+        // Deep review (Plan G): verification tools wired from the active VCS
+        // provider. Only used when the aiDeepReview setting is on; search is
+        // capability-gated by provider method presence (GitHub-only in v1).
+        deepReview: {
+          getFileAtHead: (path: string) => activeProvider.getFileAtRef({ owner, repo }, path, meta.headSha),
+          getFileAtBase: (path: string) => activeProvider.getFileAtRef({ owner, repo }, path, meta.baseSha),
+          ...(activeProvider.searchCode
+            ? { searchCode: (query: string) => activeProvider.searchCode!({ owner, repo }, query) }
+            : {}),
+        },
       })
       aiRun = run
 

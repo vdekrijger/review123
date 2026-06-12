@@ -8,7 +8,7 @@
 
   interface Props {
     title: string
-    state: { status: PanelStatus; error?: string }
+    state: { status: PanelStatus; error?: string; activity?: string[]; toolCallsUsed?: number; note?: string }
     onretry: () => void
     /** Shape of the pending skeleton — content-shaped per section. */
     skeletonVariant?: 'text' | 'block' | 'cards'
@@ -40,6 +40,14 @@
   <div class="ai-panel-loading" aria-busy="true">
     <Skeleton variant={skeletonVariant} lines={skeletonLines} />
     <span class="sr-only">Loading {title}…</span>
+    {#if state.activity && state.activity.length > 0}
+      <!-- Deep review: live tool activity from the agentic loop -->
+      <ul class="ai-tool-activity" aria-live="polite" aria-label="Deep review activity">
+        {#each state.activity as line, i (i)}
+          <li>{line}</li>
+        {/each}
+      </ul>
+    {/if}
   </div>
 {:else if state.status === 'error'}
   <div class="ai-panel-error" role="alert">
@@ -62,6 +70,14 @@
   </div>
 {:else if state.status === 'done'}
   {@render children?.()}
+  {#if state.note}
+    <p class="ai-panel-note">{state.note}</p>
+  {/if}
+  {#if state.toolCallsUsed !== undefined && state.toolCallsUsed > 0}
+    <p class="ai-deep-footer">
+      Deep review: verified with {state.toolCallsUsed} tool {state.toolCallsUsed === 1 ? 'call' : 'calls'}
+    </p>
+  {/if}
 {/if}
 
 <style>
@@ -118,6 +134,33 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+  }
+
+  .ai-tool-activity {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 0.78rem;
+    font-family: var(--font-mono, monospace);
+    opacity: 0.65;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .ai-panel-note {
+    margin: 0.5rem 0 0;
+    font-size: 0.78rem;
+    font-style: italic;
+    opacity: 0.65;
+  }
+
+  .ai-deep-footer {
+    margin: 0.6rem 0 0;
+    padding-top: 0.4rem;
+    border-top: 1px solid var(--hairline);
+    font-size: 0.78rem;
+    opacity: 0.65;
   }
 
   .spinner {
