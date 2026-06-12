@@ -118,9 +118,26 @@ function makeDeps({ hasKey = true, gateResult = true } = {}) {
     async (opts: unknown, validate: ValidateFn) => defaultJsonDispatch(opts, validate),
   )
 
+  // WithUsage variants delegate to the base stubs so existing tests that
+  // override llmStream / llmJsonWithRepair continue to work unchanged.
+  // Tests for token propagation override the WithUsage stubs directly.
+  const llmStreamWithUsage = vi.fn().mockImplementation(
+    async (opts: unknown, onDelta: (d: string) => void) => {
+      const content = await llmStream(opts, onDelta)
+      return { content, usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } }
+    },
+  )
+
+  const llmJsonWithRepairWithUsage = vi.fn().mockImplementation(
+    async (opts: unknown, validate: ValidateFn) => ({
+      result: await llmJsonWithRepair(opts, validate),
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    }),
+  )
+
   const track = vi.fn()
 
-  return { gateAi, getCached, setCached, llmStream, llmJsonWithRepair, track }
+  return { gateAi, getCached, setCached, llmStream, llmStreamWithUsage, llmJsonWithRepair, llmJsonWithRepairWithUsage, track }
 }
 
 // ---------------------------------------------------------------------------
@@ -1325,5 +1342,66 @@ describe('ask() — focus parameter', () => {
     expect(allPrompts[1].user).toContain('answer')
     // Second prompt's system should NOT contain the focus location (no focus passed)
     expect(allPrompts[1].system).not.toContain('src/a.ts:10')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Token usage propagation to track()
+// ---------------------------------------------------------------------------
+
+describe('ai_task_completed carries tokens when usage available', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('summary task: track receives tokens when llmStreamWithUsage returns usage', async () => {
+    const deps = makeDeps()
+    deps.llmStreamWithUsage = vi.fn().mockImplementation(
+      async (_opts: unknown, onDelta: (d: string) => void) => {
+        onDelta('hello')
+        return { content: 'hello', usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } }
+      },
+    )
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+    const summaryCompleted = (deps.track.mock.calls as [string, Record<string, unknown>][]).find(
+      ([event, props]) => event === 'ai_task_completed' && props.task === 'summary' && !props.cached
+    )
+    expect(summaryCompleted).toBeDefined()
+    expect(summaryCompleted![1]).toMatchObject({ task: 'summary', tokens: 8 })
+  })
+
+  it('summary task: track has no tokens field when usage absent', async () => {
+    const deps = makeDeps()
+    deps.llmStreamWithUsage = vi.fn().mockImplementation(
+      async (_opts: unknown, onDelta: (d: string) => void) => {
+        onDelta('hello')
+        return { content: 'hello' }
+      },
+    )
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+    const summaryCompleted = (deps.track.mock.calls as [string, Record<string, unknown>][]).find(
+      ([event, props]) => event === 'ai_task_completed' && props.task === 'summary' && !props.cached
+    )
+    expect(summaryCompleted).toBeDefined()
+    expect(summaryCompleted![1]).not.toHaveProperty('tokens')
+  })
+
+  it('attention task: track receives tokens from llmJsonWithRepairWithUsage', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepairWithUsage = vi.fn().mockImplementation(
+      async (_opts: unknown, validate: (x: unknown) => unknown) => {
+        const result = validate(ATTENTION_RESULT) !== null ? ATTENTION_RESULT : VERDICT_RESULT
+        return { result, usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } }
+      },
+    )
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+    const attentionCompleted = (deps.track.mock.calls as [string, Record<string, unknown>][]).find(
+      ([event, props]) => event === 'ai_task_completed' && props.task === 'attention' && !props.cached
+    )
+    expect(attentionCompleted).toBeDefined()
+    expect(attentionCompleted![1]).toMatchObject({ task: 'attention', tokens: 30 })
   })
 })

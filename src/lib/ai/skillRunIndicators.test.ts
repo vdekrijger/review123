@@ -24,15 +24,52 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 function makeStubDeps(overrides: Record<string, unknown> = {}) {
-  return {
-    llmStream: vi.fn(),
-    llmJsonWithRepair: vi.fn(),
+  const llmStream = vi.fn()
+  const llmJsonWithRepair = vi.fn()
+
+  // WithUsage variants delegate to base stubs so overrides of the base stubs
+  // are picked up automatically by the WithUsage path in run.svelte.ts.
+  const llmStreamWithUsage = vi.fn().mockImplementation(
+    async (opts: unknown, onDelta: (d: string) => void) => {
+      const content = await llmStream(opts, onDelta)
+      return { content, usage: undefined }
+    },
+  )
+
+  const llmJsonWithRepairWithUsage = vi.fn().mockImplementation(
+    async (opts: unknown, validate: unknown) => ({
+      result: await (llmJsonWithRepair as (o: unknown, v: unknown) => unknown)(opts, validate),
+      usage: undefined,
+    }),
+  )
+
+  // Apply overrides — if llmJsonWithRepair is overridden, it replaces the base stub
+  // and llmJsonWithRepairWithUsage delegates to the overridden fn via closure.
+  const base = {
+    llmStream,
+    llmStreamWithUsage,
+    llmJsonWithRepair,
+    llmJsonWithRepairWithUsage,
     getCached: vi.fn().mockResolvedValue(null),
     setCached: vi.fn().mockResolvedValue(undefined),
     gateAi: vi.fn().mockResolvedValue(true),
     track: vi.fn(),
-    ...overrides,
   }
+
+  // For overrides that replace llmJsonWithRepair, we must also replace
+  // llmJsonWithRepairWithUsage to wrap the override so it returns {result, usage}.
+  if ('llmJsonWithRepair' in overrides) {
+    const overrideFn = overrides['llmJsonWithRepair'] as (o: unknown, v: unknown) => unknown
+    const wrappedWithUsage = vi.fn().mockImplementation(
+      async (opts: unknown, validate: unknown) => ({
+        result: await overrideFn(opts, validate),
+        usage: undefined,
+      }),
+    )
+    return { ...base, ...overrides, llmJsonWithRepairWithUsage: wrappedWithUsage }
+  }
+
+  return { ...base, ...overrides }
 }
 
 function makeStubInput() {

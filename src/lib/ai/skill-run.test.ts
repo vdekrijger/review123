@@ -74,9 +74,26 @@ function makeDeps({ hasKey = true, gateResult = true } = {}) {
       return { readingOrder: [], hotspots: [], testFlags: [] }
     },
   )
+
+  // WithUsage variants delegate to the base stubs so tests that override
+  // llmStream / llmJsonWithRepair continue to work unchanged.
+  const llmStreamWithUsage = vi.fn().mockImplementation(
+    async (opts: unknown, onDelta: (d: string) => void) => {
+      const content = await llmStream(opts, onDelta)
+      return { content, usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } }
+    },
+  )
+
+  const llmJsonWithRepairWithUsage = vi.fn().mockImplementation(
+    async (opts: unknown, validate: ValidateFn) => ({
+      result: await llmJsonWithRepair(opts, validate),
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    }),
+  )
+
   const track = vi.fn()
 
-  return { gateAi, getCached, setCached, llmStream, llmJsonWithRepair, track }
+  return { gateAi, getCached, setCached, llmStream, llmStreamWithUsage, llmJsonWithRepair, llmJsonWithRepairWithUsage, track }
 }
 
 function makeInput() {
