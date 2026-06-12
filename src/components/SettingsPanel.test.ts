@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import SettingsPanel from './SettingsPanel.svelte'
-import { getSettings, saveGithubAuth, setShowProgress } from '../lib/settings/settings'
+import { getSettings, saveGithubAuth, setShowProgress, saveBitbucketAuth } from '../lib/settings/settings'
 import { _resetAuthStateForTest } from '../lib/auth/authState.svelte'
 
 // Stub applyAppearance so SettingsPanel tests don't need real DOM env for it
@@ -224,5 +224,57 @@ describe('SettingsPanel — testFileDisplay setting', () => {
     const dimRadio = screen.getByRole('radio', { name: /de-emphasize/i })
     await fireEvent.click(dimRadio)
     expect(getSettings().testFileDisplay).toBe('dim')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SettingsPanel — Bitbucket auth fields (task 49)
+// ---------------------------------------------------------------------------
+
+describe('SettingsPanel — Bitbucket auth fields', () => {
+  beforeEach(() => { localStorage.clear() })
+
+  it('Bitbucket email and token inputs are type=password (masked)', async () => {
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const emailInput = screen.getByLabelText(/bitbucket email address/i)
+    const tokenInput = screen.getByLabelText(/bitbucket api token/i)
+    expect((emailInput as HTMLInputElement).type).toBe('password')
+    expect((tokenInput as HTMLInputElement).type).toBe('password')
+  })
+
+  it('saving Bitbucket credentials stores them via saveBitbucketAuth', async () => {
+    const onclose = vi.fn()
+    render(SettingsPanel, { props: { onclose } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const emailInput = screen.getByLabelText(/bitbucket email address/i)
+    const tokenInput = screen.getByLabelText(/bitbucket api token/i)
+    await userEvent.type(emailInput, 'user@example.com')
+    await userEvent.type(tokenInput, 'myapppassword123')
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(onclose).toHaveBeenCalledOnce()
+    expect(getSettings().bitbucketAuth).toEqual({ email: 'user@example.com', token: 'myapppassword123' })
+  })
+
+  it('Bitbucket hint text is present in the Advanced section', () => {
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    const details = document.querySelector('details')
+    expect(details?.textContent).toMatch(/Pull requests: Write/)
+    expect(details?.textContent).toMatch(/App passwords/)
+  })
+
+  it('saving with email but empty token shows error, does not call onclose', async () => {
+    const onclose = vi.fn()
+    render(SettingsPanel, { props: { onclose } })
+    const summary = screen.getByText(/advanced.*personal access token/i)
+    await userEvent.click(summary)
+    const emailInput = screen.getByLabelText(/bitbucket email address/i)
+    await userEvent.type(emailInput, 'user@example.com')
+    // token left empty
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(onclose).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toBeInTheDocument()
   })
 })

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSettings, saveTokens, setGitlabToken, setTheme, setUiFont, setShowProgress, setTestFileDisplay, setDiffWidth, type Theme, type UiFont, type TestFileDisplay, type DiffWidth } from '../lib/settings/settings'
+  import { getSettings, saveTokens, setGitlabToken, saveBitbucketAuth, setTheme, setUiFont, setShowProgress, setTestFileDisplay, setDiffWidth, type Theme, type UiFont, type TestFileDisplay, type DiffWidth } from '../lib/settings/settings'
   import { applyAppearance } from '../lib/settings/appearance.svelte'
   import { track } from '../lib/analytics/analytics'
   import { authState } from '../lib/auth/authState.svelte'
@@ -27,6 +27,8 @@
   let pat = $state(current.githubPat ?? '')
   let deepseek = $state(current.deepseekKey ?? '')
   let gitlabTokenInput = $state(current.gitlabToken ?? '')
+  let bitbucketEmail = $state(current.bitbucketAuth?.email ?? '')
+  let bitbucketToken = $state(current.bitbucketAuth?.token ?? '')
   let error = $state<string | null>(null)
   let theme = $state<Theme>(current.theme)
   let uiFont = $state<UiFont>(current.uiFont)
@@ -203,14 +205,24 @@
       const hadPat = !!current.githubPat
       const hadKey = !!current.deepseekKey
       const hadGitlab = !!current.gitlabToken
+      const hadBitbucket = !!current.bitbucketAuth
       saveTokens({
         githubPat: pat.trim() === '' ? null : pat,
         deepseekKey: deepseek.trim() === '' ? null : deepseek,
       })
       setGitlabToken(gitlabTokenInput.trim() === '' ? null : gitlabTokenInput)
+      const emailTrimmed = bitbucketEmail.trim()
+      const tokenTrimmed = bitbucketToken.trim()
+      if (emailTrimmed === '' && tokenTrimmed === '') {
+        saveBitbucketAuth(null)
+      } else {
+        // throws if one is empty — caught below and shown as error
+        saveBitbucketAuth({ email: emailTrimmed, token: tokenTrimmed })
+      }
       if (!hadPat && pat.trim()) track('settings_key_added', { service: 'github' })
       if (!hadKey && deepseek.trim()) track('settings_key_added', { service: 'deepseek' })
       if (!hadGitlab && gitlabTokenInput.trim()) track('settings_key_added', { service: 'gitlab' })
+      if (!hadBitbucket && emailTrimmed && tokenTrimmed) track('settings_key_added', { service: 'bitbucket' })
       onclose()
     } catch (e) {
       error = (e as Error).message
@@ -319,6 +331,15 @@
     </label>
     <div class="hint pat-scope-hint">
       <p>Required scope: <code>api</code>. Create one at <em>GitLab → User Settings → Access Tokens</em>.</p>
+    </div>
+    <label>Bitbucket email
+      <input type="password" bind:value={bitbucketEmail} autocomplete="off" placeholder="your@email.com" aria-label="Bitbucket email address" />
+    </label>
+    <label>Bitbucket API token
+      <input type="password" bind:value={bitbucketToken} autocomplete="off" placeholder="App password / API token" aria-label="Bitbucket API token" />
+    </label>
+    <div class="hint pat-scope-hint">
+      <p>Required: Bitbucket email address and an API token with <em>Pull requests: Write</em> scope. Create at <em>Bitbucket → Personal settings → App passwords</em>.</p>
     </div>
   </details>
   <p class="hint">Keys are stored only in this browser (localStorage) and sent only to their own services.</p>
