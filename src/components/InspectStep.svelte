@@ -14,6 +14,7 @@
   import type { createViewedStore } from '../lib/viewed/viewed.svelte'
   import type { PrComment } from '../lib/github/comments'
   import { slugify } from '../lib/slug'
+  import { scrollToFileCard } from '../lib/diff/jumpToFile'
   import type { SkillReviewEntry, AskFocus } from '../lib/ai/run.svelte'
   import type { SkillReviewResult } from '../lib/ai/schemas'
   import { listSkills } from '../lib/skills/skills'
@@ -170,16 +171,8 @@
 
   function handleTreeSelect(path: string): void {
     activePath = path
-    const slug = slugify(path)
-    const wrapper = document.getElementById(`file-${slug}`)
-    if (!wrapper) return
-    wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    // If the article inside is collapsed (viewed), click its header to expand
-    const article = wrapper.querySelector('article.file-diff.is-collapsed')
-    if (article) {
-      const header = article.querySelector('header') as HTMLElement | null
-      header?.click()
-    }
+    // Shared scroll + expand-if-collapsed mechanism (also used by hotspot jumps)
+    scrollToFileCard(path)
     // On narrow viewport (<900px), close the drawer after selecting a file
     if (window.innerWidth < NARROW_THRESHOLD) closeTree()
   }

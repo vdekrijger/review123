@@ -690,10 +690,91 @@ test('review flow: diff renders with red/green rows, AI panels populate, CI show
   const hotspotBtn = page.locator('.hotspot-btn').first()
   await expect(hotspotBtn).toBeVisible({ timeout: 15_000 })
 
+  // The Hotspots section shows a one-line legend explaining the markers
+  await expect(page.locator('.hotspot-legend')).toContainText('high risk')
+
+  // Plant a marker on window — a full page reload would wipe it
+  await page.evaluate(() => {
+    ;(window as unknown as Record<string, unknown>).__review123SpaMarker = true
+  })
+
   // Click hotspot — should jump to step 2
   await hotspotBtn.click()
   // After hotspot click, we should be in step 2 (diff mode toggle visible)
   await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible({ timeout: 3_000 })
+
+  // SPA navigation: URL updated via pushState, NOT a full document load
+  await expect(page).toHaveURL(APP_REVIEW_INSPECT)
+  expect(
+    await page.evaluate(
+      () => (window as unknown as Record<string, unknown>).__review123SpaMarker,
+    ),
+  ).toBe(true)
+
+  // The hotspot's diff card (src/feature.ts) is scrolled into view and expanded
+  const hotspotCard = page.locator('#file-src-feature-ts article.file-diff')
+  await expect(hotspotCard).toBeVisible()
+  await expect(hotspotCard).not.toHaveClass(/is-collapsed/)
+  await expect
+    .poll(async () =>
+      hotspotCard.evaluate((el) => {
+        const rect = el.getBoundingClientRect()
+        return rect.top < window.innerHeight && rect.bottom > 0
+      }),
+    )
+    .toBe(true)
+})
+
+// ---------------------------------------------------------------------------
+// Test 2b: Hotspot click from a FRESH Understand step (Inspect never mounted)
+// must be an SPA navigation (pushState) — no full document reload — and must
+// scroll the target file's diff card into view.
+// ---------------------------------------------------------------------------
+
+test('hotspot click from fresh understand step: SPA-navigates to inspect and scrolls to file', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  // Land directly on the Understand step — InspectStep has never rendered
+  await page.goto(APP_REVIEW_UNDERSTAND)
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  const hotspotBtn = page.locator('.hotspot-btn').first()
+  await expect(hotspotBtn).toBeVisible({ timeout: 15_000 })
+
+  // Plant a marker on window — a full page reload would wipe it
+  await page.evaluate(() => {
+    ;(window as unknown as Record<string, unknown>).__review123SpaMarker = true
+  })
+
+  await hotspotBtn.click()
+
+  // Step 2 active, URL pushed, marker intact (no reload)
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible({ timeout: 3_000 })
+  await expect(page).toHaveURL(APP_REVIEW_INSPECT)
+  expect(
+    await page.evaluate(
+      () => (window as unknown as Record<string, unknown>).__review123SpaMarker,
+    ),
+  ).toBe(true)
+
+  // The hotspot's diff card is in view
+  const hotspotCard = page.locator('#file-src-feature-ts article.file-diff')
+  await expect(hotspotCard).toBeVisible()
+  await expect
+    .poll(async () =>
+      hotspotCard.evaluate((el) => {
+        const rect = el.getBoundingClientRect()
+        return rect.top < window.innerHeight && rect.bottom > 0
+      }),
+    )
+    .toBe(true)
 })
 
 // ---------------------------------------------------------------------------
