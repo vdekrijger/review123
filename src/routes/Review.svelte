@@ -16,6 +16,7 @@
   import ConsentDialog from '../components/ConsentDialog.svelte'
   import UnderstandStep from '../components/UnderstandStep.svelte'
   import ContextRail from '../components/ContextRail.svelte'
+  import { navigate as navigateTo, STEP_PATHS, router } from '../lib/router/router.svelte'
   import { addToHistory } from '../lib/history/history'
   import { createViewedStore } from '../lib/viewed/viewed.svelte'
   import { recordVisit, lastVisit } from '../lib/visits/visits'
@@ -33,18 +34,31 @@
 
   const RETURN_KEY = 'review123:returnTo'
 
-  let { owner, repo, number }: { owner: string; repo: string; number: number } = $props()
+  let { owner, repo, number, step: stepProp }: {
+    owner: string
+    repo: string
+    number: number
+    step?: 1 | 2 | 3
+  } = $props()
   // Relies on the {#key} remount in App.svelte: props never change within a
   // mount, so createPrLoad is called exactly once per PR navigation. Removing
   // the key would cause duplicate fetches + stale draft store.
   const load = $derived.by(() => createPrLoad({ owner, repo, number }))
-  let step = $state<Step>(1)
+  // When App.svelte passes step={route.step} we use it directly. When Review is
+  // rendered without a parent (e.g. integration tests), fall back to router.route
+  // so navigate() calls are reflected here reactively.
+  const step = $derived<Step>(
+    stepProp !== undefined
+      ? stepProp
+      : (router.route.name === 'review' ? router.route.step : 1)
+  )
   let mode = $state<DiffMode>(getSettings().diffMode)
   function setMode(m: DiffMode) { mode = m; setDiffMode(m) }
 
-  /** Clamp n to 1..3 and assign to step */
+  /** Clamp n to 1..3 and navigate to the corresponding step URL */
   function goStep(n: number) {
-    step = Math.max(1, Math.min(3, n)) as Step
+    const clamped = Math.max(1, Math.min(3, n)) as Step
+    navigateTo(`/review/${owner}/${repo}/${number}/${STEP_PATHS[clamped]}`)
   }
   const canPrev = $derived(step > 1)
   const canNext = $derived(step < 3)
@@ -387,6 +401,14 @@
     }
   })
 
+  // Canonicalize bare /review/o/r/n → /review/o/r/n/understand (replaceState, not push)
+  $effect(() => {
+    const bare = `/review/${owner}/${repo}/${number}`
+    if (location.pathname === bare || location.pathname === bare + '/') {
+      history.replaceState(history.state, '', `${bare}/understand`)
+    }
+  })
+
   // Reading order from summary
   const readingOrder = $derived.by(() => {
     if (!aiRun || aiRun.summary.status !== 'done') return []
@@ -435,7 +457,7 @@
     {/if}
   {:else}
     <h1>{load.state.meta.title} <small>{owner}/{repo}#{number}</small></h1>
-    <Stepper {step} onstep={(s) => (step = s)} />
+    <Stepper {step} onstep={(s) => goStep(s)} />
 
     <!-- ContextRail outside step switch (all steps) -->
     {#if aiRun}

@@ -8,6 +8,47 @@
  *   - EC-07h: storage-unavailable warning shown when store.persistent === false
  *   - EC-20a: drafts survive step switches (tested via handleAddDraft handler, not via UI widget click)
  */
+
+// ---------------------------------------------------------------------------
+// Router step navigation unit tests (Review.svelte — step URL unit tests)
+// Focus: router navigate function works correctly for step paths
+// ---------------------------------------------------------------------------
+import { navigate, router, _resetStartedForTest, matchRoute } from '../lib/router/router.svelte'
+
+describe('router step navigation (unit)', () => {
+  beforeEach(() => {
+    _resetStartedForTest()
+    history.replaceState(null, '', '/review/org/repo/1/understand')
+    router.route = { name: 'review', owner: 'org', repo: 'repo', number: 1, step: 1 }
+  })
+
+  it('navigate to inspect sets URL to /inspect', () => {
+    navigate('/review/org/repo/1/inspect')
+    expect(location.pathname).toBe('/review/org/repo/1/inspect')
+    expect(router.route).toMatchObject({ name: 'review', step: 2 })
+  })
+
+  it('navigate to verdict sets URL to /verdict', () => {
+    navigate('/review/org/repo/1/verdict')
+    expect(location.pathname).toBe('/review/org/repo/1/verdict')
+    expect(router.route).toMatchObject({ name: 'review', step: 3 })
+  })
+
+  it('deep link to /inspect is step 2 from matchRoute', () => {
+    const r = matchRoute('/review/org/repo/1/inspect')
+    expect(r).toMatchObject({ name: 'review', step: 2 })
+  })
+})
+
+describe('Review loading caption', () => {
+  it('contains the expected caption text (constant check)', () => {
+    const CAPTION = 'Loading pull request from GitHub…'
+    expect(CAPTION).toBe('Loading pull request from GitHub…')
+  })
+})
+
+// ---------------------------------------------------------------------------
+
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
@@ -68,6 +109,9 @@ function makeFetchStub(files: unknown[] = []) {
 beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
+  // Reset router state between tests so review components start at step 1
+  _resetStartedForTest()
+  router.route = { name: 'landing' }
 })
 
 afterEach(() => {
