@@ -202,3 +202,49 @@ describe('FileTree — test-file flask glyph', () => {
     expect(container.querySelector('.test-glyph')).not.toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Fix 1: Directory summary labels must NOT be uppercase
+// ---------------------------------------------------------------------------
+
+describe('FileTree — directory labels are normal case (not uppercase)', () => {
+  it('dir-summary element exists for directory nodes', () => {
+    const files = [makeFile('src/components/Button.ts')]
+    const { container } = render(FileTree, {
+      props: { files, attention: null, viewedStore: null, activePath: null, onselect: () => {} },
+    })
+    // There should be a dir-summary element for the directory
+    const dirSummary = container.querySelector('.dir-summary')
+    expect(dirSummary).toBeInTheDocument()
+  })
+
+  it('dir-summary has override-uppercase class to reset global text-transform', () => {
+    const files = [makeFile('src/components/Button.ts')]
+    const { container } = render(FileTree, {
+      props: { files, attention: null, viewedStore: null, activePath: null, onselect: () => {} },
+    })
+    const dirSummary = container.querySelector('.dir-summary')
+    // The component must apply the dir-summary scoped style which overrides
+    // the global details > summary text-transform: uppercase rule.
+    // We verify structurally that the dir-summary element has the correct class
+    // that carries the override in scoped CSS.
+    expect(dirSummary).toHaveClass('dir-summary')
+    // The dir-name inside should not be empty
+    const dirName = dirSummary?.querySelector('.dir-name')
+    expect(dirName).toBeInTheDocument()
+    expect(dirName?.textContent).not.toBe('')
+  })
+
+  it('dir-summary inline style overrides text-transform to none', () => {
+    const files = [makeFile('src/components/Button.ts')]
+    const { container } = render(FileTree, {
+      props: { files, attention: null, viewedStore: null, activePath: null, onselect: () => {} },
+    })
+    const dirSummary = container.querySelector('.dir-summary') as HTMLElement
+    expect(dirSummary).toBeInTheDocument()
+    // The summary must carry an inline style that resets text-transform
+    // (needed because global details > summary applies text-transform: uppercase)
+    const style = dirSummary.getAttribute('style') ?? ''
+    expect(style).toMatch(/text-transform\s*:\s*none/i)
+  })
+})

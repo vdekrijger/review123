@@ -282,6 +282,15 @@
     <div class="file-tree-drawer" data-open={treeOpen ? 'true' : 'false'} data-wide={isWideViewport ? 'true' : 'false'} aria-hidden={!treeOpen}>
       {#if treeOpen}
         <nav class="file-tree-nav" aria-label="File tree">
+          <div class="tree-drawer-header">
+            <span class="tree-drawer-title">Files</span>
+            <button
+              class="tree-drawer-close"
+              onclick={closeTree}
+              aria-label="Close file tree"
+              title="Close file tree (Escape)"
+            >✕</button>
+          </div>
           <FileTree
             {files}
             {attention}
@@ -451,19 +460,63 @@
   }
 
   .file-tree-drawer[data-open="true"] {
-    width: 260px;
+    width: 320px;
   }
 
   .file-tree-nav {
-    width: 260px;
+    width: 320px;
     max-height: calc(100vh - 5rem);
     overflow-y: auto;
     background: var(--surface-raised);
+    /* Single border lives here on the drawer nav; no extra border on tree root */
     border: 1px solid var(--border-subtle);
     border-radius: 6px;
     padding: 0.5rem 0.25rem;
     scrollbar-width: thin;
     margin-left: 0.25rem;
+  }
+
+  /* Drawer header: "Files" label + ✕ close button */
+  .tree-drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.3rem 0.5rem 0.3rem 0.5rem;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 0.25rem;
+  }
+
+  .tree-drawer-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    user-select: none;
+  }
+
+  .tree-drawer-close {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    line-height: 1;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .tree-drawer-close:hover {
+    color: var(--text);
+    background: var(--surface-hover, color-mix(in srgb, var(--surface-raised) 80%, var(--text) 10%));
+  }
+
+  .tree-drawer-close:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   /* ---- Diff column: takes remaining space; gains margin when drawer open ---- */
