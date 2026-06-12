@@ -1063,3 +1063,173 @@ describe('coach() — never touches cache', () => {
     expect(setCachedSpy).not.toHaveBeenCalled()
   })
 })
+
+// ---------------------------------------------------------------------------
+// ask() — on-demand free-form Q&A, never cached, consent gating
+// ---------------------------------------------------------------------------
+
+describe('ask() — gating (no-key / declined)', () => {
+  it('no-key: ask returns {ok:false, error} without calling gateAi or llm', async () => {
+    const deps = makeDeps({ hasKey: false })
+    const run = createAiRun(makeInput(), deps)
+
+    const result = await run.ask('Why is this coded here?', () => {})
+
+    expect(result.ok).toBe(false)
+    expect((result as { ok: false; error: string }).error).toContain('No DeepSeek API key')
+    expect(deps.gateAi).not.toHaveBeenCalled()
+    expect(deps.llmStream).not.toHaveBeenCalled()
+  })
+
+  it('declined: ask returns {ok:false, error} without calling llm', async () => {
+    const deps = makeDeps({ gateResult: false })
+    const run = createAiRun(makeInput(), deps)
+
+    const result = await run.ask('What does this do?', () => {})
+
+    expect(result.ok).toBe(false)
+    expect((result as { ok: false; error: string }).error.length).toBeGreaterThan(0)
+    expect(deps.llmStream).not.toHaveBeenCalled()
+  })
+})
+
+describe('ask() — streaming', () => {
+  it('calls onDelta for each streamed token and returns {ok:true, answer}', async () => {
+    const deps = makeDeps()
+    deps.llmStream.mockImplementation(async (_opts: unknown, onDelta: (d: string) => void) => {
+      onDelta('Hello')
+      onDelta(' world')
+      return 'Hello world'
+    })
+
+    const deltas: string[] = []
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.ask('Why is this here?', (t) => deltas.push(t))
+
+    expect(result.ok).toBe(true)
+    expect((result as { ok: true; answer: string }).answer).toBe('Hello world')
+    expect(deltas).toEqual(['Hello', ' world'])
+  })
+
+  it('ask never calls getCached or setCached', async () => {
+    const deps = makeDeps()
+    deps.llmStream.mockImplementation(async (_opts: unknown, onDelta: (d: string) => void) => {
+      onDelta('answer text')
+      return 'answer text'
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    deps.getCached.mockClear()
+    deps.setCached.mockClear()
+    await run.ask('question', () => {})
+
+    expect(deps.getCached).not.toHaveBeenCalled()
+    expect(deps.setCached).not.toHaveBeenCalled()
+  })
+
+  it('tracks ai_task_completed with task:ask on success', async () => {
+    const deps = makeDeps()
+    deps.llmStream.mockImplementation(async (_opts: unknown, onDelta: (d: string) => void) => {
+      onDelta('response')
+      return 'response'
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.ask('A question?', () => {})
+
+    const askTrack = deps.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_completed' && (c[1] as Record<string, unknown>)['task'] === 'ask',
+    )
+    expect(askTrack).toBeTruthy()
+  })
+})
+
+describe('ask() — history threading', () => {
+  it('second ask includes first Q&A in the prompt sent to llm', async () => {
+    const deps = makeDeps()
+    const capturedMessages: unknown[] = []
+
+    deps.llmStream.mockImplementation(async (opts: unknown, onDelta: (d: string) => void) => {
+      capturedMessages.push(opts)
+      onDelta('answer')
+      return 'answer'
+    })
+
+    const run = createAiRun(makeInput(), deps)
+
+    // First ask
+    await run.ask('First question', () => {})
+    // Second ask
+    await run.ask('Second question', () => {})
+
+    // The second call's prompt should contain the first Q/A pair
+    expect(capturedMessages).toHaveLength(2)
+    const secondPrompt = capturedMessages[1] as { user: string }
+    expect(secondPrompt.user).toContain('First question')
+    expect(secondPrompt.user).toContain('answer') // the first answer
+    expect(secondPrompt.user).toContain('Second question')
+  })
+
+  it('history is capped at last 3 exchanges (fifth ask prompt omits first Q&A)', async () => {
+    const deps = makeDeps()
+    const capturedMessages: unknown[] = []
+    let callCount = 0
+
+    deps.llmStream.mockImplementation(async (opts: unknown, onDelta: (d: string) => void) => {
+      capturedMessages.push(opts)
+      callCount++
+      onDelta(`answer${callCount}`)
+      return `answer${callCount}`
+    })
+
+    const run = createAiRun(makeInput(), deps)
+
+    await run.ask('Q1', () => {})
+    await run.ask('Q2', () => {})
+    await run.ask('Q3', () => {})
+    await run.ask('Q4', () => {})
+    await run.ask('Q5', () => {})
+
+    // After 4 completed exchanges (cap=3), history=[Q2,Q3,Q4].
+    // The 5th call's prompt should NOT contain Q1/answer1 (only last 3 pairs kept)
+    const fifthPrompt = capturedMessages[4] as { user: string }
+    expect(fifthPrompt.user).not.toContain('Q1')
+    expect(fifthPrompt.user).not.toContain('answer1')
+    expect(fifthPrompt.user).toContain('Q2')
+    expect(fifthPrompt.user).toContain('Q5')
+  })
+})
+
+describe('ask() — error mapping', () => {
+  it('LlmError → {ok:false, error: human message}, tracks ai_task_failed', async () => {
+    const deps = makeDeps()
+    deps.llmStream.mockRejectedValue(new LlmError('rate-limited', 'too many'))
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.ask('question', () => {})
+
+    expect(result.ok).toBe(false)
+    expect((result as { ok: false; error: string }).error).toContain('Rate limited')
+
+    const failedCall = deps.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_failed' && (c[1] as Record<string, unknown>)['task'] === 'ask',
+    )
+    expect(failedCall).toBeTruthy()
+    expect((failedCall![1] as Record<string, unknown>)['reason']).toBe('rate-limited')
+  })
+
+  it('ai_task_failed for ask NEVER includes the question text', async () => {
+    const deps = makeDeps()
+    deps.llmStream.mockRejectedValue(new LlmError('server', 'error'))
+
+    const run = createAiRun(makeInput(), deps)
+    const SENSITIVE_QUESTION = 'SENSITIVE_QUESTION_TEXT_UNIQUE_12345'
+    await run.ask(SENSITIVE_QUESTION, () => {})
+
+    // Verify no track call includes the question text
+    for (const call of deps.track.mock.calls) {
+      const serialized = JSON.stringify(call)
+      expect(serialized).not.toContain(SENSITIVE_QUESTION)
+    }
+  })
+})

@@ -40,6 +40,7 @@ function makeRun(overrides: Partial<AiRun>): AiRun {
     start: async () => {},
     retry: async () => {},
     coach: async () => ({ error: 'no-key' }),
+    ask: async () => ({ ok: false, error: 'no-key' }),
     ...overrides,
   }
 }
