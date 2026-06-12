@@ -1,6 +1,6 @@
 :root {
-  /* UI font stack — system fonts only, no web font downloads */
-  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+  /* UI font — overridden per data-font attribute below */
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
   /* Monospace font stack for code and diff views */
   --font-mono: 'SF Mono', 'JetBrains Mono', ui-monospace, 'Cascadia Code', Menlo, monospace;
   color-scheme: light dark;
@@ -9,7 +9,28 @@
   letter-spacing: normal;
 }
 
-body { margin: 0; }
+/* Font preference overrides */
+:root[data-font='humanist'] {
+  --font-ui: Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'DejaVu Sans', source-sans-pro, sans-serif;
+}
+
+:root[data-font='serif'] {
+  --font-ui: Charter, 'Bitstream Charter', 'Sitka Text', Cambria, Georgia, serif;
+}
+
+/* Theme overrides — absent = auto (light dark) */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+}
 
 /* Prose contexts: AI summary, PR description, comment bodies */
 .prose {
