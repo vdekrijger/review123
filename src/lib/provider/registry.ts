@@ -4,6 +4,7 @@
 
 import { githubProvider } from './github'
 import { gitlabProvider } from './gitlab'
+import { bitbucketProvider } from './bitbucket'
 import type { ReviewProvider, PrRefX } from './types'
 
 // ---------------------------------------------------------------------------
@@ -13,6 +14,7 @@ import type { ReviewProvider, PrRefX } from './types'
 export const PROVIDERS: Map<string, ReviewProvider> = new Map([
   ['github', githubProvider],
   ['gitlab', gitlabProvider],
+  ['bitbucket', bitbucketProvider],
 ])
 
 /**

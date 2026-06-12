@@ -24,12 +24,18 @@ export interface GithubAuth {
   scopes: string[]
 }
 
+export interface BitbucketAuth {
+  email: string
+  token: string
+}
+
 export interface Settings {
   githubPat: string | null
   deepseekKey: string | null
   diffMode: DiffMode
   githubAuth: GithubAuth | null
   gitlabToken: string | null
+  bitbucketAuth: BitbucketAuth | null
   railCollapsed: boolean
   theme: Theme
   uiFont: UiFont
@@ -45,6 +51,7 @@ const DEFAULTS: Settings = {
   diffMode: 'unified',
   githubAuth: null,
   gitlabToken: null,
+  bitbucketAuth: null,
   railCollapsed: false,
   theme: 'auto',
   uiFont: 'plex',
@@ -63,6 +70,14 @@ function coerceGithubAuth(raw: unknown): GithubAuth | null {
     ? (obj['scopes'] as string[])
     : []
   return { token: obj['token'] as string, method: obj['method'] as 'oauth' | 'pat', scopes }
+}
+
+function coerceBitbucketAuth(raw: unknown): BitbucketAuth | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const obj = raw as Record<string, unknown>
+  if (typeof obj['email'] !== 'string' || !obj['email']) return null
+  if (typeof obj['token'] !== 'string' || !obj['token']) return null
+  return { email: obj['email'] as string, token: obj['token'] as string }
 }
 
 function coerce(raw: unknown): Partial<Settings> {
@@ -118,6 +133,10 @@ function coerce(raw: unknown): Partial<Settings> {
   } else if (typeof githubPat === 'string' && githubPat) {
     // Migration: legacy bare PAT → unified auth shape
     result.githubAuth = { token: githubPat, method: 'pat', scopes: [] }
+  }
+
+  if ('bitbucketAuth' in obj) {
+    result.bitbucketAuth = coerceBitbucketAuth(obj['bitbucketAuth'])
   }
 
   return result
@@ -199,4 +218,21 @@ export function setGitlabToken(v: string | null): void {
   const trimmed = v.trim()
   if (!trimmed) throw new Error('gitlabToken must not be empty')
   save({ gitlabToken: trimmed })
+}
+
+/**
+ * Atomically validate and save Bitbucket credentials.
+ * Both email and token must be non-empty strings, or both must be null (to clear).
+ * Throws before writing if either field is invalid.
+ */
+export function saveBitbucketAuth(auth: BitbucketAuth | null): void {
+  if (auth !== null) {
+    const email = auth.email.trim()
+    const token = auth.token.trim()
+    if (!email) throw new Error('bitbucketAuth.email must not be empty')
+    if (!token) throw new Error('bitbucketAuth.token must not be empty')
+    save({ bitbucketAuth: { email, token } })
+  } else {
+    save({ bitbucketAuth: null })
+  }
 }
