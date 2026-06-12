@@ -17,7 +17,9 @@ export default defineConfig({
             id.includes('node_modules/@git-diff-view') ||
             id.includes('node_modules/highlight.js') ||
             id.includes('node_modules/lowlight') ||
-            id.includes('node_modules/fast-diff')
+            id.includes('node_modules/fast-diff') ||
+            // jsdiff — powers the hide-whitespace recompute; stable, cache with the diff vendor chunk
+            id.includes('node_modules/diff/')
           ) {
             return 'vendor-diff-view'
           }

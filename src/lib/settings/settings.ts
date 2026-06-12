@@ -64,6 +64,8 @@ export interface Settings {
   /** Google Gemini API key. */
   geminiKey: string | null
   diffMode: DiffMode
+  /** Hide whitespace-only changes in diffs (like GitHub's ?w=1). */
+  hideWhitespace: boolean
   githubAuth: GithubAuth | null
   gitlabToken: string | null
   gitlabHost: string
@@ -88,6 +90,7 @@ const DEFAULTS: Settings = {
   anthropicKey: null,
   geminiKey: null,
   diffMode: 'unified',
+  hideWhitespace: false,
   githubAuth: null,
   gitlabToken: null,
   gitlabHost: 'gitlab.com',
@@ -141,6 +144,9 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const diffMode = obj['diffMode']
   if (diffMode === 'unified' || diffMode === 'split') result.diffMode = diffMode
+
+  const hideWhitespace = obj['hideWhitespace']
+  if (typeof hideWhitespace === 'boolean') result.hideWhitespace = hideWhitespace
 
   const githubPat = obj['githubPat']
   if (typeof githubPat === 'string') result.githubPat = githubPat
@@ -302,6 +308,7 @@ export const setGeminiKey = (v: string | null) => saveTokens({ geminiKey: v })
 export const setAiProvider = (v: AiProvider) => save({ aiProvider: v })
 export const setAiModel = (v: string) => save({ aiModel: v })
 export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
+export const setHideWhitespace = (hide: boolean) => save({ hideWhitespace: hide })
 export const setRailCollapsed = (collapsed: boolean) => save({ railCollapsed: collapsed })
 export const setTheme = (theme: Theme) => save({ theme })
 export const setUiFont = (font: UiFont) => save({ uiFont: font })

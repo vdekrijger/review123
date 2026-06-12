@@ -17,6 +17,8 @@
   import type { SkillReviewEntry, AskFocus } from '../lib/ai/run.svelte'
   import type { SkillReviewResult } from '../lib/ai/schemas'
   import { listSkills } from '../lib/skills/skills'
+  import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
+  import { classifyFile } from '../lib/diff/diffFile'
 
   let {
     files,
@@ -34,6 +36,9 @@
     runSkillReviewsFn = null,
     askFn = null,
     askDisabledReason = null,
+    hideWhitespace = false,
+    onhidewhitespace = null,
+    whitespaceDisabledReason = null,
   }: {
     files: PrFile[]
     changedFiles: number
@@ -65,6 +70,15 @@
      * Optional disabled hint for Ask AI gating (e.g. "No API key configured.").
      */
     askDisabledReason?: string | null
+    /** Whether whitespace-only changes are hidden (like GitHub's ?w=1). */
+    hideWhitespace?: boolean
+    /** Called when the user toggles "Hide whitespace". */
+    onhidewhitespace?: ((hide: boolean) => void) | null
+    /**
+     * When non-null, the toggle is disabled with this reason as tooltip
+     * (e.g. compare mode, where fetched contents don't match the compared revisions).
+     */
+    whitespaceDisabledReason?: string | null
   } = $props()
 
   function commentsForFile(path: string): PrComment[] {
@@ -318,11 +332,69 @@
 
   // Running state: true when any skill entry is in loading status
   const isRunning = $derived(skillReviews.some(e => e.state.status === 'loading'))
+
+  // ---------------------------------------------------------------------------
+  // Hide whitespace changes (git diff -w semantics)
+  // ---------------------------------------------------------------------------
+
+  const whitespaceToggleEnabled = $derived(whitespaceDisabledReason === null)
+
+  /**
+   * Per-file whitespace-hiding decision, computed once here (not per FileDiff)
+   * so the toolbar can count collapsed files. Empty map when the toggle is off
+   * or disabled. Files are only included when hiding can APPLY:
+   * - added/removed files are exempt (a -w diff is identical to the normal one)
+   * - files without both full contents are 'unavailable' (honest degradation)
+   */
+  const whitespaceByPath = $derived.by(() => {
+    const map = new Map<string, WhitespaceDisplay>()
+    if (!hideWhitespace || !whitespaceToggleEnabled) return map
+    for (const f of files) {
+      if (classifyFile(f) !== 'diff') continue
+      // -w cannot change the diff of a pure addition/removal — leave as-is, no note
+      if (f.status === 'added' || f.status === 'removed') continue
+      const c = contentsMap?.get(f.filename)
+      if (c == null || c.before === null || c.after === null) {
+        map.set(f.filename, { kind: 'unavailable' })
+        continue
+      }
+      map.set(f.filename, computeWhitespaceHiddenPatch(c.before, c.after))
+    }
+    return map
+  })
+
+  /** Files whose entire change is whitespace-only (shown as placeholders). */
+  const whitespaceOnlyCount = $derived.by(() => {
+    let n = 0
+    for (const entry of whitespaceByPath.values()) {
+      if (entry.kind === 'collapsed') n++
+    }
+    return n
+  })
+
+  function toggleHideWhitespace(): void {
+    if (!whitespaceToggleEnabled) return
+    onhidewhitespace?.(!hideWhitespace)
+    if (!hideWhitespace) track('whitespace_hidden')
+  }
 </script>
 
 <div class="mode-toggle" role="group" aria-label="Diff mode">
   <button class="btn" class:btn-active={mode === 'unified'} aria-pressed={mode === 'unified'} onclick={() => onmode('unified')}>Unified</button>
   <button class="btn" class:btn-active={mode === 'split'} aria-pressed={mode === 'split'} onclick={() => onmode('split')}>Side-by-side</button>
+  <button
+    class="btn ws-toggle"
+    class:btn-active={hideWhitespace && whitespaceToggleEnabled}
+    aria-pressed={hideWhitespace && whitespaceToggleEnabled}
+    disabled={!whitespaceToggleEnabled}
+    title={whitespaceDisabledReason ?? 'Hide changes that only add or remove whitespace (like git diff -w)'}
+    onclick={toggleHideWhitespace}
+  >Hide whitespace</button>
+  {#if hideWhitespace && whitespaceToggleEnabled && whitespaceOnlyCount > 0}
+    <span class="ws-only-note" role="status">
+      {whitespaceOnlyCount} whitespace-only file{whitespaceOnlyCount === 1 ? '' : 's'} hidden
+    </span>
+  {/if}
   {#if showRunButton}
     <button
       class="run-reviewers-btn"
@@ -492,6 +564,7 @@
             {askDisabledReason}
             skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
             onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key })}
+            whitespace={whitespaceByPath.get(file.filename) ?? null}
           />
         </div>
       {/each}
@@ -734,6 +807,16 @@
   }
   .mode-toggle .btn {
     border-radius: 4px 4px 0 0; /* flat bottom, pairs with underline indicator */
+  }
+  .ws-toggle:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .ws-only-note {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    align-self: center;
+    margin-left: 0.4rem;
   }
   .run-reviewers-btn { margin-left: auto; }
 
