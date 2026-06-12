@@ -2047,29 +2047,6 @@ test('syntax-highlighting: TS keywords get hljs spans in unified + split (light 
     }
     return route.fallback()
   })
-// Test 21: instant step navigation — no PR refetch, no loading skeleton
-// ---------------------------------------------------------------------------
-
-test('step-nav: 1→2→3→back→forward is instant — no PR refetch, no loading skeleton', async ({
-  page,
-}) => {
-  await setupRoutes(page)
-
-  // Count PR-load fetches (meta + files). Registered AFTER setupRoutes so this
-  // handler runs first (Playwright routes are LIFO); fallback() passes the
-  // request through to the setupRoutes dispatcher.
-  let prLoadFetches = 0
-  await page.route('**/api.github.com/**', async (route) => {
-    const path = new URL(route.request().url()).pathname
-    if (
-      path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}` ||
-      path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`
-    ) {
-      prLoadFetches++
-    }
-    await route.fallback()
-  })
-
   await page.addInitScript((settings) => {
     localStorage.setItem('review123:settings', JSON.stringify(settings))
   }, seedSettings(false))
@@ -2167,6 +2144,36 @@ test('syntax-highlighting: dark app theme switches the diff to dark tokens, stil
     body: await article.screenshot(),
     contentType: 'image/png',
   })
+})
+
+// ---------------------------------------------------------------------------
+// Test 21: instant step navigation — no PR refetch, no loading skeleton
+// ---------------------------------------------------------------------------
+
+test('step-nav: 1→2→3→back→forward is instant — no PR refetch, no loading skeleton', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+
+  // Count PR-load fetches (meta + files). Registered AFTER setupRoutes so this
+  // handler runs first (Playwright routes are LIFO); fallback() passes the
+  // request through to the setupRoutes dispatcher.
+  let prLoadFetches = 0
+  await page.route('**/api.github.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (
+      path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}` ||
+      path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`
+    ) {
+      prLoadFetches++
+    }
+    await route.fallback()
+  })
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
   // Track every APPEARANCE of the PR loading skeleton (.pr-loading). The
   // initial page load legitimately shows it; step navigation must never
   // re-show it. A polling check via expect(...).toHaveCount(0) could miss a
