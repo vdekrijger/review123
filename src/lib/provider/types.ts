@@ -75,6 +75,13 @@ export interface ProviderCapabilities {
    * replyToThread().
    */
   commentReplies: boolean
+  /**
+   * Provider rejects review verdicts (approve / request changes) on the
+   * viewer's own PR. GitHub: 422 "Can not approve your own pull request".
+   * Bitbucket Cloud: rejects self-approval. GitLab: governed by project
+   * settings (often allowed) → false, errors surface at submit time.
+   */
+  selfReviewBlocked: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +177,24 @@ export interface ReviewProvider {
   replyToThread?(ref: PrRefX, root: PrComment, body: string): Promise<ReplyOutcome>
 
   /**
+   * Fetch the authenticated user's recent review comment bodies ACROSS repos
+   * (account-scoped). The provider resolves the authenticated identity itself
+   * (GitHub: GET /user → login; GitLab: GET /user → username) and gathers that
+   * user's recent PR/MR review comments. Returns comment bodies only (not
+   * metadata); code fences > 10 lines are stripped. Capped at `cap` comments.
+   *
+   * When `repoFilter` is provided, the search is narrowed to that single
+   * repository (delegates to the repo-scoped path).
+   *
+   * Optional — method presence implies capability (same pattern as getMyQueue).
+   * When absent, the UI should explain "not available for <Provider> yet".
+   */
+  getMyAccountReviewComments?(
+    cap: number,
+    repoFilter?: { owner: string; repo: string },
+  ): Promise<string[]>
+
+  /**
    * Return open PRs/MRs in the current user's review queue.
    * - authorIsMe=false → awaiting this user's review (reviewer-requested)
    * - authorIsMe=true  → authored by this user (open PRs)
@@ -177,4 +202,14 @@ export interface ReviewProvider {
    * Returns [] when unauthenticated.
    */
   getMyQueue?(): Promise<QueueItem[]>
+
+  /**
+   * Resolve the authenticated viewer's provider-canonical identity — the same
+   * identifier space as PrMeta.authorLogin (GitHub login, GitLab username,
+   * Bitbucket account UUID). Returns null when it cannot be determined.
+   *
+   * Optional — callers should go through resolveViewerLogin() in viewer.ts,
+   * which checks auth and caches the result per session.
+   */
+  getViewerLogin?(): Promise<string | null>
 }

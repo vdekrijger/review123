@@ -21,9 +21,9 @@ const EVENTS = {
   review_submitted: ['verdict', 'comment_count'],
   settings_key_added: ['service'],
   // PRIVACY DECISION: engagement events below carry section/surface identifiers only.
-  // 'section' is a stable registry id (e.g. 'summary', 'diagrams') — never a file path,
-  // diff content, PR title, or any user-generated text.
-  // 'surface' is 'page' | 'rail' — a layout location, not content.
+  // 'section' is a stable registry id (e.g. 'summary', 'diagrams', 'queue', 'recent') —
+  // never a file path, diff content, PR title, or any user-generated text.
+  // 'surface' is 'page' | 'rail' | 'landing' — a layout location, not content.
   // 'origin' is 'viewed' | 'dim' — the collapse reason, not file identity.
   // 'step' is '1' | '2' | '3' — step index only.
   // None of these can be used to reconstruct code, diffs, or private repo data.

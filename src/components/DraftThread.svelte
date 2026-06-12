@@ -362,7 +362,8 @@
   }
 
   .ask-inline-error {
-    color: #cf222e;
+    /* theme-aware error red (was hardcoded #cf222e — unreadable on dark surfaces) */
+    color: var(--legend-removed-color, #cf222e);
     font-size: 0.78rem;
   }
 

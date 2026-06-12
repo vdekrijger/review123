@@ -10,9 +10,10 @@
   import type { Draft } from '../lib/drafts/drafts.svelte'
   import DraftThread from './DraftThread.svelte'
   import ExistingThread from './ExistingThread.svelte'
+  import SkillFindingCard from './SkillFindingCard.svelte'
+  import { patchLineNumbers } from '../lib/diff/patchLines'
   import type { PrComment } from '../lib/github/comments'
-  import { groupThreads, type CommentThread } from '../lib/github/commentThreads'
-  import { extractPatchLines } from '../lib/github/patchLines'
+  import { groupThreads, type CommentThread as Thread } from '../lib/github/commentThreads'
   import type { ReplyOutcome } from '../lib/github/replies'
   import type { AskFocus } from '../lib/ai/tasks'
   import { excerptAround } from '../lib/diff/excerpt'
@@ -79,59 +80,34 @@
 
   let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onReply = null }: Props = $props()
 
-  // ---- Existing comments: thread grouping + anchorability split ------------
-  // Threads group a root comment with its replies (GitHub in_reply_to_id
-  // chains / GitLab discussions). A thread is ANCHORED when its root line
-  // exists in the patch hunks — anchored threads render INLINE at their line
-  // (via extendData); only file-level / unanchorable threads go to the
-  // bottom-of-file list. Same rule applies to drafts (dedupe fix).
-  const threads = $derived(groupThreads(comments))
-
-  /** Whether a line/side is present in the patch hunks (→ renders inline). */
-  function isAnchoredLine(line: number | null, side: 'LEFT' | 'RIGHT' | null): boolean {
-    if (line === null || side === null) return false
-    return extractPatchLines(file.patch, line, side) !== undefined
-  }
-
-  const anchoredThreads = $derived(threads.filter((t) => isAnchoredLine(t.root.line, t.root.side)))
-  const unanchoredThreads = $derived(threads.filter((t) => !isAnchoredLine(t.root.line, t.root.side)))
-
-  const anchoredDrafts = $derived(drafts.filter((d) => isAnchoredLine(d.line, d.side)))
-  const unanchoredDrafts = $derived(drafts.filter((d) => !isAnchoredLine(d.line, d.side)))
-
-  /** Whether a thread is resolved (root comment id in resolvedCommentIds) */
-  function isThreadResolved(thread: CommentThread): boolean {
-    return resolvedCommentIds.has(thread.root.id)
-  }
-
-  // Bottom list: unanchorable threads grouped by line (null = "General", last)
-  const unanchoredThreadsByLine = $derived.by(() => {
-    const map = new Map<number | null, CommentThread[]>()
-    for (const t of unanchoredThreads) {
-      const key = t.root.line
-      const arr = map.get(key) ?? []
-      arr.push(t)
-      map.set(key, arr)
-    }
-    return map
-  })
-
-  // Ordered line keys (non-null first, sorted numerically; null last)
-  const lineKeys = $derived.by(() => {
-    const keys = [...unanchoredThreadsByLine.keys()]
-    const nonNull = (keys.filter((k) => k !== null) as number[]).sort((a, b) => a - b)
-    const hasNull = keys.includes(null)
-    return hasNull ? ([...nonNull, null] as (number | null)[]) : nonNull
-  })
-
-  function commentCountAt(lineKey: number | null): number {
-    const group = unanchoredThreadsByLine.get(lineKey) ?? []
-    return group.reduce((n, t) => n + 1 + t.replies.length, 0)
-  }
-
   // Test-file display (must be declared before collapsed)
   const testFileDisplay = $derived<TestFileDisplay>(settingsState.current.testFileDisplay)
   const isTest = $derived(isTestFile(file.filename))
+
+  // ---- Diff view theme ----------------------------------------------------
+  // The library scopes its syntax-highlight token colors (hljs-*) and diff row
+  // backgrounds by a data-theme attribute on its own wrapper, driven by the
+  // diffViewTheme prop. Resolve the app theme setting ('auto' via matchMedia)
+  // reactively so the diff restyles live when the user flips the theme.
+  let prefersDark = $state(
+    typeof window !== 'undefined' &&
+      (window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false),
+  )
+  $effect(() => {
+    const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!mq?.addEventListener) return
+    prefersDark = mq.matches
+    const onChange = (e: MediaQueryListEvent) => {
+      prefersDark = e.matches
+    }
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  })
+  const diffTheme = $derived.by((): 'light' | 'dark' => {
+    const t = settingsState.current.theme
+    if (t === 'dark' || t === 'light') return t
+    return prefersDark ? 'dark' : 'light'
+  })
 
   // When viewed → collapse diff body; user can re-expand by clicking header or unchecking
   // dim mode reduces opacity only — it does NOT collapse the file
@@ -194,39 +170,131 @@
     return side === 'LEFT' ? SplitSide.old : SplitSide.new
   }
 
-  // ---- extendData — per-line inline annotations (drafts + comment threads) ----
-  // Anchored drafts and anchored existing-comment threads render INLINE at
-  // their line via renderExtendLine. (The upstream unified-mode extend bug is
-  // fixed via patches/@git-diff-view__svelte.patch — extend rows now render
-  // for visible lines in both unified and split modes.)
-  interface ExtendAnno {
-    drafts: Draft[]
-    threads: CommentThread[]
+  // ---- Skill findings (line-anchored) state -------------------------------
+
+  // Session-only dismissed finding keys within this FileDiff instance
+  let dismissedSkillKeys = $state<Set<string>>(new Set())
+  // Session-only "added as draft" state keys (persist for the session — state chip)
+  let addedSkillKeys = $state<Set<string>>(new Set())
+
+  function dismissSkillFinding(key: string) {
+    dismissedSkillKeys = new Set([...dismissedSkillKeys, key])
+  }
+
+  async function handleAddSkillFindingDraft(finding: SkillFinding) {
+    if (onAddSkillFindingDraft) {
+      await onAddSkillFindingDraft({ body: finding.body, line: finding.line, key: finding.key })
+    }
+    addedSkillKeys = new Set([...addedSkillKeys, finding.key])
+  }
+
+  // Visible (non-dismissed) skill findings
+  const visibleSkillFindings = $derived(skillFindings.filter(f => !dismissedSkillKeys.has(f.key)))
+
+  // ---- Anchor resolvability -----------------------------------------------
+  // A line anchor (draft or finding) is resolvable when its line number is
+  // present in the patch hunks for its side. Resolvable anchors render INLINE
+  // at the line via extendData; unresolvable ones fall back to the per-file
+  // annotation blocks below the diff. Never both.
+  const leftAnchorLines = $derived(patchLineNumbers(file.patch, 'LEFT'))
+  const rightAnchorLines = $derived(patchLineNumbers(file.patch, 'RIGHT'))
+
+  function isAnchoredDraft(d: Draft): boolean {
+    return d.side === 'LEFT' ? leftAnchorLines.has(d.line) : rightAnchorLines.has(d.line)
+  }
+
+  // ---- Existing comments: thread grouping + anchorability split ------------
+  // Threads group a root comment with its replies (GitHub in_reply_to_id
+  // chains / GitLab discussions). A thread is ANCHORED when its root line is
+  // present in the patch hunks — anchored threads render INLINE at their line
+  // (via extendData); only file-level / unanchorable threads go to the
+  // bottom-of-file list. Same dedupe rule as drafts: never both.
+  const threads = $derived(groupThreads(comments))
+
+  function isAnchoredThread(t: Thread): boolean {
+    const { line, side } = t.root
+    if (line === null || side === null) return false
+    return side === 'LEFT' ? leftAnchorLines.has(line) : rightAnchorLines.has(line)
+  }
+
+  const anchoredThreads = $derived(threads.filter(isAnchoredThread))
+  const unanchoredThreads = $derived(threads.filter((t) => !isAnchoredThread(t)))
+
+  /** Whether a thread is resolved (root comment id in resolvedCommentIds) */
+  function isThreadResolved(thread: Thread): boolean {
+    return resolvedCommentIds.has(thread.root.id)
+  }
+
+  // Bottom list: unanchorable threads grouped by line (null = "General", last)
+  const unanchoredThreadsByLine = $derived.by(() => {
+    const map = new Map<number | null, Thread[]>()
+    for (const t of unanchoredThreads) {
+      const key = t.root.line
+      const arr = map.get(key) ?? []
+      arr.push(t)
+      map.set(key, arr)
+    }
+    return map
+  })
+
+  // Ordered line keys (non-null first, sorted numerically; null last)
+  const lineKeys = $derived.by(() => {
+    const keys = [...unanchoredThreadsByLine.keys()]
+    const nonNull = (keys.filter((k) => k !== null) as number[]).sort((a, b) => a - b)
+    const hasNull = keys.includes(null)
+    return hasNull ? ([...nonNull, null] as (number | null)[]) : nonNull
+  })
+
+  function commentCountAt(lineKey: number | null): number {
+    const group = unanchoredThreadsByLine.get(lineKey) ?? []
+    return group.reduce((n, t) => n + 1 + t.replies.length, 0)
+  }
+
+  // ---- extendData — per-line annotation entries (drafts + skill findings) --
+  // NOTE: @git-diff-view's unified-mode DiffUnifiedExtendLine shipped with an
+  // inverted isHidden condition (extend rows only rendered for collapsed
+  // lines). We patch the package (patches/@git-diff-view__svelte.patch) so
+  // extendData renders inline at visible lines in BOTH unified and split
+  // modes — the same path drafts already used in split mode.
+  interface ExtendEntry {
+    draft?: Draft
+    findings: SkillFinding[]
+    threads: Thread[]
   }
 
   const extendData = $derived.by(() => {
-    const oldFile: Record<string, { data: ExtendAnno }> = {}
-    const newFile: Record<string, { data: ExtendAnno }> = {}
-    const annoAt = (side: 'LEFT' | 'RIGHT', line: number): ExtendAnno => {
-      const target = side === 'LEFT' ? oldFile : newFile
+    const oldFile: Record<string, { data: ExtendEntry }> = {}
+    const newFile: Record<string, { data: ExtendEntry }> = {}
+    const entryAt = (map: Record<string, { data: ExtendEntry }>, line: number): ExtendEntry => {
       const key = String(line)
-      if (!target[key]) target[key] = { data: { drafts: [], threads: [] } }
-      return target[key].data
+      if (!map[key]) map[key] = { data: { findings: [], threads: [] } }
+      return map[key].data
     }
-    for (const d of anchoredDrafts) {
-      annoAt(d.side, d.line).drafts.push(d)
+    for (const d of drafts) {
+      if (!isAnchoredDraft(d)) continue
+      // While the add/edit widget is open at this line, the widget shows the
+      // draft — suppress the extend entry so the draft never renders twice.
+      if (openWidget && openWidget.line === d.line && splitSideToSide(openWidget.side) === d.side) continue
+      if (d.side === 'LEFT') {
+        entryAt(oldFile, d.line).draft = d
+      } else {
+        entryAt(newFile, d.line).draft = d
+      }
+    }
+    for (const f of visibleSkillFindings) {
+      // Findings anchor to the new (RIGHT) side of the diff
+      if (!rightAnchorLines.has(f.line)) continue
+      entryAt(newFile, f.line).findings.push(f)
     }
     for (const t of anchoredThreads) {
-      annoAt(t.root.side!, t.root.line!).threads.push(t)
-    }
-    // Drafts at a line in thread order (n ascending)
-    for (const target of [oldFile, newFile]) {
-      for (const key of Object.keys(target)) {
-        target[key].data.drafts.sort((a, b) => (a.n ?? 0) - (b.n ?? 0))
-      }
+      const map = t.root.side === 'LEFT' ? oldFile : newFile
+      entryAt(map, t.root.line!).threads.push(t)
     }
     return { oldFile, newFile }
   })
+
+  // Drafts whose anchor is NOT in the current diff — fallback block below the diff
+  const unanchoredDrafts = $derived(drafts.filter((d) => !isAnchoredDraft(d)))
 
   // ---- Flash-highlight state for newly saved annotation entries (Fix-B) ----
   // Set of "line|side" strings that should flash after widget save
@@ -246,9 +314,9 @@
   function handleWidgetSave(line: number, side: SplitSide, body: string) {
     const sideStr = splitSideToSide(side)
     onAddDraft?.(line, sideStr, body)
-    // The saved draft renders immediately as an inline annotation at its line
-    // (extendData), so the widget closes on save — keeping it open would show
-    // the same draft twice at the same line (dedupe fix).
+    // Fix-B: DO NOT close the widget — stay open showing the saved draft in read view.
+    // The widget will re-render with existingDraft set (since drafts prop updates).
+    // onClose is NOT called here; only called on explicit cancel/delete.
     addFlash(line, sideStr)
   }
 
@@ -271,29 +339,8 @@
     onRemoveDraft?.(line, sideStr)
   }
 
-  // ---- Skill findings (line-anchored) state -------------------------------
-
-  // Session-only dismissed finding keys within this FileDiff instance
-  let dismissedSkillKeys = $state<Set<string>>(new Set())
-  // Session-only "added" confirmation keys
-  let addedSkillKeys = $state<Set<string>>(new Set())
-
-  function dismissSkillFinding(key: string) {
-    dismissedSkillKeys = new Set([...dismissedSkillKeys, key])
-  }
-
-  async function handleAddSkillFindingDraft(finding: SkillFinding) {
-    if (onAddSkillFindingDraft) {
-      await onAddSkillFindingDraft({ body: finding.body, line: finding.line, key: finding.key })
-    }
-    addedSkillKeys = new Set([...addedSkillKeys, finding.key])
-    setTimeout(() => {
-      addedSkillKeys = new Set([...addedSkillKeys].filter(k => k !== finding.key))
-    }, 2000)
-  }
-
-  // Visible (non-dismissed) skill findings
-  const visibleSkillFindings = $derived(skillFindings.filter(f => !dismissedSkillKeys.has(f.key)))
+  // Skill findings whose anchor is NOT in the current diff — fallback block
+  const unanchoredSkillFindings = $derived(visibleSkillFindings.filter(f => !rightAnchorLines.has(f.line)))
 </script>
 
 <article class="file-diff" class:is-collapsed={collapsed} class:test-dim={isTest && testFileDisplay === 'dim'} class:test-highlight={isTest && testFileDisplay === 'highlight'}>
@@ -341,6 +388,7 @@
       {diffFile}
       diffViewMode={mode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
       diffViewHighlight={true}
+      diffViewTheme={diffTheme}
       diffViewWrap={true}
       diffViewAddWidget={true}
       {extendData}
@@ -357,11 +405,8 @@
           line={lineNumber}
           side={splitSideToSide(side)}
           onsave={(body) => {
+            // Fix-B: do NOT call onClose here — widget stays open showing saved draft
             handleWidgetSave(lineNumber, side, body)
-            // Close the widget: the saved draft now renders inline at this
-            // line via extendData — leaving the widget open would duplicate it.
-            onClose()
-            openWidget = null
           }}
           ondelete={() => {
             handleExtendDelete(lineNumber, side)
@@ -379,35 +424,54 @@
       {/snippet}
 
       {#snippet renderExtendLine({ lineNumber, side, data })}
-        <div class="inline-annotations" data-testid="inline-annotations" data-line={lineNumber}>
-          {#each data.drafts as draft (draft.line + '|' + draft.side + '|' + (draft.n ?? 0))}
-            {@const flashKey = `${draft.line}|${draft.side}`}
-            <div class="annotation-entry" class:flash={flashKeys.has(flashKey)}>
-              <DraftThread
-                {draft}
-                path={file.filename}
-                line={lineNumber}
-                side={splitSideToSide(side)}
-                onsave={(body) => handleExtendSave(lineNumber, side, body)}
-                ondelete={() => handleExtendDelete(lineNumber, side)}
-                oncancel={() => {}}
-                {askFn}
-                {askDisabledReason}
-                excerpt={file.patch ? excerptAround(file.patch, draft.line, draft.side, 6) : ''}
+        {@const entry = data as ExtendEntry}
+        {#if entry?.draft}
+          {@const flashKey = `${entry.draft.line}|${entry.draft.side}`}
+          <div class="draft-annotations inline-annotation" data-testid="inline-annotations" data-line={lineNumber} class:flash={flashKeys.has(flashKey)} aria-label="Draft comment at line {lineNumber}">
+            <DraftThread
+              draft={entry.draft}
+              path={file.filename}
+              line={lineNumber}
+              side={splitSideToSide(side)}
+              onsave={(body) => handleExtendSave(lineNumber, side, body)}
+              ondelete={() => handleExtendDelete(lineNumber, side)}
+              oncancel={() => {}}
+              {askFn}
+              {askDisabledReason}
+              excerpt={file.patch ? excerptAround(file.patch, lineNumber, splitSideToSide(side), 6) : ''}
+            />
+          </div>
+        {/if}
+        {#if entry?.findings?.length}
+          <div class="line-findings" data-line-findings={lineNumber} aria-label="Reviewer findings at line {lineNumber}">
+            {#each entry.findings as finding (finding.key)}
+              <SkillFindingCard
+                skillName={finding.skillName}
+                severity={finding.severity}
+                body={finding.body}
+                line={finding.line}
+                anchored={true}
+                compact={true}
+                added={addedSkillKeys.has(finding.key)}
+                onAdd={() => handleAddSkillFindingDraft(finding)}
+                onDismiss={() => dismissSkillFinding(finding.key)}
               />
-            </div>
-          {/each}
-          {#each data.threads as thread (thread.root.id)}
-            <ExistingThread {thread} resolved={isThreadResolved(thread)} {onReply} />
-          {/each}
-        </div>
+            {/each}
+          </div>
+        {/if}
+        {#if entry?.threads?.length}
+          <div class="inline-comment-threads" data-testid="inline-annotations" data-line={lineNumber} aria-label="Existing comment threads at line {lineNumber}">
+            {#each entry.threads as thread (thread.root.id)}
+              <ExistingThread {thread} resolved={isThreadResolved(thread)} {onReply} />
+            {/each}
+          </div>
+        {/if}
       {/snippet}
     </DiffView>
 
-    <!-- Bottom-of-file draft list: ONLY drafts whose line is NOT in the patch
-         hunks (unanchorable — e.g. saved on an expanded context line).
-         Anchored drafts render inline at their line via extendData and must
-         NOT be repeated here (dedupe fix). -->
+    <!-- Fallback draft annotations: ONLY drafts whose line anchor is not present
+         in the current diff. Anchored drafts render inline at their line via
+         extendData (see renderExtendLine above). -->
     {#if unanchoredDrafts.length > 0}
       <div class="draft-annotations" aria-label="Draft comments on this file">
         {#each unanchoredDrafts as draft (draft.line + '|' + draft.side + '|' + (draft.n ?? 0))}
@@ -430,29 +494,21 @@
       </div>
     {/if}
 
-    {#if visibleSkillFindings.length > 0}
+    <!-- Fallback findings block: ONLY findings whose line anchor is not present
+         in the current diff. Anchored findings render inline at their line. -->
+    {#if unanchoredSkillFindings.length > 0}
       <div class="skill-findings-annotations" aria-label="Skill review findings for this file">
-        {#each visibleSkillFindings as finding (finding.key)}
-          <div class="skill-finding severity-{finding.severity}">
-            <div class="skill-finding-header">
-              <span class="skill-persona-label">{finding.skillName}</span>
-              <span class="skill-severity-chip severity-chip-{finding.severity}">{finding.severity}</span>
-            </div>
-            <p class="skill-finding-body">{finding.body}</p>
-            <div class="skill-finding-actions">
-              <button
-                class="skill-add-draft-btn"
-                class:added={addedSkillKeys.has(finding.key)}
-                onclick={() => handleAddSkillFindingDraft(finding)}
-                disabled={addedSkillKeys.has(finding.key)}
-                aria-label={addedSkillKeys.has(finding.key) ? 'Added to drafts' : 'Add as draft comment'}
-              >{addedSkillKeys.has(finding.key) ? '✓ Added' : 'Add as draft'}</button>
-              <button
-                class="skill-dismiss-btn"
-                onclick={() => dismissSkillFinding(finding.key)}
-              >Dismiss</button>
-            </div>
-          </div>
+        {#each unanchoredSkillFindings as finding (finding.key)}
+          <SkillFindingCard
+            skillName={finding.skillName}
+            severity={finding.severity}
+            body={finding.body}
+            line={finding.line}
+            anchored={false}
+            added={addedSkillKeys.has(finding.key)}
+            onAdd={() => handleAddSkillFindingDraft(finding)}
+            onDismiss={() => dismissSkillFinding(finding.key)}
+          />
         {/each}
       </div>
     {/if}
@@ -604,19 +660,9 @@
     margin-bottom: 0.15rem;
   }
 
-  /* Inline annotations row (rendered inside the diff table at a line):
-     drafts + existing threads anchored to that line */
-  .inline-annotations {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 0.5rem;
-    background: var(--surface-banner);
-    border-top: 1px solid var(--border-banner);
-    border-bottom: 1px solid var(--border-banner);
-  }
+  /* (Resolved-thread collapse styles live in ExistingThread.svelte) */
 
-  /* ---- Skill findings annotations (line-anchored, dashed-accent style) ---- */
+  /* ---- Per-file fallback block for unanchored findings ---- */
   .skill-findings-annotations {
     display: flex;
     flex-direction: column;
@@ -625,116 +671,31 @@
     border-top: 1px solid var(--border-draft, var(--hairline));
   }
 
-  .skill-finding {
+  /* ---- Inline (at-line) annotation containers inside extend rows ---- */
+  .draft-annotations.inline-annotation {
+    border-top: none;
+  }
+
+  .draft-annotations.inline-annotation.flash {
+    animation: flash-new-draft 1.5s ease-out forwards;
     border-radius: 4px;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.85rem;
-    border-style: dashed;
-    border-width: 1px;
   }
 
-  .skill-finding.severity-high {
-    border-color: var(--accent);
-    background: var(--legend-removed-bg);
-  }
-
-  .skill-finding.severity-medium {
-    border-color: var(--accent);
-    background: var(--legend-changed-bg);
-  }
-
-  .skill-finding.severity-low {
-    border-color: var(--border-subtle);
-    background: var(--surface-raised);
-  }
-
-  .skill-finding-header {
+  .line-findings {
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.35rem 0.5rem;
+  }
+
+  /* Inline existing-comment threads anchored at a line (extend row) */
+  .inline-comment-threads {
+    display: flex;
+    flex-direction: column;
     gap: 0.5rem;
-    margin-bottom: 0.3rem;
-  }
-
-  .skill-persona-label {
-    font-size: 0.75rem;
-    font-weight: 600;
-    opacity: 0.75;
-    flex: 1;
-  }
-
-  .skill-severity-chip {
-    font-size: 0.7rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 0.1rem 0.45rem;
-    border-radius: 999px;
-  }
-
-  .severity-chip-high {
-    background: var(--legend-removed-bg);
-    color: var(--legend-removed-color);
-    border: 1px solid var(--legend-removed-border);
-  }
-
-  .severity-chip-medium {
-    background: var(--legend-changed-bg);
-    color: var(--legend-changed-color);
-    border: 1px solid var(--legend-changed-border);
-  }
-
-  .severity-chip-low {
-    background: var(--surface-raised);
-    color: var(--text-muted);
-    border: 1px solid var(--border-subtle);
-  }
-
-  .skill-finding-body {
-    margin: 0 0 0.4rem;
-    line-height: 1.4;
-  }
-
-  .skill-finding-actions {
-    display: flex;
-    gap: 0.4rem;
-  }
-
-  .skill-add-draft-btn {
-    font-size: 0.78rem;
-    padding: 0.18rem 0.55rem;
-    border-radius: 4px;
-    border: 1px solid var(--accent);
-    background: transparent;
-    color: var(--accent);
-    cursor: pointer;
-    font-weight: 500;
-  }
-
-  .skill-add-draft-btn:hover:not(:disabled) {
-    background: var(--legend-added-bg);
-  }
-
-  .skill-add-draft-btn.added {
-    background: var(--legend-added-bg);
-    border-color: var(--legend-added-border, var(--accent));
-    color: var(--legend-added-color, var(--accent));
-    cursor: default;
-    opacity: 0.85;
-  }
-
-  .skill-dismiss-btn {
-    font-size: 0.78rem;
-    padding: 0.18rem 0.55rem;
-    border-radius: 4px;
-    border: 1px solid var(--border-subtle);
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    opacity: 0.7;
-  }
-
-  .skill-dismiss-btn:hover {
-    opacity: 1;
-    background: var(--surface-raised);
+    padding: 0.5rem;
+    background: var(--surface-banner);
+    border-top: 1px solid var(--border-banner);
+    border-bottom: 1px solid var(--border-banner);
   }
 </style>

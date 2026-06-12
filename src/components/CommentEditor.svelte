@@ -25,6 +25,52 @@
   let mode: 'write' | 'preview' = $state('write')
   let textareaEl: HTMLTextAreaElement | undefined = $state()
 
+  // ---- Emoji picker (hand-rolled popover, no dependency) ----
+
+  /**
+   * Curated set of common reaction/dev emojis. Clicking one inserts the raw
+   * unicode character at the cursor. The :shortcode: support in previews
+   * (renderMarkdown) is unrelated and stays as-is.
+   */
+  const EMOJIS = [
+    '👍', '👎', '🎉', '❤️', '🚀', '👀',
+    '😄', '😅', '🤔', '🙏', '💯', '🔥',
+    '✨', '💡', '✅', '❌', '⚠️', '🐛',
+    '📝', '♻️', '⚡', '😕', '😮', '🧹',
+  ]
+
+  let emojiOpen = $state(false)
+  let emojiBtnEl: HTMLButtonElement | undefined = $state()
+  let emojiWrapEl: HTMLElement | undefined = $state()
+
+  function toggleEmoji() {
+    emojiOpen = !emojiOpen
+  }
+
+  function pickEmoji(emoji: string) {
+    emojiOpen = false
+    // insertAt restores focus to the textarea with the cursor after the emoji
+    insertAt(emoji)
+  }
+
+  /** Escape closes the picker and returns focus to the emoji toggle button. */
+  function onEmojiWindowKeydown(e: KeyboardEvent) {
+    if (!emojiOpen) return
+    if (e.key === 'Escape') {
+      e.stopPropagation()
+      emojiOpen = false
+      emojiBtnEl?.focus()
+    }
+  }
+
+  /** Click/tap outside the emoji button + popover closes the picker. */
+  function onEmojiWindowPointerDown(e: PointerEvent) {
+    if (!emojiOpen) return
+    if (emojiWrapEl && !emojiWrapEl.contains(e.target as Node)) {
+      emojiOpen = false
+    }
+  }
+
   // ---- Toolbar helpers ----
 
   /**
@@ -156,6 +202,8 @@
   }
 </script>
 
+<svelte:window onkeydown={onEmojiWindowKeydown} onpointerdown={onEmojiWindowPointerDown} />
+
 <div class="comment-editor">
   <!-- Tab bar -->
   <div class="tab-bar" role="tablist">
@@ -186,6 +234,24 @@
       <button type="button" aria-label="Code block" onclick={onCodeBlock} title="Code block (``` block ```)"><code>```</code></button>
       <button type="button" aria-label="Link" onclick={onLink} title="Link ([text](url))">🔗</button>
       <button type="button" aria-label="List" onclick={onList} title="Unordered list (- item)">•</button>
+      <span class="emoji-wrap" bind:this={emojiWrapEl}>
+        <button
+          type="button"
+          bind:this={emojiBtnEl}
+          aria-label="Insert emoji"
+          aria-haspopup="true"
+          aria-expanded={emojiOpen}
+          onclick={toggleEmoji}
+          title="Insert emoji"
+        >🙂</button>
+        {#if emojiOpen}
+          <div class="emoji-popover" data-testid="emoji-picker" role="group" aria-label="Emoji picker">
+            {#each EMOJIS as emoji (emoji)}
+              <button type="button" class="emoji-option" onclick={() => pickEmoji(emoji)}>{emoji}</button>
+            {/each}
+          </div>
+        {/if}
+      </span>
       {#if suggestionSource}
         <button type="button" aria-label="Suggest change" onclick={onSuggestChange} title="Insert suggestion block (```suggestion ...```)">±</button>
       {/if}
@@ -215,17 +281,24 @@
 </div>
 
 <style>
+  /*
+   * Theme audit: editor chrome and the Write-tab textarea use design-system
+   * tokens (--surface / --text / --hairline) so text stays readable in BOTH
+   * themes — the previous transparent/inherit combo rendered dim dark-on-dark
+   * text in dark theme (same class of bug as the theme-audit PR #11).
+   */
   .comment-editor {
-    border: 1px solid #8884;
+    border: 1px solid var(--hairline);
     border-radius: 6px;
-    overflow: hidden;
+    overflow: visible;
     display: flex;
     flex-direction: column;
+    background: var(--surface);
   }
 
   .tab-bar {
     display: flex;
-    border-bottom: 1px solid #8884;
+    border-bottom: 1px solid var(--hairline);
   }
 
   .tab-bar button {
@@ -234,6 +307,7 @@
     padding: 0.4rem 1rem;
     cursor: pointer;
     font-size: 0.9rem;
+    color: var(--text);
     opacity: 0.7;
   }
 
@@ -247,8 +321,8 @@
     display: flex;
     gap: 0.25rem;
     padding: 0.35rem 0.5rem;
-    border-bottom: 1px solid #8882;
-    background: #8881;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--surface-raised);
   }
 
   .toolbar button {
@@ -259,11 +333,12 @@
     cursor: pointer;
     font-size: 0.85rem;
     line-height: 1.2;
+    color: var(--text);
   }
 
   .toolbar button:hover {
-    border-color: #8884;
-    background: #fff2;
+    border-color: var(--hairline);
+    background: var(--accent-subtle);
   }
 
   textarea {
@@ -271,18 +346,64 @@
     min-height: 8rem;
     resize: vertical;
     border: none;
+    border-radius: 0 0 6px 6px;
     padding: 0.6rem 0.75rem;
     font-family: inherit;
     font-size: 0.95rem;
     box-sizing: border-box;
-    background: transparent;
-    color: inherit;
+    background: var(--surface);
+    color: var(--text);
+    caret-color: var(--text);
     outline: none;
+  }
+
+  textarea::placeholder {
+    color: var(--text-muted);
   }
 
   .preview {
     padding: 0.6rem 0.75rem;
     min-height: 8rem;
+    color: var(--text);
+  }
+
+  /* ── Emoji picker popover ── */
+
+  .emoji-wrap {
+    position: relative;
+    display: inline-block;
+  }
+
+  .emoji-popover {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 30;
+    display: grid;
+    grid-template-columns: repeat(6, auto);
+    gap: 2px;
+    padding: 0.35rem;
+    background: var(--surface-raised);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  }
+
+  /* scoped under .toolbar to out-rank the generic .toolbar button rule */
+  .toolbar .emoji-option {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 0.15rem 0.3rem;
+    font-size: 1rem;
+    line-height: 1.2;
+    cursor: pointer;
+  }
+
+  .toolbar .emoji-option:hover,
+  .toolbar .emoji-option:focus-visible {
+    border-color: var(--hairline);
+    background: var(--accent-subtle);
   }
 
   .empty-preview {

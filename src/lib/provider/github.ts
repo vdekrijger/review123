@@ -21,6 +21,7 @@ import { compareCommits } from '../github/compare'
 import { submitReview } from '../github/review'
 import { replyToReviewComment, type ReplyOutcome } from '../github/replies'
 import { ghFetch } from '../github/client'
+import { GithubApiError } from '../github/types'
 import { getSettings } from '../settings/settings'
 import type { ReviewProvider, PrRefX, ParseResult, QueueItem } from './types'
 import type { PrMeta, PrFile } from '../github/types'
@@ -39,6 +40,139 @@ function toRef(ref: PrRefX): { owner: string; repo: string; number: number } {
 }
 
 // ---------------------------------------------------------------------------
+// Viewer identity (shared by getViewerLogin and the mining helpers)
+// ---------------------------------------------------------------------------
+
+async function fetchViewerLogin(): Promise<string | null> {
+  const user = await ghFetch<{ login?: string }>('/user')
+  return user.login ?? null
+}
+
+// ---------------------------------------------------------------------------
+// Mining helpers (account- and repo-scoped review comment harvesting)
+// ---------------------------------------------------------------------------
+
+// Inline (not imported from mineSkill) to avoid a circular dependency.
+function stripLongFences(body: string): string {
+  return body.replace(/```[^\n]*\n([\s\S]*?)```/g, (match, inner: string) => {
+    const lines = inner.split('\n')
+    if (lines.length > 10) return ''
+    return match
+  })
+}
+
+/** Re-throw rate-limit API errors as a clear, user-facing Error. */
+function throwIfRateLimited(err: unknown): void {
+  if (err instanceof GithubApiError && err.detail.kind === 'rate-limited') {
+    throw new Error(
+      `GitHub rate limit exceeded. Try again after ${err.detail.resetAt.toLocaleTimeString()}.`,
+    )
+  }
+}
+
+interface RawMineComment {
+  user: { login: string }
+  body: string
+}
+
+/** Repo-scoped mining: recent review comments on one repo, filtered to `login`. */
+async function getRepoScopedReviewComments(
+  repo: { owner: string; repo: string },
+  cap: number,
+): Promise<string[]> {
+  // Step 1: resolve authenticated login (shared viewer-identity code path)
+  const login = await fetchViewerLogin()
+  if (login == null) return []
+
+  // Step 2: fetch up to 3 pages of PR review comments
+  const MINE_PAGES = 3
+  const allComments: RawMineComment[] = []
+  for (let page = 1; page <= MINE_PAGES; page++) {
+    const path = `/repos/${repo.owner}/${repo.repo}/pulls/comments?sort=created&direction=desc&per_page=100&page=${page}`
+    const raw = await ghFetch<RawMineComment[]>(path)
+    if (!Array.isArray(raw) || raw.length === 0) break
+    allComments.push(...raw)
+  }
+
+  // Step 3: filter by author, cap, strip long fences
+  return allComments
+    .filter(c => c.user?.login === login)
+    .slice(0, cap)
+    .map(c => stripLongFences(c.body).trim())
+    .filter(body => body.length > 0)
+}
+
+/** Max PRs harvested in account-scoped mining (rate-limit budget: ~32 requests). */
+const MINE_MAX_PRS = 30
+/** PR comment fetches run in small batches to stay polite on the API. */
+const MINE_PR_BATCH = 5
+
+/**
+ * Account-scoped mining: search PRs the authenticated user commented on
+ * (across all repos), then pull that user's review comments from each.
+ */
+async function getAccountScopedReviewComments(cap: number): Promise<string[]> {
+  interface GhSearchItem {
+    number: number
+    repository_url: string
+  }
+
+  let login: string
+  let items: GhSearchItem[]
+  try {
+    // Resolve authenticated login via the shared viewer-identity code path.
+    const viewer = await fetchViewerLogin()
+    if (viewer == null) return []
+    login = viewer
+    const q = encodeURIComponent(`type:pr commenter:${login}`)
+    const res = await ghFetch<{ items?: GhSearchItem[] }>(
+      `/search/issues?q=${q}&sort=updated&order=desc&per_page=${MINE_MAX_PRS}`,
+    )
+    items = (res.items ?? []).slice(0, MINE_MAX_PRS)
+  } catch (err) {
+    throwIfRateLimited(err)
+    throw err
+  }
+
+  // Resolve owner/repo from each search item's repository_url
+  const prs: Array<{ owner: string; repo: string; number: number }> = []
+  for (const item of items) {
+    const match = item.repository_url.match(/\/repos\/([^/]+)\/([^/]+)$/)
+    if (!match) continue
+    prs.push({ owner: match[1], repo: match[2], number: item.number })
+  }
+
+  // Fetch the user's review comments per PR in small batches
+  const bodies: string[] = []
+  for (let i = 0; i < prs.length && bodies.length < cap; i += MINE_PR_BATCH) {
+    const batch = prs.slice(i, i + MINE_PR_BATCH)
+    const results = await Promise.all(
+      batch.map(async (pr) => {
+        try {
+          return await ghFetch<RawMineComment[]>(
+            `/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}/comments?per_page=100`,
+          )
+        } catch (err) {
+          throwIfRateLimited(err)
+          return [] // other per-PR failures are non-fatal — use what we have
+        }
+      }),
+    )
+    for (const raw of results) {
+      if (!Array.isArray(raw)) continue
+      for (const c of raw) {
+        if (bodies.length >= cap) break
+        if (c.user?.login !== login) continue
+        const body = stripLongFences(c.body).trim()
+        if (body.length > 0) bodies.push(body)
+      }
+    }
+  }
+
+  return bodies
+}
+
+// ---------------------------------------------------------------------------
 // GitHub ReviewProvider implementation
 // ---------------------------------------------------------------------------
 
@@ -53,6 +187,7 @@ export const githubProvider: ReviewProvider = {
     atomicReview: true,
     compare: true,
     commentReplies: true,
+    selfReviewBlocked: true, // 422 "Can not approve your own pull request"
   },
 
   parseUrl(input: string): ParseResult {
@@ -129,39 +264,19 @@ export const githubProvider: ReviewProvider = {
     return `\`\`\`suggestion\n${lines.join('\n')}\n\`\`\``
   },
 
-  async getMyReviewComments(
+  getMyReviewComments(
     repo: { owner: string; repo: string },
     cap: number,
   ): Promise<string[]> {
-    // Inline stripLongFences to avoid circular dependency with mineSkill module
-    function stripLongFences(body: string): string {
-      return body.replace(/```[^\n]*\n([\s\S]*?)```/g, (match, inner: string) => {
-        const lines = inner.split('\n')
-        if (lines.length > 10) return ''
-        return match
-      })
-    }
+    return getRepoScopedReviewComments(repo, cap)
+  },
 
-    // Step 1: resolve authenticated login
-    const user = await ghFetch<{ login: string }>('/user')
-    const login = user.login
-
-    // Step 2: fetch up to 3 pages of PR review comments
-    const MINE_PAGES = 3
-    const allComments: Array<{ user: { login: string }; body: string }> = []
-    for (let page = 1; page <= MINE_PAGES; page++) {
-      const path = `/repos/${repo.owner}/${repo.repo}/pulls/comments?sort=created&direction=desc&per_page=100&page=${page}`
-      const raw = await ghFetch<Array<{ user: { login: string }; body: string }>>(path)
-      if (!Array.isArray(raw) || raw.length === 0) break
-      allComments.push(...raw)
-    }
-
-    // Step 3: filter by author, cap, strip long fences
-    return allComments
-      .filter(c => c.user?.login === login)
-      .slice(0, cap)
-      .map(c => stripLongFences(c.body).trim())
-      .filter(body => body.length > 0)
+  getMyAccountReviewComments(
+    cap: number,
+    repoFilter?: { owner: string; repo: string },
+  ): Promise<string[]> {
+    if (repoFilter) return getRepoScopedReviewComments(repoFilter, cap)
+    return getAccountScopedReviewComments(cap)
   },
 
   async getMyQueue(): Promise<QueueItem[]> {
@@ -232,5 +347,9 @@ export const githubProvider: ReviewProvider = {
     }
 
     return [...seen.values()]
+  },
+
+  getViewerLogin(): Promise<string | null> {
+    return fetchViewerLogin()
   },
 }

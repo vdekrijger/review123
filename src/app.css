@@ -14,6 +14,10 @@
   --text-muted:     #9a9890;
   --accent:         #4db6a0;
   --accent-subtle:  rgba(77,182,160,.12);
+  --accent-contrast: #0a1410;
+
+  /* ── Select chevron (stroke matches --text-muted; swapped per theme) ── */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239a9890' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   /* ── Diff text colors (used by FileDiff stat counts) ── */
   --diff-add:   var(--legend-added-color);
@@ -52,8 +56,21 @@
 /* ── Diff width: full-width mode lifts the .review container cap (step 2 only) ── */
 /* :has(.inspect-layout) scopes to step 2 so step 1/3 prose keeps its readable width. */
 /* :root[data-diffwidth] attribute is set/cleared by applyAppearance() on every change. */
+/* Gutters also collapse to a slim 10px so full mode is meaningfully wider than
+   centered at EVERY viewport size, not only above the 70rem cap. */
 :root[data-diffwidth='full'] .review:has(.inspect-layout) {
   max-width: none;
+  padding-left: 10px;
+}
+
+/* Right gutter slims only when the rail isn't reserving that space.
+   Scoped to data-rail-collapsed='true' so the expanded-rail reservations
+   (the ≥1444px media block below + the 1100–1443px rule in Review.svelte)
+   keep winning — PR #18 lesson: content must never slide under the rail in
+   full mode. At ≥1444px the media block below restores the collapsed-strip
+   reserve where width is plentiful. */
+:root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='true'] {
+  padding-right: 10px;
 }
 
 /*
@@ -103,6 +120,9 @@
   --text-muted:     #6e6a61;
   --accent:         #2e8b78;
   --accent-subtle:  rgba(46,139,120,.10);
+  --accent-contrast: #ffffff;
+
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e6a61' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   --surface-banner:  #ddeeff;
   --border-banner:   #90b8d8;
@@ -137,6 +157,9 @@
     --text-muted:     #6e6a61;
     --accent:         #2e8b78;
     --accent-subtle:  rgba(46,139,120,.10);
+    --accent-contrast: #ffffff;
+
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e6a61' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
     --surface-banner:  #ddeeff;
     --border-banner:   #90b8d8;
@@ -290,6 +313,127 @@ select:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+/* Select: opt out of the native control and draw our own chevron.
+   Components may tweak size (font-size, padding-block, max-width) but the
+   chrome — surface, hairline, chevron, focus ring — lives here only. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  padding-right: 1.7rem;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 0.55rem center;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ═══════════════════════════════════════════
+   CHECKBOX / RADIO PRIMITIVES
+   Custom token-styled controls so native blue
+   never leaks through. One global rule set —
+   no per-component copies.
+   ═══════════════════════════════════════════ */
+
+input[type='checkbox'],
+input[type='radio'] {
+  /* Fallback hint for any path that still paints natively */
+  accent-color: var(--accent);
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  display: inline-grid;
+  place-content: center;
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  flex-shrink: 0;
+  vertical-align: -0.15em; /* baseline alignment in non-flex label contexts */
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--accent);
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+input[type='checkbox'] { border-radius: 4px; }
+input[type='radio'] { border-radius: 50%; }
+
+/* Indicator glyph: checkmark (clip-path) / dot — scales in when checked */
+input[type='checkbox']::before,
+input[type='radio']::before {
+  content: '';
+  width: 0.6rem;
+  height: 0.6rem;
+  transform: scale(0);
+  transition: transform 120ms ease-in-out;
+}
+
+input[type='checkbox']::before {
+  background: var(--accent-contrast);
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+}
+
+input[type='radio']::before {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+input[type='checkbox']:checked,
+input[type='radio']:checked {
+  border-color: var(--accent);
+}
+
+input[type='checkbox']:checked {
+  background: var(--accent);
+}
+
+input[type='checkbox']:checked::before,
+input[type='radio']:checked::before {
+  transform: scale(1);
+}
+
+input[type='checkbox']:hover:not(:disabled),
+input[type='radio']:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+/* Keyboard focus ring — matches .btn */
+input[type='checkbox']:focus-visible,
+input[type='radio']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input[type='checkbox']:disabled,
+input[type='radio']:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Windows High Contrast / forced-colors: hand back to the OS so the
+   controls stay visible (appearance:none surfaces get flattened). */
+@media (forced-colors: active) {
+  input[type='checkbox'],
+  input[type='radio'] {
+    appearance: auto;
+    -webkit-appearance: auto;
+  }
+  input[type='checkbox']::before,
+  input[type='radio']::before {
+    content: none;
+  }
 }
 
 /* ═══════════════════════════════════════════

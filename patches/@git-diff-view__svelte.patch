@@ -1,13 +1,21 @@
 diff --git a/dist/components/DiffUnifiedExtendLine.svelte b/dist/components/DiffUnifiedExtendLine.svelte
-index ed1c42c8c45480d3e5fe5a5cca57e16ac5bd2e0c..5c1d2ddc0b1a3cc46e07c70bb078f86e36b3b0b7 100644
+index ed1c42c8c45480d3e5fe5a5cca57e16ac5bd2e0c..b04abf42121e4608f925d618c64714fa15a57941 100644
 --- a/dist/components/DiffUnifiedExtendLine.svelte
 +++ b/dist/components/DiffUnifiedExtendLine.svelte
-@@ -28,7 +28,7 @@
+@@ -27,8 +27,15 @@
+ 
  	const currentIsHidden = $derived.by(() => unifiedItem.isHidden);
  
++	const enableExpand = $derived.by(() => props.diffFile.getExpandEnabled());
++
++	// PATCHED (review123): upstream condition was `currentIsHidden` (no negation),
++	// which made extend rows render ONLY for hidden/collapsed lines in unified
++	// mode — the inverse of the intended behaviour and inconsistent with both
++	// DiffUnifiedWidgetLine (`!currentIsHidden`) and the split-mode extend
++	// components (`!isHidden || enableExpand`). Mirrors DiffSplitExtendLine*.
  	const currentIsShow = $derived.by(() =>
 -		Boolean((oldExtend || newExtend) && currentIsHidden && renderExtend)
-+		Boolean((oldExtend || newExtend) && !currentIsHidden && renderExtend)
++		Boolean((oldExtend || newExtend) && (!currentIsHidden || enableExpand) && renderExtend)
  	);
  
  	const width = $derived.by(

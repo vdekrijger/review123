@@ -203,6 +203,7 @@ describe('getPrMeta', () => {
       description: 'Some description',
       diff_refs: { base_sha: 'base111', head_sha: 'head222', start_sha: 'start333' },
       changes_count: '3',
+      author: { username: 'alice' },
     }))
     const meta = await gitlabProvider.getPrMeta(REF)
     expect(meta).toMatchObject({
@@ -213,7 +214,20 @@ describe('getPrMeta', () => {
       baseSha: 'base111',
       headSha: 'head222',
       changedFiles: 3,
+      authorLogin: 'alice',
     })
+  })
+
+  it('maps a missing author to authorLogin null', async () => {
+    vi.stubGlobal('fetch', mockFetch({
+      title: 'My MR',
+      state: 'opened',
+      description: null,
+      diff_refs: null,
+      changes_count: null,
+    }))
+    const meta = await gitlabProvider.getPrMeta(REF)
+    expect(meta.authorLogin).toBeNull()
   })
 
   it('maps a merged MR correctly', async () => {
@@ -752,6 +766,28 @@ describe('submitReview', () => {
     expect(approveCall![1]?.method).toBe('POST')
   })
 
+  it('surfaces a self-approval rejection (401 on /approve) cleanly, not as "Not authenticated"', async () => {
+    const f = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (!init?.method || init.method === 'GET') {
+        return Promise.resolve(jsonResponse(MR_WITH_DIFF_REFS))
+      }
+      if ((url as string).includes('/approve')) {
+        // GitLab answers 401 when the user MAY NOT approve (e.g. own MR)
+        return Promise.resolve(jsonResponse({ message: '401 Unauthorized' }, {}, 401))
+      }
+      return Promise.resolve(jsonResponse({ id: 1 }))
+    })
+    vi.stubGlobal('fetch', f)
+
+    const result = await gitlabProvider.submitReview(REF, 'APPROVE', 'LGTM', [], 'head222')
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.message).toMatch(/not allowed to approve/i)
+      expect(result.message).not.toMatch(/add a gitlab token/i)
+    }
+  })
+
   it('returns partial failure outcome enumerating failed drafts', async () => {
     let callCount = 0
     const f = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
@@ -851,7 +887,32 @@ describe('capabilities', () => {
       atomicReview: false,
       compare: true,
       commentReplies: true,
+      selfReviewBlocked: false,
     })
+  })
+
+  it('does NOT block self-review (governed by project settings on GitLab)', () => {
+    expect(gitlabProvider.capabilities.selfReviewBlocked).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// getViewerLogin
+// ---------------------------------------------------------------------------
+
+describe('getViewerLogin', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('returns the authenticated username from /user', async () => {
+    setGitlabToken('glpat-test')
+    vi.stubGlobal('fetch', mockFetch({ username: 'alice' }))
+    expect(await gitlabProvider.getViewerLogin!()).toBe('alice')
+  })
+
+  it('returns null when /user has no username', async () => {
+    setGitlabToken('glpat-test')
+    vi.stubGlobal('fetch', mockFetch({}))
+    expect(await gitlabProvider.getViewerLogin!()).toBeNull()
   })
 })
 

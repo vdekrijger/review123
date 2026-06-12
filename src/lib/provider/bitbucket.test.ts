@@ -334,6 +334,51 @@ describe('getPrMeta', () => {
     await bitbucketProvider.getPrMeta(REF)
     expect(mockBbFetch).toHaveBeenCalledWith('/repositories/myws/myrepo/pullrequests/42')
   })
+
+  it('maps author uuid to authorLogin (preferred over nickname)', async () => {
+    mockBbFetch.mockResolvedValue({
+      ...rawPr,
+      author: { uuid: '{1234-5678}', nickname: 'alice' },
+    })
+    const meta = await bitbucketProvider.getPrMeta(REF)
+    expect(meta.authorLogin).toBe('{1234-5678}')
+  })
+
+  it('falls back to author nickname when uuid is absent', async () => {
+    mockBbFetch.mockResolvedValue({ ...rawPr, author: { nickname: 'alice' } })
+    const meta = await bitbucketProvider.getPrMeta(REF)
+    expect(meta.authorLogin).toBe('alice')
+  })
+
+  it('maps a missing author to authorLogin null', async () => {
+    mockBbFetch.mockResolvedValue(rawPr)
+    const meta = await bitbucketProvider.getPrMeta(REF)
+    expect(meta.authorLogin).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// getViewerLogin
+// ---------------------------------------------------------------------------
+
+describe('getViewerLogin', () => {
+  it('returns the viewer uuid from /user (same identity space as authorLogin)', async () => {
+    mockBbFetch.mockResolvedValue({ uuid: '{1234-5678}', nickname: 'alice' })
+    expect(await bitbucketProvider.getViewerLogin!()).toBe('{1234-5678}')
+    expect(mockBbFetch).toHaveBeenCalledWith('/user')
+  })
+
+  it('falls back to nickname, then username, when uuid is absent', async () => {
+    mockBbFetch.mockResolvedValue({ nickname: 'alice' })
+    expect(await bitbucketProvider.getViewerLogin!()).toBe('alice')
+    mockBbFetch.mockResolvedValue({ username: 'alice-user' })
+    expect(await bitbucketProvider.getViewerLogin!()).toBe('alice-user')
+  })
+
+  it('returns null when no identity fields are present', async () => {
+    mockBbFetch.mockResolvedValue({})
+    expect(await bitbucketProvider.getViewerLogin!()).toBeNull()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -914,7 +959,12 @@ describe('capabilities', () => {
       atomicReview: false,
       compare: false,
       commentReplies: false,
+      selfReviewBlocked: true,
     })
+  })
+
+  it('blocks self-review (Bitbucket Cloud rejects approving your own PR)', () => {
+    expect(bitbucketProvider.capabilities.selfReviewBlocked).toBe(true)
   })
 })
 

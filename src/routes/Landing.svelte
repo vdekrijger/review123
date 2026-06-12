@@ -6,14 +6,42 @@
   import { getHistory, clearHistory, type HistoryEntry } from '../lib/history/history'
   import { fetchAllQueues, _resetQueueCacheForTest } from '../lib/provider/queue'
   import { relativeTime } from '../lib/time'
+  import { isSectionCollapsed, setSectionCollapsed, type LandingSectionId } from '../lib/landing/collapse'
+  import { groupByRepo, isMultiRepo } from '../lib/landing/groupQueue'
+  import { track } from '../lib/analytics/analytics'
+  import ProviderIcon from '../components/ProviderIcon.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
   import type { QueueItem } from '../lib/provider/types'
+
+  // Human-readable provider names for accessible text alternatives.
+  // Local map (not the registry) so the component stays renderable when the
+  // registry is mocked down to a subset of providers.
+  const PROVIDER_NAMES: Record<'github' | 'gitlab' | 'bitbucket', string> = {
+    github: 'GitHub',
+    gitlab: 'GitLab',
+    bitbucket: 'Bitbucket',
+  }
 
   let input = $state('')
   let error = $state<string | null>(null)
   let history = $state<HistoryEntry[]>(getHistory())
 
+  // Collapsible sections — per-browser UI state, persisted in localStorage
+  let queueCollapsed = $state(isSectionCollapsed('queue'))
+  let recentCollapsed = $state(isSectionCollapsed('recent'))
+
+  function toggleSection(id: LandingSectionId) {
+    const collapsed = id === 'queue' ? !queueCollapsed : !recentCollapsed
+    if (id === 'queue') queueCollapsed = collapsed
+    else recentCollapsed = collapsed
+    setSectionCollapsed(id, collapsed)
+    // Fire only on collapsed → expanded; ids only — never content.
+    if (!collapsed) track('section_expanded', { section: id, surface: 'landing' })
+  }
+
   // Queue state
-  let queueLoading = $state(true)
+  let queueLoading = $state(true) // fetch in flight with nothing to show — skeletons
+  let queueRefreshing = $state(false) // refresh in flight with rows on screen — dim + spinner
   let queueItems = $state<QueueItem[]>([])
 
   const MESSAGES: Record<string, string> = {
@@ -41,7 +69,19 @@
 
   async function handleRefreshQueue() {
     _resetQueueCacheForTest()
-    await loadQueue()
+    if (queueItems.length > 0) {
+      // Refresh with rows on screen: keep them visible but dimmed (same
+      // content-stays-visible treatment as AiPanel's streaming state).
+      queueRefreshing = true
+      try {
+        queueItems = await fetchAllQueues(allProviders)
+      } finally {
+        queueRefreshing = false
+      }
+    } else {
+      // Nothing on screen — behave like the initial load (skeletons).
+      await loadQueue()
+    }
   }
 
   onMount(() => {
@@ -80,6 +120,60 @@
   }
 </script>
 
+<!--
+  queueRows — renders one queue list (awaiting / my open PRs).
+  Multi-repo lists are grouped under compact repo headers (provider icon +
+  owner/repo) with rows showing just #number · title; single-repo lists stay
+  flat with a provider icon per row.
+-->
+{#snippet queueRows(items: QueueItem[])}
+  {@const groups = groupByRepo(items)}
+  {#if isMultiRepo(groups)}
+    {#each groups as group (group.key)}
+      <div class="repo-group-header">
+        <ProviderIcon provider={group.provider} size={12} label={PROVIDER_NAMES[group.provider]} />
+        <span class="repo-group-name">{group.owner}/{group.repo}</span>
+      </div>
+      <ul class="queue-list grouped">
+        {#each group.items as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
+          <li class="queue-item">
+            <button
+              type="button"
+              class="queue-link"
+              onclick={() => navigateToQueueItem(item)}
+              aria-label="{item.ref.owner}/{item.ref.repo}#{item.ref.number} on {PROVIDER_NAMES[item.ref.provider]}"
+            >
+              <span class="queue-ref">#{item.ref.number}</span>
+              <span class="queue-sep"> · </span>
+              <span class="queue-title-text">{item.title}</span>
+              <span class="queue-time">{relativeTime(item.updatedAt)}</span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/each}
+  {:else}
+    <ul class="queue-list">
+      {#each items as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
+        <li class="queue-item">
+          <button
+            type="button"
+            class="queue-link"
+            onclick={() => navigateToQueueItem(item)}
+            aria-label="{item.ref.owner}/{item.ref.repo}#{item.ref.number} on {PROVIDER_NAMES[item.ref.provider]}"
+          >
+            <span class="queue-icon"><ProviderIcon provider={item.ref.provider} size={14} /></span>
+            <span class="queue-ref">{item.ref.owner}/{item.ref.repo}#{item.ref.number}</span>
+            <span class="queue-sep"> — </span>
+            <span class="queue-title-text">{item.title}</span>
+            <span class="queue-time">{relativeTime(item.updatedAt)}</span>
+          </button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+{/snippet}
+
 <section class="landing">
   <h1>Review 1‑2‑3</h1>
   <p>Paste a GitHub, GitLab, or Bitbucket pull request URL to start a guided review.</p>
@@ -92,60 +186,60 @@
   {#if hasQueueProviders}
     <div class="queue-section">
       <div class="queue-header">
-        <h2 class="section-title">Your review queue</h2>
-        <button type="button" class="refresh-btn" onclick={handleRefreshQueue} aria-label="Refresh queue">Refresh</button>
+        <h2 class="section-title">
+          <button
+            type="button"
+            class="section-toggle"
+            onclick={() => toggleSection('queue')}
+            aria-expanded={!queueCollapsed}
+            aria-controls="landing-queue-body"
+          >
+            <span class="section-chevron" class:expanded={!queueCollapsed} aria-hidden="true"></span>
+            Your review queue
+          </button>
+        </h2>
+        <button
+          type="button"
+          class="refresh-btn"
+          onclick={handleRefreshQueue}
+          disabled={queueLoading || queueRefreshing}
+          aria-label="Refresh queue"
+        >
+          {#if queueRefreshing}<span class="refresh-spinner" aria-hidden="true"></span>{/if}
+          Refresh
+        </button>
       </div>
 
+      {#if !queueCollapsed}
+      <div id="landing-queue-body">
       {#if queueLoading}
-        <p class="queue-status">Loading your queue…</p>
+        <div class="queue-skeleton" aria-busy="true" data-testid="queue-skeleton">
+          <Skeleton lines={3} />
+          <span class="sr-only">Loading your queue…</span>
+        </div>
       {:else if !anyAuthConfigured}
         <p class="queue-status">Sign in to see your queue.</p>
       {:else if queueItems.length === 0}
         <p class="queue-status">No PRs in your queue.</p>
       {:else}
+        <div
+          class="queue-rows"
+          class:refreshing={queueRefreshing}
+          aria-busy={queueRefreshing}
+          data-testid="queue-rows"
+        >
         {#if awaitingReview.length > 0}
           <h3 class="queue-group-title">Awaiting your review</h3>
-          <ul class="queue-list">
-            {#each awaitingReview as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
-              <li class="queue-item">
-                <button
-                  type="button"
-                  class="queue-link"
-                  onclick={() => navigateToQueueItem(item)}
-                  aria-label="{item.ref.owner}/{item.ref.repo}#{item.ref.number}"
-                >
-                  <span class="queue-badge">{item.ref.provider === 'github' ? 'GH' : 'GL'}</span>
-                  <span class="queue-ref">{item.ref.owner}/{item.ref.repo}#{item.ref.number}</span>
-                  <span class="queue-sep"> — </span>
-                  <span class="queue-title-text">{item.title}</span>
-                  <span class="queue-time">{relativeTime(item.updatedAt)}</span>
-                </button>
-              </li>
-            {/each}
-          </ul>
+          {@render queueRows(awaitingReview)}
         {/if}
 
         {#if myOpenPrs.length > 0}
           <h3 class="queue-group-title">Your open PRs</h3>
-          <ul class="queue-list">
-            {#each myOpenPrs as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
-              <li class="queue-item">
-                <button
-                  type="button"
-                  class="queue-link"
-                  onclick={() => navigateToQueueItem(item)}
-                  aria-label="{item.ref.owner}/{item.ref.repo}#{item.ref.number}"
-                >
-                  <span class="queue-badge">{item.ref.provider === 'github' ? 'GH' : 'GL'}</span>
-                  <span class="queue-ref">{item.ref.owner}/{item.ref.repo}#{item.ref.number}</span>
-                  <span class="queue-sep"> — </span>
-                  <span class="queue-title-text">{item.title}</span>
-                  <span class="queue-time">{relativeTime(item.updatedAt)}</span>
-                </button>
-              </li>
-            {/each}
-          </ul>
+          {@render queueRows(myOpenPrs)}
         {/if}
+        </div>
+      {/if}
+      </div>
       {/if}
     </div>
   {/if}
@@ -153,10 +247,22 @@
   {#if history.length > 0}
     <div class="recent-reviews">
       <div class="recent-header">
-        <h2 class="recent-title">Recent reviews</h2>
+        <h2 class="recent-title">
+          <button
+            type="button"
+            class="section-toggle"
+            onclick={() => toggleSection('recent')}
+            aria-expanded={!recentCollapsed}
+            aria-controls="landing-recent-body"
+          >
+            <span class="section-chevron" class:expanded={!recentCollapsed} aria-hidden="true"></span>
+            Recent reviews
+          </button>
+        </h2>
         <button type="button" class="clear-btn" onclick={handleClearHistory} aria-label="Clear history">Clear</button>
       </div>
-      <ul class="recent-list">
+      {#if !recentCollapsed}
+      <ul class="recent-list" id="landing-recent-body">
         {#each history as entry (entry.owner + '/' + entry.repo + '#' + entry.number)}
           <li class="recent-item">
             <button
@@ -164,6 +270,13 @@
               class="recent-link"
               onclick={() => navigateToPr(entry)}
             >
+              <span class="recent-icon">
+                <ProviderIcon
+                  provider={entry.provider ?? 'github'}
+                  size={14}
+                  label={PROVIDER_NAMES[entry.provider ?? 'github']}
+                />
+              </span>
               <span class="recent-ref">{entry.owner}/{entry.repo}#{entry.number}</span>
               <span class="recent-sep"> — </span>
               <span class="recent-title-text">{entry.title}</span>
@@ -171,6 +284,7 @@
           </li>
         {/each}
       </ul>
+      {/if}
     </div>
   {/if}
 </section>
@@ -246,6 +360,44 @@
     margin: 0;
   }
 
+  /* Collapsible section header — mirrors the global details > summary
+     editorial pattern (app.css): muted uppercase label + rotating triangle. */
+  .section-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    user-select: none;
+    font: inherit;
+    text-transform: inherit;
+    letter-spacing: inherit;
+    font-weight: inherit;
+    color: inherit;
+  }
+
+  .section-toggle:hover {
+    color: var(--text);
+  }
+
+  .section-chevron {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 4px 0 4px 6px;
+    border-color: transparent transparent transparent currentColor;
+    transition: transform 150ms ease;
+    flex-shrink: 0;
+  }
+
+  .section-chevron.expanded {
+    transform: rotate(90deg);
+  }
+
   .refresh-btn {
     background: none;
     border: none;
@@ -266,6 +418,58 @@
     font-size: 0.875rem;
     color: var(--text-muted);
     margin: 0.25rem 0;
+  }
+
+  /* Loading skeleton — same Skeleton-based treatment as AiPanel's loading state */
+  .queue-skeleton {
+    padding: 0.25rem 0.5rem;
+  }
+
+  /* Refresh-in-flight: keep rows visible but dimmed (content-stays-visible,
+     mirroring AiPanel's streaming treatment) */
+  .queue-rows.refreshing {
+    opacity: 0.5;
+    pointer-events: none;
+    transition: opacity 150ms ease;
+  }
+
+  .refresh-btn:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+
+  .refresh-spinner {
+    display: inline-block;
+    width: 0.75em;
+    height: 0.75em;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: refresh-spin 0.7s linear infinite;
+    vertical-align: middle;
+    margin-right: 0.3em;
+  }
+
+  @keyframes refresh-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .refresh-spinner {
+      animation: none;
+    }
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
   }
 
   .queue-group-title {
@@ -309,16 +513,35 @@
     background: var(--surface-raised);
   }
 
-  .queue-badge {
-    font-family: var(--font-mono);
-    font-size: 0.7rem;
-    background: var(--surface-raised);
-    border: 1px solid var(--hairline);
-    border-radius: 3px;
-    padding: 0 0.3em;
-    margin-right: 0.4rem;
+  .queue-icon {
+    align-self: center;
+    display: inline-flex;
+    margin-right: 0.45rem;
     color: var(--text-muted);
     flex-shrink: 0;
+  }
+
+  /* Compact repo header for multi-repo queue lists — same muted small-caps
+     register as the other section labels. */
+  .repo-group-header {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin: 0.55rem 0 0.15rem;
+    padding: 0 0.5rem;
+  }
+
+  .repo-group-name {
+    font-family: var(--font-mono);
+  }
+
+  .queue-list.grouped .queue-link {
+    padding-left: 1.1rem;
   }
 
   .queue-ref {
@@ -421,6 +644,14 @@
 
   .recent-link:hover {
     background: var(--surface-raised);
+  }
+
+  .recent-icon {
+    align-self: center;
+    display: inline-flex;
+    margin-right: 0.45rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
   }
 
   .recent-ref {

@@ -18,6 +18,8 @@
   import { authState } from '../lib/auth/authState.svelte'
   import { beginSignIn } from '../lib/auth/auth'
   import { submitReview, type Verdict, type SubmitOutcome } from '../lib/github/review'
+  import { resolveViewerLogin } from '../lib/provider/viewer'
+  import { isSelfReviewGated } from '../lib/provider/selfReview'
   import { renderMarkdown } from '../lib/markdown/render'
   import { track } from '../lib/analytics/analytics'
   import { activeProviderHasKey } from '../lib/llm/config'
@@ -26,7 +28,7 @@
   import type { PrRef } from '../lib/github/parse'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
   import type { Draft } from '../lib/drafts/drafts.svelte'
-  import type { CoachResult } from '../lib/ai/schemas'
+  import { COACH_DIMENSIONS, type CoachDimension, type CoachResult, type CommentReview } from '../lib/ai/schemas'
   import type { PrComment } from '../lib/github/comments'
   import type { ReviewProvider } from '../lib/provider/types'
 
@@ -50,9 +52,10 @@
     ) => Promise<SubmitOutcome>
     /**
      * Override the coach function — DI seam for tests. In production,
-     * Review.svelte passes run.coach.
+     * Review.svelte passes run.coach. The third argument is the verdict
+     * selected at coaching time, enabling the verdict-coherence check.
      */
-    coachFn?: (drafts: Draft[], prComments?: string[]) => Promise<CoachResult | { error: string }>
+    coachFn?: (drafts: Draft[], prComments?: string[], verdict?: Verdict) => Promise<CoachResult | { error: string }>
     /**
      * Existing PR review comments — passed through to coachFn for duplicate detection.
      * Capped at 30, truncated at 200ch inside coachPrompt.
@@ -63,9 +66,31 @@
      * no non-atomic note is shown (GitHub behaviour).
      */
     provider?: ReviewProvider
+    /**
+     * The PR author's provider-canonical login (PrMeta.authorLogin). Used with
+     * the resolved viewer identity to gate Approve / Request changes on the
+     * viewer's own PR. Absent/null → no gating.
+     */
+    authorLogin?: string | null
+    /**
+     * Override viewer identity resolution — DI seam for tests. Defaults to the
+     * session-cached resolveViewerLogin.
+     */
+    resolveViewerFn?: (provider: ReviewProvider) => Promise<string | null>
   }
 
-  let { prRef, commitId, store, prUrl, submitFn = submitReview, coachFn, prComments = [], provider }: Props = $props()
+  let {
+    prRef,
+    commitId,
+    store,
+    prUrl,
+    submitFn = submitReview,
+    coachFn,
+    prComments = [],
+    provider,
+    authorLogin = null,
+    resolveViewerFn = resolveViewerLogin,
+  }: Props = $props()
 
   // Derive signed-in status reactively from authState so the UI flips live
   // when the user completes OAuth (EC-REACT: no reload required).
@@ -91,6 +116,33 @@
   let success = $state(false)
   let clientHint = $state<string | null>(null)
 
+  // ---- Own-PR verdict gating ----
+  // Resolve the viewer identity only when it can matter: signed in, on a
+  // provider that rejects self-review, with a known PR author.
+  let viewerLogin = $state<string | null>(null)
+
+  $effect(() => {
+    if (!provider || !provider.capabilities.selfReviewBlocked) return
+    if (!isSignedIn || authorLogin == null) return
+    let cancelled = false
+    resolveViewerFn(provider).then((login) => {
+      if (!cancelled) viewerLogin = login
+    })
+    return () => {
+      cancelled = true
+    }
+  })
+
+  const selfReviewGated = $derived(
+    isSelfReviewGated(provider?.capabilities.selfReviewBlocked ?? false, viewerLogin, authorLogin),
+  )
+
+  // If gating resolves after the user already picked a blocked verdict, fall
+  // back to COMMENT so the submit button never sends a doomed request.
+  $effect(() => {
+    if (selfReviewGated && verdict !== 'COMMENT') verdict = 'COMMENT'
+  })
+
   // ---- Coach state ----
   let coachPending = $state(false)
   let coachResult = $state<CoachResult | null>(null)
@@ -110,9 +162,10 @@
     coachResult = null
     dismissedSuggestions = new Set()
     try {
-      // Pass existing PR comment bodies for duplicate detection
+      // Pass existing PR comment bodies for duplicate detection, and the
+      // currently-selected verdict for the coherence check.
       const prCommentBodies = prComments.map((c) => c.body)
-      const result = await coachFn([...store.drafts], prCommentBodies)
+      const result = await coachFn([...store.drafts], prCommentBodies, verdict)
       if ('error' in result) {
         coachError = result.error
       } else {
@@ -139,6 +192,40 @@
   /** Render clarity as N filled + (5-N) empty stars */
   function clarityStars(n: number): string {
     return '★'.repeat(n) + '☆'.repeat(5 - n)
+  }
+
+  /**
+   * Self-evident accuracy chip labels — "consistent" alone was opaque.
+   * The dimension measures the comment's claim against the PR diff.
+   */
+  const ACCURACY_LABELS: Record<CommentReview['accuracy'], string> = {
+    consistent: 'matches the diff',
+    questionable: 'hard to verify against the diff',
+    contradicted: 'contradicted by the diff',
+  }
+
+  /** Friendly per-dimension labels for the expandable rationale list. */
+  const DIMENSION_LABELS: Record<CoachDimension, string> = {
+    clarity: 'Clarity',
+    tone: 'Tone',
+    actionable: 'Actionable',
+    accuracy: 'Diff accuracy',
+    duplicate: 'Duplicate check',
+    specificity: 'Specificity',
+    grounded: 'Grounded in diff',
+  }
+
+  /** One-line rationale for a dimension, or '' when the response omitted it. */
+  function reasonFor(review: CommentReview, dim: CoachDimension): string {
+    const r = review.reasons?.[dim]
+    return typeof r === 'string' ? r : ''
+  }
+
+  /** [label, reason] pairs in dimension order — only for reasons present in the response. */
+  function reasonEntries(review: CommentReview): [string, string][] {
+    return COACH_DIMENSIONS
+      .filter((dim) => reasonFor(review, dim).length > 0)
+      .map((dim) => [DIMENSION_LABELS[dim], reasonFor(review, dim)])
   }
 
   // Group drafts by path for the recap section
@@ -247,6 +334,11 @@
 
         {#if coachResult}
           <div class="coach-results">
+            {#if coachResult.verdictCoherence && !coachResult.verdictCoherence.coherent}
+              <div class="coach-coherence-card" role="alert" data-testid="coherence-card">
+                <strong>Comments don't match your verdict:</strong> {coachResult.verdictCoherence.note}
+              </div>
+            {/if}
             {#each coachResult.reviews as review (review.index)}
               {@const draft = store.drafts[review.index]}
               {#if draft}
@@ -255,19 +347,57 @@
                     <span class="coach-draft-ref">{draft.path} line {draft.line}</span>
                     <span
                       class="coach-stars"
+                      title={reasonFor(review, 'clarity')}
                       aria-label="clarity {review.clarity} of 5"
                     >{clarityStars(review.clarity)}</span>
-                    <span class="coach-chip tone-{review.tone}">{review.tone}</span>
-                    <span class="coach-chip actionable-{review.actionable}">{review.actionable ? '✓ actionable' : '✗ actionable'}</span>
+                    <span
+                      class="coach-chip tone-{review.tone}"
+                      title={reasonFor(review, 'tone')}
+                      data-testid="tone-chip"
+                    >tone: {review.tone}</span>
+                    <span
+                      class="coach-chip actionable-{review.actionable}"
+                      title={reasonFor(review, 'actionable')}
+                      data-testid="actionable-chip"
+                    >{review.actionable ? '✓ actionable' : '✗ not actionable'}</span>
                     <span
                       class="coach-chip accuracy-{review.accuracy}"
-                      title={review.accuracyNote ?? ''}
+                      title={reasonFor(review, 'accuracy') || (review.accuracyNote ?? '')}
                       data-testid="accuracy-chip"
-                    >{review.accuracy}</span>
+                    >{ACCURACY_LABELS[review.accuracy]}</span>
+                    {#if review.specificity !== undefined}
+                      <span
+                        class="coach-chip specificity-{review.specificity}"
+                        title={reasonFor(review, 'specificity')}
+                        data-testid="specificity-chip"
+                      >{review.specificity ? '✓ points at concrete code' : '✗ vague — name the code'}</span>
+                    {/if}
+                    {#if review.grounded !== undefined}
+                      <span
+                        class="coach-chip grounded-{review.grounded}"
+                        title={reasonFor(review, 'grounded')}
+                        data-testid="grounded-chip"
+                      >{review.grounded ? '✓ claims verifiable in diff' : '✗ claims not verifiable in diff'}</span>
+                    {/if}
                     {#if review.duplicate}
-                      <span class="coach-chip duplicate-badge" data-testid="duplicate-badge">similar to an existing comment</span>
+                      <span
+                        class="coach-chip duplicate-badge"
+                        title={reasonFor(review, 'duplicate')}
+                        data-testid="duplicate-badge"
+                      >similar to an existing comment</span>
                     {/if}
                   </div>
+
+                  {#if reasonEntries(review).length > 0}
+                    <details class="coach-reasons" data-testid="coach-reasons">
+                      <summary>Why these grades?</summary>
+                      <ul>
+                        {#each reasonEntries(review) as [label, reason] (label)}
+                          <li><strong>{label}:</strong> {reason}</li>
+                        {/each}
+                      </ul>
+                    </details>
+                  {/if}
 
                   {#if review.accuracy === 'contradicted' && review.accuracyNote}
                     <div class="coach-accuracy-note" data-testid="accuracy-note">{review.accuracyNote}</div>
@@ -338,14 +468,19 @@
         <input type="radio" name="verdict" value="COMMENT" bind:group={verdict} />
         Comment
       </label>
-      <label class="verdict-label">
-        <input type="radio" name="verdict" value="APPROVE" bind:group={verdict} />
+      <label class="verdict-label" class:verdict-label-disabled={selfReviewGated}>
+        <input type="radio" name="verdict" value="APPROVE" bind:group={verdict} disabled={selfReviewGated} />
         Approve
       </label>
-      <label class="verdict-label">
-        <input type="radio" name="verdict" value="REQUEST_CHANGES" bind:group={verdict} />
+      <label class="verdict-label" class:verdict-label-disabled={selfReviewGated}>
+        <input type="radio" name="verdict" value="REQUEST_CHANGES" bind:group={verdict} disabled={selfReviewGated} />
         Request changes
       </label>
+      {#if selfReviewGated && provider}
+        <p class="self-review-note">
+          {provider.displayName} doesn't allow reviewing your own PR — you can still comment.
+        </p>
+      {/if}
     </fieldset>
 
     {#if provider && !provider.capabilities.atomicReview}
@@ -469,6 +604,17 @@
     font-size: 0.85rem;
     color: var(--text-muted);
     margin: 0;
+  }
+
+  .verdict-label-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .self-review-note {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin: 0.25rem 0 0;
   }
 
   .submit-btn {
@@ -733,5 +879,63 @@
     border: 1px solid var(--legend-removed-border);
     border-radius: 4px;
     padding: 0.35rem 0.6rem;
+  }
+
+  /* specificity chip variants */
+  .specificity-true {
+    background: var(--legend-added-bg);
+    border-color: var(--legend-added-border);
+    color: var(--legend-added-color);
+  }
+
+  .specificity-false {
+    background: var(--legend-changed-bg);
+    border-color: var(--legend-changed-border);
+    color: var(--legend-changed-color);
+  }
+
+  /* grounded chip variants */
+  .grounded-true {
+    background: var(--legend-added-bg);
+    border-color: var(--legend-added-border);
+    color: var(--legend-added-color);
+  }
+
+  .grounded-false {
+    background: var(--legend-changed-bg);
+    border-color: var(--legend-changed-border);
+    color: var(--legend-changed-color);
+  }
+
+  /* per-dimension rationale list */
+  .coach-reasons {
+    font-size: 0.82rem;
+  }
+
+  .coach-reasons summary {
+    cursor: pointer;
+    opacity: 0.7;
+  }
+
+  .coach-reasons summary:hover {
+    opacity: 1;
+  }
+
+  .coach-reasons ul {
+    margin: 0.35rem 0 0;
+    padding-left: 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  /* verdict-coherence flag card */
+  .coach-coherence-card {
+    background: var(--legend-changed-bg);
+    border: 1px solid var(--legend-changed-border);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.88rem;
+    color: var(--legend-changed-color);
   }
 </style>

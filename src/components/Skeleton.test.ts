@@ -32,3 +32,25 @@ describe('Skeleton', () => {
     expect(container.querySelector('.skeleton-header')).toBeNull()
   })
 })
+
+describe('Skeleton — content-shaped variants', () => {
+  it('text variant (default) renders lines of varying width', () => {
+    const { container } = render(Skeleton, { props: { lines: 4 } })
+    const lines = [...container.querySelectorAll<HTMLElement>('.skeleton-line')]
+    expect(lines).toHaveLength(4)
+    const widths = new Set(lines.map((l) => l.style.width))
+    expect(widths.size).toBeGreaterThan(1)
+  })
+
+  it('block variant renders ONE rectangular block and no text lines', () => {
+    const { container } = render(Skeleton, { props: { variant: 'block' } })
+    expect(container.querySelectorAll('.skeleton-rect')).toHaveLength(1)
+    expect(container.querySelector('.skeleton-line')).toBeNull()
+  })
+
+  it('cards variant renders TWO card-shaped blocks', () => {
+    const { container } = render(Skeleton, { props: { variant: 'cards' } })
+    expect(container.querySelectorAll('.skeleton-card')).toHaveLength(2)
+    expect(container.querySelector('.skeleton-rect')).toBeNull()
+  })
+})

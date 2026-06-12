@@ -10,10 +10,14 @@
     title: string
     state: { status: PanelStatus; error?: string }
     onretry: () => void
+    /** Shape of the pending skeleton — content-shaped per section. */
+    skeletonVariant?: 'text' | 'block' | 'cards'
+    /** Line count for the text skeleton variant. */
+    skeletonLines?: number
     children?: Snippet
   }
 
-  let { title, state, onretry, children }: Props = $props()
+  let { title, state, onretry, skeletonVariant = 'text', skeletonLines = 3, children }: Props = $props()
 
   // Name the ACTIVE provider in the no-key hint (Plan F) — reactive via settingsState.
   const providerName = $derived(
@@ -29,9 +33,12 @@
   }
 </script>
 
-{#if state.status === 'loading'}
+{#if state.status === 'idle' || state.status === 'loading'}
+  <!-- 'idle' counts as pending: the run hasn't signalled 'loading' yet
+       (consent gate / context packing / cache check are all async), so the
+       skeleton must be there from the FIRST render — no blank gap. -->
   <div class="ai-panel-loading" aria-busy="true">
-    <Skeleton lines={3} />
+    <Skeleton variant={skeletonVariant} lines={skeletonLines} />
     <span class="sr-only">Loading {title}…</span>
   </div>
 {:else if state.status === 'error'}
@@ -53,7 +60,7 @@
     <span class="sr-only">Streaming…</span>
     {@render children?.()}
   </div>
-{:else if state.status === 'done' || state.status === 'idle'}
+{:else if state.status === 'done'}
   {@render children?.()}
 {/if}
 

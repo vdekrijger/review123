@@ -105,3 +105,17 @@ describe('AlternativesPanel — markdown in tradeoffs and rationale', () => {
     expect(codeEl!.textContent).toBe('cache.get')
   })
 })
+
+describe('AlternativesPanel — pending skeleton (card-shaped)', () => {
+  it('shows TWO card-shaped skeleton blocks when alternatives is idle (pending, no blank gap)', () => {
+    const { container } = render(AlternativesPanel, { props: { run: makeRun({}) } })
+    expect(container.querySelectorAll('.ai-panel-loading .skeleton-card')).toHaveLength(2)
+  })
+
+  it('shows the card skeleton when alternatives is loading', () => {
+    const { container } = render(AlternativesPanel, {
+      props: { run: makeRun({ alternatives: { status: 'loading' } }) },
+    })
+    expect(container.querySelectorAll('.ai-panel-loading .skeleton-card')).toHaveLength(2)
+  })
+})

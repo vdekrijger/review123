@@ -7,6 +7,12 @@ export interface PrMeta {
   headSha: string
   private: boolean
   changedFiles: number
+  /**
+   * Provider-canonical author identity, used for own-PR detection against
+   * ReviewProvider.getViewerLogin(): GitHub login, GitLab username,
+   * Bitbucket account UUID (nickname fallback). null when unknown.
+   */
+  authorLogin: string | null
 }
 
 export interface PrFile {

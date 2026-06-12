@@ -1,11 +1,19 @@
 <script lang="ts">
   import { navigate } from '../lib/router/router.svelte'
+  import { pickActiveSection, isAtBottom, observeSections } from '../lib/settings/scrollspy'
   import AppearanceSection from '../components/settings/AppearanceSection.svelte'
   import ProvidersSection from '../components/settings/ProvidersSection.svelte'
   import AiModelsSection from '../components/settings/AiModelsSection.svelte'
   import SkillsSection from '../components/settings/SkillsSection.svelte'
 
   let { section }: { section?: string } = $props()
+
+  const NAV_ITEMS = [
+    { id: 'appearance', label: 'Appearance' },
+    { id: 'providers', label: 'Providers & access' },
+    { id: 'ai-models', label: 'AI models' },
+    { id: 'skills', label: 'Reviewer skills' },
+  ] as const
 
   // returnTo: the path to navigate back to when the user clicks Back.
   // Stored in sessionStorage so it survives direct navigation to /settings.
@@ -21,22 +29,66 @@
     navigate(returnPath)
   }
 
+  // --- Scrollspy ---------------------------------------------------------
+  // The nav item whose section is most prominently in view gets an active
+  // state. Selection logic lives in lib/settings/scrollspy (pure, unit
+  // tested); the IntersectionObserver seam degrades to a no-op in jsdom.
+
+  // While a programmatic scroll (nav click or section-prop deep link) is in
+  // flight, observer updates are suppressed so the active item doesn't
+  // flicker through intermediate sections during smooth scrolling.
+  const SCROLL_SUPPRESS_MS = 1000
+
+  function isNavId(id: string | undefined): id is (typeof NAV_ITEMS)[number]['id'] {
+    return NAV_ITEMS.some((item) => item.id === id)
+  }
+
+  // Initial value only by design: deep-link section sets the starting
+  // active item; afterwards the scrollspy/clicks own the state.
+  // svelte-ignore state_referenced_locally
+  let activeId = $state<string>(isNavId(section) ? section : NAV_ITEMS[0].id)
+  let suppressObserverUntil = 0
+
+  function computeActiveFromDom(): string | null {
+    const positions = NAV_ITEMS.flatMap((item) => {
+      const el = document.getElementById(item.id)
+      return el ? [{ id: item.id, top: el.getBoundingClientRect().top }] : []
+    })
+    return pickActiveSection(
+      positions,
+      window.innerHeight,
+      isAtBottom(window.scrollY, window.innerHeight, document.documentElement.scrollHeight),
+    )
+  }
+
+  function handleSectionsChanged() {
+    if (Date.now() < suppressObserverUntil) return
+    const next = computeActiveFromDom()
+    if (next) activeId = next
+  }
+
+  function handleNavClick(id: string) {
+    activeId = id
+    suppressObserverUntil = Date.now() + SCROLL_SUPPRESS_MS
+  }
+
+  $effect(() => {
+    const elements = NAV_ITEMS.map((item) => document.getElementById(item.id)).filter(
+      (el): el is HTMLElement => el !== null,
+    )
+    return observeSections(elements, handleSectionsChanged)
+  })
+
   // Scroll to anchor section on mount if provided
   $effect(() => {
     if (section) {
       const el = document.getElementById(section)
       if (el) {
+        suppressObserverUntil = Date.now() + SCROLL_SUPPRESS_MS
         el.scrollIntoView({ behavior: 'smooth', block: 'start' })
       }
     }
   })
-
-  const NAV_ITEMS = [
-    { id: 'appearance', label: 'Appearance' },
-    { id: 'providers', label: 'Providers & access' },
-    { id: 'ai-models', label: 'AI models' },
-    { id: 'skills', label: 'Reviewer skills' },
-  ] as const
 </script>
 
 <div class="settings-page">
@@ -51,7 +103,15 @@
       <ul>
         {#each NAV_ITEMS as item (item.id)}
           <li>
-            <a href="#{item.id}" class="nav-link">{item.label}</a>
+            <a
+              href="#{item.id}"
+              class="nav-link"
+              class:active={activeId === item.id}
+              aria-current={activeId === item.id ? 'true' : undefined}
+              onclick={() => handleNavClick(item.id)}
+            >
+              {item.label}
+            </a>
           </li>
         {/each}
       </ul>
@@ -127,17 +187,41 @@
   }
 
   .nav-link {
+    position: relative;
     display: block;
     font-size: 0.88em;
     color: var(--text-muted);
     text-decoration: none;
-    padding: 0.3rem 0.5rem;
+    padding: 0.3rem 0.5rem 0.3rem 0.65rem;
     border-radius: 5px;
   }
 
   .nav-link:hover {
     background: var(--surface-raised);
     color: var(--text);
+  }
+
+  /* Small left indicator bar for the active section */
+  .nav-link::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 2px;
+    height: 0;
+    border-radius: 1px;
+    background: var(--accent);
+    transition: height 120ms ease;
+  }
+
+  .nav-link.active {
+    color: var(--accent);
+    background: var(--accent-subtle);
+  }
+
+  .nav-link.active::before {
+    height: 65%;
   }
 
   .settings-content {

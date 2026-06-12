@@ -56,6 +56,74 @@ describe('ContextRail hotspot click', () => {
     expect(onhotspot).toHaveBeenCalledWith('src/hot.ts')
     expect(vi.mocked(track)).toHaveBeenCalledWith('hotspot_clicked')
   })
+
+  it('hotspot is a plain button, not a link — no href to trigger a page load', () => {
+    const attn: AttentionResult = {
+      readingOrder: [], testFlags: [],
+      hotspots: [{ path: 'src/hot.ts', reason: 'Critical', level: 'high' }],
+    }
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(attn), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const btn = container.querySelector('.hotspot-btn')!
+    expect(btn.tagName).toBe('BUTTON')
+    expect(btn.getAttribute('href')).toBeNull()
+    expect(btn.closest('a')).toBeNull()
+  })
+})
+
+describe('ContextRail hotspot legend (level markers explained)', () => {
+  const attn: AttentionResult = {
+    readingOrder: [],
+    testFlags: [],
+    hotspots: [
+      { path: 'src/risky.ts', reason: 'Rewrites auth flow', level: 'high' },
+      { path: 'src/mid.ts', reason: 'New cache layer', level: 'medium' },
+      { path: 'src/minor.ts', reason: 'Rename only', level: 'low' },
+    ],
+  }
+
+  function renderWithHotspots() {
+    return render(ContextRail, {
+      props: { run: makeRun(attn), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+  }
+
+  it('renders a one-line visible legend naming all three attention levels', () => {
+    const { container } = renderWithHotspots()
+    const legend = container.querySelector('.hotspot-legend')
+    expect(legend).not.toBeNull()
+    expect(legend!.textContent).toContain('⚠ high risk')
+    expect(legend!.textContent).toContain('◆ medium')
+    expect(legend!.textContent).toContain('● low attention')
+  })
+
+  it('each hotspot button carries a title with its level and AI reason', () => {
+    renderWithHotspots()
+    const high = screen.getByRole('button', { name: /src\/risky\.ts/i })
+    const medium = screen.getByRole('button', { name: /src\/mid\.ts/i })
+    const low = screen.getByRole('button', { name: /src\/minor\.ts/i })
+    expect(high.getAttribute('title')).toBe('high attention — Rewrites auth flow')
+    expect(medium.getAttribute('title')).toBe('medium attention — New cache layer')
+    expect(low.getAttribute('title')).toBe('low attention — Rename only')
+  })
+
+  it('marker icon matches the level (⚠ high, ◆ medium, ● low)', () => {
+    renderWithHotspots()
+    const high = screen.getByRole('button', { name: /src\/risky\.ts/i })
+    const medium = screen.getByRole('button', { name: /src\/mid\.ts/i })
+    const low = screen.getByRole('button', { name: /src\/minor\.ts/i })
+    expect(high.querySelector('.hotspot-icon')!.textContent).toBe('⚠')
+    expect(medium.querySelector('.hotspot-icon')!.textContent).toBe('◆')
+    expect(low.querySelector('.hotspot-icon')!.textContent).toBe('●')
+  })
+
+  it('does not render the legend when there are no hotspots', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    expect(container.querySelector('.hotspot-legend')).toBeNull()
+  })
 })
 
 describe('ContextRail collapse', () => {
@@ -313,6 +381,7 @@ describe('ContextRail registry completeness — ci-details in rail', () => {
       headSha: 'def',
       private: false,
       changedFiles: 1,
+      authorLogin: null,
     }
     render(ContextRail, {
       props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn(), meta },
@@ -331,6 +400,7 @@ describe('ContextRail registry completeness — ci-details in rail', () => {
       headSha: 'def',
       private: false,
       changedFiles: 1,
+      authorLogin: null,
     }
     render(ContextRail, {
       props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn(), meta },
@@ -404,5 +474,65 @@ describe('ContextRail — registry section order', () => {
     const prDescIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('pr description') || s.textContent?.toLowerCase().includes('original pr'))
     expect(ciIdx).toBeGreaterThanOrEqual(0)
     expect(prDescIdx).toBeGreaterThan(ciIdx)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Pending AI skeletons in the rail (same treatment as the Understand page):
+// while a section's run state is idle/loading the section body must show a
+// content-shaped skeleton from the FIRST render — no blank gap.
+// ---------------------------------------------------------------------------
+
+describe('ContextRail — pending AI skeletons', () => {
+  it('Summary section (open by default) shows a skeleton while the run is idle', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const summarySection = Array.from(container.querySelectorAll('details.rail-section-details'))
+      .find((d) => d.querySelector('summary')?.textContent?.toLowerCase().includes('full summary'))
+    expect(summarySection).toBeTruthy()
+    expect(summarySection!.querySelector('.ai-panel-loading .skeleton-block')).not.toBeNull()
+  })
+
+  it('Diagrams section shows a block-shaped skeleton, Test coverage shows cards, while idle', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const sections = Array.from(container.querySelectorAll('details.rail-section-details'))
+    const diagrams = sections.find((d) => d.querySelector('summary')?.textContent?.toLowerCase().includes('diagrams'))
+    const tests = sections.find((d) => d.querySelector('summary')?.textContent?.toLowerCase().includes('test coverage'))
+    expect(diagrams!.querySelector('.skeleton-rect')).not.toBeNull()
+    expect(tests!.querySelectorAll('.skeleton-card')).toHaveLength(2)
+  })
+
+  it('Hotspots section shows a pending skeleton while attention is idle (no late pop-in)', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const pending = container.querySelector('details.rail-hotspots-pending')
+    expect(pending).not.toBeNull()
+    expect(pending!.querySelector('summary')!.textContent).toContain('Hotspots')
+    expect(pending!.querySelector('.skeleton-block')).not.toBeNull()
+  })
+
+  it('Hotspots pending skeleton is replaced by real hotspot buttons when attention is done', () => {
+    const attn: AttentionResult = {
+      readingOrder: [], testFlags: [],
+      hotspots: [{ path: 'src/hot.ts', reason: 'Critical', level: 'high' }],
+    }
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(attn), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    expect(container.querySelector('details.rail-hotspots-pending')).toBeNull()
+    expect(container.querySelector('.hotspot-btn')).not.toBeNull()
+  })
+
+  it('Hotspots pending skeleton is NOT shown when attention errored', () => {
+    const run = makeRun()
+    ;(run as { attention: { status: string; error?: string } }).attention = { status: 'error', error: 'boom' }
+    const { container } = render(ContextRail, {
+      props: { run, onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    expect(container.querySelector('details.rail-hotspots-pending')).toBeNull()
   })
 })

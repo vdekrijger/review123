@@ -8,7 +8,6 @@
   import { llmJsonWithRepair } from '../../lib/llm/llm'
   import { githubProvider } from '../../lib/provider/github'
   import { gitlabProvider } from '../../lib/provider/gitlab'
-  import { getHistory } from '../../lib/history/history'
   import { activeLlmConfig, activeProviderHasKey } from '../../lib/llm/config'
 
   // ---- Reviewer skills state ----
@@ -49,7 +48,8 @@
   }
 
   // ---- Mine-my-reviews state ----
-  // Providers that implement getMyReviewComments (in preferred display order)
+  // Providers that implement getMyAccountReviewComments (in preferred display order).
+  // Bitbucket is honestly absent — it has no account-scoped mining yet.
   const MINE_CAPABLE_PROVIDERS = [githubProvider, gitlabProvider] as const
 
   // Default provider selection: first configured mining provider, or 'github' fallback
@@ -57,27 +57,15 @@
     (MINE_CAPABLE_PROVIDERS.find(p => p.authState().configured)?.id ?? 'github') as 'github' | 'gitlab'
   )
 
-  // Prefill repo from most recent history entry matching the selected provider
-  const historyEntries = getHistory()
-  function defaultMineRepo(providerId: 'github' | 'gitlab'): { owner: string; repo: string } {
-    const match = historyEntries.find(e => e.provider === providerId)
-    if (match) return { owner: match.owner, repo: match.repo }
-    // Fallback to first entry regardless of provider
-    return { owner: historyEntries[0]?.owner ?? '', repo: historyEntries[0]?.repo ?? '' }
-  }
-
-  let mineOwner = $state(defaultMineRepo(mineProvider).owner)
-  let mineRepo = $state(defaultMineRepo(mineProvider).repo)
+  // Optional repo filter — empty by default: mining runs account-wide across repos.
+  let mineOwner = $state('')
+  let mineRepo = $state('')
   let mineRunning = $state(false)
   let mineError = $state<string | null>(null)
   let minedSkillDraft = $state<{ name: string; content: string } | null>(null)
 
-  // When provider selection changes, update repo prefill
   function handleMineProviderChange(providerId: 'github' | 'gitlab') {
     mineProvider = providerId
-    const defaults = defaultMineRepo(providerId)
-    mineOwner = defaults.owner
-    mineRepo = defaults.repo
     mineError = null
   }
 
@@ -88,16 +76,23 @@
   const hasMineProviderAuth = $derived(
     MINE_CAPABLE_PROVIDERS.find(p => p.id === mineProvider)?.authState().configured ?? false
   )
+  // The repo filter is optional, but a half-filled filter is ambiguous → block.
+  const mineFilterIncomplete = $derived(
+    (mineOwner.trim() !== '') !== (mineRepo.trim() !== '')
+  )
 
   async function handleMineComments() {
-    if (!hasMineProviderAuth || !hasAiKey) return
+    if (!hasMineProviderAuth || !hasAiKey || mineFilterIncomplete) return
     mineRunning = true
     mineError = null
     minedSkillDraft = null
     try {
+      const owner = mineOwner.trim()
+      const repo = mineRepo.trim()
+      const repoFilter = owner && repo ? { owner, repo } : null
       const result = await mineSkillPipeline(
         mineProvider,
-        { owner: mineOwner.trim(), repo: mineRepo.trim() },
+        repoFilter,
         { llmJsonWithRepair },
       )
       if (result.ok) {
@@ -279,7 +274,7 @@
   <!-- Mine-my-reviews section -->
   <div class="mine-section">
     <p class="section-label mine-label">Generate from my reviews</p>
-    <p class="hint mine-hint">Analyzes your past review comments to build a personalized reviewer persona.</p>
+    <p class="hint mine-hint">Analyzes your recent review comments across your repositories to build a personalized reviewer persona.</p>
 
     {#if !hasAiKey}
       <p class="mine-gate-hint">Add a {aiProviderName} API key (above) to use this feature.</p>
@@ -309,27 +304,29 @@
           <p class="mine-gate-hint">Add a GitLab token or sign in via OAuth (in Advanced above) to use this feature.</p>
         {/if}
       {:else}
+        <p class="hint mine-filter-hint">Optional: limit to a single repository.</p>
         <div class="mine-repo-row">
           <input
             type="text"
             class="mine-repo-input"
             bind:value={mineOwner}
-            placeholder="owner"
-            aria-label="Repository owner"
+            placeholder="owner (optional)"
+            aria-label="Repository owner (optional filter)"
           />
           <span class="mine-repo-sep">/</span>
           <input
             type="text"
             class="mine-repo-input"
             bind:value={mineRepo}
-            placeholder="repo"
-            aria-label="Repository name"
+            placeholder="repo (optional)"
+            aria-label="Repository name (optional filter)"
           />
           <button
             class="mine-btn"
             onclick={handleMineComments}
-            disabled={mineRunning || !mineOwner.trim() || !mineRepo.trim() || skills.length >= SKILLS_CAP}
+            disabled={mineRunning || mineFilterIncomplete || skills.length >= SKILLS_CAP}
             aria-busy={mineRunning}
+            title={mineFilterIncomplete ? 'Fill both owner and repo to filter, or leave both empty to mine your whole account' : undefined}
           >
             {#if mineRunning}
               <span class="mine-spinner" aria-hidden="true"></span>Analyzing…
@@ -565,6 +562,10 @@
     margin: 0.25rem 0;
   }
 
+  .mine-filter-hint {
+    margin: 0.2rem 0 0.3rem;
+  }
+
   .mine-repo-row {
     display: flex;
     align-items: center;
@@ -644,14 +645,11 @@
     flex-shrink: 0;
   }
 
+  /* Chrome comes from the global select primitive in app.css. */
   .mine-provider-select {
     font-size: 0.88em;
-    padding: 0.2rem 0.4rem;
-    border: 1px solid var(--border-subtle);
-    border-radius: 4px;
-    background: var(--surface);
-    color: var(--text);
-    cursor: pointer;
+    padding-block: 0.2rem;
+    padding-left: 0.4rem;
   }
 
   .mined-skill-notice {
