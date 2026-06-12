@@ -37,6 +37,17 @@ export interface BitbucketAuth {
   token: string
 }
 
+/**
+ * GitLab OAuth token bundle (distinct from the PAT gitlabToken).
+ * Tokens are short-lived (2 h); refreshToken is used for transparent renewal.
+ * expiresAt is a Unix ms timestamp.
+ */
+export interface GitlabOAuth {
+  token: string
+  refreshToken: string
+  expiresAt: number
+}
+
 export interface Settings {
   githubPat: string | null
   deepseekKey: string | null
@@ -44,6 +55,8 @@ export interface Settings {
   githubAuth: GithubAuth | null
   gitlabToken: string | null
   gitlabHost: string
+  /** GitLab OAuth token bundle (separate from gitlabToken PAT). */
+  gitlabOAuth: GitlabOAuth | null
   bitbucketAuth: BitbucketAuth | null
   railCollapsed: boolean
   theme: Theme
@@ -61,6 +74,7 @@ const DEFAULTS: Settings = {
   githubAuth: null,
   gitlabToken: null,
   gitlabHost: 'gitlab.com',
+  gitlabOAuth: null,
   bitbucketAuth: null,
   railCollapsed: false,
   theme: 'auto',
@@ -80,6 +94,19 @@ function coerceGithubAuth(raw: unknown): GithubAuth | null {
     ? (obj['scopes'] as string[])
     : []
   return { token: obj['token'] as string, method: obj['method'] as 'oauth' | 'pat', scopes }
+}
+
+function coerceGitlabOAuth(raw: unknown): GitlabOAuth | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const obj = raw as Record<string, unknown>
+  if (typeof obj['token'] !== 'string' || !obj['token']) return null
+  if (typeof obj['refreshToken'] !== 'string' || !obj['refreshToken']) return null
+  if (typeof obj['expiresAt'] !== 'number') return null
+  return {
+    token: obj['token'] as string,
+    refreshToken: obj['refreshToken'] as string,
+    expiresAt: obj['expiresAt'] as number,
+  }
 }
 
 function coerceBitbucketAuth(raw: unknown): BitbucketAuth | null {
@@ -153,6 +180,10 @@ function coerce(raw: unknown): Partial<Settings> {
 
   if ('bitbucketAuth' in obj) {
     result.bitbucketAuth = coerceBitbucketAuth(obj['bitbucketAuth'])
+  }
+
+  if ('gitlabOAuth' in obj) {
+    result.gitlabOAuth = coerceGitlabOAuth(obj['gitlabOAuth'])
   }
 
   return result
@@ -262,6 +293,15 @@ export function setGitlabHost(v: string): void {
   const normalized = normalizeGitlabHost(v)
   if (!normalized) throw new Error('gitlabHost must be a valid hostname or origin')
   save({ gitlabHost: normalized })
+}
+
+/**
+ * Save a GitLab OAuth token bundle (distinct from the PAT).
+ * Pass null to clear (e.g. after refresh failure).
+ * No notifications needed beyond settings mutation — callers re-read settings.
+ */
+export function saveGitlabOAuth(auth: GitlabOAuth | null): void {
+  save({ gitlabOAuth: auth })
 }
 
 /**
