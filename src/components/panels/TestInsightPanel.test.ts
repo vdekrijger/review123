@@ -113,3 +113,25 @@ describe('TestInsightPanel — markdown in covered behaviors and gaps', () => {
     expect(container.querySelector('.tests-gap-text code')).toBeNull()
   })
 })
+
+describe('TestInsightPanel — pending skeleton (card-shaped)', () => {
+  it('shows TWO card-shaped skeleton blocks when tests is idle (pending, no blank gap)', () => {
+    const { container } = render(TestInsightPanel, { props: { run: makeRun({}) } })
+    expect(container.querySelectorAll('.ai-panel-loading .skeleton-card')).toHaveLength(2)
+  })
+
+  it('shows the card skeleton when tests is loading', () => {
+    const { container } = render(TestInsightPanel, {
+      props: { run: makeRun({ tests: { status: 'loading' } }) },
+    })
+    expect(container.querySelectorAll('.ai-panel-loading .skeleton-card')).toHaveLength(2)
+  })
+
+  it('skeleton is gone once tests is done', () => {
+    const tests: TestInsight = { covered: [], gaps: [] }
+    const { container } = render(TestInsightPanel, {
+      props: { run: makeRun({ tests: { status: 'done', value: tests } }) },
+    })
+    expect(container.querySelector('.ai-panel-loading')).toBeNull()
+  })
+})
