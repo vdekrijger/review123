@@ -228,3 +228,139 @@ test('centered mode: opening the rail does not change the first article X positi
   // Allow 2px tolerance for sub-pixel rendering.
   expect(Math.abs(boxAfter!.x - boxBefore!.x)).toBeLessThanOrEqual(2)
 })
+
+// ---------------------------------------------------------------------------
+// Test 4: Full-width is genuinely wider than centered on a NARROW viewport.
+// Below the 70rem cap both modes used to render identically; in full mode the
+// horizontal gutters now collapse to a slim minimum so the diff really widens.
+// ---------------------------------------------------------------------------
+
+test('narrow viewport: full-width mode renders a wider diff than centered mode', async ({ page }) => {
+  await setupMinimalRoutes(page)
+  await page.setViewportSize({ width: 1000, height: 800 })
+
+  // First pass: centered. Only seed settings when absent so the second pass
+  // (which flips diffWidth via evaluate) is not clobbered on re-navigation.
+  await page.addInitScript(() => {
+    if (!localStorage.getItem('review123:settings')) {
+      localStorage.setItem('review123:settings', JSON.stringify({
+        deepseekKey: '',
+        diffMode: 'unified',
+        railCollapsed: true,
+        diffWidth: 'centered',
+      }))
+    }
+  })
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Full-width rail test PR/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 8_000 })
+  await page.waitForTimeout(200)
+  const centeredBox = await page.locator('article.file-diff').first().boundingBox()
+  expect(centeredBox).not.toBeNull()
+
+  // Second pass: full — flip the persisted setting, then navigate to step 1
+  // again (the step lives in the URL) and walk back to the Inspect step.
+  await page.evaluate(() => {
+    const settings = JSON.parse(localStorage.getItem('review123:settings') ?? '{}')
+    settings.diffWidth = 'full'
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  })
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Full-width rail test PR/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 8_000 })
+  await page.waitForTimeout(200)
+  const fullBox = await page.locator('article.file-diff').first().boundingBox()
+  expect(fullBox).not.toBeNull()
+
+  // KEY: the diff is genuinely wider in full mode even though 1000px < 70rem.
+  // Gutters collapse from 1rem (15px) to 10px per side → at least ~8px wider.
+  expect(fullBox!.width).toBeGreaterThanOrEqual(centeredBox!.width + 8)
+  // And it starts closer to the viewport edge
+  expect(fullBox!.x).toBeLessThan(centeredBox!.x)
+})
+
+// ---------------------------------------------------------------------------
+// Test 5: Rail + drawer coexistence on a WIDE viewport — full-width mode with
+// the rail EXPANDED and the tree drawer OPEN: the article must sit cleanly
+// between the tree (left) and the rail (right). Nothing overlaps, no backdrop.
+// ---------------------------------------------------------------------------
+
+test('full-width wide + expanded rail + open drawer: tree | diff | rail coexist without overlap', async ({ page }) => {
+  await setupMinimalRoutes(page)
+  await page.setViewportSize({ width: 1600, height: 900 })
+
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      deepseekKey: '',
+      diffMode: 'unified',
+      railCollapsed: false, // rail EXPANDED
+      diffWidth: 'full',
+    }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Full-width rail test PR/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 8_000 })
+
+  // Open the tree drawer (inline mode in full-width)
+  const toggleTab = page.locator('.tree-toggle-tab')
+  await toggleTab.click()
+  await expect(toggleTab).toHaveAttribute('aria-expanded', 'true')
+  await page.waitForTimeout(200)
+
+  const articleBox = await page.locator('article.file-diff').first().boundingBox()
+  const navBox = await page.locator('.file-tree-nav').boundingBox()
+  const railBox = await page.locator('aside.context-rail').boundingBox()
+
+  expect(articleBox).not.toBeNull()
+  expect(navBox).not.toBeNull()
+  expect(railBox).not.toBeNull()
+
+  // Tree fully on-screen, entirely LEFT of the article
+  expect(navBox!.x).toBeGreaterThanOrEqual(0)
+  expect(navBox!.x + navBox!.width).toBeLessThanOrEqual(articleBox!.x + 2)
+
+  // Article entirely LEFT of the rail (PR #18 regression guard)
+  expect(articleBox!.x + articleBox!.width).toBeLessThanOrEqual(railBox!.x + 2)
+
+  // No backdrop — nothing overlays the diff
+  await expect(page.locator('.tree-backdrop')).toHaveCount(0)
+})
+
+// ---------------------------------------------------------------------------
+// Test 6: Medium width (1280px, the PR #18 trouble spot) — full-width + rail
+// EXPANDED: the medium-regime padding reservation must keep winning over the
+// new slim-gutter rule, so content never slides under the rail.
+// ---------------------------------------------------------------------------
+
+test('full-width @ 1280px + expanded rail: article never slides under the rail (slim gutter must not override the reserve)', async ({ page }) => {
+  await setupMinimalRoutes(page)
+  await page.setViewportSize({ width: 1280, height: 800 })
+
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      deepseekKey: '',
+      diffMode: 'unified',
+      railCollapsed: false, // rail EXPANDED
+      diffWidth: 'full',
+    }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Full-width rail test PR/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 8_000 })
+  await page.waitForTimeout(200)
+
+  const articleBox = await page.locator('article.file-diff').first().boundingBox()
+  const railBox = await page.locator('aside.context-rail').boundingBox()
+  expect(articleBox).not.toBeNull()
+  expect(railBox).not.toBeNull()
+
+  // The 1100–1443px expanded-rail reservation (Review.svelte) must still win:
+  // article's right edge stays left of the rail.
+  expect(articleBox!.x + articleBox!.width).toBeLessThanOrEqual(railBox!.x + 2)
+})

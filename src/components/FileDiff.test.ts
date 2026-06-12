@@ -479,6 +479,66 @@ describe('FileDiff — test file display modes', () => {
 })
 
 // ---------------------------------------------------------------------------
+// FileDiff — syntax highlighting wiring (DiffView highlight + theme props)
+// ---------------------------------------------------------------------------
+
+import { setTheme } from '../lib/settings/settings'
+
+describe('FileDiff — syntax highlighting wiring', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    // Re-sync the reactive settings holder after clearing storage
+    setTheme('auto')
+  })
+
+  it('DiffView mounts with the built-in lowlight highlighter (diffViewHighlight on)', async () => {
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified' } })
+    await tick()
+    const wrapper = container.querySelector('.diff-tailwindcss-wrapper')
+    expect(wrapper).toBeInTheDocument()
+    // data-highlighter is set by the library from the active highlight engine;
+    // it is only "lowlight" when highlighting is enabled and wired up.
+    expect(wrapper!.getAttribute('data-highlighter')).toBe('lowlight')
+  })
+
+  it('app theme light → DiffView wrapper gets data-theme="light"', async () => {
+    setTheme('light')
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified' } })
+    await tick()
+    const wrapper = container.querySelector('.diff-tailwindcss-wrapper')
+    expect(wrapper!.getAttribute('data-theme')).toBe('light')
+  })
+
+  it('app theme dark → DiffView wrapper gets data-theme="dark"', async () => {
+    setTheme('dark')
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified' } })
+    await tick()
+    const wrapper = container.querySelector('.diff-tailwindcss-wrapper')
+    expect(wrapper!.getAttribute('data-theme')).toBe('dark')
+  })
+
+  it('switching theme after mount restyles the diff live (no remount needed)', async () => {
+    setTheme('light')
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified' } })
+    await tick()
+    const wrapper = container.querySelector('.diff-tailwindcss-wrapper')
+    expect(wrapper!.getAttribute('data-theme')).toBe('light')
+
+    setTheme('dark')
+    await tick()
+    expect(wrapper!.getAttribute('data-theme')).toBe('dark')
+  })
+
+  it('split mode also mounts with highlighting enabled', async () => {
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'split' } })
+    await tick()
+    const wrapper = container.querySelector('.diff-tailwindcss-wrapper')
+    expect(wrapper).toBeInTheDocument()
+    expect(wrapper!.getAttribute('data-highlighter')).toBe('lowlight')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Bug 2 regression: testFileDisplay must react live (no remount needed)
 // ---------------------------------------------------------------------------
 describe('FileDiff — testFileDisplay live reactivity (Bug 2 regression)', () => {

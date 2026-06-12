@@ -362,3 +362,98 @@ test('progress bar: Show/Hide radio fieldset persists showProgress=false after H
     page.getByRole('group', { name: /progress bar/i }).getByRole('radio', { name: /^hide$/i }),
   ).toBeChecked()
 })
+
+test('themed form controls: radios are custom-styled (appearance:none) with verdigris accent in BOTH themes', async ({
+  page,
+}) => {
+  await blockExternal(page)
+
+  await page.goto('/')
+  await openSettings(page)
+
+  // Pick Dark theme — the checked radio must render the custom control,
+  // not the native browser-blue one.
+  const darkRadio = page.getByRole('radio', { name: 'Dark', exact: true })
+  await darkRadio.click()
+  await expect(darkRadio).toBeChecked()
+
+  // Non-transitioned properties can be read synchronously
+  const darkStatic = await darkRadio.evaluate((el) => {
+    const cs = getComputedStyle(el)
+    return { appearance: cs.appearance, borderRadius: cs.borderRadius }
+  })
+  expect(darkStatic.appearance).toBe('none')
+  // Radio is round
+  expect(darkStatic.borderRadius).toBe('50%')
+
+  // border-color transitions 150ms — use auto-retrying assertions.
+  // Dark verdigris accent (#4db6a0) on the checked control's border.
+  await expect(darkRadio).toHaveCSS('border-top-color', 'rgb(77, 182, 160)')
+  // Checked indicator dot is scaled in (identity matrix, not scale(0))
+  await expect
+    .poll(() =>
+      darkRadio.evaluate((el) => getComputedStyle(el, '::before').transform),
+    )
+    .toBe('matrix(1, 0, 0, 1, 0, 0)')
+
+  // Switch to Light theme — accent must follow the light palette
+  const lightRadio = page.getByRole('radio', { name: 'Light', exact: true })
+  await lightRadio.click()
+  await expect(lightRadio).toBeChecked()
+
+  expect(
+    await lightRadio.evaluate((el) => getComputedStyle(el).appearance),
+  ).toBe('none')
+  // Light verdigris accent (#2e8b78)
+  await expect(lightRadio).toHaveCSS('border-top-color', 'rgb(46, 139, 120)')
+
+  // The now-UNCHECKED Dark radio reverts to the hairline border and a
+  // scaled-out (hidden) indicator — in light theme hairline is #e3dfd6.
+  await expect(darkRadio).toHaveCSS('border-top-color', 'rgb(227, 223, 214)')
+  await expect
+    .poll(() =>
+      darkRadio.evaluate((el) => getComputedStyle(el, '::before').transform),
+    )
+    .toBe('matrix(0, 0, 0, 0, 0, 0)')
+})
+
+test('themed form controls: skill checkbox is custom-styled and fills with accent when checked', async ({
+  page,
+}) => {
+  await blockExternal(page)
+
+  await page.goto('/')
+  await openSettings(page)
+
+  // Install a built-in reviewer so a skill checkbox exists
+  const addBtn = page
+    .locator('.builtin-entry')
+    .first()
+    .getByRole('button', { name: /^add /i })
+  await expect(addBtn).toBeVisible()
+  await addBtn.click()
+
+  const toggle = page.locator('.skill-item input[type="checkbox"]').first()
+  await expect(toggle).toBeChecked()
+
+  const styles = await toggle.evaluate((el) => {
+    const cs = getComputedStyle(el)
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
+    return {
+      appearance: cs.appearance,
+      background: cs.backgroundColor,
+      accent,
+    }
+  })
+  expect(styles.appearance).toBe('none')
+  // Checked checkbox is filled with the theme accent (resolve var → rgb)
+  const accentAsRgb = await page.evaluate((hex) => {
+    const probe = document.createElement('div')
+    probe.style.color = hex
+    document.body.appendChild(probe)
+    const rgb = getComputedStyle(probe).color
+    probe.remove()
+    return rgb
+  }, styles.accent)
+  expect(styles.background).toBe(accentAsRgb)
+})
