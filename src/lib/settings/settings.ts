@@ -43,6 +43,7 @@ export interface Settings {
   diffMode: DiffMode
   githubAuth: GithubAuth | null
   gitlabToken: string | null
+  gitlabHost: string
   bitbucketAuth: BitbucketAuth | null
   railCollapsed: boolean
   theme: Theme
@@ -59,6 +60,7 @@ const DEFAULTS: Settings = {
   diffMode: 'unified',
   githubAuth: null,
   gitlabToken: null,
+  gitlabHost: 'gitlab.com',
   bitbucketAuth: null,
   railCollapsed: false,
   theme: 'auto',
@@ -106,6 +108,12 @@ function coerce(raw: unknown): Partial<Settings> {
   const gitlabToken = obj['gitlabToken']
   if (typeof gitlabToken === 'string') result.gitlabToken = gitlabToken
   else if (gitlabToken === null) result.gitlabToken = null
+
+  const gitlabHost = obj['gitlabHost']
+  if (typeof gitlabHost === 'string' && gitlabHost.trim()) {
+    const normalized = normalizeGitlabHost(gitlabHost)
+    if (normalized !== null) result.gitlabHost = normalized
+  }
 
   const railCollapsed = obj['railCollapsed']
   if (typeof railCollapsed === 'boolean') result.railCollapsed = railCollapsed
@@ -222,6 +230,39 @@ export const setShowProgress = (show: boolean) => save({ showProgress: show })
 export const setTreeOpen = (open: boolean) => save({ treeOpen: open })
 export const setTestFileDisplay = (v: TestFileDisplay) => save({ testFileDisplay: v })
 export const setDiffWidth = (v: DiffWidth) => save({ diffWidth: v })
+
+/**
+ * Normalize a GitLab host input.
+ * Accepts a bare hostname (e.g. "gitlab.mycompany.com") or a full origin
+ * (e.g. "https://gitlab.mycompany.com") and returns just the hostname.
+ * Returns null for invalid inputs.
+ */
+function normalizeGitlabHost(input: string): string | null {
+  const trimmed = input.trim()
+  if (!trimmed) return null
+  // Try as a full URL first (origin form)
+  try {
+    const url = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`)
+    const hostname = url.hostname
+    // Basic hostname validation: must contain at least one dot or be a valid local name
+    if (!hostname || hostname.includes(' ')) return null
+    return hostname
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Save the GitLab host (for self-hosted instances).
+ * Accepts a bare hostname ("gitlab.mycompany.com") or an origin ("https://gitlab.mycompany.com").
+ * Normalizes to hostname only. Throws on invalid or empty input.
+ * Default is 'gitlab.com'.
+ */
+export function setGitlabHost(v: string): void {
+  const normalized = normalizeGitlabHost(v)
+  if (!normalized) throw new Error('gitlabHost must be a valid hostname or origin')
+  save({ gitlabHost: normalized })
+}
 
 /**
  * Save the GitLab personal access token (PAT).
