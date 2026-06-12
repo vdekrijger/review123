@@ -110,6 +110,7 @@
       <input type="radio" name="diffWidth" value="full" checked={diffWidth === 'full'} onchange={() => onDiffWidthChange('full')} />
       Full width
     </label>
+    <p class="field-note">Full = edge-to-edge diff at any screen size; Centered = comfortable reading column.</p>
   </fieldset>
 </section>
 
@@ -159,5 +160,12 @@
     font-size: 0.9em;
     cursor: pointer;
     color: var(--text);
+  }
+
+  .field-note {
+    flex-basis: 100%;
+    margin: 0;
+    font-size: 0.8em;
+    color: var(--text-muted);
   }
 </style>
