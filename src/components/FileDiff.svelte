@@ -91,6 +91,10 @@
     return hasNull ? ([...nonNull, null] as (number | null)[]) : nonNull
   })
 
+  // Test-file display (must be declared before collapsed)
+  const testFileDisplay = $derived<TestFileDisplay>(getSettings().testFileDisplay)
+  const isTest = $derived(isTestFile(file.filename))
+
   // When viewed → collapse diff body; user can re-expand by clicking header or unchecking
   // Also collapse test files in dim mode by default (expandable by click)
   let manuallyExpanded = $state(false)
@@ -126,10 +130,6 @@
     copyDone = true
     setTimeout(() => { copyDone = false }, 1500)
   }
-
-  // Test-file display
-  const testFileDisplay = $derived<TestFileDisplay>(getSettings().testFileDisplay)
-  const isTest = $derived(isTestFile(file.filename))
 
   // ---- Widget state -------------------------------------------------------
   // Only one widget open at a time. Cleared after save or cancel.
