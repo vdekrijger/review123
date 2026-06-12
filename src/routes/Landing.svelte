@@ -1,5 +1,6 @@
 <script lang="ts">
   import { parsePrUrl } from '../lib/github/parse'
+  import { parseAnyUrl } from '../lib/provider/registry'
   import { navigate } from '../lib/router/router.svelte'
   import { getHistory, clearHistory, type HistoryEntry } from '../lib/history/history'
 
@@ -15,15 +16,24 @@
 
   function submit(e: SubmitEvent) {
     e.preventDefault()
-    const result = parsePrUrl(input)
-    if (!result.ok) { error = MESSAGES[result.error]; return }
+    const result = parseAnyUrl(input)
+    if (!result) {
+      // Fall back to GitHub-specific parse to get a user-friendly error message
+      const ghResult = parsePrUrl(input)
+      if (!ghResult.ok) {
+        error = MESSAGES[ghResult.error] ?? 'That does not look like a valid pull request URL.'
+      } else {
+        error = 'That does not look like a valid pull request URL.'
+      }
+      return
+    }
     error = null
-    const { owner, repo, number } = result.value
-    navigate(`/review/${owner}/${repo}/${number}`)
+    const { provider, ref } = result
+    navigate(`/review/${provider.id}/${ref.owner}/${ref.repo}/${ref.number}`)
   }
 
   function navigateToPr(entry: HistoryEntry) {
-    navigate(`/review/${entry.owner}/${entry.repo}/${entry.number}`)
+    navigate(`/review/github/${entry.owner}/${entry.repo}/${entry.number}`)
   }
 
   function handleClearHistory() {

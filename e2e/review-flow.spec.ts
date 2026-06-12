@@ -30,7 +30,7 @@ const HEAD_SHA = 'abc1234567890'
 const BASE_SHA = 'def0987654321'
 
 const PR_URL = `https://github.com/${OWNER}/${REPO}/pull/${PR_NUMBER}`
-const APP_REVIEW_PATH = `/review/${OWNER}/${REPO}/${PR_NUMBER}`
+const APP_REVIEW_PATH = `/review/github/${OWNER}/${REPO}/${PR_NUMBER}`
 const APP_REVIEW_UNDERSTAND = `${APP_REVIEW_PATH}/understand`
 const APP_REVIEW_INSPECT = `${APP_REVIEW_PATH}/inspect`
 const APP_REVIEW_VERDICT = `${APP_REVIEW_PATH}/verdict`
@@ -707,9 +707,9 @@ test('draft bar shows draft count; step 3 shows sign-in prompt when signed out',
     localStorage.setItem('review123:settings', JSON.stringify(settings))
   }, seedSettings(false))
 
-  // Seed a draft into IndexedDB — the prKey is constructed from owner/repo/number@headSha
+  // Seed a draft into IndexedDB — the prKey is provider-qualified: github:owner/repo#number@headSha
   // We seed before the page loads so the store picks it up on load()
-  const prKey = `${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
+  const prKey = `github:${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
   await page.addInitScript(seedDraftScript(prKey))
 
   await page.goto(APP_REVIEW_PATH)
@@ -929,7 +929,7 @@ test('coach: seed draft, navigate to step 3, Coach my comments → suggestion ca
   }, seedSettings(true))
 
   // Seed a draft so the coach button becomes eligible
-  const prKey = `${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
+  const prKey = `github:${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
   await page.addInitScript(seedDraftScript(prKey))
 
   await page.goto(APP_REVIEW_PATH)
@@ -1519,7 +1519,7 @@ test('inline-ask-ai: seed draft, step 2, switch widget tab to Ask AI, ask stream
   }, seedSettings(false))
 
   // Seed a draft so the annotation panel shows up in step 2
-  const prKey = `${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
+  const prKey = `github:${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
   await page.addInitScript(seedDraftScript(prKey))
 
   await page.goto(APP_REVIEW_PATH)
@@ -1631,7 +1631,7 @@ test('multi-line draft: submit payload contains start_line and start_side', asyn
     localStorage.setItem('review123:settings', JSON.stringify(settings))
   }, seedSettings(true))
 
-  const prKey = `${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
+  const prKey = `github:${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
   await page.addInitScript(seedMultilineDraftScript(prKey))
 
   // Intercept the review POST and capture its body
@@ -1693,7 +1693,7 @@ test('suggestion fence: body with suggestion fence survives verbatim through sub
   }, seedSettings(true))
 
   // Seed a draft with a suggestion body
-  const prKey = `${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
+  const prKey = `github:${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
   await page.addInitScript(`
     (async () => {
       const dbName = 'review123-drafts';

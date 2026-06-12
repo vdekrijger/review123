@@ -18,7 +18,7 @@ const PR_NUMBER = 42
 const HEAD_SHA = 'abc1234567890'
 const BASE_SHA = 'def0987654321'
 
-const APP_REVIEW_PATH = `/review/${OWNER}/${REPO}/${PR_NUMBER}`
+const APP_REVIEW_PATH = `/review/github/${OWNER}/${REPO}/${PR_NUMBER}`
 
 // ---------------------------------------------------------------------------
 // Fixture data

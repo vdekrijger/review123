@@ -146,7 +146,7 @@ test('modal: settings dialog on Inspect step is a top-layer modal — interactab
     }))
   })
 
-  await page.goto('/review/testorg/testrepo/42')
+  await page.goto('/review/github/testorg/testrepo/42')
 
   // Wait for the PR to load
   await expect(page.getByRole('heading', { name: /Modal test PR/i })).toBeVisible({ timeout: 10_000 })

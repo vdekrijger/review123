@@ -24,11 +24,11 @@ describe('Landing', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/does not look like a pull request url/i)
   })
 
-  it('valid URL navigates to the review route', async () => {
+  it('valid URL navigates to the provider-qualified review route', async () => {
     render(Landing)
     await userEvent.type(screen.getByRole('textbox'), 'https://github.com/a/b/pull/12')
     await userEvent.click(screen.getByRole('button', { name: /review/i }))
-    expect(location.pathname).toBe('/review/a/b/12')
+    expect(location.pathname).toBe('/review/github/a/b/12')
   })
 })
 
@@ -51,13 +51,13 @@ describe('Landing recent reviews', () => {
     expect(screen.getByText('Add feature')).toBeInTheDocument()
   })
 
-  it('clicking a history entry navigates to the review route', async () => {
+  it('clicking a history entry navigates to the provider-qualified review route', async () => {
     addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
     render(Landing)
     // Click the button for the PR
     const btn = screen.getByRole('button', { name: /alice\/widgets#42/i })
     await userEvent.click(btn)
-    expect(location.pathname).toBe('/review/alice/widgets/42')
+    expect(location.pathname).toBe('/review/github/alice/widgets/42')
   })
 
   it('Clear button removes history entries from the UI', async () => {

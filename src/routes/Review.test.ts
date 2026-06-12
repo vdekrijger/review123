@@ -19,7 +19,7 @@ describe('router step navigation (unit)', () => {
   beforeEach(() => {
     _resetStartedForTest()
     history.replaceState(null, '', '/review/org/repo/1/understand')
-    router.route = { name: 'review', owner: 'org', repo: 'repo', number: 1, step: 1 }
+    router.route = { name: 'review', provider: 'github', owner: 'org', repo: 'repo', number: 1, step: 1 }
   })
 
   it('navigate to inspect sets URL to /inspect', () => {
@@ -343,7 +343,7 @@ describe('Since-last-visit — visit recording', () => {
       expect(screen.getByRole('status')).toBeInTheDocument()
     })
 
-    const entry = lastVisit('a/b#100')
+    const entry = lastVisit('github:a/b#100')
     expect(entry).not.toBeNull()
     expect(entry!.headSha).toBe('sha-first-visit')
   })

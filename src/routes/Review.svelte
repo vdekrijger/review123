@@ -32,15 +32,26 @@
   import type { PrComment } from '../lib/github/comments'
   import { getResolvedCommentIds } from '../lib/github/threads'
   import { slugify } from '../lib/slug'
+  import { migrateLegacyVisits, migrateLegacyViewed } from '../lib/provider/storeKeys'
 
   const RETURN_KEY = 'review123:returnTo'
 
-  let { owner, repo, number, step: stepProp }: {
+  let { owner, repo, number, step: stepProp, provider: providerProp }: {
     owner: string
     repo: string
     number: number
     step?: 1 | 2 | 3
+    provider?: string
   } = $props()
+  // Resolve provider id — defaults to 'github' for backward compat.
+  // $derived so Svelte tracks it reactively (avoids state_referenced_locally warning).
+  // In practice this never changes within a mount because App.svelte uses {#key} with provider.
+  const providerId = $derived(providerProp ?? 'github')
+
+  // Run silent key migration once on mount — copies legacy "owner/repo#n" keys to
+  // "github:owner/repo#n" in localStorage so old visit/viewed data is not lost.
+  migrateLegacyVisits()
+  migrateLegacyViewed()
   // Relies on the {#key} remount in App.svelte: props never change within a
   // mount, so createPrLoad is called exactly once per PR navigation. Removing
   // the key would cause duplicate fetches + stale draft store.
@@ -59,13 +70,13 @@
   /** Clamp n to 1..3 and navigate to the corresponding step URL */
   function goStep(n: number) {
     const clamped = Math.max(1, Math.min(3, n)) as Step
-    navigateTo(`/review/${owner}/${repo}/${number}/${STEP_PATHS[clamped]}`)
+    navigateTo(`/review/${providerId}/${owner}/${repo}/${number}/${STEP_PATHS[clamped]}`)
   }
   const canPrev = $derived(step > 1)
   const canNext = $derived(step < 3)
 
-  // ---- Viewed store — keyed by owner/repo#number (NO sha — survives pushes) ---
-  const prId = $derived(`${owner}/${repo}#${number}`)
+  // ---- Viewed store — keyed by provider:owner/repo#number (NO sha — survives pushes) ---
+  const prId = $derived(`${providerId}:${owner}/${repo}#${number}`)
   const viewedStore = $derived(createViewedStore(prId))
   // Explicit $derived for the count so Svelte 5 always tracks the entries $state
   // signal through the $derived boundary. Without this, reading viewedStore.count
@@ -110,7 +121,7 @@
     if (load.state.status === 'ready' && !storeInitialized) {
       storeInitialized = true
       const meta = load.state.meta
-      const prKey = `${owner}/${repo}#${number}@${meta.headSha}`
+      const prKey = `${providerId}:${owner}/${repo}#${number}@${meta.headSha}`
       const store = createDraftStore(prKey)
       draftStore = store
       // Un-awaited intentionally: causes a cosmetic 0-count flash on mount
@@ -352,7 +363,7 @@
       aiInitialized = true
       const meta = load.state.meta
       const files = load.state.files
-      const prKey = `${owner}/${repo}#${number}@${meta.headSha}`
+      const prKey = `${providerId}:${owner}/${repo}#${number}@${meta.headSha}`
       const repoStr = `${owner}/${repo}`
       consentDialogRepo = repoStr
 
@@ -409,11 +420,20 @@
     }
   })
 
-  // Canonicalize bare /review/o/r/n → /review/o/r/n/understand (replaceState, not push)
+  // Canonicalize bare /review/.../n (no step) → /review/.../n/understand (replaceState, not push)
+  // Also canonicalize legacy /review/o/r/n → /review/github/o/r/n/understand
   $effect(() => {
-    const bare = `/review/${owner}/${repo}/${number}`
-    if (location.pathname === bare || location.pathname === bare + '/') {
-      history.replaceState(history.state, '', `${bare}/understand`)
+    const canonicalBase = `/review/${providerId}/${owner}/${repo}/${number}`
+    const legacyBase = `/review/${owner}/${repo}/${number}`
+    const path = location.pathname
+    if (path === canonicalBase || path === canonicalBase + '/') {
+      history.replaceState(history.state, '', `${canonicalBase}/understand`)
+    } else if (path === legacyBase || path === legacyBase + '/') {
+      history.replaceState(history.state, '', `${canonicalBase}/understand`)
+    } else if (path === `${legacyBase}/understand` || path === `${legacyBase}/inspect` || path === `${legacyBase}/verdict`) {
+      // Legacy step path — upgrade to canonical provider form
+      const step = path.slice(legacyBase.length + 1)
+      history.replaceState(history.state, '', `${canonicalBase}/${step}`)
     }
   })
 
@@ -584,7 +604,7 @@
       <VerdictStep
         prRef={{ owner, repo, number }}
         commitId={load.state.meta.headSha}
-        store={draftStore ?? createDraftStore(`${owner}/${repo}#${number}`)}
+        store={draftStore ?? createDraftStore(`${providerId}:${owner}/${repo}#${number}`)}
         prUrl={`https://github.com/${owner}/${repo}/pull/${number}`}
         coachFn={aiRun ? aiRun.coach : undefined}
         {prComments}

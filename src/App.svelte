@@ -48,8 +48,8 @@
   <Landing />
 {:else if router.route.name === 'review'}
   {@const route = router.route}
-  {#key `${route.owner}/${route.repo}/${route.number}`}
-    <Review owner={route.owner} repo={route.repo} number={route.number} step={route.step} />
+  {#key `${route.provider}/${route.owner}/${route.repo}/${route.number}`}
+    <Review owner={route.owner} repo={route.repo} number={route.number} step={route.step} provider={route.provider} />
   {/key}
 {:else if router.route.name === 'auth-callback'}
   <AuthCallback />
