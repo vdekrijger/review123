@@ -602,13 +602,17 @@ export const gitlabProvider: ReviewProvider = {
   },
 
   authState(): { configured: boolean; hint: string } {
-    const token = getSettings().gitlabToken
-    if (token) {
-      return { configured: true, hint: 'GitLab token configured (PAT)' }
+    const settings = getSettings()
+    const oauth = settings.gitlabOAuth
+    if (oauth && Date.now() < oauth.expiresAt) {
+      return { configured: true, hint: 'GitLab: signed in via OAuth' }
+    }
+    if (settings.gitlabToken) {
+      return { configured: true, hint: 'GitLab: using PAT' }
     }
     return {
       configured: false,
-      hint: 'No GitLab token configured. Add one in Settings (scope: api).',
+      hint: 'GitLab: not configured. Sign in via OAuth or add a PAT in Settings.',
     }
   },
 

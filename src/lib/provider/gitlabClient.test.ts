@@ -1,10 +1,20 @@
 /**
  * Tests for the GitLab low-level client (glFetch, glFetchPage, glFetchRaw).
+ *
+ * Auth header tests:
+ *   - PAT → PRIVATE-TOKEN header
+ *   - OAuth (valid, not expired) → Authorization: Bearer header
+ *   - No token → no auth header
+ *
+ * Refresh-on-401 tests:
+ *   - OAuth active + 401 → refresh + retry succeeds (no infinite loop)
+ *   - OAuth active + 401 → refresh fails → unauthorized thrown, gitlabOAuth cleared
+ *   - No OAuth + 401 → unauthorized thrown immediately (no refresh attempt)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { glFetch, glFetchPage, glFetchRaw, GitlabApiError } from './gitlabClient'
-import { setGitlabToken, setGitlabHost } from '../settings/settings'
+import { setGitlabToken, setGitlabHost, saveGitlabOAuth, getSettings } from '../settings/settings'
 import { jsonResponse } from '../../test-helpers'
 
 function mockFetch(body: unknown, status = 200, headers: Record<string, string> = {}) {
@@ -13,6 +23,7 @@ function mockFetch(body: unknown, status = 200, headers: Record<string, string> 
 
 describe('glFetch', () => {
   beforeEach(() => localStorage.clear())
+  afterEach(() => vi.unstubAllGlobals())
 
   it('returns parsed JSON on 200', async () => {
     vi.stubGlobal('fetch', mockFetch({ id: 1 }))
@@ -20,12 +31,40 @@ describe('glFetch', () => {
     expect(data).toEqual({ id: 1 })
   })
 
-  it('sends PRIVATE-TOKEN header when gitlabToken is set', async () => {
+  it('sends PRIVATE-TOKEN header when gitlabToken (PAT) is set and no OAuth', async () => {
     const f = mockFetch({})
     vi.stubGlobal('fetch', f)
     setGitlabToken('glpat_mytoken')
     await glFetch('/projects/1')
     expect(f.mock.calls[0][1].headers['PRIVATE-TOKEN']).toBe('glpat_mytoken')
+    expect(f.mock.calls[0][1].headers['Authorization']).toBeUndefined()
+  })
+
+  it('sends Authorization: Bearer when OAuth token is active (not expired)', async () => {
+    const f = mockFetch({})
+    vi.stubGlobal('fetch', f)
+    saveGitlabOAuth({
+      token: 'glOAT-active',
+      refreshToken: 'glORT',
+      expiresAt: Date.now() + 3_600_000,
+    })
+    await glFetch('/projects/1')
+    expect(f.mock.calls[0][1].headers['Authorization']).toBe('Bearer glOAT-active')
+    expect(f.mock.calls[0][1].headers['PRIVATE-TOKEN']).toBeUndefined()
+  })
+
+  it('falls back to PRIVATE-TOKEN when OAuth token is expired', async () => {
+    const f = mockFetch({})
+    vi.stubGlobal('fetch', f)
+    saveGitlabOAuth({
+      token: 'glOAT-expired',
+      refreshToken: 'glORT',
+      expiresAt: Date.now() - 1000,
+    })
+    setGitlabToken('glpat_fallback')
+    await glFetch('/projects/1')
+    expect(f.mock.calls[0][1].headers['PRIVATE-TOKEN']).toBe('glpat_fallback')
+    expect(f.mock.calls[0][1].headers['Authorization']).toBeUndefined()
   })
 
   it('omits PRIVATE-TOKEN when no token configured', async () => {
@@ -33,6 +72,7 @@ describe('glFetch', () => {
     vi.stubGlobal('fetch', f)
     await glFetch('/projects/1')
     expect(f.mock.calls[0][1].headers['PRIVATE-TOKEN']).toBeUndefined()
+    expect(f.mock.calls[0][1].headers['Authorization']).toBeUndefined()
   })
 
   it('maps 404 to not-found', async () => {
@@ -40,7 +80,7 @@ describe('glFetch', () => {
     await expect(glFetch('/x')).rejects.toMatchObject({ detail: { kind: 'not-found' } })
   })
 
-  it('maps 401 to unauthorized', async () => {
+  it('maps 401 to unauthorized when no OAuth is configured (no refresh attempt)', async () => {
     vi.stubGlobal('fetch', mockFetch({}, 401))
     await expect(glFetch('/x')).rejects.toMatchObject({ detail: { kind: 'unauthorized' } })
   })
@@ -73,6 +113,118 @@ describe('glFetch', () => {
   it('throws GitlabApiError for error responses', async () => {
     vi.stubGlobal('fetch', mockFetch({}, 404))
     await expect(glFetch('/x')).rejects.toBeInstanceOf(GitlabApiError)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// OAuth refresh-on-401 behavior
+// ---------------------------------------------------------------------------
+
+describe('glFetch — OAuth refresh-on-401', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.unstubAllEnvs()
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  function setActiveOAuth() {
+    saveGitlabOAuth({
+      token: 'glOAT-initial',
+      refreshToken: 'glORT-refresh',
+      expiresAt: Date.now() + 3_600_000,
+    })
+  }
+
+  it('retries once after successful refresh on 401', async () => {
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    setActiveOAuth()
+
+    let callCount = 0
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
+      // Token refresh call → succeed
+      if (url.includes('/oauth/token')) {
+        return jsonResponse({
+          access_token: 'glOAT-refreshed',
+          refresh_token: 'glORT-new',
+          expires_in: 7200,
+        })
+      }
+      callCount++
+      if (callCount === 1) {
+        // First API call → 401 (triggers refresh)
+        return jsonResponse({}, {}, 401)
+      }
+      // Second API call (retry after refresh) → 200
+      return jsonResponse({ id: 42 })
+    }))
+
+    const data = await glFetch<{ id: number }>('/projects/1')
+    expect(data).toEqual({ id: 42 })
+    // Settings should have the new token
+    expect(getSettings().gitlabOAuth?.token).toBe('glOAT-refreshed')
+  })
+
+  it('does NOT retry again if the retry also returns 401 (no infinite loop)', async () => {
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    setActiveOAuth()
+
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/oauth/token')) {
+        return jsonResponse({
+          access_token: 'glOAT-refreshed',
+          refresh_token: 'glORT-new',
+          expires_in: 7200,
+        })
+      }
+      // All API calls → 401 (both initial and retry)
+      return jsonResponse({}, {}, 401)
+    }))
+
+    // Should throw unauthorized after one retry — not loop
+    await expect(glFetch('/x')).rejects.toMatchObject({ detail: { kind: 'unauthorized' } })
+  })
+
+  it('clears gitlabOAuth and throws unauthorized when refresh itself fails', async () => {
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    setActiveOAuth()
+
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/oauth/token')) {
+        // Refresh fails
+        return jsonResponse({ error: 'invalid_grant' }, {}, 400)
+      }
+      return jsonResponse({}, {}, 401)
+    }))
+
+    await expect(glFetch('/x')).rejects.toMatchObject({ detail: { kind: 'unauthorized' } })
+    // gitlabOAuth must be cleared so UI can prompt re-auth
+    expect(getSettings().gitlabOAuth).toBeNull()
+  })
+
+  it('does NOT attempt refresh when no OAuth is configured (plain PAT + 401)', async () => {
+    setGitlabToken('glpat_pat_only')
+    const fetchMock = mockFetch({}, 401)
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(glFetch('/x')).rejects.toMatchObject({ detail: { kind: 'unauthorized' } })
+    // Only one fetch call (no token refresh call)
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('clears gitlabOAuth when refresh returns no access_token', async () => {
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    setActiveOAuth()
+
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/oauth/token')) {
+        // Malformed response
+        return jsonResponse({ token_type: 'Bearer' }, {}, 200)
+      }
+      return jsonResponse({}, {}, 401)
+    }))
+
+    await expect(glFetch('/x')).rejects.toMatchObject({ detail: { kind: 'unauthorized' } })
+    expect(getSettings().gitlabOAuth).toBeNull()
   })
 })
 

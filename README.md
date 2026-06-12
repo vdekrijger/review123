@@ -113,6 +113,7 @@ Set these in `.env.local` locally; configure them in the Vercel dashboard for pr
 | `VITE_GITHUB_CLIENT_ID` | No | — | GitHub OAuth App client ID (build-time, public). Sign-in button is hidden when absent. |
 | `GITHUB_OAUTH_CLIENT_ID` | No | — | GitHub OAuth App client ID (server-side, Vercel only). Required for OAuth sign-in. |
 | `GITHUB_OAUTH_CLIENT_SECRET` | No | — | GitHub OAuth App client secret (server-side, Vercel only). Never exposed to the browser. |
+| `VITE_GITLAB_CLIENT_ID` | No | — | GitLab OAuth Application ID (build-time, public). Sign-in button is hidden when absent. No secret needed — public PKCE client. |
 
 `.env.local` is gitignored by the `.env.*` pattern in `.gitignore`.
 
@@ -150,7 +151,52 @@ When `VITE_GITHUB_CLIENT_ID` is absent the Sign-in button is hidden and the app 
 
 ## GitLab setup
 
-Review 1-2-3 supports GitLab merge requests natively. Authentication uses a Personal Access Token (PAT).
+Review 1-2-3 supports GitLab merge requests natively. Authentication supports two methods:
+
+1. **OAuth (recommended)** — sign in directly via GitLab OAuth using PKCE (no client secret needed). Tokens are refreshed automatically.
+2. **Personal Access Token (PAT)** — manual token entry, same as before.
+
+### GitLab OAuth app setup
+
+> **Prerequisites:** You need a Vercel deployment (or equivalent) with a public HTTPS redirect URI.
+
+#### 1. Register a GitLab OAuth application
+
+For **gitlab.com**:
+
+1. Go to **GitLab → User Settings → Applications** (direct link: `https://gitlab.com/-/profile/applications`).
+2. Fill in:
+   - **Name:** `review123` (or any label)
+   - **Redirect URI:** `https://<your-domain>/auth/callback` (e.g. `https://review123.vercel.app/auth/callback`)
+   - **Scopes:** check **`api`** only
+   - **Confidential:** **NO** (uncheck this — Review 1-2-3 uses a public PKCE client, no client secret)
+3. Click **Save application** and copy the **Application ID**.
+
+For **self-hosted GitLab**: the same process applies under **Admin → Applications** (admin application) or your user settings.
+
+#### 2. Configure environment variables
+
+Add to your `.env.local` (local dev) or Vercel dashboard (production):
+
+| Variable | Value |
+|---|---|
+| `VITE_GITLAB_CLIENT_ID` | Your GitLab Application ID (build-time, public) |
+
+No `GITLAB_CLIENT_SECRET` is needed — this is a public PKCE client (RFC 7636). The token exchange happens directly from the browser to GitLab's token endpoint. GitLab allows CORS on `/oauth/token` for public PKCE clients.
+
+#### 3. Sign in
+
+Once `VITE_GITLAB_CLIENT_ID` is set, a **Sign in with GitLab** button appears in **Settings → Advanced**. Click it, authorise the app, and you are signed in. The OAuth token (valid 2 hours) is refreshed automatically on expiry — you will rarely need to re-authenticate.
+
+#### Self-hosted instances
+
+Set the **GitLab host** field in Settings to your instance hostname (e.g. `gitlab.mycompany.com`) before clicking Sign in. The OAuth flow uses the configured host for both the authorize and token endpoints.
+
+#### CORS note (self-hosted)
+
+GitLab.com allows CORS on `/oauth/token` for public PKCE apps. Most self-hosted GitLab instances (v15+) do too, but older versions may not. If sign-in fails with "exchange failed", fall back to a PAT (see below).
+
+---
 
 ### Create a GitLab PAT
 

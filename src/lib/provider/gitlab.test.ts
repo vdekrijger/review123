@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { parseGitlabUrl, gitlabProvider } from './gitlab'
-import { setGitlabToken, setGitlabHost } from '../settings/settings'
+import { setGitlabToken, setGitlabHost, saveGitlabOAuth } from '../settings/settings'
 import { jsonResponse } from '../../test-helpers'
 import type { PrRefX } from './types'
 
@@ -813,18 +813,28 @@ describe('submitReview', () => {
 describe('authState', () => {
   beforeEach(() => localStorage.clear())
 
-  it('returns configured:false when no token', () => {
+  it('returns configured:false when no token or OAuth', () => {
     const state = gitlabProvider.authState()
     expect(state.configured).toBe(false)
-    expect(state.hint).toMatch(/settings/i)
-    expect(state.hint).toMatch(/api/i)
+    expect(state.hint).toMatch(/not configured/i)
   })
 
-  it('returns configured:true when token is set', () => {
+  it('returns configured:true with PAT hint when PAT token is set', () => {
     setGitlabToken('glpat_secrettoken')
     const state = gitlabProvider.authState()
     expect(state.configured).toBe(true)
     expect(state.hint).toMatch(/PAT/i)
+  })
+
+  it('returns configured:true with OAuth hint when valid OAuth is active', () => {
+    saveGitlabOAuth({
+      token: 'glOAT-active',
+      refreshToken: 'glORT',
+      expiresAt: Date.now() + 3_600_000,
+    })
+    const state = gitlabProvider.authState()
+    expect(state.configured).toBe(true)
+    expect(state.hint).toMatch(/OAuth/i)
   })
 })
 

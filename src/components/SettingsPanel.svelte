@@ -3,6 +3,8 @@
   import { applyAppearance } from '../lib/settings/appearance.svelte'
   import { track } from '../lib/analytics/analytics'
   import { authState } from '../lib/auth/authState.svelte'
+  import { beginGitlabSignIn, signOutGitlab } from '../lib/auth/gitlabAuth'
+  import GitLabSignInButton from './GitLabSignInButton.svelte'
   import {
     listSkills, addSkill, updateSkill, removeSkill, toggleSkill,
     SKILLS_CAP, SKILL_CONTENT_CAP, type ReviewerSkill,
@@ -175,6 +177,37 @@
   // so existing PAT users aren't confused by a closed section hiding their token.
   const advancedOpen = $derived(authState.auth?.method === 'pat')
 
+  // GitLab OAuth client ID presence gates the "Sign in with GitLab" button.
+  const gitlabClientId =
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GITLAB_CLIENT_ID) || ''
+
+  // Reactive GitLab auth status line (re-reads settings each render tick).
+  // We derive from a dummy state read so Svelte re-evaluates when settings change.
+  const gitlabStatusLine = $derived.by(() => {
+    const s = getSettings()
+    const oauth = s.gitlabOAuth
+    if (oauth && Date.now() < oauth.expiresAt) {
+      return 'GitLab: signed in via OAuth'
+    }
+    if (s.gitlabToken) {
+      return 'GitLab: using PAT'
+    }
+    return 'GitLab: not configured'
+  })
+
+  async function handleGitlabSignIn() {
+    try {
+      const url = await beginGitlabSignIn()
+      location.href = url
+    } catch (e) {
+      error = (e as Error).message
+    }
+  }
+
+  function handleGitlabSignOut() {
+    signOutGitlab()
+  }
+
   function onThemeChange(value: Theme) {
     theme = value
     setTheme(value)
@@ -326,6 +359,11 @@
   </section>
 
   <p class="auth-status">{authStatusLine}</p>
+  <p class="auth-status gitlab-status">{gitlabStatusLine}
+    {#if gitlabClientId && getSettings().gitlabOAuth}
+      <button class="sign-out-link" onclick={handleGitlabSignOut}>Sign out</button>
+    {/if}
+  </p>
   <label>DeepSeek API key
     <input type="password" bind:value={deepseek} autocomplete="off" placeholder="sk-…" />
   </label>
@@ -346,11 +384,19 @@
     <div class="hint pat-scope-hint">
       <p>Self-hosted instances supported. Enter a hostname (e.g. <code>gitlab.mycompany.com</code>). Leave as <code>gitlab.com</code> for the default.</p>
     </div>
+    {#if gitlabClientId}
+      <div class="gitlab-oauth-row">
+        <GitLabSignInButton onclick={handleGitlabSignIn} />
+      </div>
+      <div class="hint pat-scope-hint">
+        <p>Sign in with GitLab OAuth (recommended). Tokens are refreshed automatically. Host setting above is used for self-hosted instances.</p>
+      </div>
+    {/if}
     <label>GitLab token (PAT)
       <input type="password" bind:value={gitlabTokenInput} autocomplete="off" placeholder="glpat_… (scope: api)" aria-label="GitLab personal access token" />
     </label>
     <div class="hint pat-scope-hint">
-      <p>Required scope: <code>api</code>. Create one at <em>GitLab → User Settings → Access Tokens</em>.</p>
+      <p>Alternative: personal access token. Required scope: <code>api</code>. Create one at <em>GitLab → User Settings → Access Tokens</em>.</p>
     </div>
     <label>Bitbucket email
       <input type="password" bind:value={bitbucketEmail} autocomplete="off" placeholder="your@email.com" aria-label="Bitbucket email address" />
@@ -553,6 +599,27 @@
     font-size: 0.9em;
     color: var(--text-muted);
     margin-bottom: 0.75rem;
+  }
+
+  .gitlab-status {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: -0.5rem;
+  }
+
+  .sign-out-link {
+    font-size: 0.85em;
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+  }
+
+  .gitlab-oauth-row {
+    margin: 0.5rem 0.75rem;
   }
 
   details {

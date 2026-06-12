@@ -1,11 +1,28 @@
 /**
  * src/lib/provider/gitlabClient.ts — low-level GitLab REST client.
  *
- * Uses PRIVATE-TOKEN header (PAT) from settings.gitlabToken.
+ * Auth resolution order (per request):
+ *   1. GitLab OAuth token (gitlabOAuth.token) if present and not expired.
+ *   2. PAT (gitlabToken) as fallback.
+ *
+ * Transparent OAuth refresh on 401:
+ *   When an OAuth token is active and the API returns 401, we attempt one
+ *   token refresh (POST /oauth/token with grant_type=refresh_token). On
+ *   success we update settings and retry the original request once. On
+ *   failure we clear gitlabOAuth and surface the 401 as GitlabApiError
+ *   { kind: 'unauthorized' } so callers can prompt re-authentication.
+ *   We deliberately do NOT retry infinitely — after the single refresh
+ *   attempt the request either succeeds or throws.
+ *
+ * CORS assumption: GitLab.com allows CORS on /oauth/token for public PKCE
+ * clients. Self-hosted instances may vary; a CORS failure is surfaced as
+ * GitlabApiError { kind: 'network' } which callers can display to the user.
+ *
  * Error mapping mirrors GithubError / GithubApiError so upper layers stay symmetric.
  */
 
-import { getSettings } from '../settings/settings'
+import { getSettings, saveGitlabOAuth } from '../settings/settings'
+import { resolveGitlabToken } from '../auth/gitlabAuth'
 
 // ---------------------------------------------------------------------------
 // Error types — mirrors github/types.ts GithubError shape
@@ -35,13 +52,103 @@ function getBase(): string {
   return `https://${getSettings().gitlabHost}/api/v4`
 }
 
-function buildHeaders(): Record<string, string> {
+/**
+ * Build auth headers for a request.
+ * - OAuth tokens (gitlabOAuth) → Authorization: Bearer
+ * - PATs (gitlabToken) → PRIVATE-TOKEN (canonical GitLab PAT header)
+ *
+ * GitLab API v4 accepts both:
+ *   Authorization: Bearer <oauth-token>
+ *   PRIVATE-TOKEN: <pat>
+ * Reference: https://docs.gitlab.com/ee/api/rest/index.html#authentication
+ *
+ * @param oauthTokenOverride - When set, always uses Authorization: Bearer with this token
+ *   (used during the post-refresh retry so we don't re-check settings mid-flight).
+ */
+function buildHeaders(oauthTokenOverride?: string): Record<string, string> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   }
-  const token = getSettings().gitlabToken
-  if (token) headers['PRIVATE-TOKEN'] = token
+
+  if (oauthTokenOverride) {
+    // Explicit OAuth token override (post-refresh retry path)
+    headers['Authorization'] = `Bearer ${oauthTokenOverride}`
+    return headers
+  }
+
+  const settings = getSettings()
+  const oauth = settings.gitlabOAuth
+  const isOAuthActive = oauth && Date.now() < oauth.expiresAt - 60_000
+
+  if (isOAuthActive) {
+    // Active OAuth token — use Bearer
+    headers['Authorization'] = `Bearer ${oauth.token}`
+  } else if (settings.gitlabToken) {
+    // PAT fallback — use PRIVATE-TOKEN (the canonical GitLab PAT header)
+    headers['PRIVATE-TOKEN'] = settings.gitlabToken
+  }
+  // If neither, no auth header (unauthenticated request)
   return headers
+}
+
+/**
+ * Attempt to refresh the GitLab OAuth access token using the stored refresh_token.
+ * On success: updates settings.gitlabOAuth with the new token bundle and returns
+ * the new access token.
+ * On failure: clears settings.gitlabOAuth and returns null.
+ *
+ * No client_secret is required — this is a public client PKCE refresh grant.
+ * Reference: https://docs.gitlab.com/ee/api/oauth2.html#authorization-code-with-proof-key-for-code-exchange-pkce
+ */
+async function refreshGitlabOAuth(): Promise<string | null> {
+  const settings = getSettings()
+  const oauth = settings.gitlabOAuth
+  const clientId =
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GITLAB_CLIENT_ID) || ''
+
+  if (!oauth || !clientId) {
+    return null
+  }
+
+  const host = settings.gitlabHost
+
+  try {
+    const res = await fetch(`https://${host}/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: clientId,
+        grant_type: 'refresh_token',
+        refresh_token: oauth.refreshToken,
+      }),
+    })
+
+    if (!res.ok) {
+      saveGitlabOAuth(null)
+      return null
+    }
+
+    const body = (await res.json()) as Record<string, unknown>
+    const newToken = body['access_token']
+    const newRefresh = body['refresh_token']
+    const expiresIn = typeof body['expires_in'] === 'number' ? (body['expires_in'] as number) : 7200
+
+    if (typeof newToken !== 'string' || !newToken || typeof newRefresh !== 'string' || !newRefresh) {
+      saveGitlabOAuth(null)
+      return null
+    }
+
+    const updated = {
+      token: newToken,
+      refreshToken: newRefresh,
+      expiresAt: Date.now() + expiresIn * 1000,
+    }
+    saveGitlabOAuth(updated)
+    return newToken
+  } catch {
+    saveGitlabOAuth(null)
+    return null
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -58,6 +165,29 @@ export async function glFetch<T>(path: string, init: RequestInit = {}): Promise<
   } catch {
     throw new GitlabApiError({ kind: 'network' })
   }
+
+  // Transparent OAuth refresh: attempt once on 401 when an OAuth token is active.
+  if (res.status === 401 && getSettings().gitlabOAuth) {
+    const newToken = await refreshGitlabOAuth()
+    if (newToken) {
+      // Retry once with the refreshed token (no loop — if this 401s again, we throw).
+      const retryHeaders = {
+        ...buildHeaders(newToken),
+        ...(init.headers as Record<string, string> | undefined),
+      }
+      let retryRes: Response
+      try {
+        retryRes = await fetch(url, { ...init, headers: retryHeaders, signal: AbortSignal.timeout(20_000) })
+      } catch {
+        throw new GitlabApiError({ kind: 'network' })
+      }
+      if (retryRes.ok) return (await retryRes.json()) as T
+      throw new GitlabApiError(mapError(retryRes, await tryParseBody(retryRes)))
+    }
+    // Refresh failed — gitlabOAuth was cleared; throw unauthorized so UI can prompt re-auth.
+    throw new GitlabApiError({ kind: 'unauthorized' })
+  }
+
   if (res.ok) return (await res.json()) as T
   throw new GitlabApiError(mapError(res, await tryParseBody(res)))
 }
