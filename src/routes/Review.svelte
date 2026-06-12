@@ -27,6 +27,7 @@
   import type { PrCommit } from '../lib/github/commits'
   import { getPrComments } from '../lib/github/comments'
   import type { PrComment } from '../lib/github/comments'
+  import { slugify } from '../lib/slug'
 
   const RETURN_KEY = 'review123:returnTo'
 
@@ -318,8 +319,7 @@
     goStep(2)
     // Scroll to file after step switch (next tick)
     requestAnimationFrame(() => {
-      const slug = path.replace(/[^a-zA-Z0-9]/g, '-')
-      document.getElementById(`file-${slug}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      document.getElementById(`file-${slugify(path)}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }
 
