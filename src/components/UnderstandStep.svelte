@@ -23,6 +23,7 @@
   import AiPanel from './AiPanel.svelte'
   import DiagramPanel from './DiagramPanel.svelte'
   import MarkdownView from './MarkdownView.svelte'
+  import FileTree from './FileTree.svelte'
   import { stripReadingOrder } from '../lib/ai/tasks'
   import type { PrMeta, PrFile } from '../lib/github/types'
   import type { CiSummary as CiSummaryType } from '../lib/github/checks'
@@ -305,6 +306,20 @@
   </section>
 
   <!-- ===== COLLAPSED DETAIL PANELS ===== -->
+
+  <!-- Changed files structure (mini FileTree, read-only) -->
+  <details class="detail-panel file-structure-panel">
+    <summary class="detail-summary">Changed files — structure</summary>
+    <div class="detail-body file-structure-body">
+      <FileTree
+        {files}
+        attention={attention}
+        viewedStore={null}
+        activePath={null}
+        onselect={(path) => onhotspot?.(path)}
+      />
+    </div>
+  </details>
 
   <!-- Full summary -->
   <details class="detail-panel summary-panel">
@@ -1114,5 +1129,11 @@
     opacity: 0.65;
     font-style: italic;
     line-height: 1.4;
+  }
+
+  /* ===== File structure panel ===== */
+
+  .file-structure-body {
+    padding: 0.5rem 0.25rem;
   }
 </style>

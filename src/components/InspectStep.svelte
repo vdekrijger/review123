@@ -111,6 +111,21 @@
   let treeOpen = $state(getSettings().treeOpen)
   let toggleTabEl = $state<HTMLButtonElement | null>(null)
 
+  // Wide-viewport detection: viewport ≥ 1200px means enough left margin space to float the drawer
+  // without pushing the diff column (70rem ≈ 1120px, so 1200px gives ~40px + 260px drawer margin)
+  // Threshold: 70rem (1120px) + 28px (toggle) + 260px (drawer) + 32px padding = ~1440px
+  // We use 1200 as a practical threshold — at this point free margin ≥ drawer width.
+  const WIDE_THRESHOLD = 1200
+  let isWideViewport = $state(typeof window !== 'undefined' ? window.innerWidth >= WIDE_THRESHOLD : false)
+
+  $effect(() => {
+    function onResize() {
+      isWideViewport = window.innerWidth >= WIDE_THRESHOLD
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  })
+
   function toggleTree(): void {
     treeOpen = !treeOpen
     setTreeOpen(treeOpen)
@@ -238,7 +253,7 @@
 {#if files.length === 0}
   <p>This PR has no changed files.</p>
 {:else}
-  <div class="inspect-layout">
+  <div class="inspect-layout" data-wide={isWideViewport ? 'true' : 'false'}>
     <!-- Slim toggle tab fixed to the left edge -->
     <button
       bind:this={toggleTabEl}
@@ -273,8 +288,9 @@
       <div class="tree-backdrop" onclick={closeTree} aria-hidden="true"></div>
     {/if}
 
-    <!-- Diff column: gets margin-left when drawer is open on wide viewport -->
-    <div class="diff-column" class:drawer-open={treeOpen}>
+    <!-- Diff column: gets margin-left only when drawer is open on NARROW viewport -->
+    <!-- On wide viewport, drawer floats into left margin — diff keeps full width -->
+    <div class="diff-column" class:drawer-open={treeOpen && !isWideViewport}>
       {#each orderedFiles as file (file.filename)}
         <div id="file-{slugify(file.filename)}">
           {#if hotspotMap.has(file.filename)}
@@ -338,6 +354,28 @@
     display: flex;
     align-items: flex-start;
     gap: 0;
+  }
+
+  /* ---- Wide viewport: drawer floats into left margin (absolute positioning) ---- */
+  /* When viewport ≥ 1200px the centered 70rem content has free left margin space.  */
+  /* The drawer is absolutely positioned to the left of the toggle tab, so the      */
+  /* diff column keeps its full width and is never pushed.                           */
+  @media (min-width: 1200px) {
+    .file-tree-drawer[data-open="true"] {
+      position: absolute;
+      /* Place drawer to the left of the toggle tab (28px wide).                    */
+      /* right: 100% positions the right edge of the drawer at the left edge of     */
+      /* its containing block. We add a 4px gap.                                    */
+      right: calc(100% - 28px + 4px);
+      top: 0;
+      z-index: 10;
+      box-shadow: -2px 4px 16px rgba(0,0,0,0.18);
+    }
+
+    .file-tree-nav {
+      /* On wide viewport the drawer doesn't need a left margin since it's absolute */
+      margin-left: 0;
+    }
   }
 
   /* ---- Toggle tab: slim vertical strip on the left edge ---- */
