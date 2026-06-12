@@ -327,6 +327,22 @@ describe('Review adds PR to history on load (history.ts)', () => {
     expect(entry).toBeDefined()
     expect(entry?.title).toBe('Test PR')
   })
+
+  it('persists the total diff size (+adds −dels) into the history entry at review time', async () => {
+    vi.stubGlobal('fetch', makeFetchStub([
+      { filename: 'a.ts', status: 'modified', additions: 3, deletions: 1, patch: '@@ -1 +1 @@\n+x' },
+      { filename: 'b.ts', status: 'added', additions: 7, deletions: 4, patch: '@@ -1 +1 @@\n+y' },
+    ]))
+
+    render(Review, { props: { owner: 'alice', repo: 'widgets', number: 42 } })
+
+    await vi.waitFor(() => {
+      const entry = getHistory().find((e) => e.number === 42)
+      expect(entry).toBeDefined()
+      expect(entry?.additions).toBe(10)
+      expect(entry?.deletions).toBe(5)
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------

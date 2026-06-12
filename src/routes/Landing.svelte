@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import { parsePrUrl } from '../lib/github/parse'
   import { parseAnyUrl, PROVIDERS } from '../lib/provider/registry'
   import { navigate } from '../lib/router/router.svelte'
@@ -8,6 +7,8 @@
   import { relativeTime } from '../lib/time'
   import { isSectionCollapsed, setSectionCollapsed, type LandingSectionId } from '../lib/landing/collapse'
   import { groupByRepo, isMultiRepo } from '../lib/landing/groupQueue'
+  import { getCachedSizes, fetchMissingSizes, sizeKey, type DiffSize } from '../lib/landing/queueSizes'
+  import { settingsState } from '../lib/settings/settingsState.svelte'
   import { track } from '../lib/analytics/analytics'
   import ProviderIcon from '../components/ProviderIcon.svelte'
   import Skeleton from '../components/Skeleton.svelte'
@@ -53,18 +54,37 @@
   // Providers that expose getMyQueue
   const allProviders = [...PROVIDERS.values()]
   const hasQueueProviders = allProviders.some((p) => typeof p.getMyQueue === 'function')
-  const anyAuthConfigured = allProviders.some(
-    (p) => typeof p.getMyQueue === 'function' && p.authState().configured,
-  )
+  // Reactive: settingsState.current is refreshed after every settings save
+  // (including auth token mutations), so this re-evaluates — and the queue
+  // section appears/disappears — when the user signs in or out, no remount.
+  const anyAuthConfigured = $derived.by(() => {
+    void settingsState.current // establish the reactive dependency
+    return allProviders.some(
+      (p) => typeof p.getMyQueue === 'function' && p.authState().configured,
+    )
+  })
 
   // Derived groups
   let awaitingReview = $derived(queueItems.filter((i) => !i.authorIsMe))
   let myOpenPrs = $derived(queueItems.filter((i) => i.authorIsMe))
 
+  // Diff sizes per row, keyed by sizeKey(item) — progressive enhancement:
+  // cached sizes render with the list; missing ones pop in as batches resolve.
+  let queueSizes = $state<Record<string, DiffSize>>({})
+
+  function refreshQueueSizes(items: QueueItem[]) {
+    queueSizes = getCachedSizes(items)
+    // Un-awaited intentionally — sizes must never block or delay the queue render.
+    void fetchMissingSizes(items, (key, size) => {
+      queueSizes = { ...queueSizes, [key]: size }
+    })
+  }
+
   async function loadQueue() {
     queueLoading = true
     queueItems = await fetchAllQueues(allProviders)
     queueLoading = false
+    refreshQueueSizes(queueItems)
   }
 
   async function handleRefreshQueue() {
@@ -75,6 +95,7 @@
       queueRefreshing = true
       try {
         queueItems = await fetchAllQueues(allProviders)
+        refreshQueueSizes(queueItems)
       } finally {
         queueRefreshing = false
       }
@@ -84,8 +105,11 @@
     }
   }
 
-  onMount(() => {
-    loadQueue()
+  // Load when auth is configured at mount, or later when auth first appears
+  // (the derived flips false → true after a settings save). Reruns only when
+  // the boolean changes, never on unrelated settings writes.
+  $effect(() => {
+    if (anyAuthConfigured) loadQueue()
   })
 
   function submit(e: SubmitEvent) {
@@ -126,6 +150,20 @@
   owner/repo) with rows showing just #number · title; single-repo lists stay
   flat with a provider icon per row.
 -->
+<!--
+  queueSize — compact "+adds −dels" chip, colored like the diff stat chips
+  elsewhere (FileDiff header). Rendered only once the size is known: rows
+  appear immediately and sizes pop in (progressive enhancement).
+-->
+{#snippet queueSize(size: DiffSize | undefined)}
+  {#if size}
+    <span class="queue-size" data-testid="queue-size">
+      <span class="stat-add">+{size.additions}</span>
+      <span class="stat-del">−{size.deletions}</span>
+    </span>
+  {/if}
+{/snippet}
+
 {#snippet queueRows(items: QueueItem[])}
   {@const groups = groupByRepo(items)}
   {#if isMultiRepo(groups)}
@@ -146,6 +184,7 @@
               <span class="queue-ref">#{item.ref.number}</span>
               <span class="queue-sep"> · </span>
               <span class="queue-title-text">{item.title}</span>
+              {@render queueSize(queueSizes[sizeKey(item)])}
               <span class="queue-time">{relativeTime(item.updatedAt)}</span>
             </button>
           </li>
@@ -166,6 +205,7 @@
             <span class="queue-ref">{item.ref.owner}/{item.ref.repo}#{item.ref.number}</span>
             <span class="queue-sep"> — </span>
             <span class="queue-title-text">{item.title}</span>
+            {@render queueSize(queueSizes[sizeKey(item)])}
             <span class="queue-time">{relativeTime(item.updatedAt)}</span>
           </button>
         </li>
@@ -183,7 +223,10 @@
   </form>
   {#if error}<p role="alert" class="error">{error}</p>{/if}
 
-  {#if hasQueueProviders}
+  <!-- Whole section (header included) only exists when at least one queue
+       provider has auth configured — signed-out users see no queue at all.
+       anyAuthConfigured is reactive, so signing in renders it immediately. -->
+  {#if hasQueueProviders && anyAuthConfigured}
     <div class="queue-section">
       <div class="queue-header">
         <h2 class="section-title">
@@ -217,8 +260,6 @@
           <Skeleton lines={3} />
           <span class="sr-only">Loading your queue…</span>
         </div>
-      {:else if !anyAuthConfigured}
-        <p class="queue-status">Sign in to see your queue.</p>
       {:else if queueItems.length === 0}
         <p class="queue-status">No PRs in your queue.</p>
       {:else}
@@ -280,6 +321,9 @@
               <span class="recent-ref">{entry.owner}/{entry.repo}#{entry.number}</span>
               <span class="recent-sep"> — </span>
               <span class="recent-title-text">{entry.title}</span>
+              {#if typeof entry.additions === 'number' && typeof entry.deletions === 'number'}
+                {@render queueSize({ additions: entry.additions, deletions: entry.deletions })}
+              {/if}
             </button>
           </li>
         {/each}
@@ -571,6 +615,18 @@
     flex-shrink: 0;
   }
 
+  /* Compact "+adds −dels" chip — same color tokens as FileDiff's stat chips */
+  .queue-size {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    margin-left: 0.5rem;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .queue-size .stat-add { color: var(--diff-add); }
+  .queue-size .stat-del { color: var(--diff-del); }
+
   /* Recent reviews section */
   .recent-reviews {
     margin-top: 2.5rem;
@@ -671,5 +727,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex: 1; /* pushes the diff-size chip to the row's right edge */
   }
 </style>
