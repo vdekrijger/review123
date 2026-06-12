@@ -91,7 +91,7 @@ export const SECTION_REGISTRY: readonly SectionDescriptor[] = [
   },
   {
     id: 'verdict-evidence',
-    title: 'Verdict evidence',
+    title: 'Why this verdict',
     defaultOpen: { page: false, rail: false },
     show: { page: true, rail: true },
   },

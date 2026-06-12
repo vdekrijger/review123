@@ -52,6 +52,17 @@ describe('SECTION_REGISTRY — required sections present', () => {
 })
 
 // ---------------------------------------------------------------------------
+// verdict-evidence title
+// ---------------------------------------------------------------------------
+
+describe('SECTION_REGISTRY — verdict-evidence title', () => {
+  it('verdict-evidence section title is "Why this verdict"', () => {
+    const verdictSection = SECTION_REGISTRY.find((s) => s.id === 'verdict-evidence')!
+    expect(verdictSection.title).toBe('Why this verdict')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // ORDER: canonical order enforced
 // ---------------------------------------------------------------------------
 

@@ -1,5 +1,6 @@
 <script lang="ts">
   import AiPanel from '../AiPanel.svelte'
+  import MarkdownView from '../MarkdownView.svelte'
   import type { AiRun } from '../../lib/ai/run.svelte'
   import type { AlternativesResult } from '../../lib/ai/schemas'
 
@@ -24,7 +25,7 @@
         {#each alternatives.alternatives as alt (alt.approach)}
           <div class="alternative-card">
             <p class="alternative-approach">{alt.approach}</p>
-            <p class="alternative-tradeoffs">{alt.tradeoffs}</p>
+            <p class="alternative-tradeoffs"><MarkdownView source={alt.tradeoffs} /></p>
             <span
               class="assessment-chip assessment-{alt.assessment}"
               aria-label="Assessment: {alt.assessment}"
@@ -35,7 +36,7 @@
               {:else}Different goals
               {/if}
             </span>
-            <p class="alternative-rationale">{alt.rationale}</p>
+            <p class="alternative-rationale"><MarkdownView source={alt.rationale} /></p>
           </div>
         {/each}
       </div>
@@ -126,5 +127,17 @@
     opacity: 0.65;
     font-style: italic;
     line-height: 1.4;
+  }
+
+  /* MarkdownView inside tradeoffs/rationale: no block margins */
+  .alternative-tradeoffs :global(.markdown-view),
+  .alternative-rationale :global(.markdown-view) {
+    font-size: inherit;
+    line-height: inherit;
+  }
+
+  .alternative-tradeoffs :global(p),
+  .alternative-rationale :global(p) {
+    margin: 0;
   }
 </style>

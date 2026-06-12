@@ -40,6 +40,7 @@
 
 <AiPanel title="Verdict" state={run.verdict} onretry={() => run.retry('verdict')}>
   {#if verdict}
+    <p class="verdict-explainer">The specific observations the AI based the behavior verdict on — each row cites what changed and where.</p>
     {#if verdict.evidence.length > 0}
       {@const visibleEvidence = evidenceExpanded
         ? verdict.evidence
@@ -88,6 +89,14 @@
 </AiPanel>
 
 <style>
+  .verdict-explainer {
+    margin: 0 0 0.6rem;
+    font-size: 0.8rem;
+    opacity: 0.55;
+    font-style: italic;
+    line-height: 1.4;
+  }
+
   .verdict-evidence {
     margin: 0 0 0.5rem 0;
     padding-left: 0;

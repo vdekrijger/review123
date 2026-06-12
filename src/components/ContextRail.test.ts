@@ -161,7 +161,7 @@ describe('ContextRail content parity — shared panels', () => {
     expect(texts.some((t) => t.includes('summary'))).toBe(true)
   })
 
-  it('renders Verdict evidence section header when expanded', () => {
+  it('renders "Why this verdict" section header when expanded', () => {
     render(ContextRail, {
       props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
     })
@@ -381,7 +381,7 @@ describe('ContextRail — registry section order', () => {
     expect(testsIdx).toBeGreaterThan(diagramsIdx)
   })
 
-  it('Verdict evidence appears before CI details in DOM order', () => {
+  it('"Why this verdict" appears before CI details in DOM order', () => {
     const { container } = render(ContextRail, {
       props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
     })

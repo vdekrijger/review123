@@ -4,6 +4,14 @@ import TestInsightPanel from './TestInsightPanel.svelte'
 import type { AiRun } from '../../lib/ai/run.svelte'
 import type { TestInsight } from '../../lib/ai/schemas'
 
+// Mock mermaid (MarkdownView dependency)
+vi.mock('mermaid', () => ({
+  default: {
+    initialize: vi.fn(),
+    render: vi.fn().mockResolvedValue({ svg: '<svg/>' }),
+  },
+}))
+
 function makeRun(overrides: Partial<AiRun>): AiRun {
   return {
     summary: { status: 'idle' },
@@ -60,5 +68,48 @@ describe('TestInsightPanel', () => {
       props: { run: makeRun({ tests: { status: 'done', value: tests } }) },
     })
     expect(screen.getByText(/No AI-inferred test coverage/i)).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Markdown rendering — gap text with backticks becomes <code> element
+// ---------------------------------------------------------------------------
+
+describe('TestInsightPanel — markdown in covered behaviors and gaps', () => {
+  it('gap text with backticks renders a <code> element (not raw backticks)', () => {
+    const tests: TestInsight = {
+      covered: [],
+      gaps: ['src/foo.ts: the `handleError` function is not tested'],
+    }
+    const { container } = render(TestInsightPanel, {
+      props: { run: makeRun({ tests: { status: 'done', value: tests } }) },
+    })
+    const codeEl = container.querySelector('.tests-gap-text code')
+    expect(codeEl).not.toBeNull()
+    expect(codeEl!.textContent).toBe('handleError')
+  })
+
+  it('covered behavior with backticks renders a <code> element', () => {
+    const tests: TestInsight = {
+      covered: [{ behavior: 'calls `setState` on mount', test: 'mount.test.ts', file: 'src/comp.ts' }],
+      gaps: [],
+    }
+    const { container } = render(TestInsightPanel, {
+      props: { run: makeRun({ tests: { status: 'done', value: tests } }) },
+    })
+    const codeEl = container.querySelector('.tests-covered-behavior code')
+    expect(codeEl).not.toBeNull()
+    expect(codeEl!.textContent).toBe('setState')
+  })
+
+  it('gap text without backticks renders as plain text (no spurious <code>)', () => {
+    const tests: TestInsight = {
+      covered: [],
+      gaps: ['src/foo.ts: edge case missing'],
+    }
+    const { container } = render(TestInsightPanel, {
+      props: { run: makeRun({ tests: { status: 'done', value: tests } }) },
+    })
+    expect(container.querySelector('.tests-gap-text code')).toBeNull()
   })
 })
