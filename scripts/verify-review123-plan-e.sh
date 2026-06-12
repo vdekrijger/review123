@@ -223,13 +223,15 @@ vt "E11-bb-displayname"       "displayName is Bitbucket"                        
 # E12 — Settings UI: Bitbucket fields
 # ===========================================================================
 
-header "E12-settings-bitbucket: SettingsPanel Bitbucket auth fields"
+# NOTE (Plan F): SettingsPanel.svelte was retired in favour of the /settings
+# page; these tests moved to the decomposed ProvidersSection component.
+header "E12-settings-bitbucket: ProvidersSection Bitbucket auth fields"
 
-vt "E12-settings-bb-masked"   "Bitbucket email and token inputs are type=password .masked." src/components/SettingsPanel.test.ts
-vt "E12-settings-bb-save"     "saving Bitbucket credentials stores them via saveBitbucketAuth" src/components/SettingsPanel.test.ts
-vt "E12-settings-bb-hint"     "Bitbucket hint text is present in the Advanced section" src/components/SettingsPanel.test.ts
-vt "E12-settings-bb-partial"  "saving with email but empty token shows error, does not call onclose" src/components/SettingsPanel.test.ts
-vt "E12-settings-bb-clear"    "clearing previously stored credentials saves null for bitbucketAuth" src/components/SettingsPanel.test.ts
+vt "E12-settings-bb-masked"   "Bitbucket email and token inputs are type=password .masked." src/components/settings/ProvidersSection.test.ts
+vt "E12-settings-bb-save"     "saving Bitbucket credentials stores them via saveBitbucketAuth" src/components/settings/ProvidersSection.test.ts
+vt "E12-settings-bb-hint"     "Bitbucket hint text is present in the Advanced section" src/components/settings/ProvidersSection.test.ts
+vt "E12-settings-bb-partial"  "saving with email but empty token shows error, does not store" src/components/settings/ProvidersSection.test.ts
+vt "E12-settings-bb-clear"    "clearing previously stored credentials saves null for bitbucketAuth" src/components/settings/ProvidersSection.test.ts
 
 # ===========================================================================
 # E13 — Landing: multi-provider copy + history

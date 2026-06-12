@@ -1405,3 +1405,60 @@ describe('ai_task_completed carries tokens when usage available', () => {
     expect(attentionCompleted![1]).toMatchObject({ task: 'attention', tokens: 30 })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Active-provider awareness (Plan F Task F3)
+// The no-key gate and error copy must follow settings.aiProvider, not be
+// hardwired to deepseekKey / "DeepSeek".
+// ---------------------------------------------------------------------------
+
+describe('active-provider awareness (Plan F Task F3)', () => {
+  it('start() proceeds when aiProvider=anthropic and only anthropicKey is set', async () => {
+    const deps = makeDeps({ hasKey: false })
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({ aiProvider: 'anthropic', anthropicKey: 'sk-ant-test' }),
+    )
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.summary.status).not.toBe('no-key')
+    expect(deps.gateAi).toHaveBeenCalled()
+  })
+
+  it('start() sets no-key when aiProvider=anthropic and only deepseekKey is set', async () => {
+    const deps = makeDeps({ hasKey: false })
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({ aiProvider: 'anthropic', deepseekKey: 'sk-ds-test' }),
+    )
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.summary.status).toBe('no-key')
+    expect(deps.gateAi).not.toHaveBeenCalled()
+  })
+
+  it('coach() no-key error names the ACTIVE provider (Gemini)', async () => {
+    const deps = makeDeps({ hasKey: false })
+    localStorage.setItem('review123:settings', JSON.stringify({ aiProvider: 'gemini' }))
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.coach([])
+
+    expect((result as { error: string }).error).toContain('No Gemini API key')
+  })
+
+  it('stream error copy names the ACTIVE provider (Anthropic)', async () => {
+    const deps = makeDeps({ hasKey: false })
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({ aiProvider: 'anthropic', anthropicKey: 'sk-ant-test' }),
+    )
+    deps.llmStreamWithUsage = vi.fn().mockRejectedValue(new LlmError('server'))
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.summary.status).toBe('error')
+    expect(run.summary.error).toContain('Anthropic')
+  })
+})

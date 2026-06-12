@@ -78,36 +78,43 @@ describe('AppearanceSection', () => {
     expect((plexRadio as HTMLInputElement).checked).toBe(true)
   })
 
-  it('renders "Show review progress bar" checkbox', () => {
+  it('renders Progress bar radiogroup with Show and Hide options (fieldset style, no bare checkbox)', () => {
     render(AppearanceSection)
-    expect(screen.getByRole('checkbox', { name: /show review progress bar/i })).toBeInTheDocument()
+    const group = screen.getByRole('group', { name: /progress bar/i })
+    expect(group).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: /^show$/i })).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: /^hide$/i })).toBeInTheDocument()
+    // The old bare checkbox must be gone
+    expect(screen.queryByRole('checkbox', { name: /show review progress bar/i })).toBeNull()
   })
 
-  it('"Show review progress bar" checkbox is checked by default (showProgress defaults to true)', () => {
+  it('Show is selected by default (showProgress defaults to true)', () => {
     render(AppearanceSection)
-    const cb = screen.getByRole('checkbox', { name: /show review progress bar/i }) as HTMLInputElement
-    expect(cb.checked).toBe(true)
+    const group = screen.getByRole('group', { name: /progress bar/i })
+    const showRadio = within(group).getByRole('radio', { name: /^show$/i }) as HTMLInputElement
+    expect(showRadio.checked).toBe(true)
   })
 
-  it('"Show review progress bar" unchecked when showProgress=false in storage', () => {
+  it('Hide is selected when showProgress=false in storage', () => {
     setShowProgress(false)
     render(AppearanceSection)
-    const cb = screen.getByRole('checkbox', { name: /show review progress bar/i }) as HTMLInputElement
-    expect(cb.checked).toBe(false)
+    const group = screen.getByRole('group', { name: /progress bar/i })
+    const hideRadio = within(group).getByRole('radio', { name: /^hide$/i }) as HTMLInputElement
+    expect(hideRadio.checked).toBe(true)
   })
 
-  it('toggling the checkbox immediately persists showProgress=false', async () => {
+  it('clicking Hide immediately persists showProgress=false', async () => {
     render(AppearanceSection)
-    const cb = screen.getByRole('checkbox', { name: /show review progress bar/i })
-    await userEvent.click(cb)
+    const group = screen.getByRole('group', { name: /progress bar/i })
+    await userEvent.click(within(group).getByRole('radio', { name: /^hide$/i }))
     expect(getSettings().showProgress).toBe(false)
   })
 
-  it('toggling the checkbox twice restores showProgress=true', async () => {
+  it('clicking Hide then Show restores showProgress=true', async () => {
     render(AppearanceSection)
-    const cb = screen.getByRole('checkbox', { name: /show review progress bar/i })
-    await userEvent.click(cb)
-    await userEvent.click(cb)
+    const group = screen.getByRole('group', { name: /progress bar/i })
+    await userEvent.click(within(group).getByRole('radio', { name: /^hide$/i }))
+    await userEvent.click(within(group).getByRole('radio', { name: /^show$/i }))
     expect(getSettings().showProgress).toBe(true)
   })
 

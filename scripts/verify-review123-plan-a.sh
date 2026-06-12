@@ -67,7 +67,8 @@ header "REQ-04 (subset): PAT storage, validation, masking"
 vt "EC-04a" "EC-04a" src/lib/settings/settings.test.ts
 vt "EC-04c" "EC-04c/EC-04e" src/lib/github/client.test.ts
 vt "EC-04e" "EC-04c/EC-04e" src/lib/github/client.test.ts
-vt "EC-04h" "EC-04h" src/components/SettingsPanel.test.ts
+# NOTE (Plan F): SettingsPanel.svelte retired — EC-04h moved to ProvidersSection
+vt "EC-04h" "EC-04h" src/components/settings/ProvidersSection.test.ts
 vt "EC-04h-no-leak" "records key service but never the key value" src/lib/analytics/analytics.test.ts
 
 # --- REQ-05: PR data fetching ---

@@ -18,8 +18,9 @@
  */
 
 import { getSettings } from '../settings/settings'
-import { activeLlmConfig } from './config'
-import type { LlmProviderDef, LlmModelDef } from './providers'
+import { activeLlmConfig, PROVIDER_KEY_FIELDS } from './config'
+import { getProvider, getModelDef } from './providers'
+import type { LlmProviderDef, LlmModelDef, LlmProviderId } from './providers'
 
 // ---------------------------------------------------------------------------
 // LlmError
@@ -78,6 +79,13 @@ export interface LlmCompleteOpts {
   user: string
   json?: boolean
   signal?: AbortSignal
+  /**
+   * Optional output-token cap. Used by llmTestConnection's minimal ping.
+   * openai-compat → body.max_tokens; anthropic → body.max_tokens (else 4096).
+   * Gemini intentionally IGNORES this: 2.5 thinking models can exhaust a
+   * 1-token cap before emitting any text part, which would read as an error.
+   */
+  maxTokens?: number
 }
 
 export interface LlmStreamOpts {
@@ -115,17 +123,8 @@ function parseSseLine(line: string): string | null {
 // Key resolution per provider
 // ---------------------------------------------------------------------------
 
-type KeyName = 'deepseekKey' | 'openaiKey' | 'anthropicKey' | 'geminiKey'
-
-const PROVIDER_KEY_MAP: Record<string, KeyName> = {
-  deepseek: 'deepseekKey',
-  openai: 'openaiKey',
-  anthropic: 'anthropicKey',
-  gemini: 'geminiKey',
-}
-
 function getKeyForProvider(provider: LlmProviderDef): string {
-  const keyName = PROVIDER_KEY_MAP[provider.id]
+  const keyName = PROVIDER_KEY_FIELDS[provider.id]
   if (!keyName) throw new LlmError('no-key', `No key mapping for provider ${provider.id}`)
   const settings = getSettings()
   const key = settings[keyName] as string | null
@@ -156,7 +155,7 @@ async function openaiCompatComplete(
   includeUsage: boolean,
 ): Promise<LlmCompleteResult> {
   const key = getKeyForProvider(provider)
-  const { system, user, json, signal } = opts
+  const { system, user, json, signal, maxTokens } = opts
 
   const body: Record<string, unknown> = {
     model: model.id,
@@ -166,6 +165,7 @@ async function openaiCompatComplete(
     ],
   }
   if (json) body.response_format = { type: 'json_object' }
+  if (maxTokens !== undefined) body.max_tokens = maxTokens
 
   const effectiveSignal = signal ?? AbortSignal.timeout(60_000)
 
@@ -337,11 +337,11 @@ async function anthropicComplete(
   opts: LlmCompleteOpts,
 ): Promise<LlmCompleteResult> {
   const key = getKeyForProvider(provider)
-  const { system, user, signal } = opts
+  const { system, user, signal, maxTokens } = opts
 
   const body: Record<string, unknown> = {
     model: model.id,
-    max_tokens: 4096,
+    max_tokens: maxTokens ?? 4096,
     system,
     messages: [{ role: 'user', content: user }],
   }
@@ -858,4 +858,47 @@ export async function llmJsonWithRepairWithUsage<T>(
   }
 
   throw new LlmError('invalid-output', 'LLM produced invalid JSON after repair retry')
+}
+
+// ---------------------------------------------------------------------------
+// llmTestConnection — minimal connection ping for the Settings "Save & test"
+// button. Goes through the REAL transport adapters for the GIVEN provider
+// (independent of the active aiProvider setting). Never cached: llm.ts has no
+// cache layer — caching lives in run.svelte.ts, which this never touches.
+// Reads the provider's key from SAVED settings (the UI saves before testing).
+// ---------------------------------------------------------------------------
+
+export async function llmTestConnection(
+  providerId: LlmProviderId,
+  modelId?: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const provider = getProvider(providerId)
+  if (!provider) throw new LlmError('server', `Unknown provider: ${providerId}`)
+
+  const model =
+    (modelId ? getModelDef(provider, modelId) : undefined) ??
+    getModelDef(provider, provider.defaultModel) ??
+    provider.models[0]
+
+  const opts: LlmCompleteOpts = {
+    system: 'Connection test.',
+    user: 'Reply with the single word: ok',
+    // 1-token-style minimal request. Gemini ignores maxTokens by design
+    // (see LlmCompleteOpts.maxTokens) — its ping stays tiny via the prompt.
+    maxTokens: 1,
+    signal: signal ?? AbortSignal.timeout(15_000),
+  }
+
+  switch (provider.transport) {
+    case 'openai-compat':
+      await openaiCompatComplete(provider, model, opts, false)
+      return
+    case 'anthropic':
+      await anthropicComplete(provider, model, opts)
+      return
+    case 'gemini':
+      await geminiComplete(provider, model, opts)
+      return
+  }
 }

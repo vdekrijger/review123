@@ -420,11 +420,36 @@ describe('FileDiff — test file display modes', () => {
     expect(screen.getByText('test')).toBeInTheDocument()
   })
 
+  it('highlight mode: article (whole file card) has class "test-highlight" for the accent left border', () => {
+    setTestFileDisplay('highlight')
+    const { container } = render(FileDiff, { props: { file: testFile, mode: 'unified' } })
+    const article = container.querySelector('article.file-diff')
+    expect(article!.classList.contains('test-highlight')).toBe(true)
+  })
+
+  it('highlight mode: no test-dim class (tint+border+chip only)', () => {
+    setTestFileDisplay('highlight')
+    const { container } = render(FileDiff, { props: { file: testFile, mode: 'unified' } })
+    expect(container.querySelector('.test-dim')).not.toBeInTheDocument()
+  })
+
   it('dim mode: article has class "test-dim"', () => {
     setTestFileDisplay('dim')
     const { container } = render(FileDiff, { props: { file: testFile, mode: 'unified' } })
     const article = container.querySelector('article.file-diff')
     expect(article!.classList.contains('test-dim')).toBe(true)
+  })
+
+  it('dim mode: "test" chip is shown in header', () => {
+    setTestFileDisplay('dim')
+    render(FileDiff, { props: { file: testFile, mode: 'unified' } })
+    expect(screen.getByText('test')).toBeInTheDocument()
+  })
+
+  it('dim mode: no test-highlight classes anywhere (no tint, no accent border)', () => {
+    setTestFileDisplay('dim')
+    const { container } = render(FileDiff, { props: { file: testFile, mode: 'unified' } })
+    expect(container.querySelector('.test-highlight')).not.toBeInTheDocument()
   })
 
   it('dim mode: test file renders expanded (not collapsed) — dim means opacity only', () => {
@@ -438,6 +463,12 @@ describe('FileDiff — test file display modes', () => {
     const { container } = render(FileDiff, { props: { file: testFile, mode: 'unified' } })
     expect(container.querySelector('.test-highlight')).not.toBeInTheDocument()
     expect(container.querySelector('.test-dim')).not.toBeInTheDocument()
+  })
+
+  it('normal mode: no "test" chip', () => {
+    setTestFileDisplay('normal')
+    const { container } = render(FileDiff, { props: { file: testFile, mode: 'unified' } })
+    expect(container.querySelector('.test-chip')).not.toBeInTheDocument()
   })
 
   it('non-test file: no test-highlight even in highlight mode', () => {

@@ -5,6 +5,8 @@ import { navigate } from '../lib/router/router.svelte'
 import * as queueModule from '../lib/provider/queue'
 import type { QueueItem } from '../lib/provider/types'
 import { addToHistory, clearHistory } from '../lib/history/history'
+import { setSectionCollapsed } from '../lib/landing/collapse'
+import { _setCaptureForTest } from '../lib/analytics/analytics'
 import userEvent from '@testing-library/user-event'
 
 // Mock navigate — all navigation checks use vi.mocked(navigate) calls
@@ -175,5 +177,127 @@ describe('Landing recent reviews', () => {
     const btn = screen.getByRole('button', { name: /mygroup\/myproject#7/i })
     await userEvent.click(btn)
     expect(navigate).toHaveBeenCalledWith('/review/gitlab/mygroup/myproject/7')
+  })
+})
+
+describe('Landing collapsible sections', () => {
+  const capture = vi.fn()
+
+  beforeEach(() => {
+    localStorage.clear()
+    clearHistory()
+    vi.mocked(navigate).mockClear()
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([])
+    queueModule._resetQueueCacheForTest()
+    capture.mockClear()
+    _setCaptureForTest(capture)
+  })
+
+  it('queue section header is a toggle button, expanded by default', async () => {
+    render(Landing)
+    const toggle = screen.getByRole('button', { name: /your review queue/i })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    await screen.findByText(/no prs in your queue/i)
+  })
+
+  it('clicking the queue header collapses the queue body', async () => {
+    render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    await userEvent.click(screen.getByRole('button', { name: /your review queue/i }))
+    expect(screen.getByRole('button', { name: /your review queue/i })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/no prs in your queue/i)).not.toBeInTheDocument()
+  })
+
+  it('clicking a collapsed queue header expands it again', async () => {
+    render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    const toggle = screen.getByRole('button', { name: /your review queue/i })
+    await userEvent.click(toggle)
+    await userEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText(/no prs in your queue/i)).toBeInTheDocument()
+  })
+
+  it('queue collapsed state persists to localStorage and is restored on mount', async () => {
+    const first = render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    await userEvent.click(screen.getByRole('button', { name: /your review queue/i }))
+    first.unmount()
+
+    render(Landing)
+    const toggle = screen.getByRole('button', { name: /your review queue/i })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/no prs in your queue/i)).not.toBeInTheDocument()
+  })
+
+  it('recent reviews header is a toggle button, expanded by default', () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
+    render(Landing)
+    const toggle = screen.getByRole('button', { name: /recent reviews/i })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText(/alice\/widgets#42/)).toBeInTheDocument()
+  })
+
+  it('clicking the recent header collapses the history list', async () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
+    render(Landing)
+    await userEvent.click(screen.getByRole('button', { name: /recent reviews/i }))
+    expect(screen.getByRole('button', { name: /recent reviews/i })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/alice\/widgets#42/)).not.toBeInTheDocument()
+  })
+
+  it('recent collapsed state is restored on mount', async () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
+    setSectionCollapsed('recent', true)
+    render(Landing)
+    expect(screen.getByRole('button', { name: /recent reviews/i })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/alice\/widgets#42/)).not.toBeInTheDocument()
+  })
+
+  it('sections collapse independently', async () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
+    render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    await userEvent.click(screen.getByRole('button', { name: /your review queue/i }))
+    // queue collapsed, recent still expanded
+    expect(screen.queryByText(/no prs in your queue/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/alice\/widgets#42/)).toBeInTheDocument()
+  })
+
+  it('toggle is keyboard accessible (Enter activates)', async () => {
+    render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    const toggle = screen.getByRole('button', { name: /your review queue/i })
+    toggle.focus()
+    await userEvent.keyboard('{Enter}')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('expanding a section emits section_expanded with id + landing surface only', async () => {
+    render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    const toggle = screen.getByRole('button', { name: /your review queue/i })
+    await userEvent.click(toggle) // collapse — no event
+    expect(capture).not.toHaveBeenCalled()
+    await userEvent.click(toggle) // expand — event
+    expect(capture).toHaveBeenCalledWith('section_expanded', { section: 'queue', surface: 'landing' })
+    expect(capture).toHaveBeenCalledTimes(1)
+  })
+
+  it('expanding recent emits section_expanded with section:recent', async () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
+    render(Landing)
+    const toggle = screen.getByRole('button', { name: /recent reviews/i })
+    await userEvent.click(toggle)
+    await userEvent.click(toggle)
+    expect(capture).toHaveBeenCalledWith('section_expanded', { section: 'recent', surface: 'landing' })
+  })
+
+  it('Refresh button does not toggle the queue collapse state', async () => {
+    render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    await userEvent.click(screen.getByRole('button', { name: /refresh queue/i }))
+    expect(screen.getByRole('button', { name: /your review queue/i })).toHaveAttribute('aria-expanded', 'true')
+    await screen.findByText(/no prs in your queue/i)
   })
 })

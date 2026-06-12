@@ -6,7 +6,7 @@
  *    cannot widen past its parent. Fix: applyAppearance sets data-diffwidth on :root,
  *    CSS `:root[data-diffwidth='full'] .review { max-width: none }` lifts the cap.
  * 2. diffWidth read once at InspectStep mount — toggling does nothing without remount.
- *    Fix: attribute approach — SettingsPanel's onDiffWidthChange calls applyAppearance()
+ *    Fix: attribute approach — AppearanceSection's onDiffWidthChange calls applyAppearance()
  *    (same as theme/font flow), so the attribute flips immediately in the live DOM.
  */
 
@@ -14,12 +14,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within, fireEvent } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import InspectStep from './InspectStep.svelte'
-import SettingsPanel from './SettingsPanel.svelte'
+import AppearanceSection from './settings/AppearanceSection.svelte'
 import { getSettings, setDiffWidth } from '../lib/settings/settings'
 import * as appearanceModule from '../lib/settings/appearance.svelte'
 import type { PrFile } from '../lib/github/types'
 
-// Stub applyAppearance for SettingsPanel tests (same as SettingsPanel.test.ts)
+// Stub applyAppearance for AppearanceSection tests
 vi.mock('../lib/settings/appearance.svelte', () => ({
   applyAppearance: vi.fn(),
 }))
@@ -75,44 +75,44 @@ describe('settings — diffWidth (Fix 3)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Fix 3: SettingsPanel UI
+// Fix 3: Settings UI (AppearanceSection)
 // ---------------------------------------------------------------------------
 
-describe('SettingsPanel — Diff width radiogroup (Fix 3)', () => {
+describe('AppearanceSection — Diff width radiogroup (Fix 3)', () => {
   it('renders Diff width fieldset/radiogroup', () => {
-    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    render(AppearanceSection)
     expect(screen.getByRole('group', { name: /diff width/i })).toBeInTheDocument()
   })
 
   it('renders Centered and Full width radio options', () => {
-    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    render(AppearanceSection)
     const group = screen.getByRole('group', { name: /diff width/i })
     expect(within(group).getByRole('radio', { name: /centered/i })).toBeInTheDocument()
     expect(within(group).getByRole('radio', { name: /full width/i })).toBeInTheDocument()
   })
 
   it('Centered radio is checked by default', () => {
-    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    render(AppearanceSection)
     const centeredRadio = screen.getByRole('radio', { name: /centered/i })
     expect((centeredRadio as HTMLInputElement).checked).toBe(true)
   })
 
   it('Full width radio is checked when diffWidth=full in storage', () => {
     setDiffWidth('full')
-    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    render(AppearanceSection)
     const fullRadio = screen.getByRole('radio', { name: /full width/i })
     expect((fullRadio as HTMLInputElement).checked).toBe(true)
   })
 
   it('clicking Full width radio saves diffWidth=full immediately', async () => {
-    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    render(AppearanceSection)
     await fireEvent.click(screen.getByRole('radio', { name: /full width/i }))
     expect(getSettings().diffWidth).toBe('full')
   })
 
   it('clicking Centered radio saves diffWidth=centered immediately', async () => {
     setDiffWidth('full')
-    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    render(AppearanceSection)
     await fireEvent.click(screen.getByRole('radio', { name: /centered/i }))
     expect(getSettings().diffWidth).toBe('centered')
   })
@@ -154,9 +154,9 @@ describe('InspectStep — diff-full class (Fix 3)', () => {
 // Root cause 1 + 2 regression tests (attribute-driven fix)
 // ---------------------------------------------------------------------------
 
-describe('SettingsPanel — onDiffWidthChange calls applyAppearance (attribute-driven fix)', () => {
+describe('AppearanceSection — onDiffWidthChange calls applyAppearance (attribute-driven fix)', () => {
   it('clicking Full width radio calls applyAppearance immediately', async () => {
-    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    render(AppearanceSection)
     vi.mocked(appearanceModule.applyAppearance).mockClear()
     await fireEvent.click(screen.getByRole('radio', { name: /full width/i }))
     expect(vi.mocked(appearanceModule.applyAppearance)).toHaveBeenCalled()
@@ -164,7 +164,7 @@ describe('SettingsPanel — onDiffWidthChange calls applyAppearance (attribute-d
 
   it('clicking Centered radio calls applyAppearance immediately', async () => {
     setDiffWidth('full')
-    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    render(AppearanceSection)
     vi.mocked(appearanceModule.applyAppearance).mockClear()
     await fireEvent.click(screen.getByRole('radio', { name: /centered/i }))
     expect(vi.mocked(appearanceModule.applyAppearance)).toHaveBeenCalled()
@@ -173,7 +173,7 @@ describe('SettingsPanel — onDiffWidthChange calls applyAppearance (attribute-d
 
 describe('applyAppearance — sets data-diffwidth on documentElement (container-level fix)', () => {
   it('documentElement gets data-diffwidth=full immediately when Full width radio clicked', async () => {
-    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    render(AppearanceSection)
     vi.mocked(appearanceModule.applyAppearance).mockClear()
     await fireEvent.click(screen.getByRole('radio', { name: /full width/i }))
     // Setting must be persisted AND applyAppearance called (which sets data-diffwidth on :root)
@@ -183,7 +183,7 @@ describe('applyAppearance — sets data-diffwidth on documentElement (container-
 
   it('documentElement gets data-diffwidth=centered immediately when Centered radio clicked', async () => {
     setDiffWidth('full')
-    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    render(AppearanceSection)
     vi.mocked(appearanceModule.applyAppearance).mockClear()
     await fireEvent.click(screen.getByRole('radio', { name: /centered/i }))
     expect(getSettings().diffWidth).toBe('centered')

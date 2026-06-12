@@ -9,7 +9,7 @@
  * stub any combination without module-level mocking.
  */
 
-import { getSettings } from '../settings/settings'
+import { activeLlmConfig, activeProviderHasKey } from '../llm/config'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import {
@@ -126,13 +126,15 @@ interface AiRunDeps {
 // ---------------------------------------------------------------------------
 
 function humanMessage(kind: string): string {
+  // Name the ACTIVE provider (Plan F) — not hardwired to DeepSeek.
+  const provider = activeLlmConfig().provider.displayName
   switch (kind) {
-    case 'no-key': return 'No DeepSeek API key configured.'
-    case 'auth': return 'API key was rejected. Please check your DeepSeek key in Settings.'
-    case 'rate-limited': return 'Rate limited by DeepSeek. Please try again in a moment.'
-    case 'server': return 'DeepSeek server error. Please try again later.'
-    case 'network': return 'Network error reaching DeepSeek. Check your connection.'
-    case 'timeout': return 'Request to DeepSeek timed out. Please try again.'
+    case 'no-key': return `No ${provider} API key configured.`
+    case 'auth': return `API key was rejected. Please check your ${provider} key in Settings.`
+    case 'rate-limited': return `Rate limited by ${provider}. Please try again in a moment.`
+    case 'server': return `${provider} server error. Please try again later.`
+    case 'network': return `Network error reaching ${provider}. Check your connection.`
+    case 'timeout': return `Request to ${provider} timed out. Please try again.`
     case 'invalid-output': return 'AI returned an unexpected response format. Please retry.'
     default: return 'An unexpected error occurred. Please retry.'
   }
@@ -466,10 +468,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // ---------------------------------------------------------------------------
 
   async function start(): Promise<void> {
-    // No-key check: if no DeepSeek key, set all panels to 'no-key' (EC-12a)
-    // Do this before consent dialog — no point asking consent if there's no key
-    const settings = getSettings()
-    if (!settings.deepseekKey) {
+    // No-key check: if the ACTIVE provider has no key, set all panels to
+    // 'no-key' (EC-12a). Do this before consent dialog — no point asking
+    // consent if there's no key.
+    if (!activeProviderHasKey()) {
       setAllPanels('no-key')
       return
     }
@@ -531,9 +533,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
   async function coach(drafts: Draft[], prComments?: string[]): Promise<CoachResult | { error: string }> {
     // No-key check: same early-exit as start()
-    const settings = getSettings()
-    if (!settings.deepseekKey) {
-      return { error: 'No DeepSeek API key configured.' }
+    if (!activeProviderHasKey()) {
+      return { error: humanMessage('no-key') }
     }
 
     // Consent gate: private repos may quote code in comments (same gateAi / shared ask)
@@ -586,9 +587,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     focus?: AskFocus,
   ): Promise<{ ok: true; answer: string } | { ok: false; error: string }> {
     // No-key check: same early-exit as start() and coach()
-    const settings = getSettings()
-    if (!settings.deepseekKey) {
-      return { ok: false, error: 'No DeepSeek API key configured.' }
+    if (!activeProviderHasKey()) {
+      return { ok: false, error: humanMessage('no-key') }
     }
 
     // Consent gate: same gateAi / shared ask
@@ -640,8 +640,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
   async function runSkillReviews(onUpdate?: () => void): Promise<void> {
     // No-key gate: same early-exit as start() and coach()
-    const settings = getSettings()
-    if (!settings.deepseekKey) return
+    if (!activeProviderHasKey()) return
 
     // Consent gate: shared gateAi / shared ask
     const allowed = await gateAi({ repo, isPrivate, ask: askConsent })

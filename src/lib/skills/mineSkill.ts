@@ -1,14 +1,17 @@
 /**
  * src/lib/skills/mineSkill.ts — "mine my GitHub reviews into a reviewer skill" feature.
  *
- * Flow:
- *   1. GET /user → get authenticated login
- *   2. Fetch /repos/{o}/{r}/pulls/comments?sort=created&direction=desc&per_page=100 (up to 3 pages)
- *   3. Filter by author === login, cap at 150 comments, strip code fences > 10 lines
+ * Flow (account-wide by default):
+ *   1. Provider resolves the authenticated identity (GET /user)
+ *   2. Provider fetches the user's recent review comments ACROSS repos
+ *      (GitHub: /search/issues?q=type:pr commenter:LOGIN → per-PR review comments;
+ *       GitLab: /events?action=commented → MergeRequest notes).
+ *      An optional repoFilter narrows the harvest to one repository.
+ *   3. Comments are author-filtered, capped at 150, code fences > 10 lines stripped
  *   4. Call llmJsonWithRepair with the mining prompt → { name, content }
  *   5. Return the draft skill for the user to review + save (NOT auto-saved)
  *
- * Privacy note: comments are sent to DeepSeek for analysis.
+ * Privacy note: comments are sent to the active AI provider (settings.aiProvider) for analysis.
  * This module is a settings-time flow (not a review-time flow like tasks.ts).
  */
 
@@ -233,20 +236,27 @@ export interface MineSkillPipelineDeps {
     id: string
     displayName: string
     authState(): { configured: boolean; hint: string }
-    getMyReviewComments?(repo: { owner: string; repo: string }, cap: number): Promise<string[]>
+    getMyAccountReviewComments?(cap: number, repoFilter?: { owner: string; repo: string }): Promise<string[]>
   }
 }
 
+/**
+ * Mine the authenticated user's recent review comments (account-wide by
+ * default) and distill them into a reviewer skill draft.
+ *
+ * @param repoFilter — optional narrowing to a single repository. When null,
+ *   comments are sourced across all repos via the provider's account-scoped path.
+ */
 export async function mineSkillPipeline(
   providerId: string,
-  repo: { owner: string; repo: string },
+  repoFilter: { owner: string; repo: string } | null,
   deps: MineSkillPipelineDeps,
 ): Promise<MineSkillResult | MineSkillError> {
   // Resolve provider (from registry or injected override)
   const provider = deps.provider ?? providerFor(providerId)
 
-  // Check provider supports mining
-  if (typeof provider.getMyReviewComments !== 'function') {
+  // Check provider supports account-scoped mining (capability = method presence)
+  if (typeof provider.getMyAccountReviewComments !== 'function') {
     return {
       ok: false,
       error: `Generate from my reviews is not available for ${provider.displayName} yet.`,
@@ -259,10 +269,10 @@ export async function mineSkillPipeline(
     return { ok: false, error: auth.hint }
   }
 
-  // Fetch comments via provider
+  // Fetch comments via provider (account-wide, optionally narrowed to one repo)
   let comments: string[]
   try {
-    comments = await provider.getMyReviewComments(repo, MINE_COMMENTS_CAP)
+    comments = await provider.getMyAccountReviewComments(MINE_COMMENTS_CAP, repoFilter ?? undefined)
   } catch (err) {
     return {
       ok: false,
@@ -273,7 +283,9 @@ export async function mineSkillPipeline(
   if (comments.length === 0) {
     return {
       ok: false,
-      error: `No review comments found on ${repo.owner}/${repo.repo}.`,
+      error: repoFilter
+        ? `No review comments found on ${repoFilter.owner}/${repoFilter.repo}.`
+        : 'No recent review comments found for your account.',
     }
   }
 

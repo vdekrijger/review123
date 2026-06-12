@@ -11,7 +11,25 @@
 
 import { getSettings } from '../settings/settings'
 import { PROVIDERS, getProvider, getModelDef, computeBudgetTokens } from './providers'
-import type { LlmProviderDef, LlmModelDef } from './providers'
+import type { LlmProviderDef, LlmModelDef, LlmProviderId } from './providers'
+
+/** Settings field that stores each provider's API key. */
+export const PROVIDER_KEY_FIELDS = {
+  deepseek: 'deepseekKey',
+  openai: 'openaiKey',
+  anthropic: 'anthropicKey',
+  gemini: 'geminiKey',
+} as const satisfies Record<LlmProviderId, string>
+
+/**
+ * Whether the ACTIVE provider (settings.aiProvider) has an API key saved.
+ * Used by no-key gates so they follow the provider selection instead of
+ * being hardwired to deepseekKey.
+ */
+export function activeProviderHasKey(): boolean {
+  const { provider } = activeLlmConfig()
+  return !!getSettings()[PROVIDER_KEY_FIELDS[provider.id]]
+}
 
 /** Static fallback — kept for compatibility. Do not use in new code. */
 export const LLM_CONFIG = {
