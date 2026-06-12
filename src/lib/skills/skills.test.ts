@@ -8,6 +8,8 @@
  *   - Corrupt localStorage is tolerated
  *   - Shape validation on load
  *   - id is deterministic djb2(name+addedAt)
+ *   - SAMPLE_SKILL_NAME / SAMPLE_SKILL_CONTENT exports
+ *   - installed sample skill is enabled and behaves like any skill
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
@@ -21,6 +23,7 @@ import {
   SKILLS_CAP,
   SKILL_CONTENT_CAP,
 } from './skills'
+import { SAMPLE_SKILL_NAME, SAMPLE_SKILL_CONTENT } from './sampleSkill'
 
 beforeEach(() => {
   localStorage.clear()
@@ -203,5 +206,48 @@ describe('toggleSkill', () => {
     expect(() => toggleSkill('nonexistent')).not.toThrow()
     expect(listSkills()).toHaveLength(1)
     expect(listSkills()[0].enabled).toBe(true)
+  })
+})
+
+describe('SAMPLE_SKILL_NAME and SAMPLE_SKILL_CONTENT', () => {
+  it('SAMPLE_SKILL_NAME is a non-empty string', () => {
+    expect(typeof SAMPLE_SKILL_NAME).toBe('string')
+    expect(SAMPLE_SKILL_NAME.trim().length).toBeGreaterThan(0)
+  })
+
+  it('SAMPLE_SKILL_CONTENT is non-empty', () => {
+    expect(typeof SAMPLE_SKILL_CONTENT).toBe('string')
+    expect(SAMPLE_SKILL_CONTENT.trim().length).toBeGreaterThan(0)
+  })
+
+  it('SAMPLE_SKILL_CONTENT is within the 20k content cap', () => {
+    expect(SAMPLE_SKILL_CONTENT.length).toBeLessThanOrEqual(SKILL_CONTENT_CAP)
+  })
+
+  it('SAMPLE_SKILL_CONTENT contains the word "Priorities"', () => {
+    expect(SAMPLE_SKILL_CONTENT).toContain('Priorities')
+  })
+
+  it('installed sample skill is enabled by default', () => {
+    const skill = addSkill(SAMPLE_SKILL_NAME, SAMPLE_SKILL_CONTENT)
+    expect(skill.enabled).toBe(true)
+  })
+
+  it('installed sample skill can be toggled like any other skill', () => {
+    const skill = addSkill(SAMPLE_SKILL_NAME, SAMPLE_SKILL_CONTENT)
+    toggleSkill(skill.id)
+    const updated = listSkills().find(s => s.id === skill.id)
+    expect(updated?.enabled).toBe(false)
+  })
+
+  it('installed sample skill can be removed like any other skill', () => {
+    const skill = addSkill(SAMPLE_SKILL_NAME, SAMPLE_SKILL_CONTENT)
+    removeSkill(skill.id)
+    expect(listSkills()).toHaveLength(0)
+  })
+
+  it('installed sample skill has the correct name', () => {
+    const skill = addSkill(SAMPLE_SKILL_NAME, SAMPLE_SKILL_CONTENT)
+    expect(skill.name).toBe(SAMPLE_SKILL_NAME)
   })
 })

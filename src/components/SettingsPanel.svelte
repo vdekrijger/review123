@@ -7,6 +7,7 @@
     listSkills, addSkill, removeSkill, toggleSkill,
     SKILLS_CAP, SKILL_CONTENT_CAP, type ReviewerSkill,
   } from '../lib/skills/skills'
+  import { SAMPLE_SKILL_NAME, SAMPLE_SKILL_CONTENT } from '../lib/skills/sampleSkill'
 
   let { onclose }: { onclose: () => void } = $props()
   const current = getSettings()
@@ -26,6 +27,13 @@
 
   function refreshSkills() {
     skills = listSkills()
+  }
+
+  const hasSampleSkill = $derived(skills.some(s => s.name === SAMPLE_SKILL_NAME))
+
+  function handleAddSampleSkill() {
+    addSkill(SAMPLE_SKILL_NAME, SAMPLE_SKILL_CONTENT)
+    refreshSkills()
   }
 
   function handleToggleSkill(id: string) {
@@ -188,6 +196,17 @@
           </li>
         {/each}
       </ul>
+    {/if}
+
+    {#if !hasSampleSkill}
+      <div class="sample-skill-row">
+        <button
+          class="add-skill-btn sample-skill-btn"
+          onclick={handleAddSampleSkill}
+          disabled={skills.length >= SKILLS_CAP}
+        >Add sample reviewer</button>
+        <p class="sample-skill-caption">A general best-practices persona — duplicate and edit it to make your own.</p>
+      </div>
     {/if}
 
     {#if !addSkillOpen}
@@ -423,5 +442,15 @@
   .add-skill-actions {
     display: flex;
     gap: 0.5rem;
+  }
+
+  .sample-skill-row {
+    margin-bottom: 0.5rem;
+  }
+
+  .sample-skill-caption {
+    font-size: 0.8em;
+    color: var(--text-muted);
+    margin: 0.2rem 0 0;
   }
 </style>
