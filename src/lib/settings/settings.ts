@@ -29,6 +29,7 @@ export interface Settings {
   deepseekKey: string | null
   diffMode: DiffMode
   githubAuth: GithubAuth | null
+  gitlabToken: string | null
   railCollapsed: boolean
   theme: Theme
   uiFont: UiFont
@@ -43,6 +44,7 @@ const DEFAULTS: Settings = {
   deepseekKey: null,
   diffMode: 'unified',
   githubAuth: null,
+  gitlabToken: null,
   railCollapsed: false,
   theme: 'auto',
   uiFont: 'plex',
@@ -77,6 +79,10 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const deepseekKey = obj['deepseekKey']
   if (typeof deepseekKey === 'string' || deepseekKey === null) result.deepseekKey = deepseekKey
+
+  const gitlabToken = obj['gitlabToken']
+  if (typeof gitlabToken === 'string') result.gitlabToken = gitlabToken
+  else if (gitlabToken === null) result.gitlabToken = null
 
   const railCollapsed = obj['railCollapsed']
   if (typeof railCollapsed === 'boolean') result.railCollapsed = railCollapsed
@@ -179,3 +185,18 @@ export const setShowProgress = (show: boolean) => save({ showProgress: show })
 export const setTreeOpen = (open: boolean) => save({ treeOpen: open })
 export const setTestFileDisplay = (v: TestFileDisplay) => save({ testFileDisplay: v })
 export const setDiffWidth = (v: DiffWidth) => save({ diffWidth: v })
+
+/**
+ * Save the GitLab personal access token (PAT).
+ * Pass null to clear. Trims whitespace; throws on empty string.
+ * Required scope: api
+ */
+export function setGitlabToken(v: string | null): void {
+  if (v === null) {
+    save({ gitlabToken: null })
+    return
+  }
+  const trimmed = v.trim()
+  if (!trimmed) throw new Error('gitlabToken must not be empty')
+  save({ gitlabToken: trimmed })
+}

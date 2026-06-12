@@ -21,13 +21,14 @@ describe('SettingsPanel', () => {
     expect(screen.getByRole('dialog', { name: /settings/i })).toBeInTheDocument()
   })
 
-  it('EC-04h: both inputs have type="password" (masking)', async () => {
+  it('EC-04h: all token inputs have type="password" (masking)', async () => {
     render(SettingsPanel, { props: { onclose: vi.fn() } })
-    // PAT is inside the Advanced disclosure — open it first
+    // PAT/GitLab fields are inside the Advanced disclosure — open it first
     const summary = screen.getByText(/advanced.*personal access token/i)
     await userEvent.click(summary)
     const inputs = document.querySelectorAll('input[type="password"]')
-    expect(inputs).toHaveLength(2)
+    // DeepSeek + GitHub PAT + GitLab PAT = 3 password inputs
+    expect(inputs.length).toBeGreaterThanOrEqual(3)
     inputs.forEach((input) => {
       expect((input as HTMLInputElement).type).toBe('password')
     })

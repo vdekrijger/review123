@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens, saveGithubAuth,
-  setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay,
+  setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay, setGitlabToken,
 } from './settings'
 
 describe('settings', () => {
@@ -13,6 +13,7 @@ describe('settings', () => {
       deepseekKey: null,
       diffMode: 'unified',
       githubAuth: null,
+      gitlabToken: null,
       railCollapsed: false,
       theme: 'auto',
       uiFont: 'plex',
@@ -57,6 +58,7 @@ describe('settings', () => {
       deepseekKey: null,
       diffMode: 'unified',
       githubAuth: null,
+      gitlabToken: null,
       railCollapsed: false,
       theme: 'auto',
       uiFont: 'plex',
@@ -259,6 +261,42 @@ describe('settings', () => {
     it('coerces invalid testFileDisplay back to normal', () => {
       localStorage.setItem('review123:settings', JSON.stringify({ testFileDisplay: 'glow' }))
       expect(getSettings().testFileDisplay).toBe('normal')
+    })
+  })
+
+  describe('gitlabToken', () => {
+    it('defaults to null', () => {
+      expect(getSettings().gitlabToken).toBeNull()
+    })
+
+    it('setGitlabToken stores a trimmed token', () => {
+      setGitlabToken('  glpat_abc123  ')
+      expect(getSettings().gitlabToken).toBe('glpat_abc123')
+    })
+
+    it('setGitlabToken(null) clears the token', () => {
+      setGitlabToken('glpat_abc123')
+      setGitlabToken(null)
+      expect(getSettings().gitlabToken).toBeNull()
+    })
+
+    it('setGitlabToken rejects empty string', () => {
+      expect(() => setGitlabToken('')).toThrow('empty')
+    })
+
+    it('setGitlabToken rejects whitespace-only string', () => {
+      expect(() => setGitlabToken('   ')).toThrow('empty')
+    })
+
+    it('persists gitlabToken across getSettings() calls', () => {
+      setGitlabToken('glpat_persisted')
+      expect(getSettings().gitlabToken).toBe('glpat_persisted')
+      expect(getSettings().gitlabToken).toBe('glpat_persisted')
+    })
+
+    it('coerces invalid gitlabToken type to null', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ gitlabToken: 42 }))
+      expect(getSettings().gitlabToken).toBeNull()
     })
   })
 })
