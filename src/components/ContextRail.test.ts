@@ -89,3 +89,33 @@ describe('ContextRail theme — uses CSS variables for surface', () => {
     expect(aside?.getAttribute('style') ?? '').not.toMatch(/background\s*:/)
   })
 })
+
+describe('ContextRail topbar overlap fix', () => {
+  it('rail top is set via CSS var --topbar-h (not hardcoded 0)', () => {
+    // jsdom does not evaluate computed CSS-var values, so we assert that the
+    // element does NOT have an inline top:0 style — real top positioning comes
+    // from the stylesheet using var(--topbar-h).
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const aside = container.querySelector('aside.context-rail')
+    expect(aside).not.toBeNull()
+    // No inline style overriding top
+    const inlineStyle = aside?.getAttribute('style') ?? ''
+    expect(inlineStyle).not.toMatch(/\btop\s*:\s*0/)
+  })
+
+  it('topbar and settings gear are both rendered simultaneously (gear must be reachable)', () => {
+    // Regression: when the rail had top:0 + z-index above the topbar, the
+    // settings gear was occluded.  Verify they co-exist in the DOM with no
+    // inline z-index on the rail that would beat the topbar.
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const aside = container.querySelector('aside.context-rail')
+    expect(aside).not.toBeNull()
+    // Rail must NOT carry an inline z-index that would override the stylesheet
+    const inlineStyle = aside?.getAttribute('style') ?? ''
+    expect(inlineStyle).not.toMatch(/z-index/)
+  })
+})

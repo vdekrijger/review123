@@ -131,13 +131,13 @@
   .context-rail {
     position: fixed;
     right: 0;
-    top: 0;
-    bottom: 0;
+    top: var(--topbar-h, 2.75rem);
+    height: calc(100vh - var(--topbar-h, 2.75rem));
     width: 260px;
     background: var(--surface);
     border-left: 1px solid var(--hairline);
     overflow-y: auto;
-    z-index: 50;
+    z-index: 100;
     display: flex;
     flex-direction: column;
     transition: width 0.2s ease;
