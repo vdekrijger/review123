@@ -57,6 +57,9 @@ export async function submitReview(
         line: d.line,
         side: d.side,
         body: d.body,
+        ...(d.startLine != null && d.startLine < d.line
+          ? { start_line: d.startLine, start_side: d.side }
+          : {}),
       }))
     }
 

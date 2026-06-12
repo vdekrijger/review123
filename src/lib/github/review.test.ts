@@ -227,6 +227,65 @@ describe('submitReview', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Multi-line: start_line / start_side anchoring
+// ---------------------------------------------------------------------------
+describe('submitReview — multi-line comment anchoring', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetInFlightForTest()
+  })
+
+  it('multi-line draft (startLine < line) emits start_line and start_side', async () => {
+    const f = mockFetch(200, { id: 5 })
+    vi.stubGlobal('fetch', f)
+
+    const draft = makeDraft({ path: 'src/foo.ts', line: 10, side: 'RIGHT', body: 'Range comment', startLine: 7 })
+    await submitReview(ref, 'COMMENT', '', [draft], commitId)
+
+    const sentBody = JSON.parse(f.mock.calls[0][1].body as string)
+    expect(sentBody.comments[0].start_line).toBe(7)
+    expect(sentBody.comments[0].start_side).toBe('RIGHT')
+    expect(sentBody.comments[0].line).toBe(10)
+    expect(sentBody.comments[0].side).toBe('RIGHT')
+  })
+
+  it('single-line draft does NOT emit start_line or start_side', async () => {
+    const f = mockFetch(200, { id: 6 })
+    vi.stubGlobal('fetch', f)
+
+    const draft = makeDraft({ path: 'src/foo.ts', line: 10, side: 'RIGHT', body: 'Single line' })
+    await submitReview(ref, 'COMMENT', '', [draft], commitId)
+
+    const sentBody = JSON.parse(f.mock.calls[0][1].body as string)
+    expect(sentBody.comments[0]).not.toHaveProperty('start_line')
+    expect(sentBody.comments[0]).not.toHaveProperty('start_side')
+  })
+
+  it('draft with startLine === line does NOT emit start_line', async () => {
+    const f = mockFetch(200, { id: 7 })
+    vi.stubGlobal('fetch', f)
+
+    const draft = makeDraft({ path: 'src/foo.ts', line: 5, side: 'RIGHT', body: 'Same line', startLine: 5 })
+    await submitReview(ref, 'COMMENT', '', [draft], commitId)
+
+    const sentBody = JSON.parse(f.mock.calls[0][1].body as string)
+    expect(sentBody.comments[0]).not.toHaveProperty('start_line')
+  })
+
+  it('suggestion fence body passes through UNMODIFIED in submitReview', async () => {
+    const f = mockFetch(200, { id: 8 })
+    vi.stubGlobal('fetch', f)
+
+    const suggestionBody = '```suggestion\nconst x = newValue\n```'
+    const draft = makeDraft({ path: 'src/foo.ts', line: 3, side: 'RIGHT', body: suggestionBody })
+    await submitReview(ref, 'COMMENT', '', [draft], commitId)
+
+    const sentBody = JSON.parse(f.mock.calls[0][1].body as string)
+    expect(sentBody.comments[0].body).toBe(suggestionBody)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Fix-B: two drafts on the same line submit as two separate comments
 // ---------------------------------------------------------------------------
 describe('submitReview — Fix-B same-line threaded drafts', () => {

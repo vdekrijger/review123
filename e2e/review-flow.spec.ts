@@ -1483,7 +1483,175 @@ test('progress-bar: rendered inside sticky footer; percent increases after marki
 })
 
 // ---------------------------------------------------------------------------
-// Test 16: browser back exits revision compare instead of leaving the PR
+// Test 16: multi-line comment — seeded draft with startLine → submit payload
+//          contains start_line + start_side
+// ---------------------------------------------------------------------------
+
+/**
+ * Seed a multi-line draft directly into IndexedDB (startLine field).
+ */
+function seedMultilineDraftScript(prKey: string) {
+  return `
+    (async () => {
+      const dbName = 'review123-drafts';
+      const storeName = 'drafts';
+      const request = indexedDB.open(dbName, 1);
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(storeName)) {
+          db.createObjectStore(storeName);
+        }
+      };
+      request.onsuccess = (e) => {
+        const db = e.target.result;
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        const draft = {
+          path: 'src/feature.ts',
+          line: 4,
+          startLine: 3,
+          side: 'RIGHT',
+          body: 'Multi-line seeded draft',
+          prKey: ${JSON.stringify(prKey)},
+          n: 0,
+          updatedAt: Date.now(),
+        };
+        const key = ${JSON.stringify(prKey)} + '|src/feature.ts|4|RIGHT|0';
+        store.put(draft, key);
+      };
+    })();
+  `
+}
+
+test('multi-line draft: submit payload contains start_line and start_side', async ({ page }) => {
+  await setupRoutes(page, { withGithubAuth: true })
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(true))
+
+  const prKey = `${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
+  await page.addInitScript(seedMultilineDraftScript(prKey))
+
+  // Intercept the review POST and capture its body
+  let capturedBody: Record<string, unknown> | null = null
+  await page.route(`**/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews`, async (route) => {
+    if (route.request().method() === 'POST') {
+      capturedBody = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>
+      await route.fulfill({ status: 200, json: { id: 1, state: 'COMMENTED', html_url: 'https://github.com' } })
+    } else {
+      await route.continue()
+    }
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 3 (VerdictStep)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await page.getByRole('button', { name: 'Next step' }).click()
+
+  const approveRadio = page.getByRole('radio', { name: /comment/i })
+  await expect(approveRadio).toBeVisible({ timeout: 5_000 })
+  await approveRadio.click()
+
+  const submitBtn = page.getByRole('button', { name: /submit review/i })
+  await expect(submitBtn).toBeVisible()
+  await submitBtn.click()
+
+  // Wait for success
+  await expect(
+    page.getByText('Your review was submitted successfully.'),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Assert the captured payload has start_line and start_side
+  expect(capturedBody).not.toBeNull()
+  const comments = (capturedBody as { comments: unknown[] }).comments
+  expect(comments).toBeDefined()
+  expect(comments).toHaveLength(1)
+  const comment = comments[0] as Record<string, unknown>
+  expect(comment.start_line).toBe(3)
+  expect(comment.start_side).toBe('RIGHT')
+  expect(comment.line).toBe(4)
+})
+
+// ---------------------------------------------------------------------------
+// Test 17: suggestion button inserts fence in CommentEditor
+// (Unit-level test via the component test suite — here we verify via page render)
+// ---------------------------------------------------------------------------
+
+test('suggestion fence: body with suggestion fence survives verbatim through submitReview', async ({ page }) => {
+  const suggestionBody = '```suggestion\nconst x = newValue\n```'
+
+  await setupRoutes(page, { withGithubAuth: true })
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(true))
+
+  // Seed a draft with a suggestion body
+  const prKey = `${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
+  await page.addInitScript(`
+    (async () => {
+      const dbName = 'review123-drafts';
+      const storeName = 'drafts';
+      const request = indexedDB.open(dbName, 1);
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(storeName)) {
+          db.createObjectStore(storeName);
+        }
+      };
+      request.onsuccess = (e) => {
+        const db = e.target.result;
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        store.put({
+          path: 'src/feature.ts',
+          line: 2,
+          side: 'RIGHT',
+          body: ${JSON.stringify(suggestionBody)},
+          prKey: ${JSON.stringify(prKey)},
+          n: 0,
+          updatedAt: Date.now(),
+        }, ${JSON.stringify(prKey)} + '|src/feature.ts|2|RIGHT|0');
+      };
+    })();
+  `)
+
+  let capturedBody: Record<string, unknown> | null = null
+  await page.route(`**/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews`, async (route) => {
+    if (route.request().method() === 'POST') {
+      capturedBody = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>
+      await route.fulfill({ status: 200, json: { id: 2, state: 'COMMENTED', html_url: 'https://github.com' } })
+    } else {
+      await route.continue()
+    }
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await page.getByRole('button', { name: 'Next step' }).click()
+
+  const commentRadio = page.getByRole('radio', { name: /comment/i })
+  await expect(commentRadio).toBeVisible({ timeout: 5_000 })
+  await commentRadio.click()
+
+  await page.getByRole('button', { name: /submit review/i }).click()
+  await expect(page.getByText('Your review was submitted successfully.')).toBeVisible({ timeout: 10_000 })
+
+  // The suggestion fence must be verbatim in the submitted body
+  expect(capturedBody).not.toBeNull()
+  const comments = (capturedBody as { comments: unknown[] }).comments
+  const comment = comments[0] as Record<string, unknown>
+  expect(comment.body).toBe(suggestionBody)
+})
+
+// ---------------------------------------------------------------------------
+// Test 18: browser back exits revision compare instead of leaving the PR
 // ---------------------------------------------------------------------------
 
 test('compare-back: browser back while compare is active exits compare and stays on /review/...', async ({

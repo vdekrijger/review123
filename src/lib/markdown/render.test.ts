@@ -156,6 +156,44 @@ describe('replaceEmojiShortcodes', () => {
 })
 
 // ---------------------------------------------------------------------------
+// suggestion fence rendering
+// ---------------------------------------------------------------------------
+
+describe('renderMarkdown — suggestion fence', () => {
+  it('renders ```suggestion fence with a suggestion-block wrapper', () => {
+    const src = '```suggestion\nconst x = newValue\n```'
+    const out = renderMarkdown(src)
+    expect(out).toContain('suggestion-block')
+  })
+
+  it('suggestion block contains header text "Suggested change"', () => {
+    const src = '```suggestion\nconst x = 1\n```'
+    const out = renderMarkdown(src)
+    expect(out).toContain('Suggested change')
+  })
+
+  it('suggestion block renders code content verbatim', () => {
+    const src = '```suggestion\nconst y = 42\n```'
+    const out = renderMarkdown(src)
+    expect(out).toContain('const y = 42')
+  })
+
+  it('non-suggestion fenced blocks are not affected', () => {
+    const src = '```js\nconst z = 0\n```'
+    const out = renderMarkdown(src)
+    expect(out).not.toContain('suggestion-block')
+    expect(out).not.toContain('Suggested change')
+  })
+
+  it('suggestion block HTML is sanitizer-safe (no script injection via suggestion)', () => {
+    const src = '```suggestion\n<script>alert(1)<\/script>\n```'
+    const out = renderMarkdown(src)
+    expect(out).not.toContain('<script')
+    expect(out).toContain('suggestion-block')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // renderMarkdown + emoji: ensure shortcodes survive through the pipeline
 // ---------------------------------------------------------------------------
 
