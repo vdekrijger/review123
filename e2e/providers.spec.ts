@@ -251,7 +251,7 @@ test('gitlab: paste MR URL → navigates to /understand, title visible, non-atom
   const input = page.getByLabel('Pull request URL')
   await expect(input).toBeVisible()
   await input.fill(`https://gitlab.com/${GL_OWNER}/${GL_REPO}/-/merge_requests/${GL_MR}`)
-  await page.getByRole('button', { name: 'Review' }).click()
+  await page.getByRole('button', { name: 'Review', exact: true }).click()
 
   // Should navigate to /review/gitlab/testgroup/testrepo/5/understand
   const expectedPath = `/review/gitlab/${GL_OWNER}/${GL_REPO}/${GL_MR}/understand`
@@ -345,7 +345,7 @@ test('bitbucket: paste PR URL → navigates to /understand, title visible, file 
   const input = page.getByLabel('Pull request URL')
   await expect(input).toBeVisible()
   await input.fill(`https://bitbucket.org/${BB_WORKSPACE}/${BB_REPO}/pull-requests/${BB_PR}`)
-  await page.getByRole('button', { name: 'Review' }).click()
+  await page.getByRole('button', { name: 'Review', exact: true }).click()
 
   // Should navigate to /review/bitbucket/testws/testrepo/3/understand
   const expectedPath = `/review/bitbucket/${BB_WORKSPACE}/${BB_REPO}/${BB_PR}/understand`

@@ -6,11 +6,26 @@
   import { getHistory, clearHistory, type HistoryEntry } from '../lib/history/history'
   import { fetchAllQueues, _resetQueueCacheForTest } from '../lib/provider/queue'
   import { relativeTime } from '../lib/time'
+  import { isSectionCollapsed, setSectionCollapsed, type LandingSectionId } from '../lib/landing/collapse'
+  import { track } from '../lib/analytics/analytics'
   import type { QueueItem } from '../lib/provider/types'
 
   let input = $state('')
   let error = $state<string | null>(null)
   let history = $state<HistoryEntry[]>(getHistory())
+
+  // Collapsible sections — per-browser UI state, persisted in localStorage
+  let queueCollapsed = $state(isSectionCollapsed('queue'))
+  let recentCollapsed = $state(isSectionCollapsed('recent'))
+
+  function toggleSection(id: LandingSectionId) {
+    const collapsed = id === 'queue' ? !queueCollapsed : !recentCollapsed
+    if (id === 'queue') queueCollapsed = collapsed
+    else recentCollapsed = collapsed
+    setSectionCollapsed(id, collapsed)
+    // Fire only on collapsed → expanded; ids only — never content.
+    if (!collapsed) track('section_expanded', { section: id, surface: 'landing' })
+  }
 
   // Queue state
   let queueLoading = $state(true)
@@ -92,10 +107,23 @@
   {#if hasQueueProviders}
     <div class="queue-section">
       <div class="queue-header">
-        <h2 class="section-title">Your review queue</h2>
+        <h2 class="section-title">
+          <button
+            type="button"
+            class="section-toggle"
+            onclick={() => toggleSection('queue')}
+            aria-expanded={!queueCollapsed}
+            aria-controls="landing-queue-body"
+          >
+            <span class="section-chevron" class:expanded={!queueCollapsed} aria-hidden="true"></span>
+            Your review queue
+          </button>
+        </h2>
         <button type="button" class="refresh-btn" onclick={handleRefreshQueue} aria-label="Refresh queue">Refresh</button>
       </div>
 
+      {#if !queueCollapsed}
+      <div id="landing-queue-body">
       {#if queueLoading}
         <p class="queue-status">Loading your queue…</p>
       {:else if !anyAuthConfigured}
@@ -147,16 +175,30 @@
           </ul>
         {/if}
       {/if}
+      </div>
+      {/if}
     </div>
   {/if}
 
   {#if history.length > 0}
     <div class="recent-reviews">
       <div class="recent-header">
-        <h2 class="recent-title">Recent reviews</h2>
+        <h2 class="recent-title">
+          <button
+            type="button"
+            class="section-toggle"
+            onclick={() => toggleSection('recent')}
+            aria-expanded={!recentCollapsed}
+            aria-controls="landing-recent-body"
+          >
+            <span class="section-chevron" class:expanded={!recentCollapsed} aria-hidden="true"></span>
+            Recent reviews
+          </button>
+        </h2>
         <button type="button" class="clear-btn" onclick={handleClearHistory} aria-label="Clear history">Clear</button>
       </div>
-      <ul class="recent-list">
+      {#if !recentCollapsed}
+      <ul class="recent-list" id="landing-recent-body">
         {#each history as entry (entry.owner + '/' + entry.repo + '#' + entry.number)}
           <li class="recent-item">
             <button
@@ -171,6 +213,7 @@
           </li>
         {/each}
       </ul>
+      {/if}
     </div>
   {/if}
 </section>
@@ -244,6 +287,44 @@
     letter-spacing: 0.04em;
     color: var(--text-muted);
     margin: 0;
+  }
+
+  /* Collapsible section header — mirrors the global details > summary
+     editorial pattern (app.css): muted uppercase label + rotating triangle. */
+  .section-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    user-select: none;
+    font: inherit;
+    text-transform: inherit;
+    letter-spacing: inherit;
+    font-weight: inherit;
+    color: inherit;
+  }
+
+  .section-toggle:hover {
+    color: var(--text);
+  }
+
+  .section-chevron {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 4px 0 4px 6px;
+    border-color: transparent transparent transparent currentColor;
+    transition: transform 150ms ease;
+    flex-shrink: 0;
+  }
+
+  .section-chevron.expanded {
+    transform: rotate(90deg);
   }
 
   .refresh-btn {
