@@ -61,7 +61,7 @@ test('appearance: pick Dark + Serif → documentElement has data-theme=dark & da
   expect(dataFontAfterReload).toBe('serif')
 })
 
-test('sample reviewer: clicking "Add sample reviewer" in Settings installs it and shows it in the list enabled', async ({
+test('sample reviewer: adding Pragmatic Senior Reviewer from the Built-in reviewers library installs it and shows it enabled', async ({
   page,
 }) => {
   await blockExternal(page)
@@ -75,18 +75,21 @@ test('sample reviewer: clicking "Add sample reviewer" in Settings installs it an
 
   await expect(page.getByRole('dialog', { name: /settings/i })).toBeVisible()
 
-  // "Add sample reviewer" button should be visible
-  const addSampleBtn = page.getByRole('button', { name: /add sample reviewer/i })
+  // The Built-in reviewers section is visible
+  await expect(page.getByText(/built-in reviewers/i)).toBeVisible()
+
+  // The pragmatic sample entry has an [Add] button
+  const addSampleBtn = page.getByRole('button', { name: /add Pragmatic Senior Reviewer \(sample\)/i })
   await expect(addSampleBtn).toBeVisible()
 
   // Click it
   await addSampleBtn.click()
 
-  // The sample skill name should appear in the list
-  await expect(page.getByText(/Pragmatic Senior Reviewer/i)).toBeVisible({ timeout: 3_000 })
+  // The sample skill name should appear in the installed skills list
+  await expect(page.locator('.skill-name', { hasText: /Pragmatic Senior Reviewer/i })).toBeVisible({ timeout: 3_000 })
 
-  // The button should be hidden now
-  await expect(page.getByRole('button', { name: /add sample reviewer/i })).not.toBeVisible()
+  // The Add button should be hidden now
+  await expect(page.getByRole('button', { name: /add Pragmatic Senior Reviewer \(sample\)/i })).not.toBeVisible()
 
   // The skill's checkbox should be checked (enabled)
   const skillCheckbox = page.locator('.skill-item input[type="checkbox"]').first()
@@ -298,4 +301,45 @@ test('appearance: Auto theme removes data-theme attribute', async ({ page }) => 
   // data-theme attribute must be removed
   const afterAuto = await page.evaluate(() => document.documentElement.getAttribute('data-theme'))
   expect(afterAuto).toBeNull()
+})
+
+// ---------------------------------------------------------------------------
+// Built-in reviewer library: add Security reviewer → appears enabled in list
+// ---------------------------------------------------------------------------
+
+test('builtin-library: add Security Reviewer (OWASP-minded) from Built-in reviewers → appears enabled in the skill list', async ({
+  page,
+}) => {
+  await blockExternal(page)
+
+  await page.goto('/')
+
+  // Open settings dialog
+  const settingsBtn = page.getByRole('button', { name: /settings/i })
+  await expect(settingsBtn).toBeVisible({ timeout: 5_000 })
+  await settingsBtn.click()
+
+  const dialog = page.getByRole('dialog', { name: /settings/i })
+  await expect(dialog).toBeVisible()
+
+  // The "Built-in reviewers" heading should be visible
+  await expect(dialog.getByText(/built-in reviewers/i)).toBeVisible()
+
+  // The Security Reviewer (OWASP-minded) [Add] button should be visible
+  const addSecurityBtn = dialog.getByRole('button', { name: /add Security Reviewer \(OWASP-minded\)/i })
+  await expect(addSecurityBtn).toBeVisible()
+
+  // Click it
+  await addSecurityBtn.click()
+
+  // The skill name should appear in the installed skills list (.skill-name)
+  await expect(dialog.locator('.skill-name', { hasText: 'Security Reviewer (OWASP-minded)' })).toBeVisible({ timeout: 3_000 })
+
+  // The Add button for that skill should no longer be visible
+  await expect(dialog.getByRole('button', { name: /add Security Reviewer \(OWASP-minded\)/i })).not.toBeVisible()
+
+  // The skill's toggle checkbox should be checked (enabled)
+  // The newly installed skill is the last in the list — find its checkbox
+  const skillCheckbox = dialog.locator('.skill-item').filter({ hasText: 'Security Reviewer (OWASP-minded)' }).locator('input[type="checkbox"]')
+  await expect(skillCheckbox).toBeChecked()
 })
