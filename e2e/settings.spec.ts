@@ -328,6 +328,68 @@ test('ai models: switch to OpenAI → model dropdown updates → key saves → S
 })
 
 // ---------------------------------------------------------------------------
+// Save UX (feat/settings-save-clarity): section-scoped Save with dirty tracking
+// and a transient Saved ✓ confirmation; connected providers render as compact
+// chips. The AI models section has NO section-level Save (per-key Save & test
+// persists keys; provider/model selection applies immediately).
+// ---------------------------------------------------------------------------
+
+test('providers save UX: single scoped Save, dirty tracking, Saved ✓ confirmation, OAuth session preserved, connected chip', async ({
+  page,
+}) => {
+  await blockExternal(page)
+
+  // Seed a GitHub OAuth session
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({ githubAuth: { token: 'gho_e2e', method: 'oauth', scopes: ['public_repo'] } }),
+    )
+  })
+
+  await page.goto('/settings')
+  await expect(page.getByRole('heading', { name: /^settings$/i })).toBeVisible({ timeout: 5_000 })
+
+  // Connected provider renders as a compact chip with an icon sign-out button
+  await expect(page.getByText(/GitHub · connected/)).toBeVisible()
+  await expect(page.getByRole('button', { name: /sign out of github/i })).toBeVisible()
+
+  // Exactly ONE plain Save button on the whole page, inside the Providers card
+  const saveBtn = page.getByRole('button', { name: /^save$/i })
+  await expect(saveBtn).toHaveCount(1)
+  const providersSection = page.locator('#providers')
+  await expect(providersSection.getByRole('button', { name: /^save$/i })).toBeVisible()
+  // The AI models section has no section-level Save at all
+  await expect(page.locator('#ai-models').getByRole('button', { name: /^save$/i })).toHaveCount(0)
+
+  // Clean section → Save is quiet/disabled, no unsaved hint
+  await expect(saveBtn).toBeDisabled()
+  await expect(page.getByText(/unsaved changes/i)).toHaveCount(0)
+
+  // Edit a field → Save becomes enabled and the unsaved hint appears
+  await providersSection.getByText(/advanced.*personal access token/i).click()
+  await page.getByLabel(/gitlab host/i).fill('gitlab.corp.example')
+  await expect(saveBtn).toBeEnabled()
+  await expect(providersSection.getByText(/unsaved changes/i)).toBeVisible()
+
+  // Save → transient Saved ✓ confirmation, section reads clean again
+  await saveBtn.click()
+  await expect(providersSection.getByText('Saved ✓')).toBeVisible()
+  await expect(saveBtn).toBeDisabled()
+  await expect(providersSection.getByText(/unsaved changes/i)).toHaveCount(0)
+
+  // The edit was persisted AND the OAuth session survived an empty PAT field
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('review123:settings') ?? '{}'),
+  )
+  expect(stored.gitlabHost).toBe('gitlab.corp.example')
+  expect(stored.githubAuth).toEqual({ token: 'gho_e2e', method: 'oauth', scopes: ['public_repo'] })
+
+  // The Saved ✓ confirmation fades after ~2s
+  await expect(providersSection.getByText('Saved ✓')).toHaveCount(0, { timeout: 4_000 })
+})
+
+// ---------------------------------------------------------------------------
 // Progress bar setting: fieldset with Show/Hide radios (consistent with the
 // other Appearance groups), persists across reload
 // ---------------------------------------------------------------------------
