@@ -86,6 +86,126 @@ describe('Landing queue section', () => {
   })
 })
 
+describe('Landing queue provider icons + per-repo grouping', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.restoreAllMocks()
+    vi.mocked(navigate).mockClear()
+    queueModule._resetQueueCacheForTest()
+  })
+
+  it('renders a provider brand icon instead of the "GH" text chip', async () => {
+    const item = makeItem('github', 'org', 'repo', 1, 'PR for review', false)
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([item])
+
+    const { container } = render(Landing)
+    await screen.findByText(/Awaiting your review/i)
+
+    expect(screen.queryByText('GH')).not.toBeInTheDocument()
+    const icon = container.querySelector('.queue-link [data-provider="github"] svg')
+    expect(icon).not.toBeNull()
+    expect(icon!.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('single-repo list stays flat: full owner/repo#number per row, no repo header', async () => {
+    const items = [
+      makeItem('github', 'org', 'repo', 1, 'First', false),
+      makeItem('github', 'org', 'repo', 2, 'Second', false),
+    ]
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue(items)
+
+    const { container } = render(Landing)
+    await screen.findByText(/Awaiting your review/i)
+
+    expect(container.querySelector('.repo-group-header')).toBeNull()
+    expect(screen.getByText(/org\/repo#1/)).toBeInTheDocument()
+    expect(screen.getByText(/org\/repo#2/)).toBeInTheDocument()
+  })
+
+  it('multi-repo list groups rows under compact repo headers with #number · title rows', async () => {
+    const items = [
+      makeItem('github', 'org', 'alpha', 1, 'Alpha PR', false),
+      makeItem('github', 'org', 'beta', 2, 'Beta PR', false),
+      makeItem('github', 'org', 'alpha', 3, 'Alpha second', false),
+    ]
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue(items)
+
+    const { container } = render(Landing)
+    await screen.findByText(/Awaiting your review/i)
+
+    // Repo headers with icon + owner/repo
+    const headers = [...container.querySelectorAll('.repo-group-header')]
+    expect(headers).toHaveLength(2)
+    expect(headers[0].textContent).toContain('org/alpha')
+    expect(headers[1].textContent).toContain('org/beta')
+    expect(headers[0].querySelector('[data-provider="github"] svg')).not.toBeNull()
+
+    // Rows show just #number (owner/repo lives in the header, not the row text)
+    expect(screen.getByText('#1')).toBeInTheDocument()
+    expect(screen.getByText('#2')).toBeInTheDocument()
+    expect(screen.getByText('#3')).toBeInTheDocument()
+    expect(screen.queryByText(/org\/alpha#1/)).not.toBeInTheDocument()
+  })
+
+  it('grouped rows keep the full accessible name and still navigate on click', async () => {
+    const items = [
+      makeItem('github', 'org', 'alpha', 1, 'Alpha PR', false),
+      makeItem('gitlab', 'grp', 'beta', 2, 'Beta MR', false),
+    ]
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue(items)
+
+    render(Landing)
+    await screen.findByText(/Awaiting your review/i)
+
+    const btn = screen.getByRole('button', { name: /grp\/beta#2/i })
+    fireEvent.click(btn)
+    expect(navigate).toHaveBeenCalledWith('/review/gitlab/grp/beta/2')
+  })
+
+  it('grouping is computed per list: awaiting grouped while open PRs stay flat', async () => {
+    const items = [
+      makeItem('github', 'org', 'alpha', 1, 'Alpha PR', false),
+      makeItem('github', 'org', 'beta', 2, 'Beta PR', false),
+      makeItem('github', 'org', 'mine', 3, 'My PR', true),
+    ]
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue(items)
+
+    const { container } = render(Landing)
+    await screen.findByText(/Your open PRs/i)
+
+    // Awaiting list (2 repos) grouped; my-open-PRs list (1 repo) flat
+    expect(container.querySelectorAll('.repo-group-header')).toHaveLength(2)
+    expect(screen.getByText(/org\/mine#3/)).toBeInTheDocument()
+  })
+})
+
+describe('Landing recent reviews provider icons (flat, no grouping)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.mocked(navigate).mockClear()
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([])
+    queueModule._resetQueueCacheForTest()
+  })
+
+  it('each history row gets a provider icon; multi-repo history stays flat', () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
+    addToHistory({ owner: 'bob', repo: 'gadgets', number: 7, title: 'Fix bug', provider: 'gitlab' })
+
+    const { container } = render(Landing)
+
+    // Flat: no repo group headers in recents, full ref text per row
+    expect(container.querySelector('.recent-reviews .repo-group-header')).toBeNull()
+    expect(screen.getByText(/alice\/widgets#42/)).toBeInTheDocument()
+    expect(screen.getByText(/bob\/gadgets#7/)).toBeInTheDocument()
+
+    // Icon per row; provider defaults to github when entry has no provider
+    const icons = container.querySelectorAll('.recent-link [data-provider]')
+    expect(icons).toHaveLength(2)
+    expect(container.querySelector('.recent-link [data-provider="gitlab"]')).not.toBeNull()
+    expect(container.querySelector('.recent-link [data-provider="github"]')).not.toBeNull()
+  })
+})
+
 describe('Landing', () => {
   beforeEach(() => {
     localStorage.clear()

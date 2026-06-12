@@ -7,8 +7,19 @@
   import { fetchAllQueues, _resetQueueCacheForTest } from '../lib/provider/queue'
   import { relativeTime } from '../lib/time'
   import { isSectionCollapsed, setSectionCollapsed, type LandingSectionId } from '../lib/landing/collapse'
+  import { groupByRepo, isMultiRepo } from '../lib/landing/groupQueue'
   import { track } from '../lib/analytics/analytics'
+  import ProviderIcon from '../components/ProviderIcon.svelte'
   import type { QueueItem } from '../lib/provider/types'
+
+  // Human-readable provider names for accessible text alternatives.
+  // Local map (not the registry) so the component stays renderable when the
+  // registry is mocked down to a subset of providers.
+  const PROVIDER_NAMES: Record<'github' | 'gitlab' | 'bitbucket', string> = {
+    github: 'GitHub',
+    gitlab: 'GitLab',
+    bitbucket: 'Bitbucket',
+  }
 
   let input = $state('')
   let error = $state<string | null>(null)
@@ -95,6 +106,60 @@
   }
 </script>
 
+<!--
+  queueRows — renders one queue list (awaiting / my open PRs).
+  Multi-repo lists are grouped under compact repo headers (provider icon +
+  owner/repo) with rows showing just #number · title; single-repo lists stay
+  flat with a provider icon per row.
+-->
+{#snippet queueRows(items: QueueItem[])}
+  {@const groups = groupByRepo(items)}
+  {#if isMultiRepo(groups)}
+    {#each groups as group (group.key)}
+      <div class="repo-group-header">
+        <ProviderIcon provider={group.provider} size={12} label={PROVIDER_NAMES[group.provider]} />
+        <span class="repo-group-name">{group.owner}/{group.repo}</span>
+      </div>
+      <ul class="queue-list grouped">
+        {#each group.items as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
+          <li class="queue-item">
+            <button
+              type="button"
+              class="queue-link"
+              onclick={() => navigateToQueueItem(item)}
+              aria-label="{item.ref.owner}/{item.ref.repo}#{item.ref.number} on {PROVIDER_NAMES[item.ref.provider]}"
+            >
+              <span class="queue-ref">#{item.ref.number}</span>
+              <span class="queue-sep"> · </span>
+              <span class="queue-title-text">{item.title}</span>
+              <span class="queue-time">{relativeTime(item.updatedAt)}</span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/each}
+  {:else}
+    <ul class="queue-list">
+      {#each items as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
+        <li class="queue-item">
+          <button
+            type="button"
+            class="queue-link"
+            onclick={() => navigateToQueueItem(item)}
+            aria-label="{item.ref.owner}/{item.ref.repo}#{item.ref.number} on {PROVIDER_NAMES[item.ref.provider]}"
+          >
+            <span class="queue-icon"><ProviderIcon provider={item.ref.provider} size={14} /></span>
+            <span class="queue-ref">{item.ref.owner}/{item.ref.repo}#{item.ref.number}</span>
+            <span class="queue-sep"> — </span>
+            <span class="queue-title-text">{item.title}</span>
+            <span class="queue-time">{relativeTime(item.updatedAt)}</span>
+          </button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+{/snippet}
+
 <section class="landing">
   <h1>Review 1‑2‑3</h1>
   <p>Paste a GitHub, GitLab, or Bitbucket pull request URL to start a guided review.</p>
@@ -133,46 +198,12 @@
       {:else}
         {#if awaitingReview.length > 0}
           <h3 class="queue-group-title">Awaiting your review</h3>
-          <ul class="queue-list">
-            {#each awaitingReview as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
-              <li class="queue-item">
-                <button
-                  type="button"
-                  class="queue-link"
-                  onclick={() => navigateToQueueItem(item)}
-                  aria-label="{item.ref.owner}/{item.ref.repo}#{item.ref.number}"
-                >
-                  <span class="queue-badge">{item.ref.provider === 'github' ? 'GH' : 'GL'}</span>
-                  <span class="queue-ref">{item.ref.owner}/{item.ref.repo}#{item.ref.number}</span>
-                  <span class="queue-sep"> — </span>
-                  <span class="queue-title-text">{item.title}</span>
-                  <span class="queue-time">{relativeTime(item.updatedAt)}</span>
-                </button>
-              </li>
-            {/each}
-          </ul>
+          {@render queueRows(awaitingReview)}
         {/if}
 
         {#if myOpenPrs.length > 0}
           <h3 class="queue-group-title">Your open PRs</h3>
-          <ul class="queue-list">
-            {#each myOpenPrs as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
-              <li class="queue-item">
-                <button
-                  type="button"
-                  class="queue-link"
-                  onclick={() => navigateToQueueItem(item)}
-                  aria-label="{item.ref.owner}/{item.ref.repo}#{item.ref.number}"
-                >
-                  <span class="queue-badge">{item.ref.provider === 'github' ? 'GH' : 'GL'}</span>
-                  <span class="queue-ref">{item.ref.owner}/{item.ref.repo}#{item.ref.number}</span>
-                  <span class="queue-sep"> — </span>
-                  <span class="queue-title-text">{item.title}</span>
-                  <span class="queue-time">{relativeTime(item.updatedAt)}</span>
-                </button>
-              </li>
-            {/each}
-          </ul>
+          {@render queueRows(myOpenPrs)}
         {/if}
       {/if}
       </div>
@@ -206,6 +237,13 @@
               class="recent-link"
               onclick={() => navigateToPr(entry)}
             >
+              <span class="recent-icon">
+                <ProviderIcon
+                  provider={entry.provider ?? 'github'}
+                  size={14}
+                  label={PROVIDER_NAMES[entry.provider ?? 'github']}
+                />
+              </span>
               <span class="recent-ref">{entry.owner}/{entry.repo}#{entry.number}</span>
               <span class="recent-sep"> — </span>
               <span class="recent-title-text">{entry.title}</span>
@@ -390,16 +428,35 @@
     background: var(--surface-raised);
   }
 
-  .queue-badge {
-    font-family: var(--font-mono);
-    font-size: 0.7rem;
-    background: var(--surface-raised);
-    border: 1px solid var(--hairline);
-    border-radius: 3px;
-    padding: 0 0.3em;
-    margin-right: 0.4rem;
+  .queue-icon {
+    align-self: center;
+    display: inline-flex;
+    margin-right: 0.45rem;
     color: var(--text-muted);
     flex-shrink: 0;
+  }
+
+  /* Compact repo header for multi-repo queue lists — same muted small-caps
+     register as the other section labels. */
+  .repo-group-header {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin: 0.55rem 0 0.15rem;
+    padding: 0 0.5rem;
+  }
+
+  .repo-group-name {
+    font-family: var(--font-mono);
+  }
+
+  .queue-list.grouped .queue-link {
+    padding-left: 1.1rem;
   }
 
   .queue-ref {
@@ -502,6 +559,14 @@
 
   .recent-link:hover {
     background: var(--surface-raised);
+  }
+
+  .recent-icon {
+    align-self: center;
+    display: inline-flex;
+    margin-right: 0.45rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
   }
 
   .recent-ref {
