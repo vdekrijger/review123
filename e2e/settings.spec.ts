@@ -91,6 +91,8 @@ test('sample reviewer: clicking "Add sample reviewer" in Settings installs it an
   // The skill's checkbox should be checked (enabled)
   const skillCheckbox = page.locator('.skill-item input[type="checkbox"]').first()
   await expect(skillCheckbox).toBeChecked()
+})
+
 
 // ---------------------------------------------------------------------------
 // Modal top-layer test: settings dialog opened on Inspect step is a real modal
