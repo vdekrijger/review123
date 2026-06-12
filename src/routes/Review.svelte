@@ -696,7 +696,7 @@
         resolvedCommentIds={isCompareActive ? new Set() : resolvedCommentIds}
         {contentsMap}
         skillReviews={aiRun?.skillReviews ?? []}
-        runSkillReviewsFn={aiRun != null ? (() => { void aiRun!.runSkillReviews() }) : null}
+        runSkillReviewsFn={aiRun != null ? (() => { void aiRun!.runSkillReviews(undefined, prComments.map((c) => c.body)) }) : null}
         askFn={aiRun ? aiRun.ask : null}
         askDisabledReason={inlineAskDisabledReason}
         replyFn={activeProvider.capabilities.commentReplies && !isCompareActive ? postReply : null}

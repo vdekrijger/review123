@@ -8,6 +8,7 @@
   import MarkdownView from './MarkdownView.svelte'
   import Skeleton from './Skeleton.svelte'
   import { SECTION_REGISTRY } from './panels/sectionRegistry'
+  import { isRailSectionExpanded, setRailSectionExpanded, type RailSectionId } from '../lib/rail/collapse'
   import { track } from '../lib/analytics/analytics'
   import type { AiRun } from '../lib/ai/run.svelte'
   import type { AttentionResult } from '../lib/ai/schemas'
@@ -50,12 +51,19 @@
     track('hotspot_clicked')
   }
 
-  // --- Section engagement tracking (rail surface) ---
-  // Debounce per mount: only fire once per section id (open events only; close ignored).
+  // --- Section open state (rail surface) ---
+  // ALL rail sections default to COLLAPSED (the rail must not eat screen real
+  // estate duplicating the Understand step). A user's expand/collapse choices
+  // persist per browser in one localStorage map (src/lib/rail/collapse.ts) —
+  // the registry's defaultOpen only governs the Understand page panels.
+  //
+  // Engagement tracking debounces per mount: only fire once per section id
+  // (open events only; close ignored).
   const trackedRailSections = new Set<string>()
 
-  function handleRailSectionToggle(e: Event, sectionId: string) {
+  function handleRailSectionToggle(e: Event, sectionId: RailSectionId) {
     const el = e.currentTarget as HTMLDetailsElement
+    setRailSectionExpanded(sectionId, el.open)
     if (el.open && !trackedRailSections.has(sectionId)) {
       trackedRailSections.add(sectionId)
       track('section_expanded', { section: sectionId, surface: 'rail' })
@@ -96,7 +104,7 @@
       {#each SECTION_REGISTRY.filter((s) => s.show.rail) as section (section.id)}
 
         {#if section.id === 'summary'}
-          <details class="rail-section-details" open={section.defaultOpen.rail} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
+          <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
             <summary class="rail-section-summary">{section.title}</summary>
             <div class="rail-section-body">
               <SummaryPanel {run} />
@@ -105,7 +113,7 @@
 
           <!-- Hotspots injected after Summary (rail-specific: jump behaviour) -->
           {#if attention && attention.hotspots.length > 0}
-            <details class="rail-section-details" open>
+            <details class="rail-section-details" open={isRailSectionExpanded('hotspots')} ontoggle={(e) => handleRailSectionToggle(e, 'hotspots')}>
               <summary class="rail-section-summary">Hotspots</summary>
               <div class="rail-section-body">
                 <!-- Legend: marker = AI-assessed attention level (AttentionResult.hotspots[].level) -->
@@ -134,7 +142,9 @@
               </div>
             </details>
           {:else if attentionPending}
-            <details class="rail-section-details rail-hotspots-pending" open>
+            <!-- Pending state must NOT force the section open — the skeleton
+                 lives inside the (collapsed-by-default) section body. -->
+            <details class="rail-section-details rail-hotspots-pending" open={isRailSectionExpanded('hotspots')} ontoggle={(e) => handleRailSectionToggle(e, 'hotspots')}>
               <summary class="rail-section-summary">Hotspots</summary>
               <div class="rail-section-body">
                 <Skeleton lines={3} />
@@ -143,7 +153,7 @@
           {/if}
 
         {:else if section.id === 'diagrams'}
-          <details class="rail-section-details" open={section.defaultOpen.rail} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
+          <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
             <summary class="rail-section-summary">{section.title}</summary>
             <div class="rail-section-body">
               <DiagramsSection {run} />
@@ -151,7 +161,7 @@
           </details>
 
         {:else if section.id === 'test-insight'}
-          <details class="rail-section-details" open={section.defaultOpen.rail} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
+          <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
             <summary class="rail-section-summary">{section.title}</summary>
             <div class="rail-section-body">
               <TestInsightPanel {run} {onhotspot} />
@@ -159,7 +169,7 @@
           </details>
 
         {:else if section.id === 'alternatives'}
-          <details class="rail-section-details" open={section.defaultOpen.rail} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
+          <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
             <summary class="rail-section-summary">{section.title}</summary>
             <div class="rail-section-body">
               <AlternativesPanel {run} />
@@ -167,7 +177,7 @@
           </details>
 
         {:else if section.id === 'verdict-evidence'}
-          <details class="rail-section-details" open={section.defaultOpen.rail} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
+          <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
             <summary class="rail-section-summary">{section.title}</summary>
             <div class="rail-section-body">
               <VerdictPanel {run} {onhotspot} />
@@ -175,7 +185,7 @@
           </details>
 
         {:else if section.id === 'ci-details'}
-          <details class="rail-section-details" open={section.defaultOpen.rail} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
+          <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
             <summary class="rail-section-summary">{section.title}</summary>
             <div class="rail-section-body">
               <CiSummary {ci} error={ciError} />
@@ -183,7 +193,7 @@
           </details>
 
         {:else if section.id === 'pr-description'}
-          <details class="rail-section-details" open={section.defaultOpen.rail} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
+          <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
             <summary class="rail-section-summary">{section.title}</summary>
             <div class="rail-section-body">
               {#if meta?.body}
