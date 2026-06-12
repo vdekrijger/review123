@@ -556,13 +556,13 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         packedCtx = await pack()
       } catch {
         // Continue without packed context — use empty context
-        packedCtx = { text: '', notAnalyzed: [], includedFiles: [] }
+        packedCtx = { text: '', notAnalyzed: [], includedFiles: [], importGraph: '' }
       }
     }
 
     // Pass previous exchanges to askPrompt (last ≤3 Q/A pairs).
     // Run stores up to 3 completed exchanges; passing them gives the LLM context.
-    const prompts = askPrompt(packedCtx, askHistory, question)
+    const prompts = askPrompt(packedCtx!, askHistory, question)
     const t1 = performance.now()
 
     try {

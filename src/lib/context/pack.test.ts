@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { packContext, fetchContents, estimateTokens, type CiInput } from './pack'
+import { packContext, fetchContents, estimateTokens, extractImportGraph, type CiInput } from './pack'
 import type { PrFile, PrMeta } from '../github/types'
 
 // ---------------------------------------------------------------------------
@@ -579,5 +579,111 @@ describe('estimateTokens', () => {
       const text = 'x'.repeat(len)
       expect(estimateTokens(text)).toBe(Math.ceil(len / 3.5))
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// extractImportGraph (ai-quality-round2)
+// Pure function: extracts import relationships from file contents.
+// ---------------------------------------------------------------------------
+
+describe('extractImportGraph', () => {
+  it('returns empty string when no files or contents given', () => {
+    const result = extractImportGraph([], new Map())
+    expect(result).toBe('')
+  })
+
+  it('extracts TS/JS import from ... from "..." syntax, resolving relative paths', () => {
+    const files = ['src/foo.ts', 'src/bar.ts']
+    const contents = new Map([
+      ['src/foo.ts', { before: null, after: `import { x } from './bar'\n` }],
+      ['src/bar.ts', { before: null, after: 'export const x = 1' }],
+    ])
+    const result = extractImportGraph(files, contents)
+    expect(result).toContain('src/foo.ts -> src/bar.ts')
+  })
+
+  it('extracts TS/JS import from ... from "..." with .ts extension', () => {
+    const files = ['src/a.ts', 'src/b.ts']
+    const contents = new Map([
+      ['src/a.ts', { before: null, after: `import foo from './b.ts'` }],
+      ['src/b.ts', { before: null, after: '' }],
+    ])
+    const result = extractImportGraph(files, contents)
+    expect(result).toContain('src/a.ts -> src/b.ts')
+  })
+
+  it('extracts require() syntax for JS files', () => {
+    const files = ['src/a.js', 'src/lib/util.js']
+    const contents = new Map([
+      ['src/a.js', { before: null, after: `const u = require('./lib/util')` }],
+      ['src/lib/util.js', { before: null, after: '' }],
+    ])
+    const result = extractImportGraph(files, contents)
+    expect(result).toContain('src/a.js -> src/lib/util.js')
+  })
+
+  it('aggregates external (non-PR) imports with package count', () => {
+    const files = ['src/foo.ts']
+    const contents = new Map([
+      ['src/foo.ts', { before: null, after: `import { a } from 'lodash'\nimport { b } from 'react'` }],
+    ])
+    const result = extractImportGraph(files, contents)
+    expect(result).toMatch(/\(external\).*lodash|lodash.*\(external\)/)
+  })
+
+  it('uses before content for deleted files (status removed)', () => {
+    const files = ['src/old.ts', 'src/dep.ts']
+    const contents = new Map([
+      ['src/old.ts', { before: `import x from './dep'`, after: null }],
+      ['src/dep.ts', { before: 'export default 1', after: null }],
+    ])
+    const result = extractImportGraph(files, contents)
+    expect(result).toContain('src/old.ts -> src/dep.ts')
+  })
+
+  it('resolves index files (import from dir → dir/index.ts)', () => {
+    const files = ['src/a.ts', 'src/utils/index.ts']
+    const contents = new Map([
+      ['src/a.ts', { before: null, after: `import u from './utils'` }],
+      ['src/utils/index.ts', { before: null, after: '' }],
+    ])
+    const result = extractImportGraph(files, contents)
+    expect(result).toContain('src/a.ts -> src/utils/index.ts')
+  })
+
+  it('caps output at ~80 lines', () => {
+    // Build a file that imports 100 different packages
+    const imports = Array.from({ length: 100 }, (_, i) => `import x${i} from 'pkg-${i}'`).join('\n')
+    const files = ['src/foo.ts']
+    const contents = new Map([
+      ['src/foo.ts', { before: null, after: imports }],
+    ])
+    const result = extractImportGraph(files, contents)
+    const lines = result.split('\n').filter(Boolean)
+    expect(lines.length).toBeLessThanOrEqual(80)
+  })
+
+  it('extracts Python-style from x import y when file extension is .py', () => {
+    const files = ['src/foo.py', 'src/bar.py']
+    const contents = new Map([
+      ['src/foo.py', { before: null, after: `from .bar import something` }],
+      ['src/bar.py', { before: null, after: '' }],
+    ])
+    const result = extractImportGraph(files, contents)
+    // Python relative import should resolve bar.py in same dir
+    expect(result).toContain('src/foo.py -> src/bar.py')
+  })
+
+  it('packContext appends importGraph field to returned PackedContext', () => {
+    const file = makeFile('src/a.ts', { patch: '-old\n+new' })
+    const contents = new Map([
+      ['src/a.ts', { before: null, after: `import x from './b'` }],
+    ])
+    // Note: src/b.ts is not in files, so it will be an external-looking import
+    const result = packContext({ files: [file], contents, ci: null, budgetTokens: 10_000 })
+    // importGraph field should exist on the result
+    expect('importGraph' in result).toBe(true)
+    expect(typeof result.importGraph).toBe('string')
   })
 })

@@ -12,7 +12,7 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
-export const PROMPT_VERSION = 6
+export const PROMPT_VERSION = 7
 
 // ---------------------------------------------------------------------------
 // summarizePrompt — streaming plain-text summary + reading order
@@ -171,6 +171,12 @@ Example valid output JSON (note status fields on every node and edge in changeMa
  * learns the exact shape by demonstration.
  */
 export function diagramsPrompt(ctx: PackedContext): { system: string; user: string } {
+  const importGraphSection = ctx.importGraph
+    ? `\n\n## Module relationships (extracted from code)\n\n${ctx.importGraph}\n\nGround your nodes and edges in these REAL import relationships. Prefer files and modules \
+that appear in the import graph above. Statuses (added/removed/changed/unchanged) are still \
+required on every node and edge in changeMap.`
+    : ''
+
   const system = `You are an expert code reviewer assistant. Analyze the pull request changes \
 and respond with JSON ONLY — no explanation, no markdown, no code fences, and absolutely NO \
 Mermaid syntax. Your response must be valid JSON matching this shape exactly:
@@ -220,7 +226,7 @@ Graph size constraints (IMPORTANT):
   "router.ts" not "The router module that handles requests").
 - Edges: only include edges that represent CHANGED or newly-added relationships.
 
-${FEW_SHOT_EXAMPLE}
+${FEW_SHOT_EXAMPLE}${importGraphSection}
 
 Do not include any text outside the JSON object.`
 

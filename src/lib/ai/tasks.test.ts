@@ -1003,3 +1003,55 @@ describe('testInsightPrompt — gaps file-path instruction (ai-quality-round2)',
     expect(system).toMatch(/colon|file:|\bpath\b.*colon/i)
   })
 })
+
+// ---------------------------------------------------------------------------
+// diagramsPrompt — import graph section (ai-quality-round2)
+// ---------------------------------------------------------------------------
+
+describe('diagramsPrompt — import graph context section (ai-quality-round2)', () => {
+  it('includes importGraph section when ctx.importGraph is provided', () => {
+    const ctx: PackedContext = {
+      text: 'PR context text',
+      notAnalyzed: [],
+      includedFiles: [],
+      importGraph: 'src/foo.ts -> src/bar.ts\nsrc/foo.ts -> (external) lodash x1',
+    }
+    const { system } = diagramsPrompt(ctx)
+    expect(system).toMatch(/module relationships|import graph/i)
+    expect(system).toContain('src/foo.ts -> src/bar.ts')
+  })
+
+  it('omits import graph section when ctx.importGraph is empty or absent', () => {
+    const ctxEmpty: PackedContext = {
+      text: 'PR context',
+      notAnalyzed: [],
+      includedFiles: [],
+      importGraph: '',
+    }
+    const { system: sysEmpty } = diagramsPrompt(ctxEmpty)
+    expect(sysEmpty).not.toMatch(/## Module relationships/)
+
+    const ctxAbsent: PackedContext = {
+      text: 'PR context',
+      notAnalyzed: [],
+      includedFiles: [],
+    }
+    const { system: sysAbsent } = diagramsPrompt(ctxAbsent)
+    expect(sysAbsent).not.toMatch(/## Module relationships/)
+  })
+
+  it('instructs model to ground nodes/edges in real import relationships', () => {
+    const ctx: PackedContext = {
+      text: 'PR context',
+      notAnalyzed: [],
+      includedFiles: [],
+      importGraph: 'src/a.ts -> src/b.ts',
+    }
+    const { system } = diagramsPrompt(ctx)
+    expect(system).toMatch(/ground.*real|real.*relationship|appear.*import graph|import graph.*nodes/i)
+  })
+
+  it('PROMPT_VERSION is at least 7 (bumped for import graph context)', () => {
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(7)
+  })
+})
