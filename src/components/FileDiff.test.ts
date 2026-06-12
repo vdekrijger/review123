@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import { tick } from 'svelte'
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import FileDiff from './FileDiff.svelte'
 import type { PrFile } from '../lib/github/types'
@@ -443,5 +444,27 @@ describe('FileDiff — test file display modes', () => {
     setTestFileDisplay('highlight')
     const { container } = render(FileDiff, { props: { file: modified, mode: 'unified' } })
     expect(container.querySelector('.test-highlight')).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Bug 2 regression: testFileDisplay must react live (no remount needed)
+// ---------------------------------------------------------------------------
+describe('FileDiff — testFileDisplay live reactivity (Bug 2 regression)', () => {
+  beforeEach(() => { localStorage.clear() })
+
+  it('switching testFileDisplay from normal→highlight adds test-highlight class without remounting', async () => {
+    setTestFileDisplay('normal')
+    const { container } = render(FileDiff, { props: { file: testFile, mode: 'unified' } })
+
+    // Initially: no highlight
+    expect(container.querySelector('header.test-highlight')).not.toBeInTheDocument()
+
+    // Change setting — no remount
+    setTestFileDisplay('highlight')
+    await tick()
+
+    // After: should have highlight class
+    expect(container.querySelector('header.test-highlight')).toBeInTheDocument()
   })
 })

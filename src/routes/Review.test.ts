@@ -57,6 +57,7 @@ import { jsonResponse } from '../test-helpers'
 import { track } from '../lib/analytics/analytics'
 import { getHistory } from '../lib/history/history'
 import { lastVisit } from '../lib/visits/visits'
+import { _resetSettingsStateForTest } from '../lib/settings/settingsState.svelte'
 
 // Stub analytics
 vi.mock('../lib/analytics/analytics', () => ({
@@ -112,6 +113,8 @@ beforeEach(() => {
   // Reset router state between tests so review components start at step 1
   _resetStartedForTest()
   router.route = { name: 'landing' }
+  // Reset settingsState facade so tests that seed localStorage see the seeded values
+  _resetSettingsStateForTest()
 })
 
 afterEach(() => {
@@ -1024,6 +1027,8 @@ describe('Review progress bar — footer integration', () => {
   it('progress bar is hidden when showProgress is false (settings toggle)', async () => {
     // Seed settings with showProgress: false
     localStorage.setItem('review123:settings', JSON.stringify({ showProgress: false }))
+    // Sync settingsState facade so derived values in Review pick up the seeded value
+    _resetSettingsStateForTest()
     const user = userEvent.setup()
     vi.stubGlobal('fetch', makeFetchStub())
 

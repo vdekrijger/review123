@@ -4,7 +4,8 @@
   import { buildDiffFile, classifyFile } from '../lib/diff/diffFile'
   import type { PrFile } from '../lib/github/types'
   import type { DiffMode } from '../lib/settings/settings'
-  import { getSettings, type TestFileDisplay } from '../lib/settings/settings'
+  import { type TestFileDisplay } from '../lib/settings/settings'
+  import { settingsState } from '../lib/settings/settingsState.svelte'
   import { isTestFile } from '../lib/testFile'
   import type { Draft } from '../lib/drafts/drafts.svelte'
   import DraftThread from './DraftThread.svelte'
@@ -110,7 +111,7 @@
   })
 
   // Test-file display (must be declared before collapsed)
-  const testFileDisplay = $derived<TestFileDisplay>(getSettings().testFileDisplay)
+  const testFileDisplay = $derived<TestFileDisplay>(settingsState.current.testFileDisplay)
   const isTest = $derived(isTestFile(file.filename))
 
   // When viewed → collapse diff body; user can re-expand by clicking header or unchecking

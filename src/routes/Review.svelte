@@ -5,6 +5,7 @@
   import RevisionPicker from '../components/RevisionPicker.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import { getSettings, setDiffMode, setRailCollapsed, type DiffMode } from '../lib/settings/settings'
+  import { settingsState } from '../lib/settings/settingsState.svelte'
   import ReviewProgress from '../components/ReviewProgress.svelte'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
   import { createDraftStore } from '../lib/drafts/drafts.svelte'
@@ -307,12 +308,9 @@
     return () => mq.removeEventListener('change', handleChange)
   })
 
-  // showProgress: read once at mount (same pattern as railCollapsed).
-  // To pick up changes from SettingsPanel without re-mounting Review, the
-  // SettingsPanel checkbox calls setShowProgress immediately (like theme),
-  // but Review itself does not re-read. A page reload or a remount via the
-  // {#key} block in App.svelte will pick up the new value.
-  let showProgress = $state(getSettings().showProgress)
+  // showProgress: derived from settingsState so it updates live when the user
+  // toggles the setting in SettingsPanel without needing a remount.
+  const showProgress = $derived(settingsState.current.showProgress)
 
   // ConsentDialog: stored promise resolver
   let consentDialogVisible = $state(false)

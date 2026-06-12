@@ -12,6 +12,14 @@ function notifyAuthMutated(): void {
   _onAuthMutated?.()
 }
 
+let _onSettingsMutated: (() => void) | null = null
+export function _registerSettingsRefresh(fn: () => void): void {
+  _onSettingsMutated = fn
+}
+function notifySettingsMutated(): void {
+  _onSettingsMutated?.()
+}
+
 export type DiffMode = 'unified' | 'split'
 export type Theme = 'auto' | 'dark' | 'light'
 export type UiFont = 'plex' | 'system' | 'serif'
@@ -153,6 +161,7 @@ export function getSettings(): Settings {
 
 function save(patch: Partial<Settings>): void {
   localStorage.setItem(KEY, JSON.stringify({ ...getSettings(), ...patch }))
+  notifySettingsMutated()
 }
 
 function validateToken(field: 'githubPat' | 'deepseekKey', value: string | null): string | null {
