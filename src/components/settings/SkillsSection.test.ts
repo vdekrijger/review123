@@ -14,7 +14,7 @@ import { addSkill, listSkills, SKILLS_CAP, SKILL_CONTENT_CAP } from '../../lib/s
 import { BUILTIN_SKILLS } from '../../lib/skills/builtinSkills'
 import { SAMPLE_SKILL_NAME } from '../../lib/skills/sampleSkill'
 import { _resetAuthStateForTest } from '../../lib/auth/authState.svelte'
-import { saveTokens } from '../../lib/settings/settings'
+import { saveTokens, saveGithubAuth, setGitlabToken } from '../../lib/settings/settings'
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -348,5 +348,94 @@ describe('SkillsSection — mine-skill gate copy', () => {
     const hint = screen.getByText(/sign in with github from the top bar to use this feature/i)
     expect(hint).toBeInTheDocument()
     expect(screen.queryByText(/sign in with github \(above\)/i)).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Account-wide mining UI — provider preselection + optional repo filter
+// ---------------------------------------------------------------------------
+
+describe('SkillsSection — account-wide mining UI', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetAuthStateForTest()
+    saveTokens({ deepseekKey: 'sk-test' })
+  })
+
+  function providerSelect(): HTMLSelectElement {
+    return document.querySelector('#mine-provider-select') as HTMLSelectElement
+  }
+
+  function analyzeButton(): HTMLButtonElement {
+    return screen.getByRole('button', { name: /analyze my comments/i }) as HTMLButtonElement
+  }
+
+  it('preselects GitHub when only GitHub auth is configured', () => {
+    saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
+    render(SkillsSection)
+    expect(providerSelect().value).toBe('github')
+  })
+
+  it('preselects GitLab when only GitLab auth is configured', () => {
+    setGitlabToken('glpat_test')
+    render(SkillsSection)
+    expect(providerSelect().value).toBe('gitlab')
+  })
+
+  it('offers a provider choice and preselects GitHub when both are configured', () => {
+    saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
+    setGitlabToken('glpat_test')
+    render(SkillsSection)
+    const select = providerSelect()
+    expect(select.value).toBe('github')
+    const enabledOptions = Array.from(select.options).filter(o => !o.disabled).map(o => o.value)
+    expect(enabledOptions).toEqual(expect.arrayContaining(['github', 'gitlab']))
+  })
+
+  it('Bitbucket option is present but disabled (honest not-supported)', () => {
+    saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
+    render(SkillsSection)
+    const bitbucket = Array.from(providerSelect().options).find(o => o.value === 'bitbucket')
+    expect(bitbucket).toBeDefined()
+    expect(bitbucket!.disabled).toBe(true)
+  })
+
+  it('analyze button is enabled with an empty repo filter (account-wide default)', () => {
+    saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
+    render(SkillsSection)
+    const ownerInput = screen.getByLabelText(/repository owner/i) as HTMLInputElement
+    const repoInput = screen.getByLabelText(/repository name/i) as HTMLInputElement
+    expect(ownerInput.value).toBe('')
+    expect(repoInput.value).toBe('')
+    expect(analyzeButton().disabled).toBe(false)
+  })
+
+  it('analyze button is disabled when only one filter field is filled', async () => {
+    saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
+    render(SkillsSection)
+    const ownerInput = screen.getByLabelText(/repository owner/i)
+    await userEvent.type(ownerInput, 'myorg')
+    expect(analyzeButton().disabled).toBe(true)
+  })
+
+  it('analyze button is enabled again when both filter fields are filled', async () => {
+    saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
+    render(SkillsSection)
+    await userEvent.type(screen.getByLabelText(/repository owner/i), 'myorg')
+    await userEvent.type(screen.getByLabelText(/repository name/i), 'myrepo')
+    expect(analyzeButton().disabled).toBe(false)
+  })
+
+  it('repo filter is labelled optional', () => {
+    saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
+    render(SkillsSection)
+    expect(screen.getByText(/optional: limit to a single repository/i)).toBeInTheDocument()
+  })
+
+  it('shows GitLab sign-in guidance when GitLab is selected without auth', async () => {
+    saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
+    render(SkillsSection)
+    await userEvent.selectOptions(providerSelect(), 'gitlab')
+    expect(screen.getByText(/add a gitlab token or sign in via oauth/i)).toBeInTheDocument()
   })
 })
