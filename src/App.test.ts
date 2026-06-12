@@ -204,6 +204,50 @@ describe('App review→review navigation', () => {
     expect(await screen.findByText(/PR-TWO/)).toBeTruthy()
   })
 
+  it('does not refetch or show the loading skeleton when navigating between steps of the same PR', async () => {
+    // Step-only navigation (understand → inspect → verdict, incl. browser
+    // back/forward) must NOT re-trigger the PR load: the component stays
+    // mounted ({#key} is on PR identity only) and the load must be created
+    // exactly once per mount. Regression: `load` was a $derived.by reading
+    // route-derived props, so every router.route reassignment recreated it.
+    history.replaceState(null, '', '/review/github/a/b/1/understand')
+    const fetchStub = makeFetchStub()
+    vi.stubGlobal('fetch', fetchStub)
+    // The PR load = exactly one meta fetch (…/pulls/1) + one files fetch (…/pulls/1/files).
+    // Other endpoints (commits, comments, check-runs) are lazy by design and not the PR load.
+    const loadCalls = () =>
+      fetchStub.mock.calls.filter(
+        ([url]) => /\/pulls\/1$/.test(String(url)) || String(url).includes('/pulls/1/files'),
+      ).length
+
+    const user = userEvent.setup()
+    render(App)
+
+    // Wait for PR-ONE to load (skeleton gone, content rendered)
+    await screen.findByText(/PR-ONE/)
+    expect(loadCalls()).toBe(2) // 1× meta + 1× files from the initial load
+
+    // Step 1 → 2 via the stepper button (uses navigate() → pushState)
+    await user.click(screen.getByRole('button', { name: /2.*Inspect/i }))
+    expect(screen.getByRole('button', { name: /2.*Inspect/i })).toHaveAttribute('aria-current', 'step')
+
+    // Step 2 → 3
+    await user.click(screen.getByRole('button', { name: /3.*Verdict/i }))
+    expect(screen.getByRole('button', { name: /3.*Verdict/i })).toHaveAttribute('aria-current', 'step')
+
+    // Browser back (verdict → inspect) — same path as back/forward buttons
+    history.pushState(null, '', '/review/github/a/b/1/inspect')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+    await screen.findByText(/PR-ONE/)
+
+    // Content must still be there instantly — never the loading skeleton
+    expect(screen.queryByLabelText('Loading pull request')).toBeNull()
+    expect(screen.getByText(/PR-ONE/)).toBeTruthy()
+
+    // And crucially: zero additional PR meta/files fetches happened
+    expect(loadCalls()).toBe(2) // still only the initial load
+  })
+
   it('resets step to 1 when navigating to a different PR (requires {#key} remount)', async () => {
     // This test specifically validates the {#key} block: without it, the `step`
     // $state defined inside Review.svelte would persist across navigation.
