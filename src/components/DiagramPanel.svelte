@@ -516,7 +516,7 @@
   }
 
   .overlay-content {
-    background: #fff;
+    background: var(--surface-overlay, #fff);
     border-radius: 8px;
     padding: 2rem;
     width: 92vw;

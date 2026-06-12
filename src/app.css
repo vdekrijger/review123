@@ -27,6 +27,58 @@
   color-scheme: light;
 }
 
+/* Surface / structural color vars — dark defaults (auto + dark) */
+:root {
+  /* Panel / rail background */
+  --surface: #16161e;
+  /* Sticky bars, dialogs, raised surfaces */
+  --surface-raised: #1a1a2e;
+  /* Overlay dialog content background */
+  --surface-overlay: #1e1e2e;
+  /* Info-banner background (visit diff banner) */
+  --surface-banner: #1a3050;
+  /* Info-banner border */
+  --border-banner: #2a5080;
+  /* Info-banner accent */
+  --border-banner-accent: #4a90d0;
+  /* Info-banner text */
+  --text-banner: #c8dff0;
+  /* Draft thread (inline comment widget) */
+  --surface-draft: #2a2510;
+  --border-draft: #a07820;
+  --text-draft: #e8e0c8;
+}
+
+/* Light theme overrides for surface vars */
+:root[data-theme='light'] {
+  --surface: #f6f8fa;
+  --surface-raised: #ffffff;
+  --surface-overlay: #ffffff;
+  --surface-banner: #ddeeff;
+  --border-banner: #90b8d8;
+  --border-banner-accent: #2a7abf;
+  --text-banner: #1a3050;
+  --surface-draft: #fffbf0;
+  --border-draft: #f0b44488;
+  --text-draft: #333;
+}
+
+/* Auto light preference */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --surface: #f6f8fa;
+    --surface-raised: #ffffff;
+    --surface-overlay: #ffffff;
+    --surface-banner: #ddeeff;
+    --border-banner: #90b8d8;
+    --border-banner-accent: #2a7abf;
+    --text-banner: #1a3050;
+    --surface-draft: #fffbf0;
+    --border-draft: #f0b44488;
+    --text-draft: #333;
+  }
+}
+
 /* Change-map legend chip color vars — dark defaults (auto + dark) */
 :root {
   --legend-added-bg: #1a4731;

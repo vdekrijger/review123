@@ -22,6 +22,7 @@
   import { track } from '../lib/analytics/analytics'
   import { getSettings } from '../lib/settings/settings'
   import CommentEditor from './CommentEditor.svelte'
+  import GitHubSignInButton from './GitHubSignInButton.svelte'
   import type { PrRef } from '../lib/github/parse'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
   import type { Draft } from '../lib/drafts/drafts.svelte'
@@ -173,7 +174,7 @@
   <div class="signed-out" role="status">
     {#if clientId}
       <p>Authentication required — use OAuth or add a PAT in Settings.</p>
-      <button type="button" class="signin-btn" onclick={handleSignIn}>Sign in with GitHub</button>
+      <GitHubSignInButton onclick={handleSignIn} />
     {:else}
       <p>Add a GitHub PAT in Settings to submit your review.</p>
       <a href="#settings">Open Settings</a>
@@ -327,21 +328,6 @@
     flex-direction: column;
     align-items: center;
     gap: 0.75rem;
-  }
-
-  .signin-btn {
-    padding: 0.5rem 1.25rem;
-    border: none;
-    border-radius: 6px;
-    background: #24292f;
-    color: #fff;
-    font-size: 0.95rem;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .signin-btn:hover {
-    background: #1c2128;
   }
 
   .verdict-step {
