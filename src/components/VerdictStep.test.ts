@@ -328,6 +328,9 @@ describe('VerdictStep', () => {
           tone: 'ok',
           biasQuestion: null,
           suggestion: null,
+          accuracy: 'consistent',
+          accuracyNote: null,
+          duplicate: false,
           ...overrides,
         }],
       }
@@ -646,6 +649,154 @@ describe('VerdictStep', () => {
       })
 
       expect(screen.getByRole('button', { name: /submit review/i })).not.toBeDisabled()
+    })
+
+    // --- accuracy chip rendering ---
+
+    it('accuracy chip: consistent shows muted chip', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: {
+          prRef, commitId, store, prUrl, submitFn: okSubmit,
+          coachFn: okCoach(makeCoachResult({ accuracy: 'consistent', accuracyNote: null, duplicate: false })),
+        },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        const chip = screen.getByTestId('accuracy-chip')
+        expect(chip).toBeInTheDocument()
+        expect(chip.textContent).toContain('consistent')
+        expect(chip.className).toMatch(/accuracy-consistent/)
+      })
+    })
+
+    it('accuracy chip: questionable shows amber chip', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: {
+          prRef, commitId, store, prUrl, submitFn: okSubmit,
+          coachFn: okCoach(makeCoachResult({ accuracy: 'questionable', accuracyNote: null, duplicate: false })),
+        },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        const chip = screen.getByTestId('accuracy-chip')
+        expect(chip.textContent).toContain('questionable')
+        expect(chip.className).toMatch(/accuracy-questionable/)
+      })
+    })
+
+    it('accuracy chip: contradicted shows red chip with why in title and below', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      const why = 'The diff shows X returns number not string.'
+      render(VerdictStep, {
+        props: {
+          prRef, commitId, store, prUrl, submitFn: okSubmit,
+          coachFn: okCoach(makeCoachResult({ accuracy: 'contradicted', accuracyNote: why, duplicate: false })),
+        },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        const chip = screen.getByTestId('accuracy-chip')
+        expect(chip.textContent).toContain('contradicted')
+        expect(chip.className).toMatch(/accuracy-contradicted/)
+        // The why should be in the chip title
+        expect(chip).toHaveAttribute('title', why)
+        // The why should also appear below as text
+        expect(screen.getByTestId('accuracy-note')).toHaveTextContent(why)
+      })
+    })
+
+    it('accuracy chip: no accuracyNote shown when consistent', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: {
+          prRef, commitId, store, prUrl, submitFn: okSubmit,
+          coachFn: okCoach(makeCoachResult({ accuracy: 'consistent', accuracyNote: null, duplicate: false })),
+        },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('accuracy-chip')).toBeInTheDocument()
+      })
+
+      expect(screen.queryByTestId('accuracy-note')).not.toBeInTheDocument()
+    })
+
+    // --- duplicate badge rendering ---
+
+    it('duplicate badge shown when duplicate is true', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: {
+          prRef, commitId, store, prUrl, submitFn: okSubmit,
+          coachFn: okCoach(makeCoachResult({ accuracy: 'consistent', accuracyNote: null, duplicate: true })),
+        },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        const badge = screen.getByTestId('duplicate-badge')
+        expect(badge).toBeInTheDocument()
+        expect(badge.textContent).toMatch(/similar to an existing comment/i)
+      })
+    })
+
+    it('duplicate badge NOT shown when duplicate is false', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: {
+          prRef, commitId, store, prUrl, submitFn: okSubmit,
+          coachFn: okCoach(makeCoachResult({ accuracy: 'consistent', accuracyNote: null, duplicate: false })),
+        },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('accuracy-chip')).toBeInTheDocument()
+      })
+
+      expect(screen.queryByTestId('duplicate-badge')).not.toBeInTheDocument()
     })
   })
 

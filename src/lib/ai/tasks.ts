@@ -12,7 +12,7 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
-export const PROMPT_VERSION = 7
+export const PROMPT_VERSION = 8
 
 // ---------------------------------------------------------------------------
 // summarizePrompt — streaming plain-text summary + reading order
@@ -294,10 +294,15 @@ Do not include any text outside the JSON object.`
  *   }
  *
  * Per review comment: clarity 1–5, actionable boolean, tone, optional anti-bias
- * question when the comment states preference as defect, optional suggestion.
+ * question when the comment states preference as defect, optional suggestion,
+ * accuracy assessment against the diff, and duplicate detection.
+ *
+ * When prComments are provided (existing PR comment bodies, capped at 30,
+ * truncated to 200ch each), the system prompt instructs duplicate detection.
  */
 export function coachPrompt(
   drafts: { index: number; path: string; line: number; body: string }[],
+  prComments?: string[],
 ): { system: string; user: string } {
   const system = `You are a code review coach. Evaluate each draft review comment and respond \
 with JSON ONLY — no explanation, no markdown, no code fences. Your response must be valid JSON \
@@ -311,7 +316,10 @@ that exactly matches this shape:
       "actionable": <true if the comment tells the author what to do, false otherwise>,
       "tone": "ok" | "blunt" | "harsh",
       "biasQuestion": "<a single probing question to surface reviewer bias, or null>",
-      "suggestion": "<a reworded version of the comment that is clearer or kinder, or null>"
+      "suggestion": "<a reworded version of the comment that is clearer or kinder, or null>",
+      "accuracy": "consistent" | "questionable" | "contradicted",
+      "accuracyNote": "<explanation of why the claim is contradicted by the diff, or null>",
+      "duplicate": <true if this comment substantially repeats an existing PR comment, false otherwise>
     }
   ]
 }
@@ -328,16 +336,30 @@ Field rules:
   Otherwise null.
 - suggestion: include ONLY when a reword would materially improve clarity or tone. \
   Keep it concise. Otherwise null.
+- accuracy: assess whether the comment's claim matches what the diff actually shows.
+  - "consistent": the comment's claim is supported by the diff (this is the common case).
+  - "questionable": the claim may be partially accurate or hard to verify from the diff alone.
+  - "contradicted": the diff shows something that directly contradicts what the comment claims.
+  When "contradicted", you MUST cite why in accuracyNote (e.g. "The diff shows X returns a \
+  number, but the comment says it returns a string."). Be honest: "consistent" is the most \
+  frequent outcome and requires no extra explanation.
+- accuracyNote: required. A string explaining the contradiction when accuracy is "contradicted". \
+  Must be null for "consistent" and "questionable" unless there is a specific note worth adding.
+- duplicate: true ONLY when the draft comment substantially repeats an existing PR comment \
+  listed in the input. Minor overlap in topic is not enough — the substance must be the same. \
+  false otherwise (the common case).
 
 Be brief and concrete. Do not pad. Do not include any text outside the JSON object.`
 
-  const draftsJson = JSON.stringify(
-    drafts.map((d) => ({ index: d.index, path: d.path, line: d.line, body: d.body })),
-    null,
-    2,
-  )
+  // Cap prComments at 30, truncate each to 200 chars
+  const capped = (prComments ?? []).slice(0, 30).map((c) => c.slice(0, 200))
 
-  return { system, user: draftsJson }
+  const payload: unknown = {
+    drafts: drafts.map((d) => ({ index: d.index, path: d.path, line: d.line, body: d.body })),
+    ...(capped.length > 0 ? { existingPrComments: capped } : {}),
+  }
+
+  return { system, user: JSON.stringify(payload, null, 2) }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import FileDiff from './FileDiff.svelte'
 import type { PrFile } from '../lib/github/types'
@@ -328,5 +328,120 @@ describe('FileDiff — askFn prop', () => {
       },
     })
     expect(container.querySelector('article.file-diff')).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// FileDiff — copy path button (task 4 / item 2)
+// ---------------------------------------------------------------------------
+
+describe('FileDiff — copy path button', () => {
+  let clipboardWriteText: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    clipboardWriteText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: clipboardWriteText },
+      writable: true,
+      configurable: true,
+    })
+  })
+
+  it('renders a copy button with aria-label "Copy file path"', () => {
+    render(FileDiff, { props: { file: modified, mode: 'unified' } })
+    expect(screen.getByRole('button', { name: /copy file path/i })).toBeInTheDocument()
+  })
+
+  it('copy button calls navigator.clipboard.writeText with the file path', async () => {
+    render(FileDiff, { props: { file: modified, mode: 'unified' } })
+    const copyBtn = screen.getByRole('button', { name: /copy file path/i })
+    await fireEvent.click(copyBtn)
+    expect(clipboardWriteText).toHaveBeenCalledWith('src/a.ts')
+  })
+
+  it('shows "Copied" confirmation text after clicking copy', async () => {
+    render(FileDiff, { props: { file: modified, mode: 'unified' } })
+    const copyBtn = screen.getByRole('button', { name: /copy file path/i })
+    await fireEvent.click(copyBtn)
+    expect(screen.getByText(/copied/i)).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// FileDiff — colored stat counts (task 4 / item 2)
+// ---------------------------------------------------------------------------
+
+describe('FileDiff — colored stat counts', () => {
+  it('additions span has class "stat-add"', () => {
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified' } })
+    const addSpan = container.querySelector('.stat-add')
+    expect(addSpan).toBeInTheDocument()
+    expect(addSpan!.textContent).toMatch(/\+/)
+  })
+
+  it('deletions span has class "stat-del"', () => {
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified' } })
+    const delSpan = container.querySelector('.stat-del')
+    expect(delSpan).toBeInTheDocument()
+    expect(delSpan!.textContent).toMatch(/−/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// FileDiff — test file display modes (task 4 / item 4)
+// ---------------------------------------------------------------------------
+
+import { setTestFileDisplay } from '../lib/settings/settings'
+
+const testFile: PrFile = {
+  filename: 'src/components/Foo.test.ts',
+  status: 'modified',
+  additions: 2,
+  deletions: 1,
+  patch: '@@ -1,2 +1,2 @@\n-old\n+new\n ctx',
+}
+
+describe('FileDiff — test file display modes', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('highlight mode: header has class "test-highlight"', () => {
+    setTestFileDisplay('highlight')
+    const { container } = render(FileDiff, { props: { file: testFile, mode: 'unified' } })
+    const header = container.querySelector('header')
+    expect(header!.classList.contains('test-highlight')).toBe(true)
+  })
+
+  it('highlight mode: "test" chip is shown in header', () => {
+    setTestFileDisplay('highlight')
+    render(FileDiff, { props: { file: testFile, mode: 'unified' } })
+    expect(screen.getByText('test')).toBeInTheDocument()
+  })
+
+  it('dim mode: article has class "test-dim"', () => {
+    setTestFileDisplay('dim')
+    const { container } = render(FileDiff, { props: { file: testFile, mode: 'unified' } })
+    const article = container.querySelector('article.file-diff')
+    expect(article!.classList.contains('test-dim')).toBe(true)
+  })
+
+  it('dim mode: test file is collapsed by default', () => {
+    setTestFileDisplay('dim')
+    const { container } = render(FileDiff, { props: { file: testFile, mode: 'unified' } })
+    expect(container.querySelector('article.file-diff.is-collapsed')).toBeInTheDocument()
+  })
+
+  it('normal mode: no test-highlight or test-dim classes', () => {
+    setTestFileDisplay('normal')
+    const { container } = render(FileDiff, { props: { file: testFile, mode: 'unified' } })
+    expect(container.querySelector('.test-highlight')).not.toBeInTheDocument()
+    expect(container.querySelector('.test-dim')).not.toBeInTheDocument()
+  })
+
+  it('non-test file: no test-highlight even in highlight mode', () => {
+    setTestFileDisplay('highlight')
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified' } })
+    expect(container.querySelector('.test-highlight')).not.toBeInTheDocument()
   })
 })

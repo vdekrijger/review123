@@ -27,6 +27,7 @@
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
   import type { Draft } from '../lib/drafts/drafts.svelte'
   import type { CoachResult } from '../lib/ai/schemas'
+  import type { PrComment } from '../lib/github/comments'
 
   const RETURN_KEY = 'review123:returnTo'
 
@@ -50,10 +51,15 @@
      * Override the coach function — DI seam for tests. In production,
      * Review.svelte passes run.coach.
      */
-    coachFn?: (drafts: Draft[]) => Promise<CoachResult | { error: string }>
+    coachFn?: (drafts: Draft[], prComments?: string[]) => Promise<CoachResult | { error: string }>
+    /**
+     * Existing PR review comments — passed through to coachFn for duplicate detection.
+     * Capped at 30, truncated at 200ch inside coachPrompt.
+     */
+    prComments?: PrComment[]
   }
 
-  let { prRef, commitId, store, prUrl, submitFn = submitReview, coachFn }: Props = $props()
+  let { prRef, commitId, store, prUrl, submitFn = submitReview, coachFn, prComments = [] }: Props = $props()
 
   // Derive signed-in status reactively from authState so the UI flips live
   // when the user completes OAuth (EC-REACT: no reload required).
@@ -93,7 +99,9 @@
     coachResult = null
     dismissedSuggestions = new Set()
     try {
-      const result = await coachFn([...store.drafts])
+      // Pass existing PR comment bodies for duplicate detection
+      const prCommentBodies = prComments.map((c) => c.body)
+      const result = await coachFn([...store.drafts], prCommentBodies)
       if ('error' in result) {
         coachError = result.error
       } else {
@@ -240,7 +248,19 @@
                     >{clarityStars(review.clarity)}</span>
                     <span class="coach-chip tone-{review.tone}">{review.tone}</span>
                     <span class="coach-chip actionable-{review.actionable}">{review.actionable ? '✓ actionable' : '✗ actionable'}</span>
+                    <span
+                      class="coach-chip accuracy-{review.accuracy}"
+                      title={review.accuracyNote ?? ''}
+                      data-testid="accuracy-chip"
+                    >{review.accuracy}</span>
+                    {#if review.duplicate}
+                      <span class="coach-chip duplicate-badge" data-testid="duplicate-badge">similar to an existing comment</span>
+                    {/if}
                   </div>
+
+                  {#if review.accuracy === 'contradicted' && review.accuracyNote}
+                    <div class="coach-accuracy-note" data-testid="accuracy-note">{review.accuracyNote}</div>
+                  {/if}
 
                   {#if review.biasQuestion}
                     <div class="coach-bias-callout">
@@ -654,5 +674,41 @@
   .coach-dismiss-btn:hover {
     opacity: 1;
     background: #8882;
+  }
+
+  /* accuracy chip variants */
+  .accuracy-consistent {
+    background: var(--surface-raised);
+    border-color: var(--hairline);
+    color: inherit;
+    opacity: 0.7;
+  }
+
+  .accuracy-questionable {
+    background: #fff8e1;
+    border-color: #f9a825;
+    color: #e65100;
+  }
+
+  .accuracy-contradicted {
+    background: var(--legend-removed-bg);
+    border-color: var(--legend-removed-border);
+    color: var(--legend-removed-color);
+  }
+
+  .duplicate-badge {
+    background: var(--legend-changed-bg);
+    border-color: var(--legend-changed-border);
+    color: var(--legend-changed-color);
+    font-style: italic;
+  }
+
+  .coach-accuracy-note {
+    font-size: 0.82rem;
+    color: var(--legend-removed-color);
+    background: var(--legend-removed-bg);
+    border: 1px solid var(--legend-removed-border);
+    border-radius: 4px;
+    padding: 0.35rem 0.6rem;
   }
 </style>

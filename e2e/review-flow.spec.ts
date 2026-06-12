@@ -288,7 +288,7 @@ const TEST_INSIGHT_RESULT = {
   gaps: ['no test covers removal of removed line from feature.ts'],
 }
 
-// v4 contract: CoachResult with one review containing a suggestion
+// v8 contract: CoachResult with one review containing a suggestion + accuracy + duplicate
 const COACH_RESULT = {
   reviews: [
     {
@@ -298,6 +298,9 @@ const COACH_RESULT = {
       tone: 'blunt',
       biasQuestion: null,
       suggestion: 'Consider rephrasing this as a question to encourage discussion.',
+      accuracy: 'consistent',
+      accuracyNote: null,
+      duplicate: false,
     },
   ],
 }
@@ -1233,11 +1236,16 @@ test('inspect: context-line expand affordance renders when full file contents ar
 })
 
 // ---------------------------------------------------------------------------
-// Test 12: Ask AI — open rail → type question → answer streams in →
-//          second question retains first in view
+// Test 12: Ask AI removed from context rail (line-level widget supersedes it)
+//
+// Per product decision: the rail no longer hosts an Ask AI panel.
+// The AskAi component lives in the line-level DraftThread widget path.
+// This test verifies:
+//   1. The rail does NOT contain a details.ask-ai-section.
+//   2. The rail DOES contain registry-driven sections (ci-details + pr-description).
 // ---------------------------------------------------------------------------
 
-test('ask-ai: open rail, type question, answer streams in; second question retains first in view', async ({
+test('ask-ai: NOT in context rail; rail shows ci-details and pr-description sections', async ({
   page,
 }) => {
   await setupRoutes(page)
@@ -1256,48 +1264,19 @@ test('ask-ai: open rail, type question, answer streams in; second question retai
   const rail = page.locator('aside.context-rail')
   await expect(rail).toBeVisible()
 
-  // Open the Ask AI section (it is inside a <details> element)
-  const askSection = rail.locator('details.ask-ai-section')
-  await expect(askSection).toBeVisible({ timeout: 5_000 })
-  await askSection.evaluate((el: HTMLDetailsElement) => { el.open = true })
+  // Ask AI section must NOT be in the rail body
+  await expect(rail.locator('details.ask-ai-section')).not.toBeVisible()
 
-  // Find the textarea and type a question with "ask-marker" so the DeepSeek fixture
-  // route recognizes it as an Ask AI request
-  const textarea = askSection.getByRole('textbox')
-  await expect(textarea).toBeVisible()
-  await textarea.fill('ask-marker: Why is this coded here?')
+  // Registry sections must be present — CI details and PR description now included
+  // Collect all <details> summary texts in the rail body
+  const railBody = rail.locator('.rail-body')
+  const summaryTexts = await railBody.locator('details > summary').allTextContents()
+  const lower = summaryTexts.map((t) => t.toLowerCase())
 
-  // Submit with the Ask button — use JS click to bypass the draft-bar overlay
-  const askBtn = askSection.getByRole('button', { name: /ask/i })
-  await expect(askBtn).toBeEnabled()
-  await askBtn.evaluate((el: HTMLButtonElement) => el.click())
-
-  // The answer should stream in
-  await expect(
-    askSection.getByText(/This code is in this location/i),
-  ).toBeVisible({ timeout: 15_000 })
-
-  // First question should still be visible in the conversation
-  await expect(
-    askSection.getByText(/ask-marker: Why is this coded here\?/i),
-  ).toBeVisible()
-
-  // Second question — verify history retained from first
-  await textarea.fill('ask-marker second-ask: What about the tests?')
-  await askBtn.evaluate((el: HTMLButtonElement) => el.click())
-
-  // Second answer should appear
-  await expect(
-    askSection.getByText(/second answer confirms context was retained/i),
-  ).toBeVisible({ timeout: 15_000 })
-
-  // Both questions should remain visible in the conversation
-  await expect(
-    askSection.getByText(/ask-marker: Why is this coded here\?/i),
-  ).toBeVisible()
-  await expect(
-    askSection.getByText(/This code is in this location/i),
-  ).toBeVisible()
+  // ci-details section
+  expect(lower.some((t) => t.includes('ci'))).toBe(true)
+  // pr-description section
+  expect(lower.some((t) => t.includes('pr description') || t.includes('original pr'))).toBe(true)
 })
 
 // ---------------------------------------------------------------------------
@@ -1344,8 +1323,8 @@ test('file-tree: drawer closed by default; toggle opens tree; clicking second fi
   await expect(treeNav).toBeVisible()
 
   // The fixture has 2 files: src/feature.ts and src/old-utils.ts
-  // Both should appear as buttons in the file tree
-  const fileButtons = treeNav.getByRole('button')
+  // Both should appear as file-selection buttons in the file tree (not counting close button)
+  const fileButtons = treeNav.locator('.file-btn')
   await expect(fileButtons).toHaveCount(2)
 
   // Get the second file button (src/old-utils.ts)
@@ -1361,6 +1340,48 @@ test('file-tree: drawer closed by default; toggle opens tree; clicking second fi
   const secondArticle = page.locator('article.file-diff').nth(1)
   await expect(secondArticle).toBeVisible({ timeout: 5_000 })
   await expect(secondArticle).toBeInViewport({ ratio: 0.1 })
+})
+
+// ---------------------------------------------------------------------------
+// file-tree: close via ✕ button inside drawer header
+// ---------------------------------------------------------------------------
+
+test('file-tree: drawer can be closed via the ✕ close button inside the drawer', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+  await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 5_000 })
+
+  const toggleTab = page.locator('.tree-toggle-tab')
+  const treeNav = page.locator('nav[aria-label="File tree"]')
+
+  // Open drawer
+  await toggleTab.click()
+  await expect(toggleTab).toHaveAttribute('aria-expanded', 'true')
+  await expect(treeNav).toBeVisible()
+
+  // Close via ✕ button inside the drawer header
+  const closeBtn = page.locator('.tree-drawer-close')
+  await expect(closeBtn).toBeVisible()
+  await closeBtn.click()
+
+  // Drawer should be closed
+  await expect(toggleTab).toHaveAttribute('aria-expanded', 'false')
+  await expect(treeNav).not.toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
@@ -1519,32 +1540,33 @@ test('inline-ask-ai: seed draft, step 2, switch widget tab to Ask AI, ask stream
   const draftAnnotations = page.locator('.draft-annotations')
   await expect(draftAnnotations).toBeVisible({ timeout: 5_000 })
 
-  // The DraftThread widget should have Comment and Ask AI tabs
-  // (since aiRun.ask is provided and deepseekKey is set)
-  const commentTab = draftAnnotations.getByRole('tab', { name: /comment/i })
-  const askAiTab = draftAnnotations.getByRole('tab', { name: /ask ai/i })
-  await expect(commentTab).toBeVisible({ timeout: 5_000 })
-  await expect(askAiTab).toBeVisible()
+  // New action-row UI: No tabs — instead there is a single editor surface
+  // with "Leave comment" + "Ask AI" + "Cancel" buttons at the bottom.
+  // Tab buttons must NOT be present.
+  await expect(draftAnnotations.getByRole('tab', { name: /comment/i })).not.toBeVisible()
+  await expect(draftAnnotations.getByRole('tab', { name: /ask ai/i })).not.toBeVisible()
 
-  // Comment tab should be active by default
-  await expect(commentTab).toHaveAttribute('aria-selected', 'true')
+  // The comment body textarea is always visible (single surface)
+  // Click Edit to open the editor if the draft is in view mode
+  const editBtn = draftAnnotations.getByRole('button', { name: /edit/i })
+  if (await editBtn.isVisible()) {
+    await editBtn.evaluate((el: HTMLButtonElement) => el.click())
+  }
 
-  // Switch to Ask AI tab — use JS click to bypass the context-rail overlay
-  // (same pattern as the Ask AI rail tests in test 12)
-  await askAiTab.evaluate((el: HTMLButtonElement) => el.click())
-  await expect(askAiTab).toHaveAttribute('aria-selected', 'true')
+  // The "Ask AI" action button should be visible in the action row
+  const askAiBtn = draftAnnotations.getByRole('button', { name: /ask ai/i })
+  await expect(askAiBtn).toBeVisible({ timeout: 5_000 })
 
-  // Ask textarea should be visible
-  const askTextarea = draftAnnotations.getByRole('textbox', { name: /ask a question about this line/i })
-  await expect(askTextarea).toBeVisible()
+  // The comment body textarea is the single editor surface
+  const commentTextarea = draftAnnotations.getByRole('textbox', { name: /comment body/i })
+  await expect(commentTextarea).toBeVisible()
 
-  // Type a question — include "ask-marker" so the fixture route recognizes it
-  await askTextarea.evaluate((el: HTMLTextAreaElement, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })) }, 'ask-marker: Why is this change needed?')
+  // Type a question into the textarea — include "ask-marker" so the fixture route recognizes it
+  await commentTextarea.evaluate((el: HTMLTextAreaElement, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })) }, 'ask-marker: Why is this change needed?')
 
-  // Click Ask button via JS to bypass overlay
-  const askBtn = draftAnnotations.getByRole('button', { name: /^ask$/i })
-  await expect(askBtn).toBeEnabled()
-  await askBtn.evaluate((el: HTMLButtonElement) => el.click())
+  // Click Ask AI button via JS to bypass overlay
+  await expect(askAiBtn).toBeEnabled()
+  await askAiBtn.evaluate((el: HTMLButtonElement) => el.click())
 
   // The answer should stream in from the fixture
   await expect(

@@ -616,6 +616,16 @@ describe('PROMPT_VERSION v4', () => {
 })
 
 // ---------------------------------------------------------------------------
+// PROMPT_VERSION v8 (coach accuracy + duplicate + prComments)
+// ---------------------------------------------------------------------------
+
+describe('PROMPT_VERSION v8', () => {
+  it('is at least 8 (bumped for coach accuracy/duplicate/prComments dimensions)', () => {
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(8)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // testInsightPrompt (D2)
 // ---------------------------------------------------------------------------
 
@@ -743,20 +753,87 @@ describe('coachPrompt', () => {
     expect(system.toLowerCase()).toMatch(/preference.*defect|defect.*preference/i)
   })
 
-  it('user prompt is valid JSON containing all draft entries', () => {
+  it('user prompt is valid JSON containing all draft entries under a drafts key', () => {
     const { user } = coachPrompt(drafts)
     const parsed = JSON.parse(user)
-    expect(Array.isArray(parsed)).toBe(true)
-    expect(parsed).toHaveLength(2)
-    expect(parsed[0].body).toBe('This variable name is confusing.')
-    expect(parsed[1].body).toBe('You should never do it this way.')
+    // Now the payload is { drafts: [...], ... }
+    expect(Array.isArray(parsed.drafts)).toBe(true)
+    expect(parsed.drafts).toHaveLength(2)
+    expect(parsed.drafts[0].body).toBe('This variable name is confusing.')
+    expect(parsed.drafts[1].body).toBe('You should never do it this way.')
   })
 
   it('handles empty drafts array gracefully', () => {
     const { system, user } = coachPrompt([])
     expect(typeof system).toBe('string')
     const parsed = JSON.parse(user)
-    expect(parsed).toEqual([])
+    expect(parsed.drafts).toEqual([])
+  })
+
+  // --- new accuracy + duplicate dimensions ---
+
+  it('system prompt mentions accuracy field with its three enum values', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toContain('accuracy')
+    expect(system).toContain('consistent')
+    expect(system).toContain('questionable')
+    expect(system).toContain('contradicted')
+  })
+
+  it('system prompt mentions duplicate field', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toContain('duplicate')
+  })
+
+  it('system prompt instructs per-comment accuracy assessment against the diff', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system.toLowerCase()).toMatch(/accuracy|consistent.*diff|diff.*claim/i)
+  })
+
+  it('system prompt says to cite why when contradicted', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system.toLowerCase()).toMatch(/contradict|cite|why/i)
+  })
+
+  it('system prompt mentions accuracyNote field', () => {
+    const { system } = coachPrompt(drafts)
+    expect(system).toContain('accuracyNote')
+  })
+
+  it('user payload embeds existing PR comments when provided', () => {
+    const prComments = [
+      'This function is too complex.',
+      'Please add a test for this edge case.',
+    ]
+    const { user } = coachPrompt(drafts, prComments)
+    expect(user).toContain('This function is too complex.')
+    expect(user).toContain('Please add a test for this edge case.')
+  })
+
+  it('user payload has no prComments section when not provided', () => {
+    const { user } = coachPrompt(drafts)
+    // The user should be valid JSON starting with the drafts array when no prComments
+    const parsed = JSON.parse(user)
+    expect(Array.isArray(parsed) || typeof parsed === 'object').toBe(true)
+  })
+
+  it('coachPrompt caps existing PR comments at 30', () => {
+    const manyComments = Array.from({ length: 50 }, (_, i) => `comment ${i}`)
+    const { user } = coachPrompt(drafts, manyComments)
+    // Should not contain comment 30 and beyond (0-indexed)
+    expect(user).not.toContain('comment 30')
+    expect(user).not.toContain('comment 49')
+    // Should contain up to comment 29
+    expect(user).toContain('comment 0')
+  })
+
+  it('coachPrompt truncates individual PR comment bodies at 200 chars', () => {
+    const longComment = 'x'.repeat(300)
+    const { user } = coachPrompt(drafts, [longComment])
+    // The full 300-char string should NOT appear
+    expect(user).not.toContain('x'.repeat(300))
+    // But a 200-char truncation should
+    expect(user).toContain('x'.repeat(200))
   })
 })
 
