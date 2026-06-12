@@ -15,7 +15,8 @@
 
 import { glFetch, glFetchPage, glFetchRaw, GitlabApiError } from './gitlabClient'
 import { getSettings } from '../settings/settings'
-import type { ReviewProvider, PrRefX, ParseResult, ProviderCapabilities } from './types'
+import { resolveGitlabToken } from '../auth/gitlabAuth'
+import type { ReviewProvider, PrRefX, ParseResult, ProviderCapabilities, QueueItem } from './types'
 import type { PrMeta, PrFile } from '../github/types'
 import type { CiSummary } from '../github/checks'
 import type { PrComment } from '../github/comments'
@@ -622,6 +623,84 @@ export const gitlabProvider: ReviewProvider = {
    */
   suggestionFence(lines: string[]): string {
     return `\`\`\`suggestion:-0+0\n${lines.join('\n')}\n\`\`\``
+  },
+
+  async getMyQueue(): Promise<QueueItem[]> {
+    const token = resolveGitlabToken()
+    if (!token) return []
+
+    interface GlUser { username: string }
+    interface GlMrListItem {
+      iid: number
+      title: string
+      updated_at: string
+      web_url: string
+    }
+
+    function parseMrWebUrl(webUrl: string): { owner: string; repo: string } | null {
+      const match = webUrl.match(/https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/\d+/)
+      if (!match) return null
+      const fullPath = match[1]
+      const segments = fullPath.split('/')
+      if (segments.length < 2) return null
+      const repo = segments[segments.length - 1]
+      const owner = segments.slice(0, -1).join('/')
+      return { owner, repo }
+    }
+
+    let me: string
+    try {
+      const user = await glFetch<GlUser>('/user')
+      me = user.username
+    } catch {
+      return []
+    }
+
+    async function listMrs(params: string): Promise<GlMrListItem[]> {
+      try {
+        const items = await glFetch<GlMrListItem[]>(
+          `/merge_requests?state=opened&scope=all&${params}&per_page=20`,
+        )
+        return Array.isArray(items) ? items : []
+      } catch {
+        return []
+      }
+    }
+
+    const [reviewMrs, authorMrs] = await Promise.all([
+      listMrs(`reviewer_username=${encodeURIComponent(me)}`),
+      listMrs(`author_username=${encodeURIComponent(me)}`),
+    ])
+
+    const seen = new Map<string, QueueItem>()
+
+    for (const mr of reviewMrs) {
+      const repo = parseMrWebUrl(mr.web_url)
+      if (!repo) continue
+      const key = `${repo.owner}/${repo.repo}#${mr.iid}`
+      seen.set(key, {
+        ref: { provider: 'gitlab', owner: repo.owner, repo: repo.repo, number: mr.iid },
+        title: mr.title,
+        authorIsMe: false,
+        updatedAt: mr.updated_at,
+      })
+    }
+
+    for (const mr of authorMrs) {
+      const repo = parseMrWebUrl(mr.web_url)
+      if (!repo) continue
+      const key = `${repo.owner}/${repo.repo}#${mr.iid}`
+      if (!seen.has(key)) {
+        seen.set(key, {
+          ref: { provider: 'gitlab', owner: repo.owner, repo: repo.repo, number: mr.iid },
+          title: mr.title,
+          authorIsMe: true,
+          updatedAt: mr.updated_at,
+        })
+      }
+    }
+
+    return [...seen.values()]
   },
 }
 
