@@ -426,10 +426,10 @@ describe('FileDiff — test file display modes', () => {
     expect(article!.classList.contains('test-dim')).toBe(true)
   })
 
-  it('dim mode: test file is collapsed by default', () => {
+  it('dim mode: test file renders expanded (not collapsed) — dim means opacity only', () => {
     setTestFileDisplay('dim')
     const { container } = render(FileDiff, { props: { file: testFile, mode: 'unified' } })
-    expect(container.querySelector('article.file-diff.is-collapsed')).toBeInTheDocument()
+    expect(container.querySelector('article.file-diff.is-collapsed')).not.toBeInTheDocument()
   })
 
   it('normal mode: no test-highlight or test-dim classes', () => {

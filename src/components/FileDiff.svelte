@@ -114,9 +114,9 @@
   const isTest = $derived(isTestFile(file.filename))
 
   // When viewed → collapse diff body; user can re-expand by clicking header or unchecking
-  // Also collapse test files in dim mode by default (expandable by click)
+  // dim mode reduces opacity only — it does NOT collapse the file
   let manuallyExpanded = $state(false)
-  const collapsed = $derived((viewed && !manuallyExpanded) || (isTest && testFileDisplay === 'dim' && !manuallyExpanded))
+  const collapsed = $derived(viewed && !manuallyExpanded)
 
   function handleHeaderClick() {
     if (collapsed) manuallyExpanded = true
