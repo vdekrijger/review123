@@ -179,3 +179,15 @@ describe('SettingsPanel', () => {
     })
   })
 })
+
+describe('PAT scope guidance', () => {
+  it('shows required scopes for fine-grained and classic tokens in the Advanced section', async () => {
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    const details = document.querySelector('details')
+    expect(details?.textContent).toMatch(/Pull requests: Read & write/)
+    expect(details?.textContent).toMatch(/Contents: Read/)
+    expect(details?.textContent).toMatch(/Checks: Read/)
+    expect(details?.textContent).toMatch(/public_repo/)
+    expect(details?.textContent).toMatch(/Configure SSO/)
+  })
+})

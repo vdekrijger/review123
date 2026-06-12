@@ -172,6 +172,12 @@
     <label>GitHub token (PAT)
       <input type="password" bind:value={pat} autocomplete="off" placeholder="github_pat_… (fine-grained, repo-scoped recommended)" />
     </label>
+    <div class="hint pat-scope-hint">
+      <p><strong>Fine-grained token</strong> (recommended): grant access to the repositories you review, with
+        <em>Pull requests: Read &amp; write</em>, <em>Contents: Read</em>, and <em>Checks: Read</em>.</p>
+      <p><strong>Classic token:</strong> the <code>public_repo</code> scope (or <code>repo</code> for private
+        repositories). In a SAML/SSO organization, click <em>Configure SSO → Authorize</em> on the token afterwards.</p>
+    </div>
   </details>
   <p class="hint">Keys are stored only in this browser (localStorage) and sent only to their own services.</p>
   {#if error}<p role="alert">{error}</p>{/if}
