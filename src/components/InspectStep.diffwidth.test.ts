@@ -1,11 +1,13 @@
 /**
- * Tests for Fix 3: Diff width setting (diffWidth: 'centered' | 'full').
+ * Tests for Fix 3 (revised): Diff width setting — attribute-driven, applies immediately.
  *
- * - settings.ts: diffWidth added to Settings interface with default 'centered'
- * - setDiffWidth() setter exported
- * - SettingsPanel: Diff width radiogroup (Centered / Full width) in Appearance section
- * - InspectStep: when diffWidth='full', inspect-layout gets class 'diff-full'
- * - InspectStep: when diffWidth='centered' (default), no 'diff-full' class
+ * Root causes confirmed and tested:
+ * 1. .review container (max-width: 70rem) is the true constraint; child .inspect-layout
+ *    cannot widen past its parent. Fix: applyAppearance sets data-diffwidth on :root,
+ *    CSS `:root[data-diffwidth='full'] .review { max-width: none }` lifts the cap.
+ * 2. diffWidth read once at InspectStep mount — toggling does nothing without remount.
+ *    Fix: attribute approach — SettingsPanel's onDiffWidthChange calls applyAppearance()
+ *    (same as theme/font flow), so the attribute flips immediately in the live DOM.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -14,9 +16,10 @@ import userEvent from '@testing-library/user-event'
 import InspectStep from './InspectStep.svelte'
 import SettingsPanel from './SettingsPanel.svelte'
 import { getSettings, setDiffWidth } from '../lib/settings/settings'
+import * as appearanceModule from '../lib/settings/appearance.svelte'
 import type { PrFile } from '../lib/github/types'
 
-// Stub applyAppearance for SettingsPanel tests
+// Stub applyAppearance for SettingsPanel tests (same as SettingsPanel.test.ts)
 vi.mock('../lib/settings/appearance.svelte', () => ({
   applyAppearance: vi.fn(),
 }))
@@ -28,6 +31,8 @@ Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
 
 beforeEach(() => {
   localStorage.clear()
+  document.documentElement.removeAttribute('data-diffwidth')
+  vi.mocked(appearanceModule.applyAppearance).mockClear()
 })
 
 const PATCH = '@@ -1 +1 @@\n-old\n+new'
@@ -142,5 +147,46 @@ describe('InspectStep — diff-full class (Fix 3)', () => {
       props: { files: makeFiles(['src/a.ts']), changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null },
     })
     expect(result.container.querySelector('.inspect-layout')?.classList.contains('diff-full')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Root cause 1 + 2 regression tests (attribute-driven fix)
+// ---------------------------------------------------------------------------
+
+describe('SettingsPanel — onDiffWidthChange calls applyAppearance (attribute-driven fix)', () => {
+  it('clicking Full width radio calls applyAppearance immediately', async () => {
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    vi.mocked(appearanceModule.applyAppearance).mockClear()
+    await fireEvent.click(screen.getByRole('radio', { name: /full width/i }))
+    expect(vi.mocked(appearanceModule.applyAppearance)).toHaveBeenCalled()
+  })
+
+  it('clicking Centered radio calls applyAppearance immediately', async () => {
+    setDiffWidth('full')
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    vi.mocked(appearanceModule.applyAppearance).mockClear()
+    await fireEvent.click(screen.getByRole('radio', { name: /centered/i }))
+    expect(vi.mocked(appearanceModule.applyAppearance)).toHaveBeenCalled()
+  })
+})
+
+describe('applyAppearance — sets data-diffwidth on documentElement (container-level fix)', () => {
+  it('documentElement gets data-diffwidth=full immediately when Full width radio clicked', async () => {
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    vi.mocked(appearanceModule.applyAppearance).mockClear()
+    await fireEvent.click(screen.getByRole('radio', { name: /full width/i }))
+    // Setting must be persisted AND applyAppearance called (which sets data-diffwidth on :root)
+    expect(getSettings().diffWidth).toBe('full')
+    expect(vi.mocked(appearanceModule.applyAppearance)).toHaveBeenCalledTimes(1)
+  })
+
+  it('documentElement gets data-diffwidth=centered immediately when Centered radio clicked', async () => {
+    setDiffWidth('full')
+    render(SettingsPanel, { props: { onclose: vi.fn() } })
+    vi.mocked(appearanceModule.applyAppearance).mockClear()
+    await fireEvent.click(screen.getByRole('radio', { name: /centered/i }))
+    expect(getSettings().diffWidth).toBe('centered')
+    expect(vi.mocked(appearanceModule.applyAppearance)).toHaveBeenCalledTimes(1)
   })
 })

@@ -49,6 +49,13 @@
   letter-spacing: normal;
 }
 
+/* ── Diff width: full-width mode lifts the .review container cap (step 2 only) ── */
+/* :has(.inspect-layout) scopes to step 2 so step 1/3 prose keeps its readable width. */
+/* :root[data-diffwidth] attribute is set/cleared by applyAppearance() on every change. */
+:root[data-diffwidth='full'] .review:has(.inspect-layout) {
+  max-width: none;
+}
+
 /* ── Font preference overrides (data-font attribute set by applyAppearance) ── */
 :root[data-font='system'] {
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;

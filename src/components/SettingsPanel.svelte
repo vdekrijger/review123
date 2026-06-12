@@ -198,6 +198,7 @@
   function onDiffWidthChange(value: DiffWidth) {
     diffWidth = value
     setDiffWidth(value)
+    applyAppearance()
   }
 
   function save() {

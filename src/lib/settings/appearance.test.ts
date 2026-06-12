@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { setTheme, setUiFont } from './settings'
+import { setTheme, setUiFont, setDiffWidth } from './settings'
 
 // Mock matchMedia — controlled per test
 let _prefersDark = false
@@ -18,6 +18,7 @@ beforeEach(async () => {
   localStorage.clear()
   document.documentElement.removeAttribute('data-theme')
   document.documentElement.removeAttribute('data-font')
+  document.documentElement.removeAttribute('data-diffwidth')
   _prefersDark = false
   vi.resetModules()
 })
@@ -97,5 +98,35 @@ describe('resolvedTheme', () => {
     const { applyAppearance, resolvedTheme } = await import('./appearance.svelte')
     applyAppearance()
     expect(resolvedTheme()).toBe('light')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// applyAppearance — data-diffwidth attribute (fix: attribute-driven diff width)
+// ---------------------------------------------------------------------------
+
+describe('applyAppearance — data-diffwidth', () => {
+  it('sets data-diffwidth=full when diffWidth is full', async () => {
+    setDiffWidth('full')
+    const { applyAppearance } = await import('./appearance.svelte')
+    applyAppearance()
+    expect(document.documentElement.getAttribute('data-diffwidth')).toBe('full')
+  })
+
+  it('sets data-diffwidth=centered when diffWidth is centered', async () => {
+    setDiffWidth('centered')
+    const { applyAppearance } = await import('./appearance.svelte')
+    applyAppearance()
+    expect(document.documentElement.getAttribute('data-diffwidth')).toBe('centered')
+  })
+
+  it('removes stale data-diffwidth=full when reset to centered', async () => {
+    setDiffWidth('full')
+    const { applyAppearance } = await import('./appearance.svelte')
+    applyAppearance()
+    expect(document.documentElement.getAttribute('data-diffwidth')).toBe('full')
+    setDiffWidth('centered')
+    applyAppearance()
+    expect(document.documentElement.getAttribute('data-diffwidth')).toBe('centered')
   })
 })

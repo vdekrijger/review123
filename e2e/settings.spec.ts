@@ -187,6 +187,90 @@ test('modal: settings dialog on Inspect step is a top-layer modal — interactab
   await expect(dialog).not.toBeVisible()
 })
 
+// ---------------------------------------------------------------------------
+// Diff width: attribute-driven, applies immediately without remount
+// ---------------------------------------------------------------------------
+
+test('diff width: Full width sets data-diffwidth=full immediately and widens .review container on step 2', async ({
+  page,
+}) => {
+  await page.route('**/*posthog.com/**', (route) => route.abort())
+  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+  await page.route('**/api.github.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith('/pulls/42')) {
+      return route.fulfill({
+        json: {
+          title: 'Diff width test PR',
+          state: 'open', merged: false, body: null,
+          base: { sha: 'base000', repo: { private: false } },
+          head: { sha: 'head000' },
+          changed_files: 1,
+        },
+      })
+    }
+    if (path.endsWith('/pulls/42/files')) {
+      return route.fulfill({
+        json: [{
+          filename: 'src/example.ts',
+          status: 'modified',
+          patch: '@@ -1,2 +1,3 @@\n context\n-old\n+new\n+extra',
+          additions: 2, deletions: 1,
+        }],
+      })
+    }
+    if (path.endsWith('/commits/head000/check-runs')) {
+      return route.fulfill({ json: { total_count: 0, check_runs: [] } })
+    }
+    if (path.endsWith('/pulls/42/comments')) {
+      return route.fulfill({ json: [] })
+    }
+    return route.fulfill({ json: {} })
+  })
+  await page.route('**/api.deepseek.com/**', (route) => route.abort())
+
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      diffMode: 'unified',
+      railCollapsed: true,
+    }))
+  })
+
+  await page.goto('/review/github/testorg/testrepo/42')
+  await expect(page.getByRole('heading', { name: /Diff width test PR/i })).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+  await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 5_000 })
+
+  // Measure centered max-width (should be ≤ 70rem = 1120px at 16px base)
+  const centeredWidth = await page.locator('.review').evaluate((el) => el.getBoundingClientRect().width)
+
+  // Open settings
+  const settingsBtn = page.getByRole('button', { name: /settings/i })
+  await settingsBtn.evaluate((el: HTMLButtonElement) => el.click())
+  const dialog = page.getByRole('dialog', { name: /settings/i })
+  await expect(dialog).toBeVisible({ timeout: 3_000 })
+
+  // Click Full width radio
+  const fullRadio = dialog.getByRole('radio', { name: /full width/i })
+  await expect(fullRadio).toBeVisible()
+  await fullRadio.click()
+
+  // data-diffwidth must be set immediately (no reload required)
+  const dataDiffwidth = await page.evaluate(() => document.documentElement.getAttribute('data-diffwidth'))
+  expect(dataDiffwidth).toBe('full')
+
+  // Close dialog
+  await dialog.getByRole('button', { name: /cancel/i }).click()
+  await expect(dialog).not.toBeVisible()
+
+  // The .review container must now be wider than the centered width
+  const fullWidth = await page.locator('.review').evaluate((el) => el.getBoundingClientRect().width)
+  expect(fullWidth).toBeGreaterThan(centeredWidth)
+})
+
 test('appearance: Auto theme removes data-theme attribute', async ({ page }) => {
   await blockExternal(page)
 
