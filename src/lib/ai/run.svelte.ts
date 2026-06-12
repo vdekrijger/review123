@@ -33,6 +33,7 @@ import {
   testInsightPrompt,
   coachPrompt,
   alternativesPrompt,
+  askPrompt,
 } from './tasks'
 import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult } from './schemas'
 import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult } from './schemas'
@@ -70,6 +71,7 @@ export interface AiRun {
   start(): Promise<void>
   retry(task: TaskName): Promise<void>
   coach(drafts: Draft[]): Promise<CoachResult | { error: string }>
+  ask(question: string, onDelta: (t: string) => void): Promise<{ ok: true; answer: string } | { ok: false; error: string }>
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +139,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     ...deps,
   }
 
-  const { prKey, repo, isPrivate, pack, ci, ask } = input
+  const { prKey, repo, isPrivate, pack, ci, ask: askConsent } = input
 
   // Reactive panel state holders
   const summaryState = $state<PanelState<string>>({ status: 'idle' })
@@ -414,7 +416,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
 
     // Consent gate (EC-11c): declined → all 'declined', no AI calls
-    const allowed = await gateAi({ repo, isPrivate, ask })
+    const allowed = await gateAi({ repo, isPrivate, ask: askConsent })
     if (!allowed) {
       setAllPanels('declined')
       return
@@ -476,7 +478,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
 
     // Consent gate: private repos may quote code in comments (same gateAi / shared ask)
-    const allowed = await gateAi({ repo, isPrivate, ask })
+    const allowed = await gateAi({ repo, isPrivate, ask: askConsent })
     if (!allowed) {
       return { error: 'AI analysis was declined. Enable AI analysis in the consent dialog to use the comment coach.' }
     }
@@ -507,6 +509,59 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   // ---------------------------------------------------------------------------
+  // ask(question, onDelta) — on-demand free-form Q&A, never cached
+  // Maintains internal history of last 3 exchanges in the run instance.
+  // ---------------------------------------------------------------------------
+
+  // Internal conversation history for this run instance
+  const askHistory: { q: string; a: string }[] = []
+
+  async function ask(
+    question: string,
+    onDelta: (t: string) => void,
+  ): Promise<{ ok: true; answer: string } | { ok: false; error: string }> {
+    // No-key check: same early-exit as start() and coach()
+    const settings = getSettings()
+    if (!settings.deepseekKey) {
+      return { ok: false, error: 'No DeepSeek API key configured.' }
+    }
+
+    // Consent gate: same gateAi / shared ask
+    const allowed = await gateAi({ repo, isPrivate, ask: askConsent })
+    if (!allowed) {
+      return { ok: false, error: 'AI analysis was declined. Enable AI analysis to use Ask AI.' }
+    }
+
+    // Pack context if not already packed (best-effort — if pack fails, carry on without it)
+    if (packedCtx === null) {
+      try {
+        packedCtx = await pack()
+      } catch {
+        // Continue without packed context — use empty context
+        packedCtx = { text: '', notAnalyzed: [], includedFiles: [] }
+      }
+    }
+
+    // Pass previous exchanges to askPrompt (last ≤3 Q/A pairs).
+    // Run stores up to 3 completed exchanges; passing them gives the LLM context.
+    const prompts = askPrompt(packedCtx, askHistory, question)
+    const t1 = performance.now()
+
+    try {
+      const answer = await llmStream(prompts, onDelta)
+      // Store exchange in history; shift oldest out so we keep at most 3
+      askHistory.push({ q: question, a: answer })
+      while (askHistory.length > 3) askHistory.shift()
+      track('ai_task_completed', { task: 'ask', duration_ms: Math.round(performance.now() - t1), cached: false })
+      return { ok: true, answer }
+    } catch (err) {
+      const kind = err instanceof LlmError ? err.kind : 'unknown'
+      track('ai_task_failed', { task: 'ask', reason: kind })
+      return { ok: false, error: humanMessage(kind) }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Return reactive state + methods
   // ---------------------------------------------------------------------------
 
@@ -520,5 +575,6 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     start,
     retry,
     coach,
+    ask,
   }
 }

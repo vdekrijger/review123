@@ -1,5 +1,6 @@
 <script lang="ts">
   import DiagramPanel from './DiagramPanel.svelte'
+  import AskAi from './AskAi.svelte'
   import { track } from '../lib/analytics/analytics'
   import { stripReadingOrder } from '../lib/ai/tasks'
   import type { AiRun } from '../lib/ai/run.svelte'
@@ -36,6 +37,13 @@
     onhotspot(path)
     track('hotspot_clicked')
   }
+
+  // disabledReason: show hint when no API key available
+  const askDisabledReason = $derived(
+    run.summary.status === 'no-key'
+      ? 'No API key configured. Add your DeepSeek key in Settings to use Ask AI.'
+      : null
+  )
 </script>
 
 <aside class="context-rail" class:collapsed>
@@ -112,6 +120,9 @@
           <span class="verdict-pill level-{verdict.level}">{verdict.level}</span>
         </div>
       {/if}
+
+      <!-- Ask AI -->
+      <AskAi ask={run.ask} disabledReason={askDisabledReason} />
     </div>
   {/if}
 </aside>

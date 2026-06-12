@@ -203,6 +203,12 @@ function makeDeepSeekStreamResponse(text: string): string {
 const SUMMARY_TEXT =
   'This PR adds a new feature.\n\n===READING-ORDER===\nsrc/feature.ts\nsrc/old-utils.ts\n===END==='
 
+// Ask AI fixture response — plain text streamed answer
+const ASK_ANSWER_TEXT = 'This code is in this location because it handles feature initialization.'
+
+// Second ask fixture response — used to verify history retention
+const ASK_ANSWER_2_TEXT = 'The second answer confirms context was retained.'
+
 const ATTENTION_RESULT = {
   readingOrder: ['src/feature.ts', 'src/old-utils.ts'],
   hotspots: [{ path: 'src/feature.ts', reason: 'Critical logic change', level: 'high' }],
@@ -461,8 +467,21 @@ async function setupRoutes(
     }
 
     if (body?.stream === true) {
-      // Streaming — return SSE for summary
-      const sseText = makeDeepSeekStreamResponse(SUMMARY_TEXT)
+      // Determine which streaming response to return based on system prompt
+      const streamSystem = (
+        body?.messages?.find((m) => m.role === 'system')?.content ?? ''
+      ).toLowerCase()
+      // Ask AI requests include "ask-marker" in user message or "senior engineer" in system
+      const userContent = (
+        body?.messages?.find((m) => m.role === 'user')?.content ?? ''
+      )
+      const isAskRequest = streamSystem.includes('senior engineer') || userContent.includes('ask-marker')
+      // For the second ask request in the history threading test, we vary the answer
+      const askCount = isAskRequest && userContent.includes('second-ask') ? 2 : 1
+      const askAnswer = askCount === 2 ? ASK_ANSWER_2_TEXT : ASK_ANSWER_TEXT
+      const sseText = isAskRequest
+        ? makeDeepSeekStreamResponse(askAnswer)
+        : makeDeepSeekStreamResponse(SUMMARY_TEXT)
       return route.fulfill({
         status: 200,
         headers: {
@@ -1163,4 +1182,72 @@ test('inspect: context-line expand affordance renders when full file contents ar
     'button[title="Expand Up"], button[title="Expand Down"], button[title="Expand All"]',
   ).first()
   await expect(expandBtn).toBeVisible({ timeout: 10_000 })
+})
+
+// ---------------------------------------------------------------------------
+// Test 12: Ask AI — open rail → type question → answer streams in →
+//          second question retains first in view
+// ---------------------------------------------------------------------------
+
+test('ask-ai: open rail, type question, answer streams in; second question retains first in view', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // The context rail should be visible (railCollapsed: false in settings)
+  const rail = page.locator('aside.context-rail')
+  await expect(rail).toBeVisible()
+
+  // Open the Ask AI section (it is inside a <details> element)
+  const askSection = rail.locator('details.ask-ai-section')
+  await expect(askSection).toBeVisible({ timeout: 5_000 })
+  await askSection.evaluate((el: HTMLDetailsElement) => { el.open = true })
+
+  // Find the textarea and type a question with "ask-marker" so the DeepSeek fixture
+  // route recognizes it as an Ask AI request
+  const textarea = askSection.getByRole('textbox')
+  await expect(textarea).toBeVisible()
+  await textarea.fill('ask-marker: Why is this coded here?')
+
+  // Submit with the Ask button — use JS click to bypass the draft-bar overlay
+  const askBtn = askSection.getByRole('button', { name: /ask/i })
+  await expect(askBtn).toBeEnabled()
+  await askBtn.evaluate((el: HTMLButtonElement) => el.click())
+
+  // The answer should stream in
+  await expect(
+    askSection.getByText(/This code is in this location/i),
+  ).toBeVisible({ timeout: 15_000 })
+
+  // First question should still be visible in the conversation
+  await expect(
+    askSection.getByText(/ask-marker: Why is this coded here\?/i),
+  ).toBeVisible()
+
+  // Second question — verify history retained from first
+  await textarea.fill('ask-marker second-ask: What about the tests?')
+  await askBtn.evaluate((el: HTMLButtonElement) => el.click())
+
+  // Second answer should appear
+  await expect(
+    askSection.getByText(/second answer confirms context was retained/i),
+  ).toBeVisible({ timeout: 15_000 })
+
+  // Both questions should remain visible in the conversation
+  await expect(
+    askSection.getByText(/ask-marker: Why is this coded here\?/i),
+  ).toBeVisible()
+  await expect(
+    askSection.getByText(/This code is in this location/i),
+  ).toBeVisible()
 })
