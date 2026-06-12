@@ -21,6 +21,7 @@
     "@fontsource/newsreader": "^5.2.10",
     "@git-diff-view/file": "^0.1.5",
     "@git-diff-view/svelte": "^0.1.5",
+    "diff": "8.0.4",
     "dompurify": "^3.4.8",
     "marked": "^18.0.5",
     "mermaid": "^11.15.0",

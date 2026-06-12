@@ -5,7 +5,7 @@
   import RevisionPicker from '../components/RevisionPicker.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import CraftedLoader from '../components/CraftedLoader.svelte'
-  import { getSettings, setDiffMode, setRailCollapsed, type DiffMode } from '../lib/settings/settings'
+  import { getSettings, setDiffMode, setHideWhitespace, setRailCollapsed, type DiffMode } from '../lib/settings/settings'
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import ReviewProgress from '../components/ReviewProgress.svelte'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
@@ -93,6 +93,10 @@
   )
   let mode = $state<DiffMode>(getSettings().diffMode)
   function setMode(m: DiffMode) { mode = m; setDiffMode(m) }
+
+  // Hide-whitespace toggle — same persistence pattern as diffMode
+  let hideWhitespace = $state<boolean>(getSettings().hideWhitespace)
+  function setHideWs(hide: boolean) { hideWhitespace = hide; setHideWhitespace(hide) }
 
   // Track step changes — fires on initial render and whenever step changes.
   $effect(() => {
@@ -657,6 +661,9 @@
         changedFiles={inspectChangedFiles}
         {mode}
         onmode={setMode}
+        {hideWhitespace}
+        onhidewhitespace={setHideWs}
+        whitespaceDisabledReason={isCompareActive ? 'Hide whitespace is unavailable in compare view — file contents are fetched for the PR base/head, not the compared revisions' : null}
         {draftStore}
         attention={isCompareActive ? null : (aiRun?.attention.status === 'done' ? aiRun.attention.value as AttentionResult : null)}
         readingOrder={isCompareActive ? [] : readingOrder}

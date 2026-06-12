@@ -14,6 +14,7 @@
   import { patchLineNumbers } from '../lib/diff/patchLines'
   import type { PrComment } from '../lib/github/comments'
   import type { AskFocus } from '../lib/ai/tasks'
+  import type { WhitespaceDisplay } from '../lib/diff/whitespace'
   import { excerptAround } from '../lib/diff/excerpt'
   import { track } from '../lib/analytics/analytics'
 
@@ -69,9 +70,18 @@
      * Called when the user clicks "Add as draft" on a skill finding inside FileDiff.
      */
     onAddSkillFindingDraft?: (finding: { body: string; line: number; key: string }) => Promise<void>
+    /**
+     * Whitespace-hiding decision for this file (computed in InspectStep).
+     * null/undefined = toggle off or not applicable → render the provider diff.
+     * 'collapsed'    = whole change is whitespace-only → placeholder instead of diff.
+     * 'recomputed'   = render the recomputed patch; line-comment widgets disabled
+     *                  because displayed rows no longer match provider-side anchors.
+     * 'unavailable'  = full contents missing → provider diff + honest note.
+     */
+    whitespace?: WhitespaceDisplay | null
   }
 
-  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft }: Props = $props()
+  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, whitespace = null }: Props = $props()
 
   // Group existing comments by line (null-line comments go under a null key)
   const commentsByLine = $derived.by(() => {
@@ -172,7 +182,17 @@
   )
 
   const kind = $derived(classifyFile(file))
-  const diffFile = $derived(kind === 'diff' ? buildDiffFile(file, mode, contents) : null)
+
+  // Whitespace-hiding display state for this file
+  const wsCollapsed = $derived(kind === 'diff' && whitespace?.kind === 'collapsed')
+  const wsActive = $derived(kind === 'diff' && whitespace?.kind === 'recomputed')
+  const wsUnavailable = $derived(kind === 'diff' && whitespace?.kind === 'unavailable')
+
+  const diffFile = $derived(
+    kind === 'diff' && !wsCollapsed
+      ? buildDiffFile(file, mode, contents, whitespace?.kind === 'recomputed' ? whitespace.patch : undefined)
+      : null,
+  )
 
   // Copy-path state
   let copyDone = $state(false)
@@ -362,16 +382,23 @@
   {#if !collapsed}
   {#if kind === 'rename-only'}
     <p class="note">Rename only — no content changes.</p>
+  {:else if wsCollapsed}
+    <p class="note ws-collapsed-note" role="status">No changes when hiding whitespace.</p>
   {:else if kind === 'binary-or-too-large' || !diffFile}
     <p class="note">Binary or too large to display.</p>
   {:else}
+    {#if wsUnavailable}
+      <p class="ws-inline-note" role="note">Whitespace hiding isn't available for this file — showing the full diff.</p>
+    {:else if wsActive}
+      <p class="ws-inline-note" role="note">Line comments are disabled while whitespace changes are hidden — turn off "Hide whitespace" to comment on exact lines.</p>
+    {/if}
     <DiffView
       {diffFile}
       diffViewMode={mode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
       diffViewHighlight={true}
       diffViewTheme={diffTheme}
       diffViewWrap={true}
-      diffViewAddWidget={true}
+      diffViewAddWidget={!wsActive}
       {extendData}
       onAddWidgetClick={handleAddWidgetClick}
     >
@@ -524,6 +551,15 @@
   header.clickable:hover { background: color-mix(in srgb, var(--hairline) 30%, var(--surface-raised)); }
   .header-right { display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0; }
   .note { padding: 0.8rem; opacity: 0.7; }
+  .ws-collapsed-note { font-style: italic; }
+  .ws-inline-note {
+    margin: 0;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    background: var(--surface-raised);
+    border-bottom: 1px solid var(--hairline);
+  }
   .viewed-label {
     display: flex;
     align-items: center;
