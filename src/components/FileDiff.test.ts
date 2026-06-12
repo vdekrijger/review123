@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/svelte'
 import FileDiff from './FileDiff.svelte'
 import type { PrFile } from '../lib/github/types'
 import type { PrComment } from '../lib/github/comments'
+import { buildDiffFile } from '../lib/diff/diffFile'
 
 // DiffView uses canvas.getContext('2d') for text measurement — jsdom has no canvas.
 // Stub it so the component can render without throwing.
@@ -206,5 +207,92 @@ describe('FileDiff — existing comments (EC-FD-COMM)', () => {
       props: { file: modified, mode: 'unified', comments: [comment] },
     })
     expect(screen.getByText(/This is the review comment body\./i)).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// FileDiff — context expansion (hunk expand affordance)
+// ---------------------------------------------------------------------------
+
+// A file with a small hunk in the middle of a larger file — there will be
+// hidden context lines above and below when full content is provided.
+const bigFile: PrFile = {
+  filename: 'src/big.ts',
+  status: 'modified',
+  additions: 1,
+  deletions: 1,
+  patch: '@@ -5,3 +5,3 @@\n context\n-old line\n+new line\n context',
+}
+
+const oldContent = [
+  'line 1', 'line 2', 'line 3', 'line 4',
+  'context', 'old line', 'context',
+  'line 8', 'line 9', 'line 10',
+].join('\n')
+
+const newContent = [
+  'line 1', 'line 2', 'line 3', 'line 4',
+  'context', 'new line', 'context',
+  'line 8', 'line 9', 'line 10',
+].join('\n')
+
+describe('FileDiff — context expansion prop', () => {
+  it('without contents prop: DiffFile has getExpandEnabled()=false', () => {
+    // Verify at the library level that hunk-only mode disables expansion
+    const df = buildDiffFile(bigFile, 'unified')!
+    expect(df.getExpandEnabled()).toBe(false)
+  })
+
+  it('with contents prop: DiffFile has getExpandEnabled()=true', () => {
+    // Verify at the library level that full-content mode enables expansion
+    const df = buildDiffFile(bigFile, 'unified', { before: oldContent, after: newContent })!
+    expect(df.getExpandEnabled()).toBe(true)
+  })
+
+  it('without contents: component renders without expand buttons (hunk-only)', () => {
+    const { container } = render(FileDiff, {
+      props: { file: bigFile, mode: 'unified' },
+    })
+    // No expand buttons when contents are not provided
+    const expandButtons = container.querySelectorAll('button[title="Expand Up"], button[title="Expand Down"], button[title="Expand All"]')
+    expect(expandButtons.length).toBe(0)
+  })
+
+  it('with contents: component renders expand button(s) in hunk separator rows', () => {
+    const { container } = render(FileDiff, {
+      props: {
+        file: bigFile,
+        mode: 'unified',
+        contents: { before: oldContent, after: newContent },
+      },
+    })
+    // When full content is provided and there are hidden context lines,
+    // the library renders Expand Up/Down/All buttons in hunk rows.
+    const expandButtons = container.querySelectorAll(
+      'button[title="Expand Up"], button[title="Expand Down"], button[title="Expand All"]'
+    )
+    expect(expandButtons.length).toBeGreaterThan(0)
+  })
+
+  it('contents arriving after first render: upgrading to expandable works (Svelte reactivity)', async () => {
+    // Initially no contents — hunk-only; then update to provide contents
+    // Svelte's reactivity recomputes diffFile → expand buttons appear
+    const result = render(FileDiff, {
+      props: { file: bigFile, mode: 'unified', contents: undefined },
+    })
+
+    // Before: no expand buttons
+    let expandButtons = result.container.querySelectorAll(
+      'button[title="Expand Up"], button[title="Expand Down"], button[title="Expand All"]'
+    )
+    expect(expandButtons.length).toBe(0)
+
+    // After: provide contents → reactivity fires, diff rebuilds with expansion
+    await result.rerender({ file: bigFile, mode: 'unified', contents: { before: oldContent, after: newContent } })
+
+    expandButtons = result.container.querySelectorAll(
+      'button[title="Expand Up"], button[title="Expand Down"], button[title="Expand All"]'
+    )
+    expect(expandButtons.length).toBeGreaterThan(0)
   })
 })

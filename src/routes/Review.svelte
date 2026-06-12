@@ -160,6 +160,22 @@
     return ciPromise
   }
 
+  // File contents — fetched once, shared by AI pack() and InspectStep diff expansion.
+  // null = not yet fetched; Map = ready (may be empty if fetch failed).
+  let contentsMap: Map<string, { before: string | null; after: string | null }> | null = $state(null)
+  let contentsPromise: Promise<Map<string, { before: string | null; after: string | null }>> | null = null
+
+  function getContents(
+    files: PrFile[],
+    meta: { baseSha: string; headSha: string },
+  ): Promise<Map<string, { before: string | null; after: string | null }>> {
+    if (!contentsPromise) {
+      contentsPromise = fetchContents({ owner, repo }, files, meta).catch(() => new Map())
+      contentsPromise.then((map) => { contentsMap = map })
+    }
+    return contentsPromise
+  }
+
   // PR comments state
   let prComments: PrComment[] = $state([])
   let commentsError = $state(false)
@@ -183,12 +199,16 @@
 
       const budgetTokens = LLM_CONFIG.contextWindowTokens - LLM_CONFIG.maxOutputTokens - 2000
 
+      // Start fetching file contents immediately — shared with InspectStep for
+      // context-line expansion (up to 30 files, concurrency cap 4).
+      getContents(files, meta)
+
       const run = createAiRun({
         prKey,
         repo: repoStr,
         isPrivate: meta.private,
         pack: async () => {
-          const contents = await fetchContents({ owner, repo }, files, meta)
+          const contents = await getContents(files, meta)
           const ci = await getCi({ owner, repo, number }, meta.headSha)
           return packContext({ files, contents, ci, budgetTokens })
         },
@@ -330,6 +350,7 @@
         readingOrder={compareMode === 'active' ? [] : readingOrder}
         {viewedStore}
         prComments={compareMode === 'active' ? [] : prComments}
+        {contentsMap}
       />
     {:else}
       <VerdictStep

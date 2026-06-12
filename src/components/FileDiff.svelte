@@ -26,9 +26,15 @@
     changedSinceViewed?: boolean
     /** Called when the user clicks the Viewed checkbox */
     onToggleViewed?: () => void
+    /**
+     * Full before/after file contents used to enable GitHub-style context
+     * expansion between hunks. When omitted (or while still loading) the
+     * diff renders hunk-only without expansion affordances.
+     */
+    contents?: { before: string | null; after: string | null }
   }
 
-  let { file, mode, drafts = [], comments = [], onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed }: Props = $props()
+  let { file, mode, drafts = [], comments = [], onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents }: Props = $props()
 
   // Group existing comments by line (null-line comments go under a null key)
   const commentsByLine = $derived.by(() => {
@@ -75,7 +81,7 @@
   )
 
   const kind = $derived(classifyFile(file))
-  const diffFile = $derived(kind === 'diff' ? buildDiffFile(file, mode) : null)
+  const diffFile = $derived(kind === 'diff' ? buildDiffFile(file, mode, contents) : null)
 
   // ---- Widget state -------------------------------------------------------
   // Only one widget open at a time. Cleared after save or cancel.
