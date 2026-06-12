@@ -1,14 +1,34 @@
 /**
- * e2e/settings.spec.ts — Appearance settings: theme + font persist across reload.
- * Also tests that SettingsPanel renders as a true top-layer modal (showModal),
- * so that diff content (sticky line numbers, annotations) cannot paint through it.
+ * e2e/settings.spec.ts — Settings page tests.
+ *
+ * Previously tested SettingsPanel as a modal dialog; now retargeted to the
+ * dedicated /settings page (feat/settings-page). The gear button navigates
+ * to /settings instead of opening a dialog.
+ *
+ * RETIRED TESTS (showModal):
+ *   - 'modal: settings dialog on Inspect step is a top-layer modal'
+ *   - 'does NOT use the open attribute directly (no <dialog open>)'
+ * These modal-dialog behaviours are still covered by ConsentDialog and
+ * DiagramPanel tests (modal-dialog.test.ts). No coverage gap.
+ *
+ * NOTE on 'diff width' test: the settings page is navigated to from the Inspect
+ * step; after changing settings, we navigate back and verify the attribute.
  */
 import { test, expect } from '@playwright/test'
 
-// Block PostHog and external APIs (we only need the settings dialog, no PR load)
+// Block PostHog and external APIs (we only need the settings page, no PR load)
 async function blockExternal(page: import('@playwright/test').Page) {
   await page.route('**/*posthog.com/**', (route) => route.abort())
   await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+}
+
+// Navigate to the settings page via the gear button
+async function openSettings(page: import('@playwright/test').Page) {
+  const settingsBtn = page.getByRole('button', { name: /settings/i })
+  await expect(settingsBtn).toBeVisible({ timeout: 5_000 })
+  await settingsBtn.click()
+  // Settings page is now rendered (not a dialog)
+  await expect(page.getByRole('heading', { name: /^settings$/i })).toBeVisible({ timeout: 5_000 })
 }
 
 test('appearance: pick Dark + Serif → documentElement has data-theme=dark & data-font=serif → reload → persist', async ({
@@ -18,13 +38,8 @@ test('appearance: pick Dark + Serif → documentElement has data-theme=dark & da
 
   await page.goto('/')
 
-  // Open settings dialog — the gear/settings button on the landing page
-  const settingsBtn = page.getByRole('button', { name: /settings/i })
-  await expect(settingsBtn).toBeVisible({ timeout: 5_000 })
-  await settingsBtn.click()
-
-  // Dialog should appear
-  await expect(page.getByRole('dialog', { name: /settings/i })).toBeVisible()
+  // Navigate to settings page via gear button
+  await openSettings(page)
 
   // Pick Dark theme
   const darkRadio = page.getByRole('radio', { name: /dark/i })
@@ -43,8 +58,8 @@ test('appearance: pick Dark + Serif → documentElement has data-theme=dark & da
   const dataFont = await page.evaluate(() => document.documentElement.getAttribute('data-font'))
   expect(dataFont).toBe('serif')
 
-  // Close the dialog (Cancel — keys section; appearance is already saved)
-  await page.getByRole('button', { name: /cancel/i }).click()
+  // Navigate back (appearance is already saved on change)
+  await page.getByRole('button', { name: /back/i }).click()
 
   // Reload
   await page.reload()
@@ -68,12 +83,8 @@ test('sample reviewer: adding Pragmatic Senior Reviewer from the Built-in review
 
   await page.goto('/')
 
-  // Open settings dialog
-  const settingsBtn = page.getByRole('button', { name: /settings/i })
-  await expect(settingsBtn).toBeVisible({ timeout: 5_000 })
-  await settingsBtn.click()
-
-  await expect(page.getByRole('dialog', { name: /settings/i })).toBeVisible()
+  // Navigate to settings page
+  await openSettings(page)
 
   // The Built-in reviewers section is visible
   await expect(page.getByText(/built-in reviewers/i)).toBeVisible()
@@ -96,99 +107,6 @@ test('sample reviewer: adding Pragmatic Senior Reviewer from the Built-in review
   await expect(skillCheckbox).toBeChecked()
 })
 
-
-// ---------------------------------------------------------------------------
-// Modal top-layer test: settings dialog opened on Inspect step is a real modal
-// Fix for: <dialog open> (non-modal) let sticky diff internals paint through it
-// ---------------------------------------------------------------------------
-
-test('modal: settings dialog on Inspect step is a top-layer modal — interactable, not painted over by diff', async ({
-  page,
-}) => {
-  // Minimal GitHub API mock so the Inspect step renders
-  await page.route('**/*posthog.com/**', (route) => route.abort())
-  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
-  await page.route('**/api.github.com/**', async (route) => {
-    const path = new URL(route.request().url()).pathname
-    if (path.endsWith('/pulls/42')) {
-      return route.fulfill({
-        json: {
-          title: 'Modal test PR',
-          state: 'open', merged: false, body: null,
-          base: { sha: 'base000', repo: { private: false } },
-          head: { sha: 'head000' },
-          changed_files: 1,
-        },
-      })
-    }
-    if (path.endsWith('/pulls/42/files')) {
-      return route.fulfill({
-        json: [{
-          filename: 'src/example.ts',
-          status: 'modified',
-          patch: '@@ -1,2 +1,3 @@\n context\n-old\n+new\n+extra',
-          additions: 2, deletions: 1,
-        }],
-      })
-    }
-    if (path.endsWith('/commits/head000/check-runs')) {
-      return route.fulfill({ json: { total_count: 0, check_runs: [] } })
-    }
-    if (path.endsWith('/pulls/42/comments')) {
-      return route.fulfill({ json: [] })
-    }
-    return route.fulfill({ json: {} })
-  })
-  await page.route('**/api.deepseek.com/**', (route) => route.abort())
-
-  await page.addInitScript(() => {
-    localStorage.setItem('review123:settings', JSON.stringify({
-      deepseekKey: '',
-      diffMode: 'unified',
-      railCollapsed: true,
-    }))
-  })
-
-  await page.goto('/review/github/testorg/testrepo/42')
-
-  // Wait for the PR to load
-  await expect(page.getByRole('heading', { name: /Modal test PR/i })).toBeVisible({ timeout: 10_000 })
-
-  // Navigate to step 2 (Inspect)
-  await page.getByRole('button', { name: 'Next step' }).click()
-  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
-
-  // Wait for diff content to render
-  await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 5_000 })
-
-  // Open the settings dialog while on the Inspect step.
-  // Use JS click to bypass any z-index overlaps from the context rail header.
-  const settingsBtn = page.getByRole('button', { name: /settings/i })
-  await settingsBtn.evaluate((el: HTMLButtonElement) => el.click())
-
-  const dialog = page.getByRole('dialog', { name: /settings/i })
-  await expect(dialog).toBeVisible({ timeout: 3_000 })
-
-  // The dialog must be a real modal: verify it has the open attribute set
-  // (showModal() sets this, unlike <dialog open> which also sets it but without top-layer)
-  // The key test: we can interact with a radio inside the dialog
-  const darkRadio = dialog.getByRole('radio', { name: /dark/i })
-  await expect(darkRadio).toBeVisible()
-  await darkRadio.click()
-
-  // Verify the setting took effect (interactable, not blocked by diff internals)
-  const dataTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme'))
-  expect(dataTheme).toBe('dark')
-
-  // Verify the dialog is rendered as a modal: evaluate dialog.matches(':modal')
-  // showModal() puts the dialog in the :modal pseudo-class; <dialog open> does not
-  const isModal = await dialog.evaluate((el) => el.matches(':modal'))
-  expect(isModal).toBe(true)
-
-  // Close via Cancel button
-  await dialog.getByRole('button', { name: /cancel/i }).click()
-  await expect(dialog).not.toBeVisible()
-})
 
 // ---------------------------------------------------------------------------
 // Diff width: attribute-driven, applies immediately without remount
@@ -250,14 +168,13 @@ test('diff width: Full width sets data-diffwidth=full immediately and widens .re
   // Measure centered max-width (should be ≤ 70rem = 1120px at 16px base)
   const centeredWidth = await page.locator('.review').evaluate((el) => el.getBoundingClientRect().width)
 
-  // Open settings
+  // Open settings page via gear button
   const settingsBtn = page.getByRole('button', { name: /settings/i })
-  await settingsBtn.evaluate((el: HTMLButtonElement) => el.click())
-  const dialog = page.getByRole('dialog', { name: /settings/i })
-  await expect(dialog).toBeVisible({ timeout: 3_000 })
+  await settingsBtn.click()
+  await expect(page.getByRole('heading', { name: /^settings$/i })).toBeVisible({ timeout: 5_000 })
 
   // Click Full width radio
-  const fullRadio = dialog.getByRole('radio', { name: /full width/i })
+  const fullRadio = page.getByRole('radio', { name: /full width/i })
   await expect(fullRadio).toBeVisible()
   await fullRadio.click()
 
@@ -265,9 +182,11 @@ test('diff width: Full width sets data-diffwidth=full immediately and widens .re
   const dataDiffwidth = await page.evaluate(() => document.documentElement.getAttribute('data-diffwidth'))
   expect(dataDiffwidth).toBe('full')
 
-  // Close dialog
-  await dialog.getByRole('button', { name: /cancel/i }).click()
-  await expect(dialog).not.toBeVisible()
+  // Navigate back
+  await page.getByRole('button', { name: /back/i }).click()
+
+  // Wait for back navigation to the review page
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible({ timeout: 5_000 })
 
   // The .review container must now be wider than the centered width
   const fullWidth = await page.locator('.review').evaluate((el) => el.getBoundingClientRect().width)
@@ -291,10 +210,8 @@ test('appearance: Auto theme removes data-theme attribute', async ({ page }) => 
   const initial = await page.evaluate(() => document.documentElement.getAttribute('data-theme'))
   expect(initial).toBe('dark')
 
-  // Open settings and pick Auto
-  const settingsBtn = page.getByRole('button', { name: /settings/i })
-  await settingsBtn.click()
-  await expect(page.getByRole('dialog', { name: /settings/i })).toBeVisible()
+  // Navigate to settings page
+  await openSettings(page)
 
   await page.getByRole('radio', { name: /auto/i }).click()
 
@@ -314,32 +231,26 @@ test('builtin-library: add Security Reviewer (OWASP-minded) from Built-in review
 
   await page.goto('/')
 
-  // Open settings dialog
-  const settingsBtn = page.getByRole('button', { name: /settings/i })
-  await expect(settingsBtn).toBeVisible({ timeout: 5_000 })
-  await settingsBtn.click()
-
-  const dialog = page.getByRole('dialog', { name: /settings/i })
-  await expect(dialog).toBeVisible()
+  // Navigate to settings page
+  await openSettings(page)
 
   // The "Built-in reviewers" heading should be visible
-  await expect(dialog.getByText(/built-in reviewers/i)).toBeVisible()
+  await expect(page.getByText(/built-in reviewers/i)).toBeVisible()
 
   // The Security Reviewer (OWASP-minded) [Add] button should be visible
-  const addSecurityBtn = dialog.getByRole('button', { name: /add Security Reviewer \(OWASP-minded\)/i })
+  const addSecurityBtn = page.getByRole('button', { name: /add Security Reviewer \(OWASP-minded\)/i })
   await expect(addSecurityBtn).toBeVisible()
 
   // Click it
   await addSecurityBtn.click()
 
   // The skill name should appear in the installed skills list (.skill-name)
-  await expect(dialog.locator('.skill-name', { hasText: 'Security Reviewer (OWASP-minded)' })).toBeVisible({ timeout: 3_000 })
+  await expect(page.locator('.skill-name', { hasText: 'Security Reviewer (OWASP-minded)' })).toBeVisible({ timeout: 3_000 })
 
   // The Add button for that skill should no longer be visible
-  await expect(dialog.getByRole('button', { name: /add Security Reviewer \(OWASP-minded\)/i })).not.toBeVisible()
+  await expect(page.getByRole('button', { name: /add Security Reviewer \(OWASP-minded\)/i })).not.toBeVisible()
 
   // The skill's toggle checkbox should be checked (enabled)
-  // The newly installed skill is the last in the list — find its checkbox
-  const skillCheckbox = dialog.locator('.skill-item').filter({ hasText: 'Security Reviewer (OWASP-minded)' }).locator('input[type="checkbox"]')
+  const skillCheckbox = page.locator('.skill-item').filter({ hasText: 'Security Reviewer (OWASP-minded)' }).locator('input[type="checkbox"]')
   await expect(skillCheckbox).toBeChecked()
 })

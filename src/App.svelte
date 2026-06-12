@@ -1,17 +1,17 @@
 <script lang="ts">
-  import { router, startRouter } from './lib/router/router.svelte'
+  import { router, startRouter, navigate } from './lib/router/router.svelte'
   import Landing from './routes/Landing.svelte'
   import Review from './routes/Review.svelte'
   import AuthCallback from './routes/AuthCallback.svelte'
-  import SettingsPanel from './components/SettingsPanel.svelte'
+  import SettingsPage from './routes/SettingsPage.svelte'
   import GitHubSignInButton from './components/GitHubSignInButton.svelte'
   import { beginSignIn, signOut } from './lib/auth/auth'
   import { authState } from './lib/auth/authState.svelte'
 
   const RETURN_KEY = 'review123:returnTo'
+  const SETTINGS_RETURN_KEY = 'review123:settingsReturnTo'
 
   startRouter()
-  let settingsOpen = $state(false)
 
   async function handleSignIn() {
     sessionStorage.setItem(RETURN_KEY, location.pathname)
@@ -22,6 +22,12 @@
     signOut()
     // signOut() calls saveGithubAuth(null) → refreshAuthState() → authState.auth
     // updates reactively, so no local state sync needed here.
+  }
+
+  function handleSettingsClick() {
+    // Remember the current path so the settings page can navigate back
+    sessionStorage.setItem(SETTINGS_RETURN_KEY, location.pathname)
+    navigate('/settings')
   }
 
   const clientId = import.meta.env.VITE_GITHUB_CLIENT_ID as string | undefined
@@ -38,11 +44,9 @@
     {:else if clientId}
       <GitHubSignInButton onclick={handleSignIn} />
     {/if}
-    <button class="btn" aria-label="Settings" onclick={() => (settingsOpen = true)}>⚙</button>
+    <button class="btn" aria-label="Settings" onclick={handleSettingsClick}>⚙</button>
   </div>
 </header>
-
-{#if settingsOpen}<SettingsPanel onclose={() => { settingsOpen = false }} />{/if}
 
 {#if router.route.name === 'landing'}
   <Landing />
@@ -53,6 +57,9 @@
   {/key}
 {:else if router.route.name === 'auth-callback'}
   <AuthCallback />
+{:else if router.route.name === 'settings'}
+  {@const route = router.route}
+  <SettingsPage section={route.section} />
 {:else}
   <section><h1>Not found</h1><p>That isn't a valid review link. <a href="/">Go home</a>.</p></section>
 {/if}
