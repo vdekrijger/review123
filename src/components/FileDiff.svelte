@@ -9,10 +9,12 @@
   import { isTestFile } from '../lib/testFile'
   import type { Draft } from '../lib/drafts/drafts.svelte'
   import DraftThread from './DraftThread.svelte'
-  import CommentThread from './CommentThread.svelte'
+  import ExistingThread from './ExistingThread.svelte'
   import SkillFindingCard from './SkillFindingCard.svelte'
   import { patchLineNumbers } from '../lib/diff/patchLines'
   import type { PrComment } from '../lib/github/comments'
+  import { groupThreads, type CommentThread as Thread } from '../lib/github/commentThreads'
+  import type { ReplyOutcome } from '../lib/github/replies'
   import type { AskFocus } from '../lib/ai/tasks'
   import type { WhitespaceDisplay } from '../lib/diff/whitespace'
   import { excerptAround } from '../lib/diff/excerpt'
@@ -71,6 +73,11 @@
      */
     onAddSkillFindingDraft?: (finding: { body: string; line: number; key: string }) => Promise<void>
     /**
+     * Posts a reply to an existing comment thread IMMEDIATELY (not queued
+     * with the review). null → no Reply affordance (provider unsupported).
+     */
+    onReply?: ((root: PrComment, body: string) => Promise<ReplyOutcome>) | null
+    /**
      * Whitespace-hiding decision for this file (computed in InspectStep).
      * null/undefined = toggle off or not applicable → render the provider diff.
      * 'collapsed'    = whole change is whitespace-only → placeholder instead of diff.
@@ -81,47 +88,7 @@
     whitespace?: WhitespaceDisplay | null
   }
 
-  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, whitespace = null }: Props = $props()
-
-  // Group existing comments by line (null-line comments go under a null key)
-  const commentsByLine = $derived.by(() => {
-    const map = new Map<number | null, PrComment[]>()
-    for (const c of comments) {
-      const key = c.line
-      const arr = map.get(key) ?? []
-      arr.push(c)
-      map.set(key, arr)
-    }
-    return map
-  })
-
-  /**
-   * Returns the root (top-level) comment of a thread group.
-   * The root is the first comment with inReplyTo === null; falls back to the
-   * first comment in the array if all are replies (orphan scenario).
-   */
-  function rootComment(group: PrComment[]): PrComment {
-    return group.find((c) => c.inReplyTo === null) ?? group[0]
-  }
-
-  /** Whether a thread group is resolved (root comment id in resolvedCommentIds) */
-  function isResolved(group: PrComment[]): boolean {
-    return resolvedCommentIds.has(rootComment(group).id)
-  }
-
-  /** Truncates body to ~60 chars for the resolved summary line */
-  function truncateBody(body: string, maxLen = 60): string {
-    const oneLine = body.replace(/\s+/g, ' ').trim()
-    return oneLine.length > maxLen ? oneLine.slice(0, maxLen) + '…' : oneLine
-  }
-
-  // Ordered line keys (non-null first, sorted numerically; null last)
-  const lineKeys = $derived.by(() => {
-    const keys = [...commentsByLine.keys()]
-    const nonNull = (keys.filter((k) => k !== null) as number[]).sort((a, b) => a - b)
-    const hasNull = keys.includes(null)
-    return hasNull ? ([...nonNull, null] as (number | null)[]) : nonNull
-  })
+  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onReply = null, whitespace = null }: Props = $props()
 
   // Test-file display (must be declared before collapsed)
   const testFileDisplay = $derived<TestFileDisplay>(settingsState.current.testFileDisplay)
@@ -256,6 +223,53 @@
     return d.side === 'LEFT' ? leftAnchorLines.has(d.line) : rightAnchorLines.has(d.line)
   }
 
+  // ---- Existing comments: thread grouping + anchorability split ------------
+  // Threads group a root comment with its replies (GitHub in_reply_to_id
+  // chains / GitLab discussions). A thread is ANCHORED when its root line is
+  // present in the patch hunks — anchored threads render INLINE at their line
+  // (via extendData); only file-level / unanchorable threads go to the
+  // bottom-of-file list. Same dedupe rule as drafts: never both.
+  const threads = $derived(groupThreads(comments))
+
+  function isAnchoredThread(t: Thread): boolean {
+    const { line, side } = t.root
+    if (line === null || side === null) return false
+    return side === 'LEFT' ? leftAnchorLines.has(line) : rightAnchorLines.has(line)
+  }
+
+  const anchoredThreads = $derived(threads.filter(isAnchoredThread))
+  const unanchoredThreads = $derived(threads.filter((t) => !isAnchoredThread(t)))
+
+  /** Whether a thread is resolved (root comment id in resolvedCommentIds) */
+  function isThreadResolved(thread: Thread): boolean {
+    return resolvedCommentIds.has(thread.root.id)
+  }
+
+  // Bottom list: unanchorable threads grouped by line (null = "General", last)
+  const unanchoredThreadsByLine = $derived.by(() => {
+    const map = new Map<number | null, Thread[]>()
+    for (const t of unanchoredThreads) {
+      const key = t.root.line
+      const arr = map.get(key) ?? []
+      arr.push(t)
+      map.set(key, arr)
+    }
+    return map
+  })
+
+  // Ordered line keys (non-null first, sorted numerically; null last)
+  const lineKeys = $derived.by(() => {
+    const keys = [...unanchoredThreadsByLine.keys()]
+    const nonNull = (keys.filter((k) => k !== null) as number[]).sort((a, b) => a - b)
+    const hasNull = keys.includes(null)
+    return hasNull ? ([...nonNull, null] as (number | null)[]) : nonNull
+  })
+
+  function commentCountAt(lineKey: number | null): number {
+    const group = unanchoredThreadsByLine.get(lineKey) ?? []
+    return group.reduce((n, t) => n + 1 + t.replies.length, 0)
+  }
+
   // ---- extendData — per-line annotation entries (drafts + skill findings) --
   // NOTE: @git-diff-view's unified-mode DiffUnifiedExtendLine shipped with an
   // inverted isHidden condition (extend rows only rendered for collapsed
@@ -265,6 +279,7 @@
   interface ExtendEntry {
     draft?: Draft
     findings: SkillFinding[]
+    threads: Thread[]
   }
 
   const extendData = $derived.by(() => {
@@ -272,7 +287,7 @@
     const newFile: Record<string, { data: ExtendEntry }> = {}
     const entryAt = (map: Record<string, { data: ExtendEntry }>, line: number): ExtendEntry => {
       const key = String(line)
-      if (!map[key]) map[key] = { data: { findings: [] } }
+      if (!map[key]) map[key] = { data: { findings: [], threads: [] } }
       return map[key].data
     }
     for (const d of drafts) {
@@ -290,6 +305,10 @@
       // Findings anchor to the new (RIGHT) side of the diff
       if (!rightAnchorLines.has(f.line)) continue
       entryAt(newFile, f.line).findings.push(f)
+    }
+    for (const t of anchoredThreads) {
+      const map = t.root.side === 'LEFT' ? oldFile : newFile
+      entryAt(map, t.root.line!).threads.push(t)
     }
     return { oldFile, newFile }
   })
@@ -435,7 +454,7 @@
         {@const entry = data as ExtendEntry}
         {#if entry?.draft}
           {@const flashKey = `${entry.draft.line}|${entry.draft.side}`}
-          <div class="draft-annotations inline-annotation" class:flash={flashKeys.has(flashKey)} aria-label="Draft comment at line {lineNumber}">
+          <div class="draft-annotations inline-annotation" data-testid="inline-annotations" data-line={lineNumber} class:flash={flashKeys.has(flashKey)} aria-label="Draft comment at line {lineNumber}">
             <DraftThread
               draft={entry.draft}
               path={file.filename}
@@ -464,6 +483,13 @@
                 onAdd={() => handleAddSkillFindingDraft(finding)}
                 onDismiss={() => dismissSkillFinding(finding.key)}
               />
+            {/each}
+          </div>
+        {/if}
+        {#if entry?.threads?.length}
+          <div class="inline-comment-threads" data-testid="inline-annotations" data-line={lineNumber} aria-label="Existing comment threads at line {lineNumber}">
+            {#each entry.threads as thread (thread.root.id)}
+              <ExistingThread {thread} resolved={isThreadResolved(thread)} {onReply} />
             {/each}
           </div>
         {/if}
@@ -514,27 +540,21 @@
       </div>
     {/if}
 
-    {#if comments.length > 0}
+    <!-- Bottom-of-file existing comments: ONLY file-level / unanchorable
+         threads (root line null or not present in the patch hunks).
+         Anchored threads render inline at their line via extendData. -->
+    {#if unanchoredThreads.length > 0}
       <div class="existing-comments" aria-label="Existing review comments">
         {#each lineKeys as lineKey (lineKey)}
-          {@const group = commentsByLine.get(lineKey)!}
-          {@const root = rootComment(group)}
+          {@const group = unanchoredThreadsByLine.get(lineKey)!}
+          {@const count = commentCountAt(lineKey)}
           <div class="existing-line-group">
             <div class="existing-line-label">
-              {lineKey !== null ? `Line ${lineKey}` : 'General'} — {group.length} comment{group.length === 1 ? '' : 's'}
+              {lineKey !== null ? `Line ${lineKey}` : 'General'} — {count} comment{count === 1 ? '' : 's'}
             </div>
-            {#if isResolved(group)}
-              <details class="resolved-thread">
-                <summary class="resolved-summary">
-                  <span class="resolved-check" aria-hidden="true">✓</span>
-                  <span class="resolved-label">Resolved</span>
-                  <span class="resolved-snippet">{root.author}: {truncateBody(root.body)}</span>
-                </summary>
-                <CommentThread comments={group} />
-              </details>
-            {:else}
-              <CommentThread comments={group} />
-            {/if}
+            {#each group as thread (thread.root.id)}
+              <ExistingThread {thread} resolved={isThreadResolved(thread)} {onReply} />
+            {/each}
           </div>
         {/each}
       </div>
@@ -676,54 +696,7 @@
     margin-bottom: 0.15rem;
   }
 
-  /* Resolved thread — collapsed <details> */
-  .resolved-thread {
-    border: 1px solid var(--hairline);
-    border-radius: 4px;
-    overflow: hidden;
-  }
-
-  .resolved-summary {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.3rem 0.6rem;
-    cursor: pointer;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    background: var(--surface-raised);
-    list-style: none;
-    user-select: none;
-  }
-
-  .resolved-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .resolved-check {
-    color: var(--accent);
-    font-size: 0.85rem;
-    flex-shrink: 0;
-  }
-
-  .resolved-label {
-    font-weight: 600;
-    color: var(--text-muted);
-    flex-shrink: 0;
-  }
-
-  .resolved-snippet {
-    opacity: 0.7;
-    font-size: 0.78rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* Expanded content padding */
-  .resolved-thread[open] > :not(summary) {
-    padding: 0.4rem;
-  }
+  /* (Resolved-thread collapse styles live in ExistingThread.svelte) */
 
   /* ---- Per-file fallback block for unanchored findings ---- */
   .skill-findings-annotations {
@@ -749,5 +722,16 @@
     flex-direction: column;
     gap: 0.3rem;
     padding: 0.35rem 0.5rem;
+  }
+
+  /* Inline existing-comment threads anchored at a line (extend row) */
+  .inline-comment-threads {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    background: var(--surface-banner);
+    border-top: 1px solid var(--border-banner);
+    border-bottom: 1px solid var(--border-banner);
   }
 </style>

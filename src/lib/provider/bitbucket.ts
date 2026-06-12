@@ -207,6 +207,8 @@ export const bitbucketProvider: ReviewProvider = {
     suggestions: false,
     atomicReview: false,
     compare: false,
+    // Reply-to-thread not wired for Bitbucket (no UI affordance shown)
+    commentReplies: false,
     selfReviewBlocked: true, // Bitbucket Cloud rejects approving your own PR
   } satisfies ProviderCapabilities,
 

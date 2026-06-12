@@ -32,7 +32,7 @@
   import { jumpToFileDiff } from '../lib/diff/jumpToFile'
   import { migrateLegacyVisits, migrateLegacyViewed } from '../lib/provider/storeKeys'
   import { providerFor } from '../lib/provider/registry'
-  import type { PrRefX } from '../lib/provider/types'
+  import type { PrRefX, ReplyOutcome } from '../lib/provider/types'
   import { track } from '../lib/analytics/analytics'
 
   const RETURN_KEY = 'review123:returnTo'
@@ -455,6 +455,20 @@
     }
   })
 
+  // Reply to an existing comment thread — posts IMMEDIATELY (not queued with
+  // the review). On success the created comment is appended to prComments so
+  // the reply shows up in its thread right away.
+  async function postReply(root: PrComment, body: string): Promise<ReplyOutcome> {
+    if (!activeProvider.replyToThread) {
+      return { ok: false, message: `${activeProvider.displayName} does not support replying to threads.` }
+    }
+    const result = await activeProvider.replyToThread(prRefX, root, body)
+    if (result.ok) {
+      prComments = [...prComments, result.comment]
+    }
+    return result
+  }
+
   // Canonicalize bare /review/.../n (no step) → /review/.../n/understand (replaceState, not push)
   // Also canonicalize legacy /review/o/r/n → /review/github/o/r/n/understand
   $effect(() => {
@@ -675,6 +689,7 @@
         runSkillReviewsFn={aiRun != null ? (() => { void aiRun!.runSkillReviews() }) : null}
         askFn={aiRun ? aiRun.ask : null}
         askDisabledReason={inlineAskDisabledReason}
+        replyFn={activeProvider.capabilities.commentReplies && !isCompareActive ? postReply : null}
       />
     {:else}
       <VerdictStep

@@ -22,6 +22,7 @@ import type { CiSummary } from '../github/checks'
 import type { PrComment } from '../github/comments'
 import type { PrCommit } from '../github/commits'
 import type { Verdict, SubmitOutcome } from '../github/review'
+import type { ReplyOutcome } from '../github/replies'
 import type { Draft } from '../drafts/drafts.svelte'
 
 // ---------------------------------------------------------------------------
@@ -383,7 +384,18 @@ function mapCompareDiff(d: GlCompareFile): PrFile {
   return file
 }
 
-function mapNote(note: GlNote): PrComment | null {
+/**
+ * Map a GitLab note to a PrComment.
+ *
+ * Thread context comes from the enclosing discussion: the first non-system
+ * note of a discussion is the thread root; later notes are replies to it
+ * (inReplyTo = root note id). threadId carries the discussion id — required
+ * for posting replies (POST .../discussions/{threadId}/notes).
+ */
+function mapNote(
+  note: GlNote,
+  thread?: { discussionId: string; rootNoteId: number | null },
+): PrComment | null {
   // Skip system notes (e.g. "approved this merge request", pipeline events)
   if (note.system) return null
 
@@ -404,6 +416,8 @@ function mapNote(note: GlNote): PrComment | null {
     }
   }
 
+  const isReply = thread != null && thread.rootNoteId != null && thread.rootNoteId !== note.id
+
   return {
     id: note.id,
     author: note.author.username,
@@ -413,7 +427,8 @@ function mapNote(note: GlNote): PrComment | null {
     path,
     line,
     side,
-    inReplyTo: null, // GitLab REST doesn't expose reply-to per note
+    inReplyTo: isReply ? thread.rootNoteId : null,
+    ...(thread ? { threadId: thread.discussionId } : {}),
   }
 }
 
@@ -440,6 +455,7 @@ export const gitlabProvider: ReviewProvider = {
     suggestions: true,
     atomicReview: false,
     compare: true,
+    commentReplies: true,
     // Self-approval on GitLab is governed by project settings (often allowed):
     // never gate client-side; a rejection surfaces via mapGitlabError at submit.
     selfReviewBlocked: false,
@@ -548,8 +564,13 @@ export const gitlabProvider: ReviewProvider = {
 
     const comments: PrComment[] = []
     for (const disc of discussions) {
+      // First non-system note = thread root; later notes are replies to it.
+      const rootNote = disc.notes.find((n) => !n.system)
       for (const note of disc.notes) {
-        const comment = mapNote(note)
+        const comment = mapNote(note, {
+          discussionId: disc.id,
+          rootNoteId: rootNote?.id ?? null,
+        })
         if (comment) comments.push(comment)
       }
     }
@@ -745,6 +766,33 @@ export const gitlabProvider: ReviewProvider = {
     }
 
     return { ok: true }
+  },
+
+  /**
+   * Reply to an existing discussion: POST .../discussions/{threadId}/notes.
+   * Posts immediately (GitLab discussions are live conversations).
+   */
+  async replyToThread(ref: PrRefX, root: PrComment, body: string): Promise<ReplyOutcome> {
+    if (!root.threadId) {
+      return {
+        ok: false,
+        message: 'This comment has no discussion id — cannot reply to it.',
+      }
+    }
+    const pid = projectId(ref)
+    try {
+      const note = await glFetch<GlNote>(
+        `/projects/${pid}/merge_requests/${ref.number}/discussions/${encodeURIComponent(root.threadId)}/notes`,
+        { method: 'POST', body: JSON.stringify({ body }) },
+      )
+      const comment = mapNote(note, { discussionId: root.threadId, rootNoteId: root.id })
+      if (!comment) {
+        return { ok: false, message: 'GitLab returned an unexpected note payload.' }
+      }
+      return { ok: true, comment }
+    } catch (err) {
+      return { ok: false, message: mapGitlabError(err, 'Failed to post reply') }
+    }
   },
 
   authState(): { configured: boolean; hint: string } {

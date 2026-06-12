@@ -135,6 +135,17 @@ function makeReviewComments() {
       side: 'RIGHT',
       in_reply_to_id: null,
     },
+    // Threaded reply to 1001 — exercises in_reply_to_id grouping in the UI
+    {
+      id: 1003,
+      user: { login: 'author-dev', avatar_url: null },
+      body: 'Thanks, will fix in the next push.',
+      created_at: '2024-01-01T11:00:00Z',
+      path: 'src/feature.ts',
+      line: 2,
+      side: 'RIGHT',
+      in_reply_to_id: 1001,
+    },
   ]
 }
 
@@ -401,7 +412,14 @@ function seedDraftScript(prKey: string) {
 
 async function setupRoutes(
   page: import('@playwright/test').Page,
-  opts: { withGithubAuth?: boolean; withResolvedThreads?: boolean; aiDelayMs?: number } = {},
+  opts: {
+    withGithubAuth?: boolean
+    withResolvedThreads?: boolean
+    /** Hold AI (DeepSeek) fixture responses for this many ms before fulfilling */
+    aiDelayMs?: number
+    /** Called with the JSON body of each POST to the review-comment reply endpoint */
+    onReplyPost?: (body: unknown) => void
+  } = {},
 ) {
   // Block PostHog analytics
   await page.route('**/*posthog.com/**', (route) => route.abort())
@@ -487,6 +505,29 @@ async function setupRoutes(
         return route.fulfill({ json: makeCompareOneFile() })
       }
       return route.fulfill({ json: { files: [] } })
+    }
+
+    // Reply to a review-comment thread:
+    // POST /repos/:owner/:repo/pulls/:number/comments/:comment_id/replies
+    const replyMatch = path.match(
+      new RegExp(`^/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/comments/(\\d+)/replies$`),
+    )
+    if (replyMatch && route.request().method() === 'POST') {
+      const posted = route.request().postDataJSON() as { body: string }
+      opts.onReplyPost?.(posted)
+      return route.fulfill({
+        status: 201,
+        json: {
+          id: 5001,
+          user: { login: 'test-user', avatar_url: null },
+          body: posted.body,
+          created_at: '2024-01-02T10:00:00Z',
+          path: 'src/feature.ts',
+          line: 2,
+          side: 'RIGHT',
+          in_reply_to_id: Number(replyMatch[1]),
+        },
+      })
     }
 
     // PR review comments: /repos/:owner/:repo/pulls/:number/comments
@@ -1652,9 +1693,22 @@ test('inline-ask-ai: seed draft, step 2, switch widget tab to Ask AI, ask stream
   // Wait for file diffs to appear
   await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 5_000 })
 
-  // The seeded draft should appear in the .draft-annotations section
-  const draftAnnotations = page.locator('.draft-annotations')
+  // Wait for file contents to finish loading (expand affordances appear).
+  // The diff rebuilds when contents arrive, remounting inline annotations —
+  // opening the editor before that would lose the editing state.
+  await expect(
+    page.locator('button[title="Expand Up"], button[title="Expand Down"], button[title="Expand All"]').first(),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // The seeded draft (line 3 — anchored in the patch) renders INLINE at its
+  // line via the extend annotation row (dedupe: anchored drafts no longer
+  // appear in the bottom-of-file .draft-annotations list). Select by line:
+  // the existing-comment thread at line 2 renders its own inline row.
+  const draftAnnotations = page.locator('[data-testid="inline-annotations"][data-line="3"]')
   await expect(draftAnnotations).toBeVisible({ timeout: 5_000 })
+  await expect(draftAnnotations).toContainText('Seeded draft for testing')
+  // No bottom-of-file fallback block (inline rows carry .inline-annotation)
+  await expect(page.locator('.draft-annotations:not(.inline-annotation)')).toHaveCount(0)
 
   // New action-row UI: No tabs — instead there is a single editor surface
   // with "Leave comment" + "Ask AI" + "Cancel" buttons at the bottom.
@@ -1662,12 +1716,12 @@ test('inline-ask-ai: seed draft, step 2, switch widget tab to Ask AI, ask stream
   await expect(draftAnnotations.getByRole('tab', { name: /comment/i })).not.toBeVisible()
   await expect(draftAnnotations.getByRole('tab', { name: /ask ai/i })).not.toBeVisible()
 
-  // The comment body textarea is always visible (single surface)
-  // Click Edit to open the editor if the draft is in view mode
+  // The seeded draft starts in view mode — click Edit to open the editor.
+  // (await visibility first: the inline row can re-render briefly while the
+  // diff finishes building, so a bare isVisible() check is racy)
   const editBtn = draftAnnotations.getByRole('button', { name: /edit/i })
-  if (await editBtn.isVisible()) {
-    await editBtn.evaluate((el: HTMLButtonElement) => el.click())
-  }
+  await expect(editBtn).toBeVisible({ timeout: 5_000 })
+  await editBtn.evaluate((el: HTMLButtonElement) => el.click())
 
   // The "Ask AI" action button should be visible in the action row
   const askAiBtn = draftAnnotations.getByRole('button', { name: /ask ai/i })
@@ -2285,4 +2339,58 @@ test('step-nav: 1→2→3→back→forward is instant — no PR refetch, no load
 
   // And the PR was fetched exactly once — no refetch on any step change
   expect(prLoadFetches).toBe(2)
+})
+
+// ---------------------------------------------------------------------------
+// Comment threads — grouped inline render + immediate reply post
+// ---------------------------------------------------------------------------
+
+test('comment threads: root + reply grouped inline at the line; Reply (posts now) posts via reply API and shows in thread', async ({
+  page,
+}) => {
+  const replyPosts: Array<{ body: string }> = []
+  await setupRoutes(page, { onReplyPost: (b) => replyPosts.push(b as { body: string }) })
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(true))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // The thread (root 1001 + reply 1003) renders grouped INLINE at its line
+  const inline = page.locator('[data-testid="inline-annotations"]').first()
+  await expect(inline).toBeVisible({ timeout: 8_000 })
+  await expect(inline).toContainText('This inline comment is on src/feature.ts line 2.')
+  await expect(inline).toContainText('Thanks, will fix in the next push.')
+  // The reply is visually indented/connected (CommentThread reply styling)
+  await expect(inline.locator('.comment-item.reply')).toBeVisible()
+
+  // Dedupe: the anchored thread is NOT repeated in a bottom-of-file list
+  await expect(page.locator('.existing-comments')).toHaveCount(0)
+  await expect(
+    page.getByText('This inline comment is on src/feature.ts line 2.'),
+  ).toHaveCount(1)
+
+  // ---- Reply flow: posts immediately via the reply API ----
+  await inline.getByRole('button', { name: 'Reply (posts now)' }).click()
+  await expect(inline.getByText(/posts immediately to the PR/i)).toBeVisible()
+  await inline.getByRole('textbox', { name: /comment body/i }).fill('Replying from e2e')
+  await inline.getByRole('button', { name: 'Reply (posts now)' }).click()
+
+  // The intercepted POST went to /pulls/:n/comments/1001/replies with the body
+  await expect.poll(() => replyPosts.length, { timeout: 8_000 }).toBe(1)
+  expect(replyPosts[0]).toEqual({ body: 'Replying from e2e' })
+
+  // The reply appears in the thread right away (immediate display)
+  await expect(inline).toContainText('Replying from e2e', { timeout: 8_000 })
+  // Editor closed after successful post
+  await expect(inline.getByRole('textbox', { name: /comment body/i })).toHaveCount(0)
 })

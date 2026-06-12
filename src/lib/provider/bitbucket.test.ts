@@ -958,6 +958,7 @@ describe('capabilities', () => {
       suggestions: false,
       atomicReview: false,
       compare: false,
+      commentReplies: false,
       selfReviewBlocked: true,
     })
   })

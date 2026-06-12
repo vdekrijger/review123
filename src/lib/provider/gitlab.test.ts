@@ -886,6 +886,7 @@ describe('capabilities', () => {
       suggestions: true,
       atomicReview: false,
       compare: true,
+      commentReplies: true,
       selfReviewBlocked: false,
     })
   })
@@ -1082,5 +1083,157 @@ describe('registry integration', () => {
       repo: 'myproject',
       number: 99,
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Discussion → thread mapping (commentReplies support)
+// ---------------------------------------------------------------------------
+
+describe('getComments — discussion thread mapping', () => {
+  beforeEach(() => localStorage.clear())
+
+  const note = (overrides: Record<string, unknown>) => ({
+    id: 1,
+    author: { username: 'alice', avatar_url: null },
+    body: 'note',
+    created_at: '2025-01-01T10:00:00Z',
+    system: false,
+    position: null,
+    ...overrides,
+  })
+
+  // Fixture mirrors a real GitLab discussions payload: one threaded
+  // discussion (root + 2 replies) and one single-note discussion.
+  const discussionsFixture = [
+    {
+      id: 'disc-abc',
+      resolved: false,
+      notes: [
+        note({ id: 100, body: 'root note', created_at: '2025-01-01T10:00:00Z' }),
+        note({ id: 101, body: 'first reply', created_at: '2025-01-01T11:00:00Z' }),
+        note({ id: 102, body: 'second reply', created_at: '2025-01-01T12:00:00Z' }),
+      ],
+    },
+    {
+      id: 'disc-def',
+      resolved: false,
+      notes: [note({ id: 200, body: 'lone note', created_at: '2025-01-02T10:00:00Z' })],
+    },
+  ]
+
+  it('first note of a discussion is the root (inReplyTo null); later notes reply to it', async () => {
+    vi.stubGlobal('fetch', mockFetch(discussionsFixture))
+    const comments = await gitlabProvider.getComments(REF)
+    const byId = new Map(comments.map((c) => [c.id, c]))
+    expect(byId.get(100)!.inReplyTo).toBeNull()
+    expect(byId.get(101)!.inReplyTo).toBe(100)
+    expect(byId.get(102)!.inReplyTo).toBe(100)
+    expect(byId.get(200)!.inReplyTo).toBeNull()
+  })
+
+  it('every note carries the discussion id as threadId (needed for replies)', async () => {
+    vi.stubGlobal('fetch', mockFetch(discussionsFixture))
+    const comments = await gitlabProvider.getComments(REF)
+    const byId = new Map(comments.map((c) => [c.id, c]))
+    expect(byId.get(100)!.threadId).toBe('disc-abc')
+    expect(byId.get(102)!.threadId).toBe('disc-abc')
+    expect(byId.get(200)!.threadId).toBe('disc-def')
+  })
+
+  it('system note first in a discussion: root falls to the first NON-system note', async () => {
+    vi.stubGlobal('fetch', mockFetch([
+      {
+        id: 'disc-sys',
+        resolved: false,
+        notes: [
+          note({ id: 300, system: true, body: 'changed the description' }),
+          note({ id: 301, body: 'actual root' }),
+          note({ id: 302, body: 'reply', created_at: '2025-01-01T11:00:00Z' }),
+        ],
+      },
+    ]))
+    const comments = await gitlabProvider.getComments(REF)
+    expect(comments.map((c) => c.id).sort()).toEqual([301, 302])
+    const byId = new Map(comments.map((c) => [c.id, c]))
+    expect(byId.get(301)!.inReplyTo).toBeNull()
+    expect(byId.get(302)!.inReplyTo).toBe(301)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// replyToThread — immediate reply post to a discussion
+// ---------------------------------------------------------------------------
+
+describe('replyToThread', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setGitlabToken('glpat-test')
+  })
+
+  const rootComment = {
+    id: 100,
+    author: 'alice',
+    authorAvatar: null,
+    body: 'root note',
+    createdAt: '2025-01-01T10:00:00Z',
+    path: 'src/foo.ts',
+    line: 15,
+    side: 'RIGHT' as const,
+    inReplyTo: null,
+    threadId: 'disc-abc',
+  }
+
+  it('POSTs to the discussion notes endpoint and returns the mapped comment', async () => {
+    const createdNote = {
+      id: 999,
+      author: { username: 'me', avatar_url: null },
+      body: 'my reply',
+      created_at: '2025-01-03T10:00:00Z',
+      system: false,
+      position: null,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(createdNote))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await gitlabProvider.replyToThread!(REF, rootComment, 'my reply')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain(`/projects/${PID}/merge_requests/42/discussions/disc-abc/notes`)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({ body: 'my reply' })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.comment).toMatchObject({
+        id: 999,
+        author: 'me',
+        body: 'my reply',
+        inReplyTo: 100,
+        threadId: 'disc-abc',
+      })
+    }
+  })
+
+  it('missing threadId → typed error result, no network call', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await gitlabProvider.replyToThread!(REF, { ...rootComment, threadId: undefined }, 'x')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toMatch(/discussion id/i)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('API failure → typed error result, does not throw', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ message: 'unauthorized' }, {}, 401)))
+    const result = await gitlabProvider.replyToThread!(REF, rootComment, 'x')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toMatch(/not authenticated/i)
+  })
+
+  it('capability flag commentReplies is true and the method exists', () => {
+    expect(gitlabProvider.capabilities.commentReplies).toBe(true)
+    expect(typeof gitlabProvider.replyToThread).toBe('function')
   })
 })

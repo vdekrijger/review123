@@ -134,6 +134,11 @@ describe('FileDiff — viewed state', () => {
 // ---------------------------------------------------------------------------
 
 describe('FileDiff — existing comments (EC-FD-COMM)', () => {
+  // NOTE on anchoring: `modified` has patch lines RIGHT 1–3 (and LEFT 1–2).
+  // Comments anchored to a patch line render INLINE (extendData) and must NOT
+  // appear in the bottom `.existing-comments` list — that list is only for
+  // file-level / unanchorable comments. Line 99 is NOT in the patch →
+  // unanchorable → bottom list.
   function makeExistingComment(overrides: Partial<PrComment> = {}): PrComment {
     return {
       id: 1,
@@ -142,14 +147,14 @@ describe('FileDiff — existing comments (EC-FD-COMM)', () => {
       body: 'Existing review comment',
       createdAt: new Date().toISOString(),
       path: 'src/a.ts',
-      line: 2,
+      line: 99,
       side: 'RIGHT',
       inReplyTo: null,
       ...overrides,
     }
   }
 
-  it('renders existing comment section when comments prop has items', () => {
+  it('renders existing comment section when comments prop has unanchorable items', () => {
     const comment = makeExistingComment({ body: 'Please refactor this.' })
     const { container } = render(FileDiff, {
       props: { file: modified, mode: 'unified', comments: [comment] },
@@ -190,16 +195,27 @@ describe('FileDiff — existing comments (EC-FD-COMM)', () => {
     expect(existingSection!.classList.contains('draft-annotations')).toBe(false)
   })
 
-  it('groups comments by line with a line label', () => {
-    const c1 = makeExistingComment({ id: 1, line: 5, body: 'Comment on line 5' })
-    const c2 = makeExistingComment({ id: 2, line: 5, body: 'Another on line 5', inReplyTo: 1 })
+  it('groups unanchorable comments by line with a line label', () => {
+    const c1 = makeExistingComment({ id: 1, line: 55, body: 'Comment on line 55' })
+    const c2 = makeExistingComment({ id: 2, line: 55, body: 'Another on line 55', inReplyTo: 1 })
     const { container } = render(FileDiff, {
       props: { file: modified, mode: 'unified', comments: [c1, c2] },
     })
-    // Should show a "Line 5" label in the existing-line-label
+    // Should show a "Line 55" label in the existing-line-label
     const lineLabel = container.querySelector('.existing-line-label')
     expect(lineLabel).toBeInTheDocument()
-    expect(lineLabel!.textContent).toMatch(/line 5/i)
+    expect(lineLabel!.textContent).toMatch(/line 55/i)
+  })
+
+  it('file-level comment (line null) appears under a "General" label', () => {
+    const comment = makeExistingComment({ id: 7, line: null, side: null, body: 'File-level remark' })
+    const { container } = render(FileDiff, {
+      props: { file: modified, mode: 'unified', comments: [comment] },
+    })
+    const lineLabel = container.querySelector('.existing-line-label')
+    expect(lineLabel).toBeInTheDocument()
+    expect(lineLabel!.textContent).toMatch(/general/i)
+    expect(screen.getByText(/File-level remark/i)).toBeInTheDocument()
   })
 
   it('renders body content of existing comment', () => {
@@ -208,6 +224,129 @@ describe('FileDiff — existing comments (EC-FD-COMM)', () => {
       props: { file: modified, mode: 'unified', comments: [comment] },
     })
     expect(screen.getByText(/This is the review comment body\./i)).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// FileDiff — dedupe: anchored → inline only; file-level/unanchorable → bottom
+// ---------------------------------------------------------------------------
+
+describe('FileDiff — anchored comments render inline only (dedupe)', () => {
+  function makeComment(overrides: Partial<PrComment> = {}): PrComment {
+    return {
+      id: 1,
+      author: 'reviewer',
+      authorAvatar: null,
+      body: 'Anchored comment',
+      createdAt: '2024-01-01T10:00:00Z',
+      path: 'src/a.ts',
+      line: 2, // RIGHT line 2 IS in the `modified` patch (context "unchanged")
+      side: 'RIGHT',
+      inReplyTo: null,
+      ...overrides,
+    }
+  }
+
+  it('anchored comment renders inline (inline-annotations) and NOT in the bottom list', async () => {
+    const { container } = render(FileDiff, {
+      props: { file: modified, mode: 'unified', comments: [makeComment()] },
+    })
+    // Inline annotation row appears at the line (extend row)
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-testid="inline-annotations"]')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/Anchored comment/i)).toBeInTheDocument()
+    // NOT duplicated in the bottom-of-file list
+    expect(container.querySelector('.existing-comments')).not.toBeInTheDocument()
+  })
+
+  it('anchored comment body appears exactly once (no duplicate render)', async () => {
+    render(FileDiff, {
+      props: { file: modified, mode: 'unified', comments: [makeComment({ body: 'unique-body-marker' })] },
+    })
+    await vi.waitFor(() => {
+      expect(screen.getAllByText(/unique-body-marker/i)).toHaveLength(1)
+    })
+  })
+
+  it('split mode: anchored comment also renders inline only', async () => {
+    const { container } = render(FileDiff, {
+      props: { file: modified, mode: 'split', comments: [makeComment()] },
+    })
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-testid="inline-annotations"]')).toBeInTheDocument()
+    })
+    expect(container.querySelector('.existing-comments')).not.toBeInTheDocument()
+  })
+
+  it('mixed: anchored inline, unanchorable in bottom list — never both for one thread', async () => {
+    const anchored = makeComment({ id: 1, body: 'marker-inline-only' })
+    const unanchored = makeComment({ id: 2, line: 99, body: 'marker-bottom-only' })
+    const { container } = render(FileDiff, {
+      props: { file: modified, mode: 'unified', comments: [anchored, unanchored] },
+    })
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-testid="inline-annotations"]')).toBeInTheDocument()
+    })
+    const bottom = container.querySelector('.existing-comments')
+    expect(bottom).toBeInTheDocument()
+    expect(bottom!.textContent).toContain('marker-bottom-only')
+    expect(bottom!.textContent).not.toContain('marker-inline-only')
+    expect(screen.getAllByText(/marker-inline-only/i)).toHaveLength(1)
+    expect(screen.getAllByText(/marker-bottom-only/i)).toHaveLength(1)
+  })
+
+  it('thread on an anchored line renders root + reply inside the inline annotation', async () => {
+    const root = makeComment({ id: 10, body: 'thread root body' })
+    const reply = makeComment({ id: 11, body: 'thread reply body', inReplyTo: 10, author: 'replier' })
+    const { container } = render(FileDiff, {
+      props: { file: modified, mode: 'unified', comments: [root, reply] },
+    })
+    await vi.waitFor(() => {
+      const inline = container.querySelector('[data-testid="inline-annotations"]')
+      expect(inline).toBeInTheDocument()
+      expect(inline!.textContent).toContain('thread root body')
+      expect(inline!.textContent).toContain('thread reply body')
+    })
+    // reply is rendered as an indented .comment-item.reply
+    expect(container.querySelector('.comment-item.reply')).toBeInTheDocument()
+    // one thread → one inline ExistingThread, nothing at the bottom
+    expect(container.querySelector('.existing-comments')).not.toBeInTheDocument()
+  })
+})
+
+describe('FileDiff — anchored drafts render inline only (dedupe)', () => {
+  function makeDraft(overrides: Partial<import('../lib/drafts/drafts.svelte').Draft> = {}) {
+    return {
+      prKey: 'o/r#1@sha',
+      path: 'src/a.ts',
+      line: 2,
+      side: 'RIGHT' as const,
+      body: 'Draft on anchored line',
+      n: 0,
+      updatedAt: Date.now(),
+      ...overrides,
+    }
+  }
+
+  it('anchored draft renders inline and NOT in the bottom draft-annotations list', async () => {
+    const { container } = render(FileDiff, {
+      props: { file: modified, mode: 'unified', drafts: [makeDraft()] },
+    })
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-testid="inline-annotations"]')).toBeInTheDocument()
+    })
+    expect(screen.getAllByText(/Draft on anchored line/i)).toHaveLength(1)
+    // No bottom-of-file fallback block (inline rows carry .inline-annotation)
+    expect(container.querySelector('.draft-annotations:not(.inline-annotation)')).not.toBeInTheDocument()
+  })
+
+  it('unanchorable draft (line outside patch) falls back to the bottom list', () => {
+    const { container } = render(FileDiff, {
+      props: { file: modified, mode: 'unified', drafts: [makeDraft({ line: 99, body: 'off-patch draft' })] },
+    })
+    expect(container.querySelector('.draft-annotations:not(.inline-annotation)')).toBeInTheDocument()
+    expect(screen.getByText(/off-patch draft/i)).toBeInTheDocument()
   })
 })
 

@@ -14,6 +14,7 @@
   import type { AttentionResult } from '../lib/ai/schemas'
   import type { createViewedStore } from '../lib/viewed/viewed.svelte'
   import type { PrComment } from '../lib/github/comments'
+  import type { ReplyOutcome } from '../lib/github/replies'
   import { slugify } from '../lib/slug'
   import { scrollToFileCard } from '../lib/diff/jumpToFile'
   import { observeDiffColHeight } from '../lib/tree/diffColHeight'
@@ -39,6 +40,7 @@
     runSkillReviewsFn = null,
     askFn = null,
     askDisabledReason = null,
+    replyFn = null,
     hideWhitespace = false,
     onhidewhitespace = null,
     whitespaceDisabledReason = null,
@@ -73,6 +75,11 @@
      * Optional disabled hint for Ask AI gating (e.g. "No API key configured.").
      */
     askDisabledReason?: string | null
+    /**
+     * Posts a reply to an existing comment thread immediately (provider
+     * capability commentReplies). null → Reply affordance hidden.
+     */
+    replyFn?: ((root: PrComment, body: string) => Promise<ReplyOutcome>) | null
     /** Whether whitespace-only changes are hidden (like GitHub's ?w=1). */
     hideWhitespace?: boolean
     /** Called when the user toggles "Hide whitespace". */
@@ -543,6 +550,7 @@
             contents={contentsMap?.get(file.filename)}
             {askFn}
             {askDisabledReason}
+            onReply={replyFn}
             skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
             onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key })}
             whitespace={whitespaceByPath.get(file.filename) ?? null}
