@@ -602,7 +602,7 @@ test('landing: paste PR URL navigates to review route', async ({ page }) => {
 
   // Type in the PR URL and submit
   await input.fill(PR_URL)
-  await page.getByRole('button', { name: 'Review' }).click()
+  await page.getByRole('button', { name: 'Review', exact: true }).click()
 
   // Should navigate to the review route (URL canonicalized to /understand)
   await expect(page).toHaveURL(APP_REVIEW_UNDERSTAND, { timeout: 5_000 })

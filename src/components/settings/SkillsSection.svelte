@@ -8,7 +8,7 @@
   import { llmJsonWithRepair } from '../../lib/llm/llm'
   import { githubProvider } from '../../lib/provider/github'
   import { gitlabProvider } from '../../lib/provider/gitlab'
-  import { getSettings } from '../../lib/settings/settings'
+  import { activeLlmConfig, activeProviderHasKey } from '../../lib/llm/config'
 
   // ---- Reviewer skills state ----
   let skills = $state<ReviewerSkill[]>(listSkills())
@@ -69,7 +69,9 @@
     mineError = null
   }
 
-  const hasDeepseekKey = $derived(!!getSettings().deepseekKey)
+  // Mining gates on the ACTIVE AI provider's key (Plan F), not deepseekKey
+  const hasAiKey = $derived(activeProviderHasKey())
+  const aiProviderName = $derived(activeLlmConfig().provider.displayName)
   // For gating: whether the currently selected mine provider has auth configured
   const hasMineProviderAuth = $derived(
     MINE_CAPABLE_PROVIDERS.find(p => p.id === mineProvider)?.authState().configured ?? false
@@ -80,7 +82,7 @@
   )
 
   async function handleMineComments() {
-    if (!hasMineProviderAuth || !hasDeepseekKey || mineFilterIncomplete) return
+    if (!hasMineProviderAuth || !hasAiKey || mineFilterIncomplete) return
     mineRunning = true
     mineError = null
     minedSkillDraft = null
@@ -274,8 +276,8 @@
     <p class="section-label mine-label">Generate from my reviews</p>
     <p class="hint mine-hint">Analyzes your recent review comments across your repositories to build a personalized reviewer persona.</p>
 
-    {#if !hasDeepseekKey}
-      <p class="mine-gate-hint">Add a DeepSeek API key (above) to use this feature.</p>
+    {#if !hasAiKey}
+      <p class="mine-gate-hint">Add a {aiProviderName} API key (above) to use this feature.</p>
     {:else}
       <!-- Provider select -->
       <div class="mine-provider-row">
@@ -336,7 +338,7 @@
         {#if mineError}
           <p role="alert" class="skill-error">{mineError}</p>
         {/if}
-        <p class="hint mine-privacy-note">Your comments are sent to DeepSeek for analysis.</p>
+        <p class="hint mine-privacy-note">Your comments are sent to {aiProviderName} for analysis.</p>
       {/if}
     {/if}
   </div>

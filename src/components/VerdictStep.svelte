@@ -20,7 +20,7 @@
   import { submitReview, type Verdict, type SubmitOutcome } from '../lib/github/review'
   import { renderMarkdown } from '../lib/markdown/render'
   import { track } from '../lib/analytics/analytics'
-  import { getSettings } from '../lib/settings/settings'
+  import { activeProviderHasKey } from '../lib/llm/config'
   import CommentEditor from './CommentEditor.svelte'
   import GitHubSignInButton from './GitHubSignInButton.svelte'
   import type { PrRef } from '../lib/github/parse'
@@ -100,7 +100,7 @@
 
   // Show coach button: signed in + has drafts + key configured + coachFn provided
   const showCoachButton = $derived(
-    isSignedIn && store.count > 0 && !!getSettings().deepseekKey && !!coachFn
+    isSignedIn && store.count > 0 && activeProviderHasKey() && !!coachFn
   )
 
   async function handleCoach() {

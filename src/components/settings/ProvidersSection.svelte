@@ -1,9 +1,16 @@
 <script lang="ts">
   import { getSettings, saveTokens, setGitlabToken, setGitlabHost, saveBitbucketAuth } from '../../lib/settings/settings'
+  import { settingsState } from '../../lib/settings/settingsState.svelte'
   import { track } from '../../lib/analytics/analytics'
   import { authState } from '../../lib/auth/authState.svelte'
+  import { beginSignIn, signOut } from '../../lib/auth/auth'
   import { beginGitlabSignIn, signOutGitlab } from '../../lib/auth/gitlabAuth'
+  import GitHubSignInButton from '../GitHubSignInButton.svelte'
   import GitLabSignInButton from '../GitLabSignInButton.svelte'
+
+  // returnTo: stored before the OAuth redirect so AuthCallback navigates back
+  // here (/settings) after sign-in. Same key as App.svelte / VerdictStep.svelte.
+  const RETURN_KEY = 'review123:returnTo'
 
   const current = getSettings()
   let pat = $state(current.githubPat ?? '')
@@ -29,25 +36,45 @@
   // so existing PAT users aren't confused by a closed section hiding their token.
   const advancedOpen = $derived(authState.auth?.method === 'pat')
 
-  // GitLab OAuth client ID presence gates the "Sign in with GitLab" button.
+  // OAuth client ID presence gates each provider's sign-in button.
+  const githubClientId =
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GITHUB_CLIENT_ID) || ''
   const gitlabClientId =
     (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GITLAB_CLIENT_ID) || ''
 
-  // Reactive GitLab auth status line (re-reads settings each render tick).
+  // GitLab OAuth session state — reactive via the settingsState facade, and
+  // fully independent of the GitHub session (authState).
+  const gitlabOauthConnected = $derived.by(() => {
+    const oauth = settingsState.current.gitlabOAuth
+    return !!oauth && Date.now() < oauth.expiresAt
+  })
+
   const gitlabStatusLine = $derived.by(() => {
-    const s = getSettings()
-    const oauth = s.gitlabOAuth
-    if (oauth && Date.now() < oauth.expiresAt) {
+    if (gitlabOauthConnected) {
       return 'GitLab: signed in via OAuth'
     }
-    if (s.gitlabToken) {
+    if (settingsState.current.gitlabToken) {
       return 'GitLab: using PAT'
     }
     return 'GitLab: not configured'
   })
 
+  async function handleGithubSignIn() {
+    try {
+      sessionStorage.setItem(RETURN_KEY, location.pathname)
+      location.assign(await beginSignIn('public_repo'))
+    } catch (e) {
+      error = (e as Error).message
+    }
+  }
+
+  function handleGithubSignOut() {
+    signOut()
+  }
+
   async function handleGitlabSignIn() {
     try {
+      sessionStorage.setItem(RETURN_KEY, location.pathname)
       const url = await beginGitlabSignIn()
       location.href = url
     } catch (e) {
@@ -101,12 +128,28 @@
 <section id="providers" aria-label="Providers and access">
   <p class="section-label">Providers &amp; access</p>
 
-  <p class="auth-status">{authStatusLine}</p>
-  <p class="auth-status gitlab-status">{gitlabStatusLine}
-    {#if gitlabClientId && getSettings().gitlabOAuth}
-      <button class="sign-out-link" onclick={handleGitlabSignOut}>Sign out</button>
+  <p class="auth-status">{authStatusLine}
+    {#if authState.auth?.method === 'oauth'}
+      <button class="sign-out-link" aria-label="Sign out of GitHub" onclick={handleGithubSignOut}>Sign out</button>
     {/if}
   </p>
+  {#if !authState.auth && githubClientId}
+    <div class="oauth-row">
+      <GitHubSignInButton onclick={handleGithubSignIn} />
+    </div>
+  {/if}
+
+  <p class="auth-status gitlab-status">{gitlabStatusLine}
+    {#if gitlabOauthConnected}
+      <button class="sign-out-link" aria-label="Sign out of GitLab" onclick={handleGitlabSignOut}>Sign out</button>
+    {/if}
+  </p>
+  {#if !gitlabOauthConnected && gitlabClientId}
+    <div class="oauth-row">
+      <GitLabSignInButton onclick={handleGitlabSignIn} />
+    </div>
+    <p class="hint">Sign in with GitLab OAuth (recommended). Tokens are refreshed automatically. For self-hosted instances, set the GitLab host under Advanced first.</p>
+  {/if}
 
   <details open={advancedOpen}>
     <summary>Advanced: use a personal access token instead</summary>
@@ -125,14 +168,6 @@
     <div class="hint pat-scope-hint">
       <p>Self-hosted instances supported. Enter a hostname (e.g. <code>gitlab.mycompany.com</code>). Leave as <code>gitlab.com</code> for the default.</p>
     </div>
-    {#if gitlabClientId}
-      <div class="gitlab-oauth-row">
-        <GitLabSignInButton onclick={handleGitlabSignIn} />
-      </div>
-      <div class="hint pat-scope-hint">
-        <p>Sign in with GitLab OAuth (recommended). Tokens are refreshed automatically. Host setting above is used for self-hosted instances.</p>
-      </div>
-    {/if}
     <label>GitLab token (PAT)
       <input type="password" bind:value={gitlabTokenInput} autocomplete="off" placeholder="glpat_… (scope: api)" aria-label="GitLab personal access token" />
     </label>
@@ -176,11 +211,8 @@
     margin-bottom: 0.75rem;
   }
 
-  .gitlab-status {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    margin-top: -0.5rem;
+  .auth-status .sign-out-link {
+    margin-left: 0.4rem;
   }
 
   .sign-out-link {
@@ -193,8 +225,8 @@
     text-decoration: underline;
   }
 
-  .gitlab-oauth-row {
-    margin: 0.5rem 0.75rem;
+  .oauth-row {
+    margin: 0.25rem 0 0.75rem;
   }
 
   details {

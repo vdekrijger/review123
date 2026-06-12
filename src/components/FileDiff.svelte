@@ -262,7 +262,7 @@
   const visibleSkillFindings = $derived(skillFindings.filter(f => !dismissedSkillKeys.has(f.key)))
 </script>
 
-<article class="file-diff" class:is-collapsed={collapsed} class:test-dim={isTest && testFileDisplay === 'dim'}>
+<article class="file-diff" class:is-collapsed={collapsed} class:test-dim={isTest && testFileDisplay === 'dim'} class:test-highlight={isTest && testFileDisplay === 'highlight'}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <header onclick={handleHeaderClick} class:clickable={collapsed} class:test-highlight={isTest && testFileDisplay === 'highlight'}>
@@ -278,7 +278,7 @@
         <span class="stat-add">+{file.additions}</span>
         <span class="stat-del"> −{file.deletions}</span>
       </span>
-      {#if isTest && testFileDisplay === 'highlight'}
+      {#if isTest && testFileDisplay !== 'normal'}
         <span class="test-chip chip">test</span>
       {/if}
       <label class="viewed-label">
@@ -485,11 +485,11 @@
   .stat-add { color: var(--diff-add); }
   .stat-del { color: var(--diff-del); }
 
-  /* Test chip */
+  /* Test chip (shown in highlight and dim modes) — verdigris accent tokens */
   .test-chip {
-    background: color-mix(in srgb, #f59e0b 15%, transparent);
-    border-color: #f59e0b88;
-    color: #d97706;
+    background: var(--accent-subtle);
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+    color: var(--accent);
     font-size: 0.68rem;
     padding: 0.08rem 0.4rem;
     border-radius: 999px;
@@ -497,9 +497,20 @@
     letter-spacing: 0.03em;
   }
 
-  /* Test highlight: amber left border */
+  /* Test highlight: accent left border on the whole file card so test files
+     are scannable in the file list at a glance. Code rows stay untouched. */
+  article.test-highlight {
+    border-left: 3px solid var(--accent);
+  }
+
+  /* Test highlight: subtle verdigris tint on the file header only.
+     Both --accent and --surface-raised are theme-aware, so the tint adapts
+     to light and dark palettes. */
   header.test-highlight {
-    border-left: 3px solid #f59e0b;
+    background: color-mix(in srgb, var(--accent) 9%, var(--surface-raised));
+  }
+  header.test-highlight.clickable:hover {
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface-raised));
   }
 
   /* Test dim */
