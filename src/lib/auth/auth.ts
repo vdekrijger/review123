@@ -4,8 +4,9 @@
  */
 import { generateVerifier, challengeFromVerifier } from './pkce'
 import { getSettings, saveGithubAuth } from '../settings/settings'
+import { GITHUB_OAUTH_SESSION_KEY } from './oauthKeys'
 
-const SESSION_KEY = 'review123:oauth'
+const SESSION_KEY = GITHUB_OAUTH_SESSION_KEY
 const GITHUB_AUTHORIZE = 'https://github.com/login/oauth/authorize'
 const EXCHANGE_ENDPOINT = '/api/oauth/exchange'
 

@@ -874,8 +874,11 @@ test('draft bar shows draft count; step 3 shows sign-in prompt when signed out',
   await page.getByRole('button', { name: 'Next step' }).click()
   await page.getByRole('button', { name: 'Next step' }).click()
 
-  // VerdictStep renders a sign-in prompt / PAT prompt when signed out (EC-09c / EC-19b)
-  await expect(page.getByText(/sign in|add a.*pat|authentication required/i)).toBeVisible({ timeout: 5_000 })
+  // VerdictStep renders a sign-in prompt / PAT prompt when signed out (EC-09c / EC-19b).
+  // Scoped to the step's signed-out panel: the navbar also offers "Sign in with …" buttons.
+  await expect(
+    page.locator('.signed-out').getByText(/sign in|add a.*pat|authentication required/i).first(),
+  ).toBeVisible({ timeout: 5_000 })
 
   // Submit button should NOT be present when signed out
   await expect(page.getByRole('button', { name: /submit review/i })).not.toBeVisible()

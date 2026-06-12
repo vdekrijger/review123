@@ -5,7 +5,6 @@
  *   - beginGitlabSignIn: URL shape, PKCE params, sessionStorage, state randomness
  *   - completeGitlabSignIn: state validation, denial, missing-code, no-verifier,
  *     exchange success/failure, refresh token stored, sessionStorage cleanup
- *   - getPendingProvider: gitlab vs null
  *   - resolveGitlabToken: OAuth-first, expiry fallback to PAT, PAT fallback
  *   - signOutGitlab
  *   - state payload encoding (provider='gitlab' in sessionStorage)
@@ -14,7 +13,6 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import {
   beginGitlabSignIn,
   completeGitlabSignIn,
-  getPendingProvider,
   resolveGitlabToken,
   signOutGitlab,
 } from './gitlabAuth'
@@ -289,26 +287,8 @@ describe('completeGitlabSignIn', () => {
 })
 
 // ---------------------------------------------------------------------------
-// getPendingProvider
-// ---------------------------------------------------------------------------
-
-describe('getPendingProvider', () => {
-  it('returns gitlab when a GitLab session is in sessionStorage', async () => {
-    await beginGitlabSignIn('gitlab.com')
-    expect(getPendingProvider()).toBe('gitlab')
-  })
-
-  it('returns null when sessionStorage is empty', () => {
-    expect(getPendingProvider()).toBeNull()
-  })
-
-  it('returns null when the session has a different provider', () => {
-    // Simulate a GitHub session (uses different key — but if someone stored wrong data)
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify({ provider: 'github', state: 'x' }))
-    expect(getPendingProvider()).toBeNull()
-  })
-})
-
+// Callback dispatch (which provider's completer handles /auth/callback) is
+// covered by oauthFlow.test.ts → resolvePendingProvider.
 // ---------------------------------------------------------------------------
 // resolveGitlabToken
 // ---------------------------------------------------------------------------

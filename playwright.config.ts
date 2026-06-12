@@ -35,5 +35,13 @@ export default defineConfig({
     port: PORT,
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,
+    // Bake OAuth client ids into the e2e build so the env-gated sign-in
+    // entry points (navbar + settings) render and the OAuth round-trip can
+    // be exercised with route interception (no real OAuth apps involved).
+    env: {
+      ...process.env as Record<string, string>,
+      VITE_GITHUB_CLIENT_ID: process.env.VITE_GITHUB_CLIENT_ID ?? 'e2e_github_client_id',
+      VITE_GITLAB_CLIENT_ID: process.env.VITE_GITLAB_CLIENT_ID ?? 'e2e_gitlab_client_id',
+    },
   },
 })

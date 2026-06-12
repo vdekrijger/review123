@@ -18,17 +18,18 @@
  * Token lifetime: GitLab access tokens expire after 2 hours.
  * Refresh is handled transparently in gitlabClient.ts (refresh grant on 401).
  *
- * State payload: The sessionStorage key holds { state, verifier, provider:'gitlab' }
- * so AuthCallback.svelte can dispatch to the correct completer. This is safe
- * because both GitHub and GitLab flows share /auth/callback — the provider field
- * disambiguates without any security consequence (state is additionally validated
- * by comparing the CSRF-protecting nonce, which is the real security invariant).
+ * State payload: The sessionStorage key holds { state, verifier, provider:'gitlab' }.
+ * Both GitHub and GitLab flows share /auth/callback; dispatch to the correct
+ * completer is handled by oauthFlow.resolvePendingProvider, which matches the
+ * callback's `state` nonce against each pending session (the CSRF-protecting
+ * nonce is the real security invariant and is validated again on completion).
  */
 
 import { generateVerifier, challengeFromVerifier } from './pkce'
 import { getSettings, saveGitlabOAuth } from '../settings/settings'
+import { GITLAB_OAUTH_SESSION_KEY } from './oauthKeys'
 
-const SESSION_KEY = 'review123:gitlab-oauth'
+const SESSION_KEY = GITLAB_OAUTH_SESSION_KEY
 
 /** Scope required for full GitLab API access (MR read/write, project read). */
 const GITLAB_SCOPE = 'api'
@@ -206,22 +207,6 @@ export async function completeGitlabSignIn(params: URLSearchParams): Promise<Git
     return { ok: true }
   } finally {
     sessionStorage.removeItem(SESSION_KEY)
-  }
-}
-
-/**
- * Peek at the session key to determine which provider's callback is in-flight.
- * Used by AuthCallback to route to the correct completer.
- * Returns 'gitlab' if a GitLab session is pending, null otherwise.
- */
-export function getPendingProvider(): 'gitlab' | null {
-  try {
-    const raw = sessionStorage.getItem(SESSION_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as { provider?: string }
-    return parsed.provider === 'gitlab' ? 'gitlab' : null
-  } catch {
-    return null
   }
 }
 

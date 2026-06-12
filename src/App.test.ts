@@ -4,8 +4,9 @@ import userEvent from '@testing-library/user-event'
 import App from './App.svelte'
 import { _resetStartedForTest } from './lib/router/router.svelte'
 import { _resetAuthStateForTest } from './lib/auth/authState.svelte'
+import { _resetSettingsStateForTest } from './lib/settings/settingsState.svelte'
 import { jsonResponse } from './test-helpers'
-import { saveGithubAuth } from './lib/settings/settings'
+import { saveGithubAuth, saveGitlabOAuth, getSettings } from './lib/settings/settings'
 
 // Stub analytics so posthog.capture doesn't fire during tests
 vi.mock('./lib/analytics/analytics', () => ({
@@ -108,6 +109,98 @@ describe('App topbar auth states', () => {
 
     expect(await screen.findByRole('button', { name: /sign in with github/i })).toBeTruthy()
     expect(screen.queryByText(/GitHub ✓/)).toBeNull()
+  })
+})
+
+describe('App topbar GitLab provider status (parity with GitHub)', () => {
+  const validGitlabOAuth = {
+    token: 'glo_token123',
+    refreshToken: 'glr_refresh123',
+    expiresAt: Date.now() + 60 * 60 * 1000,
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+    _resetAuthStateForTest()
+    _resetSettingsStateForTest()
+    _resetStartedForTest()
+    history.replaceState(null, '', '/')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it('gitlab configured but not connected: shows "Sign in with GitLab" next to the GitHub button', () => {
+    vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'test_client_id')
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    render(App)
+    expect(screen.getByRole('button', { name: /sign in with gitlab/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /sign in with github/i })).toBeTruthy()
+  })
+
+  it('no VITE_GITLAB_CLIENT_ID: renders nothing GitLab-related in the navbar', () => {
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', '')
+    saveGitlabOAuth(validGitlabOAuth) // even when a session exists
+    render(App)
+    expect(screen.queryByRole('button', { name: /sign in with gitlab/i })).toBeNull()
+    expect(screen.queryByText(/GitLab ✓/)).toBeNull()
+    expect(screen.queryByRole('button', { name: /sign out of gitlab/i })).toBeNull()
+  })
+
+  it('gitlab connected: shows "GitLab ✓" with a sign-out affordance, no sign-in button', () => {
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    saveGitlabOAuth(validGitlabOAuth)
+    render(App)
+    expect(screen.getByText(/GitLab ✓/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /sign out of gitlab/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /sign in with gitlab/i })).toBeNull()
+  })
+
+  it('expired gitlabOAuth counts as NOT connected: sign-in button shown', () => {
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    saveGitlabOAuth({ ...validGitlabOAuth, expiresAt: Date.now() - 1000 })
+    render(App)
+    expect(screen.queryByText(/GitLab ✓/)).toBeNull()
+    expect(screen.getByRole('button', { name: /sign in with gitlab/i })).toBeTruthy()
+  })
+
+  it('GitLab sign-out clears ONLY gitlabOAuth — the GitHub session stays (independent sessions)', async () => {
+    vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'test_client_id')
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    saveGithubAuth({ token: 'gho_TOKEN', method: 'oauth', scopes: ['public_repo'] })
+    saveGitlabOAuth(validGitlabOAuth)
+    const user = userEvent.setup()
+    render(App)
+
+    expect(screen.getByText(/GitHub ✓/)).toBeTruthy()
+    expect(screen.getByText(/GitLab ✓/)).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: /sign out of gitlab/i }))
+
+    // GitLab reverts to its sign-in button reactively…
+    expect(await screen.findByRole('button', { name: /sign in with gitlab/i })).toBeTruthy()
+    expect(screen.queryByText(/GitLab ✓/)).toBeNull()
+    // …while GitHub stays signed in
+    expect(screen.getByText(/GitHub ✓/)).toBeTruthy()
+    expect(getSettings().githubAuth).not.toBeNull()
+    expect(getSettings().gitlabOAuth).toBeNull()
+  })
+
+  it('GitHub sign-out leaves the GitLab session intact (independent sessions)', async () => {
+    vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'test_client_id')
+    vi.stubEnv('VITE_GITLAB_CLIENT_ID', 'test_gitlab_client_id')
+    saveGithubAuth({ token: 'gho_TOKEN', method: 'oauth', scopes: ['public_repo'] })
+    saveGitlabOAuth(validGitlabOAuth)
+    const user = userEvent.setup()
+    render(App)
+
+    await user.click(screen.getByRole('button', { name: /sign out of github/i }))
+
+    expect(await screen.findByRole('button', { name: /sign in with github/i })).toBeTruthy()
+    expect(screen.getByText(/GitLab ✓/)).toBeTruthy()
+    expect(getSettings().gitlabOAuth).toEqual(validGitlabOAuth)
   })
 })
 
