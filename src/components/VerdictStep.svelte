@@ -70,7 +70,7 @@
   let verdict = $state<Verdict>('COMMENT')
   let body = $state('')
   let pending = $state(false)
-  let errorMsg = $state<string | null>(null)
+  let submitError = $state<{ kind: string; message: string } | null>(null)
   let success = $state(false)
   let clientHint = $state<string | null>(null)
 
@@ -148,7 +148,7 @@
     const currentDrafts = [...store.drafts]
 
     pending = true
-    errorMsg = null
+    submitError = null
 
     let result: SubmitOutcome
     try {
@@ -164,7 +164,7 @@
       success = true
     } else {
       // EC-09d/e/f: render message verbatim; drafts NOT cleared
-      errorMsg = result.message
+      submitError = { kind: result.kind, message: result.message }
     }
   }
 </script>
@@ -287,8 +287,17 @@
     {/if}
 
     <!-- Error message from API -->
-    {#if errorMsg}
-      <p class="error-msg" role="alert">{errorMsg}</p>
+    {#if submitError}
+      <div class="error-msg" role="alert">
+        <p>{submitError.message}</p>
+        {#if clientId && (submitError.kind === 'forbidden' || (submitError.kind === 'unauthorized' && authState.auth?.method === 'oauth'))}
+          <a
+            href="https://github.com/settings/connections/applications/{clientId}"
+            target="_blank"
+            rel="noopener"
+          >Check or request organization access for this app →</a>
+        {/if}
+      </div>
     {/if}
 
     <!-- Verdict radio group -->

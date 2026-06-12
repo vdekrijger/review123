@@ -201,7 +201,7 @@ describe('VerdictStep', () => {
       await waitFor(() => {
         expect(screen.getByRole('alert')).toBeInTheDocument()
       })
-      expect(screen.getByRole('alert').textContent).toBe(errorMessage)
+      expect(screen.getByRole('alert').textContent?.trim()).toBe(errorMessage)
 
       // Drafts must NOT be cleared
       expect(store.count).toBe(1)
@@ -646,6 +646,116 @@ describe('VerdictStep', () => {
       })
 
       expect(screen.getByRole('button', { name: /submit review/i })).not.toBeDisabled()
+    })
+  })
+
+  // ---- Org-access deep-link (forbidden / unauthorized+oauth) ----
+  describe('org-access deep-link', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it('forbidden outcome renders org-access link with correct href when VITE_GITHUB_CLIENT_ID is set', async () => {
+      vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'gh_client_abc')
+      signIn()
+      const user = userEvent.setup()
+      const submitFn = vi.fn().mockResolvedValue({
+        ok: false,
+        kind: 'forbidden',
+        message: 'Resource not accessible by integration',
+      } as SubmitOutcome)
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store: makeStore(), prUrl, submitFn },
+      })
+
+      await user.click(screen.getByRole('radio', { name: /approve/i }))
+      await user.click(screen.getByRole('button', { name: /submit review/i }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('alert')).toBeInTheDocument()
+      })
+
+      const link = screen.getByRole('link', { name: /check or request organization access/i })
+      expect(link).toBeInTheDocument()
+      expect(link).toHaveAttribute('href', 'https://github.com/settings/connections/applications/gh_client_abc')
+      expect(link).toHaveAttribute('target', '_blank')
+      expect(link).toHaveAttribute('rel', 'noopener')
+    })
+
+    it('unauthorized + oauth method renders org-access link when VITE_GITHUB_CLIENT_ID is set', async () => {
+      vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'gh_client_abc')
+      // Sign in via OAuth
+      saveGithubAuth({ token: 'gho_oauthtoken', method: 'oauth', scopes: ['public_repo'] })
+      const user = userEvent.setup()
+      const submitFn = vi.fn().mockResolvedValue({
+        ok: false,
+        kind: 'unauthorized',
+        message: 'Bad credentials',
+      } as SubmitOutcome)
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store: makeStore(), prUrl, submitFn },
+      })
+
+      await user.click(screen.getByRole('radio', { name: /approve/i }))
+      await user.click(screen.getByRole('button', { name: /submit review/i }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('alert')).toBeInTheDocument()
+      })
+
+      const link = screen.getByRole('link', { name: /check or request organization access/i })
+      expect(link).toBeInTheDocument()
+      expect(link).toHaveAttribute('href', 'https://github.com/settings/connections/applications/gh_client_abc')
+    })
+
+    it('unauthorized + pat method does NOT render org-access link', async () => {
+      vi.stubEnv('VITE_GITHUB_CLIENT_ID', 'gh_client_abc')
+      signIn() // PAT sign-in
+      const user = userEvent.setup()
+      const submitFn = vi.fn().mockResolvedValue({
+        ok: false,
+        kind: 'unauthorized',
+        message: 'Bad credentials',
+      } as SubmitOutcome)
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store: makeStore(), prUrl, submitFn },
+      })
+
+      await user.click(screen.getByRole('radio', { name: /approve/i }))
+      await user.click(screen.getByRole('button', { name: /submit review/i }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('alert')).toBeInTheDocument()
+      })
+
+      expect(screen.queryByRole('link', { name: /check or request organization access/i })).toBeNull()
+    })
+
+    it('forbidden outcome does NOT render org-access link when VITE_GITHUB_CLIENT_ID is absent', async () => {
+      vi.stubEnv('VITE_GITHUB_CLIENT_ID', '')
+      signIn()
+      const user = userEvent.setup()
+      const submitFn = vi.fn().mockResolvedValue({
+        ok: false,
+        kind: 'forbidden',
+        message: 'Resource not accessible by integration',
+      } as SubmitOutcome)
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store: makeStore(), prUrl, submitFn },
+      })
+
+      await user.click(screen.getByRole('radio', { name: /approve/i }))
+      await user.click(screen.getByRole('button', { name: /submit review/i }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('alert')).toBeInTheDocument()
+      })
+
+      expect(screen.queryByRole('link', { name: /check or request organization access/i })).toBeNull()
     })
   })
 
