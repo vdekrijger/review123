@@ -713,6 +713,43 @@ Do not include any text outside the JSON object.`
 }
 
 // ---------------------------------------------------------------------------
+// withDeepReviewGuidance — agentic deep review (Plan G part 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Append the deep-review tool discipline to a task's system prompt.
+ *
+ * Applied ONLY when deep review is enabled (verdict + skill-review tasks) —
+ * single-pass prompts are byte-identical to today. Composes with (never
+ * replaces) the existing evidence-discipline/calibration blocks above: the
+ * same spirit — claims must be grounded — but now the model can GROUND them
+ * itself with tools instead of hedging.
+ *
+ * No PROMPT_VERSION bump: deep-review results are cached under keys that
+ * carry a '|deep' marker, so deep and single-pass outputs never collide.
+ */
+export function withDeepReviewGuidance(system: string, toolNames: string[]): string {
+  return `${system}
+
+Deep review mode (IMPORTANT — you have verification tools: ${toolNames.join(', ')}):
+- First, form hypotheses from the diff: every suspicion that depends on code you cannot \
+  see (callers of a changed symbol, the rest of a partially-shown file, pre-PR behavior) \
+  is a HYPOTHESIS, not a finding.
+- USE THE TOOLS to verify each hypothesis before flagging it. Read the file, check the \
+  base version, or search for the symbol — whichever settles the question.
+- DROP anything you could not verify. An unverified suspicion must not appear in your \
+  answer — not even hedged. If a tool fails (file missing, search unavailable), either \
+  verify another way or drop the point.
+- Verified findings should cite what you confirmed (file + what you saw), briefly. \
+  Severity must reflect verified evidence, not worst-case speculation.
+- Budget: at most 8 tool calls and 150 KB of fetched content per run. Spend them on the \
+  highest-impact suspicions first. When the budget is exhausted, answer from what you \
+  have verified.
+- Your FINAL message must contain ONLY the JSON object in the required shape — no tool \
+  commentary.`
+}
+
+// ---------------------------------------------------------------------------
 // parseReadingOrder — extract file paths from summary text
 // ---------------------------------------------------------------------------
 

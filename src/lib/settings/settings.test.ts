@@ -4,6 +4,7 @@ import {
   setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay, setGitlabToken,
   saveBitbucketAuth, setGitlabHost,
   setOpenaiKey, setAnthropicKey, setGeminiKey, setAiProvider, setAiModel,
+  setAiDeepReview,
 } from './settings'
 
 describe('settings', () => {
@@ -18,6 +19,7 @@ describe('settings', () => {
       openaiKey: null,
       anthropicKey: null,
       geminiKey: null,
+      aiDeepReview: false,
       diffMode: 'unified',
       hideWhitespace: false,
       githubAuth: null,
@@ -84,6 +86,7 @@ describe('settings', () => {
       openaiKey: null,
       anthropicKey: null,
       geminiKey: null,
+      aiDeepReview: false,
       diffMode: 'unified',
       hideWhitespace: false,
       githubAuth: null,
@@ -601,5 +604,29 @@ describe('settings', () => {
       expect(() => saveTokens({ openaiKey: '  ' })).toThrow()
       expect(getSettings().openaiKey).toBe('sk-openai-original')
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// aiDeepReview (Plan G part 2 — agentic deep review, opt-in)
+// ---------------------------------------------------------------------------
+
+describe('aiDeepReview setting', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('defaults to false (deep review is opt-in)', () => {
+    expect(getSettings().aiDeepReview).toBe(false)
+  })
+
+  it('setAiDeepReview(true) persists and round-trips', () => {
+    setAiDeepReview(true)
+    expect(getSettings().aiDeepReview).toBe(true)
+    setAiDeepReview(false)
+    expect(getSettings().aiDeepReview).toBe(false)
+  })
+
+  it('coerces non-boolean stored values back to the default', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ aiDeepReview: 'yes' }))
+    expect(getSettings().aiDeepReview).toBe(false)
   })
 })

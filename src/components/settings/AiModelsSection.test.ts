@@ -379,3 +379,31 @@ describe('AiModelsSection — save UX (zero ambiguous buttons)', () => {
     expect(btn).toHaveAttribute('data-dirty', 'true')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Deep review (agentic) toggle — Plan G part 2
+// ---------------------------------------------------------------------------
+
+describe('AiModelsSection — deep review toggle', () => {
+  it('renders the toggle unchecked by default with honest cost copy', () => {
+    render(AiModelsSection)
+    const toggle = screen.getByRole('checkbox', { name: /deep review \(agentic\)/i })
+    expect(toggle).not.toBeChecked()
+    expect(screen.getByText(/slower, uses more tokens/i)).toBeInTheDocument()
+  })
+
+  it('checking the toggle persists aiDeepReview immediately', async () => {
+    render(AiModelsSection)
+    const toggle = screen.getByRole('checkbox', { name: /deep review \(agentic\)/i })
+    await userEvent.click(toggle)
+    expect(getSettings().aiDeepReview).toBe(true)
+    await userEvent.click(toggle)
+    expect(getSettings().aiDeepReview).toBe(false)
+  })
+
+  it('reflects a previously saved aiDeepReview=true on render', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ aiDeepReview: true }))
+    render(AiModelsSection)
+    expect(screen.getByRole('checkbox', { name: /deep review \(agentic\)/i })).toBeChecked()
+  })
+})

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSettings, saveTokens, setAiProvider, setAiModel, type AiProvider } from '../../lib/settings/settings'
+  import { getSettings, saveTokens, setAiProvider, setAiModel, setAiDeepReview, type AiProvider } from '../../lib/settings/settings'
   import { settingsState } from '../../lib/settings/settingsState.svelte'
   import { PROVIDERS, getModelDef, type LlmProviderId } from '../../lib/llm/providers'
   import { llmTestConnection, LlmError } from '../../lib/llm/llm'
@@ -17,6 +17,13 @@
     gemini: current.geminiKey ?? '',
   })
   let error = $state<string | null>(null)
+
+  // Deep review (agentic) toggle — applies immediately, like provider/model.
+  let deepReview = $state<boolean>(current.aiDeepReview)
+  function onDeepReviewChange(checked: boolean) {
+    deepReview = checked
+    setAiDeepReview(checked)
+  }
 
   // Per-provider model selection. Empty string means "use the provider default".
   // Each card owns its provider's choice; only the ACTIVE provider's choice is
@@ -198,6 +205,21 @@
     {/each}
   </div>
 
+  <div class="deep-review-row">
+    <label class="deep-review-toggle">
+      <input
+        type="checkbox"
+        checked={deepReview}
+        onchange={(e) => onDeepReviewChange((e.currentTarget as HTMLInputElement).checked)}
+      />
+      <span class="deep-review-label">Deep review (agentic)</span>
+    </label>
+    <p class="deep-review-hint">
+      Lets the AI read extra files before flagging; slower, uses more tokens.
+      Applies to reviewer skills and the verdict. Requires a model with tool-calling support.
+    </p>
+  </div>
+
   <div class="hint privacy-note">
     <p><strong>What's sent where:</strong> keys are stored only in this browser (localStorage) — never on our servers.</p>
   </div>
@@ -345,6 +367,31 @@
     font-size: 0.78em;
     color: var(--text-muted);
     margin: 0.5rem 0 0;
+  }
+
+  .deep-review-row {
+    margin: 0.85rem 0 0;
+    padding: 0.6rem 0.85rem;
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+  }
+
+  .deep-review-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.9em;
+    cursor: pointer;
+  }
+
+  .deep-review-label {
+    font-weight: 600;
+  }
+
+  .deep-review-hint {
+    font-size: 0.78em;
+    color: var(--text-muted);
+    margin: 0.3rem 0 0;
   }
 
   .hint {
