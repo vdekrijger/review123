@@ -119,3 +119,33 @@ describe('ContextRail topbar overlap fix', () => {
     expect(inlineStyle).not.toMatch(/z-index/)
   })
 })
+
+describe('ContextRail responsive width', () => {
+  it('rail has no inline width attribute — width comes from CSS class (clamp formula)', () => {
+    // jsdom cannot evaluate CSS clamp() so we assert the responsive width
+    // lives entirely in the stylesheet (class-based), not as inline style.
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const aside = container.querySelector('aside.context-rail')
+    expect(aside).not.toBeNull()
+    const inlineStyle = aside?.getAttribute('style') ?? ''
+    expect(inlineStyle).not.toMatch(/\bwidth\s*:/)
+  })
+
+  it('collapsed rail has class "collapsed" applied (CSS transitions to narrow state)', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: true, oncollapse: vi.fn() },
+    })
+    const aside = container.querySelector('aside.context-rail')
+    expect(aside?.classList.contains('collapsed')).toBe(true)
+  })
+
+  it('expanded rail does NOT have class "collapsed"', () => {
+    const { container } = render(ContextRail, {
+      props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
+    })
+    const aside = container.querySelector('aside.context-rail')
+    expect(aside?.classList.contains('collapsed')).toBe(false)
+  })
+})

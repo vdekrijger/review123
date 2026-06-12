@@ -133,7 +133,11 @@
     right: 0;
     top: var(--topbar-h, 2.75rem);
     height: calc(100vh - var(--topbar-h, 2.75rem));
-    width: 260px;
+    /* Responsive width: fill the space between content column edge and viewport.
+       --content-max mirrors the Review.svelte max-width (70rem ≈ 1120px).
+       clamp keeps a min of 300px and caps at 480px.
+       On narrow viewports (no leftover space) the rail overlays as before. */
+    width: clamp(300px, calc((100vw - var(--content-max, 70rem)) / 1 - 24px), 480px);
     background: var(--surface);
     border-left: 1px solid var(--hairline);
     overflow-y: auto;
@@ -144,7 +148,7 @@
   }
 
   .context-rail.collapsed {
-    width: 2.5rem;
+    width: 1.75rem;
   }
 
   .rail-header {
