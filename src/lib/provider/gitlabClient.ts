@@ -30,7 +30,10 @@ export class GitlabApiError extends Error {
 // Base URL + header builder
 // ---------------------------------------------------------------------------
 
-const BASE = 'https://gitlab.com/api/v4'
+/** Compute the GitLab API base URL per-request (picks up gitlabHost changes without restart). */
+function getBase(): string {
+  return `https://${getSettings().gitlabHost}/api/v4`
+}
 
 function buildHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
@@ -46,7 +49,7 @@ function buildHeaders(): Record<string, string> {
 // ---------------------------------------------------------------------------
 
 export async function glFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const url = `${BASE}${path}`
+  const url = `${getBase()}${path}`
   const headers = { ...buildHeaders(), ...(init.headers as Record<string, string> | undefined) }
   const signal = init.signal ?? AbortSignal.timeout(20_000)
   let res: Response
@@ -66,7 +69,7 @@ export async function glFetch<T>(path: string, init: RequestInit = {}): Promise<
 export async function glFetchPage<T>(
   pathOrUrl: string,
 ): Promise<{ body: T; next: string | null }> {
-  const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${BASE}${pathOrUrl}`
+  const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${getBase()}${pathOrUrl}`
   let res: Response
   try {
     res = await fetch(url, {
@@ -100,7 +103,7 @@ export async function glFetchPage<T>(
 // ---------------------------------------------------------------------------
 
 export async function glFetchRaw(path: string): Promise<string | null> {
-  const url = `${BASE}${path}`
+  const url = `${getBase()}${path}`
   let res: Response
   try {
     res = await fetch(url, {

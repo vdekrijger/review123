@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
   getSettings, setGithubPat, setDeepseekKey, setDiffMode, saveTokens, saveGithubAuth,
   setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay, setGitlabToken,
-  saveBitbucketAuth,
+  saveBitbucketAuth, setGitlabHost,
 } from './settings'
 
 describe('settings', () => {
@@ -15,6 +15,7 @@ describe('settings', () => {
       diffMode: 'unified',
       githubAuth: null,
       gitlabToken: null,
+      gitlabHost: 'gitlab.com',
       bitbucketAuth: null,
       railCollapsed: false,
       theme: 'auto',
@@ -61,6 +62,7 @@ describe('settings', () => {
       diffMode: 'unified',
       githubAuth: null,
       gitlabToken: null,
+      gitlabHost: 'gitlab.com',
       bitbucketAuth: null,
       railCollapsed: false,
       theme: 'auto',
@@ -300,6 +302,66 @@ describe('settings', () => {
     it('coerces invalid gitlabToken type to null', () => {
       localStorage.setItem('review123:settings', JSON.stringify({ gitlabToken: 42 }))
       expect(getSettings().gitlabToken).toBeNull()
+    })
+  })
+
+  describe('gitlabHost', () => {
+    it('defaults to gitlab.com', () => {
+      expect(getSettings().gitlabHost).toBe('gitlab.com')
+    })
+
+    it('setGitlabHost stores a bare hostname', () => {
+      setGitlabHost('gitlab.mycompany.com')
+      expect(getSettings().gitlabHost).toBe('gitlab.mycompany.com')
+    })
+
+    it('setGitlabHost normalizes an origin to just the hostname', () => {
+      setGitlabHost('https://gitlab.mycompany.com')
+      expect(getSettings().gitlabHost).toBe('gitlab.mycompany.com')
+    })
+
+    it('setGitlabHost normalizes an origin with trailing slash', () => {
+      setGitlabHost('https://gitlab.mycompany.com/')
+      expect(getSettings().gitlabHost).toBe('gitlab.mycompany.com')
+    })
+
+    it('setGitlabHost rejects empty string', () => {
+      expect(() => setGitlabHost('')).toThrow()
+    })
+
+    it('setGitlabHost rejects whitespace-only string', () => {
+      expect(() => setGitlabHost('   ')).toThrow()
+    })
+
+    it('setGitlabHost rejects an invalid value (not a hostname or origin)', () => {
+      expect(() => setGitlabHost('not a hostname!')).toThrow()
+    })
+
+    it('setGitlabHost accepts "gitlab.com" (restores default)', () => {
+      setGitlabHost('custom.host.io')
+      setGitlabHost('gitlab.com')
+      expect(getSettings().gitlabHost).toBe('gitlab.com')
+    })
+
+    it('coerces invalid gitlabHost type to default (gitlab.com)', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ gitlabHost: 42 }))
+      expect(getSettings().gitlabHost).toBe('gitlab.com')
+    })
+
+    it('coerces stored empty string gitlabHost to default (gitlab.com)', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ gitlabHost: '' }))
+      expect(getSettings().gitlabHost).toBe('gitlab.com')
+    })
+
+    it('persists gitlabHost across getSettings() calls', () => {
+      setGitlabHost('mygitlab.corp.internal')
+      expect(getSettings().gitlabHost).toBe('mygitlab.corp.internal')
+      expect(getSettings().gitlabHost).toBe('mygitlab.corp.internal')
+    })
+
+    it('shape-coerces: defaults include gitlabHost: gitlab.com', () => {
+      const s = getSettings()
+      expect(s).toHaveProperty('gitlabHost', 'gitlab.com')
     })
   })
 
