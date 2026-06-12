@@ -53,7 +53,7 @@ describe('llmTestConnection', () => {
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-ds-test')
     const body = JSON.parse(init.body as string)
     expect(body.max_tokens).toBe(1)
-    expect(body.model).toBe('deepseek-chat')
+    expect(body.model).toBe('deepseek-v4-flash')
   })
 
   it('tests the GIVEN provider even when a different provider is active', async () => {
@@ -81,10 +81,10 @@ describe('llmTestConnection', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    await llmTestConnection('anthropic', 'claude-opus-4-5')
+    await llmTestConnection('anthropic', 'claude-opus-4-8')
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string)
-    expect(body.model).toBe('claude-opus-4-5')
+    expect(body.model).toBe('claude-opus-4-8')
   })
 
   it('gemini: pings generateContent with x-goog-api-key (no 1-token cap — thinking models)', async () => {
@@ -98,7 +98,7 @@ describe('llmTestConnection', () => {
 
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent',
     )
     expect((init.headers as Record<string, string>)['x-goog-api-key']).toBe('AIza-test')
     // Gemini 2.5 thinking models can exhaust a 1-token cap before emitting text,

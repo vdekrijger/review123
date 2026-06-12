@@ -2,7 +2,7 @@
  * LLM configuration helpers (Plan F: multi-LLM transport layer).
  *
  * Token budget formula: budgetTokens = contextWindowTokens - maxOutputTokens - 2000 (prompt overhead)
- * = 64_000 - 4_000 - 2_000 = 58_000 for DeepSeek default.
+ * = 1_000_000 - 4_000 - 2_000 = 994_000 for the DeepSeek default (V4 Flash).
  *
  * LLM_CONFIG is kept for backward compatibility; all new code should use
  * activeLlmConfig() which reads aiProvider/aiModel from settings and returns
