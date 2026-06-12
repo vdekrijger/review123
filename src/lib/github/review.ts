@@ -92,7 +92,13 @@ export async function submitReview(
         case 'unprocessable': {
           const msg = detail.message
           if (/own pull request/i.test(msg)) {
-            return { ok: false, kind: 'self-approve', message: msg }
+            // Belt and braces: the Verdict step gates own-PR verdicts up front,
+            // but gating can miss (e.g. PAT user differs from the resolved viewer).
+            return {
+              ok: false,
+              kind: 'self-approve',
+              message: "GitHub doesn't allow approving or requesting changes on your own pull request — switch the verdict to Comment to post your feedback.",
+            }
           }
           return { ok: false, kind: 'invalid-anchor', message: msg }
         }

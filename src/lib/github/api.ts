@@ -16,6 +16,7 @@ interface RawPr {
   base: { sha: string; repo?: { private: boolean } }
   head: { sha: string }
   changed_files: number
+  user?: { login: string } | null
 }
 
 export async function getPrMeta(ref: PrRef): Promise<PrMeta> {
@@ -25,6 +26,7 @@ export async function getPrMeta(ref: PrRef): Promise<PrMeta> {
     baseSha: pr.base.sha, headSha: pr.head.sha,
     private: pr.base.repo?.private ?? false,
     changedFiles: pr.changed_files,
+    authorLogin: pr.user?.login ?? null,
   }
 }
 

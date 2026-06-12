@@ -118,6 +118,14 @@ interface BbPrMeta {
   description: string | null
   source: { commit: { hash: string }; repository: { is_private: boolean } }
   destination: { commit: { hash: string } }
+  author?: { uuid?: string | null; nickname?: string | null } | null
+}
+
+/** GET /2.0/user — authenticated viewer identity */
+interface BbUser {
+  uuid?: string | null
+  nickname?: string | null
+  username?: string | null
 }
 
 interface BbDiffstatEntry {
@@ -199,6 +207,7 @@ export const bitbucketProvider: ReviewProvider = {
     suggestions: false,
     atomicReview: false,
     compare: false,
+    selfReviewBlocked: true, // Bitbucket Cloud rejects approving your own PR
   } satisfies ProviderCapabilities,
 
   // -------------------------------------------------------------------------
@@ -252,6 +261,9 @@ export const bitbucketProvider: ReviewProvider = {
       baseSha: data.destination.commit.hash,
       private: data.source.repository?.is_private ?? false,
       changedFiles: 0, // filled in later from diffstat if needed; Bitbucket meta doesn't include it
+      // UUID is the stable identity post-GDPR; nickname is a display fallback.
+      // Must stay in the same identity space as getViewerLogin().
+      authorLogin: data.author?.uuid ?? data.author?.nickname ?? null,
     }
   },
 
@@ -527,5 +539,13 @@ export const bitbucketProvider: ReviewProvider = {
       configured: false,
       hint: 'No Bitbucket credentials configured. Add your email and API token in Settings.',
     }
+  },
+
+  // -------------------------------------------------------------------------
+  // getViewerLogin — same identity space as PrMeta.authorLogin (uuid first)
+  // -------------------------------------------------------------------------
+  async getViewerLogin(): Promise<string | null> {
+    const user = await bbFetch<BbUser>('/user')
+    return user.uuid ?? user.nickname ?? user.username ?? null
   },
 }

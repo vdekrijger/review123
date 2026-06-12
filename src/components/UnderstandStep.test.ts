@@ -23,6 +23,7 @@ const meta: PrMeta = {
   headSha: 'head',
   private: false,
   changedFiles: 2,
+  authorLogin: null,
 }
 
 const files: PrFile[] = [

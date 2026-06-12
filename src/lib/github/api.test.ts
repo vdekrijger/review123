@@ -12,12 +12,20 @@ describe('github api', () => {
   it('getPrMeta maps fields incl. repo privacy', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
       ...META, base: { ...META.base, repo: { private: true } },
+      user: { login: 'octocat' },
     })))
     const meta = await getPrMeta({ owner: 'a', repo: 'b', number: 1 })
     expect(meta).toEqual({
       title: 'T', state: 'open', merged: false, body: null,
       baseSha: 'b1', headSha: 'h1', private: true, changedFiles: 2,
+      authorLogin: 'octocat',
     })
+  })
+
+  it('getPrMeta maps a missing PR author to authorLogin null', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(META)))
+    const meta = await getPrMeta({ owner: 'a', repo: 'b', number: 1 })
+    expect(meta.authorLogin).toBeNull()
   })
 
   it('getPrFiles traverses pagination via Link header (EC-05i)', async () => {

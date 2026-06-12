@@ -381,6 +381,7 @@ describe('ContextRail registry completeness — ci-details in rail', () => {
       headSha: 'def',
       private: false,
       changedFiles: 1,
+      authorLogin: null,
     }
     render(ContextRail, {
       props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn(), meta },
@@ -399,6 +400,7 @@ describe('ContextRail registry completeness — ci-details in rail', () => {
       headSha: 'def',
       private: false,
       changedFiles: 1,
+      authorLogin: null,
     }
     render(ContextRail, {
       props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn(), meta },
