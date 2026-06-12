@@ -380,7 +380,6 @@ describe('AiModelsSection — save UX (zero ambiguous buttons)', () => {
   })
 })
 
-<<<<<<< HEAD
 // ---------------------------------------------------------------------------
 // Deep review (agentic) toggle — Plan G part 2
 // ---------------------------------------------------------------------------
@@ -406,7 +405,9 @@ describe('AiModelsSection — deep review toggle', () => {
     localStorage.setItem('review123:settings', JSON.stringify({ aiDeepReview: true }))
     render(AiModelsSection)
     expect(screen.getByRole('checkbox', { name: /deep review \(agentic\)/i })).toBeChecked()
-=======
+  })
+})
+
 describe('AiModelsSection — show/hide key toggle', () => {
   function keyInput(name: RegExp): HTMLInputElement {
     return screen.getByLabelText(name) as HTMLInputElement
@@ -482,6 +483,5 @@ describe('AiModelsSection — invalid key characters rejected at save', () => {
     expect(getSettings().deepseekKey).toBeNull()
     // The connection test never runs on a key that failed validation
     expect(llmTestConnectionMock).not.toHaveBeenCalled()
->>>>>>> origin/main
   })
 })
