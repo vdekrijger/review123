@@ -240,10 +240,10 @@
 </script>
 
 <div class="mode-toggle" role="group" aria-label="Diff mode">
-  <button class:active={mode === 'unified'} aria-pressed={mode === 'unified'} onclick={() => onmode('unified')}>Unified</button>
-  <button class:active={mode === 'split'} aria-pressed={mode === 'split'} onclick={() => onmode('split')}>Side-by-side</button>
+  <button class="btn" class:btn-active={mode === 'unified'} aria-pressed={mode === 'unified'} onclick={() => onmode('unified')}>Unified</button>
+  <button class="btn" class:btn-active={mode === 'split'} aria-pressed={mode === 'split'} onclick={() => onmode('split')}>Side-by-side</button>
   {#if showRunButton}
-    <button class="run-reviewers-btn" onclick={() => runSkillReviewsFn?.()}>
+    <button class="btn run-reviewers-btn" onclick={() => runSkillReviewsFn?.()}>
       Run my reviewers ({enabledSkillCount})
     </button>
   {/if}
@@ -279,7 +279,7 @@
     </button>
 
     <!-- Collapsible drawer -->
-    <div class="file-tree-drawer" data-open={treeOpen ? 'true' : 'false'} aria-hidden={!treeOpen}>
+    <div class="file-tree-drawer" data-open={treeOpen ? 'true' : 'false'} data-wide={isWideViewport ? 'true' : 'false'} aria-hidden={!treeOpen}>
       {#if treeOpen}
         <nav class="file-tree-nav" aria-label="File tree">
           <FileTree
@@ -369,25 +369,22 @@
     gap: 0;
   }
 
-  /* ---- Wide viewport: drawer floats into left margin (absolute positioning) ---- */
-  /* When viewport ≥ 1200px the centered 70rem content has free left margin space.  */
-  /* The drawer is absolutely positioned to the left of the toggle tab, so the      */
-  /* diff column keeps its full width and is never pushed.                           */
+  /* ---- Wide viewport (≥1200px): drawer is sticky in the left margin, own scroll ---- */
   @media (min-width: 1200px) {
-    .file-tree-drawer[data-open="true"] {
-      position: absolute;
-      /* Place drawer to the left of the toggle tab (28px wide).                    */
-      /* right: 100% positions the right edge of the drawer at the left edge of     */
-      /* its containing block. We add a 4px gap.                                    */
-      right: calc(100% - 28px + 4px);
-      top: 0;
+    .inspect-layout[data-wide="true"] .file-tree-drawer[data-open="true"] {
+      position: sticky;
+      top: 3.5rem; /* below topbar (~56px) */
+      align-self: flex-start;
+      max-height: calc(100vh - 3.5rem);
+      overflow-y: auto;
       z-index: 10;
       box-shadow: -2px 4px 16px rgba(0,0,0,0.18);
     }
 
-    .file-tree-nav {
-      /* On wide viewport the drawer doesn't need a left margin since it's absolute */
+    .inspect-layout[data-wide="true"] .file-tree-nav {
       margin-left: 0;
+      max-height: none; /* parent handles scrolling */
+      overflow-y: visible;
     }
   }
 
@@ -512,7 +509,16 @@
     }
   }
 
-  .mode-toggle button.active { font-weight: 700; }
+  /* Mode toggle: active state via accent underline, consistent with stepper */
+  .mode-toggle .btn-active {
+    border-bottom: 2px solid var(--accent);
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .mode-toggle .btn {
+    border-radius: 4px 4px 0 0; /* flat bottom, pairs with underline indicator */
+  }
+  .run-reviewers-btn { margin-left: auto; }
 
   .hotspot-badge {
     display: flex;
@@ -551,24 +557,6 @@
     background: var(--legend-changed-bg);
     color: var(--legend-changed-color);
     border-left: 3px solid var(--legend-changed-border);
-  }
-
-  /* ---- Run button ---- */
-  .run-reviewers-btn {
-    margin-left: auto;
-    padding: 0.3rem 0.75rem;
-    border: 1px solid var(--border-subtle);
-    border-radius: 6px;
-    background: transparent;
-    color: inherit;
-    font-size: 0.85rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-
-  .run-reviewers-btn:hover {
-    background: var(--surface-raised);
   }
 
   /* ---- Skill persona summaries ---- */
