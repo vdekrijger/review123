@@ -665,6 +665,7 @@
         coachFn={aiRun ? aiRun.coach : undefined}
         {prComments}
         provider={activeProvider}
+        authorLogin={load.state.meta.authorLogin}
       />
     {/if}
   {/if}

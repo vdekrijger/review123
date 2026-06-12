@@ -139,6 +139,7 @@ interface GlMrMeta {
   } | null
   changes_count: string | null
   blocking_discussions_resolved: boolean
+  author?: { username: string } | null
 }
 
 interface GlDiff {
@@ -313,6 +314,15 @@ function mapNote(note: GlNote): PrComment | null {
 }
 
 // ---------------------------------------------------------------------------
+// Viewer identity (shared by getViewerLogin, getMyReviewComments, getMyQueue)
+// ---------------------------------------------------------------------------
+
+async function fetchViewerUsername(): Promise<string | null> {
+  const me = await glFetch<Partial<GlUser>>('/user')
+  return me.username ?? null
+}
+
+// ---------------------------------------------------------------------------
 // GitLab ReviewProvider
 // ---------------------------------------------------------------------------
 
@@ -326,6 +336,9 @@ export const gitlabProvider: ReviewProvider = {
     suggestions: true,
     atomicReview: false,
     compare: true,
+    // Self-approval on GitLab is governed by project settings (often allowed):
+    // never gate client-side; a rejection surfaces via mapGitlabError at submit.
+    selfReviewBlocked: false,
   } satisfies ProviderCapabilities,
 
   parseUrl(input: string): ParseResult {
@@ -346,6 +359,7 @@ export const gitlabProvider: ReviewProvider = {
       headSha: mr.diff_refs?.head_sha ?? '',
       private: false, // GitLab REST /projects/:id doesn't expose visibility in MR payload; treat as non-private
       changedFiles: mr.changes_count != null ? Number(mr.changes_count) : 0,
+      authorLogin: mr.author?.username ?? null,
     }
   },
 
@@ -595,8 +609,14 @@ export const gitlabProvider: ReviewProvider = {
           body: JSON.stringify({}),
         })
       } catch (err) {
-        // Approval failure is surfaced but doesn't block the outcome
-        const errMsg = mapGitlabError(err, 'Failed to approve MR')
+        // Approval failure is surfaced but doesn't block the outcome.
+        // GitLab answers 401 on POST /approve when the user MAY NOT approve
+        // (e.g. own MR with "prevent author approval" enabled) — distinguish
+        // that from a missing/expired token instead of saying "Not authenticated".
+        const errMsg =
+          err instanceof GitlabApiError && err.detail.kind === 'unauthorized'
+            ? 'GitLab rejected the approval: your account is not allowed to approve this MR (this is typically your own MR, or approval rules forbid it). Your comments were still posted.'
+            : mapGitlabError(err, 'Failed to approve MR')
         if (failedDrafts.length > 0) {
           return {
             ok: false,
@@ -662,8 +682,8 @@ export const gitlabProvider: ReviewProvider = {
     }
 
     // Step 1: get authenticated username
-    const me = await glFetch<GlUser>('/user')
-    const myUsername = me.username
+    const myUsername = await fetchViewerUsername()
+    if (myUsername == null) return []
 
     // Step 2: fetch recent MRs (cap 15 MRs, ordered by updated_at)
     const mrs = await glFetch<GlMrSummary[]>(
@@ -711,8 +731,9 @@ export const gitlabProvider: ReviewProvider = {
 
     let me: string
     try {
-      const user = await glFetch<GlUser>('/user')
-      me = user.username
+      const username = await fetchViewerUsername()
+      if (username == null) return []
+      me = username
     } catch {
       return []
     }
@@ -762,6 +783,10 @@ export const gitlabProvider: ReviewProvider = {
     }
 
     return [...seen.values()]
+  },
+
+  getViewerLogin(): Promise<string | null> {
+    return fetchViewerUsername()
   },
 }
 

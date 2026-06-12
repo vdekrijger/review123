@@ -20,7 +20,7 @@ vi.mock('../lib/provider/registry', () => ({
       displayName: 'GitHub',
       authState: () => ({ configured: true, hint: '' }),
       getMyQueue: vi.fn(),
-      capabilities: { resolvedThreads: false, checks: false, suggestions: false, atomicReview: false, compare: false },
+      capabilities: { resolvedThreads: false, checks: false, suggestions: false, atomicReview: false, compare: false, selfReviewBlocked: false },
     }],
   ]),
   parseAnyUrl: vi.fn().mockReturnValue(null),

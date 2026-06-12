@@ -38,6 +38,15 @@ function toRef(ref: PrRefX): { owner: string; repo: string; number: number } {
 }
 
 // ---------------------------------------------------------------------------
+// Viewer identity (shared by getViewerLogin and getMyReviewComments)
+// ---------------------------------------------------------------------------
+
+async function fetchViewerLogin(): Promise<string | null> {
+  const user = await ghFetch<{ login?: string }>('/user')
+  return user.login ?? null
+}
+
+// ---------------------------------------------------------------------------
 // GitHub ReviewProvider implementation
 // ---------------------------------------------------------------------------
 
@@ -51,6 +60,7 @@ export const githubProvider: ReviewProvider = {
     suggestions: true,
     atomicReview: true,
     compare: true,
+    selfReviewBlocked: true, // 422 "Can not approve your own pull request"
   },
 
   parseUrl(input: string): ParseResult {
@@ -137,8 +147,8 @@ export const githubProvider: ReviewProvider = {
     }
 
     // Step 1: resolve authenticated login
-    const user = await ghFetch<{ login: string }>('/user')
-    const login = user.login
+    const login = await fetchViewerLogin()
+    if (login == null) return []
 
     // Step 2: fetch up to 3 pages of PR review comments
     const MINE_PAGES = 3
@@ -226,5 +236,9 @@ export const githubProvider: ReviewProvider = {
     }
 
     return [...seen.values()]
+  },
+
+  getViewerLogin(): Promise<string | null> {
+    return fetchViewerLogin()
   },
 }

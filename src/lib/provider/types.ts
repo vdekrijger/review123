@@ -67,6 +67,13 @@ export interface ProviderCapabilities {
   atomicReview: boolean
   /** Provider supports commit comparison */
   compare: boolean
+  /**
+   * Provider rejects review verdicts (approve / request changes) on the
+   * viewer's own PR. GitHub: 422 "Can not approve your own pull request".
+   * Bitbucket Cloud: rejects self-approval. GitLab: governed by project
+   * settings (often allowed) → false, errors surface at submit time.
+   */
+  selfReviewBlocked: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -157,4 +164,14 @@ export interface ReviewProvider {
    * Returns [] when unauthenticated.
    */
   getMyQueue?(): Promise<QueueItem[]>
+
+  /**
+   * Resolve the authenticated viewer's provider-canonical identity — the same
+   * identifier space as PrMeta.authorLogin (GitHub login, GitLab username,
+   * Bitbucket account UUID). Returns null when it cannot be determined.
+   *
+   * Optional — callers should go through resolveViewerLogin() in viewer.ts,
+   * which checks auth and caches the result per session.
+   */
+  getViewerLogin?(): Promise<string | null>
 }
