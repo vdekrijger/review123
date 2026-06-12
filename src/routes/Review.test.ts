@@ -857,6 +857,10 @@ describe('compare-mode: browser back exits compare instead of leaving the PR', (
 
     // Route stays on review
     expect(screen.getByRole('status')).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
 
 // Progress bar — footer location + reactivity (EC-PROGRESS)
 // ---------------------------------------------------------------------------
