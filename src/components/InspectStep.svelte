@@ -127,16 +127,21 @@
   // Diff width: 'centered' (default) | 'full'
   const diffWidth = $derived<DiffWidth>(getSettings().diffWidth)
 
-  // Wide-viewport detection: viewport ≥ 1200px means enough left margin space to float the drawer
-  // without pushing the diff column (70rem ≈ 1120px, so 1200px gives ~40px + 260px drawer margin)
-  // Threshold: 70rem (1120px) + 28px (toggle) + 260px (drawer) + 32px padding = ~1440px
-  // We use 1200 as a practical threshold — at this point free margin ≥ drawer width.
+  // ---- Viewport regime thresholds ----
+  // WIDE_THRESHOLD (≥1200px): left margin likely ≥ 340px; drawer fits purely in margin.
+  // NARROW_THRESHOLD (<900px): existing fixed-overlay mode (diff-column gets drawer-open offset).
+  // Between 900–1199px: drawer is a floating overlay (absolute, leftward, shadow + backdrop),
+  //   but NEVER pushes/shrinks the diff column.
+  // In ALL cases ≥900px, the diff column is never pushed — only visual elevation differs.
   const WIDE_THRESHOLD = 1200
+  const NARROW_THRESHOLD = 900
   let isWideViewport = $state(typeof window !== 'undefined' ? window.innerWidth >= WIDE_THRESHOLD : false)
+  let isNarrowViewport = $state(typeof window !== 'undefined' ? window.innerWidth < NARROW_THRESHOLD : false)
 
   $effect(() => {
     function onResize() {
       isWideViewport = window.innerWidth >= WIDE_THRESHOLD
+      isNarrowViewport = window.innerWidth < NARROW_THRESHOLD
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
@@ -172,7 +177,7 @@
       header?.click()
     }
     // On narrow viewport (<900px), close the drawer after selecting a file
-    if (window.innerWidth < 900) closeTree()
+    if (window.innerWidth < NARROW_THRESHOLD) closeTree()
   }
 
   // ---------------------------------------------------------------------------
@@ -377,20 +382,8 @@
   <p>This PR has no changed files.</p>
 {:else}
   <div class="inspect-layout" class:diff-full={diffWidth === 'full'} data-wide={isWideViewport ? 'true' : 'false'}>
-    <!-- Slim toggle tab fixed to the left edge -->
-    <button
-      bind:this={toggleTabEl}
-      class="tree-toggle-tab"
-      aria-expanded={treeOpen}
-      aria-label={treeOpen ? 'Close file tree' : 'Open file tree'}
-      onclick={toggleTree}
-      title={treeOpen ? 'Close file tree (Escape)' : 'Open file tree'}
-    >
-      <span class="tree-toggle-icon" aria-hidden="true">{treeOpen ? '‹' : '☰'}</span>
-      <span class="tree-toggle-label">Files</span>
-    </button>
-
-    <!-- Collapsible drawer -->
+    <!-- Collapsible drawer: zero-width flex placeholder, nav panel extends LEFTWARD -->
+    <!-- DOM order: drawer first → tab second → diff column, so nav's right edge meets tab's LEFT edge -->
     <div class="file-tree-drawer" data-open={treeOpen ? 'true' : 'false'} data-wide={isWideViewport ? 'true' : 'false'} aria-hidden={!treeOpen}>
       {#if treeOpen}
         <nav class="file-tree-nav" aria-label="File tree">
@@ -414,15 +407,29 @@
       {/if}
     </div>
 
-    <!-- Narrow-viewport backdrop (overlays content when drawer open on <900px) -->
-    {#if treeOpen}
+    <!-- Slim toggle tab: at the content column's left edge (immediately right of drawer) -->
+    <button
+      bind:this={toggleTabEl}
+      class="tree-toggle-tab"
+      aria-expanded={treeOpen}
+      aria-label={treeOpen ? 'Close file tree' : 'Open file tree'}
+      onclick={toggleTree}
+      title={treeOpen ? 'Close file tree (Escape)' : 'Open file tree'}
+    >
+      <span class="tree-toggle-icon" aria-hidden="true">{treeOpen ? '‹' : '☰'}</span>
+      <span class="tree-toggle-label">Files</span>
+    </button>
+
+    <!-- Backdrop: shown on overlay regimes (mid 900–1199px and narrow <900px) -->
+    <!-- On wide (≥1200px), no backdrop needed — drawer fits in left margin -->
+    {#if treeOpen && !isWideViewport}
       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
       <div class="tree-backdrop" onclick={closeTree} aria-hidden="true"></div>
     {/if}
 
-    <!-- Diff column: gets margin-left only when drawer is open on NARROW viewport -->
-    <!-- On wide viewport, drawer floats into left margin — diff keeps full width -->
-    <div class="diff-column" class:drawer-open={treeOpen && !isWideViewport}>
+    <!-- Diff column: drawer-open only on narrow (<900px) for narrow-specific overlay offset -->
+    <!-- On ≥900px, the drawer is out-of-flow; diff-column is never pushed -->
+    <div class="diff-column" class:drawer-open={treeOpen && isNarrowViewport}>
       {#each orderedFiles as file (file.filename)}
         <div id="file-{slugify(file.filename)}">
           {#if hotspotMap.has(file.filename)}
@@ -487,12 +494,36 @@
 {/if}
 
 <style>
-  /* Inspect layout: relative container for the drawer + toggle tab */
+  /*
+   * ==========================================================================
+   * DRAWER CSS — THREE CONSOLIDATED REGIMES
+   *
+   * REGIME A — Wide (≥1200px): drawer is absolutely positioned LEFTWARD of the
+   *   tab, opening into the left margin. Fits in margin when available; when
+   *   viewport is wide but margin < 340px, still floats (overlay, no diff push).
+   *   No backdrop. Diff column is NEVER touched.
+   *
+   * REGIME B — Mid (900–1199px): drawer is absolutely positioned LEFTWARD.
+   *   Same left-anchor as wide, but viewport narrower → drawer may overlay page
+   *   content to the left. Box-shadow for elevation. Backdrop click to close.
+   *   Diff column is NEVER pushed (same absolute positioning, out of flow).
+   *
+   * REGIME C — Narrow (<900px): existing fixed full-height overlay. Backdrop
+   *   covers whole screen. Diff column gets drawer-open class for visual
+   *   spacer offset (only this regime pushes the diff).
+   *
+   * BINDING REQUIREMENT: the diff is the most important part. The drawer must
+   * NEVER push/shrink/cover the diff column inline in regimes A or B.
+   * ==========================================================================
+   */
+
+  /* Inspect layout: relative+overflow-visible container for absolute drawer */
   .inspect-layout {
     position: relative;
     display: flex;
     align-items: flex-start;
     gap: 0;
+    overflow: visible;
   }
 
   /* Diff width: full mode overrides the content max-width via CSS custom property */
@@ -501,51 +532,11 @@
     max-width: none;
   }
 
-  /* ---- Wide viewport (≥1200px): drawer is absolutely positioned RIGHTWARD of the tab,
-         within the left margin — does NOT consume flex space, diff column stays full width ---- */
-  @media (min-width: 1200px) {
-    /* The drawer in wide mode floats absolutely; it does not participate in flex layout */
-    .inspect-layout[data-wide="true"] .file-tree-drawer {
-      position: absolute;
-      /* Align with the left edge of the tab (tab is 28px wide) — drawer opens to the right */
-      left: 28px; /* immediately right of the toggle tab */
-      top: 0; /* same top as the tab/layout start */
-      width: 0;
-      overflow: hidden;
-      max-height: calc(100vh - 5rem);
-      z-index: 20;
-      transition: width 0.2s ease;
-      /* Remove sticky/flex positioning that was causing leftward drift */
-      align-self: auto;
-    }
-
-    .inspect-layout[data-wide="true"] .file-tree-drawer[data-open="true"] {
-      position: sticky;
-      top: 0.5rem; /* same as the toggle tab top */
-      left: 0; /* sticks within its absolute context; the flex placement handles horizontal */
-      width: 320px;
-      max-height: calc(100vh - 5rem);
-      overflow-y: auto;
-      z-index: 20;
-      box-shadow: 2px 4px 16px rgba(0,0,0,0.18);
-    }
-
-    .inspect-layout[data-wide="true"] .file-tree-nav {
-      margin-left: 0;
-      max-height: none; /* parent handles scrolling */
-      overflow-y: visible;
-    }
-
-    /* Diff column must NOT shrink when drawer opens in wide mode — drawer is out-of-flow */
-    .inspect-layout[data-wide="true"] .diff-column {
-      margin-left: 0 !important;
-    }
-  }
-
-  /* ---- Toggle tab: slim vertical strip on the left edge ---- */
+  /* ---- Toggle tab: slim vertical strip fixed to the content column's left edge ---- */
+  /* Matches top offset with the drawer header in all regimes */
   .tree-toggle-tab {
     position: sticky;
-    top: 0.5rem;
+    top: 0.5rem; /* same top as drawer in regimes A/B */
     flex-shrink: 0;
     width: 28px;
     height: calc(100vh - 5rem);
@@ -562,7 +553,7 @@
     cursor: pointer;
     color: inherit;
     font-size: 0.78rem;
-    z-index: 10;
+    z-index: 21; /* above the drawer's z-index so tab stays clickable */
     transition: background 0.15s;
     align-self: flex-start;
   }
@@ -591,34 +582,47 @@
     user-select: none;
   }
 
-  /* ---- Collapsible drawer ---- */
+  /* ---- Collapsible drawer — zero-width flex spacer + absolutely-positioned content ----
+   *
+   * The wrapper (.file-tree-drawer) is a zero-width flex child — it never consumes
+   * flex space and therefore NEVER pushes the diff column in regimes A or B.
+   *
+   * The actual content panel (.file-tree-nav) is absolutely positioned relative to
+   * the wrapper (position: relative on the wrapper). Its right edge is anchored to the
+   * wrapper's right edge (right: 0), so the panel extends 340px LEFTWARD — into the left
+   * margin, never covering the diff column.
+   *
+   * position: sticky on .file-tree-nav gives the scroll-following behaviour without
+   * participating in flex flow.
+   */
   .file-tree-drawer {
-    /* When closed: zero width, no overflow */
-    width: 0;
-    overflow: hidden;
-    flex-shrink: 0;
-    transition: width 0.2s ease;
-    position: sticky;
+    /* Zero-width flex placeholder — takes no flex space, diff is NEVER pushed */
+    position: sticky; /* sticky so the zero-width anchor follows scroll */
     top: 0.5rem;
+    width: 0;
+    flex-shrink: 0;
     align-self: flex-start;
+    z-index: 20;
     max-height: calc(100vh - 5rem);
-  }
-
-  .file-tree-drawer[data-open="true"] {
-    width: 320px;
+    overflow: visible; /* allow the absolutely-positioned nav to extend leftward */
   }
 
   .file-tree-nav {
-    width: 320px;
+    /* Absolutely positioned panel extending 340px LEFTWARD from the wrapper's right edge */
+    position: absolute;
+    right: 0; /* right edge meets the tab's left edge */
+    top: 0;   /* same top as the tab (wrapper is sticky at same offset) */
+    width: 340px;
+    box-sizing: border-box; /* total width = 340px including border + padding */
     max-height: calc(100vh - 5rem);
     overflow-y: auto;
     background: var(--surface-raised);
-    /* Single border lives here on the drawer nav; no extra border on tree root */
     border: 1px solid var(--border-subtle);
     border-radius: 6px;
     padding: 0.5rem 0.25rem;
     scrollbar-width: thin;
-    margin-left: 0.25rem;
+    /* Elevation: drawer floats over left margin with shadow */
+    box-shadow: -2px 4px 20px rgba(0, 0, 0, 0.22);
   }
 
   /* Drawer header: "Files" label + ✕ close button */
@@ -664,46 +668,55 @@
     outline-offset: 1px;
   }
 
-  /* ---- Diff column: takes remaining space; gains margin when drawer open ---- */
+  /* ---- Diff column: takes remaining flex space ---- */
+  /* NEVER receives drawer-open on ≥900px — drawer is absolutely positioned */
   .diff-column {
     min-width: 0;
     flex: 1;
-    transition: none; /* margin change handled by flex; instant */
   }
 
-  /* ---- Narrow viewport (<900px): drawer overlays (backdrop) instead of pushing ---- */
-  @media (max-width: 900px) {
+  /* ---- REGIME B: Mid-range (900–1199px) backdrop ---- */
+  /* Backdrop is rendered by Svelte when treeOpen && !isWideViewport */
+  /* On ≥900px it shows a semi-transparent overlay behind the drawer */
+  /* On <900px the narrow-viewport rules take over with fixed positioning */
+  @media (min-width: 900px) and (max-width: 1199px) {
+    .tree-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.2);
+      z-index: 15; /* below drawer (z-index 20) but above page content */
+      cursor: pointer;
+    }
+  }
+
+  /* ---- REGIME C: Narrow viewport (<900px) — fixed full-height overlay ---- */
+  @media (max-width: 899px) {
     .file-tree-drawer[data-open="true"] {
       position: fixed;
       top: 0;
-      left: 32px; /* just past the toggle tab */
+      /* Left edge just past the toggle tab (tab is fixed at viewport left ~32px) */
+      left: 32px;
       height: 100vh;
       max-height: 100vh;
+      width: 340px;
+      overflow-y: auto;
       z-index: 50;
-      box-shadow: 2px 0 12px rgba(0,0,0,0.2);
+      box-shadow: 2px 0 16px rgba(0, 0, 0, 0.3);
     }
 
     .file-tree-nav {
       height: 100%;
       max-height: 100vh;
       border-radius: 0 6px 6px 0;
-      margin-left: 0;
     }
 
-    /* Backdrop covers the rest of the screen */
+    /* Backdrop covers the full screen in narrow mode */
     .tree-backdrop {
       position: fixed;
       inset: 0;
       background: rgba(0, 0, 0, 0.35);
       z-index: 45;
       cursor: pointer;
-    }
-  }
-
-  /* Hide backdrop on wide viewport */
-  @media (min-width: 901px) {
-    .tree-backdrop {
-      display: none;
     }
   }
 
