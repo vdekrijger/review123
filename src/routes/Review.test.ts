@@ -624,6 +624,244 @@ describe('Review — PR comments integration (EC-REVIEW-COMM)', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Compare-mode browser back behavior (fix/compare-back-behavior)
+// ---------------------------------------------------------------------------
+
+describe('compare-mode: browser back exits compare instead of leaving the PR', () => {
+  /**
+   * Helper: render Review with the PR already loaded and navigate to step 2.
+   * Returns the user object and a fetch stub that serves compare data.
+   */
+  async function renderAtStep2(prNumber: number) {
+    const user = userEvent.setup()
+    const compareFiles = [
+      { filename: 'only.ts', status: 'modified', additions: 1, deletions: 0 },
+    ]
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/compare/')) return Promise.resolve(jsonResponse({ files: compareFiles }))
+      if (url.includes('/files')) return Promise.resolve(jsonResponse([
+        { filename: 'a.ts', status: 'modified', additions: 1, deletions: 0 },
+      ]))
+      if (url.includes('/commits')) return Promise.resolve(jsonResponse([
+        { sha: 'aaa111', commit: { message: 'first commit', author: { date: '2024-01-01T10:00:00Z' } } },
+        { sha: 'bbb222', commit: { message: 'second commit', author: { date: '2024-01-02T10:00:00Z' } } },
+      ]))
+      // PR meta with sha different from prior visit so since-last-visit features work
+      return Promise.resolve(jsonResponse({
+        title: 'Test PR',
+        state: 'open',
+        merged: false,
+        body: null,
+        base: { sha: 'base1', repo: { private: false } },
+        head: { sha: 'new-sha' },
+        changed_files: 1,
+      }))
+    }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: prNumber } })
+    await vi.waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /next step/i }))
+    return { user, compareFiles }
+  }
+
+  it('entering compare via picker pushes a history entry with { review123Compare: true }', async () => {
+    const pushStateSpy = vi.spyOn(history, 'pushState')
+    await renderAtStep2(700)
+
+    // Wait for picker to appear (commits loaded)
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('combobox', { name: /from revision/i })).toBeInTheDocument()
+    }, { timeout: 3000 })
+
+    const fromSelect = screen.getByRole('combobox', { name: /from revision/i })
+    const toSelect = screen.getByRole('combobox', { name: /to revision/i })
+    const user = userEvent.setup()
+
+    // Set up a comparison
+    await user.selectOptions(fromSelect, fromSelect.querySelector('option')!.value)
+    await user.selectOptions(toSelect, Array.from(toSelect.querySelectorAll('option')).at(-1)!.getAttribute('value')!)
+
+    const callsBefore = pushStateSpy.mock.calls.length
+
+    // Click Apply — should activate compare and push a flagged history entry
+    const applyBtn = screen.getByRole('button', { name: /apply revision comparison/i })
+    await user.click(applyBtn)
+
+    // Wait for pushState to be called with the compare flag
+    await vi.waitFor(() => {
+      const newCalls = pushStateSpy.mock.calls.slice(callsBefore)
+      const comparePush = newCalls.find(([state]) =>
+        state != null && typeof state === 'object' && (state as Record<string, unknown>).review123Compare === true
+      )
+      expect(comparePush).toBeDefined()
+    }, { timeout: 3000 })
+  })
+
+  it('popstate while compare is active exits compare mode and stays on review route', async () => {
+    const pushStateSpy = vi.spyOn(history, 'pushState')
+    const backSpy = vi.spyOn(history, 'back')
+    await renderAtStep2(701)
+
+    // Wait for picker
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('combobox', { name: /from revision/i })).toBeInTheDocument()
+    }, { timeout: 3000 })
+
+    const fromSelect = screen.getByRole('combobox', { name: /from revision/i })
+    const toSelect = screen.getByRole('combobox', { name: /to revision/i })
+    const user = userEvent.setup()
+    await user.selectOptions(fromSelect, fromSelect.querySelector('option')!.value)
+    await user.selectOptions(toSelect, Array.from(toSelect.querySelectorAll('option')).at(-1)!.getAttribute('value')!)
+    await user.click(screen.getByRole('button', { name: /apply revision comparison/i }))
+
+    // Wait for compare to activate — confirmed by pushState being called with compare flag
+    await vi.waitFor(() => {
+      const compareCall = pushStateSpy.mock.calls.find(([state]) =>
+        state != null && typeof state === 'object' && (state as Record<string, unknown>).review123Compare === true
+      )
+      expect(compareCall).toBeDefined()
+    }, { timeout: 3000 })
+
+    // Simulate browser back (popstate fires with null state, as if we navigated back)
+    window.dispatchEvent(new PopStateEvent('popstate', { state: null }))
+
+    // After popstate: exitCompareMode(true) is called — compare cleared, history.back NOT called
+    // (the pop already consumed the entry — fromPopstate=true skips back())
+    await vi.waitFor(() => {
+      expect(backSpy).not.toHaveBeenCalled()
+    }, { timeout: 1000 })
+
+    // Route stays on review — status bar still present (not remounted to different page)
+    expect(screen.getByRole('status')).toBeInTheDocument()
+  })
+
+  it('"Full diff" via picker calls history.back() when state is compare-flagged, leaving history balanced', async () => {
+    const pushStateSpy = vi.spyOn(history, 'pushState')
+    await renderAtStep2(702)
+
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('combobox', { name: /from revision/i })).toBeInTheDocument()
+    }, { timeout: 3000 })
+
+    const fromSelect = screen.getByRole('combobox', { name: /from revision/i })
+    const toSelect = screen.getByRole('combobox', { name: /to revision/i })
+    const user = userEvent.setup()
+    await user.selectOptions(fromSelect, fromSelect.querySelector('option')!.value)
+    await user.selectOptions(toSelect, Array.from(toSelect.querySelectorAll('option')).at(-1)!.getAttribute('value')!)
+    await user.click(screen.getByRole('button', { name: /apply revision comparison/i }))
+
+    // Wait for compare — confirmed by the pushState spy calling with compare flag
+    await vi.waitFor(() => {
+      const compareCall = pushStateSpy.mock.calls.find(([state]) =>
+        state != null && typeof state === 'object' && (state as Record<string, unknown>).review123Compare === true
+      )
+      expect(compareCall).toBeDefined()
+    }, { timeout: 3000 })
+
+    // Ensure history.state is the compare-flagged entry before clicking Full diff
+    history.pushState({ review123Compare: true }, '', location.pathname)
+
+    const backSpy = vi.spyOn(history, 'back')
+
+    // Click Full diff — exitCompareMode() detects compare-flagged state and calls history.back()
+    await user.click(screen.getByRole('button', { name: /full diff/i }))
+
+    // history.back() must be called exactly once (the compare entry is consumed)
+    await vi.waitFor(() => {
+      expect(backSpy).toHaveBeenCalledTimes(1)
+    }, { timeout: 3000 })
+  })
+
+  it('entering compare via since-last-visit banner pushes a compare-flagged history entry', async () => {
+    // Seed a prior visit with different sha to trigger the banner
+    localStorage.setItem('review123:visits', JSON.stringify({
+      'a/b#703': { headSha: 'old-sha', visitedAt: Date.now() - 86400000 },
+    }))
+
+    const pushStateSpy = vi.spyOn(history, 'pushState')
+    const user = userEvent.setup()
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/compare/')) return Promise.resolve(jsonResponse({ files: [] }))
+      if (url.includes('/files')) return Promise.resolve(jsonResponse([]))
+      if (url.includes('/commits')) return Promise.resolve(jsonResponse([]))
+      return Promise.resolve(jsonResponse({
+        title: 'Test PR',
+        state: 'open', merged: false, body: null,
+        base: { sha: 'base1', repo: { private: false } },
+        head: { sha: 'new-sha' },
+        changed_files: 0,
+      }))
+    }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 703 } })
+    await vi.waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /next step/i }))
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('button', { name: /show only changes since then/i })).toBeInTheDocument()
+    })
+
+    const callsBefore = pushStateSpy.mock.calls.length
+    await user.click(screen.getByRole('button', { name: /show only changes since then/i }))
+
+    // After compare activates via banner, pushState should have been called with the compare flag
+    await vi.waitFor(() => {
+      const newCalls = pushStateSpy.mock.calls.slice(callsBefore)
+      const comparePush = newCalls.find(([state]) =>
+        state != null && typeof state === 'object' && (state as Record<string, unknown>).review123Compare === true
+      )
+      expect(comparePush).toBeDefined()
+    }, { timeout: 3000 })
+  })
+
+  it('popstate while since-last-visit compare is active exits compare mode', async () => {
+    localStorage.setItem('review123:visits', JSON.stringify({
+      'a/b#704': { headSha: 'old-sha', visitedAt: Date.now() - 86400000 },
+    }))
+
+    const user = userEvent.setup()
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/compare/')) return Promise.resolve(jsonResponse({ files: [] }))
+      if (url.includes('/files')) return Promise.resolve(jsonResponse([]))
+      if (url.includes('/commits')) return Promise.resolve(jsonResponse([]))
+      return Promise.resolve(jsonResponse({
+        title: 'Test PR',
+        state: 'open', merged: false, body: null,
+        base: { sha: 'base1', repo: { private: false } },
+        head: { sha: 'new-sha' },
+        changed_files: 0,
+      }))
+    }))
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 704 } })
+    await vi.waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /next step/i }))
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('button', { name: /show only changes since then/i })).toBeInTheDocument()
+    })
+    await user.click(screen.getByRole('button', { name: /show only changes since then/i }))
+
+    await vi.waitFor(() => {
+      expect(history.state).toEqual({ review123Compare: true })
+    }, { timeout: 3000 })
+
+    // Simulate browser back
+    history.back()
+    window.dispatchEvent(new PopStateEvent('popstate', { state: null }))
+
+    // Compare exits — "Show full diff" button disappears
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('button', { name: /show full diff/i })).not.toBeInTheDocument()
+    }, { timeout: 3000 })
+
+    // Route stays on review
+    expect(screen.getByRole('status')).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+
 // Progress bar — footer location + reactivity (EC-PROGRESS)
 // ---------------------------------------------------------------------------
 
@@ -713,5 +951,77 @@ describe('Review progress bar — footer integration', () => {
 
     // Restore
     localStorage.removeItem('review123:settings')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Narrow-viewport rail behaviour (layout regression fix)
+// ---------------------------------------------------------------------------
+
+describe('Review narrow-mode rail (< 1100px)', () => {
+  // Capture the original innerWidth descriptor so we can restore it
+  const origInnerWidth = Object.getOwnPropertyDescriptor(window, 'innerWidth')
+
+  function stubNarrowViewport() {
+    Object.defineProperty(window, 'innerWidth', {
+      value: 800,
+      writable: true,
+      configurable: true,
+    })
+    // Stub matchMedia so the narrow breakpoint query (max-width: 1099px) matches
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('max-width: 1099px'),
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+  }
+
+  function restoreViewport() {
+    if (origInnerWidth) {
+      Object.defineProperty(window, 'innerWidth', origInnerWidth)
+    }
+    vi.unstubAllGlobals()
+    // Re-stub fetch to avoid the unstubAllGlobals clearing it mid-test — callers restore on their own
+  }
+
+  afterEach(() => {
+    restoreViewport()
+  })
+
+  it('rail is collapsed by default at narrow viewport regardless of stored preference', async () => {
+    stubNarrowViewport()
+    // Seed settings with railCollapsed: false (wide-mode preference)
+    localStorage.setItem('review123:settings', JSON.stringify({ railCollapsed: false }))
+    vi.stubGlobal('fetch', makeFetchStub())
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 900 } })
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    // The aside should have the "collapsed" class even though stored pref is false
+    const aside = document.querySelector('aside.context-rail')
+    // In narrow mode the $effect fires synchronously via the matchMedia stub (matches=true),
+    // forcing railCollapsed=true and propagating the collapsed prop to ContextRail.
+    expect(aside?.classList.contains('collapsed')).toBe(true)
+  })
+
+  it('section.review has data-rail-collapsed attribute set when PR loads', async () => {
+    vi.stubGlobal('fetch', makeFetchStub())
+
+    render(Review, { props: { owner: 'a', repo: 'b', number: 902 } })
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    // data-rail-collapsed must be present — CSS media query uses it to conditionally
+    // add padding-right in the medium viewport regime
+    const section = document.querySelector('section.review')
+    expect(section?.hasAttribute('data-rail-collapsed')).toBe(true)
   })
 })

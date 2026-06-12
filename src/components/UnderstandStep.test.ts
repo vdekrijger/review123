@@ -235,9 +235,11 @@ describe('UnderstandStep glance card — churn chart', () => {
 describe('UnderstandStep detail panels', () => {
   it('all detail panels are collapsed by default', () => {
     render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
-    const details = document.querySelectorAll('details')
-    details.forEach((d) => {
-      expect(d.open).toBe(false)
+    // Only check the top-level detail panels (.detail-panel), not inner <details>
+    // inside sub-components like FileTree (which opens directory nodes by default).
+    const panels = document.querySelectorAll('.detail-panel')
+    panels.forEach((d) => {
+      expect((d as HTMLDetailsElement).open).toBe(false)
     })
   })
 
@@ -841,5 +843,77 @@ describe('UnderstandStep verdict evidence panel', () => {
     })
     openAllDetails()
     expect(screen.queryByRole('button', { name: /show all/i })).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// File structure section (new: collapsed <details> with mini FileTree)
+// ---------------------------------------------------------------------------
+
+describe('UnderstandStep — file structure section', () => {
+  it('renders a "Changed files — structure" collapsed details section', () => {
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    const structurePanel = Array.from(document.querySelectorAll('details')).find(
+      (d) => d.querySelector('summary')?.textContent?.match(/changed files.*structure/i)
+    )
+    expect(structurePanel).not.toBeUndefined()
+    // Must be collapsed by default
+    expect((structurePanel as HTMLDetailsElement).open).toBe(false)
+  })
+
+  it('renders file tree nodes inside the structure section when opened', () => {
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    const structurePanel = Array.from(document.querySelectorAll('details')).find(
+      (d) => d.querySelector('summary')?.textContent?.match(/changed files.*structure/i)
+    ) as HTMLDetailsElement
+    structurePanel.open = true
+    // FileTree renders file names as buttons
+    expect(structurePanel.querySelector('.file-btn')).not.toBeNull()
+  })
+
+  it('file tree in structure section shows both files', () => {
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run: makeRun({}) },
+    })
+    const structurePanel = Array.from(document.querySelectorAll('details')).find(
+      (d) => d.querySelector('summary')?.textContent?.match(/changed files.*structure/i)
+    ) as HTMLDetailsElement
+    structurePanel.open = true
+    // Both files from the `files` fixture should appear as buttons
+    const fileBtns = structurePanel.querySelectorAll('.file-btn')
+    expect(fileBtns.length).toBe(2)
+  })
+
+  it('selecting a file node in structure section calls onhotspot with the path', async () => {
+    const onhotspot = vi.fn()
+    render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run: makeRun({}), onhotspot },
+    })
+    const structurePanel = Array.from(document.querySelectorAll('details')).find(
+      (d) => d.querySelector('summary')?.textContent?.match(/changed files.*structure/i)
+    ) as HTMLDetailsElement
+    structurePanel.open = true
+
+    const firstFileBtn = structurePanel.querySelector('.file-btn') as HTMLButtonElement
+    firstFileBtn?.click()
+    expect(onhotspot).toHaveBeenCalled()
+  })
+
+  it('structure section shows hotspot dots when attention is done', () => {
+    const attention: AttentionResult = {
+      readingOrder: [],
+      hotspots: [{ path: 'src/a.ts', reason: 'Critical change', level: 'high' }],
+      testFlags: [],
+    }
+    const run = makeRun({ attention: { status: 'done', value: attention } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    const structurePanel = Array.from(document.querySelectorAll('details')).find(
+      (d) => d.querySelector('summary')?.textContent?.match(/changed files.*structure/i)
+    ) as HTMLDetailsElement
+    structurePanel.open = true
+
+    // FileTree renders hotspot dots as .hotspot-dot elements
+    const dot = structurePanel.querySelector('.hotspot-dot.level-high')
+    expect(dot).not.toBeNull()
   })
 })

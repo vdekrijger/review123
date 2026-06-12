@@ -804,10 +804,11 @@ test('tests-panel: glance chip shows covered/gap counts; open panel shows checkl
   await testsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
 
   // Covered checklist rows should be visible (2 covered items)
-  await expect(page.locator('.tests-covered-item')).toHaveCount(2)
+  // Scope to the tests-panel details so we don't count the rail's copy
+  await expect(page.locator('details.tests-panel .tests-covered-item')).toHaveCount(2)
 
   // Gap rows should also be visible (1 gap)
-  await expect(page.locator('.tests-gap-item')).toHaveCount(1)
+  await expect(page.locator('details.tests-panel .tests-gap-item')).toHaveCount(1)
 })
 
 // ---------------------------------------------------------------------------
@@ -1100,22 +1101,23 @@ test('alternatives-panel: glance chip appears when alternative-is-better; panel 
   const altPanel = page.locator('details.alternatives-panel')
   await altPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
 
-  // Problem statement should be visible
+  // Problem statement should be visible — scope to the alternatives panel
+  // to avoid the rail's copy matching too
   await expect(
-    page.getByText(/The PR introduces a global singleton cache/i),
+    page.locator('details.alternatives-panel').getByText(/The PR introduces a global singleton cache/i),
   ).toBeVisible({ timeout: 5_000 })
 
-  // Both alternative cards should be visible
-  await expect(page.locator('.alternative-card')).toHaveCount(2)
+  // Both alternative cards should be visible (scoped to the step-1 panel)
+  await expect(page.locator('details.alternatives-panel .alternative-card')).toHaveCount(2)
 
   // The "alternative-is-better" chip should show "Worth considering"
   await expect(
-    page.locator('.assessment-chip.assessment-alternative-is-better'),
+    page.locator('details.alternatives-panel .assessment-chip.assessment-alternative-is-better'),
   ).toContainText('Worth considering')
 
   // The "comparable" chip should show "Comparable"
   await expect(
-    page.locator('.assessment-chip.assessment-comparable'),
+    page.locator('details.alternatives-panel .assessment-chip.assessment-comparable'),
   ).toContainText('Comparable')
 })
 
@@ -1646,4 +1648,60 @@ test('suggestion fence: body with suggestion fence survives verbatim through sub
   const comments = (capturedBody as { comments: unknown[] }).comments
   const comment = comments[0] as Record<string, unknown>
   expect(comment.body).toBe(suggestionBody)
+})
+
+// ---------------------------------------------------------------------------
+// Test 18: browser back exits revision compare instead of leaving the PR
+// ---------------------------------------------------------------------------
+
+test('compare-back: browser back while compare is active exits compare and stays on /review/...', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Wait for PR to load
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 2 (Inspect)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Wait for revision picker to appear (commits loaded)
+  const fromSelect = page.getByRole('combobox', { name: /from revision/i })
+  await expect(fromSelect).toBeVisible({ timeout: 5_000 })
+
+  // Confirm 2 files in full diff before entering compare
+  await expect(page.locator('article.file-diff')).toHaveCount(2, { timeout: 5_000 })
+
+  // Select base → first commit and apply
+  const toSelect = page.getByRole('combobox', { name: /to revision/i })
+  await fromSelect.selectOption({ label: 'PR base' })
+  await toSelect.selectOption({ value: COMMIT_1_SHA })
+
+  const compareBtn = page.getByRole('button', { name: /apply revision comparison/i })
+  await compareBtn.click()
+
+  // Wait for compare to activate — 1 file (src/feature.ts from makeCompareOneFile)
+  await expect(page.locator('article.file-diff')).toHaveCount(1, { timeout: 8_000 })
+
+  // Verify we are in compare mode: URL is still the review path
+  await expect(page).toHaveURL(APP_REVIEW_PATH)
+
+  // Browser BACK — should exit compare, NOT navigate to the landing/homepage.
+  // Use waitUntil: 'commit' because a same-URL popstate doesn't trigger a full
+  // page load event; 'commit' resolves as soon as the navigation is committed.
+  await page.goBack({ waitUntil: 'commit' })
+
+  // After back: full diff is restored (2 files again) — give Svelte time to re-render
+  await expect(page.locator('article.file-diff')).toHaveCount(2, { timeout: 8_000 })
+
+  // URL must still be the review route (not /  or anything else)
+  await expect(page).toHaveURL(APP_REVIEW_PATH)
 })
