@@ -72,6 +72,25 @@ const VERDICT_RESULT = {
   notAnalyzed: [],
 }
 
+const TESTS_RESULT = {
+  covered: [
+    { behavior: 'extends the existing flow', test: 'feature flow', file: 'src/feature.ts' },
+  ],
+  gaps: [],
+}
+
+const ALTERNATIVES_RESULT = {
+  problem: 'add a feature to the existing flow',
+  alternatives: [],
+}
+
+// Pick the deep-task result shape from the system prompt the loop carries.
+function deepResultForSystem(system: string): string {
+  if (/changed test files/i.test(system)) return JSON.stringify(TESTS_RESULT)
+  if (/genuinely different approach/i.test(system)) return JSON.stringify(ALTERNATIVES_RESULT)
+  return JSON.stringify(VERDICT_RESULT)
+}
+
 // DeepSeek SSE response for the streaming summary task
 function makeDeepSeekStreamResponse(text: string): string {
   const lines: string[] = []
@@ -170,8 +189,9 @@ async function setupRoutes(page: import('@playwright/test').Page) {
       })
     }
 
-    // Deep-review tool conversation (verdict task with tools enabled)
+    // Deep-review tool conversation (verdict + tests + alternatives, tools enabled)
     if (Array.isArray(body?.tools) && body.tools.length > 0) {
+      const system = (body.messages ?? []).find((m) => m.role === 'system')?.content ?? ''
       const hasToolResult = (body.messages ?? []).some((m) => m.role === 'tool')
       if (!hasToolResult) {
         // Round 1: the model asks to verify the file before judging
@@ -202,12 +222,14 @@ async function setupRoutes(page: import('@playwright/test').Page) {
           },
         })
       }
-      // Round 2: tool result is in the conversation → final verified verdict
+      // Round 2: tool result is in the conversation → final verified answer,
+      // shaped per the task's system prompt (verdict / tests / alternatives).
       toolRounds.round2++
-      return route.fulfill({ status: 200, json: jsonChatCompletion(JSON.stringify(VERDICT_RESULT)) })
+      return route.fulfill({ status: 200, json: jsonChatCompletion(deepResultForSystem(system)) })
     }
 
-    // All other single-pass JSON tasks (attention/diagrams/tests/alternatives)
+    // Single-pass JSON tasks that stay single-pass even in deep mode (attention,
+    // diagrams). They never carry a tools array.
     return route.fulfill({ status: 200, json: jsonChatCompletion(JSON.stringify(VERDICT_RESULT)) })
   })
   return toolRounds
@@ -250,4 +272,12 @@ test('deep review: 2-round tool conversation renders verdict with the tool-call 
   // Verified evidence rendered + the deep-review footer counts the tool call
   await expect(verdictDetails).toContainText('verified the new lines')
   await expect(verdictDetails.locator('.ai-deep-footer')).toHaveText(/Deep review: verified with 1 tool call/)
+
+  // Test-insight task ALSO ran through the deep harness (same toggle) — its
+  // panel renders the verified covered behavior + the same tool-call footer.
+  const testsPanel = page.locator('details.tests-panel')
+  await expect(testsPanel).toBeVisible({ timeout: 20_000 })
+  await testsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+  await expect(testsPanel).toContainText('extends the existing flow')
+  await expect(testsPanel.locator('.ai-deep-footer')).toHaveText(/Deep review: verified with 1 tool call/)
 })

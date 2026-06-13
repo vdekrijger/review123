@@ -1475,15 +1475,15 @@ describe('testInsightPrompt — anti-fatigue caps (v10)', () => {
     expect(system).toMatch(/do\s+not invent gaps/i)
   })
 
-  it('tightens covered behavior descriptions to one short sentence (≤15 words)', () => {
+  it('tightens covered behavior descriptions to terse bullets (≤12 words)', () => {
     const { system } = testInsightPrompt(makeCtx())
-    expect(system).toMatch(/ONE short sentence/i)
-    expect(system).toMatch(/15 words/i)
+    expect(system).toMatch(/TERSE bullet/i)
+    expect(system).toMatch(/12 words/i)
   })
 
-  it('requires each gap to name the concrete harm of leaving it untested', () => {
+  it('requires each gap to name the concrete harm if it regresses', () => {
     const { system } = testInsightPrompt(makeCtx())
-    expect(system).toMatch(/concrete harm of leaving it untested/i)
+    expect(system).toMatch(/concrete harm if it regresses/i)
   })
 })
 
@@ -1492,14 +1492,14 @@ describe('testInsightPrompt — anti-fatigue caps (v10)', () => {
 // ---------------------------------------------------------------------------
 
 describe('alternativesPrompt — anti-fatigue caps (v10)', () => {
-  it('caps approach at 2 sentences', () => {
+  it('caps approach at one sentence', () => {
     const { system } = alternativesPrompt(makeCtx())
-    expect(system).toMatch(/approach: a concrete description[^.]*AT MOST 2 sentences/i)
+    expect(system).toMatch(/approach:[^.]*AT MOST ONE sentence/i)
   })
 
-  it('caps tradeoffs at 2 sentences (one gain, one cost)', () => {
+  it('caps tradeoffs at one sentence (one gain, one cost)', () => {
     const { system } = alternativesPrompt(makeCtx())
-    expect(system).toMatch(/tradeoffs:[^.]*AT MOST 2 sentences/i)
+    expect(system).toMatch(/tradeoffs:\s*AT MOST ONE sentence/i)
   })
 
   it('states an empty alternatives array is a GOOD outcome', () => {
@@ -1513,9 +1513,9 @@ describe('alternativesPrompt — anti-fatigue caps (v10)', () => {
 // ---------------------------------------------------------------------------
 
 describe('summarizePrompt — anti-fatigue (v10)', () => {
-  it('keeps the ~120-word cap', () => {
+  it('keeps an overall ~120-word ceiling on the whole summary', () => {
     const { system } = summarizePrompt(makeCtx())
-    expect(system).toContain('~120 words maximum')
+    expect(system).toContain('120')
   })
 
   it('bans praise padding, methodology narration, and diff restating in the prose', () => {
@@ -1523,5 +1523,125 @@ describe('summarizePrompt — anti-fatigue (v10)', () => {
     expect(system).toMatch(/no praise padding/i)
     expect(system).toMatch(/no methodology narration/i)
     expect(system).toMatch(/do not restate the diff/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PROMPT_VERSION v11 — phase-1 tightening + test-insight/alternatives harness
+// ---------------------------------------------------------------------------
+
+describe('PROMPT_VERSION v11', () => {
+  it('is at least 11 (bumped for phase-1 tightening — cache invalidation)', () => {
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(11)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// summarizePrompt — v11 hard 60-word TL;DR cap + sentinel-phrase discipline
+// ---------------------------------------------------------------------------
+
+describe('summarizePrompt — v11 TL;DR hard cap + sentinels', () => {
+  it('states an explicit HARD CAP of 60 words on the TL;DR', () => {
+    const { system } = summarizePrompt(makeCtx())
+    expect(system).toMatch(/HARD CAP:\s*60 words/i)
+    expect(system).toMatch(/TL;DR/i)
+  })
+
+  it('names the discipline as the sentinel tests the output is graded against', () => {
+    const { system } = summarizePrompt(makeCtx())
+    expect(system).toMatch(/sentinel tests/i)
+  })
+
+  it('forbids methodology narration with concrete banned phrases', () => {
+    const { system } = summarizePrompt(makeCtx())
+    expect(system).toMatch(/No methodology narration/i)
+    expect(system).toContain('this PR appears to')
+    expect(system).toContain('after reviewing')
+  })
+
+  it('forbids praise padding with concrete banned adjectives', () => {
+    const { system } = summarizePrompt(makeCtx())
+    expect(system).toMatch(/No praise padding/i)
+    expect(system).toContain('clean')
+    expect(system).toContain('well-structured')
+  })
+
+  it('still forbids restating the diff line-by-line', () => {
+    const { system } = summarizePrompt(makeCtx())
+    expect(system).toMatch(/Do not restate the diff/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// testInsightPrompt — v11 terse grouped bullets + one-line harm gaps
+// ---------------------------------------------------------------------------
+
+describe('testInsightPrompt — v11 terse caps', () => {
+  it('caps each covered behavior at a terse ≤12-word bullet', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system).toMatch(/≤12 words|12 words/i)
+    expect(system).toMatch(/TERSE bullet/i)
+  })
+
+  it('requires grouping related cases instead of per-assertion listing', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system).toMatch(/GROUP related cases/i)
+    expect(system).toMatch(/never list per-assertion|never.*per-assertion/i)
+  })
+
+  it('drops any prose intro / narration', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system).toMatch(/no prose intro/i)
+  })
+
+  it('keeps gaps to one line each with concrete harm and the ≤5 cap', () => {
+    const { system } = testInsightPrompt(makeCtx())
+    expect(system).toMatch(/at most 5 gaps/i)
+    expect(system).toMatch(/ONE line naming\s+the untested behavior AND the concrete harm/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// alternativesPrompt — v11 one-sentence approach + one-sentence tradeoff
+// ---------------------------------------------------------------------------
+
+describe('alternativesPrompt — v11 one-sentence caps', () => {
+  it('caps approach at AT MOST ONE sentence, no multi-paragraph cards', () => {
+    const { system } = alternativesPrompt(makeCtx())
+    expect(system).toMatch(/approach:[^.]*AT MOST ONE sentence/i)
+    expect(system).toMatch(/No multi-paragraph cards/i)
+  })
+
+  it('caps tradeoffs at AT MOST ONE sentence with exactly one gain and one cost', () => {
+    const { system } = alternativesPrompt(makeCtx())
+    expect(system).toMatch(/tradeoffs:\s*AT MOST ONE sentence/i)
+    expect(system).toMatch(/exactly one gain and one\s+cost/i)
+  })
+
+  it('caps the list at 3 alternatives', () => {
+    const { system } = alternativesPrompt(makeCtx())
+    expect(system).toMatch(/Maximum 3 alternatives|up to 3/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// diagramsPrompt — v11 terse edge labels + no explanatory prose
+// ---------------------------------------------------------------------------
+
+describe('diagramsPrompt — v11 terse labels', () => {
+  it('caps edge labels at ≤2 words', () => {
+    const { system } = diagramsPrompt(makeCtx())
+    expect(system).toMatch(/Edge labels must be ≤ 2 words/i)
+  })
+
+  it('forbids explanatory prose in the graph output (≤2 sentences happen downstream)', () => {
+    const { system } = diagramsPrompt(makeCtx())
+    expect(system).toMatch(/emit NO explanatory prose/i)
+    expect(system).toMatch(/≤2 sentences downstream/i)
+  })
+
+  it('still caps node labels at ≤3 words (graph itself unchanged)', () => {
+    const { system } = diagramsPrompt(makeCtx())
+    expect(system).toMatch(/Node labels must be ≤ 3 words/i)
   })
 })

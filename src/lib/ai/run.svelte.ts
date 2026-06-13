@@ -334,77 +334,145 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   async function runTestsTask(ctx: PackedContext): Promise<void> {
-    const key = cacheKey(prKey, 'tests', PROMPT_VERSION)
+    const deep = deepReviewAvailability(deepReview)
+    if (deep.note) testsState.note = deep.note
+    const key = cacheKey(prKey, deep.enabled ? 'tests|deep' : 'tests', PROMPT_VERSION)
 
     const t0 = performance.now()
-    const hit = await getCached<TestInsight>(key)
-    if (hit !== null) {
-      testsState.status = 'done'
-      testsState.value = hit
-      track('ai_task_completed', { task: 'tests', duration_ms: Math.round(performance.now() - t0), cached: true })
-      return
+    if (deep.enabled) {
+      const hit = await getCached<DeepCached<TestInsight>>(key)
+      if (hit !== null) {
+        testsState.status = 'done'
+        testsState.value = hit.result
+        testsState.toolCallsUsed = hit.toolCallsUsed
+        track('ai_task_completed', { task: 'tests', duration_ms: Math.round(performance.now() - t0), cached: true, deep: true })
+        return
+      }
+    } else {
+      const hit = await getCached<TestInsight>(key)
+      if (hit !== null) {
+        testsState.status = 'done'
+        testsState.value = hit
+        track('ai_task_completed', { task: 'tests', duration_ms: Math.round(performance.now() - t0), cached: true })
+        return
+      }
     }
 
     testsState.status = 'loading'
+    if (deep.enabled) testsState.activity = []
     const t1 = performance.now()
     const prompts = testInsightPrompt(ctx)
 
     try {
-      const { result: testsResult, usage: testsUsage } = await llmJsonWithRepairWithUsage<TestInsight>(
-        { system: prompts.system, user: prompts.user },
-        validateTestInsight,
-      )
-      await setCached<TestInsight>(key, testsResult)
+      let testsResult: TestInsight
+      let testsUsage: LlmUsage | undefined
+      let toolCallsUsed: number | undefined
+
+      if (deep.enabled) {
+        const deepOutcome = await runDeepJson<TestInsight>(prompts, validateTestInsight, (line) => {
+          testsState.activity = [...(testsState.activity ?? []), line]
+        })
+        testsResult = deepOutcome.result
+        testsUsage = deepOutcome.usage
+        toolCallsUsed = deepOutcome.toolCallsUsed
+        await setCached<DeepCached<TestInsight>>(key, { deep: true, result: testsResult, toolCallsUsed })
+      } else {
+        const singlePass = await llmJsonWithRepairWithUsage<TestInsight>(
+          { system: prompts.system, user: prompts.user },
+          validateTestInsight,
+        )
+        testsResult = singlePass.result
+        testsUsage = singlePass.usage
+        await setCached<TestInsight>(key, testsResult)
+      }
       testsState.status = 'done'
       testsState.value = testsResult
+      testsState.activity = undefined
+      if (toolCallsUsed !== undefined) testsState.toolCallsUsed = toolCallsUsed
       track('ai_task_completed', {
         task: 'tests',
         duration_ms: Math.round(performance.now() - t1),
         cached: false,
         ...(testsUsage?.total_tokens !== undefined ? { tokens: testsUsage.total_tokens } : {}),
+        ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
     } catch (err) {
       const kind = err instanceof LlmError ? err.kind : 'unknown'
       testsState.status = 'error'
       testsState.error = humanMessage(kind)
+      testsState.activity = undefined
       track('ai_task_failed', { task: 'tests', reason: kind })
     }
   }
 
   async function runAlternativesTask(ctx: PackedContext): Promise<void> {
-    const key = cacheKey(prKey, 'alternatives', PROMPT_VERSION)
+    const deep = deepReviewAvailability(deepReview)
+    if (deep.note) alternativesState.note = deep.note
+    const key = cacheKey(prKey, deep.enabled ? 'alternatives|deep' : 'alternatives', PROMPT_VERSION)
 
     const t0 = performance.now()
-    const hit = await getCached<AlternativesResult>(key)
-    if (hit !== null) {
-      alternativesState.status = 'done'
-      alternativesState.value = hit
-      track('ai_task_completed', { task: 'alternatives', duration_ms: Math.round(performance.now() - t0), cached: true })
-      return
+    if (deep.enabled) {
+      const hit = await getCached<DeepCached<AlternativesResult>>(key)
+      if (hit !== null) {
+        alternativesState.status = 'done'
+        alternativesState.value = hit.result
+        alternativesState.toolCallsUsed = hit.toolCallsUsed
+        track('ai_task_completed', { task: 'alternatives', duration_ms: Math.round(performance.now() - t0), cached: true, deep: true })
+        return
+      }
+    } else {
+      const hit = await getCached<AlternativesResult>(key)
+      if (hit !== null) {
+        alternativesState.status = 'done'
+        alternativesState.value = hit
+        track('ai_task_completed', { task: 'alternatives', duration_ms: Math.round(performance.now() - t0), cached: true })
+        return
+      }
     }
 
     alternativesState.status = 'loading'
+    if (deep.enabled) alternativesState.activity = []
     const t1 = performance.now()
     const prompts = alternativesPrompt(ctx)
 
     try {
-      const { result: alternativesResult, usage: alternativesUsage } = await llmJsonWithRepairWithUsage<AlternativesResult>(
-        { system: prompts.system, user: prompts.user },
-        validateAlternativesResult,
-      )
-      await setCached<AlternativesResult>(key, alternativesResult)
+      let alternativesResult: AlternativesResult
+      let alternativesUsage: LlmUsage | undefined
+      let toolCallsUsed: number | undefined
+
+      if (deep.enabled) {
+        const deepOutcome = await runDeepJson<AlternativesResult>(prompts, validateAlternativesResult, (line) => {
+          alternativesState.activity = [...(alternativesState.activity ?? []), line]
+        })
+        alternativesResult = deepOutcome.result
+        alternativesUsage = deepOutcome.usage
+        toolCallsUsed = deepOutcome.toolCallsUsed
+        await setCached<DeepCached<AlternativesResult>>(key, { deep: true, result: alternativesResult, toolCallsUsed })
+      } else {
+        const singlePass = await llmJsonWithRepairWithUsage<AlternativesResult>(
+          { system: prompts.system, user: prompts.user },
+          validateAlternativesResult,
+        )
+        alternativesResult = singlePass.result
+        alternativesUsage = singlePass.usage
+        await setCached<AlternativesResult>(key, alternativesResult)
+      }
       alternativesState.status = 'done'
       alternativesState.value = alternativesResult
+      alternativesState.activity = undefined
+      if (toolCallsUsed !== undefined) alternativesState.toolCallsUsed = toolCallsUsed
       track('ai_task_completed', {
         task: 'alternatives',
         duration_ms: Math.round(performance.now() - t1),
         cached: false,
         ...(alternativesUsage?.total_tokens !== undefined ? { tokens: alternativesUsage.total_tokens } : {}),
+        ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
     } catch (err) {
       const kind = err instanceof LlmError ? err.kind : 'unknown'
       alternativesState.status = 'error'
       alternativesState.error = humanMessage(kind)
+      alternativesState.activity = undefined
       track('ai_task_failed', { task: 'alternatives', reason: kind })
     }
   }

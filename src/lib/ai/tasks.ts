@@ -12,7 +12,7 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
-export const PROMPT_VERSION = 10
+export const PROMPT_VERSION = 11
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)
@@ -51,11 +51,21 @@ export function summarizePrompt(ctx: PackedContext): { system: string; user: str
   const system = `You are an expert code reviewer assistant. Your role is to help engineers \
 understand pull requests quickly and accurately.
 
-Given the code changes below, produce a concise prose summary: lead with what the PR does \
-and why in one sentence, then use bullet points for any important details a reviewer should \
-know. Keep the prose summary to ~120 words maximum — shorter is better. No praise padding, \
-no methodology narration, do not restate the diff — every sentence must tell the reviewer \
-something they need. Do NOT mention reading order anywhere in the prose.
+Given the code changes below, produce output in two parts:
+
+1. A TL;DR — ONE tight paragraph (HARD CAP: 60 words maximum) stating what the PR does and \
+why. This is the most important constraint: if your TL;DR exceeds 60 words, cut it down. Lead \
+with the change, not the process.
+2. After the TL;DR, optionally add bullet points for important details a reviewer should know. \
+Keep the whole thing short — the TL;DR plus bullets should not exceed ~120 words.
+
+Discipline (NON-NEGOTIABLE — these are the sentinel tests this output is graded against):
+- No methodology narration (never describe how you analyzed — no "this PR appears to", \
+"after reviewing", "the changes seem to").
+- Do not restate the diff line-by-line — summarize intent, not mechanics.
+- No praise padding — never call code "clean", "well-structured", "nicely done", or similar.
+Every sentence must tell the reviewer something they need. Do NOT mention reading order \
+anywhere in the prose.
 
 At the very end of your response, after all prose, append a reading order block in EXACTLY \
 this format (nothing after ===END===):
@@ -253,6 +263,9 @@ Graph size constraints (IMPORTANT):
   only include nodes whose relationships CHANGED or are needed for context.
 - Node labels must be ≤ 3 words — prefer module/file names over sentences (e.g. \
   "router.ts" not "The router module that handles requests").
+- Edge labels must be ≤ 2 words (a verb is enough, e.g. "calls", "delegates") — never a \
+  sentence. The graph speaks for itself; emit NO explanatory prose anywhere (the output is \
+  JSON graph data only — any captioning happens in ≤2 sentences downstream, not here).
 - Edges: only include edges that represent CHANGED or newly-added relationships.
 
 ${FEW_SHOT_EXAMPLE}${importGraphSection}
@@ -293,18 +306,17 @@ Your response must be valid JSON that exactly matches this shape:
   "gaps": ["<plain-language description of a behavior that changed without test coverage>", ...]
 }
 
-Field rules:
-- covered: list up to 10 behaviors actually covered by CHANGED test files in this PR. \
-  Each behavior description is ONE short sentence (≤15 words) in plain language (not just the \
-  test name); name the test function or describe block, and reference the file path. Infer \
-  from reading the test code. Group related cases into one behavior instead of listing each \
-  assertion separately.
-- gaps: behaviors in behavior-changing (non-test) files that have NO corresponding test change \
-  in this PR. Each gap string MUST start with the file path followed by a colon, e.g. \
-  "src/lib/cache.ts: cache expiry is not tested". This file path + colon prefix is required so \
-  the UI can group gaps by file. If the gap is not specific to a single file, start with \
-  "General: " as the prefix. Each gap is ONE sentence naming the untested behavior and the \
-  concrete harm of leaving it untested — what breaks if it regresses. \
+Field rules (terse output — no prose intro, no narration anywhere):
+- covered: list up to 10 behaviors covered by CHANGED test files in this PR. Each behavior is \
+  a TERSE bullet, ≤12 words, plain language (not the raw test name); name the test function or \
+  describe block and reference the file path. GROUP related cases into one behavior — never \
+  list per-assertion. Infer from reading the test code.
+- gaps: behaviors in behavior-changing (non-test) files with NO corresponding test change in \
+  this PR. Each gap string MUST start with the file path followed by a colon, e.g. \
+  "src/lib/cache.ts: cache expiry untested — stale entries served forever on regression". This \
+  file path + colon prefix is required so the UI can group gaps by file. If the gap is not \
+  specific to a single file, start with "General: " as the prefix. Each gap is ONE line naming \
+  the untested behavior AND the concrete harm if it regresses — no padding. \
   Hard cap: at most 5 gaps, ranked by severity × confidence. If you cut lower-confidence \
   candidates, add ONE final gap "General: N lower-confidence observations omitted". \
   An empty gaps array is a GOOD and expected outcome when the changes are well tested — do \
@@ -595,11 +607,11 @@ Field rules:
   alternatives that represent a meaningfully different design or strategy.
   - If the PR's approach is the obvious or only reasonable solution, return an empty array \
     or a single alternative with assessment "pr-is-better".
-- approach: a concrete description of the alternative approach in AT MOST 2 sentences. Be \
-  specific enough that a developer could act on it — no methodology narration.
-- tradeoffs: compare honestly against what the PR does in AT MOST 2 sentences: one for what \
-  the alternative gains (e.g. "better test isolation") and one for what it costs (e.g. "more \
-  boilerplate"). Do not restate the PR's approach.
+- approach: name the alternative, then describe it in AT MOST ONE sentence — specific enough \
+  that a developer could act on it. No multi-paragraph cards, no methodology narration.
+- tradeoffs: AT MOST ONE sentence comparing honestly against the PR — exactly one gain and one \
+  cost (e.g. "Gains better test isolation but adds boilerplate"). Do not restate the PR's \
+  approach.
 - assessment: exactly one of the four enum values:
   - "pr-is-better": the PR's approach is the better choice for this codebase/context
   - "comparable": both approaches have similar merit; team preference should decide
@@ -815,16 +827,19 @@ export function withDeepReviewGuidance(system: string, toolNames: string[]): str
   return `${system}
 
 Deep review mode (IMPORTANT — you have verification tools: ${toolNames.join(', ')}):
-- First, form hypotheses from the diff: every suspicion that depends on code you cannot \
-  see (callers of a changed symbol, the rest of a partially-shown file, pre-PR behavior) \
-  is a HYPOTHESIS, not a finding.
-- USE THE TOOLS to verify each hypothesis before flagging it. Read the file, check the \
-  base version, or search for the symbol — whichever settles the question.
-- DROP anything you could not verify. An unverified suspicion must not appear in your \
+- First, form hypotheses from the diff: every claim that depends on code you cannot \
+  see (callers of a changed symbol, the rest of a partially-shown file, pre-PR behavior, \
+  WHICH test actually covers a behavior, whether an alternative approach is genuinely \
+  feasible or better) is a HYPOTHESIS, not a fact.
+- USE THE TOOLS to verify each hypothesis before asserting it. Read the file, check the \
+  base version, or search for the symbol/test — whichever settles the question. Do not \
+  claim a test covers a behavior, a gap exists, or an alternative is better/feasible until \
+  the tools confirm it.
+- DROP anything you could not verify. An unverified claim must not appear in your \
   answer — not even hedged. If a tool fails (file missing, search unavailable), either \
   verify another way or drop the point.
-- Verified findings should cite what you confirmed (file + what you saw), briefly. \
-  Severity must reflect verified evidence, not worst-case speculation.
+- Verified claims should cite what you confirmed (file + what you saw), briefly. \
+  Severity/assessment must reflect verified evidence, not worst-case speculation.
 - Budget: at most 8 tool calls and 150 KB of fetched content per run. Spend them on the \
   highest-impact suspicions first. When the budget is exhausted, answer from what you \
   have verified.
