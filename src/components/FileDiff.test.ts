@@ -313,6 +313,40 @@ describe('FileDiff — anchored comments render inline only (dedupe)', () => {
     // one thread → one inline ExistingThread, nothing at the bottom
     expect(container.querySelector('.existing-comments')).not.toBeInTheDocument()
   })
+
+  // Dark-mode contrast fix (see e2e/inline-comment-contrast.spec.ts): the inline
+  // host must re-pin the app text cascade so it out-specifies @git-diff-view's
+  // `.diff-line-extend-wrapper * { color: initial }`. jsdom can't resolve the
+  // library cascade, so we pin the FIX at the source: the compiled component CSS
+  // must scope `color: var(--text)` / `color: inherit` to the inline host under
+  // the library's extend-row wrapper. This guards the rule from silent removal.
+  it('ships the inline-host color-token override (contrast fix is present in CSS)', async () => {
+    const css = await import('./FileDiff.svelte?raw' as string).then(
+      (m: { default: string }) => m.default,
+    )
+    const styleBlock = css.slice(css.indexOf('<style>'))
+    // Host pinned to the app text token, scoped under the library extend wrapper.
+    expect(styleBlock).toMatch(
+      /\.diff-line-extend-wrapper\)[^}]*\.inline-comment-threads[\s\S]*?color:\s*var\(--text\)/,
+    )
+    // Descendant text re-inherits from the pinned host (not the diff row color).
+    expect(styleBlock).toMatch(
+      /\.inline-comment-threads[\s\S]*?:global\(\*\)[\s\S]*?color:\s*inherit/,
+    )
+  })
+
+  it('renders the anchored comment body inside the inline host container', async () => {
+    const { container } = render(FileDiff, {
+      props: { file: modified, mode: 'unified', comments: [makeComment({ body: 'token-host-marker' })] },
+    })
+    await vi.waitFor(() => {
+      const host = container.querySelector('.inline-comment-threads')
+      expect(host).toBeInTheDocument()
+      // The MarkdownView body is inside the pinned host, so it inherits --text.
+      expect(host!.querySelector('.comment-body')).toBeInTheDocument()
+      expect(host!.textContent).toContain('token-host-marker')
+    })
+  })
 })
 
 describe('FileDiff — anchored drafts render inline only (dedupe)', () => {
