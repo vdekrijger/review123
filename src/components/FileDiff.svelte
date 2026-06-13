@@ -734,4 +734,85 @@
     border-top: 1px solid var(--border-banner);
     border-bottom: 1px solid var(--border-banner);
   }
+
+  /*
+   * ── Inline-widget theme-inheritance fix (dark-mode contrast bug) ──
+   *
+   * @git-diff-view's diff-view.css forces, on EVERY descendant of an inline
+   * annotation row:
+   *     .diff-line-extend-wrapper * { color: initial; }   (specificity 0,0,1,1)
+   *     .diff-line-widget-wrapper * { color: initial; }
+   * `initial` for `color` is canvastext (≈ black). Readable on the light
+   * surface, but washed dark-on-dark in dark theme — for the existing comment
+   * threads, draft threads, AI finding cards, and the add-comment editor that
+   * render inline at a line. The SAME content in the bottom-of-file list sits
+   * OUTSIDE these wrappers and renders fine, which is why only the inline
+   * (extend-row / widget) context was broken.
+   *
+   * Fix: re-establish the app's text cascade. Our inline host containers are
+   * pinned to the proper app token; their descendants are set to
+   * `color: inherit` so body text resolves to the APP color, not the diff row
+   * color. Every selector below sits at specificity 0,0,2,x — beating the
+   * library's 0,0,1,1 universal rule WITHOUT depending on CSS load order (the
+   * library and these styles ship in separate bundle chunks, so source order
+   * is not a reliable tie-breaker).
+   *
+   * `color: inherit` would also flatten the few descendants that carry their
+   * OWN design-system color (severity / state chips, accent + danger text,
+   * muted notes). Those are re-pinned just below, again at 0,0,2,x, so the
+   * proper tokens drive them in BOTH themes.
+   */
+
+  /* Host containers → app text tokens. */
+  :global(.diff-line-extend-wrapper) .inline-comment-threads,
+  :global(.diff-line-extend-wrapper) .line-findings {
+    color: var(--text);
+  }
+  /* Draft threads carry their own dedicated --text-draft surface/text pair. */
+  :global(.diff-line-extend-wrapper) .draft-annotations :global(.draft-thread),
+  :global(.diff-line-widget-wrapper) :global(.draft-thread) {
+    color: var(--text-draft);
+  }
+
+  /* Body text descendants inherit from the pinned host (not the diff row). */
+  :global(.diff-line-extend-wrapper) .inline-comment-threads :global(*),
+  :global(.diff-line-extend-wrapper) .line-findings :global(*),
+  :global(.diff-line-extend-wrapper) .draft-annotations :global(.draft-thread) :global(*),
+  :global(.diff-line-widget-wrapper) :global(.draft-thread) :global(*) {
+    color: inherit;
+  }
+
+  /* Re-pin design-system token colors for non-body descendants (0,0,2,x). */
+  :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.comment-header),
+  :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.resolved-summary),
+  :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.resolved-label),
+  :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-hint),
+  :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-pending-label),
+  :global(.diff-line-extend-wrapper) .line-findings :global(.skill-line-note) {
+    color: var(--text-muted);
+  }
+
+  :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.resolved-check),
+  :global(.diff-line-extend-wrapper) .line-findings :global(.skill-add-draft-btn:not(.added)) {
+    color: var(--accent);
+  }
+
+  :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.avatar-initial) {
+    color: var(--surface);
+  }
+
+  :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-error),
+  :global(.diff-line-extend-wrapper) .line-findings :global(.severity-chip-high) {
+    color: var(--legend-removed-color);
+  }
+  :global(.diff-line-extend-wrapper) .line-findings :global(.severity-chip-medium) {
+    color: var(--legend-changed-color);
+  }
+  :global(.diff-line-extend-wrapper) .line-findings :global(.severity-chip-low) {
+    color: var(--text-muted);
+  }
+  :global(.diff-line-extend-wrapper) .line-findings :global(.skill-state-chip),
+  :global(.diff-line-extend-wrapper) .line-findings :global(.skill-add-draft-btn.added) {
+    color: var(--legend-added-color);
+  }
 </style>
