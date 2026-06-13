@@ -19,7 +19,7 @@ import { LlmError } from '../llm/llm'
 import { addSkill } from '../skills/skills'
 import { djb2 } from '../viewed/viewed.svelte'
 import type { PackedContext } from '../context/pack'
-import type { VerdictResult, SkillReviewResult } from './schemas'
+import type { VerdictResult, SkillReviewResult, TestInsight, AlternativesResult } from './schemas'
 import type { DeepReviewSource } from './deepReview'
 
 // ---------------------------------------------------------------------------
@@ -164,8 +164,12 @@ describe('deep verdict task', () => {
     const run = createAiRun(makeInput(makeSource()), deps)
     await run.start()
 
-    expect(deps.llmToolLoop).toHaveBeenCalledTimes(1)
-    const loopOpts = deps.llmToolLoop.mock.calls[0][0]
+    // start() now runs the deep loop for verdict + tests + alternatives; pick
+    // the verdict invocation by its system prompt (the verdict level enum).
+    const loopOpts = deps.llmToolLoop.mock.calls
+      .map((c: unknown[]) => c[0] as { system: string; tools: { name: string }[]; maxToolCalls: number })
+      .find((o) => /behavior-preserved/.test(o.system))!
+    expect(loopOpts).toBeDefined()
     // Toolkit tools passed through (source has searchCode → all 3)
     expect(loopOpts.tools.map((t: { name: string }) => t.name)).toEqual([
       'read_file',
@@ -203,9 +207,12 @@ describe('deep verdict task', () => {
     const deps = makeDeps()
     let activityDuringRun: string[] = []
     deps.llmToolLoop.mockImplementation(
-      async (opts: { onToolEvent?: (ev: { name: string; detail: string }) => void }) => {
+      async (opts: { system: string; onToolEvent?: (ev: { name: string; detail: string }) => void }) => {
         opts.onToolEvent?.({ name: 'read_file', detail: 'Reading src/foo.ts…' })
-        activityDuringRun = [...(run.verdict.activity ?? [])]
+        // Only capture for the verdict loop (other tasks now loop too in start()).
+        if (/behavior-preserved/.test(opts.system)) {
+          activityDuringRun = [...(run.verdict.activity ?? [])]
+        }
         return { content: JSON.stringify(VERDICT_RESULT), usage: undefined, toolCallsUsed: 1 }
       },
     )
@@ -226,7 +233,11 @@ describe('deep verdict task', () => {
     const run = createAiRun(makeInput(makeSource()), deps)
     await run.start()
 
-    expect(deps.llmToolLoop).not.toHaveBeenCalled()
+    // The verdict came from cache → no verdict loop call (other tasks may loop).
+    const verdictLoop = deps.llmToolLoop.mock.calls
+      .map((c: unknown[]) => c[0] as { system: string })
+      .find((o) => /behavior-preserved/.test(o.system))
+    expect(verdictLoop).toBeUndefined()
     expect(run.verdict.status).toBe('done')
     expect(run.verdict.value).toEqual(VERDICT_RESULT)
     expect(run.verdict.toolCallsUsed).toBe(5)
@@ -342,5 +353,225 @@ describe('deep skill reviews', () => {
     expect(deps.llmToolLoop).not.toHaveBeenCalled()
     expect(run.skillReviews[0].state.status).toBe('done')
     expect(run.skillReviews[0].state.note).toContain('does not support tool calling')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Deep test-insight + alternatives (Plan: phase1-deepen)
+//
+// These two phase-1 tasks join the deep harness under the SAME aiDeepReview
+// toggle. Mirrors the verdict deep tests: |deep key, loop invoked with the
+// task's prompts + validator, wrapper carries toolCallsUsed, activity lines
+// populate, cache-hit unwraps, unsupported model → single-pass + note, and
+// toggle off → byte-identical single-pass key.
+// ---------------------------------------------------------------------------
+
+const TESTS_RESULT: TestInsight = {
+  covered: [{ behavior: 'parses sentinel block', test: 'parseReadingOrder', file: 'src/foo.test.ts' }],
+  gaps: ['src/foo.ts: error path untested — silent failure on bad input'],
+}
+
+const ALTERNATIVES_RESULT: AlternativesResult = {
+  problem: 'parse a reading-order block from summary text',
+  alternatives: [
+    {
+      approach: 'Regex over the whole string',
+      tradeoffs: 'Gains brevity but loses line-level resilience',
+      assessment: 'pr-is-better',
+      rationale: 'line scanning is clearer here',
+    },
+  ],
+}
+
+/**
+ * Validator-aware deps: the deep loop and single-pass repair return whichever
+ * fixture validates for the task's own validator, so start()'s six parallel
+ * tasks each get a shape-correct answer.
+ */
+function makeMultiTaskDeps() {
+  const CANDIDATES = [VERDICT_RESULT, SKILL_RESULT, TESTS_RESULT, ALTERNATIVES_RESULT]
+  const pick = (validate: ValidateFn) => {
+    for (const c of CANDIDATES) if (validate(c) !== null) return c
+    return VERDICT_RESULT
+  }
+  const llmJsonWithRepair = vi.fn().mockImplementation(async (_o: unknown, validate: ValidateFn) => pick(validate))
+  const llmJsonWithRepairWithUsage = vi.fn().mockImplementation(async (_o: unknown, validate: ValidateFn) => ({
+    result: pick(validate),
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+  }))
+  const llmStream = vi.fn().mockImplementation(async (_o: unknown, onDelta: (d: string) => void) => {
+    onDelta('hi')
+    return 'hi'
+  })
+  const llmStreamWithUsage = vi.fn().mockImplementation(async (opts: unknown, onDelta: (d: string) => void) => ({
+    content: await llmStream(opts, onDelta),
+    usage: undefined,
+  }))
+  // The loop reads the system prompt to decide which fixture to return, so each
+  // deep task gets a shape-correct JSON body.
+  const llmToolLoop = vi.fn().mockImplementation(
+    async (opts: { system: string; onToolEvent?: (ev: { name: string; detail: string }) => void }) => {
+      opts.onToolEvent?.({ name: 'read_file', detail: 'Reading src/foo.ts…' })
+      let body: unknown = VERDICT_RESULT
+      if (/changed test files/i.test(opts.system)) body = TESTS_RESULT
+      else if (/genuinely different approach/i.test(opts.system)) body = ALTERNATIVES_RESULT
+      else if (/reviewer persona/i.test(opts.system)) body = SKILL_RESULT
+      return {
+        content: JSON.stringify(body),
+        usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+        toolCallsUsed: 2,
+      }
+    },
+  )
+  return {
+    llmStream,
+    llmStreamWithUsage,
+    llmJsonWithRepair,
+    llmJsonWithRepairWithUsage,
+    llmToolLoop,
+    getCached: vi.fn().mockResolvedValue(null),
+    setCached: vi.fn().mockResolvedValue(undefined),
+    gateAi: vi.fn().mockResolvedValue(true),
+    track: vi.fn(),
+  }
+}
+
+describe('deep test-insight task', () => {
+  it('runs the tool loop, uses the |deep key, caches a wrapper with toolCallsUsed', async () => {
+    seedSettings({ aiDeepReview: true })
+    const deps = makeMultiTaskDeps()
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    // Deep guidance composed onto the test-insight system prompt
+    const testsLoopCall = deps.llmToolLoop.mock.calls.find((c: unknown[]) =>
+      /changed test files/i.test((c[0] as { system: string }).system),
+    )
+    expect(testsLoopCall).toBeDefined()
+    expect((testsLoopCall![0] as { system: string }).system).toContain('Deep review mode')
+
+    const deepKey = `${PR_KEY}|tests|deep|v${PROMPT_VERSION}`
+    expect(deps.getCached).toHaveBeenCalledWith(deepKey)
+    expect(deps.setCached).toHaveBeenCalledWith(deepKey, {
+      deep: true,
+      result: TESTS_RESULT,
+      toolCallsUsed: 2,
+    })
+    expect(run.tests.status).toBe('done')
+    expect(run.tests.value).toEqual(TESTS_RESULT)
+    expect(run.tests.toolCallsUsed).toBe(2)
+    expect(run.tests.activity).toBeUndefined()
+  })
+
+  it('unwraps a deep cache hit: result + toolCallsUsed, no loop call', async () => {
+    seedSettings({ aiDeepReview: true })
+    const deps = makeMultiTaskDeps()
+    deps.getCached.mockImplementation(async (key: string) =>
+      key === `${PR_KEY}|tests|deep|v${PROMPT_VERSION}`
+        ? { deep: true, result: TESTS_RESULT, toolCallsUsed: 3 }
+        : null,
+    )
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    expect(run.tests.value).toEqual(TESTS_RESULT)
+    expect(run.tests.toolCallsUsed).toBe(3)
+    // No loop call carried the test-insight prompt
+    const testsLoop = deps.llmToolLoop.mock.calls.find((c: unknown[]) =>
+      /changed test files/i.test((c[0] as { system: string }).system),
+    )
+    expect(testsLoop).toBeUndefined()
+  })
+
+  it('unsupported model → single-pass key + honest note', async () => {
+    seedSettings({ aiDeepReview: true, aiModel: 'deepseek-reasoner' })
+    const deps = makeMultiTaskDeps()
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|tests|v${PROMPT_VERSION}`)
+    expect(run.tests.status).toBe('done')
+    expect(run.tests.note).toContain('does not support tool calling')
+    expect(run.tests.toolCallsUsed).toBeUndefined()
+  })
+
+  it('toggle off → single-pass key, no loop, byte-identical', async () => {
+    seedSettings()
+    const deps = makeMultiTaskDeps()
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|tests|v${PROMPT_VERSION}`)
+    expect(run.tests.status).toBe('done')
+    expect(run.tests.toolCallsUsed).toBeUndefined()
+    expect(run.tests.note).toBeUndefined()
+  })
+})
+
+describe('deep alternatives task', () => {
+  it('runs the tool loop, uses the |deep key, caches a wrapper with toolCallsUsed', async () => {
+    seedSettings({ aiDeepReview: true })
+    const deps = makeMultiTaskDeps()
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    const altLoopCall = deps.llmToolLoop.mock.calls.find((c: unknown[]) =>
+      /genuinely different approach/i.test((c[0] as { system: string }).system),
+    )
+    expect(altLoopCall).toBeDefined()
+    expect((altLoopCall![0] as { system: string }).system).toContain('Deep review mode')
+
+    const deepKey = `${PR_KEY}|alternatives|deep|v${PROMPT_VERSION}`
+    expect(deps.getCached).toHaveBeenCalledWith(deepKey)
+    expect(deps.setCached).toHaveBeenCalledWith(deepKey, {
+      deep: true,
+      result: ALTERNATIVES_RESULT,
+      toolCallsUsed: 2,
+    })
+    expect(run.alternatives.status).toBe('done')
+    expect(run.alternatives.value).toEqual(ALTERNATIVES_RESULT)
+    expect(run.alternatives.toolCallsUsed).toBe(2)
+  })
+
+  it('toggle off → single-pass key, no deep marker', async () => {
+    seedSettings()
+    const deps = makeMultiTaskDeps()
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|alternatives|v${PROMPT_VERSION}`)
+    expect(run.alternatives.toolCallsUsed).toBeUndefined()
+  })
+
+  it('invalid loop JSON → single-pass repair grounded in loop output, then cached', async () => {
+    seedSettings({ aiDeepReview: true })
+    const deps = makeMultiTaskDeps()
+    // Alternatives loop returns non-JSON → triggers the repair pass
+    deps.llmToolLoop.mockImplementation(
+      async (opts: { system: string; onToolEvent?: (ev: { name: string; detail: string }) => void }) => {
+        if (/genuinely different approach/i.test(opts.system)) {
+          return { content: 'Here are some alternatives (not JSON)', usage: undefined, toolCallsUsed: 4 }
+        }
+        let body: unknown = VERDICT_RESULT
+        if (/changed test files/i.test(opts.system)) body = TESTS_RESULT
+        else if (/reviewer persona/i.test(opts.system)) body = SKILL_RESULT
+        return { content: JSON.stringify(body), usage: undefined, toolCallsUsed: 1 }
+      },
+    )
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    const repairCall = deps.llmJsonWithRepairWithUsage.mock.calls.find((c: unknown[]) =>
+      (c[0] as { user: string }).user.includes('Here are some alternatives'),
+    )
+    expect(repairCall).toBeDefined()
+    expect(run.alternatives.status).toBe('done')
+    expect(run.alternatives.value).toEqual(ALTERNATIVES_RESULT)
+    expect(run.alternatives.toolCallsUsed).toBe(4)
+    expect(deps.setCached).toHaveBeenCalledWith(`${PR_KEY}|alternatives|deep|v${PROMPT_VERSION}`, {
+      deep: true,
+      result: ALTERNATIVES_RESULT,
+      toolCallsUsed: 4,
+    })
   })
 })
