@@ -35,6 +35,8 @@ const EVENTS = {
   drawer_opened: [],
   // Carries no content — fired when the user turns ON "Hide whitespace changes".
   whitespace_hidden: [],
+  // Carries no content — fired when the user turns ON focus mode (any non-off).
+  focus_mode_on: [],
   rail_expanded: [],
   step_viewed: ['step'],
 } as const

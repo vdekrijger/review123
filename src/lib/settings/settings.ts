@@ -25,6 +25,13 @@ export type Theme = 'auto' | 'dark' | 'light'
 export type UiFont = 'plex' | 'system' | 'serif'
 export type TestFileDisplay = 'normal' | 'highlight' | 'dim'
 export type DiffWidth = 'centered' | 'full'
+/**
+ * Focus mode — visually DIM (never hide/collapse) low-signal lines in the diff.
+ * 'off'             — no dimming.
+ * 'imports'         — dim import/use/require lines only (DEFAULT).
+ * 'imports-comments'— dim import lines AND comment lines.
+ */
+export type FocusMode = 'off' | 'imports' | 'imports-comments'
 
 export interface GithubAuth {
   token: string
@@ -84,6 +91,8 @@ export interface Settings {
   treeOpen: boolean
   testFileDisplay: TestFileDisplay
   diffWidth: DiffWidth
+  /** Focus mode: dim imports / imports+comments to reduce diff noise. */
+  focusMode: FocusMode
 }
 
 const DEFAULTS: Settings = {
@@ -109,6 +118,8 @@ const DEFAULTS: Settings = {
   treeOpen: false,
   testFileDisplay: 'normal',
   diffWidth: 'centered',
+  // Non-destructive dimming of imports is our recommendation → on by default.
+  focusMode: 'imports',
 }
 
 function coerceGithubAuth(raw: unknown): GithubAuth | null {
@@ -218,6 +229,11 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const diffWidth = obj['diffWidth']
   if (diffWidth === 'centered' || diffWidth === 'full') result.diffWidth = diffWidth
+
+  const focusMode = obj['focusMode']
+  if (focusMode === 'off' || focusMode === 'imports' || focusMode === 'imports-comments') {
+    result.focusMode = focusMode
+  }
 
   // Prefer explicit githubAuth; fall back to migrating legacy githubPat string
   if ('githubAuth' in obj) {
@@ -378,6 +394,7 @@ export const setShowProgress = (show: boolean) => save({ showProgress: show })
 export const setTreeOpen = (open: boolean) => save({ treeOpen: open })
 export const setTestFileDisplay = (v: TestFileDisplay) => save({ testFileDisplay: v })
 export const setDiffWidth = (v: DiffWidth) => save({ diffWidth: v })
+export const setFocusMode = (v: FocusMode) => save({ focusMode: v })
 
 /**
  * Normalize a GitLab host input.

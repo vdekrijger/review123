@@ -3,9 +3,10 @@
   import '@git-diff-view/svelte/styles/diff-view.css'
   import { buildDiffFile, classifyFile } from '../lib/diff/diffFile'
   import type { PrFile } from '../lib/github/types'
-  import type { DiffMode } from '../lib/settings/settings'
+  import type { DiffMode, FocusMode } from '../lib/settings/settings'
   import { type TestFileDisplay } from '../lib/settings/settings'
   import { settingsState } from '../lib/settings/settingsState.svelte'
+  import { langForFilename, classifyNoise } from '../lib/diff/codeNoise'
   import { isTestFile } from '../lib/testFile'
   import type { Draft } from '../lib/drafts/drafts.svelte'
   import DraftThread from './DraftThread.svelte'
@@ -93,6 +94,77 @@
   // Test-file display (must be declared before collapsed)
   const testFileDisplay = $derived<TestFileDisplay>(settingsState.current.testFileDisplay)
   const isTest = $derived(isTestFile(file.filename))
+
+  // ---- Focus mode (dim code noise) ----------------------------------------
+  // Reactive: dims import lines ('imports') or imports + comments
+  // ('imports-comments') by toggling a `dimmed-noise` class on each matching
+  // diff row AFTER the third-party DiffView renders. Lines are never hidden or
+  // collapsed — text stays selectable and comment-anchorable.
+  const focusMode = $derived<FocusMode>(settingsState.current.focusMode)
+  const noiseLang = $derived(langForFilename(file.filename))
+
+  /** True for lines we should dim under the active focusMode. */
+  function shouldDim(rawText: string): boolean {
+    if (focusMode === 'off' || noiseLang === null) return false
+    const kind = classifyNoise(rawText, noiseLang)
+    if (kind === 'import') return true
+    if (kind === 'comment') return focusMode === 'imports-comments'
+    return false
+  }
+
+  /**
+   * Read the raw source text of a single content cell WITHOUT the +/- diff
+   * marker. The library renders the marker in a separate
+   * `.diff-line-content-operator` span and the line text in
+   * `.diff-line-content-raw` (plain) or `.diff-line-syntax-raw` (highlighted).
+   * We read those so classification sees the source line, not `+ import …`.
+   */
+  function cellText(cell: Element): string {
+    const raws = cell.querySelectorAll('.diff-line-content-raw, .diff-line-syntax-raw')
+    if (raws.length === 0) return ''
+    return [...raws].map((s) => s.textContent ?? '').join('')
+  }
+
+  /**
+   * Decorate each diff CONTENT CELL independently. Cell-level (not row-level)
+   * matters in split mode, where one <tr> holds both the old (LEFT) and new
+   * (RIGHT) sides — they may classify differently. Unified rows have a single
+   * content cell, so behaviour is identical there.
+   */
+  function decorateRows(root: HTMLElement): void {
+    const cells = root.querySelectorAll(
+      '.diff-line-content, .diff-line-old-content, .diff-line-new-content',
+    )
+    for (const cell of cells) {
+      cell.classList.toggle('dimmed-noise', shouldDim(cellText(cell)))
+    }
+  }
+
+  /**
+   * Svelte action: keep the diff rows decorated as focus mode / diff content
+   * change. Re-runs on the reactive `_` arg (a tuple of focusMode + filename +
+   * mode) and observes library re-renders (highlight load, context expansion)
+   * via a MutationObserver so newly inserted rows get decorated too.
+   */
+  function focusDim(node: HTMLElement, _: unknown) {
+    let raf = 0
+    const schedule = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => decorateRows(node))
+    }
+    schedule()
+    const mo = new MutationObserver(schedule)
+    mo.observe(node, { childList: true, subtree: true })
+    return {
+      update() {
+        schedule()
+      },
+      destroy() {
+        cancelAnimationFrame(raf)
+        mo.disconnect()
+      },
+    }
+  }
 
   // ---- Diff view theme ----------------------------------------------------
   // The library scopes its syntax-highlight token colors (hljs-*) and diff row
@@ -411,6 +483,12 @@
     {:else if wsActive}
       <p class="ws-inline-note" role="note">Line comments are disabled while whitespace changes are hidden — turn off "Hide whitespace" to comment on exact lines.</p>
     {/if}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="focus-dim-host"
+      data-focus-mode={focusMode}
+      use:focusDim={[focusMode, file.filename, mode]}
+    >
     <DiffView
       {diffFile}
       diffViewMode={mode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
@@ -495,6 +573,7 @@
         {/if}
       {/snippet}
     </DiffView>
+    </div>
 
     <!-- Fallback draft annotations: ONLY drafts whose line anchor is not present
          in the current diff. Anchored drafts render inline at their line via
@@ -652,6 +731,24 @@
   /* Test dim */
   article.test-dim { opacity: 0.6; }
   article.test-dim header { opacity: 0.8; }
+
+  /* Focus mode — dim "code noise" (import / comment) content cells.
+     Opacity-only so the text stays fully selectable and the cell remains
+     comment-anchorable (the add-comment affordance and line number are
+     untouched). Hover restores full opacity for legibility on demand. Works in
+     unified (.diff-line-content) and split (old/new-content) layouts and in both
+     themes (opacity is theme-agnostic). The class is toggled per content cell. */
+  .focus-dim-host :global(.diff-line-content.dimmed-noise),
+  .focus-dim-host :global(.diff-line-old-content.dimmed-noise),
+  .focus-dim-host :global(.diff-line-new-content.dimmed-noise) {
+    opacity: 0.45;
+    transition: opacity 0.12s ease;
+  }
+  .focus-dim-host :global(.diff-line-content.dimmed-noise):hover,
+  .focus-dim-host :global(.diff-line-old-content.dimmed-noise):hover,
+  .focus-dim-host :global(.diff-line-new-content.dimmed-noise):hover {
+    opacity: 1;
+  }
   /* Apply the --font-mono token to the diff view container */
   :global(.unified-diff-table-wrapper),
   :global(.old-diff-table-wrapper),

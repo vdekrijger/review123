@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSettings, setTheme, setUiFont, setShowProgress, setTestFileDisplay, setDiffWidth, type Theme, type UiFont, type TestFileDisplay, type DiffWidth } from '../../lib/settings/settings'
+  import { getSettings, setTheme, setUiFont, setShowProgress, setTestFileDisplay, setDiffWidth, setFocusMode, type Theme, type UiFont, type TestFileDisplay, type DiffWidth, type FocusMode } from '../../lib/settings/settings'
   import { applyAppearance } from '../../lib/settings/appearance.svelte'
 
   const current = getSettings()
@@ -8,6 +8,7 @@
   let showProgress = $state<boolean>(current.showProgress)
   let testFileDisplay = $state<TestFileDisplay>(current.testFileDisplay)
   let diffWidth = $state<DiffWidth>(current.diffWidth)
+  let focusMode = $state<FocusMode>(current.focusMode)
 
   function onThemeChange(value: Theme) {
     theme = value
@@ -35,6 +36,11 @@
     diffWidth = value
     setDiffWidth(value)
     applyAppearance()
+  }
+
+  function onFocusModeChange(value: FocusMode) {
+    focusMode = value
+    setFocusMode(value)
   }
 </script>
 
@@ -98,6 +104,23 @@
       <input type="radio" name="testFileDisplay" value="dim" checked={testFileDisplay === 'dim'} onchange={() => onTestFileDisplayChange('dim')} />
       De-emphasize
     </label>
+  </fieldset>
+
+  <fieldset aria-label="Focus mode">
+    <legend>Focus mode</legend>
+    <label>
+      <input type="radio" name="focusMode" value="off" checked={focusMode === 'off'} onchange={() => onFocusModeChange('off')} />
+      Off
+    </label>
+    <label>
+      <input type="radio" name="focusMode" value="imports" checked={focusMode === 'imports'} onchange={() => onFocusModeChange('imports')} />
+      Dim imports
+    </label>
+    <label>
+      <input type="radio" name="focusMode" value="imports-comments" checked={focusMode === 'imports-comments'} onchange={() => onFocusModeChange('imports-comments')} />
+      Dim imports + comments
+    </label>
+    <p class="field-note">Fades import and (optionally) comment lines in the diff so real changes stand out. Lines stay visible, selectable, and commentable — never hidden.</p>
   </fieldset>
 
   <fieldset aria-label="Diff width">

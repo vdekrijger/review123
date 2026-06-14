@@ -237,10 +237,10 @@ describe('SkillsSection — Built-in reviewers group', () => {
     expect(screen.getByText(/built-in reviewers/i)).toBeInTheDocument()
   })
 
-  it('renders exactly 6 builtin entries', () => {
+  it('renders one entry per builtin skill', () => {
     render(SkillsSection)
     const entries = document.querySelectorAll('[data-builtin-id]')
-    expect(entries).toHaveLength(6)
+    expect(entries).toHaveLength(BUILTIN_SKILLS.length)
   })
 
   it('renders each builtin skill name', () => {
