@@ -84,6 +84,13 @@ export interface Settings {
   treeOpen: boolean
   testFileDisplay: TestFileDisplay
   diffWidth: DiffWidth
+  /**
+   * Power-user: show approximate token usage (and a rough $ estimate when
+   * per-model pricing is known) per AI section + a per-review total. Display
+   * only — derived from usage the LLM layer already captures; sends nothing
+   * new. Default OFF: toggling off is byte-identical to the prior UI.
+   */
+  showTokenCost: boolean
 }
 
 const DEFAULTS: Settings = {
@@ -109,6 +116,7 @@ const DEFAULTS: Settings = {
   treeOpen: false,
   testFileDisplay: 'normal',
   diffWidth: 'centered',
+  showTokenCost: false,
 }
 
 function coerceGithubAuth(raw: unknown): GithubAuth | null {
@@ -218,6 +226,9 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const diffWidth = obj['diffWidth']
   if (diffWidth === 'centered' || diffWidth === 'full') result.diffWidth = diffWidth
+
+  const showTokenCost = obj['showTokenCost']
+  if (typeof showTokenCost === 'boolean') result.showTokenCost = showTokenCost
 
   // Prefer explicit githubAuth; fall back to migrating legacy githubPat string
   if ('githubAuth' in obj) {
@@ -378,6 +389,7 @@ export const setShowProgress = (show: boolean) => save({ showProgress: show })
 export const setTreeOpen = (open: boolean) => save({ treeOpen: open })
 export const setTestFileDisplay = (v: TestFileDisplay) => save({ testFileDisplay: v })
 export const setDiffWidth = (v: DiffWidth) => save({ diffWidth: v })
+export const setShowTokenCost = (v: boolean) => save({ showTokenCost: v })
 
 /**
  * Normalize a GitLab host input.

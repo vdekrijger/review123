@@ -30,11 +30,34 @@ export interface LlmModelDef {
    * - OpenAI / Anthropic / Gemini lineups here all support tool use.
    */
   supportsTools?: boolean
+  /**
+   * Public list price per 1M tokens (USD), used only for the OPTIONAL
+   * "Show token usage" power-user estimate. Standard (cache-miss) rates;
+   * we don't model prompt caching / batch discounts, so the $ shown is a
+   * rough upper bound. Omitted = no $ estimate (tokens shown only).
+   * Verified June 2026 against official pricing pages (see PROVIDERS below).
+   */
+  pricing?: { inputPer1M: number; outputPer1M: number }
 }
 
 /** True when a model supports tool use. Omitted flag = supported. */
 export function modelSupportsTools(model: LlmModelDef): boolean {
   return model.supportsTools !== false
+}
+
+/**
+ * Rough USD cost for a token usage split, given a model's list pricing.
+ * Returns null when the model carries no pricing (caller shows tokens only —
+ * never a fabricated $). Standard cache-miss rates; an upper-bound estimate.
+ */
+export function estimateCostUsd(
+  model: Pick<LlmModelDef, 'pricing'>,
+  promptTokens: number,
+  completionTokens: number,
+): number | null {
+  const p = model.pricing
+  if (!p) return null
+  return (promptTokens / 1e6) * p.inputPer1M + (completionTokens / 1e6) * p.outputPer1M
 }
 
 export interface LlmProviderDef {
@@ -75,7 +98,9 @@ export const PROVIDERS: LlmProviderDef[] = [
     defaultModel: 'deepseek-v4-flash',
     keyHint: 'sk-...',
     models: [
-      { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash', contextWindowTokens: 1_000_000 },
+      // Pricing (api-docs.deepseek.com/quick_start/pricing, verified 2026-06-14):
+      // V4 Flash standard cache-miss $0.14 in / $0.28 out per MTok.
+      { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash', contextWindowTokens: 1_000_000, pricing: { inputPer1M: 0.14, outputPer1M: 0.28 } },
       { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro', contextWindowTokens: 1_000_000 },
       // Legacy ids — per DeepSeek docs they now alias deepseek-v4-flash's
       // non-thinking/thinking modes; deprecated 2026-07-24. Kept so saved
@@ -95,10 +120,12 @@ export const PROVIDERS: LlmProviderDef[] = [
     defaultModel: 'gpt-5.4',
     keyHint: 'sk-...',
     models: [
-      { id: 'gpt-5.5', label: 'GPT-5.5', contextWindowTokens: 1_000_000 },
-      { id: 'gpt-5.4', label: 'GPT-5.4', contextWindowTokens: 1_000_000 },
-      { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini', contextWindowTokens: 400_000 },
+      // Pricing (openai.com/api/pricing, verified 2026-06-14), USD per MTok:
+      { id: 'gpt-5.5', label: 'GPT-5.5', contextWindowTokens: 1_000_000, pricing: { inputPer1M: 5, outputPer1M: 30 } },
+      { id: 'gpt-5.4', label: 'GPT-5.4', contextWindowTokens: 1_000_000, pricing: { inputPer1M: 2.5, outputPer1M: 15 } },
+      { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini', contextWindowTokens: 400_000, pricing: { inputPer1M: 0.75, outputPer1M: 4.5 } },
       // Previous default — still available ("previous frontier model").
+      // gpt-5.2 pricing not re-verified → tokens only (no $ shown).
       { id: 'gpt-5.2', label: 'GPT-5.2', contextWindowTokens: 400_000 },
     ],
   },
@@ -112,9 +139,11 @@ export const PROVIDERS: LlmProviderDef[] = [
     defaultModel: 'claude-sonnet-4-6',
     keyHint: 'sk-ant-...',
     models: [
+      // Pricing (platform.claude.com/docs pricing, verified 2026-06-14), USD per MTok.
+      // Fable 5 / Opus 4.8 list prices not re-verified → tokens only (no $).
       { id: 'claude-fable-5', label: 'Claude Fable 5', contextWindowTokens: 1_000_000 },
       { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', contextWindowTokens: 1_000_000 },
-      { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', contextWindowTokens: 1_000_000 },
+      { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', contextWindowTokens: 1_000_000, pricing: { inputPer1M: 3, outputPer1M: 15 } },
       { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', contextWindowTokens: 200_000 },
     ],
   },
@@ -128,7 +157,9 @@ export const PROVIDERS: LlmProviderDef[] = [
     defaultModel: 'gemini-3.5-flash',
     keyHint: 'AIza...',
     models: [
-      { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', contextWindowTokens: 1_048_576 },
+      // Pricing (ai.google.dev/gemini-api/docs/pricing, verified 2026-06-14):
+      // 3.5 Flash global tier $1.50 in / $9.00 out per MTok.
+      { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', contextWindowTokens: 1_048_576, pricing: { inputPer1M: 1.5, outputPer1M: 9 } },
       { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro (preview)', contextWindowTokens: 1_048_576 },
       // Previous generation — still stable; gemini-2.5-flash was the old default.
       { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', contextWindowTokens: 1_048_576 },
