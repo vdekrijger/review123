@@ -4,7 +4,7 @@ import {
   setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay, setGitlabToken,
   saveBitbucketAuth, setGitlabHost,
   setOpenaiKey, setAnthropicKey, setGeminiKey, setAiProvider, setAiModel,
-  setAiDeepReview, setFocusMode, setShowTokenCost,
+  setAiDeepReview, setStoryMode, setFocusMode, setShowTokenCost,
   findInvalidKeyChar, invalidKeyCharMessage,
 } from './settings'
 
@@ -21,6 +21,7 @@ describe('settings', () => {
       anthropicKey: null,
       geminiKey: null,
       aiDeepReview: false,
+      storyMode: true,
       diffMode: 'unified',
       hideWhitespace: false,
       githubAuth: null,
@@ -90,6 +91,7 @@ describe('settings', () => {
       anthropicKey: null,
       geminiKey: null,
       aiDeepReview: false,
+      storyMode: true,
       diffMode: 'unified',
       hideWhitespace: false,
       githubAuth: null,
@@ -688,6 +690,30 @@ describe('aiDeepReview setting', () => {
   it('coerces non-boolean stored values back to the default', () => {
     localStorage.setItem('review123:settings', JSON.stringify({ aiDeepReview: 'yes' }))
     expect(getSettings().aiDeepReview).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// storyMode (Plan H — guided narrative walkthrough, defaults on)
+// ---------------------------------------------------------------------------
+
+describe('storyMode setting', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('defaults to true (lead with the narrative when a key exists)', () => {
+    expect(getSettings().storyMode).toBe(true)
+  })
+
+  it('persists a false choice (user flipped to Files)', () => {
+    setStoryMode(false)
+    expect(getSettings().storyMode).toBe(false)
+    setStoryMode(true)
+    expect(getSettings().storyMode).toBe(true)
+  })
+
+  it('ignores a non-boolean stored value', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ storyMode: 'yes' }))
+    expect(getSettings().storyMode).toBe(true)
   })
 })
 

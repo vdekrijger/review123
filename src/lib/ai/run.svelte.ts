@@ -43,14 +43,15 @@ import {
   testInsightPrompt,
   coachPrompt,
   alternativesPrompt,
+  storyOrderPrompt,
   askPrompt,
   skillReviewPrompt,
   withDeepReviewGuidance,
   type AskFocus,
 } from './tasks'
 export type { AskFocus }
-import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateSkillReviewResult } from './schemas'
-import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, SkillReviewResult } from './schemas'
+import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateStoryOrder, validateSkillReviewResult } from './schemas'
+import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, SkillReviewResult } from './schemas'
 import type { Draft } from '../drafts/drafts.svelte'
 import { listSkills } from '../skills/skills'
 import { djb2 } from '../viewed/viewed.svelte'
@@ -84,7 +85,7 @@ export interface PanelState<T> {
 // Task names (used as cache key discriminants + analytics)
 // ---------------------------------------------------------------------------
 
-type TaskName = 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests' | 'alternatives'
+type TaskName = 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests' | 'alternatives' | 'story'
 
 // ---------------------------------------------------------------------------
 // SkillReviewEntry — reactive entry per skill in skillReviews array
@@ -107,6 +108,7 @@ export interface AiRun {
   readonly verdict: PanelState<VerdictResult>
   readonly tests: PanelState<TestInsight>
   readonly alternatives: PanelState<AlternativesResult>
+  readonly story: PanelState<StoryOrderResult>
   readonly skillReviews: SkillReviewEntry[]
   /**
    * Sum of every task's captured token usage for THIS PR run (the six core
@@ -214,6 +216,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   const verdictState = $state<PanelState<VerdictResult>>({ status: 'idle' })
   const testsState = $state<PanelState<TestInsight>>({ status: 'idle' })
   const alternativesState = $state<PanelState<AlternativesResult>>({ status: 'idle' })
+  const storyState = $state<PanelState<StoryOrderResult>>({ status: 'idle' })
 
   // Skill review entries — populated on-demand by runSkillReviews()
   let skillReviewsState = $state<SkillReviewEntry[]>([])
@@ -578,6 +581,84 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
   }
 
+  async function runStoryOrderTask(ctx: PackedContext): Promise<void> {
+    // Story mode (Plan H): classify changed files into layers and emit an
+    // ORDERED narrative sequence. Runs through the deep harness when the
+    // agentic toggle is on (verify ordering/test-pairing by reading deps),
+    // single-pass otherwise — same branch shape as the other deep tasks.
+    const deep = deepReviewAvailability(deepReview)
+    if (deep.note) storyState.note = deep.note
+    const key = cacheKey(prKey, deep.enabled ? 'story|deep' : 'story', PROMPT_VERSION)
+
+    const t0 = performance.now()
+    if (deep.enabled) {
+      const hit = await getCached<DeepCached<StoryOrderResult>>(key)
+      if (hit !== null) {
+        storyState.status = 'done'
+        storyState.value = hit.result
+        storyState.toolCallsUsed = hit.toolCallsUsed
+        storyState.usage = hit.usage
+        track('ai_task_completed', { task: 'story', duration_ms: Math.round(performance.now() - t0), cached: true, deep: true })
+        return
+      }
+    } else {
+      const hit = await getCached<StoryOrderResult>(key)
+      if (hit !== null) {
+        storyState.status = 'done'
+        storyState.value = hit
+        track('ai_task_completed', { task: 'story', duration_ms: Math.round(performance.now() - t0), cached: true })
+        return
+      }
+    }
+
+    storyState.status = 'loading'
+    if (deep.enabled) storyState.activity = []
+    const t1 = performance.now()
+    const prompts = storyOrderPrompt(ctx, { deep: deep.enabled })
+
+    try {
+      let storyResult: StoryOrderResult
+      let storyUsage: LlmUsage | undefined
+      let toolCallsUsed: number | undefined
+
+      if (deep.enabled) {
+        const deepOutcome = await runDeepJson<StoryOrderResult>(prompts, validateStoryOrder, (line) => {
+          storyState.activity = [...(storyState.activity ?? []), line]
+        })
+        storyResult = deepOutcome.result
+        storyUsage = deepOutcome.usage
+        toolCallsUsed = deepOutcome.toolCallsUsed
+        await setCached<DeepCached<StoryOrderResult>>(key, { deep: true, result: storyResult, toolCallsUsed, usage: storyUsage })
+      } else {
+        const singlePass = await llmJsonWithRepairWithUsage<StoryOrderResult>(
+          { system: prompts.system, user: prompts.user },
+          validateStoryOrder,
+        )
+        storyResult = singlePass.result
+        storyUsage = singlePass.usage
+        await setCached<StoryOrderResult>(key, storyResult)
+      }
+      storyState.status = 'done'
+      storyState.value = storyResult
+      storyState.activity = undefined
+      storyState.usage = storyUsage
+      if (toolCallsUsed !== undefined) storyState.toolCallsUsed = toolCallsUsed
+      track('ai_task_completed', {
+        task: 'story',
+        duration_ms: Math.round(performance.now() - t1),
+        cached: false,
+        ...(storyUsage?.total_tokens !== undefined ? { tokens: storyUsage.total_tokens } : {}),
+        ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
+      })
+    } catch (err) {
+      const kind = err instanceof LlmError ? err.kind : 'unknown'
+      storyState.status = 'error'
+      storyState.error = humanMessage(kind)
+      storyState.activity = undefined
+      track('ai_task_failed', { task: 'story', reason: kind })
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Deep review helpers (Plan G part 2)
   //
@@ -748,6 +829,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     verdictState.status = status
     testsState.status = status
     alternativesState.status = status
+    storyState.status = status
     if (error !== undefined) {
       summaryState.error = error
       attentionState.error = error
@@ -755,6 +837,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       verdictState.error = error
       testsState.error = error
       alternativesState.error = error
+      storyState.error = error
     }
   }
 
@@ -814,6 +897,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       runDiagramsTask(ctx),
       runTestsTask(ctx),
       runAlternativesTask(ctx),
+      runStoryOrderTask(ctx),
       runVerdictTask(ctx, ciData),
     ])
   }
@@ -837,6 +921,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     if (task === 'diagrams') return runDiagramsTask(ctx)
     if (task === 'tests') return runTestsTask(ctx)
     if (task === 'alternatives') return runAlternativesTask(ctx)
+    if (task === 'story') return runStoryOrderTask(ctx)
   }
 
   // ---------------------------------------------------------------------------
@@ -1114,12 +1199,13 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     get verdict() { return verdictState },
     get tests() { return testsState },
     get alternatives() { return alternativesState },
+    get story() { return storyState },
     get skillReviews() { return skillReviewsState },
     get totalUsage(): LlmUsage | undefined {
       // Sum every task's captured usage for this PR run. Tasks with no usage
       // (cached pre-usage results / errors) contribute nothing.
       let total: LlmUsage | undefined
-      const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState]
+      const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, storyState]
       for (const s of states) total = addUsage(total, s.usage)
       for (const e of skillReviewsState) total = addUsage(total, e.state.usage)
       return total

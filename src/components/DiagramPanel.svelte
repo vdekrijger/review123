@@ -29,9 +29,25 @@
   interface Props {
     result: GraphResult | null
     panelState: 'idle' | 'loading' | 'error' | 'declined'
+    /**
+     * Story mode (Plan H): file paths covered by the CURRENT story step. The
+     * change-map nodes whose label matches one of these files are highlighted
+     * as "current"; nodes for files in an EARLIER step (doneFiles) are marked
+     * "done"; the rest are "upcoming". Empty/absent → no highlighting (default
+     * standalone diagram behaviour, byte-identical).
+     */
+    highlightFiles?: string[]
+    /** File paths already visited (steps before the current one) → "done" state. */
+    doneFiles?: string[]
+    /**
+     * Story mode: called with a file path when the user clicks a change-map
+     * node, so the slideshow can jump to the step covering that file. null/absent
+     * → nodes are not click-to-jump (the existing zoom overlay still works).
+     */
+    onnodeclick?: ((file: string) => void) | null
   }
 
-  let { result, panelState }: Props = $props()
+  let { result, panelState, highlightFiles = [], doneFiles = [], onnodeclick = null }: Props = $props()
 
   // Containers for Mermaid SVG output
   let changeMapContainer = $state<HTMLDivElement | null>(null)
@@ -73,12 +89,72 @@
     }
   }
 
+  // ---- Story-mode node↔file matching (Plan H) ----------------------------
+  // A change-map node's visible label is typically a file basename (e.g.
+  // "settings.ts"). We match a node to a PR file path when the node's label
+  // equals the path's basename (or the path ends with the label). Returns the
+  // matched file path, or null when the node isn't one of the given files.
+  function matchNodeToFile(label: string, files: string[]): string | null {
+    const trimmed = label.trim()
+    if (!trimmed) return null
+    for (const f of files) {
+      const base = f.split('/').pop() ?? f
+      if (base === trimmed || f === trimmed || f.endsWith('/' + trimmed)) return f
+    }
+    return null
+  }
+
+  /**
+   * After the change-map SVG renders, tag each node with a story-state class
+   * (current / done) and wire click-to-jump. Re-runs when the highlight inputs
+   * change. No-ops entirely when story mode isn't driving the panel
+   * (no highlightFiles, no doneFiles, no onnodeclick) — keeps the standalone
+   * diagram byte-identical.
+   */
+  function decorateStoryNodes(container: HTMLElement): void {
+    if (highlightFiles.length === 0 && doneFiles.length === 0 && !onnodeclick) return
+    // Mermaid node groups carry the `.node` class. Match only those (NOT nested
+    // label spans) so each rendered node is decorated exactly once.
+    const nodes = container.querySelectorAll('g.node, .node')
+    for (const node of nodes) {
+      const label = node.textContent ?? ''
+      const currentFile = matchNodeToFile(label, highlightFiles)
+      const doneFile = currentFile ? null : matchNodeToFile(label, doneFiles)
+      node.classList.toggle('story-node-current', currentFile !== null)
+      node.classList.toggle('story-node-done', doneFile !== null)
+      const file = currentFile ?? doneFile ?? matchNodeToFile(label, [...highlightFiles, ...doneFiles])
+      if (onnodeclick) {
+        const target = file ?? matchNodeToFile(label, allMapFiles())
+        ;(node as HTMLElement).style.cursor = target ? 'pointer' : ''
+        node.classList.toggle('story-node-clickable', target !== null)
+        // Avoid duplicate listeners by stamping a dataset flag
+        if (target && !(node as HTMLElement).dataset['storyWired']) {
+          ;(node as HTMLElement).dataset['storyWired'] = '1'
+          node.addEventListener('click', (e) => {
+            e.stopPropagation()
+            onnodeclick?.(target)
+          })
+        }
+      }
+    }
+  }
+
+  // All file labels present in the change-map (for click-to-jump matching).
+  function allMapFiles(): string[] {
+    if (!result?.changeMap) return []
+    return result.changeMap.nodes.map((n) => n.label)
+  }
+
   // Render the change-map diagram when container and result.changeMap are ready
   $effect(() => {
     if (!result?.changeMap || !changeMapContainer) return
 
     const { changeMap, kind } = result
     const changeMapMermaid = graphToMermaid(changeMap, kind, { palette: resolvedTheme() }).mermaid
+    // Reference the highlight inputs so this effect re-runs when the current
+    // story step changes (re-renders + re-decorates the nodes).
+    void highlightFiles
+    void doneFiles
 
     let cancelled = false
 
@@ -89,6 +165,8 @@
       const svg = await renderDiagram(cmc, changeMapMermaid, 'changemap')
 
       if (cancelled) return
+
+      decorateStoryNodes(cmc)
 
       if (svg && !hasTracked) {
         hasTracked = true
@@ -497,6 +575,23 @@
   .diagram-container :global(svg) {
     max-width: 100%;
     height: auto;
+  }
+
+  /* ---- Story-mode node states (Plan H) ---- */
+  /* CURRENT step: accent ring + emphasis. */
+  .diagram-container :global(.story-node-current rect),
+  .diagram-container :global(.story-node-current circle),
+  .diagram-container :global(.story-node-current polygon) {
+    stroke: var(--accent) !important;
+    stroke-width: 3px !important;
+    filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 55%, transparent));
+  }
+  /* DONE steps: dimmed (already walked). */
+  .diagram-container :global(.story-node-done) {
+    opacity: 0.55;
+  }
+  .diagram-container :global(.story-node-clickable) {
+    cursor: pointer;
   }
 
   .empty-graph {

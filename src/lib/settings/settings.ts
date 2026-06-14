@@ -75,6 +75,13 @@ export interface Settings {
    * before flagging findings. Opt-in: slower and uses more tokens (Plan G).
    */
   aiDeepReview: boolean
+  /**
+   * Story mode (Plan H): in step 2, lead with the guided NARRATIVE walkthrough
+   * instead of the all-files diff. Requires an LLM key (a classification task);
+   * unavailable + ignored when no key is configured. Default true so users with
+   * a key get the narrative first; flipping to Files in-step persists false.
+   */
+  storyMode: boolean
   diffMode: DiffMode
   /** Hide whitespace-only changes in diffs (like GitHub's ?w=1). */
   hideWhitespace: boolean
@@ -111,6 +118,7 @@ const DEFAULTS: Settings = {
   anthropicKey: null,
   geminiKey: null,
   aiDeepReview: false,
+  storyMode: true,
   diffMode: 'unified',
   hideWhitespace: false,
   githubAuth: null,
@@ -199,6 +207,9 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const aiDeepReview = obj['aiDeepReview']
   if (typeof aiDeepReview === 'boolean') result.aiDeepReview = aiDeepReview
+
+  const storyMode = obj['storyMode']
+  if (typeof storyMode === 'boolean') result.storyMode = storyMode
 
   const gitlabToken = obj['gitlabToken']
   if (typeof gitlabToken === 'string') result.gitlabToken = gitlabToken
@@ -395,6 +406,7 @@ export const setGeminiKey = (v: string | null) => saveTokens({ geminiKey: v })
 export const setAiProvider = (v: AiProvider) => save({ aiProvider: v })
 export const setAiModel = (v: string) => save({ aiModel: v })
 export const setAiDeepReview = (v: boolean) => save({ aiDeepReview: v })
+export const setStoryMode = (v: boolean) => save({ storyMode: v })
 export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
 export const setHideWhitespace = (hide: boolean) => save({ hideWhitespace: hide })
 export const setRailCollapsed = (collapsed: boolean) => save({ railCollapsed: collapsed })

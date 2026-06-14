@@ -20,7 +20,7 @@ import { createAiRun } from './run.svelte'
 import { LlmError } from '../llm/llm'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
-import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult } from './schemas'
+import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult } from './schemas'
 
 // ---------------------------------------------------------------------------
 // Fixture data
@@ -71,6 +71,12 @@ const ALTERNATIVES_RESULT: AlternativesResult = {
   ],
 }
 
+const STORY_RESULT: StoryOrderResult = {
+  steps: [
+    { index: 0, files: ['src/foo.ts'], caption: 'Foo changes.', layer: 'logic', relatedTests: [] },
+  ],
+}
+
 // ---------------------------------------------------------------------------
 // Default llmJsonWithRepair implementation that dispatches by validator result
 // Returns appropriate fixture based on which validator accepts the result.
@@ -79,8 +85,10 @@ const ALTERNATIVES_RESULT: AlternativesResult = {
 type ValidateFn = (x: unknown) => unknown
 
 function defaultJsonDispatch(_opts: unknown, validate: ValidateFn): unknown {
-  // Try each fixture in order — return the first one the validator accepts
-  for (const candidate of [ATTENTION_RESULT, GRAPH_RESULT, TEST_INSIGHT_RESULT, ALTERNATIVES_RESULT, VERDICT_RESULT]) {
+  // Try each fixture in order — return the first one the validator accepts.
+  // StoryOrderResult is tried FIRST because validateAttention/etc. would not
+  // accept it, but its own shape must win for the story task.
+  for (const candidate of [STORY_RESULT, ATTENTION_RESULT, GRAPH_RESULT, TEST_INSIGHT_RESULT, ALTERNATIVES_RESULT, VERDICT_RESULT]) {
     if (validate(candidate) !== null) return candidate
   }
   return ATTENTION_RESULT // fallback
@@ -268,7 +276,7 @@ describe('cache-hit (EC-17a, track cached:true)', () => {
     expect((attentionTrack![1] as Record<string, unknown>)['cached']).toBe(true)
   })
 
-  it('all six tasks cache hit: no llm calls at all', async () => {
+  it('all seven tasks cache hit: no llm calls at all', async () => {
     const deps = makeDeps()
     deps.getCached.mockImplementation(async (key: string) => {
       if (key.includes('summary')) return 'cached summary'
@@ -276,6 +284,7 @@ describe('cache-hit (EC-17a, track cached:true)', () => {
       if (key.includes('diagrams')) return GRAPH_RESULT
       if (key.includes('tests')) return TEST_INSIGHT_RESULT
       if (key.includes('alternatives')) return ALTERNATIVES_RESULT
+      if (key.includes('story')) return STORY_RESULT
       if (key.includes('verdict')) return VERDICT_RESULT
       return null
     })
@@ -291,6 +300,7 @@ describe('cache-hit (EC-17a, track cached:true)', () => {
     expect(run.diagrams.status).toBe('done')
     expect(run.tests.status).toBe('done')
     expect(run.alternatives.status).toBe('done')
+    expect(run.story.status).toBe('done')
     expect(run.verdict.status).toBe('done')
   })
 })
@@ -585,6 +595,8 @@ describe('retry single task', () => {
       if (asTests !== null) return asTests
       const asAlternatives = validate(ALTERNATIVES_RESULT)
       if (asAlternatives !== null) return asAlternatives
+      const asStory = validate(STORY_RESULT)
+      if (asStory !== null) return asStory
       verdictCallCount++
       if (verdictCallCount === 1) throw new LlmError('server', 'verdict broke')
       return VERDICT_RESULT
@@ -691,7 +703,7 @@ describe('duration_ms as number', () => {
     await run.start()
 
     const completedCalls = deps.track.mock.calls.filter((c: unknown[]) => c[0] === 'ai_task_completed')
-    expect(completedCalls.length).toBe(6) // summary + attention + diagrams + tests + alternatives + verdict
+    expect(completedCalls.length).toBe(7) // summary + attention + diagrams + tests + alternatives + story + verdict
 
     for (const call of completedCalls) {
       const props = call[1] as Record<string, unknown>
@@ -1527,16 +1539,16 @@ describe('totalUsage — per-review accumulation', () => {
     expect(run.totalUsage).toBeUndefined()
   })
 
-  it('sums every task usage after a full start() (summary 8 + 5 json tasks × 15)', async () => {
+  it('sums every task usage after a full start() (summary 8 + 6 json tasks × 15)', async () => {
     const deps = makeDeps()
     const run = createAiRun(makeInput(), deps)
     await run.start()
 
-    // summary: total 8; attention/diagrams/tests/alternatives/verdict: 15 each = 75
+    // summary: total 8; attention/diagrams/tests/alternatives/story/verdict: 15 each = 90
     expect(run.totalUsage).toEqual({
-      prompt_tokens: 5 + 10 * 5,
-      completion_tokens: 3 + 5 * 5,
-      total_tokens: 8 + 15 * 5,
+      prompt_tokens: 5 + 10 * 6,
+      completion_tokens: 3 + 5 * 6,
+      total_tokens: 8 + 15 * 6,
     })
   })
 
@@ -1550,6 +1562,7 @@ describe('totalUsage — per-review accumulation', () => {
       if (key.includes('diagrams')) return GRAPH_RESULT
       if (key.includes('tests')) return TEST_INSIGHT_RESULT
       if (key.includes('alternatives')) return ALTERNATIVES_RESULT
+      if (key.includes('story')) return STORY_RESULT
       if (key.includes('verdict')) return VERDICT_RESULT
       return null
     })
@@ -1574,9 +1587,9 @@ describe('totalUsage — per-review accumulation', () => {
 
     expect(run.summary.usage).toBeUndefined()
     expect(run.totalUsage).toEqual({
-      prompt_tokens: 10 * 5,
-      completion_tokens: 5 * 5,
-      total_tokens: 15 * 5,
+      prompt_tokens: 10 * 6,
+      completion_tokens: 5 * 6,
+      total_tokens: 15 * 6,
     })
   })
 })

@@ -5,7 +5,9 @@
   import RevisionPicker from '../components/RevisionPicker.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import CraftedLoader from '../components/CraftedLoader.svelte'
-  import { getSettings, setDiffMode, setHideWhitespace, setRailCollapsed, type DiffMode } from '../lib/settings/settings'
+  import { getSettings, setDiffMode, setHideWhitespace, setRailCollapsed, setStoryMode, type DiffMode } from '../lib/settings/settings'
+  import { activeProviderHasKey } from '../lib/llm/config'
+  import type { GraphResult, StoryOrderResult } from '../lib/ai/schemas'
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import ReviewProgress from '../components/ReviewProgress.svelte'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
@@ -97,6 +99,10 @@
   // Hide-whitespace toggle — same persistence pattern as diffMode
   let hideWhitespace = $state<boolean>(getSettings().hideWhitespace)
   function setHideWs(hide: boolean) { hideWhitespace = hide; setHideWhitespace(hide) }
+
+  // Story mode (Plan H) — per-browser flow choice, same persistence pattern.
+  let storyMode = $state<boolean>(getSettings().storyMode)
+  function setStory(on: boolean) { storyMode = on; setStoryMode(on) }
 
   // Track step changes — fires on initial render and whenever step changes.
   $effect(() => {
@@ -525,6 +531,9 @@
 
   // Whether compare mode is currently active (either source)
   const isCompareActive = $derived(compareMode !== null)
+  // Story mode requires an LLM key (it's a classification task) and is
+  // unavailable while comparing revisions (the story is built for the PR diff).
+  const storyAvailable = $derived(activeProviderHasKey() && !isCompareActive)
   // Files to show in InspectStep
   const inspectFiles = $derived(isCompareActive ? compareMode!.files : (load.state.status === 'ready' ? load.state.files : []))
   const inspectChangedFiles = $derived(isCompareActive ? compareMode!.files.length : (load.state.status === 'ready' ? load.state.meta.changedFiles : 0))
@@ -711,6 +720,12 @@
         askFn={aiRun ? aiRun.ask : null}
         askDisabledReason={inlineAskDisabledReason}
         replyFn={activeProvider.capabilities.commentReplies && !isCompareActive ? postReply : null}
+        {storyAvailable}
+        {storyMode}
+        onstorymode={setStory}
+        story={isCompareActive ? null : (aiRun?.story.status === 'done' ? aiRun.story.value as StoryOrderResult : null)}
+        storyStatus={aiRun?.story.status ?? 'idle'}
+        diagrams={isCompareActive ? null : (aiRun?.diagrams.status === 'done' ? aiRun.diagrams.value as GraphResult : null)}
       />
     {:else}
       <VerdictStep

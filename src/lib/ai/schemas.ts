@@ -432,6 +432,90 @@ function isObject(x: unknown): x is Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// StoryOrderResult (Plan H — Story mode)
+// ---------------------------------------------------------------------------
+
+/**
+ * Layer taxonomy for story classification, in canonical reading order. Exported
+ * so the prompt builder and consumers share the SAME list (single source of
+ * truth). 'foundational'/'config' are woven in just before their first consumer
+ * by the model — the order here is only the within-layer grouping default.
+ */
+export const STORY_LAYERS = [
+  'data',
+  'api',
+  'logic',
+  'config',
+  'tests',
+  'ui',
+  'foundational',
+] as const
+
+export type StoryLayer = (typeof STORY_LAYERS)[number]
+
+export interface StoryStep {
+  /** Ordered position, 0-based. The model emits steps already in reading order. */
+  index: number
+  /** File path(s) this step covers — at least one, all should appear in the PR. */
+  files: string[]
+  /** One-line narrative caption ("The schema gains a `provider` column…"). */
+  caption: string
+  /** Which layer this step belongs to. */
+  layer: StoryLayer
+  /** Related test file paths to show inline for sense-checking (may be empty). */
+  relatedTests: string[]
+}
+
+export interface StoryOrderResult {
+  steps: StoryStep[]
+}
+
+const STORY_LAYER_SET = new Set<string>(STORY_LAYERS)
+
+/**
+ * Validate an unknown value as StoryOrderResult.
+ * Returns the typed value or null if the shape is invalid.
+ *
+ * Strict on: steps array, each step's index (integer), files (non-empty array
+ * of strings), caption (string), layer (enum), relatedTests (array of strings).
+ * Tolerant of extra keys. An empty steps array is valid (the consumer falls
+ * back to Files mode when there are no usable steps).
+ */
+export function validateStoryOrder(x: unknown): StoryOrderResult | null {
+  if (!isObject(x)) return null
+
+  if (!Array.isArray(x['steps'])) return null
+  for (const step of x['steps']) {
+    if (!isObject(step)) return null
+
+    // index — required integer
+    if (typeof step['index'] !== 'number' || !Number.isInteger(step['index'])) return null
+
+    // files — required non-empty array of strings
+    if (!Array.isArray(step['files']) || step['files'].length === 0) return null
+    for (const f of step['files']) {
+      if (typeof f !== 'string') return null
+    }
+
+    // caption — required string
+    if (typeof step['caption'] !== 'string') return null
+
+    // layer — required string enum
+    if (typeof step['layer'] !== 'string' || !STORY_LAYER_SET.has(step['layer'] as string)) {
+      return null
+    }
+
+    // relatedTests — required array of strings
+    if (!Array.isArray(step['relatedTests'])) return null
+    for (const t of step['relatedTests']) {
+      if (typeof t !== 'string') return null
+    }
+  }
+
+  return x as unknown as StoryOrderResult
+}
+
+// ---------------------------------------------------------------------------
 // SkillFinding / SkillReviewResult (Skill reviewer feature)
 // ---------------------------------------------------------------------------
 

@@ -39,6 +39,13 @@ const EVENTS = {
   focus_mode_on: [],
   rail_expanded: [],
   step_viewed: ['step'],
+  // PRIVACY DECISION (Plan H — Story mode): neither event carries content.
+  // 'story_mode_entered' fires when the user switches step 2 to the narrative
+  // walkthrough — no properties. 'story_step_viewed' carries 'index', the
+  // integer step position only (never a file path, caption, or diff content),
+  // for walkthrough-engagement observability.
+  story_mode_entered: [],
+  story_step_viewed: ['index'],
 } as const
 
 export type EventName = keyof typeof EVENTS
