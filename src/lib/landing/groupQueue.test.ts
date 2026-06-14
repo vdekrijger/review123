@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { groupByRepo, isMultiRepo } from './groupQueue'
+import { groupByRepo } from './groupQueue'
 import type { QueueItem } from '../provider/types'
 
 function makeItem(
@@ -21,7 +21,7 @@ describe('groupByRepo', () => {
     expect(groupByRepo([])).toEqual([])
   })
 
-  it('puts items from a single repo into one group (flat list case)', () => {
+  it('puts items from a single repo into one group', () => {
     const items = [makeItem('github', 'org', 'repo', 1), makeItem('github', 'org', 'repo', 2)]
     const groups = groupByRepo(items)
     expect(groups).toHaveLength(1)
@@ -29,7 +29,6 @@ describe('groupByRepo', () => {
     expect(groups[0].repo).toBe('repo')
     expect(groups[0].provider).toBe('github')
     expect(groups[0].items.map((i) => i.ref.number)).toEqual([1, 2])
-    expect(isMultiRepo(groups)).toBe(false)
   })
 
   it('groups items from multiple repos, preserving first-seen group order and item order', () => {
@@ -44,14 +43,12 @@ describe('groupByRepo', () => {
     expect(groups[0].items.map((i) => i.ref.number)).toEqual([1, 3])
     expect(groups[1].repo).toBe('beta')
     expect(groups[1].items.map((i) => i.ref.number)).toEqual([2])
-    expect(isMultiRepo(groups)).toBe(true)
   })
 
   it('treats the same owner/repo on different providers as distinct groups', () => {
     const items = [makeItem('github', 'org', 'repo', 1), makeItem('gitlab', 'org', 'repo', 2)]
     const groups = groupByRepo(items)
     expect(groups).toHaveLength(2)
-    expect(isMultiRepo(groups)).toBe(true)
   })
 
   it('gives each group a stable unique key', () => {

@@ -1,11 +1,10 @@
 /**
  * src/lib/landing/groupQueue.ts — per-repo grouping for the review queue.
  *
- * When a queue list contains entries from more than one repo, the landing
- * page renders compact repo headers with the rows beneath. groupByRepo
- * buckets items by provider+owner/repo, preserving first-seen group order
- * and the item order within each group. isMultiRepo decides whether the
- * grouped rendering applies (single-repo lists stay flat).
+ * The landing page renders every queue list under compact repo headers with
+ * the rows beneath — a single-repo list gets one header, multi-repo lists get
+ * one per repo. groupByRepo buckets items by provider+owner/repo, preserving
+ * first-seen group order and the item order within each group.
  */
 
 import type { QueueItem } from '../provider/types'
@@ -32,8 +31,4 @@ export function groupByRepo(items: QueueItem[]): RepoGroup[] {
     group.items.push(item)
   }
   return [...groups.values()]
-}
-
-export function isMultiRepo(groups: RepoGroup[]): boolean {
-  return groups.length > 1
 }

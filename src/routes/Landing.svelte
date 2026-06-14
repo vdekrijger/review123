@@ -6,7 +6,7 @@
   import { fetchAllQueues, _resetQueueCacheForTest } from '../lib/provider/queue'
   import { relativeTime } from '../lib/time'
   import { isSectionCollapsed, setSectionCollapsed, type LandingSectionId } from '../lib/landing/collapse'
-  import { groupByRepo, isMultiRepo } from '../lib/landing/groupQueue'
+  import { groupByRepo } from '../lib/landing/groupQueue'
   import { getCachedSizes, fetchMissingSizes, sizeKey, type DiffSize } from '../lib/landing/queueSizes'
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import { track } from '../lib/analytics/analytics'
@@ -146,9 +146,10 @@
 
 <!--
   queueRows — renders one queue list (awaiting / my open PRs).
-  Multi-repo lists are grouped under compact repo headers (provider icon +
-  owner/repo) with rows showing just #number · title; single-repo lists stay
-  flat with a provider icon per row.
+  Every list is grouped under compact repo headers (provider icon + owner/repo)
+  with rows showing just #number · title. A single-repo list shows one header;
+  multi-repo lists show one header per repo. This keeps both queue sections
+  consistent and avoids repeating the owner/repo prefix on every row.
 -->
 <!--
   queueSize — compact "+adds −dels" chip, colored like the diff stat chips
@@ -165,35 +166,13 @@
 {/snippet}
 
 {#snippet queueRows(items: QueueItem[])}
-  {@const groups = groupByRepo(items)}
-  {#if isMultiRepo(groups)}
-    {#each groups as group (group.key)}
-      <div class="repo-group-header">
-        <ProviderIcon provider={group.provider} size={12} label={PROVIDER_NAMES[group.provider]} />
-        <span class="repo-group-name">{group.owner}/{group.repo}</span>
-      </div>
-      <ul class="queue-list grouped">
-        {#each group.items as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
-          <li class="queue-item">
-            <button
-              type="button"
-              class="queue-link"
-              onclick={() => navigateToQueueItem(item)}
-              aria-label="{item.ref.owner}/{item.ref.repo}#{item.ref.number} on {PROVIDER_NAMES[item.ref.provider]}"
-            >
-              <span class="queue-ref">#{item.ref.number}</span>
-              <span class="queue-sep"> · </span>
-              <span class="queue-title-text">{item.title}</span>
-              {@render queueSize(queueSizes[sizeKey(item)])}
-              <span class="queue-time">{relativeTime(item.updatedAt)}</span>
-            </button>
-          </li>
-        {/each}
-      </ul>
-    {/each}
-  {:else}
-    <ul class="queue-list">
-      {#each items as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
+  {#each groupByRepo(items) as group (group.key)}
+    <div class="repo-group-header">
+      <ProviderIcon provider={group.provider} size={12} label={PROVIDER_NAMES[group.provider]} />
+      <span class="repo-group-name">{group.owner}/{group.repo}</span>
+    </div>
+    <ul class="queue-list grouped">
+      {#each group.items as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
         <li class="queue-item">
           <button
             type="button"
@@ -201,9 +180,8 @@
             onclick={() => navigateToQueueItem(item)}
             aria-label="{item.ref.owner}/{item.ref.repo}#{item.ref.number} on {PROVIDER_NAMES[item.ref.provider]}"
           >
-            <span class="queue-icon"><ProviderIcon provider={item.ref.provider} size={14} /></span>
-            <span class="queue-ref">{item.ref.owner}/{item.ref.repo}#{item.ref.number}</span>
-            <span class="queue-sep"> — </span>
+            <span class="queue-ref">#{item.ref.number}</span>
+            <span class="queue-sep"> · </span>
             <span class="queue-title-text">{item.title}</span>
             {@render queueSize(queueSizes[sizeKey(item)])}
             <span class="queue-time">{relativeTime(item.updatedAt)}</span>
@@ -211,7 +189,7 @@
         </li>
       {/each}
     </ul>
-  {/if}
+  {/each}
 {/snippet}
 
 <section class="landing">
@@ -557,16 +535,8 @@
     background: var(--surface-raised);
   }
 
-  .queue-icon {
-    align-self: center;
-    display: inline-flex;
-    margin-right: 0.45rem;
-    color: var(--text-muted);
-    flex-shrink: 0;
-  }
-
-  /* Compact repo header for multi-repo queue lists — same muted small-caps
-     register as the other section labels. */
+  /* Compact repo header for queue lists — same muted small-caps register as
+     the other section labels. Every queue list is grouped under one of these. */
   .repo-group-header {
     display: flex;
     align-items: center;
