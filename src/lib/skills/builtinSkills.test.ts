@@ -2,7 +2,7 @@
  * Tests for src/lib/skills/builtinSkills.ts
  *
  * Covers:
- *   - BUILTIN_SKILLS is an array of 6 entries
+ *   - BUILTIN_SKILLS is an array of 8 entries
  *   - Each entry has id, name, tagline, and content fields
  *   - Content sanity: < 20_000 chars, non-empty, contains 'Priorities' or 'Discipline'
  *   - Each entry has a unique id
@@ -15,9 +15,9 @@ import { BUILTIN_SKILLS } from './builtinSkills'
 import { SAMPLE_SKILL_NAME } from './sampleSkill'
 
 describe('BUILTIN_SKILLS', () => {
-  it('is an array of exactly 7 entries', () => {
+  it('is an array of exactly 8 entries', () => {
     expect(Array.isArray(BUILTIN_SKILLS)).toBe(true)
-    expect(BUILTIN_SKILLS).toHaveLength(7)
+    expect(BUILTIN_SKILLS).toHaveLength(8)
   })
 
   it('each entry has id, name, tagline, and content fields as strings', () => {
@@ -128,6 +128,38 @@ describe('BUILTIN_SKILLS', () => {
   it('Comment Sensibility persona carries the shared calibration (not bypassed)', async () => {
     const { SHARED_CALIBRATION } = await import('./builtinSkills')
     const skill = BUILTIN_SKILLS.find((s) => s.id === 'comment-sensibility')
+    expect(skill?.content.endsWith(SHARED_CALIBRATION)).toBe(true)
+  })
+
+  it('includes a "PostHog Observability Reviewer" entry', () => {
+    expect(BUILTIN_SKILLS.some((s) => s.name === 'PostHog Observability Reviewer')).toBe(true)
+  })
+
+  it('PostHog Observability Reviewer has the expected id and tagline', () => {
+    const skill = BUILTIN_SKILLS.find((s) => s.name === 'PostHog Observability Reviewer')
+    expect(skill?.id).toBe('posthog-observability')
+    expect(skill?.tagline).toBe('Events, flags, errors — what would PostHog want to see?')
+  })
+
+  it('PostHog persona references real PostHog capabilities (capture / feature flag / error tracking)', () => {
+    const skill = BUILTIN_SKILLS.find((s) => s.id === 'posthog-observability')
+    expect(skill?.content).toMatch(/posthog\.capture/i)
+    expect(skill?.content).toMatch(/feature flag/i)
+    expect(skill?.content).toMatch(/error tracking/i)
+    expect(skill?.content).toMatch(/experiment/i)
+    expect(skill?.content).toMatch(/survey/i)
+    expect(skill?.content).toMatch(/session replay/i)
+  })
+
+  it('PostHog persona stays disciplined — silence on already-instrumented / unfitting code', () => {
+    const skill = BUILTIN_SKILLS.find((s) => s.id === 'posthog-observability')
+    expect(skill?.content).toMatch(/already instrumented/i)
+    expect(skill?.content).toMatch(/empty result/i)
+  })
+
+  it('PostHog persona carries the shared calibration (not bypassed)', async () => {
+    const { SHARED_CALIBRATION } = await import('./builtinSkills')
+    const skill = BUILTIN_SKILLS.find((s) => s.id === 'posthog-observability')
     expect(skill?.content.endsWith(SHARED_CALIBRATION)).toBe(true)
   })
 
