@@ -73,7 +73,7 @@ describe('Landing queue section', () => {
     expect(screen.getByTestId('queue-skeleton')).toBeInTheDocument()
 
     resolveFetch([makeItem('github', 'org', 'repo', 5, 'Resolved PR', false)])
-    await screen.findByText(/org\/repo#5/i)
+    await screen.findByRole('button', { name: /org\/repo#5/i })
     expect(screen.queryByTestId('queue-skeleton')).not.toBeInTheDocument()
   })
 
@@ -99,13 +99,13 @@ describe('Landing queue section', () => {
       .mockReturnValueOnce(new Promise<QueueItem[]>((resolve) => { resolveRefresh = resolve }))
 
     render(Landing)
-    await screen.findByText(/org\/repo#9/i)
+    await screen.findByRole('button', { name: /org\/repo#9/i })
 
     const refreshBtn = screen.getByRole('button', { name: /refresh queue/i })
     await fireEvent.click(refreshBtn)
 
     // Rows stay visible (no skeleton swap), dimmed while in flight
-    expect(screen.getByText(/org\/repo#9/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /org\/repo#9/i })).toBeInTheDocument()
     expect(screen.queryByTestId('queue-skeleton')).not.toBeInTheDocument()
     const rows = screen.getByTestId('queue-rows')
     expect(rows).toHaveAttribute('aria-busy', 'true')
@@ -113,7 +113,7 @@ describe('Landing queue section', () => {
     expect(refreshBtn).toBeDisabled()
 
     resolveRefresh([makeItem('github', 'org', 'repo', 10, 'Fresh PR', false)])
-    await screen.findByText(/org\/repo#10/i)
+    await screen.findByRole('button', { name: /org\/repo#10/i })
     expect(screen.getByTestId('queue-rows')).toHaveAttribute('aria-busy', 'false')
     expect(refreshBtn).not.toBeDisabled()
   })
@@ -142,8 +142,9 @@ describe('Landing queue section', () => {
     // Wait for async fetch to complete
     await screen.findByText(/Awaiting your review/i)
     expect(screen.getByText(/Your open PRs/i)).toBeTruthy()
-    expect(screen.getByText(/org\/repo#1/i)).toBeTruthy()
-    expect(screen.getByText(/org\/repo#2/i)).toBeTruthy()
+    // Rows live under per-repo headers now; accessible name still carries the full ref
+    expect(screen.getByRole('button', { name: /org\/repo#1/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /org\/repo#2/i })).toBeTruthy()
   })
 
   it('clicking a queue row navigates to the review route', async () => {
@@ -181,12 +182,13 @@ describe('Landing queue provider icons + per-repo grouping', () => {
     await screen.findByText(/Awaiting your review/i)
 
     expect(screen.queryByText('GH')).not.toBeInTheDocument()
-    const icon = container.querySelector('.queue-link [data-provider="github"] svg')
+    // The provider brand icon lives in the repo header (one per group)
+    const icon = container.querySelector('.repo-group-header [data-provider="github"] svg')
     expect(icon).not.toBeNull()
     expect(icon!.getAttribute('aria-hidden')).toBe('true')
   })
 
-  it('single-repo list stays flat: full owner/repo#number per row, no repo header', async () => {
+  it('single-repo list renders ONE repo header; rows show #number (no repeated owner/repo prefix)', async () => {
     const items = [
       makeItem('github', 'org', 'repo', 1, 'First', false),
       makeItem('github', 'org', 'repo', 2, 'Second', false),
@@ -196,9 +198,19 @@ describe('Landing queue provider icons + per-repo grouping', () => {
     const { container } = render(Landing)
     await screen.findByText(/Awaiting your review/i)
 
-    expect(container.querySelector('.repo-group-header')).toBeNull()
-    expect(screen.getByText(/org\/repo#1/)).toBeInTheDocument()
-    expect(screen.getByText(/org\/repo#2/)).toBeInTheDocument()
+    // Exactly one repo header with provider icon + owner/repo
+    const headers = [...container.querySelectorAll('.repo-group-header')]
+    expect(headers).toHaveLength(1)
+    expect(headers[0].textContent).toContain('org/repo')
+    expect(headers[0].querySelector('[data-provider="github"] svg')).not.toBeNull()
+
+    // Rows show just "#number" — the owner/repo prefix is NOT repeated per row
+    expect(screen.getByText('#1')).toBeInTheDocument()
+    expect(screen.getByText('#2')).toBeInTheDocument()
+    expect(screen.queryByText(/org\/repo#1/)).not.toBeInTheDocument()
+
+    // …but the accessible name still carries the full ref for screen readers
+    expect(screen.getByRole('button', { name: /org\/repo#1/i })).toBeInTheDocument()
   })
 
   it('multi-repo list groups rows under compact repo headers with #number · title rows', async () => {
@@ -241,7 +253,7 @@ describe('Landing queue provider icons + per-repo grouping', () => {
     expect(navigate).toHaveBeenCalledWith('/review/gitlab/grp/beta/2')
   })
 
-  it('grouping is computed per list: awaiting grouped while open PRs stay flat', async () => {
+  it('grouping is computed per list: each list gets its own repo headers', async () => {
     const items = [
       makeItem('github', 'org', 'alpha', 1, 'Alpha PR', false),
       makeItem('github', 'org', 'beta', 2, 'Beta PR', false),
@@ -252,9 +264,17 @@ describe('Landing queue provider icons + per-repo grouping', () => {
     const { container } = render(Landing)
     await screen.findByText(/Your open PRs/i)
 
-    // Awaiting list (2 repos) grouped; my-open-PRs list (1 repo) flat
-    expect(container.querySelectorAll('.repo-group-header')).toHaveLength(2)
-    expect(screen.getByText(/org\/mine#3/)).toBeInTheDocument()
+    // Awaiting list (alpha, beta) → 2 headers; my-open-PRs list (mine) → 1 header
+    const headers = [...container.querySelectorAll('.repo-group-header')]
+    expect(headers).toHaveLength(3)
+    expect(headers.map((h) => h.textContent)).toEqual([
+      expect.stringContaining('org/alpha'),
+      expect.stringContaining('org/beta'),
+      expect.stringContaining('org/mine'),
+    ])
+    // The single-repo open-PRs row shows just "#3", not the repeated prefix
+    expect(screen.getByText('#3')).toBeInTheDocument()
+    expect(screen.queryByText(/org\/mine#3/)).not.toBeInTheDocument()
   })
 
   it('"Your open PRs" groups per repo (reusing groupQueue) when authored PRs span repos', async () => {
@@ -302,7 +322,7 @@ describe('Landing queue diff size chips (+adds −dels)', () => {
     })
 
     render(Landing)
-    await screen.findByText(/org\/repo#5/)
+    await screen.findByRole('button', { name: /org\/repo#5/i })
 
     // Rendered without a size — the queue is never blocked on size fetches
     expect(screen.queryByTestId('queue-size')).not.toBeInTheDocument()
@@ -324,7 +344,7 @@ describe('Landing queue diff size chips (+adds −dels)', () => {
     vi.spyOn(sizesModule, 'fetchMissingSizes').mockResolvedValue(undefined)
 
     render(Landing)
-    await screen.findByText(/org\/repo#8/)
+    await screen.findByRole('button', { name: /org\/repo#8/i })
 
     expect(screen.getByTestId('queue-size')).toBeInTheDocument()
     expect(screen.getByText('+7')).toBeInTheDocument()
@@ -337,7 +357,7 @@ describe('Landing queue diff size chips (+adds −dels)', () => {
     vi.spyOn(sizesModule, 'fetchMissingSizes').mockResolvedValue(undefined)
 
     render(Landing)
-    await screen.findByText(/org\/repo#9/)
+    await screen.findByRole('button', { name: /org\/repo#9/i })
 
     expect(screen.queryByTestId('queue-size')).not.toBeInTheDocument()
   })
