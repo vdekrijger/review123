@@ -7,7 +7,19 @@
  * the AI schema validator.
  */
 
-export type NodeStatus = 'added' | 'removed' | 'changed' | 'unchanged'
+/**
+ * Node/edge status drives the Mermaid classDef styling.
+ *
+ * The `context` status (deep-diagram mode) marks one-hop architectural
+ * neighborhood nodes — direct importers/callers of the changed modules and
+ * their direct dependencies — so the diagram situates the change inside the
+ * broader system. Context nodes render DE-EMPHASIZED (muted, dashed, low
+ * contrast) so the changed nodes stay the visual focus.
+ *
+ * It is an ADDITIVE extension: old cached graphs that never carry `context`
+ * still validate and render byte-identically.
+ */
+export type NodeStatus = 'added' | 'removed' | 'changed' | 'unchanged' | 'context'
 
 export interface Graph {
   nodes: { id: string; label: string; status?: NodeStatus }[]

@@ -12,7 +12,7 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
-export const PROMPT_VERSION = 11
+export const PROMPT_VERSION = 12
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)
@@ -209,11 +209,47 @@ Example valid output JSON (note status fields on every node and edge in changeMa
  * A compact few-shot example is embedded in the system prompt so the model
  * learns the exact shape by demonstration.
  */
-export function diagramsPrompt(ctx: PackedContext): { system: string; user: string } {
+/**
+ * Cap on `context` (one-hop neighborhood) nodes in deep-diagram mode. The
+ * model is told to keep the most-connected neighbors and drop the rest so a
+ * large neighborhood cannot explode the diagram. Exported for the prompt test.
+ */
+export const DEEP_DIAGRAM_CONTEXT_NODE_CAP = 8
+
+export function diagramsPrompt(
+  ctx: PackedContext,
+  options?: { deep?: boolean },
+): { system: string; user: string } {
   const importGraphSection = ctx.importGraph
     ? `\n\n## Module relationships (extracted from code)\n\n${ctx.importGraph}\n\nGround your nodes and edges in these REAL import relationships. Prefer files and modules \
 that appear in the import graph above. Statuses (added/removed/changed/unchanged) are still \
 required on every node and edge in changeMap.`
+    : ''
+
+  // Deep-diagram guidance (PROMPT_VERSION 12): when the agentic harness is on,
+  // the model situates the changed files inside the BROADER architecture by
+  // walking one hop out (importers/callers + direct dependencies) with the
+  // verification tools, then tagging those neighbors with status "context".
+  const deepContextSection = options?.deep
+    ? `\n\n## Deep mode — situate the change in the broader architecture (IMPORTANT)
+You have verification tools (search_code / read_file). After forming the changed-file graph as \
+described above, use them to find the IMMEDIATE architectural neighborhood — ONE HOP OUT, not \
+the whole repo:
+- Direct IMPORTERS / CALLERS of the changed modules (search_code for the changed symbol/file).
+- Direct DEPENDENCIES the changed modules import (read the changed file's imports).
+Add the highest-signal of these neighbors as nodes with status "context" so the diagram shows \
+WHERE the change sits in the system. Context nodes appear in before/after/changeMap where \
+relevant. Edges between a context node and a changed node carry status "context" and a \
+"uses"/"calls" verb label so they read as ambient relationships (the serializer de-emphasizes \
+them visually). The five change statuses still apply to the changed nodes/edges themselves.
+
+Budget & cap discipline:
+- Stay within the tool budget: prefer the most-connected, highest-signal neighbors. Do NOT \
+  enumerate the whole repo or chase second-hop neighbors.
+- At most ${DEEP_DIAGRAM_CONTEXT_NODE_CAP} context nodes. If more neighbors exist, keep the \
+  most-connected ones and drop the rest silently (do NOT add a placeholder "+N more" node — \
+  changeMap's 14-node total cap still holds).
+- "context" is the ONLY new status — never invent others.`
     : ''
 
   const system = `You are an expert code reviewer assistant. Analyze the pull request changes \
@@ -231,8 +267,8 @@ Mermaid syntax. Your response must be valid JSON matching this shape exactly:
     "edges": [{ "from": "<node-id>", "to": "<node-id>", "label": "<optional-label>" }, ...]
   },
   "changeMap": {
-    "nodes": [{ "id": "<unique-id>", "label": "<display-label>", "status": "added"|"removed"|"changed"|"unchanged" }, ...],
-    "edges": [{ "from": "<node-id>", "to": "<node-id>", "label": "<optional-label>", "status": "added"|"removed"|"changed"|"unchanged" }, ...]
+    "nodes": [{ "id": "<unique-id>", "label": "<display-label>", "status": "added"|"removed"|"changed"|"unchanged"|"context" }, ...],
+    "edges": [{ "from": "<node-id>", "to": "<node-id>", "label": "<optional-label>", "status": "added"|"removed"|"changed"|"unchanged"|"context" }, ...]
   }
 }
 
@@ -252,7 +288,9 @@ changeMap (PRIMARY OUTPUT — this is what the UI renders first):
 - Every node and every edge in changeMap MUST carry a status field:
   "added" — present only in after; "removed" — present only in before;
   "changed" — present in both but behavior/signature changed;
-  "unchanged" — present in both, unaffected by this PR.
+  "unchanged" — present in both, unaffected by this PR;
+  "context" — a surrounding architectural neighbor (NOT touched by this PR) included only to \
+  situate the change; emit these ONLY in deep mode (see below) — never invent them otherwise.
 - Statuses must reflect this PR's actual effect, not guesses.
 - before and after remain for the toggle view (compact is fine — mirror the changeMap nodes).
 
@@ -268,7 +306,7 @@ Graph size constraints (IMPORTANT):
   JSON graph data only — any captioning happens in ≤2 sentences downstream, not here).
 - Edges: only include edges that represent CHANGED or newly-added relationships.
 
-${FEW_SHOT_EXAMPLE}${importGraphSection}
+${FEW_SHOT_EXAMPLE}${importGraphSection}${deepContextSection}
 
 Do not include any text outside the JSON object.`
 

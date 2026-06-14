@@ -623,3 +623,88 @@ describe('EC-14c adversarial — status graph structural invariants', () => {
     })
   }
 })
+
+// ---------------------------------------------------------------------------
+// context status (deep-diagram one-hop neighborhood) — de-emphasized styling
+// ---------------------------------------------------------------------------
+
+describe('graphToMermaid — context status (deep-diagram neighborhood)', () => {
+  const contextGraph = {
+    nodes: [
+      { id: 'changed', label: 'router.ts', status: 'changed' as const },
+      { id: 'neighbor', label: 'app.ts', status: 'context' as const },
+    ],
+    edges: [{ from: 'neighbor', to: 'changed', label: 'uses', status: 'context' as const }],
+  }
+
+  it('emits a context classDef and class assignment', () => {
+    const { mermaid } = graphToMermaid(contextGraph, 'flow')
+    expect(mermaid).toContain('classDef context')
+    // The context node (n1) carries the class assignment
+    expect(mermaid).toContain('class n1 context')
+  })
+
+  it('dark palette: context classDef is muted, thin, dashed', () => {
+    const { mermaid } = graphToMermaid(contextGraph, 'flow', { palette: 'dark' })
+    expect(mermaid).toContain(
+      'classDef context fill:#202024,stroke:#3d3d44,color:#8a8a93,stroke-width:1px,stroke-dasharray: 3 3',
+    )
+    // Must NOT borrow the light context fill
+    expect(mermaid).not.toContain('fill:#f6f6f8')
+  })
+
+  it('light palette: context classDef is muted, thin, dashed', () => {
+    const { mermaid } = graphToMermaid(contextGraph, 'flow', { palette: 'light' })
+    expect(mermaid).toContain(
+      'classDef context fill:#f6f6f8,stroke:#d0d0d6,color:#9b9b9b,stroke-width:1px,stroke-dasharray: 3 3',
+    )
+    // Must NOT borrow the dark context fill
+    expect(mermaid).not.toContain('fill:#202024')
+  })
+
+  it('context edge with label reads as a dotted "uses/calls" relationship', () => {
+    const { mermaid } = graphToMermaid(contextGraph, 'flow')
+    // Dotted labeled arrow (same family as removed, but distinct from change edges)
+    expect(mermaid).toContain('n1 -. "uses" .-> n0')
+  })
+
+  it('context edge without label uses the dotted arrow', () => {
+    const { mermaid } = graphToMermaid({
+      nodes: [
+        { id: 'a', label: 'A', status: 'changed' },
+        { id: 'b', label: 'B', status: 'context' },
+      ],
+      edges: [{ from: 'b', to: 'a', status: 'context' }],
+    })
+    expect(mermaid).toContain('n1 -.-> n0')
+    // Not the thick (added) or plain arrow
+    expect(mermaid).not.toContain('==>')
+  })
+
+  it('context classDef emits AFTER the four change statuses (deterministic order)', () => {
+    const { mermaid } = graphToMermaid({
+      nodes: [
+        { id: 'a', label: 'A', status: 'added' },
+        { id: 'b', label: 'B', status: 'removed' },
+        { id: 'c', label: 'C', status: 'changed' },
+        { id: 'd', label: 'D', status: 'unchanged' },
+        { id: 'e', label: 'E', status: 'context' },
+      ],
+      edges: [],
+    })
+    const unchangedIdx = mermaid.indexOf('classDef unchanged')
+    const contextIdx = mermaid.indexOf('classDef context')
+    expect(unchangedIdx).toBeGreaterThanOrEqual(0)
+    expect(contextIdx).toBeGreaterThan(unchangedIdx)
+  })
+
+  it('a graph that uses ONLY context status still emits the classDef (no change statuses needed)', () => {
+    const { mermaid } = graphToMermaid({
+      nodes: [{ id: 'a', label: 'A', status: 'context' }],
+      edges: [],
+    })
+    expect(mermaid).toContain('classDef context')
+    expect(mermaid).toContain('class n0 context')
+    expect(mermaid).not.toContain('classDef added')
+  })
+})

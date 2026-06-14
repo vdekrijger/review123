@@ -84,10 +84,27 @@ const ALTERNATIVES_RESULT = {
   alternatives: [],
 }
 
+// Deep-diagram changeMap with a de-emphasized one-hop "context" neighbor
+// (deep-diagrams-context, v12). The changed file is the focus; app.ts is the
+// surrounding architecture pulled in via the verification tools.
+const DIAGRAM_RESULT = {
+  kind: 'flow',
+  before: { nodes: [{ id: 'feature', label: 'feature.ts' }], edges: [] },
+  after: { nodes: [{ id: 'feature', label: 'feature.ts' }], edges: [] },
+  changeMap: {
+    nodes: [
+      { id: 'feature', label: 'feature.ts', status: 'changed' },
+      { id: 'caller', label: 'AppRouter', status: 'context' },
+    ],
+    edges: [{ from: 'caller', to: 'feature', label: 'calls', status: 'context' }],
+  },
+}
+
 // Pick the deep-task result shape from the system prompt the loop carries.
 function deepResultForSystem(system: string): string {
   if (/changed test files/i.test(system)) return JSON.stringify(TESTS_RESULT)
   if (/genuinely different approach/i.test(system)) return JSON.stringify(ALTERNATIVES_RESULT)
+  if (/NO Mermaid syntax/i.test(system)) return JSON.stringify(DIAGRAM_RESULT)
   return JSON.stringify(VERDICT_RESULT)
 }
 
@@ -189,7 +206,8 @@ async function setupRoutes(page: import('@playwright/test').Page) {
       })
     }
 
-    // Deep-review tool conversation (verdict + tests + alternatives, tools enabled)
+    // Deep-review tool conversation (verdict + tests + alternatives + diagrams,
+    // tools enabled — diagrams now run deep too, see deepResultForSystem)
     if (Array.isArray(body?.tools) && body.tools.length > 0) {
       const system = (body.messages ?? []).find((m) => m.role === 'system')?.content ?? ''
       const hasToolResult = (body.messages ?? []).some((m) => m.role === 'tool')
@@ -228,8 +246,8 @@ async function setupRoutes(page: import('@playwright/test').Page) {
       return route.fulfill({ status: 200, json: jsonChatCompletion(deepResultForSystem(system)) })
     }
 
-    // Single-pass JSON tasks that stay single-pass even in deep mode (attention,
-    // diagrams). They never carry a tools array.
+    // Single-pass JSON tasks that stay single-pass even in deep mode (attention).
+    // They never carry a tools array.
     return route.fulfill({ status: 200, json: jsonChatCompletion(JSON.stringify(VERDICT_RESULT)) })
   })
   return toolRounds
@@ -280,4 +298,21 @@ test('deep review: 2-round tool conversation renders verdict with the tool-call 
   await testsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
   await expect(testsPanel).toContainText('extends the existing flow')
   await expect(testsPanel.locator('.ai-deep-footer')).toHaveText(/Deep review: verified with 1 tool call/)
+
+  // Diagram task ALSO ran through the deep harness (same toggle): its change-map
+  // renders the de-emphasized one-hop "context" neighbor (AppRouter) alongside
+  // the changed file, plus the same tool-call footer.
+  const diagramsPanel = page.locator('details.diagrams-panel')
+  await expect(diagramsPanel).toBeVisible({ timeout: 20_000 })
+  await diagramsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+  // The change-map SVG renders with the de-emphasized one-hop neighbor.
+  const changeMapSvg = diagramsPanel.locator('.changemap-section svg')
+  await expect(changeMapSvg).toBeVisible({ timeout: 20_000 })
+  // Mermaid emits the `context` classDef styling ONLY when a node/edge carries
+  // status:'context'. Its presence in the rendered change-map SVG proves the deep
+  // diagram added the de-emphasized one-hop neighbor and that the new status
+  // round-trips through the serializer end-to-end (the diff-scoped single-pass
+  // path never produces context nodes).
+  await expect(changeMapSvg.locator('style')).toContainText('.context', { timeout: 20_000 })
+  await expect(diagramsPanel.locator('.ai-deep-footer')).toHaveText(/Deep review: verified with 1 tool call/)
 })
