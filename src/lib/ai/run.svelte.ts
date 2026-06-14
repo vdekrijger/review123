@@ -54,6 +54,7 @@ import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachRes
 import type { Draft } from '../drafts/drafts.svelte'
 import { listSkills } from '../skills/skills'
 import { djb2 } from '../viewed/viewed.svelte'
+import { addUsage } from './tokenCost'
 
 // ---------------------------------------------------------------------------
 // PanelState union
@@ -71,6 +72,12 @@ export interface PanelState<T> {
   toolCallsUsed?: number
   /** Honest UI note (e.g. deep review fell back to single-pass). */
   note?: string
+  /**
+   * Token usage for this task, when the transport captured it. Surfaced ONLY
+   * by the opt-in showTokenCost footer; absent on cached results that predate
+   * usage capture (footer then shows nothing for that task — never fabricated).
+   */
+  usage?: LlmUsage
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +108,13 @@ export interface AiRun {
   readonly tests: PanelState<TestInsight>
   readonly alternatives: PanelState<AlternativesResult>
   readonly skillReviews: SkillReviewEntry[]
+  /**
+   * Sum of every task's captured token usage for THIS PR run (the six core
+   * tasks + any skill reviews). undefined when no task reported usage.
+   * Reset implicitly on PR change: a fresh createAiRun() per PR owns its own
+   * panel states. Display-only — consumed by the showTokenCost total.
+   */
+  readonly totalUsage: LlmUsage | undefined
   start(): Promise<void>
   retry(task: TaskName): Promise<void>
   coach(drafts: Draft[], prComments?: string[], verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'): Promise<CoachResult | { error: string }>
@@ -241,6 +255,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       await setCached<string>(key, streamResult.content)
       summaryState.status = 'done'
       summaryState.value = streamResult.content
+      summaryState.usage = streamResult.usage
       const summaryTokens = streamResult.usage?.total_tokens
       track('ai_task_completed', {
         task: 'summary',
@@ -274,6 +289,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         attentionState.status = 'done'
         attentionState.value = hit.result
         attentionState.toolCallsUsed = hit.toolCallsUsed
+        attentionState.usage = hit.usage
         track('ai_task_completed', { task: 'attention', duration_ms: Math.round(performance.now() - t0), cached: true, deep: true })
         return
       }
@@ -304,7 +320,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         attentionResult = deepOutcome.result
         attentionUsage = deepOutcome.usage
         toolCallsUsed = deepOutcome.toolCallsUsed
-        await setCached<DeepCached<AttentionResult>>(key, { deep: true, result: attentionResult, toolCallsUsed })
+        await setCached<DeepCached<AttentionResult>>(key, { deep: true, result: attentionResult, toolCallsUsed, usage: attentionUsage })
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<AttentionResult>(
           { system: prompts.system, user: prompts.user },
@@ -317,6 +333,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       attentionState.status = 'done'
       attentionState.value = attentionResult
       attentionState.activity = undefined
+      attentionState.usage = attentionUsage
       if (toolCallsUsed !== undefined) attentionState.toolCallsUsed = toolCallsUsed
       track('ai_task_completed', {
         task: 'attention',
@@ -351,6 +368,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         diagramsState.status = 'done'
         diagramsState.value = hit.result
         diagramsState.toolCallsUsed = hit.toolCallsUsed
+        diagramsState.usage = hit.usage
         track('ai_task_completed', { task: 'diagrams', duration_ms: Math.round(performance.now() - t0), cached: true, deep: true })
         return
       }
@@ -381,7 +399,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         diagramsResult = deepOutcome.result
         diagramsUsage = deepOutcome.usage
         toolCallsUsed = deepOutcome.toolCallsUsed
-        await setCached<DeepCached<GraphResult>>(key, { deep: true, result: diagramsResult, toolCallsUsed })
+        await setCached<DeepCached<GraphResult>>(key, { deep: true, result: diagramsResult, toolCallsUsed, usage: diagramsUsage })
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<GraphResult>(
           { system: prompts.system, user: prompts.user },
@@ -394,6 +412,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       diagramsState.status = 'done'
       diagramsState.value = diagramsResult
       diagramsState.activity = undefined
+      diagramsState.usage = diagramsUsage
       if (toolCallsUsed !== undefined) diagramsState.toolCallsUsed = toolCallsUsed
       track('ai_task_completed', {
         task: 'diagrams',
@@ -423,6 +442,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         testsState.status = 'done'
         testsState.value = hit.result
         testsState.toolCallsUsed = hit.toolCallsUsed
+        testsState.usage = hit.usage
         track('ai_task_completed', { task: 'tests', duration_ms: Math.round(performance.now() - t0), cached: true, deep: true })
         return
       }
@@ -453,7 +473,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         testsResult = deepOutcome.result
         testsUsage = deepOutcome.usage
         toolCallsUsed = deepOutcome.toolCallsUsed
-        await setCached<DeepCached<TestInsight>>(key, { deep: true, result: testsResult, toolCallsUsed })
+        await setCached<DeepCached<TestInsight>>(key, { deep: true, result: testsResult, toolCallsUsed, usage: testsUsage })
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<TestInsight>(
           { system: prompts.system, user: prompts.user },
@@ -466,6 +486,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       testsState.status = 'done'
       testsState.value = testsResult
       testsState.activity = undefined
+      testsState.usage = testsUsage
       if (toolCallsUsed !== undefined) testsState.toolCallsUsed = toolCallsUsed
       track('ai_task_completed', {
         task: 'tests',
@@ -495,6 +516,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         alternativesState.status = 'done'
         alternativesState.value = hit.result
         alternativesState.toolCallsUsed = hit.toolCallsUsed
+        alternativesState.usage = hit.usage
         track('ai_task_completed', { task: 'alternatives', duration_ms: Math.round(performance.now() - t0), cached: true, deep: true })
         return
       }
@@ -525,7 +547,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         alternativesResult = deepOutcome.result
         alternativesUsage = deepOutcome.usage
         toolCallsUsed = deepOutcome.toolCallsUsed
-        await setCached<DeepCached<AlternativesResult>>(key, { deep: true, result: alternativesResult, toolCallsUsed })
+        await setCached<DeepCached<AlternativesResult>>(key, { deep: true, result: alternativesResult, toolCallsUsed, usage: alternativesUsage })
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<AlternativesResult>(
           { system: prompts.system, user: prompts.user },
@@ -538,6 +560,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       alternativesState.status = 'done'
       alternativesState.value = alternativesResult
       alternativesState.activity = undefined
+      alternativesState.usage = alternativesUsage
       if (toolCallsUsed !== undefined) alternativesState.toolCallsUsed = toolCallsUsed
       track('ai_task_completed', {
         task: 'alternatives',
@@ -569,6 +592,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     deep: true
     result: T
     toolCallsUsed: number
+    /**
+     * Usage captured for the deep run, stored so the opt-in token footer
+     * survives cache hits. Optional: entries cached before usage was stored
+     * simply omit it (footer shows nothing for that task — never fabricated).
+     */
+    usage?: LlmUsage
   }
 
   function sumUsage(a: LlmUsage | undefined, b: LlmUsage | undefined): LlmUsage | undefined {
@@ -639,6 +668,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         verdictState.status = 'done'
         verdictState.value = hit.result
         verdictState.toolCallsUsed = hit.toolCallsUsed
+        verdictState.usage = hit.usage
         track('ai_task_completed', { task: 'verdict', duration_ms: Math.round(performance.now() - t0), cached: true, deep: true })
         return
       }
@@ -682,13 +712,14 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       const merged = [...new Set([...ctx.notAnalyzed, ...verdictResult.notAnalyzed])]
       const finalResult: VerdictResult = { ...verdictResult, notAnalyzed: merged }
       if (deep.enabled) {
-        await setCached<DeepCached<VerdictResult>>(key, { deep: true, result: finalResult, toolCallsUsed: toolCallsUsed ?? 0 })
+        await setCached<DeepCached<VerdictResult>>(key, { deep: true, result: finalResult, toolCallsUsed: toolCallsUsed ?? 0, usage: verdictUsage })
       } else {
         await setCached<VerdictResult>(key, finalResult)
       }
       verdictState.status = 'done'
       verdictState.value = finalResult
       verdictState.activity = undefined
+      verdictState.usage = verdictUsage
       if (toolCallsUsed !== undefined) verdictState.toolCallsUsed = toolCallsUsed
       track('ai_task_completed', {
         task: 'verdict',
@@ -985,7 +1016,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
             skillReviewsState[idx] = {
               skillId: skill.id,
               name: skill.name,
-              state: { status: 'done', value: hit.result, toolCallsUsed: hit.toolCallsUsed },
+              state: { status: 'done', value: hit.result, toolCallsUsed: hit.toolCallsUsed, ...(hit.usage ? { usage: hit.usage } : {}) },
             }
             track('ai_task_completed', {
               task: 'skill-review',
@@ -1030,7 +1061,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
             skillResult = deepOutcome.result
             skillUsage = deepOutcome.usage
             toolCallsUsed = deepOutcome.toolCallsUsed
-            await setCached<DeepCached<SkillReviewResult>>(key, { deep: true, result: skillResult, toolCallsUsed })
+            await setCached<DeepCached<SkillReviewResult>>(key, { deep: true, result: skillResult, toolCallsUsed, usage: skillUsage })
           } else {
             const singlePass = await llmJsonWithRepairWithUsage<SkillReviewResult>(
               { system: prompts.system, user: prompts.user },
@@ -1047,6 +1078,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
               status: 'done',
               value: skillResult,
               ...(toolCallsUsed !== undefined ? { toolCallsUsed } : {}),
+              ...(skillUsage ? { usage: skillUsage } : {}),
               ...(deep.note ? { note: deep.note } : {}),
             },
           }
@@ -1083,6 +1115,15 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     get tests() { return testsState },
     get alternatives() { return alternativesState },
     get skillReviews() { return skillReviewsState },
+    get totalUsage(): LlmUsage | undefined {
+      // Sum every task's captured usage for this PR run. Tasks with no usage
+      // (cached pre-usage results / errors) contribute nothing.
+      let total: LlmUsage | undefined
+      const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState]
+      for (const s of states) total = addUsage(total, s.usage)
+      for (const e of skillReviewsState) total = addUsage(total, e.state.usage)
+      return total
+    },
     start,
     retry,
     coach,

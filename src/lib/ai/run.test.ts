@@ -1515,3 +1515,68 @@ describe('active-provider awareness (Plan F Task F3)', () => {
     expect(run.summary.error).toContain('Anthropic')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Per-review token TOTAL accumulation (showTokenCost power-user feature)
+// ---------------------------------------------------------------------------
+
+describe('totalUsage — per-review accumulation', () => {
+  it('is undefined before any task runs', () => {
+    const deps = makeDeps()
+    const run = createAiRun(makeInput(), deps)
+    expect(run.totalUsage).toBeUndefined()
+  })
+
+  it('sums every task usage after a full start() (summary 8 + 5 json tasks × 15)', async () => {
+    const deps = makeDeps()
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    // summary: total 8; attention/diagrams/tests/alternatives/verdict: 15 each = 75
+    expect(run.totalUsage).toEqual({
+      prompt_tokens: 5 + 10 * 5,
+      completion_tokens: 3 + 5 * 5,
+      total_tokens: 8 + 15 * 5,
+    })
+  })
+
+  it('cached single-pass tasks with no stored usage contribute nothing (graceful)', async () => {
+    const deps = makeDeps()
+    // Every task served from cache as a bare result (no usage stored on
+    // single-pass cache entries) → totalUsage stays undefined, never fabricated.
+    deps.getCached.mockImplementation(async (key: string) => {
+      if (key.includes('summary')) return 'cached summary'
+      if (key.includes('attention')) return ATTENTION_RESULT
+      if (key.includes('diagrams')) return GRAPH_RESULT
+      if (key.includes('tests')) return TEST_INSIGHT_RESULT
+      if (key.includes('alternatives')) return ALTERNATIVES_RESULT
+      if (key.includes('verdict')) return VERDICT_RESULT
+      return null
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.summary.status).toBe('done')
+    expect(run.verdict.status).toBe('done')
+    expect(run.totalUsage).toBeUndefined()
+  })
+
+  it('partial: only the tasks that reported usage are summed', async () => {
+    const deps = makeDeps()
+    // summary served from cache (no usage); json tasks run live (usage 15 each).
+    deps.getCached.mockImplementation(async (key: string) =>
+      key.includes('summary') ? 'cached summary' : null,
+    )
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.summary.usage).toBeUndefined()
+    expect(run.totalUsage).toEqual({
+      prompt_tokens: 10 * 5,
+      completion_tokens: 5 * 5,
+      total_tokens: 15 * 5,
+    })
+  })
+})

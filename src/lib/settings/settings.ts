@@ -93,6 +93,13 @@ export interface Settings {
   diffWidth: DiffWidth
   /** Focus mode: dim imports / imports+comments to reduce diff noise. */
   focusMode: FocusMode
+  /**
+   * Power-user: show approximate token usage (and a rough $ estimate when
+   * per-model pricing is known) per AI section + a per-review total. Display
+   * only — derived from usage the LLM layer already captures; sends nothing
+   * new. Default OFF: toggling off is byte-identical to the prior UI.
+   */
+  showTokenCost: boolean
 }
 
 const DEFAULTS: Settings = {
@@ -120,6 +127,7 @@ const DEFAULTS: Settings = {
   diffWidth: 'centered',
   // Non-destructive dimming of imports is our recommendation → on by default.
   focusMode: 'imports',
+  showTokenCost: false,
 }
 
 function coerceGithubAuth(raw: unknown): GithubAuth | null {
@@ -234,6 +242,8 @@ function coerce(raw: unknown): Partial<Settings> {
   if (focusMode === 'off' || focusMode === 'imports' || focusMode === 'imports-comments') {
     result.focusMode = focusMode
   }
+  const showTokenCost = obj['showTokenCost']
+  if (typeof showTokenCost === 'boolean') result.showTokenCost = showTokenCost
 
   // Prefer explicit githubAuth; fall back to migrating legacy githubPat string
   if ('githubAuth' in obj) {
@@ -395,6 +405,7 @@ export const setTreeOpen = (open: boolean) => save({ treeOpen: open })
 export const setTestFileDisplay = (v: TestFileDisplay) => save({ testFileDisplay: v })
 export const setDiffWidth = (v: DiffWidth) => save({ diffWidth: v })
 export const setFocusMode = (v: FocusMode) => save({ focusMode: v })
+export const setShowTokenCost = (v: boolean) => save({ showTokenCost: v })
 
 /**
  * Normalize a GitLab host input.

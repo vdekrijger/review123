@@ -4,7 +4,7 @@ import {
   setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay, setGitlabToken,
   saveBitbucketAuth, setGitlabHost,
   setOpenaiKey, setAnthropicKey, setGeminiKey, setAiProvider, setAiModel,
-  setAiDeepReview, setFocusMode,
+  setAiDeepReview, setFocusMode, setShowTokenCost,
   findInvalidKeyChar, invalidKeyCharMessage,
 } from './settings'
 
@@ -36,6 +36,7 @@ describe('settings', () => {
       testFileDisplay: 'normal',
       diffWidth: 'centered',
       focusMode: 'imports',
+      showTokenCost: false,
     })
   })
 
@@ -104,6 +105,7 @@ describe('settings', () => {
       testFileDisplay: 'normal',
       diffWidth: 'centered',
       focusMode: 'imports',
+      showTokenCost: false,
     })
   })
 
@@ -331,6 +333,29 @@ describe('settings', () => {
     it('coerces non-string focusMode back to default (imports)', () => {
       localStorage.setItem('review123:settings', JSON.stringify({ focusMode: 3 }))
       expect(getSettings().focusMode).toBe('imports')
+    })
+  })
+
+  describe('showTokenCost (power-user token usage display)', () => {
+    it('defaults to false', () => {
+      expect(getSettings().showTokenCost).toBe(false)
+    })
+
+    it('setShowTokenCost persists true and back to false', () => {
+      setShowTokenCost(true)
+      expect(getSettings().showTokenCost).toBe(true)
+      setShowTokenCost(false)
+      expect(getSettings().showTokenCost).toBe(false)
+    })
+
+    it('coerces a non-boolean stored value back to default (false)', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ showTokenCost: 'yes' }))
+      expect(getSettings().showTokenCost).toBe(false)
+    })
+
+    it('persists a stored true', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ showTokenCost: true }))
+      expect(getSettings().showTokenCost).toBe(true)
     })
   })
 

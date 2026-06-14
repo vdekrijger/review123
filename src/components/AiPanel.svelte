@@ -5,10 +5,12 @@
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import { getProvider } from '../lib/llm/providers'
   import { navigate } from '../lib/router/router.svelte'
+  import { formatUsageLabel } from '../lib/ai/tokenCost'
+  import type { LlmUsage } from '../lib/llm/llm'
 
   interface Props {
     title: string
-    state: { status: PanelStatus; error?: string; activity?: string[]; toolCallsUsed?: number; note?: string }
+    state: { status: PanelStatus; error?: string; activity?: string[]; toolCallsUsed?: number; note?: string; usage?: LlmUsage }
     onretry: () => void
     /** Shape of the pending skeleton — content-shaped per section. */
     skeletonVariant?: 'text' | 'block' | 'cards'
@@ -25,6 +27,13 @@
   )
   // "an Anthropic key" vs "a DeepSeek key"
   const article = $derived(/^[aeiou]/i.test(providerName) ? 'an' : 'a')
+
+  // Opt-in token-usage footer (settings.showTokenCost, default OFF). Reactive
+  // via settingsState. Returns null when off or when this task has no captured
+  // usage — in either case nothing renders (byte-identical to the prior UI).
+  const usageLabel = $derived(
+    settingsState.current.showTokenCost ? formatUsageLabel(state.usage) : null,
+  )
 
   function goToSettings(e: MouseEvent) {
     e.preventDefault()
@@ -77,6 +86,9 @@
     <p class="ai-deep-footer">
       Deep review: verified with {state.toolCallsUsed} tool {state.toolCallsUsed === 1 ? 'call' : 'calls'}
     </p>
+  {/if}
+  {#if usageLabel}
+    <p class="ai-usage-footer" aria-label="Token usage">·· {usageLabel}</p>
   {/if}
 {/if}
 
@@ -161,6 +173,13 @@
     border-top: 1px solid var(--hairline);
     font-size: 0.78rem;
     opacity: 0.65;
+  }
+
+  .ai-usage-footer {
+    margin: 0.3rem 0 0;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.5;
   }
 
   .spinner {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSettings, setTheme, setUiFont, setShowProgress, setTestFileDisplay, setDiffWidth, setFocusMode, type Theme, type UiFont, type TestFileDisplay, type DiffWidth, type FocusMode } from '../../lib/settings/settings'
+  import { getSettings, setTheme, setUiFont, setShowProgress, setTestFileDisplay, setDiffWidth, setFocusMode, setShowTokenCost, type Theme, type UiFont, type TestFileDisplay, type DiffWidth, type FocusMode } from '../../lib/settings/settings'
   import { applyAppearance } from '../../lib/settings/appearance.svelte'
 
   const current = getSettings()
@@ -9,6 +9,7 @@
   let testFileDisplay = $state<TestFileDisplay>(current.testFileDisplay)
   let diffWidth = $state<DiffWidth>(current.diffWidth)
   let focusMode = $state<FocusMode>(current.focusMode)
+  let showTokenCost = $state<boolean>(current.showTokenCost)
 
   function onThemeChange(value: Theme) {
     theme = value
@@ -41,6 +42,11 @@
   function onFocusModeChange(value: FocusMode) {
     focusMode = value
     setFocusMode(value)
+  }
+
+  function onShowTokenCostChange(value: boolean) {
+    showTokenCost = value
+    setShowTokenCost(value)
   }
 </script>
 
@@ -134,6 +140,15 @@
       Full width
     </label>
     <p class="field-note">Full = edge-to-edge diff at any screen size; Centered = comfortable reading column.</p>
+  </fieldset>
+
+  <fieldset aria-label="Token usage">
+    <legend>Token usage</legend>
+    <label>
+      <input type="checkbox" name="showTokenCost" checked={showTokenCost} onchange={(e) => onShowTokenCostChange((e.currentTarget as HTMLInputElement).checked)} />
+      Show token usage
+    </label>
+    <p class="field-note">Display approximate tokens/cost per AI section (power users).</p>
   </fieldset>
 </section>
 
