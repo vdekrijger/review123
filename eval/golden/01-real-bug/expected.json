@@ -1,0 +1,16 @@
+{
+  "real": [
+    {
+      "file": "src/lib/paginate.ts",
+      "line": 8,
+      "description": "off-by-one: end = start + size - 1 with exclusive slice drops the last item on every page"
+    }
+  ],
+  "noise": [
+    {
+      "file": "src/lib/paginate.ts",
+      "line": 2,
+      "description": "comment style: prefer a doc comment over an inline comment"
+    }
+  ]
+}

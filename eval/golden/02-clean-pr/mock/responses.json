@@ -1,0 +1,18 @@
+{
+  "skill:bug-hunter": {
+    "skillName": "bug-hunter",
+    "findings": []
+  },
+  "attention": {
+    "readingOrder": ["src/lib/greet.ts", "src/lib/greet.test.ts"],
+    "hotspots": [],
+    "testFlags": []
+  },
+  "verdict": {
+    "level": "behavior-preserved",
+    "evidence": [
+      "The greeting output is identical before and after; the change is purely cosmetic."
+    ],
+    "notAnalyzed": []
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "02-clean-pr",
+  "files": [
+    {
+      "path": "src/lib/greet.ts",
+      "patch": "@@ -1,5 +1,5 @@\n-export function greet(n: string): string {\n-  return 'Hello, ' + n + '!'\n+export function greet(name: string): string {\n+  return `Hello, ${name}!`\n }",
+      "contentBefore": "export function greet(n: string): string {\n  return 'Hello, ' + n + '!'\n}\n",
+      "contentAfter": "export function greet(name: string): string {\n  return `Hello, ${name}!`\n}\n"
+    },
+    {
+      "path": "src/lib/greet.test.ts",
+      "patch": "@@ -1,4 +1,4 @@\n import { greet } from './greet'\n test('greets by name', () => {\n-  expect(greet('Ada')).toBe('Hello, Ada!')\n+  expect(greet('Ada')).toBe('Hello, Ada!')\n })",
+      "contentBefore": "import { greet } from './greet'\ntest('greets by name', () => {\n  expect(greet('Ada')).toBe('Hello, Ada!')\n})\n",
+      "contentAfter": "import { greet } from './greet'\ntest('greets by name', () => {\n  expect(greet('Ada')).toBe('Hello, Ada!')\n})\n"
+    }
+  ],
+  "skills": [
+    {
+      "name": "bug-hunter",
+      "content": "You are a correctness-focused reviewer. Flag off-by-one errors, boundary mistakes, null/undefined hazards, and logic bugs that change observable behavior. Ignore style and naming."
+    }
+  ]
+}

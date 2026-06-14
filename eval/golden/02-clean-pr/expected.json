@@ -1,0 +1,15 @@
+{
+  "real": [],
+  "noise": [
+    {
+      "file": "src/lib/greet.ts",
+      "line": 1,
+      "description": "parameter renamed from n to name — a readability improvement, not a defect"
+    },
+    {
+      "file": "src/lib/greet.ts",
+      "line": 2,
+      "description": "switched string concatenation to a template literal — equivalent behavior, not worth flagging"
+    }
+  ]
+}

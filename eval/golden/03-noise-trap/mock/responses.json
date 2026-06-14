@@ -1,0 +1,18 @@
+{
+  "skill:bug-hunter": {
+    "skillName": "bug-hunter",
+    "findings": []
+  },
+  "attention": {
+    "readingOrder": ["src/lib/retry.ts"],
+    "hotspots": [],
+    "testFlags": []
+  },
+  "verdict": {
+    "level": "behavior-preserved",
+    "evidence": [
+      "The only change upgrades a console.log to a more informative console.warn; retry control flow is unchanged."
+    ],
+    "notAnalyzed": []
+  }
+}
