@@ -258,39 +258,78 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   async function runAttentionTask(ctx: PackedContext): Promise<void> {
-    const key = cacheKey(prKey, 'attention', PROMPT_VERSION)
+    // Deep attention (PROMPT_VERSION 13): when the agentic toggle is on, the
+    // attention/hotspot task runs through the same harness as the other deep
+    // tasks so it can VERIFY each candidate hotspot (read the changed file and
+    // its callers/dependencies) before reporting it — assume-best-intent: drop
+    // hotspots it can't substantiate. Toggle off → byte-identical single-pass.
+    const deep = deepReviewAvailability(deepReview)
+    if (deep.note) attentionState.note = deep.note
+    const key = cacheKey(prKey, deep.enabled ? 'attention|deep' : 'attention', PROMPT_VERSION)
 
     const t0 = performance.now()
-    const hit = await getCached<AttentionResult>(key)
-    if (hit !== null) {
-      attentionState.status = 'done'
-      attentionState.value = hit
-      track('ai_task_completed', { task: 'attention', duration_ms: Math.round(performance.now() - t0), cached: true })
-      return
+    if (deep.enabled) {
+      const hit = await getCached<DeepCached<AttentionResult>>(key)
+      if (hit !== null) {
+        attentionState.status = 'done'
+        attentionState.value = hit.result
+        attentionState.toolCallsUsed = hit.toolCallsUsed
+        track('ai_task_completed', { task: 'attention', duration_ms: Math.round(performance.now() - t0), cached: true, deep: true })
+        return
+      }
+    } else {
+      const hit = await getCached<AttentionResult>(key)
+      if (hit !== null) {
+        attentionState.status = 'done'
+        attentionState.value = hit
+        track('ai_task_completed', { task: 'attention', duration_ms: Math.round(performance.now() - t0), cached: true })
+        return
+      }
     }
 
     attentionState.status = 'loading'
+    if (deep.enabled) attentionState.activity = []
     const t1 = performance.now()
-    const prompts = attentionPrompt(ctx)
+    const prompts = attentionPrompt(ctx, { deep: deep.enabled })
 
     try {
-      const { result: attentionResult, usage: attentionUsage } = await llmJsonWithRepairWithUsage<AttentionResult>(
-        { system: prompts.system, user: prompts.user },
-        validateAttention,
-      )
-      await setCached<AttentionResult>(key, attentionResult)
+      let attentionResult: AttentionResult
+      let attentionUsage: LlmUsage | undefined
+      let toolCallsUsed: number | undefined
+
+      if (deep.enabled) {
+        const deepOutcome = await runDeepJson<AttentionResult>(prompts, validateAttention, (line) => {
+          attentionState.activity = [...(attentionState.activity ?? []), line]
+        })
+        attentionResult = deepOutcome.result
+        attentionUsage = deepOutcome.usage
+        toolCallsUsed = deepOutcome.toolCallsUsed
+        await setCached<DeepCached<AttentionResult>>(key, { deep: true, result: attentionResult, toolCallsUsed })
+      } else {
+        const singlePass = await llmJsonWithRepairWithUsage<AttentionResult>(
+          { system: prompts.system, user: prompts.user },
+          validateAttention,
+        )
+        attentionResult = singlePass.result
+        attentionUsage = singlePass.usage
+        await setCached<AttentionResult>(key, attentionResult)
+      }
       attentionState.status = 'done'
       attentionState.value = attentionResult
+      attentionState.activity = undefined
+      if (toolCallsUsed !== undefined) attentionState.toolCallsUsed = toolCallsUsed
       track('ai_task_completed', {
         task: 'attention',
         duration_ms: Math.round(performance.now() - t1),
         cached: false,
         ...(attentionUsage?.total_tokens !== undefined ? { tokens: attentionUsage.total_tokens } : {}),
+        ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
     } catch (err) {
       const kind = err instanceof LlmError ? err.kind : 'unknown'
       attentionState.status = 'error'
       attentionState.error = humanMessage(kind)
+      attentionState.activity = undefined
       track('ai_task_failed', { task: 'attention', reason: kind })
     }
   }

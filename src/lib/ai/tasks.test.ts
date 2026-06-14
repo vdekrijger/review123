@@ -1691,3 +1691,105 @@ describe('diagramsPrompt — v11 terse labels', () => {
     expect(system).toMatch(/Node labels must be ≤ 3 words/i)
   })
 })
+
+// ---------------------------------------------------------------------------
+// PROMPT_VERSION v13 — assume-best-intent + deep attention harness
+// ---------------------------------------------------------------------------
+
+describe('PROMPT_VERSION v13', () => {
+  it('is at least 13 (bumped for assume-best-intent + deep attention — cache invalidation)', () => {
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(13)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// attentionPrompt — assume-best-intent calibration (v13)
+//
+// The framing applies to BOTH prompt paths (single-pass AND deep) — the
+// calibration helps even without tools; deep mode adds verification on top.
+// ---------------------------------------------------------------------------
+
+describe('attentionPrompt — assume-best-intent (v13)', () => {
+  for (const [label, opts] of [
+    ['single-pass', undefined],
+    ['deep', { deep: true }],
+  ] as const) {
+    it(`${label}: carries the assume-best-intent framing`, () => {
+      const { system } = attentionPrompt(makeCtx(), opts)
+      expect(system).toMatch(/Assume best intent/i)
+      expect(system).toMatch(/competent engineer acting in good faith/i)
+    })
+
+    it(`${label}: states a file is NOT a hotspot just for being large or touched`, () => {
+      const { system } = attentionPrompt(makeCtx(), opts)
+      expect(system).toMatch(/NOT a hotspot because it is large/i)
+      expect(system).toMatch(/simply because it was touched/i)
+    })
+
+    it(`${label}: flags genuine risk only — not style/preference/speculation`, () => {
+      const { system } = attentionPrompt(makeCtx(), opts)
+      expect(system).toMatch(/Flag ONLY genuine risk/i)
+      expect(system).toMatch(/correctness/i)
+      expect(system).toMatch(/blast radius/i)
+      expect(system).toMatch(/security/i)
+      expect(system).toMatch(/broken contract|contract.*stale|signature\/behavior/i)
+      expect(system).toMatch(/Do NOT flag style, naming, preference/i)
+      expect(system).toMatch(/could maybe break something/i)
+    })
+
+    it(`${label}: evidence gate — couldn't verify means DROP/stay silent`, () => {
+      const { system } = attentionPrompt(makeCtx(), opts)
+      expect(system).toMatch(/Evidence gate over alarm/i)
+      expect(system).toMatch(/couldn't verify means stay silent|DROP it/i)
+      expect(system).toMatch(/never assert/i)
+    })
+
+    it(`${label}: an empty hotspots list is the EXPECTED, GOOD outcome on a clean PR`, () => {
+      const { system } = attentionPrompt(makeCtx(), opts)
+      expect(system).toMatch(/EMPTY hotspots list is the EXPECTED, GOOD outcome/i)
+      expect(system).toMatch(/clean, well-scoped PR/i)
+      expect(system).toMatch(/Do not manufacture hotspots/i)
+    })
+
+    it(`${label}: still caps hotspots at 5`, () => {
+      const { system } = attentionPrompt(makeCtx(), opts)
+      expect(system).toMatch(/at most 5 hotspots/i)
+    })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// attentionPrompt — deep mode verification guidance (v13)
+//
+// Single-pass omits the tool-verification section (byte-identical to today's
+// calibrated prompt save for the assume-best-intent block); deep mode adds the
+// "verify each hotspot with the tools before reporting it" guidance.
+// ---------------------------------------------------------------------------
+
+describe('attentionPrompt — deep mode verification (v13)', () => {
+  it('single-pass (default / deep:false) omits the deep verify-hotspot section', () => {
+    const { system: def } = attentionPrompt(makeCtx())
+    const { system: off } = attentionPrompt(makeCtx(), { deep: false })
+    expect(def).not.toContain('VERIFY each hotspot before reporting it')
+    expect(off).not.toContain('VERIFY each hotspot before reporting it')
+    // Default and explicit deep:false are byte-identical
+    expect(def).toBe(off)
+  })
+
+  it('deep mode adds the verify-each-hotspot-with-tools guidance', () => {
+    const { system } = attentionPrompt(makeCtx(), { deep: true })
+    expect(system).toContain('VERIFY each hotspot before reporting it')
+    expect(system).toMatch(/read_file/i)
+    expect(system).toMatch(/search_code/i)
+    expect(system).toMatch(/callers\/consumers|callers|blast radius/i)
+    expect(system).toMatch(/DROP any hotspot you cannot substantiate/i)
+  })
+
+  it('deep mode keeps the JSON shape + anti-fatigue + assume-best-intent', () => {
+    const { system } = attentionPrompt(makeCtx(), { deep: true })
+    expect(system).toContain('hotspots')
+    expect(system).toContain('testFlags')
+    expect(system).toMatch(/Anti-fatigue calibration/i)
+    expect(system).toMatch(/Assume best intent/i)
+  })
+})
