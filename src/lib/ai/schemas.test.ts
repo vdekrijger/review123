@@ -418,6 +418,60 @@ describe('validateGraphResult', () => {
     }
   })
 
+  // Deep-diagram (v12): the additive 'context' status — old graphs without it
+  // still validate, new graphs that use it pass the strict enum check.
+  it('accepts the context status on nodes (deep-diagram neighborhood)', () => {
+    const x = {
+      kind: 'flow',
+      before: { nodes: [{ id: 'n', label: 'app.ts', status: 'context' }], edges: [] },
+      after: { nodes: [], edges: [] },
+    }
+    expect(validateGraphResult(x)).not.toBeNull()
+  })
+
+  it('accepts the context status on edges (uses/calls neighbor relationship)', () => {
+    const x = {
+      kind: 'flow',
+      before: {
+        nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+        edges: [{ from: 'a', to: 'b', label: 'uses', status: 'context' }],
+      },
+      after: { nodes: [], edges: [] },
+    }
+    expect(validateGraphResult(x)).not.toBeNull()
+  })
+
+  it('accepts all FIVE status enum values on nodes (four change + context)', () => {
+    for (const status of ['added', 'removed', 'changed', 'unchanged', 'context']) {
+      const x = {
+        kind: 'flow',
+        before: { nodes: [{ id: 'a', label: 'A', status }], edges: [] },
+        after: { nodes: [], edges: [] },
+      }
+      expect(validateGraphResult(x)).not.toBeNull()
+    }
+  })
+
+  it('additive compat: an old cached graph WITHOUT any context node still validates', () => {
+    // A pre-v12 cached changeMap (only the original four statuses) must remain valid.
+    const oldCached = {
+      kind: 'flow',
+      before: { nodes: [{ id: 'a', label: 'A' }], edges: [] },
+      after: { nodes: [{ id: 'a', label: 'A' }], edges: [] },
+      changeMap: {
+        nodes: [
+          { id: 'a', label: 'router.ts', status: 'changed' },
+          { id: 'b', label: 'handler.ts', status: 'added' },
+        ],
+        edges: [{ from: 'b', to: 'a', label: 'calls', status: 'added' }],
+      },
+    }
+    const result = validateGraphResult(oldCached)
+    expect(result).not.toBeNull()
+    // No context node present — purely the legacy shape.
+    expect(result?.changeMap?.nodes.some((n) => n.status === 'context')).toBe(false)
+  })
+
   it('returns null for invalid node status enum value', () => {
     const x = {
       kind: 'flow',

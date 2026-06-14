@@ -30,16 +30,22 @@ const CLASS_DEFS: Record<'dark' | 'light', Record<NodeStatus, string>> = {
     removed:   'classDef removed fill:#4a1a1a,stroke:#d73a49,color:#f0a3a3,stroke-dasharray: 5 5',
     changed:   'classDef changed fill:#4a3a10,stroke:#d4a72c,color:#ffd86e',
     unchanged: 'classDef unchanged fill:#2a2a2e,stroke:#555,color:#aaa',
+    // Context (deep-diagram neighborhood): de-emphasized — muted dark fill,
+    // thin dashed border, low-contrast text so changed nodes stay the focus.
+    context:   'classDef context fill:#202024,stroke:#3d3d44,color:#8a8a93,stroke-width:1px,stroke-dasharray: 3 3',
   },
   light: {
     added:     'classDef added fill:#dcffe4,stroke:#2ea44f,color:#1a7f37',
     removed:   'classDef removed fill:#ffe5e5,stroke:#d73a49,color:#cb2431,stroke-dasharray: 5 5',
     changed:   'classDef changed fill:#fff5cc,stroke:#d4a72c,color:#9a6700',
     unchanged: 'classDef unchanged fill:#f0f0f2,stroke:#bbb,color:#666',
+    // Context (deep-diagram neighborhood): de-emphasized — muted light fill,
+    // thin dashed border, low-contrast text so changed nodes stay the focus.
+    context:   'classDef context fill:#f6f6f8,stroke:#d0d0d6,color:#9b9b9b,stroke-width:1px,stroke-dasharray: 3 3',
   },
 }
 
-const STATUS_ORDER: NodeStatus[] = ['added', 'removed', 'changed', 'unchanged']
+const STATUS_ORDER: NodeStatus[] = ['added', 'removed', 'changed', 'unchanged', 'context']
 
 /**
  * Serialize a Graph to a Mermaid flowchart string.
@@ -56,9 +62,11 @@ const STATUS_ORDER: NodeStatus[] = ['added', 'removed', 'changed', 'unchanged']
  * - Self-loops and cycles serialize naturally (EC-14d).
  * - Status-aware: when any node/edge carries a `status` field, emits classDef
  *   lines for each status present, then `class nX status` assignments. Edges
- *   with status=removed use dashed syntax (`-.->`), status=added use thick
- *   syntax (`==>`); others use normal arrows. Graphs without any status field
- *   are byte-identical to the pre-status implementation.
+ *   with status=removed OR status=context use dashed syntax (`-.->`),
+ *   status=added use thick syntax (`==>`); others use normal arrows. Context
+ *   nodes (deep-diagram one-hop neighborhood) render de-emphasized (muted fill,
+ *   thin dashed border). Graphs without any status field are byte-identical to
+ *   the pre-status implementation.
  *
  * @param g    The graph to serialize.
  * @param _kind  The diagram kind ('flow' | 'module') — currently both use
@@ -140,9 +148,12 @@ export function graphToMermaid(
       continue
     }
 
-    // Determine edge arrow style based on status
+    // Determine edge arrow style based on status. `context` edges (deep-diagram
+    // neighborhood "uses/calls" relationships) use the dotted arrow so they read
+    // as ambient context, distinct from the thick `added` / dashed `removed`
+    // change edges.
     let arrowHead: string
-    if (edge.status === 'removed') {
+    if (edge.status === 'removed' || edge.status === 'context') {
       arrowHead = '-.->'
     } else if (edge.status === 'added') {
       arrowHead = '==>'
@@ -152,7 +163,7 @@ export function graphToMermaid(
 
     if (edge.label !== undefined && edge.label !== '') {
       const edgeLabel = escapeLabel(edge.label)
-      if (edge.status === 'removed') {
+      if (edge.status === 'removed' || edge.status === 'context') {
         lines.push(`    ${fromAlias} -. "${edgeLabel}" .-> ${toAlias}`)
       } else if (edge.status === 'added') {
         lines.push(`    ${fromAlias} == "${edgeLabel}" ==> ${toAlias}`)

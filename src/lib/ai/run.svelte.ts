@@ -296,39 +296,78 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   async function runDiagramsTask(ctx: PackedContext): Promise<void> {
-    const key = cacheKey(prKey, 'diagrams', PROMPT_VERSION)
+    // Deep diagrams (PROMPT_VERSION 12): when the agentic toggle is on, the
+    // diagram task runs through the same harness as verdict/tests/alternatives
+    // so it can walk one hop out (importers/callers + dependencies) and add
+    // de-emphasized "context" nodes around the changed files. Toggle off →
+    // byte-identical single-pass, diff-scoped behavior.
+    const deep = deepReviewAvailability(deepReview)
+    if (deep.note) diagramsState.note = deep.note
+    const key = cacheKey(prKey, deep.enabled ? 'diagrams|deep' : 'diagrams', PROMPT_VERSION)
 
     const t0 = performance.now()
-    const hit = await getCached<GraphResult>(key)
-    if (hit !== null) {
-      diagramsState.status = 'done'
-      diagramsState.value = hit
-      track('ai_task_completed', { task: 'diagrams', duration_ms: Math.round(performance.now() - t0), cached: true })
-      return
+    if (deep.enabled) {
+      const hit = await getCached<DeepCached<GraphResult>>(key)
+      if (hit !== null) {
+        diagramsState.status = 'done'
+        diagramsState.value = hit.result
+        diagramsState.toolCallsUsed = hit.toolCallsUsed
+        track('ai_task_completed', { task: 'diagrams', duration_ms: Math.round(performance.now() - t0), cached: true, deep: true })
+        return
+      }
+    } else {
+      const hit = await getCached<GraphResult>(key)
+      if (hit !== null) {
+        diagramsState.status = 'done'
+        diagramsState.value = hit
+        track('ai_task_completed', { task: 'diagrams', duration_ms: Math.round(performance.now() - t0), cached: true })
+        return
+      }
     }
 
     diagramsState.status = 'loading'
+    if (deep.enabled) diagramsState.activity = []
     const t1 = performance.now()
-    const prompts = diagramsPrompt(ctx)
+    const prompts = diagramsPrompt(ctx, { deep: deep.enabled })
 
     try {
-      const { result: diagramsResult, usage: diagramsUsage } = await llmJsonWithRepairWithUsage<GraphResult>(
-        { system: prompts.system, user: prompts.user },
-        validateGraphResult,
-      )
-      await setCached<GraphResult>(key, diagramsResult)
+      let diagramsResult: GraphResult
+      let diagramsUsage: LlmUsage | undefined
+      let toolCallsUsed: number | undefined
+
+      if (deep.enabled) {
+        const deepOutcome = await runDeepJson<GraphResult>(prompts, validateGraphResult, (line) => {
+          diagramsState.activity = [...(diagramsState.activity ?? []), line]
+        })
+        diagramsResult = deepOutcome.result
+        diagramsUsage = deepOutcome.usage
+        toolCallsUsed = deepOutcome.toolCallsUsed
+        await setCached<DeepCached<GraphResult>>(key, { deep: true, result: diagramsResult, toolCallsUsed })
+      } else {
+        const singlePass = await llmJsonWithRepairWithUsage<GraphResult>(
+          { system: prompts.system, user: prompts.user },
+          validateGraphResult,
+        )
+        diagramsResult = singlePass.result
+        diagramsUsage = singlePass.usage
+        await setCached<GraphResult>(key, diagramsResult)
+      }
       diagramsState.status = 'done'
       diagramsState.value = diagramsResult
+      diagramsState.activity = undefined
+      if (toolCallsUsed !== undefined) diagramsState.toolCallsUsed = toolCallsUsed
       track('ai_task_completed', {
         task: 'diagrams',
         duration_ms: Math.round(performance.now() - t1),
         cached: false,
         ...(diagramsUsage?.total_tokens !== undefined ? { tokens: diagramsUsage.total_tokens } : {}),
+        ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
     } catch (err) {
       const kind = err instanceof LlmError ? err.kind : 'unknown'
       diagramsState.status = 'error'
       diagramsState.error = humanMessage(kind)
+      diagramsState.activity = undefined
       track('ai_task_failed', { task: 'diagrams', reason: kind })
     }
   }

@@ -148,7 +148,9 @@ export function validateGraphResult(x: unknown): GraphResult | null {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-const NODE_STATUSES = new Set<string>(['added', 'removed', 'changed', 'unchanged'])
+// 'context' (deep-diagram mode) is additive — old cached graphs that never
+// carry it still validate, and graphs that do still pass the strict enum check.
+const NODE_STATUSES = new Set<string>(['added', 'removed', 'changed', 'unchanged', 'context'])
 
 function validateGraph(x: unknown): Graph | null {
   if (!isObject(x)) return null

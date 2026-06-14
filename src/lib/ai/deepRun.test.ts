@@ -19,7 +19,7 @@ import { LlmError } from '../llm/llm'
 import { addSkill } from '../skills/skills'
 import { djb2 } from '../viewed/viewed.svelte'
 import type { PackedContext } from '../context/pack'
-import type { VerdictResult, SkillReviewResult, TestInsight, AlternativesResult } from './schemas'
+import type { VerdictResult, SkillReviewResult, TestInsight, AlternativesResult, GraphResult } from './schemas'
 import type { DeepReviewSource } from './deepReview'
 
 // ---------------------------------------------------------------------------
@@ -383,13 +383,28 @@ const ALTERNATIVES_RESULT: AlternativesResult = {
   ],
 }
 
+// A deep-diagram changeMap including a de-emphasized one-hop "context" neighbor
+// (deep-diagram mode, v12). The serializer styles status:'context' as muted.
+const DIAGRAM_RESULT: GraphResult = {
+  kind: 'flow',
+  before: { nodes: [{ id: 'router', label: 'router.ts' }], edges: [] },
+  after: { nodes: [{ id: 'router', label: 'router.ts' }], edges: [] },
+  changeMap: {
+    nodes: [
+      { id: 'router', label: 'router.ts', status: 'changed' },
+      { id: 'app', label: 'app.ts', status: 'context' },
+    ],
+    edges: [{ from: 'app', to: 'router', label: 'uses', status: 'context' }],
+  },
+}
+
 /**
  * Validator-aware deps: the deep loop and single-pass repair return whichever
  * fixture validates for the task's own validator, so start()'s six parallel
  * tasks each get a shape-correct answer.
  */
 function makeMultiTaskDeps() {
-  const CANDIDATES = [VERDICT_RESULT, SKILL_RESULT, TESTS_RESULT, ALTERNATIVES_RESULT]
+  const CANDIDATES = [DIAGRAM_RESULT, VERDICT_RESULT, SKILL_RESULT, TESTS_RESULT, ALTERNATIVES_RESULT]
   const pick = (validate: ValidateFn) => {
     for (const c of CANDIDATES) if (validate(c) !== null) return c
     return VERDICT_RESULT
@@ -416,6 +431,7 @@ function makeMultiTaskDeps() {
       if (/changed test files/i.test(opts.system)) body = TESTS_RESULT
       else if (/genuinely different approach/i.test(opts.system)) body = ALTERNATIVES_RESULT
       else if (/reviewer persona/i.test(opts.system)) body = SKILL_RESULT
+      else if (/NO Mermaid syntax/i.test(opts.system)) body = DIAGRAM_RESULT
       return {
         content: JSON.stringify(body),
         usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
@@ -572,6 +588,142 @@ describe('deep alternatives task', () => {
       deep: true,
       result: ALTERNATIVES_RESULT,
       toolCallsUsed: 4,
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Deep diagrams (Plan: deep-diagrams-context)
+//
+// When aiDeepReview is ON the diagram task joins the harness so it can situate
+// the changed files inside the broader architecture (one-hop "context" nodes).
+// When OFF it stays byte-identical: diff-scoped, single-pass, no |deep marker,
+// no tool loop.
+// ---------------------------------------------------------------------------
+
+describe('deep diagrams task', () => {
+  it('runs the tool loop, uses the |deep key, caches a wrapper with toolCallsUsed', async () => {
+    seedSettings({ aiDeepReview: true })
+    const deps = makeMultiTaskDeps()
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    // The diagram loop carries the deep-diagram system prompt (no-Mermaid + deep guidance)
+    const diagramLoopCall = deps.llmToolLoop.mock.calls.find((c: unknown[]) =>
+      /NO Mermaid syntax/i.test((c[0] as { system: string }).system),
+    )
+    expect(diagramLoopCall).toBeDefined()
+    const diagramSystem = (diagramLoopCall![0] as { system: string }).system
+    expect(diagramSystem).toContain('Deep review mode')
+    // Deep-diagram-specific guidance: one-hop neighborhood + context status
+    expect(diagramSystem).toContain('situate the change in the broader architecture')
+    expect(diagramSystem).toMatch(/context/i)
+
+    const deepKey = `${PR_KEY}|diagrams|deep|v${PROMPT_VERSION}`
+    expect(deps.getCached).toHaveBeenCalledWith(deepKey)
+    expect(deps.setCached).toHaveBeenCalledWith(deepKey, {
+      deep: true,
+      result: DIAGRAM_RESULT,
+      toolCallsUsed: 2,
+    })
+    expect(run.diagrams.status).toBe('done')
+    expect(run.diagrams.value).toEqual(DIAGRAM_RESULT)
+    expect(run.diagrams.toolCallsUsed).toBe(2)
+    expect(run.diagrams.activity).toBeUndefined()
+  })
+
+  it('surfaces a context node in the deep changeMap', async () => {
+    seedSettings({ aiDeepReview: true })
+    const deps = makeMultiTaskDeps()
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    const value = run.diagrams.value as GraphResult
+    const contextNode = value.changeMap?.nodes.find((n) => n.status === 'context')
+    expect(contextNode).toBeDefined()
+    expect(contextNode?.label).toBe('app.ts')
+  })
+
+  it('unwraps a deep cache hit: result + toolCallsUsed, no diagram loop call', async () => {
+    seedSettings({ aiDeepReview: true })
+    const deps = makeMultiTaskDeps()
+    deps.getCached.mockImplementation(async (key: string) =>
+      key === `${PR_KEY}|diagrams|deep|v${PROMPT_VERSION}`
+        ? { deep: true, result: DIAGRAM_RESULT, toolCallsUsed: 6 }
+        : null,
+    )
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    expect(run.diagrams.value).toEqual(DIAGRAM_RESULT)
+    expect(run.diagrams.toolCallsUsed).toBe(6)
+    const diagramLoop = deps.llmToolLoop.mock.calls.find((c: unknown[]) =>
+      /NO Mermaid syntax/i.test((c[0] as { system: string }).system),
+    )
+    expect(diagramLoop).toBeUndefined()
+  })
+
+  it('unsupported model → single-pass key + honest note, no context guidance', async () => {
+    seedSettings({ aiDeepReview: true, aiModel: 'deepseek-reasoner' })
+    const deps = makeMultiTaskDeps()
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    expect(deps.llmToolLoop).not.toHaveBeenCalled()
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|diagrams|v${PROMPT_VERSION}`)
+    expect(run.diagrams.status).toBe('done')
+    expect(run.diagrams.note).toContain('does not support tool calling')
+    expect(run.diagrams.toolCallsUsed).toBeUndefined()
+  })
+
+  it('toggle off → single-pass diagrams key, no loop, byte-identical (diff-scoped)', async () => {
+    seedSettings()
+    const deps = makeMultiTaskDeps()
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    // Single-pass key — no |deep marker
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|diagrams|v${PROMPT_VERSION}`)
+    // The diagram task never went through the tool loop
+    const diagramLoop = deps.llmToolLoop.mock.calls.find((c: unknown[]) =>
+      /NO Mermaid syntax/i.test((c[0] as { system: string }).system),
+    )
+    expect(diagramLoop).toBeUndefined()
+    expect(run.diagrams.status).toBe('done')
+    expect(run.diagrams.toolCallsUsed).toBeUndefined()
+    expect(run.diagrams.note).toBeUndefined()
+  })
+
+  it('invalid loop JSON → single-pass repair grounded in loop output, then cached', async () => {
+    seedSettings({ aiDeepReview: true })
+    const deps = makeMultiTaskDeps()
+    // Diagram loop returns non-JSON → triggers the repair pass
+    deps.llmToolLoop.mockImplementation(
+      async (opts: { system: string; onToolEvent?: (ev: { name: string; detail: string }) => void }) => {
+        if (/NO Mermaid syntax/i.test(opts.system)) {
+          return { content: 'Here is the graph (not JSON)', usage: undefined, toolCallsUsed: 5 }
+        }
+        let body: unknown = VERDICT_RESULT
+        if (/changed test files/i.test(opts.system)) body = TESTS_RESULT
+        else if (/genuinely different approach/i.test(opts.system)) body = ALTERNATIVES_RESULT
+        else if (/reviewer persona/i.test(opts.system)) body = SKILL_RESULT
+        return { content: JSON.stringify(body), usage: undefined, toolCallsUsed: 1 }
+      },
+    )
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    const repairCall = deps.llmJsonWithRepairWithUsage.mock.calls.find((c: unknown[]) =>
+      (c[0] as { user: string }).user.includes('Here is the graph'),
+    )
+    expect(repairCall).toBeDefined()
+    expect(run.diagrams.status).toBe('done')
+    expect(run.diagrams.value).toEqual(DIAGRAM_RESULT)
+    expect(run.diagrams.toolCallsUsed).toBe(5)
+    expect(deps.setCached).toHaveBeenCalledWith(`${PR_KEY}|diagrams|deep|v${PROMPT_VERSION}`, {
+      deep: true,
+      result: DIAGRAM_RESULT,
+      toolCallsUsed: 5,
     })
   })
 })

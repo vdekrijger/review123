@@ -19,6 +19,7 @@ import {
   askPrompt,
   parseReadingOrder,
   stripReadingOrder,
+  DEEP_DIAGRAM_CONTEXT_NODE_CAP,
 } from './tasks'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
@@ -237,6 +238,51 @@ describe('diagramsPrompt', () => {
     const fewShotBlock = system.slice(fewShotStart, fewShotEnd)
     expect(fewShotBlock).toContain('"status"')
     expect(fewShotBlock).toContain('"added"')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// diagramsPrompt — deep mode (deep-diagrams-context, v12)
+// ---------------------------------------------------------------------------
+
+describe('diagramsPrompt — deep mode (context nodes)', () => {
+  it('single-pass (default / deep:false) omits the deep-diagram context section', () => {
+    const { system: def } = diagramsPrompt(makeCtx())
+    const { system: off } = diagramsPrompt(makeCtx(), { deep: false })
+    expect(def).not.toContain('situate the change in the broader architecture')
+    expect(off).not.toContain('situate the change in the broader architecture')
+    // Default and explicit deep:false are byte-identical (diff-scoped, unchanged)
+    expect(def).toBe(off)
+  })
+
+  it('deep mode adds the one-hop neighborhood / context-node guidance', () => {
+    const { system } = diagramsPrompt(makeCtx(), { deep: true })
+    expect(system).toContain('situate the change in the broader architecture')
+    expect(system).toMatch(/importers/i)
+    expect(system).toMatch(/dependenc/i)
+    expect(system).toContain('"context"')
+  })
+
+  it('deep mode mentions the context-node cap', () => {
+    const { system } = diagramsPrompt(makeCtx(), { deep: true })
+    expect(system).toContain(String(DEEP_DIAGRAM_CONTEXT_NODE_CAP))
+    expect(DEEP_DIAGRAM_CONTEXT_NODE_CAP).toBe(8)
+  })
+
+  it('deep mode keeps the before/after/changeMap structure and the no-Mermaid rule', () => {
+    const { system } = diagramsPrompt(makeCtx(), { deep: true })
+    expect(system).toContain('"before"')
+    expect(system).toContain('"after"')
+    expect(system).toContain('"changeMap"')
+    expect(system.toLowerCase()).toContain('mermaid')
+  })
+
+  it('the context status appears in the changeMap enum (both modes)', () => {
+    const { system: deep } = diagramsPrompt(makeCtx(), { deep: true })
+    const { system: single } = diagramsPrompt(makeCtx())
+    // The schema enum advertises context so the validator and model agree.
+    expect(deep).toContain('"context"')
+    expect(single).toContain('"context"')
   })
 })
 
