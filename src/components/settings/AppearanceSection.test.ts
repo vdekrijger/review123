@@ -149,4 +149,34 @@ describe('AppearanceSection', () => {
     expect(screen.getByRole('radio', { name: /centered/i })).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: /full width/i })).toBeInTheDocument()
   })
+
+  it('renders Focus mode fieldset with Off, Dim imports, Dim imports + comments', () => {
+    render(AppearanceSection)
+    const group = screen.getByRole('group', { name: /focus mode/i })
+    expect(group).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: /^off$/i })).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: /^dim imports$/i })).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: /dim imports \+ comments/i })).toBeInTheDocument()
+  })
+
+  it('Dim imports is selected by default (focusMode defaults to imports)', () => {
+    render(AppearanceSection)
+    const group = screen.getByRole('group', { name: /focus mode/i })
+    const importsRadio = within(group).getByRole('radio', { name: /^dim imports$/i }) as HTMLInputElement
+    expect(importsRadio.checked).toBe(true)
+  })
+
+  it('selecting Off persists focusMode=off', async () => {
+    render(AppearanceSection)
+    const group = screen.getByRole('group', { name: /focus mode/i })
+    await userEvent.click(within(group).getByRole('radio', { name: /^off$/i }))
+    expect(getSettings().focusMode).toBe('off')
+  })
+
+  it('selecting Dim imports + comments persists focusMode=imports-comments', async () => {
+    render(AppearanceSection)
+    const group = screen.getByRole('group', { name: /focus mode/i })
+    await userEvent.click(within(group).getByRole('radio', { name: /dim imports \+ comments/i }))
+    expect(getSettings().focusMode).toBe('imports-comments')
+  })
 })

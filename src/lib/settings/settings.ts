@@ -25,6 +25,13 @@ export type Theme = 'auto' | 'dark' | 'light'
 export type UiFont = 'plex' | 'system' | 'serif'
 export type TestFileDisplay = 'normal' | 'highlight' | 'dim'
 export type DiffWidth = 'centered' | 'full'
+/**
+ * Focus mode — visually DIM (never hide/collapse) low-signal lines in the diff.
+ * 'off'             — no dimming.
+ * 'imports'         — dim import/use/require lines only (DEFAULT).
+ * 'imports-comments'— dim import lines AND comment lines.
+ */
+export type FocusMode = 'off' | 'imports' | 'imports-comments'
 
 export interface GithubAuth {
   token: string
@@ -84,6 +91,8 @@ export interface Settings {
   treeOpen: boolean
   testFileDisplay: TestFileDisplay
   diffWidth: DiffWidth
+  /** Focus mode: dim imports / imports+comments to reduce diff noise. */
+  focusMode: FocusMode
   /**
    * Power-user: show approximate token usage (and a rough $ estimate when
    * per-model pricing is known) per AI section + a per-review total. Display
@@ -116,6 +125,8 @@ const DEFAULTS: Settings = {
   treeOpen: false,
   testFileDisplay: 'normal',
   diffWidth: 'centered',
+  // Non-destructive dimming of imports is our recommendation → on by default.
+  focusMode: 'imports',
   showTokenCost: false,
 }
 
@@ -227,6 +238,10 @@ function coerce(raw: unknown): Partial<Settings> {
   const diffWidth = obj['diffWidth']
   if (diffWidth === 'centered' || diffWidth === 'full') result.diffWidth = diffWidth
 
+  const focusMode = obj['focusMode']
+  if (focusMode === 'off' || focusMode === 'imports' || focusMode === 'imports-comments') {
+    result.focusMode = focusMode
+  }
   const showTokenCost = obj['showTokenCost']
   if (typeof showTokenCost === 'boolean') result.showTokenCost = showTokenCost
 
@@ -389,6 +404,7 @@ export const setShowProgress = (show: boolean) => save({ showProgress: show })
 export const setTreeOpen = (open: boolean) => save({ treeOpen: open })
 export const setTestFileDisplay = (v: TestFileDisplay) => save({ testFileDisplay: v })
 export const setDiffWidth = (v: DiffWidth) => save({ diffWidth: v })
+export const setFocusMode = (v: FocusMode) => save({ focusMode: v })
 export const setShowTokenCost = (v: boolean) => save({ showTokenCost: v })
 
 /**

@@ -5,7 +5,8 @@
   import FileTree from './FileTree.svelte'
   import type { PrFile } from '../lib/github/types'
   import type { DiffMode } from '../lib/settings/settings'
-  import { getSettings, setTreeOpen } from '../lib/settings/settings'
+  import { getSettings, setTreeOpen, setFocusMode, type FocusMode } from '../lib/settings/settings'
+  import { settingsState } from '../lib/settings/settingsState.svelte'
   import { activeProviderHasKey } from '../lib/llm/config'
   import type { DiffWidth } from '../lib/settings/settings'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
@@ -151,6 +152,27 @@
 
   // Diff width: 'centered' (default) | 'full'
   const diffWidth = $derived<DiffWidth>(getSettings().diffWidth)
+
+  // ---- Focus mode quick toggle (toolbar) ----------------------------------
+  // Cycles off → imports → imports-comments → off. Reads reactively from
+  // settingsState so the label/active state stay in sync with the Appearance
+  // setting. The per-line dimming itself lives in FileDiff.
+  const focusMode = $derived<FocusMode>(settingsState.current.focusMode)
+  const FOCUS_CYCLE: Record<FocusMode, FocusMode> = {
+    off: 'imports',
+    imports: 'imports-comments',
+    'imports-comments': 'off',
+  }
+  const FOCUS_LABEL: Record<FocusMode, string> = {
+    off: 'Focus: off',
+    imports: 'Focus: imports',
+    'imports-comments': 'Focus: imports + comments',
+  }
+  function cycleFocusMode(): void {
+    const next = FOCUS_CYCLE[focusMode]
+    setFocusMode(next)
+    if (next !== 'off') track('focus_mode_on')
+  }
 
   // ---- Viewport thresholds ----
   // The margin-vs-inline drawer decision is pure CSS (see the drawer CSS block
@@ -391,6 +413,13 @@
     title={whitespaceDisabledReason ?? 'Hide changes that only add or remove whitespace (like git diff -w)'}
     onclick={toggleHideWhitespace}
   >Hide whitespace</button>
+  <button
+    class="btn focus-toggle"
+    class:btn-active={focusMode !== 'off'}
+    aria-pressed={focusMode !== 'off'}
+    title="Dim low-signal lines (imports, comments) so real changes stand out. Click to cycle: off → imports → imports + comments."
+    onclick={cycleFocusMode}
+  >{FOCUS_LABEL[focusMode]}</button>
   {#if hideWhitespace && whitespaceToggleEnabled && whitespaceOnlyCount > 0}
     <span class="ws-only-note" role="status">
       {whitespaceOnlyCount} whitespace-only file{whitespaceOnlyCount === 1 ? '' : 's'} hidden

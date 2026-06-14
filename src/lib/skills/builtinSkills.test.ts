@@ -15,9 +15,9 @@ import { BUILTIN_SKILLS } from './builtinSkills'
 import { SAMPLE_SKILL_NAME } from './sampleSkill'
 
 describe('BUILTIN_SKILLS', () => {
-  it('is an array of exactly 6 entries', () => {
+  it('is an array of exactly 7 entries', () => {
     expect(Array.isArray(BUILTIN_SKILLS)).toBe(true)
-    expect(BUILTIN_SKILLS).toHaveLength(6)
+    expect(BUILTIN_SKILLS).toHaveLength(7)
   })
 
   it('each entry has id, name, tagline, and content fields as strings', () => {
@@ -104,6 +104,31 @@ describe('BUILTIN_SKILLS', () => {
   it('Performance Reviewer has correct tagline', () => {
     const skill = BUILTIN_SKILLS.find((s) => s.name === 'Performance Reviewer')
     expect(skill?.tagline).toBe('Work done per unit of value — quietly hot paths')
+  })
+
+  it('includes a "Comment Sensibility Reviewer" entry', () => {
+    expect(BUILTIN_SKILLS.some((s) => s.name === 'Comment Sensibility Reviewer')).toBe(true)
+  })
+
+  it('Comment Sensibility Reviewer has the expected id and tagline', () => {
+    const skill = BUILTIN_SKILLS.find((s) => s.name === 'Comment Sensibility Reviewer')
+    expect(skill?.id).toBe('comment-sensibility')
+    expect(skill?.tagline).toBe('Redundant, stale, commented-out — comments that add noise')
+  })
+
+  it('Comment Sensibility persona targets low-value/stale/commented-out comments', () => {
+    const skill = BUILTIN_SKILLS.find((s) => s.id === 'comment-sensibility')
+    expect(skill?.content).toMatch(/Redundant/i)
+    expect(skill?.content).toMatch(/Stale|misleading/i)
+    expect(skill?.content).toMatch(/Commented-out code/i)
+    // Must NOT push the user to add more comments.
+    expect(skill?.content).toMatch(/never demand MORE comments/i)
+  })
+
+  it('Comment Sensibility persona carries the shared calibration (not bypassed)', async () => {
+    const { SHARED_CALIBRATION } = await import('./builtinSkills')
+    const skill = BUILTIN_SKILLS.find((s) => s.id === 'comment-sensibility')
+    expect(skill?.content.endsWith(SHARED_CALIBRATION)).toBe(true)
   })
 
   it('includes a pragmatic sample skill with id "pragmatic"', () => {

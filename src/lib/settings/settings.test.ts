@@ -4,7 +4,7 @@ import {
   setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay, setGitlabToken,
   saveBitbucketAuth, setGitlabHost,
   setOpenaiKey, setAnthropicKey, setGeminiKey, setAiProvider, setAiModel,
-  setAiDeepReview, setShowTokenCost,
+  setAiDeepReview, setFocusMode, setShowTokenCost,
   findInvalidKeyChar, invalidKeyCharMessage,
 } from './settings'
 
@@ -35,6 +35,7 @@ describe('settings', () => {
       treeOpen: false,
       testFileDisplay: 'normal',
       diffWidth: 'centered',
+      focusMode: 'imports',
       showTokenCost: false,
     })
   })
@@ -103,6 +104,7 @@ describe('settings', () => {
       treeOpen: false,
       testFileDisplay: 'normal',
       diffWidth: 'centered',
+      focusMode: 'imports',
       showTokenCost: false,
     })
   })
@@ -299,6 +301,38 @@ describe('settings', () => {
     it('coerces invalid testFileDisplay back to normal', () => {
       localStorage.setItem('review123:settings', JSON.stringify({ testFileDisplay: 'glow' }))
       expect(getSettings().testFileDisplay).toBe('normal')
+    })
+  })
+
+  describe('focusMode', () => {
+    it('defaults to imports (non-destructive dimming recommendation)', () => {
+      expect(getSettings().focusMode).toBe('imports')
+    })
+
+    it('setFocusMode persists off', () => {
+      setFocusMode('off')
+      expect(getSettings().focusMode).toBe('off')
+    })
+
+    it('setFocusMode persists imports-comments', () => {
+      setFocusMode('imports-comments')
+      expect(getSettings().focusMode).toBe('imports-comments')
+    })
+
+    it('setFocusMode round-trips back to imports', () => {
+      setFocusMode('off')
+      setFocusMode('imports')
+      expect(getSettings().focusMode).toBe('imports')
+    })
+
+    it('coerces invalid focusMode back to default (imports)', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ focusMode: 'blur' }))
+      expect(getSettings().focusMode).toBe('imports')
+    })
+
+    it('coerces non-string focusMode back to default (imports)', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ focusMode: 3 }))
+      expect(getSettings().focusMode).toBe('imports')
     })
   })
 
