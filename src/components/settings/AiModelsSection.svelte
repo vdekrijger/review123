@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { getSettings, saveTokens, setAiProvider, setAiModel, setAiDeepReview, type AiProvider } from '../../lib/settings/settings'
+  import { getSettings, saveTokens, setAiProvider, setAiModel, setAiDeepReview, setStoryMode, type AiProvider } from '../../lib/settings/settings'
   import { settingsState } from '../../lib/settings/settingsState.svelte'
   import { PROVIDERS, getModelDef, type LlmProviderId } from '../../lib/llm/providers'
   import { llmTestConnection, LlmError } from '../../lib/llm/llm'
+  import { activeProviderHasKey } from '../../lib/llm/config'
   import { track } from '../../lib/analytics/analytics'
   import SecretInput from './SecretInput.svelte'
 
@@ -24,6 +25,17 @@
   function onDeepReviewChange(checked: boolean) {
     deepReview = checked
     setAiDeepReview(checked)
+  }
+
+  // Story mode (Plan H) toggle — applies immediately. Requires an LLM key
+  // (it's a classification task); disabled with a hint when no key is set.
+  // Reactive to settingsState so adding a key re-enables it live.
+  let storyMode = $state<boolean>(current.storyMode)
+  // Touch settingsState.current so this re-evaluates when keys/provider change.
+  const storyKeyAvailable = $derived((settingsState.current, activeProviderHasKey()))
+  function onStoryModeChange(checked: boolean) {
+    storyMode = checked
+    setStoryMode(checked)
   }
 
   // Per-provider model selection. Empty string means "use the provider default".
@@ -221,6 +233,24 @@
     </p>
   </div>
 
+  <div class="deep-review-row">
+    <label class="deep-review-toggle" class:disabled={!storyKeyAvailable}>
+      <input
+        type="checkbox"
+        checked={storyMode}
+        disabled={!storyKeyAvailable}
+        onchange={(e) => onStoryModeChange((e.currentTarget as HTMLInputElement).checked)}
+      />
+      <span class="deep-review-label">Story mode (guided walkthrough)</span>
+    </label>
+    <p class="deep-review-hint">
+      In Inspect (step 2), lead with a guided narrative walkthrough of the change — one coherent
+      step at a time, in reading order, with related tests inline. Falls back to the all-files diff
+      anytime via the Story / Files switch.
+      {#if !storyKeyAvailable}<strong> Add an LLM API key above to enable it.</strong>{/if}
+    </p>
+  </div>
+
   <div class="hint privacy-note">
     <p><strong>What's sent where:</strong> keys are stored only in this browser (localStorage) — never on our servers.</p>
   </div>
@@ -383,6 +413,11 @@
     gap: 0.4rem;
     font-size: 0.9em;
     cursor: pointer;
+  }
+
+  .deep-review-toggle.disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
   }
 
   .deep-review-label {

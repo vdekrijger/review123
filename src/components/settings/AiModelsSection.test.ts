@@ -485,3 +485,33 @@ describe('AiModelsSection — invalid key characters rejected at save', () => {
     expect(llmTestConnectionMock).not.toHaveBeenCalled()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Story mode toggle (Plan H) — requires an LLM key to be enabled
+// ---------------------------------------------------------------------------
+
+describe('AiModelsSection — story mode toggle', () => {
+  it('is disabled when no LLM key is configured (no-key gating)', () => {
+    render(AiModelsSection)
+    const toggle = screen.getByRole('checkbox', { name: /Story mode/i }) as HTMLInputElement
+    expect(toggle.disabled).toBe(true)
+    expect(screen.getByText(/Add an LLM API key above to enable it/i)).toBeInTheDocument()
+  })
+
+  it('is enabled once the active provider has a key', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ aiProvider: 'deepseek', deepseekKey: 'sk-test' }))
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    const toggle = screen.getByRole('checkbox', { name: /Story mode/i }) as HTMLInputElement
+    expect(toggle.disabled).toBe(false)
+  })
+
+  it('persists the toggle change to settings', async () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ aiProvider: 'deepseek', deepseekKey: 'sk-test', storyMode: true }))
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    const toggle = screen.getByRole('checkbox', { name: /Story mode/i }) as HTMLInputElement
+    await userEvent.click(toggle)
+    expect(getSettings().storyMode).toBe(false)
+  })
+})

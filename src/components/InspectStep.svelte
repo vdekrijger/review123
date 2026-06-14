@@ -24,6 +24,10 @@
   import { listSkills } from '../lib/skills/skills'
   import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
   import { classifyFile } from '../lib/diff/diffFile'
+  import StorySlideshow from './StorySlideshow.svelte'
+  import Skeleton from './Skeleton.svelte'
+  import type { StoryOrderResult, GraphResult } from '../lib/ai/schemas'
+  import type { PanelStatus } from '../lib/ai/run.svelte'
 
   let {
     files,
@@ -45,6 +49,12 @@
     hideWhitespace = false,
     onhidewhitespace = null,
     whitespaceDisabledReason = null,
+    storyAvailable = false,
+    storyMode = false,
+    onstorymode = null,
+    story = null,
+    storyStatus = 'idle',
+    diagrams = null,
   }: {
     files: PrFile[]
     changedFiles: number
@@ -90,7 +100,46 @@
      * (e.g. compare mode, where fetched contents don't match the compared revisions).
      */
     whitespaceDisabledReason?: string | null
+    // ---- Story mode (Plan H) ----
+    /** Whether story mode is available (LLM key configured + not compare mode). */
+    storyAvailable?: boolean
+    /** Whether story mode is the active flow (persisted per-browser). */
+    storyMode?: boolean
+    /** Called when the user switches Story|Files in step 2 (persists the choice). */
+    onstorymode?: ((story: boolean) => void) | null
+    /** Story-order result from the AI run; null while pending / unavailable. */
+    story?: StoryOrderResult | null
+    /** Status of the story AI task (for skeleton / fallback decisions). */
+    storyStatus?: PanelStatus
+    /** Change-map source for the story progress map; null/pending → no map (never blocks). */
+    diagrams?: GraphResult | null
   } = $props()
+
+  // ---------------------------------------------------------------------------
+  // Story mode switching + fallback (Plan H)
+  // ---------------------------------------------------------------------------
+
+  // Does the story result have at least one step that touches a file in this PR?
+  const storyHasUsableSteps = $derived.by(() => {
+    if (!story || story.steps.length === 0) return false
+    const present = new Set(files.map((f) => f.filename))
+    return story.steps.some((s) => s.files.some((p) => present.has(p)))
+  })
+
+  // The effective flow: story when available AND chosen AND a usable result
+  // exists; otherwise files. While the story task is still loading we keep the
+  // story surface (skeleton). On error / empty result we fall back to files with
+  // a note. No-key users never reach here (storyAvailable is false).
+  const storyPending = $derived(storyStatus === 'idle' || storyStatus === 'loading' || storyStatus === 'streaming')
+  const showStory = $derived(storyAvailable && storyMode && (storyPending || storyHasUsableSteps))
+  // A one-line note when story was chosen but fell back to files.
+  const storyFellBack = $derived(
+    storyAvailable && storyMode && !storyPending && !storyHasUsableSteps,
+  )
+
+  function selectMode(toStory: boolean): void {
+    onstorymode?.(toStory)
+  }
 
   function commentsForFile(path: string): PrComment[] {
     return prComments.filter((c) => c.path === path)
@@ -402,6 +451,29 @@
   }
 </script>
 
+{#if storyAvailable}
+  <div class="flow-switch" role="group" aria-label="Inspect flow">
+    <button
+      class="flow-btn"
+      class:flow-active={showStory}
+      aria-pressed={showStory}
+      onclick={() => selectMode(true)}
+    >Story</button>
+    <button
+      class="flow-btn"
+      class:flow-active={!showStory}
+      aria-pressed={!showStory}
+      onclick={() => selectMode(false)}
+    >Files</button>
+  </div>
+{/if}
+
+{#if storyFellBack}
+  <p class="story-fallback-note" role="note">
+    Story mode unavailable for this PR — showing all files.
+  </p>
+{/if}
+
 <div class="mode-toggle" role="group" aria-label="Diff mode">
   <button class="btn" class:btn-active={mode === 'unified'} aria-pressed={mode === 'unified'} onclick={() => onmode('unified')}>Unified</button>
   <button class="btn" class:btn-active={mode === 'split'} aria-pressed={mode === 'split'} onclick={() => onmode('split')}>Side-by-side</button>
@@ -502,6 +574,32 @@
 
 {#if files.length === 0}
   <p>This PR has no changed files.</p>
+{:else if showStory && storyPending && !storyHasUsableSteps}
+  <!-- Story task still running: crafted skeleton (reuse the shared component). -->
+  <div class="story-skeleton" aria-busy="true" aria-label="Building the walkthrough">
+    <Skeleton lines={3} />
+    <Skeleton lines={6} />
+  </div>
+{:else if showStory && story}
+  <StorySlideshow
+    {story}
+    {files}
+    {mode}
+    {draftStore}
+    {viewedStore}
+    {prComments}
+    {resolvedCommentIds}
+    {contentsMap}
+    lineSkillFindingsByPath={lineSkillFindingsByPath}
+    whitespaceByPath={whitespaceByPath}
+    onAddDraft={handleAddDraft}
+    onRemoveDraft={handleRemoveDraft}
+    onAddSkillFindingDraft={(path, finding) => addFindingAsDraft({ findingPath: path, line: finding.line, body: finding.body, key: finding.key })}
+    {askFn}
+    {askDisabledReason}
+    replyFn={replyFn}
+    {diagrams}
+  />
 {:else}
   <div class="inspect-layout" class:diff-full={diffWidth === 'full'} data-diffwidth={diffWidth} bind:this={layoutEl}>
     <!-- Collapsible drawer. Two CSS regimes (see drawer CSS block below):
@@ -811,6 +909,41 @@
   .diff-column {
     min-width: 0;
     flex: 1;
+  }
+
+  /* ---- Story | Files flow switch (Plan H) ---- */
+  .flow-switch {
+    display: inline-flex;
+    gap: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    padding: 0.15rem;
+    margin-bottom: 0.5rem;
+  }
+  .flow-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 0.25rem 0.9rem;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .flow-btn.flow-active {
+    background: var(--accent);
+    color: var(--surface, #fff);
+  }
+  .story-fallback-note {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin: 0 0 0.5rem;
+  }
+  .story-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 0.5rem 0;
   }
 
   /* Mode toggle: active state via accent underline, consistent with stepper */

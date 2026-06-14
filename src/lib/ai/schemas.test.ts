@@ -1128,3 +1128,65 @@ describe('validateAlternativesResult', () => {
     expect(validateAlternativesResult([])).toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// validateStoryOrder (Plan H — Story mode)
+// ---------------------------------------------------------------------------
+
+import { validateStoryOrder, STORY_LAYERS } from './schemas'
+
+describe('validateStoryOrder', () => {
+  const valid = {
+    steps: [
+      { index: 0, files: ['src/db/schema.ts'], caption: 'Schema gains a column.', layer: 'data', relatedTests: ['src/db/schema.test.ts'] },
+      { index: 1, files: ['src/api/route.ts'], caption: 'API reads the column.', layer: 'api', relatedTests: [] },
+    ],
+  }
+
+  it('accepts a valid story-order result', () => {
+    expect(validateStoryOrder(valid)).toEqual(valid)
+  })
+
+  it('accepts an empty steps array (consumer falls back to Files)', () => {
+    expect(validateStoryOrder({ steps: [] })).toEqual({ steps: [] })
+  })
+
+  it('accepts every layer in the taxonomy', () => {
+    for (const layer of STORY_LAYERS) {
+      const x = { steps: [{ index: 0, files: ['a.ts'], caption: 'c', layer, relatedTests: [] }] }
+      expect(validateStoryOrder(x)).not.toBeNull()
+    }
+  })
+
+  it('rejects an unknown layer enum', () => {
+    const x = { steps: [{ index: 0, files: ['a.ts'], caption: 'c', layer: 'frontend', relatedTests: [] }] }
+    expect(validateStoryOrder(x)).toBeNull()
+  })
+
+  it('rejects a step with an empty files array', () => {
+    const x = { steps: [{ index: 0, files: [], caption: 'c', layer: 'data', relatedTests: [] }] }
+    expect(validateStoryOrder(x)).toBeNull()
+  })
+
+  it('rejects a non-integer index', () => {
+    const x = { steps: [{ index: 1.5, files: ['a.ts'], caption: 'c', layer: 'data', relatedTests: [] }] }
+    expect(validateStoryOrder(x)).toBeNull()
+  })
+
+  it('rejects a non-array steps', () => {
+    expect(validateStoryOrder({ steps: 'nope' })).toBeNull()
+    expect(validateStoryOrder({})).toBeNull()
+    expect(validateStoryOrder(null)).toBeNull()
+    expect(validateStoryOrder([])).toBeNull()
+  })
+
+  it('rejects non-string files / relatedTests entries', () => {
+    expect(validateStoryOrder({ steps: [{ index: 0, files: [1], caption: 'c', layer: 'data', relatedTests: [] }] })).toBeNull()
+    expect(validateStoryOrder({ steps: [{ index: 0, files: ['a.ts'], caption: 'c', layer: 'data', relatedTests: [2] }] })).toBeNull()
+  })
+
+  it('tolerates extra keys', () => {
+    const x = { steps: [{ index: 0, files: ['a.ts'], caption: 'c', layer: 'data', relatedTests: [], extra: 'x' }], top: 1 }
+    expect(validateStoryOrder(x)).not.toBeNull()
+  })
+})

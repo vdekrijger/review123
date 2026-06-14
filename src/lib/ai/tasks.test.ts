@@ -16,11 +16,13 @@ import {
   testInsightPrompt,
   coachPrompt,
   alternativesPrompt,
+  storyOrderPrompt,
   askPrompt,
   parseReadingOrder,
   stripReadingOrder,
   DEEP_DIAGRAM_CONTEXT_NODE_CAP,
 } from './tasks'
+import { STORY_LAYERS } from './schemas'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
@@ -1791,5 +1793,57 @@ describe('attentionPrompt — deep mode verification (v13)', () => {
     expect(system).toContain('testFlags')
     expect(system).toMatch(/Anti-fatigue calibration/i)
     expect(system).toMatch(/Assume best intent/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// storyOrderPrompt (Plan H — Story mode)
+// ---------------------------------------------------------------------------
+
+describe('storyOrderPrompt', () => {
+  it('asks for JSON-only output matching the StoryOrderResult shape', () => {
+    const { system, user } = storyOrderPrompt(makeCtx('story-context-123'))
+    expect(system).toMatch(/JSON ONLY/i)
+    expect(system).toContain('"steps"')
+    expect(system).toContain('"caption"')
+    expect(system).toContain('"layer"')
+    expect(system).toContain('"relatedTests"')
+    expect(user).toBe('story-context-123')
+  })
+
+  it('names every layer in the taxonomy', () => {
+    const { system } = storyOrderPrompt(makeCtx())
+    for (const layer of STORY_LAYERS) {
+      expect(system).toContain(layer)
+    }
+  })
+
+  it('states the chronological/logical ordering rule', () => {
+    const { system } = storyOrderPrompt(makeCtx())
+    expect(system).toMatch(/data\s*→\s*api\s*→\s*logic\s*→\s*tests\s*→\s*ui/i)
+    expect(system).toMatch(/just before/i)
+  })
+
+  it('embeds the import graph when present (for ordering + test pairing)', () => {
+    const ctx: PackedContext = { text: 'x', notAnalyzed: [], includedFiles: [], importGraph: 'A imports B' }
+    const { system } = storyOrderPrompt(ctx)
+    expect(system).toContain('A imports B')
+  })
+
+  it('single-pass variant does NOT include deep verification guidance', () => {
+    const { system } = storyOrderPrompt(makeCtx())
+    expect(system).not.toMatch(/Deep mode/i)
+  })
+
+  it('deep variant adds verification guidance for ordering + test-pairing', () => {
+    const { system } = storyOrderPrompt(makeCtx(), { deep: true })
+    expect(system).toMatch(/Deep mode/i)
+    expect(system).toMatch(/read_file|search_code/i)
+  })
+})
+
+describe('PROMPT_VERSION', () => {
+  it('is bumped to 14 for the storyOrder task', () => {
+    expect(PROMPT_VERSION).toBe(14)
   })
 })

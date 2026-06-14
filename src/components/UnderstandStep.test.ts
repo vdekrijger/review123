@@ -39,6 +39,7 @@ function makeRun(overrides: Partial<AiRun>): AiRun {
     verdict: { status: 'idle' },
     tests: { status: 'idle' },
     alternatives: { status: 'idle' },
+    story: { status: 'idle' },
     skillReviews: [],
     totalUsage: undefined,
     start: async () => {},

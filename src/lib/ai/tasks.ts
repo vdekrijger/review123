@@ -11,8 +11,9 @@
 
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
+import { STORY_LAYERS } from './schemas'
 
-export const PROMPT_VERSION = 13
+export const PROMPT_VERSION = 14
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)
@@ -714,6 +715,108 @@ more low-quality ones. Maximum 3 alternatives total. An empty alternatives array
 and expected outcome when the PR's approach is the natural choice — silence is a valid answer.
 
 ${ANTI_FATIGUE_RULES}
+
+Do not include any text outside the JSON object.`
+
+  return { system, user: ctx.text }
+}
+
+// ---------------------------------------------------------------------------
+// storyOrderPrompt — JSON StoryOrderResult (Plan H — Story mode)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build prompts for the story-order task.
+ *
+ * Output must be JSON-only, matching StoryOrderResult:
+ *   { steps: StoryStep[] }   // steps already ordered (index 0..n-1)
+ *
+ * Per step: { index, files[], caption, layer, relatedTests[] }.
+ *
+ * Classifies each changed file (or coherent group of files) into one of the
+ * STORY_LAYERS, then emits an ORDERED narrative sequence so a reviewer can walk
+ * the PR as a story: data model → API/service → business logic → tests → UI,
+ * with foundational/config primitives woven in JUST BEFORE the first step that
+ * depends on them. Each step pairs its code with the related test file(s) that
+ * cover it (grounded in the import graph + the changed test files) so the
+ * reviewer can sense-check inline.
+ *
+ * Deep variant (options.deep): when the agentic harness is on, the model
+ * VERIFIES ordering/test-pairing by reading dependencies/imports with the tools
+ * before committing to the sequence. withDeepReviewGuidance() adds the generic
+ * tool-loop discipline; this section adds the story-specific verification.
+ */
+export function storyOrderPrompt(
+  ctx: PackedContext,
+  options?: { deep?: boolean },
+): { system: string; user: string } {
+  const layerList = STORY_LAYERS.join(', ')
+
+  const importGraphSection = ctx.importGraph
+    ? `\n\n## Module relationships (extracted from code)\n\n${ctx.importGraph}\n\nUse these REAL import relationships to (a) order steps so a primitive precedes its first \
+consumer and (b) pair each step's code with the test file(s) that import/cover it.`
+    : ''
+
+  const deepStorySection = options?.deep
+    ? `\n\n## Deep mode — VERIFY ordering and test-pairing before committing (IMPORTANT)
+You have verification tools (read_file / read_file_at_base / search_code). Before finalizing the \
+sequence:
+- Read a changed file's imports (read_file) to confirm which layer it truly belongs to and what it \
+  depends on — order dependencies before dependents.
+- search_code for a changed symbol to find the test file that actually exercises it, so relatedTests \
+  reflects real coverage rather than a name guess.
+- DROP a relatedTests entry you cannot substantiate. Keep the sequence honest to what the tools show.`
+    : ''
+
+  const system = `You are an expert code reviewer assistant. Turn this pull request into a guided \
+NARRATIVE walkthrough — a sequence of steps a reviewer reads in order to understand the change as a \
+story. Respond with JSON ONLY — no explanation, no markdown, no code fences. Your response must be \
+valid JSON that exactly matches this shape:
+
+{
+  "steps": [
+    {
+      "index": <0-based integer position in reading order>,
+      "files": ["<file-path>", ...],
+      "caption": "<one-line narrative sentence describing this step>",
+      "layer": "data" | "api" | "logic" | "config" | "tests" | "ui" | "foundational",
+      "relatedTests": ["<test-file-path>", ...]
+    }
+  ]
+}
+
+Layer taxonomy (use EXACTLY these ids): ${layerList}.
+- data: data model, migration, schema, persistence.
+- api: API surface, service, transport, routing, network.
+- logic: business logic, core algorithms, orchestration.
+- config: validation, configuration, build/setup wiring.
+- tests: test files.
+- ui: UI / frontend / components / styling.
+- foundational: shared primitives/utilities depended on by many other layers.
+
+Ordering rule (the sequence is the whole point):
+- Emit steps in CHRONOLOGICAL / LOGICAL reading order: data → api → logic → tests → ui.
+- Weave config/foundational steps in JUST BEFORE the first step that depends on them (a shared \
+  primitive precedes its first consumer; a migration precedes the API that reads the new column).
+- Group a layer's steps together; within a layer, most load-bearing first.
+- index must be the 0-based position in the FINAL order (steps[0].index = 0, steps[1].index = 1, …).
+
+Field rules:
+- files: one or more file paths that THIS step covers. Group files into a single step ONLY when they \
+  form one coherent change (e.g. a migration + its model). Every path must appear in the PR changes; \
+  do not invent paths. A pure test file belongs in its OWN step with layer "tests" unless it is the \
+  natural sense-check companion of a code step (then list it in that step's relatedTests instead).
+- caption: ONE sentence, plain language, describing what changes here and why it matters in the \
+  story (e.g. "The schema gains a \`provider\` column so reviews can target GitLab too."). No \
+  methodology narration, no praise padding, no restating the diff line-by-line.
+- layer: exactly one of the ids above.
+- relatedTests: test file paths (from the PR) that exercise THIS step's code — for inline \
+  sense-checking. Empty array when no test in the PR covers it. Ground pairings in the import graph \
+  and the test files touched by this PR; do not guess.
+
+Keep the walkthrough tight: prefer FEWER, coherent steps over one-step-per-file. Cover every changed \
+non-test file in some step (as files or relatedTests).
+${importGraphSection}${deepStorySection}
 
 Do not include any text outside the JSON object.`
 
