@@ -12,7 +12,7 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
-export const PROMPT_VERSION = 12
+export const PROMPT_VERSION = 13
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)
@@ -34,6 +34,32 @@ the diff, no praise padding, no methodology narration.
 clean code. Do not invent points to fill space.
 - Severity honesty: nits are nits — label them "low"; never inflate severity to make a point \
 sound important.`
+
+// ---------------------------------------------------------------------------
+// Assume-best-intent calibration (v13) — hotspot/attention discipline
+//
+// The attention task fights over-caution: it must treat the PR author as a
+// competent engineer acting in good faith and flag only GENUINE, substantiated
+// risk — never style, preference, or speculative "this could maybe break
+// something". A clean, well-scoped PR is EXPECTED to produce zero hotspots.
+// Embedded in BOTH the single-pass and deep attention prompts (the framing
+// helps even without tools; deep mode adds verification on top).
+// ---------------------------------------------------------------------------
+
+const ASSUME_BEST_INTENT = `Assume best intent (IMPORTANT — calibration for hotspots):
+- Treat the PR author as a competent engineer acting in good faith. A file is NOT a hotspot \
+because it is large, or simply because it was touched — assume the author handled the obvious \
+cases unless you have concrete evidence otherwise.
+- Flag ONLY genuine risk: correctness bugs, blast radius / broad consumer impact, data or \
+security exposure, or a broken contract (changed signature/behavior with callers left stale). \
+Do NOT flag style, naming, preference, or "this could maybe break something" speculation \
+without evidence.
+- Evidence gate over alarm: if you cannot substantiate a risk from what you can see (or \
+verify), DROP it — couldn't verify means stay silent, never assert. Severity must reflect \
+substantiated harm, not worst-case imagination.
+- An EMPTY hotspots list is the EXPECTED, GOOD outcome on a clean, well-scoped PR. Do not \
+manufacture hotspots to look thorough — silence is the correct answer when nothing is \
+genuinely risky.`
 
 // ---------------------------------------------------------------------------
 // summarizePrompt — streaming plain-text summary + reading order
@@ -98,7 +124,30 @@ changes. Plain paths only — no bullets, numbers, or prefixes.`
  *
  * NOTE: test mapping is inferred from reading code, not measured coverage.
  */
-export function attentionPrompt(ctx: PackedContext): { system: string; user: string } {
+export function attentionPrompt(
+  ctx: PackedContext,
+  options?: { deep?: boolean },
+): { system: string; user: string } {
+  // Deep-attention guidance (PROMPT_VERSION 13): when the agentic harness is on,
+  // the model VERIFIES each candidate hotspot with the tools before reporting it
+  // — read the changed file and its callers/dependencies (search_code/read_file)
+  // to confirm the change is genuinely load-bearing rather than superficially
+  // scary. Composes with (never replaces) the assume-best-intent + evidence
+  // discipline below; withDeepReviewGuidance() adds the generic tool loop rules.
+  const deepHotspotSection = options?.deep
+    ? `\n\n## Deep mode — VERIFY each hotspot before reporting it (IMPORTANT)
+You have verification tools (read_file / read_file_at_base / search_code). Before marking a \
+file a hotspot, substantiate the risk:
+- Read the changed file (read_file) to confirm the change is genuinely load-bearing — not \
+  superficially scary.
+- Find its callers/consumers (search_code for the changed symbol/file) and its dependencies \
+  to gauge real blast radius. A completed refactor whose call sites are all updated is NOT a \
+  hotspot.
+- DROP any hotspot you cannot substantiate with what the tools show. An unverified suspicion \
+  must not appear in your answer — not even hedged. Verified hotspots should reflect what you \
+  confirmed, briefly.`
+    : ''
+
   const system = `You are an expert code reviewer assistant. Analyze the pull request changes \
 and respond with JSON ONLY — no explanation, no markdown, no code fences. Your response must \
 be valid JSON that exactly matches this shape:
@@ -140,6 +189,8 @@ Evidence discipline (IMPORTANT — apply to every hotspot and testFlag):
   asserting breakage.
 - Prefer neutral, factual phrasing over alarm. Severity must reflect evidence, not worst-case \
   speculation.
+
+${ASSUME_BEST_INTENT}${deepHotspotSection}
 
 Do not include any text outside the JSON object.`
 

@@ -19,7 +19,7 @@ import { LlmError } from '../llm/llm'
 import { addSkill } from '../skills/skills'
 import { djb2 } from '../viewed/viewed.svelte'
 import type { PackedContext } from '../context/pack'
-import type { VerdictResult, SkillReviewResult, TestInsight, AlternativesResult, GraphResult } from './schemas'
+import type { VerdictResult, SkillReviewResult, TestInsight, AlternativesResult, GraphResult, AttentionResult } from './schemas'
 import type { DeepReviewSource } from './deepReview'
 
 // ---------------------------------------------------------------------------
@@ -383,6 +383,12 @@ const ALTERNATIVES_RESULT: AlternativesResult = {
   ],
 }
 
+const ATTENTION_RESULT: AttentionResult = {
+  readingOrder: ['src/foo.ts'],
+  hotspots: [{ path: 'src/foo.ts', reason: 'verified load-bearing change', level: 'high' }],
+  testFlags: [],
+}
+
 // A deep-diagram changeMap including a de-emphasized one-hop "context" neighbor
 // (deep-diagram mode, v12). The serializer styles status:'context' as muted.
 const DIAGRAM_RESULT: GraphResult = {
@@ -404,7 +410,7 @@ const DIAGRAM_RESULT: GraphResult = {
  * tasks each get a shape-correct answer.
  */
 function makeMultiTaskDeps() {
-  const CANDIDATES = [DIAGRAM_RESULT, VERDICT_RESULT, SKILL_RESULT, TESTS_RESULT, ALTERNATIVES_RESULT]
+  const CANDIDATES = [DIAGRAM_RESULT, VERDICT_RESULT, SKILL_RESULT, TESTS_RESULT, ALTERNATIVES_RESULT, ATTENTION_RESULT]
   const pick = (validate: ValidateFn) => {
     for (const c of CANDIDATES) if (validate(c) !== null) return c
     return VERDICT_RESULT
@@ -432,6 +438,7 @@ function makeMultiTaskDeps() {
       else if (/genuinely different approach/i.test(opts.system)) body = ALTERNATIVES_RESULT
       else if (/reviewer persona/i.test(opts.system)) body = SKILL_RESULT
       else if (/NO Mermaid syntax/i.test(opts.system)) body = DIAGRAM_RESULT
+      else if (/testFlags/i.test(opts.system)) body = ATTENTION_RESULT
       return {
         content: JSON.stringify(body),
         usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
@@ -724,6 +731,158 @@ describe('deep diagrams task', () => {
       deep: true,
       result: DIAGRAM_RESULT,
       toolCallsUsed: 5,
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Deep attention / hotspots (Plan: deep-attention)
+//
+// When aiDeepReview is ON the attention task joins the harness so it can VERIFY
+// each candidate hotspot (read the changed file + its callers/dependencies)
+// before reporting it — assume best intent, drop unsubstantiated hotspots.
+// When OFF it stays byte-identical: single-pass, no |deep marker, no tool loop.
+// ---------------------------------------------------------------------------
+
+describe('deep attention task', () => {
+  it('runs the tool loop, uses the |deep key, caches a wrapper with toolCallsUsed', async () => {
+    seedSettings({ aiDeepReview: true })
+    const deps = makeMultiTaskDeps()
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    // The attention loop carries the deep-attention system prompt (hotspots +
+    // verify guidance + deep guidance composed on top).
+    const attentionLoopCall = deps.llmToolLoop.mock.calls.find((c: unknown[]) =>
+      /testFlags/i.test((c[0] as { system: string }).system),
+    )
+    expect(attentionLoopCall).toBeDefined()
+    const attentionSystem = (attentionLoopCall![0] as { system: string }).system
+    expect(attentionSystem).toContain('Deep review mode')
+    // Deep-attention-specific guidance: verify each hotspot before reporting it
+    expect(attentionSystem).toContain('VERIFY each hotspot before reporting it')
+
+    const deepKey = `${PR_KEY}|attention|deep|v${PROMPT_VERSION}`
+    expect(deps.getCached).toHaveBeenCalledWith(deepKey)
+    expect(deps.setCached).toHaveBeenCalledWith(deepKey, {
+      deep: true,
+      result: ATTENTION_RESULT,
+      toolCallsUsed: 2,
+    })
+    expect(run.attention.status).toBe('done')
+    expect(run.attention.value).toEqual(ATTENTION_RESULT)
+    expect(run.attention.toolCallsUsed).toBe(2)
+    expect(run.attention.activity).toBeUndefined()
+  })
+
+  it('surfaces tool activity lines while the attention loop runs', async () => {
+    seedSettings({ aiDeepReview: true })
+    const deps = makeMultiTaskDeps()
+    let activityDuringRun: string[] = []
+    deps.llmToolLoop.mockImplementation(
+      async (opts: { system: string; onToolEvent?: (ev: { name: string; detail: string }) => void }) => {
+        opts.onToolEvent?.({ name: 'read_file', detail: 'Reading src/foo.ts…' })
+        if (/testFlags/i.test(opts.system)) {
+          activityDuringRun = [...(run.attention.activity ?? [])]
+        }
+        let body: unknown = VERDICT_RESULT
+        if (/changed test files/i.test(opts.system)) body = TESTS_RESULT
+        else if (/genuinely different approach/i.test(opts.system)) body = ALTERNATIVES_RESULT
+        else if (/reviewer persona/i.test(opts.system)) body = SKILL_RESULT
+        else if (/NO Mermaid syntax/i.test(opts.system)) body = DIAGRAM_RESULT
+        else if (/testFlags/i.test(opts.system)) body = ATTENTION_RESULT
+        return { content: JSON.stringify(body), usage: undefined, toolCallsUsed: 1 }
+      },
+    )
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    expect(activityDuringRun).toEqual(['Reading src/foo.ts…'])
+  })
+
+  it('unwraps a deep cache hit: result + toolCallsUsed, no attention loop call', async () => {
+    seedSettings({ aiDeepReview: true })
+    const deps = makeMultiTaskDeps()
+    deps.getCached.mockImplementation(async (key: string) =>
+      key === `${PR_KEY}|attention|deep|v${PROMPT_VERSION}`
+        ? { deep: true, result: ATTENTION_RESULT, toolCallsUsed: 4 }
+        : null,
+    )
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    expect(run.attention.value).toEqual(ATTENTION_RESULT)
+    expect(run.attention.toolCallsUsed).toBe(4)
+    const attentionLoop = deps.llmToolLoop.mock.calls.find((c: unknown[]) =>
+      /testFlags/i.test((c[0] as { system: string }).system),
+    )
+    expect(attentionLoop).toBeUndefined()
+  })
+
+  it('unsupported model → single-pass key + honest note, no deep guidance', async () => {
+    seedSettings({ aiDeepReview: true, aiModel: 'deepseek-reasoner' })
+    const deps = makeMultiTaskDeps()
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|attention|v${PROMPT_VERSION}`)
+    expect(run.attention.status).toBe('done')
+    expect(run.attention.note).toContain('does not support tool calling')
+    expect(run.attention.toolCallsUsed).toBeUndefined()
+    // No attention call went through the tool loop
+    const attentionLoop = deps.llmToolLoop.mock.calls.find((c: unknown[]) =>
+      /testFlags/i.test((c[0] as { system: string }).system),
+    )
+    expect(attentionLoop).toBeUndefined()
+  })
+
+  it('toggle off → single-pass attention key, no loop, byte-identical', async () => {
+    seedSettings()
+    const deps = makeMultiTaskDeps()
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|attention|v${PROMPT_VERSION}`)
+    const attentionLoop = deps.llmToolLoop.mock.calls.find((c: unknown[]) =>
+      /testFlags/i.test((c[0] as { system: string }).system),
+    )
+    expect(attentionLoop).toBeUndefined()
+    expect(run.attention.status).toBe('done')
+    expect(run.attention.toolCallsUsed).toBeUndefined()
+    expect(run.attention.note).toBeUndefined()
+  })
+
+  it('invalid loop JSON → single-pass repair grounded in loop output, then cached', async () => {
+    seedSettings({ aiDeepReview: true })
+    const deps = makeMultiTaskDeps()
+    // Attention loop returns non-JSON → triggers the repair pass
+    deps.llmToolLoop.mockImplementation(
+      async (opts: { system: string; onToolEvent?: (ev: { name: string; detail: string }) => void }) => {
+        if (/testFlags/i.test(opts.system)) {
+          return { content: 'Here are the hotspots (not JSON)', usage: undefined, toolCallsUsed: 6 }
+        }
+        let body: unknown = VERDICT_RESULT
+        if (/changed test files/i.test(opts.system)) body = TESTS_RESULT
+        else if (/genuinely different approach/i.test(opts.system)) body = ALTERNATIVES_RESULT
+        else if (/reviewer persona/i.test(opts.system)) body = SKILL_RESULT
+        else if (/NO Mermaid syntax/i.test(opts.system)) body = DIAGRAM_RESULT
+        return { content: JSON.stringify(body), usage: undefined, toolCallsUsed: 1 }
+      },
+    )
+    const run = createAiRun(makeInput(makeSource()), deps)
+    await run.start()
+
+    const repairCall = deps.llmJsonWithRepairWithUsage.mock.calls.find((c: unknown[]) =>
+      (c[0] as { user: string }).user.includes('Here are the hotspots'),
+    )
+    expect(repairCall).toBeDefined()
+    expect(run.attention.status).toBe('done')
+    expect(run.attention.value).toEqual(ATTENTION_RESULT)
+    expect(run.attention.toolCallsUsed).toBe(6)
+    expect(deps.setCached).toHaveBeenCalledWith(`${PR_KEY}|attention|deep|v${PROMPT_VERSION}`, {
+      deep: true,
+      result: ATTENTION_RESULT,
+      toolCallsUsed: 6,
     })
   })
 })

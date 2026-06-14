@@ -139,6 +139,13 @@
                     </li>
                   {/each}
                 </ul>
+                <!-- Deep review: "verified with N tool calls" footer (same
+                     run.attention channel the other deep panels use). -->
+                {#if run.attention.toolCallsUsed !== undefined && run.attention.toolCallsUsed > 0}
+                  <p class="ai-deep-footer">
+                    Deep review: verified with {run.attention.toolCallsUsed} tool {run.attention.toolCallsUsed === 1 ? 'call' : 'calls'}
+                  </p>
+                {/if}
               </div>
             </details>
           {:else if attentionPending}
@@ -148,6 +155,14 @@
               <summary class="rail-section-summary">Hotspots</summary>
               <div class="rail-section-body">
                 <Skeleton lines={3} />
+                {#if run.attention.activity && run.attention.activity.length > 0}
+                  <!-- Deep review: live tool activity from the agentic loop -->
+                  <ul class="hotspot-tool-activity" aria-live="polite" aria-label="Deep review activity">
+                    {#each run.attention.activity as line, i (i)}
+                      <li>{line}</li>
+                    {/each}
+                  </ul>
+                {/if}
               </div>
             </details>
           {/if}
@@ -362,6 +377,26 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+  }
+
+  .ai-deep-footer {
+    margin: 0.6rem 0 0;
+    padding-top: 0.4rem;
+    border-top: 1px solid var(--hairline);
+    font-size: 0.78rem;
+    opacity: 0.65;
+  }
+
+  .hotspot-tool-activity {
+    margin: 0.4rem 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: 0.78rem;
+    font-family: var(--font-mono, monospace);
+    opacity: 0.65;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
   }
 
   .hotspot-btn {

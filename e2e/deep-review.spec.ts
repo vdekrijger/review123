@@ -100,11 +100,23 @@ const DIAGRAM_RESULT = {
   },
 }
 
+// A verified hotspot the deep attention task reports after reading the file +
+// its callers (deep-attention, v13). The single-pass path produces hotspots
+// too, but only the deep path renders the "verified with N tool calls" footer.
+const ATTENTION_RESULT = {
+  readingOrder: ['src/feature.ts'],
+  hotspots: [
+    { path: 'src/feature.ts', reason: 'verified the new lines extend a load-bearing flow', level: 'high' },
+  ],
+  testFlags: [],
+}
+
 // Pick the deep-task result shape from the system prompt the loop carries.
 function deepResultForSystem(system: string): string {
   if (/changed test files/i.test(system)) return JSON.stringify(TESTS_RESULT)
   if (/genuinely different approach/i.test(system)) return JSON.stringify(ALTERNATIVES_RESULT)
   if (/NO Mermaid syntax/i.test(system)) return JSON.stringify(DIAGRAM_RESULT)
+  if (/testFlags/i.test(system)) return JSON.stringify(ATTENTION_RESULT)
   return JSON.stringify(VERDICT_RESULT)
 }
 
@@ -246,8 +258,9 @@ async function setupRoutes(page: import('@playwright/test').Page) {
       return route.fulfill({ status: 200, json: jsonChatCompletion(deepResultForSystem(system)) })
     }
 
-    // Single-pass JSON tasks that stay single-pass even in deep mode (attention).
-    // They never carry a tools array.
+    // Fallback single-pass JSON tasks (summary reading-order is streamed above;
+    // every JSON review task now carries tools in deep mode). Never reached in
+    // the happy path, but kept honest.
     return route.fulfill({ status: 200, json: jsonChatCompletion(JSON.stringify(VERDICT_RESULT)) })
   })
   return toolRounds
@@ -315,4 +328,22 @@ test('deep review: 2-round tool conversation renders verdict with the tool-call 
   // path never produces context nodes).
   await expect(changeMapSvg.locator('style')).toContainText('.context', { timeout: 20_000 })
   await expect(diagramsPanel.locator('.ai-deep-footer')).toHaveText(/Deep review: verified with 1 tool call/)
+
+  // Attention/hotspots task ALSO ran through the deep harness (same toggle): the
+  // rail Hotspots section renders the verified hotspot AND the same tool-call
+  // footer the other deep panels use (run.attention.toolCallsUsed channel).
+  const hotspotBtn = page.locator('.hotspot-btn').first()
+  await expect(hotspotBtn).toBeAttached({ timeout: 20_000 })
+  // ALL rail sections start collapsed — expand Hotspots to reveal its body.
+  const hotspotsSection = page
+    .locator('aside.context-rail details.rail-section-details')
+    .filter({ has: page.locator('summary', { hasText: 'Hotspots' }) })
+  if ((await hotspotsSection.getAttribute('open')) === null) {
+    await hotspotsSection.locator('summary').click()
+  }
+  await expect(hotspotBtn).toBeVisible()
+  // The verified hotspot the deep attention loop reported is shown…
+  await expect(hotspotBtn).toContainText('src/feature.ts')
+  // …with the deep-review footer counting the tool call.
+  await expect(hotspotsSection.locator('.ai-deep-footer')).toHaveText(/Deep review: verified with 1 tool call/)
 })
