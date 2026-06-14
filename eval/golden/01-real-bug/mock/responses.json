@@ -1,0 +1,33 @@
+{
+  "skill:bug-hunter": {
+    "skillName": "bug-hunter",
+    "findings": [
+      {
+        "path": "src/lib/paginate.ts",
+        "line": 8,
+        "severity": "high",
+        "body": "Off-by-one: `end = start + size - 1` combined with slice's exclusive end drops the last item on every page; use `start + size`."
+      }
+    ]
+  },
+  "attention": {
+    "readingOrder": ["src/lib/paginate.ts"],
+    "hotspots": [
+      {
+        "path": "src/lib/paginate.ts",
+        "level": "high",
+        "reason": "Pagination slice end was changed to start + size - 1, an off-by-one that silently drops the last item per page."
+      }
+    ],
+    "testFlags": [
+      { "path": "src/lib/paginate.ts", "note": "No test covers the page-boundary behavior (inferred, not measured)." }
+    ]
+  },
+  "verdict": {
+    "level": "significant-changes",
+    "evidence": [
+      "src/lib/paginate.ts: changed slice end from start + size to start + size - 1, altering pagination results."
+    ],
+    "notAnalyzed": []
+  }
+}

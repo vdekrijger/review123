@@ -13,7 +13,8 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run --passWithNoTests",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "eval": "node eval/run-eval.mts"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",

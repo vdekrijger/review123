@@ -1,0 +1,17 @@
+{
+  "name": "03-noise-trap",
+  "files": [
+    {
+      "path": "src/lib/retry.ts",
+      "patch": "@@ -3,9 +3,9 @@ const MAX_ATTEMPTS = 3\n export async function withRetry<T>(fn: () => Promise<T>): Promise<T> {\n   let lastErr: unknown\n   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {\n     try {\n       return await fn()\n     } catch (err) {\n       lastErr = err\n-      console.log('retry failed')\n+      console.warn(`retry attempt ${attempt} failed`)\n     }\n   }\n   throw lastErr\n }",
+      "contentBefore": "// TODO(2019): make MAX_ATTEMPTS configurable per call site\nconst MAX_ATTEMPTS = 3\n\nexport async function withRetry<T>(fn: () => Promise<T>): Promise<T> {\n  let lastErr: unknown\n  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {\n    try {\n      return await fn()\n    } catch (err) {\n      lastErr = err\n      console.log('retry failed')\n    }\n  }\n  throw lastErr\n}\n",
+      "contentAfter": "// TODO(2019): make MAX_ATTEMPTS configurable per call site\nconst MAX_ATTEMPTS = 3\n\nexport async function withRetry<T>(fn: () => Promise<T>): Promise<T> {\n  let lastErr: unknown\n  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {\n    try {\n      return await fn()\n    } catch (err) {\n      lastErr = err\n      console.warn(`retry attempt ${attempt} failed`)\n    }\n  }\n  throw lastErr\n}\n"
+    }
+  ],
+  "skills": [
+    {
+      "name": "bug-hunter",
+      "content": "You are a correctness-focused reviewer. Flag off-by-one errors, boundary mistakes, null/undefined hazards, and logic bugs that change observable behavior. Ignore style and naming. Do NOT flag pre-existing issues on unchanged lines, TODOs you did not introduce, or magic-number nits."
+    }
+  ]
+}

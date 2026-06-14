@@ -1,0 +1,20 @@
+{
+  "real": [],
+  "noise": [
+    {
+      "file": "src/lib/retry.ts",
+      "line": 1,
+      "description": "stale TODO(2019) about making MAX_ATTEMPTS configurable — pre-existing, on an unchanged line"
+    },
+    {
+      "file": "src/lib/retry.ts",
+      "line": 2,
+      "description": "MAX_ATTEMPTS is a magic number 3 — pre-existing constant, not introduced by this PR"
+    },
+    {
+      "file": "src/lib/retry.ts",
+      "line": 12,
+      "description": "use a logger instead of console — moot, the PR only refines the existing console call"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "01-real-bug",
+  "files": [
+    {
+      "path": "src/lib/paginate.ts",
+      "patch": "@@ -1,10 +1,14 @@\n export function page<T>(items: T[], pageNum: number, size: number): T[] {\n-  const start = pageNum * size\n-  const end = start + size\n-  return items.slice(start, end)\n+  // Convert 1-based page number to a 0-based offset.\n+  const start = (pageNum - 1) * size\n+  // BUG: `end` is computed from `start` of the NEXT page minus one, but slice's\n+  // second arg is exclusive, so this drops the last item on every page.\n+  const end = start + size - 1\n+  return items.slice(start, end)\n }",
+      "contentBefore": "export function page<T>(items: T[], pageNum: number, size: number): T[] {\n  const start = pageNum * size\n  const end = start + size\n  return items.slice(start, end)\n}\n",
+      "contentAfter": "export function page<T>(items: T[], pageNum: number, size: number): T[] {\n  // Convert 1-based page number to a 0-based offset.\n  const start = (pageNum - 1) * size\n  // BUG: `end` is computed from `start` of the NEXT page minus one, but slice's\n  // second arg is exclusive, so this drops the last item on every page.\n  const end = start + size - 1\n  return items.slice(start, end)\n}\n"
+    }
+  ],
+  "skills": [
+    {
+      "name": "bug-hunter",
+      "content": "You are a correctness-focused reviewer. Flag off-by-one errors, boundary mistakes, null/undefined hazards, and logic bugs that change observable behavior. Ignore style and naming."
+    }
+  ]
+}
