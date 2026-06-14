@@ -49,6 +49,7 @@ function makeRun(): AiRun {
     tests: { status: 'idle' },
     alternatives: { status: 'idle' },
     skillReviews: [],
+    totalUsage: undefined,
     start: async () => {},
     retry: async () => {},
     coach: async () => ({ error: 'no-key' }),

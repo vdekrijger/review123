@@ -187,6 +187,7 @@ describe('deep verdict task', () => {
       deep: true,
       result: VERDICT_RESULT,
       toolCallsUsed: 2,
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
     })
 
     expect(run.verdict.status).toBe('done')
@@ -293,6 +294,7 @@ describe('deep verdict task', () => {
       deep: true,
       result: VERDICT_RESULT,
       toolCallsUsed: 3,
+      usage: { prompt_tokens: 110, completion_tokens: 55, total_tokens: 165 },
     })
   })
 })
@@ -325,6 +327,7 @@ describe('deep skill reviews', () => {
       deep: true,
       result: SKILL_RESULT,
       toolCallsUsed: 4,
+      usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
     })
     expect(run.skillReviews[0].state.status).toBe('done')
     expect(run.skillReviews[0].state.toolCallsUsed).toBe(4)
@@ -479,6 +482,7 @@ describe('deep test-insight task', () => {
       deep: true,
       result: TESTS_RESULT,
       toolCallsUsed: 2,
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
     })
     expect(run.tests.status).toBe('done')
     expect(run.tests.value).toEqual(TESTS_RESULT)
@@ -550,6 +554,7 @@ describe('deep alternatives task', () => {
       deep: true,
       result: ALTERNATIVES_RESULT,
       toolCallsUsed: 2,
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
     })
     expect(run.alternatives.status).toBe('done')
     expect(run.alternatives.value).toEqual(ALTERNATIVES_RESULT)
@@ -595,6 +600,7 @@ describe('deep alternatives task', () => {
       deep: true,
       result: ALTERNATIVES_RESULT,
       toolCallsUsed: 4,
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
     })
   })
 })
@@ -632,6 +638,7 @@ describe('deep diagrams task', () => {
       deep: true,
       result: DIAGRAM_RESULT,
       toolCallsUsed: 2,
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
     })
     expect(run.diagrams.status).toBe('done')
     expect(run.diagrams.value).toEqual(DIAGRAM_RESULT)
@@ -731,6 +738,7 @@ describe('deep diagrams task', () => {
       deep: true,
       result: DIAGRAM_RESULT,
       toolCallsUsed: 5,
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
     })
   })
 })
@@ -768,6 +776,7 @@ describe('deep attention task', () => {
       deep: true,
       result: ATTENTION_RESULT,
       toolCallsUsed: 2,
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
     })
     expect(run.attention.status).toBe('done')
     expect(run.attention.value).toEqual(ATTENTION_RESULT)
@@ -883,6 +892,7 @@ describe('deep attention task', () => {
       deep: true,
       result: ATTENTION_RESULT,
       toolCallsUsed: 6,
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
     })
   })
 })

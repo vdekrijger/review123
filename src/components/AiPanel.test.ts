@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import AiPanel from './AiPanel.svelte'
-import { setAiProvider } from '../lib/settings/settings'
+import { setAiProvider, setAiModel, setShowTokenCost } from '../lib/settings/settings'
 import { _resetSettingsStateForTest } from '../lib/settings/settingsState.svelte'
 import { navigate } from '../lib/router/router.svelte'
 
@@ -103,5 +103,65 @@ describe('AiPanel — pending skeleton from the FIRST render (no blank gap)', ()
       },
     })
     expect(container.querySelectorAll('.ai-panel-loading .skeleton-card')).toHaveLength(2)
+  })
+})
+
+describe('AiPanel — token usage footer (opt-in: settings.showTokenCost)', () => {
+  const doneWithUsage = {
+    status: 'done' as const,
+    usage: { prompt_tokens: 8000, completion_tokens: 200, total_tokens: 8200 },
+  }
+
+  it('renders NOTHING when showTokenCost is off (default)', () => {
+    const { container } = render(AiPanel, {
+      props: { title: 'Summary', state: doneWithUsage, onretry: vi.fn() },
+    })
+    expect(container.querySelector('.ai-usage-footer')).toBeNull()
+  })
+
+  it('renders tokens + $ when on and the active model has pricing', () => {
+    setShowTokenCost(true)
+    setAiProvider('anthropic')
+    setAiModel('claude-sonnet-4-6') // $3/$15 per MTok → 8000*3/1e6 + 200*15/1e6 ≈ $0.027
+    _resetSettingsStateForTest()
+    const { container } = render(AiPanel, {
+      props: { title: 'Summary', state: doneWithUsage, onretry: vi.fn() },
+    })
+    const footer = container.querySelector('.ai-usage-footer')
+    expect(footer).not.toBeNull()
+    expect(footer!.textContent).toContain('8.2k tokens')
+    expect(footer!.textContent).toContain('$0.03')
+  })
+
+  it('renders tokens ONLY when on but the active model has no pricing', () => {
+    setShowTokenCost(true)
+    setAiProvider('anthropic')
+    setAiModel('claude-opus-4-8') // no pricing populated
+    _resetSettingsStateForTest()
+    const { container } = render(AiPanel, {
+      props: { title: 'Summary', state: doneWithUsage, onretry: vi.fn() },
+    })
+    const footer = container.querySelector('.ai-usage-footer')
+    expect(footer).not.toBeNull()
+    expect(footer!.textContent).toContain('8.2k tokens')
+    expect(footer!.textContent).not.toContain('$')
+  })
+
+  it('renders NOTHING for a cached task with no captured usage (graceful)', () => {
+    setShowTokenCost(true)
+    _resetSettingsStateForTest()
+    const { container } = render(AiPanel, {
+      props: { title: 'Summary', state: { status: 'done' as const }, onretry: vi.fn() },
+    })
+    expect(container.querySelector('.ai-usage-footer')).toBeNull()
+  })
+
+  it('does not show the footer for non-done states even with usage', () => {
+    setShowTokenCost(true)
+    _resetSettingsStateForTest()
+    const { container } = render(AiPanel, {
+      props: { title: 'Summary', state: { status: 'loading' as const, usage: doneWithUsage.usage }, onretry: vi.fn() },
+    })
+    expect(container.querySelector('.ai-usage-footer')).toBeNull()
   })
 })

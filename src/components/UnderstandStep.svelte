@@ -30,6 +30,8 @@
   import { SECTION_REGISTRY } from './panels/sectionRegistry'
   import { track } from '../lib/analytics/analytics'
   import { stripReadingOrder } from '../lib/ai/tasks'
+  import { settingsState } from '../lib/settings/settingsState.svelte'
+  import { formatUsageLabel } from '../lib/ai/tokenCost'
   import type { PrMeta, PrFile } from '../lib/github/types'
   import type { CiSummary as CiSummaryType } from '../lib/github/checks'
   import type { AiRun } from '../lib/ai/run.svelte'
@@ -140,6 +142,13 @@
     if (ci.failed === 0) return `✓ ${ci.passed} passed`
     return `✗ ${ci.failed} failed`
   })
+
+  // --- Per-review token TOTAL (opt-in: settings.showTokenCost, default OFF) ---
+  // Sums every AI task's captured usage for this PR. Null = toggle off or no
+  // usage captured yet → nothing renders (byte-identical to the prior UI).
+  const totalUsageLabel = $derived(
+    settingsState.current.showTokenCost ? formatUsageLabel(run.totalUsage) : null,
+  )
 
   function handleHotspotClick(path: string) {
     onhotspot?.(path)
@@ -294,6 +303,12 @@
             </span>
           </button>
         {/each}
+      </div>
+    {/if}
+
+    {#if totalUsageLabel}
+      <div class="glance-row glance-row-usage">
+        <span class="usage-total" aria-label="Total token usage for this review">·· {totalUsageLabel} total</span>
       </div>
     {/if}
 
@@ -652,6 +667,17 @@
     gap: 0.25rem;
     font-size: 0.7rem;
     white-space: nowrap;
+  }
+
+  /* Per-review token total (opt-in power-user footer) */
+  .glance-row-usage {
+    margin-top: 0.1rem;
+  }
+
+  .usage-total {
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.5;
   }
 
   /* ===== Detail panels ===== */
