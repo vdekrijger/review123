@@ -150,6 +150,19 @@ describe('SkillsSection — Reviewer skills section', () => {
       expect(listSkills()).toHaveLength(0)
     })
 
+    it('Save skill and Cancel buttons carry the themed .btn classes', async () => {
+      render(SkillsSection)
+      await userEvent.click(screen.getByRole('button', { name: /add skill/i }))
+      const saveBtn = screen.getByRole('button', { name: /save skill/i })
+      const cancelBtn = screen.getByRole('button', { name: /^cancel$/i })
+      // Save = primary themed button
+      expect(saveBtn).toHaveClass('btn')
+      expect(saveBtn).toHaveClass('btn-primary')
+      // Cancel = secondary themed button (themed .btn, not primary)
+      expect(cancelBtn).toHaveClass('btn')
+      expect(cancelBtn).not.toHaveClass('btn-primary')
+    })
+
     it('add button is disabled or shows error when cap (10) reached', () => {
       for (let i = 0; i < SKILLS_CAP; i++) {
         addSkill(`Skill ${i}`, 'content')
