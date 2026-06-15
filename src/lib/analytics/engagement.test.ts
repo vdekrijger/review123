@@ -94,4 +94,22 @@ describe('engagement events — allowlist entries', () => {
     expect(props).not.toHaveProperty('owner')
     expect(props).not.toHaveProperty('repo')
   })
+
+  // expand_all (Understand step bulk expand/collapse)
+  it('expand_all fires with expanded:true + surface:page', () => {
+    track('expand_all', { expanded: true, surface: 'page' })
+    expect(capture).toHaveBeenCalledWith('expand_all', { expanded: true, surface: 'page' })
+  })
+
+  it('expand_all fires with expanded:false + surface:page', () => {
+    track('expand_all', { expanded: false, surface: 'page' })
+    expect(capture).toHaveBeenCalledWith('expand_all', { expanded: false, surface: 'page' })
+  })
+
+  it('expand_all strips extra props (no content ever leaks)', () => {
+    track('expand_all', { expanded: true, surface: 'page', path: '/src/secret.ts' } as never)
+    const props = capture.mock.calls[0][1]
+    expect(props).toEqual({ expanded: true, surface: 'page' })
+    expect(props).not.toHaveProperty('path')
+  })
 })
