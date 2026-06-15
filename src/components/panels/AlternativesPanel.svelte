@@ -1,6 +1,7 @@
 <script lang="ts">
   import AiPanel from '../AiPanel.svelte'
   import MarkdownView from '../MarkdownView.svelte'
+  import { renderInlineMarkdown } from '../../lib/markdown/render'
   import type { AiRun } from '../../lib/ai/run.svelte'
   import type { AlternativesResult } from '../../lib/ai/schemas'
 
@@ -24,7 +25,9 @@
       <div class="alternatives-list">
         {#each alternatives.alternatives as alt (alt.approach)}
           <div class="alternative-card">
-            <p class="alternative-approach">{alt.approach}</p>
+            <!-- {@html} is acceptable ONLY with renderInlineMarkdown() output (sanitization boundary) -->
+            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+            <p class="alternative-approach">{@html renderInlineMarkdown(alt.approach)}</p>
             <p class="alternative-tradeoffs"><MarkdownView source={alt.tradeoffs} /></p>
             <span
               class="assessment-chip assessment-{alt.assessment}"
@@ -80,6 +83,16 @@
     font-size: 0.9rem;
     font-weight: 600;
     line-height: 1.4;
+  }
+
+  /* Inline markdown in the model-generated title: code spans use the same
+     inline-code styling tokens as comment bodies / VerdictPanel evidence. */
+  .alternative-approach :global(code) {
+    font-size: 0.85em;
+    font-weight: 500;
+    background: var(--surface-raised);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
   }
 
   .alternative-tradeoffs {

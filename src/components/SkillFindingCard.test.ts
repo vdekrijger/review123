@@ -52,6 +52,15 @@ describe('SkillFindingCard — severity visual system', () => {
     expect(screen.getByText('Consider extracting this into a helper')).toBeInTheDocument()
   })
 
+  it('renders inline markdown in the body: backticks become a <code> element', () => {
+    const { container } = renderCard({ body: 'The `REDIS_URL` env var must be set' })
+    const codeEl = container.querySelector('.skill-finding-body code')
+    expect(codeEl).not.toBeNull()
+    expect(codeEl!.textContent).toBe('REDIS_URL')
+    // No literal backticks leak through
+    expect(container.querySelector('.skill-finding-body')!.textContent).not.toContain('`')
+  })
+
   it('exposes an aria-label naming the persona and severity', () => {
     renderCard({ severity: 'high' })
     expect(

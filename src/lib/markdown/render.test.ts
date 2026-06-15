@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { renderMarkdown, replaceEmojiShortcodes } from './render'
+import { renderMarkdown, renderInlineMarkdown, replaceEmojiShortcodes } from './render'
 
 describe('renderMarkdown', () => {
   it('strips <script> tags (XSS: script injection)', () => {
@@ -88,6 +88,63 @@ describe('renderMarkdown', () => {
   it('handles empty string', () => {
     const out = renderMarkdown('')
     expect(typeof out).toBe('string')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// renderInlineMarkdown — inline-only markdown for model-generated titles
+// ---------------------------------------------------------------------------
+
+describe('renderInlineMarkdown', () => {
+  it('renders backticks as a <code> span', () => {
+    const out = renderInlineMarkdown('call `calculate_for_query_based_insight`')
+    expect(out).toContain('<code>calculate_for_query_based_insight</code>')
+  })
+
+  it('does NOT wrap output in a <p> (inline parse, not block)', () => {
+    const out = renderInlineMarkdown('plain title text')
+    expect(out).not.toContain('<p>')
+    expect(out).not.toContain('</p>')
+    expect(out).toContain('plain title text')
+  })
+
+  it('does NOT promote a leading # to a heading', () => {
+    const out = renderInlineMarkdown('# not a heading')
+    expect(out).not.toContain('<h1')
+    // The literal text (incl. the #) is preserved as inline content
+    expect(out).toContain('# not a heading')
+  })
+
+  it('renders **bold**', () => {
+    const out = renderInlineMarkdown('**bold**')
+    expect(out).toContain('<strong>bold</strong>')
+  })
+
+  it('renders _emphasis_', () => {
+    const out = renderInlineMarkdown('_em_')
+    expect(out).toContain('<em>em</em>')
+  })
+
+  it('sanitizes <script> out (XSS)', () => {
+    const out = renderInlineMarkdown('hi <script>alert(1)<\/script>')
+    expect(out).not.toContain('<script')
+    expect(out).not.toContain('alert(1)')
+  })
+
+  it('strips onclick handler (XSS: event handler)', () => {
+    const out = renderInlineMarkdown('<a href="https://x.com" onclick="alert(1)">x</a>')
+    expect(out).not.toContain('onclick')
+    expect(out).not.toContain('alert(1)')
+  })
+
+  it('expands :emoji: shortcodes for parity with renderMarkdown', () => {
+    const out = renderInlineMarkdown('ship it :rocket:')
+    expect(out).toContain('🚀')
+    expect(out).not.toContain(':rocket:')
+  })
+
+  it('returns a string and handles empty input', () => {
+    expect(typeof renderInlineMarkdown('')).toBe('string')
   })
 })
 

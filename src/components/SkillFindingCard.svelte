@@ -16,6 +16,8 @@
    *       unresolvable anchor → muted "line N — not in this diff" note
    */
 
+  import { renderInlineMarkdown } from '../lib/markdown/render'
+
   interface Props {
     skillName: string
     severity: 'high' | 'medium' | 'low'
@@ -46,7 +48,9 @@
     {/if}
     <span class="skill-severity-chip severity-chip-{severity}">{severity}</span>
   </div>
-  <p class="skill-finding-body">{body}</p>
+  <!-- {@html} is acceptable ONLY with renderInlineMarkdown() output (sanitization boundary) -->
+  <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+  <p class="skill-finding-body">{@html renderInlineMarkdown(body)}</p>
   <div class="skill-finding-actions">
     <button
       class="skill-add-draft-btn"
@@ -156,6 +160,15 @@
   .skill-finding-body {
     margin: 0 0 0.4rem;
     line-height: 1.4;
+  }
+
+  /* Inline markdown in the model-generated finding body: code spans use the
+     same inline-code styling tokens as comment bodies / VerdictPanel evidence. */
+  .skill-finding-body :global(code) {
+    font-size: 0.85em;
+    background: var(--surface-raised);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
   }
 
   .skill-finding-actions {

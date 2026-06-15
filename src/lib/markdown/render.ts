@@ -158,3 +158,27 @@ export function renderMarkdown(src: string): string {
   const rawHtml = marked(withEmoji, { gfm: true, breaks: true, async: false }) as string
   return purify.sanitize(rawHtml, PURIFY_CONFIG)
 }
+
+/**
+ * Render INLINE Markdown to sanitized HTML — for short, single-line text such
+ * as model-generated titles, where block elements (wrapping <p>, headings,
+ * lists) are NOT wanted but inline markup IS.
+ *
+ * Inline-only output: code spans, **bold**, _emphasis_, links — no <p>/<h*>
+ * wrappers. Uses marked.parseInline (NOT the block parser).
+ *
+ * Goes through the SAME DOMPurify boundary (same instance/config) and the SAME
+ * :emoji: shortcode expansion as renderMarkdown, so the security and preview
+ * contract is identical.
+ *
+ * @param src - Raw Markdown string (may contain model-supplied content).
+ * @returns Safe HTML string. Safe to embed via {@html} — sanitization is done here.
+ */
+export function renderInlineMarkdown(src: string): string {
+  // Expand :emoji: shortcodes for parity with renderMarkdown
+  const withEmoji = replaceEmojiShortcodes(src)
+  // marked 18: parseInline() with async:false returns string synchronously.
+  // Inline parse → no wrapping <p>, no block-level elements.
+  const rawHtml = marked.parseInline(withEmoji, { gfm: true, async: false }) as string
+  return purify.sanitize(rawHtml, PURIFY_CONFIG)
+}
