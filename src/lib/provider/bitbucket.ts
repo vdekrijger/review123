@@ -248,6 +248,13 @@ export const bitbucketProvider: ReviewProvider = {
   },
 
   // -------------------------------------------------------------------------
+  // prWebUrl — canonical Bitbucket Cloud PR web URL
+  // -------------------------------------------------------------------------
+  prWebUrl(ref: PrRefX): string {
+    return `https://bitbucket.org/${ref.owner}/${ref.repo}/pull-requests/${ref.number}`
+  },
+
+  // -------------------------------------------------------------------------
   // getPrMeta
   // -------------------------------------------------------------------------
   async getPrMeta(ref: PrRefX): Promise<PrMeta> {

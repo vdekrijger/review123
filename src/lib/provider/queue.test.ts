@@ -8,6 +8,7 @@ function makeProvider(id: string, hasQueue: boolean, authConfigured: boolean, qu
     displayName: id,
     capabilities: { resolvedThreads: false, checks: false, suggestions: false, atomicReview: false, compare: false, commentReplies: false, selfReviewBlocked: false },
     parseUrl: () => ({ ok: false, error: 'not impl' }),
+    prWebUrl: () => '',
     getPrMeta: async () => { throw new Error('not impl') },
     getPrFiles: async () => [],
     getFileAtRef: async () => null,
