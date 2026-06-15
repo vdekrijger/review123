@@ -278,8 +278,8 @@
         <p role="alert" class="skill-error">{skillError}</p>
       {/if}
       <div class="add-skill-actions">
-        <button onclick={handleSaveSkill}>Save skill</button>
-        <button onclick={() => { addSkillOpen = false; skillError = null; minedSkillDraft = null }}>Cancel</button>
+        <button class="btn btn-primary" onclick={handleSaveSkill}>Save skill</button>
+        <button class="btn" onclick={() => { addSkillOpen = false; skillError = null; minedSkillDraft = null }}>Cancel</button>
       </div>
     </div>
   {/if}
