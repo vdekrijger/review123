@@ -125,6 +125,26 @@ describe('FileDiff — viewed state', () => {
     expect(container.querySelector('article.file-diff')!.classList.contains('is-collapsed')).toBe(false)
   })
 
+  // Story Mode auto-marks a file viewed for coverage the instant its slide is
+  // reached; without forceExpanded that would collapse the narrated diff
+  // (header-only, no body → no syntax highlighting). forceExpanded keeps the
+  // body — and its highlighting — visible while the viewed checkbox still
+  // reflects the marked state.
+  it('forceExpanded=true overrides viewed-collapse: body stays expanded, checkbox stays checked', () => {
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified', viewed: true, forceExpanded: true } })
+    const article = container.querySelector('article.file-diff')!
+    // NOT collapsed despite viewed=true — the narrated diff body renders.
+    expect(article.classList.contains('is-collapsed')).toBe(false)
+    // Viewed bookkeeping is preserved: the checkbox still reflects viewed=true.
+    const checkbox = screen.getByRole('checkbox', { name: /mark src\/a\.ts as viewed/i })
+    expect((checkbox as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('forceExpanded=false (default): viewed=true still collapses (Files-mode behaviour unchanged)', () => {
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified', viewed: true } })
+    expect(container.querySelector('article.file-diff')!.classList.contains('is-collapsed')).toBe(true)
+  })
+
   it('changedSinceViewed=true: amber badge is shown', () => {
     render(FileDiff, { props: { file: modified, mode: 'unified', changedSinceViewed: true } })
     expect(screen.getByText(/changed since you viewed it/i)).toBeInTheDocument()
