@@ -96,9 +96,9 @@
           </div>
           {#if snippet}
             {#await highlightSnippet(snippet, snippetLangForFilename(t.testFile))}
-              <pre class="sym-test-pre"><code>{snippet}</code></pre>
+              <pre class="sym-test-pre"><code>{snippet}{#if t.truncated}{'\n… (truncated)'}{/if}</code></pre>
             {:then highlighted}
-              <pre class="sym-test-pre"><code>{@html highlighted}</code></pre>
+              <pre class="sym-test-pre"><code>{@html highlighted}{#if t.truncated}{'\n… (truncated)'}{/if}</code></pre>
             {/await}
           {:else}
             <p class="sym-test-empty">Test content unavailable for inline preview.</p>
