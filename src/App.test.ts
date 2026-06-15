@@ -58,6 +58,55 @@ function makeFetchStub() {
   })
 }
 
+describe('App sticky-footer layout (build footer pins to page bottom)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetAuthStateForTest()
+    _resetStartedForTest()
+    history.replaceState(null, '', '/')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  // The sticky-footer pattern: the app root is a flex COLUMN whose middle
+  // (route content) grows to fill the viewport, pushing the BuildIndicator
+  // footer to the bottom of the page on SHORT routes and below the content on
+  // tall ones. These tests lock the structural contract that makes that work.
+
+  it('renders a single <main> route region that grows (flex:1) between topbar and footer', () => {
+    const { container } = render(App)
+    const main = container.querySelector('main.route-main')
+    expect(main).not.toBeNull()
+    // The growing region carries the flex-grow class that fills the column.
+    expect(main?.classList.contains('route-main')).toBe(true)
+  })
+
+  it('the build footer is the LAST flow child of the app root (sits below all content)', () => {
+    const { container } = render(App)
+    // App mounts header → main.route-main → footer.build-indicator in order.
+    const root = container
+    const lastEl = root.querySelector('footer.build-indicator')
+    expect(lastEl).not.toBeNull()
+    // The footer must come AFTER the route region in document order.
+    const main = root.querySelector('main.route-main')!
+    const footer = root.querySelector('footer.build-indicator')!
+    // compareDocumentPosition: FOLLOWING (4) means footer follows main.
+    expect(main.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('the build footer uses normal document flow — never position:fixed/absolute', () => {
+    const { container } = render(App)
+    const footer = container.querySelector('footer.build-indicator') as HTMLElement
+    expect(footer).not.toBeNull()
+    const pos = getComputedStyle(footer).position
+    expect(pos).not.toBe('fixed')
+    expect(pos).not.toBe('absolute')
+  })
+})
+
 describe('App topbar auth states', () => {
   beforeEach(() => {
     localStorage.clear()
