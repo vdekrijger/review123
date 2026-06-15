@@ -46,6 +46,11 @@ const EVENTS = {
   // for walkthrough-engagement observability.
   story_mode_entered: [],
   story_step_viewed: ['index'],
+  // PRIVACY DECISION (Plan I — function↔test pairing): fired when the user
+  // expands an inline "tested by" snippet beneath a changed function. Carries
+  // only 'confidence' ('named' | 'referenced') — the pairing-confidence label.
+  // Never a symbol name, test title, file path, or any code/diff content.
+  symbol_test_expanded: ['confidence'],
 } as const
 
 export type EventName = keyof typeof EVENTS

@@ -18,6 +18,9 @@
   import FileDiff from './FileDiff.svelte'
   import type { SkillFinding } from './FileDiff.svelte'
   import DiagramPanel from './DiagramPanel.svelte'
+  import SymbolTestPairing from './SymbolTestPairing.svelte'
+  import { pairStepTests } from '../lib/diff/symbolTests'
+  import type { SymbolTestPairing as Pairing } from '../lib/diff/symbolTests'
   import type { PrFile } from '../lib/github/types'
   import type { DiffMode } from '../lib/settings/settings'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
@@ -104,6 +107,36 @@
 
   const currentStep = $derived<StoryStep | undefined>(steps[current])
   const total = $derived(steps.length)
+
+  // Symbol-level function↔test pairings for the current step (Plan I).
+  // Deterministic, LLM-free: extract changed symbols from the step's code files,
+  // match them against the available test-file contents (the step's relatedTests
+  // plus any PR test files), and surface the specific test block beneath each
+  // function's diff. Grouped by impl-file path so we can render it in place.
+  const stepPairingsByFile = $derived.by<Map<string, Pairing[]>>(() => {
+    if (!currentStep) return new Map()
+    const stepFiles = currentStep.files
+      .map((p) => fileByPath.get(p))
+      .filter((f): f is PrFile => f !== undefined)
+    // Candidate tests: this step's relatedTests + every test file in the PR
+    // (a test may not be listed in relatedTests but still exercise the symbol).
+    const candidatePaths = new Set<string>(currentStep.relatedTests)
+    for (const f of files) candidatePaths.add(f.filename)
+    const testFiles = [...candidatePaths]
+      .map((p) => fileByPath.get(p))
+      .filter((f): f is PrFile => f !== undefined)
+    return pairStepTests({ stepFiles, testFiles, contentsMap })
+  })
+
+  // path → full (after) test content, for slicing the test block in the snippet.
+  const testContentsByPath = $derived.by<Map<string, string>>(() => {
+    const out = new Map<string, string>()
+    if (!contentsMap) return out
+    for (const [path, c] of contentsMap) {
+      if (c.after) out.set(path, c.after)
+    }
+    return out
+  })
 
   // Fire story_mode_entered once on mount (this component only mounts in story mode).
   $effect(() => {
@@ -213,6 +246,13 @@
               onAddSkillFindingDraft={(finding) => onAddSkillFindingDraft(path, finding)}
               whitespace={whitespaceByPath.get(path) ?? null}
             />
+            {#if stepPairingsByFile.get(path)}
+              <div class="story-pairings">
+                {#each stepPairingsByFile.get(path) ?? [] as pairing (pairing.symbol)}
+                  <SymbolTestPairing {pairing} testContents={testContentsByPath} />
+                {/each}
+              </div>
+            {/if}
           </div>
         {/if}
       {/each}
@@ -351,6 +391,13 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);
+  }
+
+  .story-pairings {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin-top: 0.2rem;
   }
 
   .story-related-test {

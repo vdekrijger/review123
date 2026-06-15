@@ -317,3 +317,93 @@ test('story mode: no LLM key → unavailable, classic Files renders', async ({ p
   await expect(page.getByRole('button', { name: 'Story' })).toHaveCount(0)
   await expect(page.locator('#file-src-db-schema-ts article.file-diff')).toBeVisible({ timeout: 10_000 })
 })
+
+// Plan I — function↔test pairing: a changed function with a named test shows the
+// inline "tested by" snippet. We give the impl file a named-function hunk header
+// and serve the test file's CONTENTS (base64) at the head ref so the deterministic
+// pairing engine can slice the test block from the already-fetched content.
+
+const PAIR_IMPL_PATCH = `@@ -1,2 +1,3 @@ function buildKey(x) {
+   const a = 1
++  return x + 1
+ }`
+
+const PAIR_STORY_RESULT = {
+  steps: [
+    { index: 0, files: ['src/keys.ts'], caption: 'buildKey now returns a derived value.', layer: 'logic', relatedTests: ['src/keys.test.ts'] },
+  ],
+}
+
+const PAIR_TEST_SOURCE = [
+  "import { buildKey } from './keys'",
+  "describe('keys', () => {",
+  "  it('buildKey adds one', () => {",
+  '    expect(buildKey(1)).toBe(2)',
+  '  })',
+  '})',
+].join('\n')
+
+function makePairPrFiles() {
+  return [
+    { filename: 'src/keys.ts', status: 'modified', patch: PAIR_IMPL_PATCH, additions: 1, deletions: 0 },
+    { filename: 'src/keys.test.ts', status: 'modified', patch: '@@ -1,1 +1,2 @@\n x\n+y', additions: 1, deletions: 0 },
+  ]
+}
+
+function b64(s: string): string {
+  return Buffer.from(s, 'utf-8').toString('base64')
+}
+
+test('story mode: a changed function with a named test shows the inline "tested by" snippet', async ({ page }) => {
+  await page.route('**/*posthog.com/**', (route) => route.abort())
+  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+
+  await page.route('**/api.github.com/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}`) return route.fulfill({ json: makePrMeta() })
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) return route.fulfill({ json: makePairPrFiles() })
+    if (path === `/repos/${OWNER}/${REPO}/commits/${HEAD_SHA}/check-runs`) return route.fulfill({ json: { total_count: 0, check_runs: [] } })
+    // Serve the test file's content at the head ref so it lands in contentsMap.
+    if (path === `/repos/${OWNER}/${REPO}/contents/src/keys.test.ts`) {
+      return route.fulfill({ json: { content: b64(PAIR_TEST_SOURCE), encoding: 'base64' } })
+    }
+    if (path.startsWith(`/repos/${OWNER}/${REPO}/contents/`)) return route.fulfill({ status: 404, json: { message: 'Not Found' } })
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/comments`) return route.fulfill({ json: [] })
+    if (path === `/repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments`) return route.fulfill({ json: [] })
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/commits`) return route.fulfill({ json: [] })
+    return route.fulfill({ json: {} })
+  })
+
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string | null }> } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* */ }
+    if (body?.stream === true) {
+      return route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }, body: makeStreamResponse(SUMMARY_TEXT) })
+    }
+    const system = (body.messages ?? []).find((m) => m.role === 'system')?.content ?? ''
+    if (/guided NARRATIVE walkthrough/i.test(system)) return route.fulfill({ status: 200, json: jsonChatCompletion(JSON.stringify(PAIR_STORY_RESULT)) })
+    return route.fulfill({ status: 200, json: jsonChatCompletion(resultForSystem(system)) })
+  })
+
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test', storyMode: true, diffMode: 'unified', railCollapsed: true }))
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Story mode test PR/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+
+  await expect(page.getByText('buildKey now returns a derived value.')).toBeVisible({ timeout: 15_000 })
+
+  // The collapsed "Tested by" affordance appears beneath the function's diff.
+  const toggle = page.getByRole('button', { name: /Tested by/i })
+  await expect(toggle).toBeVisible({ timeout: 15_000 })
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+  // Expanding reveals THAT test block, sliced from the fetched test content.
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByText(/expect\(buildKey\(1\)\)\.toBe\(2\)/)).toBeVisible()
+})
