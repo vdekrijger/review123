@@ -95,9 +95,20 @@
      * fills the slide and sticky would interact oddly with the slideshow scroll.
      */
     sticky?: boolean
+    /**
+     * Keep the diff body expanded regardless of viewed state. Story Mode uses
+     * this for the slide's PRIMARY diff: the slideshow auto-marks a file viewed
+     * for COVERAGE tracking the moment its slide is reached, which would
+     * otherwise collapse the very diff being narrated (header-only, no body —
+     * and therefore no syntax highlighting). The file still counts as viewed
+     * (✓ in Files mode); only the collapse-on-view is suppressed. The user can
+     * still manually un-view via the checkbox. Default false → Files-mode
+     * collapse-on-view behaviour is unchanged.
+     */
+    forceExpanded?: boolean
   }
 
-  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onReply = null, whitespace = null, sticky = true }: Props = $props()
+  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onReply = null, whitespace = null, sticky = true, forceExpanded = false }: Props = $props()
 
   // Test-file display (must be declared before collapsed)
   const testFileDisplay = $derived<TestFileDisplay>(settingsState.current.testFileDisplay)
@@ -240,7 +251,9 @@
   // When viewed → collapse diff body; user can re-expand by clicking header or unchecking
   // dim mode reduces opacity only — it does NOT collapse the file
   let manuallyExpanded = $state(false)
-  const collapsed = $derived(viewed && !manuallyExpanded)
+  // forceExpanded (Story Mode primary diff) overrides the viewed-collapse so the
+  // narrated diff body — and its syntax highlighting — always renders.
+  const collapsed = $derived(!forceExpanded && viewed && !manuallyExpanded)
 
   function handleHeaderClick() {
     if (collapsed) {

@@ -55,10 +55,16 @@
 
 /* ── Diff width: full-width mode lifts the .review container cap (step 2 only) ── */
 /* :has(.inspect-layout) scopes to step 2 so step 1/3 prose keeps its readable width. */
+/* :has(.story) covers Story Mode — it renders INSTEAD of .inspect-layout inside
+   step 2 (see InspectStep.svelte: showStory ? <StorySlideshow> : <div.inspect-layout>),
+   so without it the story slideshow keeps the 70rem cap and ignores full-width.
+   Both selectors get identical full-width treatment so the diff honours diffWidth
+   in either mode. */
 /* :root[data-diffwidth] attribute is set/cleared by applyAppearance() on every change. */
 /* Gutters also collapse to a slim 10px so full mode is meaningfully wider than
    centered at EVERY viewport size, not only above the 70rem cap. */
-:root[data-diffwidth='full'] .review:has(.inspect-layout) {
+:root[data-diffwidth='full'] .review:has(.inspect-layout),
+:root[data-diffwidth='full'] .review:has(.story) {
   max-width: none;
   padding-left: 10px;
 }
@@ -69,7 +75,8 @@
    keep winning — PR #18 lesson: content must never slide under the rail in
    full mode. At ≥1444px the media block below restores the collapsed-strip
    reserve where width is plentiful. */
-:root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='true'] {
+:root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='true'],
+:root[data-diffwidth='full'] .review:has(.story)[data-rail-collapsed='true'] {
   padding-right: 10px;
 }
 
@@ -89,10 +96,12 @@
  * and at narrow (<1100px) the rail is a transient overlay so no reservation is needed.
  */
 @media (min-width: 1444px) {
-  :root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='false'] {
+  :root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='false'],
+  :root[data-diffwidth='full'] .review:has(.story)[data-rail-collapsed='false'] {
     padding-right: calc(340px + 1rem);
   }
-  :root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='true'] {
+  :root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='true'],
+  :root[data-diffwidth='full'] .review:has(.story)[data-rail-collapsed='true'] {
     padding-right: calc(1.75rem + 0.5rem);
   }
 }

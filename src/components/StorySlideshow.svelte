@@ -387,6 +387,7 @@
               {file}
               {mode}
               sticky={false}
+              forceExpanded={true}
               drafts={draftsFor(path)}
               comments={commentsFor(path)}
               {resolvedCommentIds}
