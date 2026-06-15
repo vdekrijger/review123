@@ -51,6 +51,10 @@ const EVENTS = {
   // only 'confidence' ('named' | 'referenced') — the pairing-confidence label.
   // Never a symbol name, test title, file path, or any code/diff content.
   symbol_test_expanded: ['confidence'],
+  // Fired when the user opens the original PR/MR in its native provider UI via
+  // the "View on <Provider>" header link. Carries only 'provider' (the provider
+  // id: 'github' | 'gitlab' | 'bitbucket') — never a URL, owner, repo, or number.
+  original_pr_opened: ['provider'],
 } as const
 
 export type EventName = keyof typeof EVENTS

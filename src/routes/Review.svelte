@@ -5,6 +5,7 @@
   import RevisionPicker from '../components/RevisionPicker.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import CraftedLoader from '../components/CraftedLoader.svelte'
+  import ProviderIcon from '../components/ProviderIcon.svelte'
   import { getSettings, setDiffMode, setHideWhitespace, setRailCollapsed, setStoryMode, type DiffMode } from '../lib/settings/settings'
   import { activeProviderHasKey } from '../lib/llm/config'
   import type { GraphResult, StoryOrderResult } from '../lib/ai/schemas'
@@ -610,7 +611,21 @@
       <p role="alert">GitHub returned an error. Wait a moment and try again.</p>
     {/if}
   {:else}
-    <h1>{load.state.meta.title} <small>{owner}/{repo}#{number}</small></h1>
+    <div class="pr-header">
+      <h1>{load.state.meta.title} <small>{owner}/{repo}#{number}</small></h1>
+      <a
+        class="view-on-provider"
+        href={activeProvider.prWebUrl(prRefX)}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`View on ${activeProvider.displayName} (opens in a new tab)`}
+        onclick={() => track('original_pr_opened', { provider: providerId })}
+      >
+        <ProviderIcon provider={providerId as PrRefX['provider']} size={13} />
+        <span>View on {activeProvider.displayName}</span>
+        <span class="ext" aria-hidden="true">↗</span>
+      </a>
+    </div>
     <Stepper {step} onstep={(s) => goStep(s)} />
 
     <!-- ContextRail outside step switch (all steps) -->
@@ -735,7 +750,7 @@
         prRef={{ owner, repo, number }}
         commitId={load.state.meta.headSha}
         store={draftStore ?? createDraftStore(`${providerId}:${owner}/${repo}#${number}`)}
-        prUrl={`https://github.com/${owner}/${repo}/pull/${number}`}
+        prUrl={activeProvider.prWebUrl(prRefX)}
         coachFn={aiRun ? aiRun.coach : undefined}
         {prComments}
         provider={activeProvider}
@@ -792,6 +807,48 @@
 
 <style>
   .review { max-width: 70rem; margin: 0 auto; padding: 1rem; padding-bottom: 5rem; }
+
+  .pr-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .pr-header h1 {
+    margin: 0;
+    min-width: 0;
+  }
+
+  /* Utility/secondary link — muted, not a primary action */
+  .view-on-provider {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-shrink: 0;
+    align-self: center;
+    font-size: 0.85rem;
+    font-weight: 500;
+    text-decoration: none;
+    color: var(--text-muted);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    padding: 0.3rem 0.6rem;
+    white-space: nowrap;
+    transition: color 0.12s ease, border-color 0.12s ease;
+  }
+
+  .view-on-provider:hover,
+  .view-on-provider:focus-visible {
+    color: var(--text, #e8eef8);
+    border-color: var(--accent, #4a90d0);
+  }
+
+  .view-on-provider .ext {
+    font-size: 0.8em;
+    opacity: 0.8;
+  }
 
   /*
    * Medium regime (1100–1443px): rail is 300px fixed, but the viewport doesn't have

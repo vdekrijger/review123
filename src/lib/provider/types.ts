@@ -95,6 +95,14 @@ export interface ReviewProvider {
   /** Parse a URL or short-form string into a PrRefX, or return an error. */
   parseUrl(input: string): ParseResult
 
+  /**
+   * Build the canonical web URL of the PR/MR in the provider's native UI.
+   * Pure URL construction from the ref (+ provider settings) — no network.
+   * Used by the review flow to offer a "View on <Provider>" escape hatch for
+   * actions the tool doesn't cover (merge, native CI, conversation tab).
+   */
+  prWebUrl(ref: PrRefX): string
+
   /** Fetch PR metadata (title, state, SHAs, …) */
   getPrMeta(ref: PrRefX): Promise<PrMeta>
 

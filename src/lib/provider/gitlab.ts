@@ -465,6 +465,14 @@ export const gitlabProvider: ReviewProvider = {
     return parseGitlabUrl(input)
   },
 
+  prWebUrl(ref: PrRefX): string {
+    // Self-hosted support: use the configured host (default gitlab.com).
+    // owner may be a subgroup path (e.g. "group/sub") — preserve its slashes
+    // exactly as GitLab's canonical MR URL expects them.
+    const host = getSettings().gitlabHost || 'gitlab.com'
+    return `https://${host}/${ref.owner}/${ref.repo}/-/merge_requests/${ref.number}`
+  },
+
   async getPrMeta(ref: PrRefX): Promise<PrMeta> {
     const pid = projectId(ref)
     const mr = await glFetch<GlMrMeta>(

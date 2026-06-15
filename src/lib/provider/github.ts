@@ -206,6 +206,10 @@ export const githubProvider: ReviewProvider = {
     }
   },
 
+  prWebUrl(ref: PrRefX): string {
+    return `https://github.com/${ref.owner}/${ref.repo}/pull/${ref.number}`
+  },
+
   getPrMeta(ref: PrRefX): Promise<PrMeta> {
     return getPrMeta(toRef(ref))
   },
