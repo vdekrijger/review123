@@ -616,28 +616,25 @@ describe('AiModelsSection — ensemble editor (Plan N)', () => {
     expect(getSettings().aiEnsemble!.verifiers.length).toBe(0)
   })
 
-  // Cap is 8 (raised from 4); add stays available up to 8 participants.
-  it('allows adding participants up to 8, then hides the add control', () => {
+  // No hard cap: the Add control never disappears, even past the old limit of 8.
+  it('keeps the Add control available beyond 8 participants (no hard block)', async () => {
     setupAnthropic()
-    // generator + 6 verifiers = 7 participants → Add still available.
+    // generator + 8 verifiers = 9 participants — past the old cap of 8.
     setAiEnsemble({
       generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: Array.from({ length: 6 }, () => ({ provider: 'anthropic' as const, model: 'claude-haiku-4-5' })),
+      verifiers: Array.from({ length: 8 }, () => ({ provider: 'anthropic' as const, model: 'claude-haiku-4-5' })),
     })
     _resetSettingsStateForTest()
-    const seven = render(AiModelsSection)
-    expect(seven.getByRole('button', { name: /Add a model/i })).toBeInTheDocument()
-    seven.unmount()
-
-    // generator + 7 verifiers = 8 participants → at the cap, Add hidden.
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: Array.from({ length: 7 }, () => ({ provider: 'anthropic' as const, model: 'claude-haiku-4-5' })),
-    })
-    _resetSettingsStateForTest()
-    const eight = render(AiModelsSection)
-    expect(eight.queryByRole('button', { name: /Add a model/i })).toBeNull()
-    expect(eight.getByText(/Maximum of 8 models/i)).toBeInTheDocument()
+    render(AiModelsSection)
+    // Add is still present (no disable / hide at the old 8-limit)…
+    const addBtn = screen.getByRole('button', { name: /Add a model/i })
+    expect(addBtn).toBeInTheDocument()
+    expect(addBtn).not.toBeDisabled()
+    // …and there is no "maximum" copy blocking the user.
+    expect(screen.queryByText(/Maximum of \d+ models/i)).toBeNull()
+    // Clicking it actually adds a 10th participant.
+    await userEvent.click(addBtn)
+    expect(getSettings().aiEnsemble!.verifiers.length).toBe(9)
   })
 
   it('shows the soft scale/cost note once the panel reaches 4+ participants', () => {

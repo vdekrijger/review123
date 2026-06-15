@@ -4,7 +4,7 @@ import {
   crossModelVerifyEffective,
   resolveEnsemble,
   MAX_VERIFIER_PROVIDERS,
-  MAX_ENSEMBLE_PARTICIPANTS,
+  ENSEMBLE_RUNAWAY_BACKSTOP,
 } from './config'
 import {
   setDeepseekKey,
@@ -155,20 +155,38 @@ describe('resolveEnsemble — Plan N configurable ensemble', () => {
     expect(crossModelVerifyEffective()).toBe(false)
   })
 
-  it('caps total participants at MAX_ENSEMBLE_PARTICIPANTS (generator + verifiers)', () => {
+  it('does NOT truncate to a product cap: a 10-participant ensemble resolves all 10', () => {
     setAnthropicKey('a')
-    // Ten verifiers requested (single-key, same provider) — generator + 9 = 11
-    // participants, well over the cap. resolveEnsemble drops the overflow.
+    // Generator + 9 verifiers = 10 participants (single-key, same provider).
+    // There is no hard product cap (the old 8) — all 10 resolve since each
+    // provider key is present and the count is under the runaway backstop.
     setAiEnsemble({
       generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: Array.from({ length: 10 }, () => ({
+      verifiers: Array.from({ length: 9 }, () => ({
         provider: 'anthropic' as const,
         model: 'claude-sonnet-4-6',
       })),
     })
     const { generator, verifiers } = resolveEnsemble()
-    expect(1 + verifiers.length).toBe(MAX_ENSEMBLE_PARTICIPANTS)
-    expect(MAX_ENSEMBLE_PARTICIPANTS).toBe(8)
     expect(generator).not.toBeNull()
+    expect(1 + verifiers.length).toBe(10)
+  })
+
+  it('applies only the runaway backstop, never a product cap of 8', () => {
+    setAnthropicKey('a')
+    // Far more verifiers than the backstop — generator + 30 requested. Only the
+    // runaway backstop trims the overflow; the old 8-cap is gone.
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: Array.from({ length: 30 }, () => ({
+        provider: 'anthropic' as const,
+        model: 'claude-sonnet-4-6',
+      })),
+    })
+    const { generator, verifiers } = resolveEnsemble()
+    expect(generator).not.toBeNull()
+    // Bounded by the runaway backstop, not 8.
+    expect(1 + verifiers.length).toBe(ENSEMBLE_RUNAWAY_BACKSTOP)
+    expect(ENSEMBLE_RUNAWAY_BACKSTOP).toBeGreaterThan(8)
   })
 })

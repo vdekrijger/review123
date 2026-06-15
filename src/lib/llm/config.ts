@@ -84,12 +84,14 @@ export function activeLlmConfig(): ActiveLlmConfig {
 export const MAX_VERIFIER_PROVIDERS = 3
 
 /**
- * Cap on TOTAL ensemble participants (generator + verifiers) — a loose upper
- * bound, not a cost governor. The real governor is the per-model cost+impact
- * data the user watches as the panel grows; this just keeps the UI bounded.
- * Generator counts as 1, so verifiers are capped at MAX_ENSEMBLE_PARTICIPANTS-1.
+ * RUNAWAY BACKSTOP — NOT a product limit. Users may add as many ensemble
+ * participants as they like; the soft scale note + the per-model cost/impact
+ * data are the real governors and let users self-regulate. This bound exists
+ * solely to prevent a pathological runaway (e.g. a corrupted/oversized stored
+ * ensemble) from spawning an unbounded number of provider calls. It is set
+ * absurdly high relative to any sane ensemble so it never bites real usage.
  */
-export const MAX_ENSEMBLE_PARTICIPANTS = 8
+export const ENSEMBLE_RUNAWAY_BACKSTOP = 20
 
 /** A resolved ensemble participant: provider def + model def + its key. */
 export interface ResolvedParticipant {
@@ -138,9 +140,11 @@ function defaultEnsemble(): ResolvedEnsemble {
  * Resolve the effective ensemble (Plan N). When `aiEnsemble` is set, use the
  * user's hand-picked generator + verifiers — which MAY include multiple models
  * of the SAME provider (single-key cross-verify unlock). Participants whose
- * provider key is missing are dropped. Total participants capped at
- * MAX_ENSEMBLE_PARTICIPANTS. When no custom ensemble is stored, returns the
- * DEFAULT (byte-identical to #128).
+ * provider key is missing are dropped. There is NO product cap on participant
+ * count — users add as many models as they want and self-regulate via the soft
+ * scale note + per-model cost/impact data. Only the ENSEMBLE_RUNAWAY_BACKSTOP
+ * is applied, purely to guard against pathological runaway. When no custom
+ * ensemble is stored, returns the DEFAULT (byte-identical to #128).
  */
 export function resolveEnsemble(): ResolvedEnsemble {
   const ensemble = getSettings().aiEnsemble
@@ -155,9 +159,11 @@ export function resolveEnsemble(): ResolvedEnsemble {
     generator = { providerId: genProvider.id, model, key: genKey }
   }
 
-  // Verifiers: drop key-missing, cap so generator + verifiers ≤ max.
+  // Verifiers: drop key-missing. No product cap — only the runaway backstop on
+  // total participants (generator + verifiers) keeps a corrupted ensemble from
+  // spawning unbounded calls.
   const verifiers: ProviderConfig[] = []
-  const verifierCap = MAX_ENSEMBLE_PARTICIPANTS - (generator ? 1 : 0)
+  const verifierBackstop = ENSEMBLE_RUNAWAY_BACKSTOP - (generator ? 1 : 0)
   for (const v of ensemble.verifiers) {
     const provider = getProvider(v.provider)
     if (!provider) continue
@@ -165,7 +171,7 @@ export function resolveEnsemble(): ResolvedEnsemble {
     if (!key) continue
     const model = getModelDef(provider, v.model) ?? provider.models[0]
     verifiers.push({ providerId: provider.id, model, key })
-    if (verifiers.length >= verifierCap) break
+    if (verifiers.length >= verifierBackstop) break
   }
   return { generator, verifiers }
 }
