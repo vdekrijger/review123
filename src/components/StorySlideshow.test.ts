@@ -174,3 +174,57 @@ describe('StorySlideshow — analytics', () => {
     expect(enteredCalls).toHaveLength(1)
   })
 })
+
+// Plan I — function↔test pairing affordance ----------------------------------
+
+const PAIR_IMPL_PATCH = '@@ -1,2 +1,3 @@ function buildKey(x) {\n   const a = 1\n+  return x + 1\n }'
+const PAIR_TEST_CONTENT =
+  "describe('keys', () => {\n  it('buildKey works', () => {\n    expect(buildKey(1)).toBe(2)\n  })\n})"
+
+function pairProps(overrides: Record<string, unknown> = {}) {
+  const files: PrFile[] = [
+    { filename: 'src/keys.ts', status: 'modified', additions: 1, deletions: 0, patch: PAIR_IMPL_PATCH },
+    { filename: 'src/keys.test.ts', status: 'modified', additions: 1, deletions: 0, patch: PATCH },
+  ]
+  const story: StoryOrderResult = {
+    steps: [
+      { index: 0, files: ['src/keys.ts'], caption: 'buildKey gains a return.', layer: 'logic', relatedTests: ['src/keys.test.ts'] },
+    ],
+  }
+  const contentsMap = new Map([
+    ['src/keys.test.ts', { before: null, after: PAIR_TEST_CONTENT }],
+  ])
+  return baseProps({ story, files, contentsMap, ...overrides })
+}
+
+describe('StorySlideshow — symbol↔test pairing', () => {
+  it('shows a collapsed "Tested by" affordance beneath the function diff', () => {
+    render(StorySlideshow, { props: pairProps() })
+    const toggle = screen.getByRole('button', { name: /Tested by/i })
+    expect(toggle).toBeInTheDocument()
+    // Collapsed by default: the toggle is not expanded and no snippet is shown.
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText(/return x \+ 1/)).not.toBeInTheDocument()
+  })
+
+  it('expands to reveal the paired test block and fires the analytics event', async () => {
+    render(StorySlideshow, { props: pairProps() })
+    const toggle = screen.getByRole('button', { name: /Tested by/i })
+    await fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    // The test block snippet (sliced from contentsMap) is now visible.
+    expect(screen.getByText(/expect\(buildKey\(1\)\)\.toBe\(2\)/)).toBeInTheDocument()
+    expect(vi.mocked(track)).toHaveBeenCalledWith('symbol_test_expanded', { confidence: 'named' })
+  })
+
+  it('renders nothing when there is no paired test', () => {
+    // No test content in contentsMap → no pairing.
+    render(StorySlideshow, { props: pairProps({ contentsMap: new Map() }) })
+    expect(screen.queryByRole('button', { name: /Tested by/i })).not.toBeInTheDocument()
+  })
+
+  it('does not pair when contentsMap is absent', () => {
+    render(StorySlideshow, { props: pairProps({ contentsMap: null }) })
+    expect(screen.queryByRole('button', { name: /Tested by/i })).not.toBeInTheDocument()
+  })
+})
