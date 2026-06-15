@@ -33,6 +33,8 @@
   import type { WhitespaceDisplay } from '../lib/diff/whitespace'
   import { slugify } from '../lib/slug'
   import { track } from '../lib/analytics/analytics'
+  import { renderInlineMarkdown } from '../lib/markdown/render'
+  import { scrollToFileCard } from '../lib/diff/jumpToFile'
 
   let {
     story,
@@ -74,6 +76,10 @@
   } = $props()
 
   const fileByPath = $derived(new Map(files.map((f) => [f.filename, f])))
+
+  // The PR's changed-file paths — lets the "Tested by" affordance tell whether a
+  // paired test file is part of THIS PR's diff (jump-to) or pre-existing context.
+  const prPathSet = $derived(new Set(files.map((f) => f.filename)))
 
   // Map each step's paths to the PR's REAL filenames via tolerant matching
   // (exact → unique suffix → unique basename), then drop unmappable files and
@@ -176,6 +182,15 @@
     if (idx !== -1) go(idx)
   }
 
+  // Jump to the step where a paired TEST file appears (as a step file or a
+  // related test), then scroll its diff card into view. Used by the "Tested by"
+  // affordance for tests that ARE in this PR's diff.
+  function jumpToTestFile(file: string): void {
+    const idx = steps.findIndex((s) => s.files.includes(file) || s.relatedTests.includes(file))
+    if (idx !== -1) go(idx)
+    scrollToFileCard(file)
+  }
+
   const LAYER_LABEL: Record<(typeof STORY_LAYERS)[number], string> = {
     data: 'Data model',
     api: 'API / service',
@@ -221,7 +236,9 @@
     <div class="story-step" data-step-index={current}>
       <div class="story-caption-row">
         <span class="story-layer-chip layer-{currentStep.layer}">{LAYER_LABEL[currentStep.layer]}</span>
-        <p class="story-caption">{currentStep.caption}</p>
+<!-- Inline markdown so `code spans`, **bold**, _emphasis_ render (no block
+             wrapping). renderInlineMarkdown sanitizes — safe for {@html}. -->
+        <p class="story-caption">{@html renderInlineMarkdown(currentStep.caption)}</p>
       </div>
 
       {#each currentStep.files as path (path)}
@@ -251,7 +268,7 @@
             {#if stepPairingsByFile.get(path)}
               <div class="story-pairings">
                 {#each stepPairingsByFile.get(path) ?? [] as pairing (pairing.symbol)}
-                  <SymbolTestPairing {pairing} testContents={testContentsByPath} />
+                  <SymbolTestPairing {pairing} testContents={testContentsByPath} {prPathSet} onJumpToFile={jumpToTestFile} />
                 {/each}
               </div>
             {/if}
@@ -362,6 +379,17 @@
     margin: 0;
     font-size: 1.02rem;
     line-height: 1.5;
+  }
+
+  /* Inline markdown in the model-generated caption: code spans use the same
+     inline-code tokens as comment bodies / skill findings (readable in both
+     themes). */
+  .story-caption :global(code) {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.85em;
+    background: var(--surface-raised);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
   }
 
   .story-layer-chip {
