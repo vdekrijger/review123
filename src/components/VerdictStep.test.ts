@@ -19,6 +19,10 @@ import type { SubmitOutcome } from '../lib/github/review'
 import type { CoachResult, CommentReview } from '../lib/ai/schemas'
 import type { Draft } from '../lib/drafts/drafts.svelte'
 import type { ReviewProvider } from '../lib/provider/types'
+import { _setCaptureForTest } from '../lib/analytics/analytics'
+
+/** No-op capture restored after analytics assertions to avoid cross-test leakage. */
+const noopCapture = () => {}
 
 const prRef: PrRef = { owner: 'alice', repo: 'widgets', number: 42 }
 const commitId = 'abc123'
@@ -1492,5 +1496,93 @@ describe('own-PR verdict gating', () => {
       expect(screen.getByRole('radio', { name: /approve/i })).toBeDisabled()
     })
     expect(screen.getByRole('radio', { name: /comment/i })).toBeChecked()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Copy as LLM prompt — deterministic export (no submit, no key)
+// ---------------------------------------------------------------------------
+
+describe('VerdictStep — Copy as LLM prompt', () => {
+  beforeEach(() => {
+    signIn()
+    _setCaptureForTest(vi.fn())
+  })
+  afterEach(() => {
+    _setCaptureForTest(noopCapture)
+  })
+
+  it('is disabled when there are no drafts and no overall comment', () => {
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit },
+    })
+    expect(screen.getByRole('button', { name: /copy as llm prompt/i })).toBeDisabled()
+  })
+
+  it('copies the prompt to the clipboard, shows confirmation, and does not submit or clear drafts', async () => {
+    const user = userEvent.setup()
+    const copyFn = vi.fn().mockResolvedValue(undefined)
+    const submitFn = vi.fn().mockResolvedValue({ ok: true } as SubmitOutcome)
+    const capture = vi.fn()
+    _setCaptureForTest(capture)
+
+    const store = makeStore()
+    await store.upsert({ path: 'src/a.ts', line: 7, side: 'RIGHT', body: 'Rename this variable.' })
+
+    render(VerdictStep, {
+      props: {
+        prRef,
+        commitId,
+        store,
+        prUrl,
+        prTitle: 'My PR title',
+        submitFn,
+        copyFn,
+      },
+    })
+
+    const btn = screen.getByRole('button', { name: /copy as llm prompt/i })
+    expect(btn).toBeEnabled()
+    await user.click(btn)
+
+    // Clipboard received a prompt containing the file:line and the request.
+    expect(copyFn).toHaveBeenCalledTimes(1)
+    const text = copyFn.mock.calls[0][0] as string
+    expect(text).toContain('src/a.ts:7')
+    expect(text).toContain('Rename this variable.')
+    expect(text).toContain('PR #42 — My PR title')
+
+    // Transient confirmation appears.
+    await waitFor(() => {
+      expect(screen.getByText(/copied ✓/i)).toBeInTheDocument()
+    })
+
+    // Analytics: counts only, no content.
+    expect(capture).toHaveBeenCalledWith('review_prompt_copied', { item_count: 1 })
+
+    // Copying must NOT submit or clear drafts.
+    expect(submitFn).not.toHaveBeenCalled()
+    expect(store.count).toBe(1)
+  })
+
+  it('enables the button when only an overall comment is present', async () => {
+    const user = userEvent.setup()
+    const copyFn = vi.fn().mockResolvedValue(undefined)
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, copyFn },
+    })
+
+    // Type an overall comment.
+    const editor = screen.getByRole('textbox')
+    await user.click(editor)
+    await user.type(editor, 'Overall this looks good.')
+
+    const btn = screen.getByRole('button', { name: /copy as llm prompt/i })
+    await waitFor(() => expect(btn).toBeEnabled())
+    await user.click(btn)
+
+    expect(copyFn).toHaveBeenCalledTimes(1)
+    expect(copyFn.mock.calls[0][0] as string).toContain('## Overall comment')
   })
 })
