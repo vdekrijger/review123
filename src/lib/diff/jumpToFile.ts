@@ -53,6 +53,61 @@ export function scrollToFileCard(path: string): void {
   requestAnimationFrame(retry)
 }
 
+/**
+ * Max animation frames to wait for a specific finding card to appear. A finding
+ * may live inside a collapsed file card (revealed only after we expand it) or in
+ * a file that just mounted; a few frames cover expand + paint without blocking.
+ */
+const FINDING_MAX_FRAMES = 30
+
+/** How long (ms) the flash highlight stays on a jumped-to finding card. */
+const FINDING_FLASH_MS = 1500
+
+/**
+ * Scroll a single reviewer finding into view and briefly flash it.
+ *
+ * Findings render as `.skill-finding` cards tagged with `data-finding-key`,
+ * whether inline at their diff line, in the per-file fallback block, or above
+ * the file (file-level). We first jump to the OWNING file card (`path`) — that
+ * scrolls the file into view AND expands it if it was collapsed (marked viewed),
+ * which is what makes a hidden inline finding render at all — then, across a few
+ * animation frames, locate the finding card by its key, scroll it into view and
+ * add a transient `.finding-flash` class.
+ *
+ * Unanchorable findings (off-diff) still get a card in the file's fallback block,
+ * so this resolves them too — never a dead jump.
+ */
+export function jumpToFinding(path: string, findingKey: string): void {
+  // Expand + scroll the owning file first (reveals collapsed inline findings).
+  scrollToFileCard(path)
+
+  const selector = `[data-finding-key="${cssEscape(findingKey)}"]`
+  let attempts = 0
+  const tryFlash = (): boolean => {
+    const el = document.querySelector(selector) as HTMLElement | null
+    if (!el) return false
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('finding-flash')
+    window.setTimeout(() => el.classList.remove('finding-flash'), FINDING_FLASH_MS)
+    return true
+  }
+  if (tryFlash()) return
+  const retry = () => {
+    if (tryFlash()) return
+    attempts += 1
+    if (attempts < FINDING_MAX_FRAMES) requestAnimationFrame(retry)
+  }
+  requestAnimationFrame(retry)
+}
+
+/** CSS.escape with a minimal fallback for jsdom / older runtimes. */
+function cssEscape(value: string): string {
+  const cssApi = (globalThis as { CSS?: { escape?: (v: string) => string } }).CSS
+  if (cssApi?.escape) return cssApi.escape(value)
+  // Fallback: escape the characters that matter inside an attribute selector.
+  return value.replace(/["\\]/g, '\\$&')
+}
+
 export interface JumpToFileDiffOptions {
   /** Whether the Inspect step (where diff cards live) is already active. */
   isInspectActive: boolean

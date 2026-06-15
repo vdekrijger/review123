@@ -606,6 +606,7 @@
                 line={finding.line}
                 anchored={true}
                 compact={true}
+                findingKey={finding.key}
                 added={addedSkillKeys.has(finding.key)}
                 onAdd={() => handleAddSkillFindingDraft(finding)}
                 onDismiss={() => dismissSkillFinding(finding.key)}
@@ -660,6 +661,7 @@
             body={finding.body}
             line={finding.line}
             anchored={false}
+            findingKey={finding.key}
             added={addedSkillKeys.has(finding.key)}
             onAdd={() => handleAddSkillFindingDraft(finding)}
             onDismiss={() => dismissSkillFinding(finding.key)}

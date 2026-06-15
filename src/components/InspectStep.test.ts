@@ -240,6 +240,158 @@ describe('InspectStep — skill-reviewer token-usage footer', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// InspectStep — reviewer chip → finding navigation (jump / popover)
+// Clicking a reviewer's done result chip (or its suggestion summary chip):
+//   • 1 finding  → jumps straight to it (jumpToFinding with path/key)
+//   • N findings → opens a popover listing each finding (file:line + title),
+//                  clicking an entry jumps to it
+//   • error chip → keeps retry semantics (never a finding jump)
+// ---------------------------------------------------------------------------
+
+import { fireEvent } from '@testing-library/svelte'
+import * as jumpToFileMod from '../lib/diff/jumpToFile'
+import { vi } from 'vitest'
+
+describe('InspectStep — reviewer chip → finding navigation', () => {
+  const skillId = 'rev-x'
+  const reviewerName = 'PostHog Observability Reviewer'
+
+  const reviewEntry = (findings: { path: string; line: number | null; body: string; severity?: 'high' | 'medium' | 'low' }[]): SkillReviewEntry => ({
+    skillId,
+    name: reviewerName,
+    state: {
+      status: 'done',
+      value: {
+        skillName: reviewerName,
+        findings: findings.map(f => ({ path: f.path, line: f.line, body: f.body, severity: f.severity ?? 'medium' })),
+      },
+    },
+  })
+
+  // The key SkillFindingCard emits / jumpToFinding targets (mirrors InspectStep).
+  const keyOf = (path: string, line: number | null, body: string) => `${skillId}:${path}:${line}:${body.slice(0, 30)}`
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('single-finding chip jumps straight to that finding (path + key)', async () => {
+    const spy = vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
+    const files = makeFiles(['a.ts'])
+    const body = 'Missing capture() on this path'
+    const skillReviews = [reviewEntry([{ path: 'a.ts', line: 12, body }])]
+    render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews } })
+
+    const chip = screen.getByRole('button', { name: `Show 1 finding from ${reviewerName}` })
+    await fireEvent.click(chip)
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('a.ts', keyOf('a.ts', 12, body))
+  })
+
+  it('multi-finding chip opens a popover with N entries; clicking one jumps to its location', async () => {
+    const spy = vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
+    const files = makeFiles(['a.ts', 'b.ts'])
+    const b1 = 'First issue here'
+    const b2 = 'Second issue over there'
+    const skillReviews = [reviewEntry([
+      { path: 'a.ts', line: 3, body: b1 },
+      { path: 'b.ts', line: 9, body: b2 },
+    ])]
+    const { container } = render(InspectStep, { props: { files, changedFiles: 2, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews } })
+
+    expect(container.querySelector('.findings-popover')).toBeNull()
+    const chip = screen.getByRole('button', { name: `Show 2 findings from ${reviewerName}` })
+    await fireEvent.click(chip)
+
+    const menu = container.querySelector('.findings-popover[role="menu"]')
+    expect(menu).not.toBeNull()
+    const items = menu!.querySelectorAll('[role="menuitem"]')
+    expect(items).toHaveLength(2)
+    expect(items[0].textContent).toContain('a.ts:3')
+    expect(items[0].textContent).toContain('First issue here')
+    expect(items[1].textContent).toContain('b.ts:9')
+
+    await fireEvent.click(items[1] as HTMLElement)
+    expect(spy).toHaveBeenCalledWith('b.ts', keyOf('b.ts', 9, b2))
+  })
+
+  it('unanchorable finding (null line) still produces a jump entry', async () => {
+    const spy = vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
+    const files = makeFiles(['a.ts'])
+    const offDiff = 'Whole-file concern'
+    const anchored = 'On a real line'
+    const skillReviews = [reviewEntry([
+      { path: 'a.ts', line: null, body: offDiff },
+      { path: 'a.ts', line: 5, body: anchored },
+    ])]
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews } })
+
+    const chip = screen.getByRole('button', { name: `Show 2 findings from ${reviewerName}` })
+    await fireEvent.click(chip)
+    const menu = container.querySelector('.findings-popover')!
+    const items = menu.querySelectorAll('[role="menuitem"]')
+    const entry = [...items].find(i => i.textContent?.includes('Whole-file concern'))!
+    expect(entry).toBeTruthy()
+    await fireEvent.click(entry as HTMLElement)
+    // null-line finding still jumps to its (fallback) location — not a dead link.
+    expect(spy).toHaveBeenCalledWith('a.ts', keyOf('a.ts', null, offDiff))
+  })
+
+  it('popover is keyboard accessible: Escape closes it', async () => {
+    vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
+    const files = makeFiles(['a.ts', 'b.ts'])
+    const skillReviews = [reviewEntry([
+      { path: 'a.ts', line: 3, body: 'one' },
+      { path: 'b.ts', line: 9, body: 'two' },
+    ])]
+    const { container } = render(InspectStep, { props: { files, changedFiles: 2, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews } })
+
+    await fireEvent.click(screen.getByRole('button', { name: `Show 2 findings from ${reviewerName}` }))
+    const menu = container.querySelector('.findings-popover[role="menu"]')!
+    expect(menu).not.toBeNull()
+    await fireEvent.keyDown(menu, { key: 'Escape' })
+    expect(container.querySelector('.findings-popover')).toBeNull()
+  })
+
+  it('error chip keeps its retry semantics — NOT a finding jump', () => {
+    const spy = vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
+    const files = makeFiles(['a.ts'])
+    const errored: SkillReviewEntry = {
+      skillId, name: reviewerName, state: { status: 'error', error: 'boom' },
+    }
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [errored] } })
+    // No nav button for an error chip; the error chip is its own (non-jump) chip.
+    expect(screen.queryByRole('button', { name: new RegExp(`Show .* from ${reviewerName}`) })).toBeNull()
+    expect(container.querySelector('.chip-error')).not.toBeNull()
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('suggestion summary chip jumps to the single finding too', async () => {
+    const spy = vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
+    const files = makeFiles(['a.ts'])
+    const body = 'a suggestion'
+    const skillReviews = [reviewEntry([{ path: 'a.ts', line: 7, body }])]
+    render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews } })
+
+    const summary = screen.getByRole('button', { name: `Show 1 suggestion from ${reviewerName}` })
+    await fireEvent.click(summary)
+    expect(spy).toHaveBeenCalledWith('a.ts', keyOf('a.ts', 7, body))
+  })
+
+  it('rendered finding card carries the matching data-finding-key (jump target exists)', () => {
+    vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
+    const files = makeFiles(['a.ts'])
+    const body = 'a finding on a null line'
+    const skillReviews = [reviewEntry([{ path: 'a.ts', line: null, body }])]
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews } })
+    // File-level (null-line) finding renders above the file with the key.
+    const card = container.querySelector(`[data-finding-key="${keyOf('a.ts', null, body)}"]`)
+    expect(card).not.toBeNull()
+  })
+})
+
 describe('InspectStep — sticky drawer structure', () => {
   it('file-tree-drawer has data-open attribute (CSS keys the inline width off it)', () => {
     const files = makeFiles(['a.ts'])
