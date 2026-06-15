@@ -230,6 +230,7 @@
             <FileDiff
               {file}
               {mode}
+              sticky={false}
               drafts={draftsFor(path)}
               comments={commentsFor(path)}
               {resolvedCommentIds}
@@ -268,6 +269,7 @@
                 <FileDiff
                   {file}
                   {mode}
+              sticky={false}
                   drafts={draftsFor(path)}
                   comments={commentsFor(path)}
                   {resolvedCommentIds}
