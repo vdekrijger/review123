@@ -615,4 +615,53 @@ describe('AiModelsSection — ensemble editor (Plan N)', () => {
     await userEvent.click(removeButtons[removeButtons.length - 1])
     expect(getSettings().aiEnsemble!.verifiers.length).toBe(0)
   })
+
+  // Cap is 8 (raised from 4); add stays available up to 8 participants.
+  it('allows adding participants up to 8, then hides the add control', () => {
+    setupAnthropic()
+    // generator + 6 verifiers = 7 participants → Add still available.
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: Array.from({ length: 6 }, () => ({ provider: 'anthropic' as const, model: 'claude-haiku-4-5' })),
+    })
+    _resetSettingsStateForTest()
+    const seven = render(AiModelsSection)
+    expect(seven.getByRole('button', { name: /Add a model/i })).toBeInTheDocument()
+    seven.unmount()
+
+    // generator + 7 verifiers = 8 participants → at the cap, Add hidden.
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: Array.from({ length: 7 }, () => ({ provider: 'anthropic' as const, model: 'claude-haiku-4-5' })),
+    })
+    _resetSettingsStateForTest()
+    const eight = render(AiModelsSection)
+    expect(eight.queryByRole('button', { name: /Add a model/i })).toBeNull()
+    expect(eight.getByText(/Maximum of 8 models/i)).toBeInTheDocument()
+  })
+
+  it('shows the soft scale/cost note once the panel reaches 4+ participants', () => {
+    setupAnthropic()
+    // 2 participants → no note yet.
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [{ provider: 'anthropic', model: 'claude-haiku-4-5' }],
+    })
+    _resetSettingsStateForTest()
+    const two = render(AiModelsSection)
+    expect(two.queryByTestId('ensemble-scale-note')).toBeNull()
+    two.unmount()
+
+    // 4 participants → note appears.
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: Array.from({ length: 3 }, () => ({ provider: 'anthropic' as const, model: 'claude-haiku-4-5' })),
+    })
+    _resetSettingsStateForTest()
+    const four = render(AiModelsSection)
+    const note = four.getByTestId('ensemble-scale-note')
+    expect(note).toBeInTheDocument()
+    expect(note.textContent).toMatch(/more models means more tokens/i)
+    expect(note.textContent).toMatch(/per-model impact/i)
+  })
 })

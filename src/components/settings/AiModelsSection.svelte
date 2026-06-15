@@ -497,6 +497,13 @@
         </li>
       {/each}
     </ul>
+    {#if ensembleRows.length >= 4}
+      <p class="ensemble-scale-note" data-testid="ensemble-scale-note">
+        Each model verifies every finding — more models means more tokens and higher
+        rate-limit risk, with diminishing returns. Watch the per-model impact to see
+        which earn their keep.
+      </p>
+    {/if}
     {#if canAddParticipant}
       <button type="button" class="ensemble-add" onclick={addParticipant}>+ Add a model</button>
     {:else}
@@ -888,6 +895,13 @@
     font-size: 0.74em;
     color: var(--text-muted);
     flex-basis: 100%;
+  }
+  .ensemble-scale-note {
+    margin: 0.6rem 0 0;
+    font-size: 0.76em;
+    font-style: italic;
+    color: var(--text-muted);
+    opacity: 0.85;
   }
   .ensemble-add {
     margin-top: 0.6rem;
