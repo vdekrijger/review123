@@ -64,6 +64,26 @@ describe('FileDiff', () => {
     expect(screen.getByText(/a\.ts.*→.*b\.ts/)).toBeInTheDocument()
   })
 
+  it('header carries the sticky-header class by default (Files mode)', () => {
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified' } })
+    const header = container.querySelector('article.file-diff > header')!
+    expect(header).toBeInTheDocument()
+    expect(header.classList.contains('sticky-header')).toBe(true)
+  })
+
+  it('sticky=false drops the sticky-header class (Story mode)', () => {
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified', sticky: false } })
+    const header = container.querySelector('article.file-diff > header')!
+    expect(header.classList.contains('sticky-header')).toBe(false)
+  })
+
+  it('sticky header survives the collapsed (viewed) state', () => {
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified', viewed: true } })
+    const header = container.querySelector('article.file-diff > header')!
+    // Even when the file is collapsed the (only) header keeps the sticky class
+    expect(header.classList.contains('sticky-header')).toBe(true)
+  })
+
   it('smoke: renders modified file without throwing and DiffView mounts', () => {
     // jsdom stubs canvas so DiffView can mount; DiffView uses a virtual scroll /
     // lazy-render strategy so 'const a = 2' won't be in the initial DOM —

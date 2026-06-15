@@ -87,9 +87,16 @@
      * 'unavailable'  = full contents missing → provider diff + honest note.
      */
     whitespace?: WhitespaceDisplay | null
+    /**
+     * Whether the file header sticks to the top of the viewport while the
+     * file's diff is in view (so Viewed / collapse / path stay reachable on a
+     * long file). Enabled in Files mode; disabled in Story mode, where one file
+     * fills the slide and sticky would interact oddly with the slideshow scroll.
+     */
+    sticky?: boolean
   }
 
-  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onReply = null, whitespace = null }: Props = $props()
+  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onReply = null, whitespace = null, sticky = true }: Props = $props()
 
   // Test-file display (must be declared before collapsed)
   const testFileDisplay = $derived<TestFileDisplay>(settingsState.current.testFileDisplay)
@@ -438,7 +445,7 @@
 <article class="file-diff" class:is-collapsed={collapsed} class:test-dim={isTest && testFileDisplay === 'dim'} class:test-highlight={isTest && testFileDisplay === 'highlight'}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <header onclick={handleHeaderClick} class:clickable={collapsed} class:test-highlight={isTest && testFileDisplay === 'highlight'}>
+  <header onclick={handleHeaderClick} class:clickable={collapsed} class:sticky-header={sticky} class:test-highlight={isTest && testFileDisplay === 'highlight'}>
     <code>{filename}</code>
     <div class="header-right">
       {#if changedSinceViewed}
@@ -643,8 +650,32 @@
 </article>
 
 <style>
-  .file-diff { border: 1px solid var(--hairline); border-radius: 6px; margin-bottom: 1rem; overflow: hidden; }
-  header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: var(--surface-raised); }
+  /* NOTE: no `overflow: hidden` here — it would clip the sticky header and
+     defeat position: sticky. The rounded corners are preserved by clipping the
+     header's top corners and the last child's bottom corners instead. */
+  .file-diff { border: 1px solid var(--hairline); border-radius: 6px; margin-bottom: 1rem; }
+  header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: var(--surface-raised); border-radius: 6px 6px 0 0; }
+  /* Collapsed: header is the only visible child → round all four corners. */
+  .is-collapsed header { border-radius: 6px; }
+
+  /*
+   * Sticky file header (Files mode). While a long file's diff is on screen the
+   * header pins below the app topbar so the path, ± counts, copy-path, the
+   * Viewed toggle and the collapse control stay reachable without scrolling
+   * back up. Each FileDiff is its own sticky context, so the next file's header
+   * pushes the current one up — standard per-section sticky-header behaviour.
+   *
+   * top:  sits directly below the app topbar (the only element sticky above the
+   *       diff — the Unified/Side-by-side + hide-whitespace toolbar scrolls away).
+   * z-index 5: above the diff rows, below the file-tree drawer/tab (20/21) and
+   *       the topbar (200) and any modal. Background is the opaque surface token
+   *       so diff rows never show through behind the pinned header.
+   */
+  header.sticky-header {
+    position: sticky;
+    top: var(--topbar-h, 2.75rem);
+    z-index: 5;
+  }
   header code { font-family: var(--font-mono); font-size: 0.8125rem; }
   header.clickable { cursor: pointer; }
   header.clickable:hover { background: color-mix(in srgb, var(--hairline) 30%, var(--surface-raised)); }
