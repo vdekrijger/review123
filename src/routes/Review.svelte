@@ -757,6 +757,9 @@
         commitId={load.state.meta.headSha}
         store={draftStore ?? createDraftStore(`${providerId}:${owner}/${repo}#${number}`)}
         prUrl={activeProvider.prWebUrl(prRefX)}
+        prTitle={load.state.meta.title}
+        files={load.state.files}
+        {contentsMap}
         coachFn={aiRun ? aiRun.coach : undefined}
         {prComments}
         provider={activeProvider}

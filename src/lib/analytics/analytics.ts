@@ -22,6 +22,10 @@ const EVENTS = {
   // thread ids, or repo identifiers are ever sent.
   reply_posted: ['ok'],
   review_submitted: ['verdict', 'comment_count'],
+  // PRIVACY DECISION: 'item_count' is an integer count of drafted items exported
+  // when the reviewer clicks "Copy as LLM prompt". No comment bodies, code,
+  // diffs, file paths, or PR identifiers are sent — counts only.
+  review_prompt_copied: ['item_count'],
   settings_key_added: ['service'],
   // PRIVACY DECISION: engagement events below carry section/surface identifiers only.
   // 'section' is a stable registry id (e.g. 'summary', 'diagrams', 'queue', 'recent') —

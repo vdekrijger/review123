@@ -36,12 +36,25 @@
   import type { LlmUsage } from '../lib/llm/llm'
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import { formatUsageLabel } from '../lib/ai/tokenCost'
+  import { buildReviewPrompt } from '../lib/ai/reviewPrompt'
+  import type { PrFile } from '../lib/github/types'
 
   interface Props {
     prRef: PrRef
     commitId: string
     store: ReturnType<typeof createDraftStore>
     prUrl: string
+    /** PR title — for the "Copy as LLM prompt" preamble. */
+    prTitle?: string
+    /** Changed files (patches) — current-code excerpts in the exported prompt. */
+    files?: PrFile[]
+    /** Full file contents map, when fetched — wider current-code windows. */
+    contentsMap?: Map<string, { before: string | null; after: string | null }> | null
+    /**
+     * Override clipboard write — DI seam for tests. Defaults to the real
+     * navigator.clipboard.writeText.
+     */
+    copyFn?: (text: string) => Promise<void>
     /**
      * Override the submit function — allows tests to inject a stub without
      * module-level mocking. Defaults to the real submitReview.
@@ -87,6 +100,10 @@
     commitId,
     store,
     prUrl,
+    prTitle = '',
+    files = [],
+    contentsMap = null,
+    copyFn = (text: string) => navigator.clipboard.writeText(text),
     submitFn = submitReview,
     coachFn,
     prComments = [],
@@ -249,6 +266,48 @@
     }
     return map
   })
+
+  // ---- Copy as LLM prompt ----
+  // Deterministic export: assemble the drafted review into an agent-ready
+  // markdown prompt and copy it to the clipboard. No LLM call, no key needed,
+  // and it does NOT submit or clear drafts.
+  let copied = $state(false)
+  let copyError = $state<string | null>(null)
+  let copyTimer: ReturnType<typeof setTimeout> | undefined
+
+  // Enabled when there's at least one draft OR a non-empty overall comment.
+  const canCopyPrompt = $derived(store.count > 0 || body.trim().length > 0)
+
+  async function handleCopyPrompt() {
+    if (!canCopyPrompt) return
+    copyError = null
+    const itemCount = store.count
+    const prompt = buildReviewPrompt({
+      pr: {
+        owner: prRef.owner,
+        repo: prRef.repo,
+        number: prRef.number,
+        title: prTitle,
+        provider: provider?.displayName ?? 'GitHub',
+        url: prUrl,
+      },
+      verdict,
+      drafts: [...store.drafts],
+      overall: body,
+      files,
+      contents: contentsMap,
+    })
+    try {
+      await copyFn(prompt)
+    } catch {
+      copyError = 'Could not copy to clipboard.'
+      return
+    }
+    track('review_prompt_copied', { item_count: itemCount })
+    copied = true
+    if (copyTimer) clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => { copied = false }, 2000)
+  }
 
   // ---- Submit handler ----
 
@@ -508,15 +567,40 @@
       </p>
     {/if}
 
-    <!-- Submit -->
-    <button
-      class="submit-btn"
-      onclick={handleSubmit}
-      disabled={pending}
-      aria-busy={pending}
-    >
-      {pending ? 'Submitting…' : 'Submit review'}
-    </button>
+    <!-- Actions: submit (to provider) + copy as LLM prompt (export, no submit) -->
+    <div class="actions">
+      <!-- Submit -->
+      <button
+        class="submit-btn"
+        onclick={handleSubmit}
+        disabled={pending}
+        aria-busy={pending}
+      >
+        {pending ? 'Submitting…' : 'Submit review'}
+      </button>
+
+      <!-- Copy as LLM prompt — deterministic export, never submits or clears drafts -->
+      <button
+        class="copy-prompt-btn"
+        type="button"
+        onclick={handleCopyPrompt}
+        disabled={!canCopyPrompt}
+        title={canCopyPrompt
+          ? 'Copy your review as a prompt to paste into a coding agent'
+          : 'Draft a comment or write an overall comment first'}
+      >
+        {copied ? 'Copied ✓' : 'Copy as LLM prompt'}
+      </button>
+    </div>
+
+    <!-- Transient confirmation / error, announced to assistive tech -->
+    <p class="copy-status" role="status" aria-live="polite">
+      {#if copyError}
+        <span class="copy-error">{copyError}</span>
+      {:else if copied}
+        Review prompt copied to clipboard.
+      {/if}
+    </p>
   </div>
 {/if}
 
@@ -634,6 +718,45 @@
     font-size: 0.85rem;
     color: var(--text-muted);
     margin: 0.25rem 0 0;
+  }
+
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .copy-prompt-btn {
+    padding: 0.5rem 1.25rem;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font-size: 0.95rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .copy-prompt-btn:hover:not(:disabled) {
+    background: var(--surface-raised);
+  }
+
+  .copy-prompt-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .copy-status {
+    margin: 0;
+    min-height: 1.1rem;
+    font-size: 0.85rem;
+    color: var(--legend-added-color);
+  }
+
+  .copy-status .copy-error {
+    color: var(--legend-removed-color);
   }
 
   .submit-btn {

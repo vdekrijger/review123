@@ -2418,3 +2418,56 @@ test('comment threads: root + reply grouped inline at the line; Reply (posts now
   // Editor closed after successful post
   await expect(inline.getByRole('textbox', { name: /comment body/i })).toHaveCount(0)
 })
+
+// ---------------------------------------------------------------------------
+// Copy as LLM prompt — deterministic export at step 3 (Verdict)
+//
+// Seeds a draft, navigates to the Verdict step, clicks "Copy as LLM prompt",
+// and asserts the clipboard text carries the file:line anchor + the request.
+// Clipboard permissions are granted so navigator.clipboard.writeText resolves
+// and the value can be read back. No review is submitted by this action.
+// ---------------------------------------------------------------------------
+test('copy-as-llm-prompt: seed draft, step 3, copy → clipboard has file:line + request', async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await setupRoutes(page, { withGithubAuth: true })
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(true))
+
+  const prKey = `github:${OWNER}/${REPO}#${PR_NUMBER}@${HEAD_SHA}`
+  await page.addInitScript(seedDraftScript(prKey))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Navigate to step 3 (VerdictStep)
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await page.getByRole('button', { name: 'Next step' }).click()
+
+  // The seeded draft should be recapped
+  await expect(page.getByText(/Drafted comments/i)).toBeVisible({ timeout: 5_000 })
+
+  // Click "Copy as LLM prompt"
+  const copyBtn = page.getByRole('button', { name: /copy as llm prompt/i })
+  await expect(copyBtn).toBeEnabled()
+  await copyBtn.click()
+
+  // Transient confirmation appears
+  await expect(page.getByText(/copied ✓/i)).toBeVisible({ timeout: 5_000 })
+
+  // The clipboard carries the file:line anchor + the request body
+  const clip = await page.evaluate(() => navigator.clipboard.readText())
+  expect(clip).toContain('src/feature.ts:3')
+  expect(clip).toContain('Seeded draft for testing')
+  expect(clip).toContain('PR #42')
+
+  // Copying does NOT submit — the verdict form is still present
+  await expect(page.getByRole('button', { name: /submit review/i })).toBeVisible()
+})
