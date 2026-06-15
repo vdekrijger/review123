@@ -25,6 +25,7 @@
   import { getMermaid } from '../lib/diagram/mermaidInit'
   import type { GraphResult } from '../lib/diagram/types'
   import { resolvedTheme } from '../lib/settings/appearance.svelte'
+  import AiProgress from './AiProgress.svelte'
 
   interface Props {
     result: GraphResult | null
@@ -264,9 +265,9 @@
 </script>
 
 {#if panelState === 'loading'}
-  <div class="panel-loading" role="status" aria-label="Loading diagrams">
-    <span class="spinner" aria-hidden="true"></span>
-    Loading diagrams…
+  <!-- Unified AI progress: status line ("Mapping the architecture…") + skeleton. -->
+  <div class="panel-loading" aria-label="Loading diagrams">
+    <AiProgress task="diagrams" state={{ status: 'loading' }} skeletonVariant="block" />
   </div>
 {:else if panelState === 'error'}
   <div class="panel-error" role="alert">
@@ -419,7 +420,6 @@
 {/if}
 
 <style>
-  .panel-loading,
   .panel-error,
   .panel-declined,
   .panel-empty {
@@ -431,23 +431,13 @@
     gap: 0.5rem;
   }
 
+  .panel-loading {
+    padding: 0.5rem 1rem;
+  }
+
   .panel-error {
     color: #dc2626;
     opacity: 1;
-  }
-
-  .spinner {
-    display: inline-block;
-    width: 1em;
-    height: 1em;
-    border: 2px solid currentColor;
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
   }
 
   .diagram-panel {

@@ -725,6 +725,7 @@
         onstorymode={setStory}
         story={isCompareActive ? null : (aiRun?.story.status === 'done' ? aiRun.story.value as StoryOrderResult : null)}
         storyStatus={aiRun?.story.status ?? 'idle'}
+        storyActivity={aiRun?.story.activity}
         storyError={aiRun?.story.error ?? null}
         onRetryStory={aiRun != null ? (() => { void aiRun!.retry('story') }) : null}
         diagrams={isCompareActive ? null : (aiRun?.diagrams.status === 'done' ? aiRun.diagrams.value as GraphResult : null)}

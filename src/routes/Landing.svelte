@@ -12,6 +12,7 @@
   import { track } from '../lib/analytics/analytics'
   import ProviderIcon from '../components/ProviderIcon.svelte'
   import Skeleton from '../components/Skeleton.svelte'
+  import Spinner from '../components/Spinner.svelte'
   import type { QueueItem } from '../lib/provider/types'
 
   // Human-readable provider names for accessible text alternatives.
@@ -226,7 +227,7 @@
           disabled={queueLoading || queueRefreshing}
           aria-label="Refresh queue"
         >
-          {#if queueRefreshing}<span class="refresh-spinner" aria-hidden="true"></span>{/if}
+          {#if queueRefreshing}<Spinner size="0.75em" />{/if}
           Refresh
         </button>
       </div>
@@ -458,28 +459,6 @@
   .refresh-btn:disabled {
     cursor: default;
     opacity: 0.6;
-  }
-
-  .refresh-spinner {
-    display: inline-block;
-    width: 0.75em;
-    height: 0.75em;
-    border: 2px solid currentColor;
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: refresh-spin 0.7s linear infinite;
-    vertical-align: middle;
-    margin-right: 0.3em;
-  }
-
-  @keyframes refresh-spin {
-    to { transform: rotate(360deg); }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .refresh-spinner {
-      animation: none;
-    }
   }
 
   .sr-only {

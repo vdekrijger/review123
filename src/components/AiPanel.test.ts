@@ -27,7 +27,7 @@ beforeEach(() => {
 
 function renderNoKey() {
   return render(AiPanel, {
-    props: { title: 'Summary', state: { status: 'no-key' as const }, onretry: vi.fn() },
+    props: { title: 'Summary', task: 'summary', state: { status: 'no-key' as const }, onretry: vi.fn() },
   })
 }
 
@@ -67,7 +67,7 @@ describe('AiPanel — no-key hint names the ACTIVE provider', () => {
 describe('AiPanel — pending skeleton from the FIRST render (no blank gap)', () => {
   it('renders the skeleton when status is idle (run not yet signalled loading)', () => {
     const { container } = render(AiPanel, {
-      props: { title: 'Summary', state: { status: 'idle' as const }, onretry: vi.fn() },
+      props: { title: 'Summary', task: 'summary', state: { status: 'idle' as const }, onretry: vi.fn() },
     })
     expect(container.querySelector('.ai-panel-loading .skeleton-block')).not.toBeNull()
     // No spinner — content-shaped skeleton only
@@ -76,7 +76,7 @@ describe('AiPanel — pending skeleton from the FIRST render (no blank gap)', ()
 
   it('renders the skeleton when status is loading', () => {
     const { container } = render(AiPanel, {
-      props: { title: 'Summary', state: { status: 'loading' as const }, onretry: vi.fn() },
+      props: { title: 'Summary', task: 'summary', state: { status: 'loading' as const }, onretry: vi.fn() },
     })
     expect(container.querySelector('.ai-panel-loading .skeleton-block')).not.toBeNull()
   })
@@ -85,6 +85,7 @@ describe('AiPanel — pending skeleton from the FIRST render (no blank gap)', ()
     const { container } = render(AiPanel, {
       props: {
         title: 'Diagrams',
+        task: 'diagrams' as const,
         state: { status: 'idle' as const },
         onretry: vi.fn(),
         skeletonVariant: 'block' as const,
@@ -97,6 +98,7 @@ describe('AiPanel — pending skeleton from the FIRST render (no blank gap)', ()
     const { container } = render(AiPanel, {
       props: {
         title: 'Test coverage (AI-inferred)',
+        task: 'tests' as const,
         state: { status: 'loading' as const },
         onretry: vi.fn(),
         skeletonVariant: 'cards' as const,
@@ -114,7 +116,7 @@ describe('AiPanel — token usage footer (opt-in: settings.showTokenCost)', () =
 
   it('renders NOTHING when showTokenCost is off (default)', () => {
     const { container } = render(AiPanel, {
-      props: { title: 'Summary', state: doneWithUsage, onretry: vi.fn() },
+      props: { title: 'Summary', task: 'summary', state: doneWithUsage, onretry: vi.fn() },
     })
     expect(container.querySelector('.ai-usage-footer')).toBeNull()
   })
@@ -125,7 +127,7 @@ describe('AiPanel — token usage footer (opt-in: settings.showTokenCost)', () =
     setAiModel('claude-sonnet-4-6') // $3/$15 per MTok → 8000*3/1e6 + 200*15/1e6 ≈ $0.027
     _resetSettingsStateForTest()
     const { container } = render(AiPanel, {
-      props: { title: 'Summary', state: doneWithUsage, onretry: vi.fn() },
+      props: { title: 'Summary', task: 'summary', state: doneWithUsage, onretry: vi.fn() },
     })
     const footer = container.querySelector('.ai-usage-footer')
     expect(footer).not.toBeNull()
@@ -139,7 +141,7 @@ describe('AiPanel — token usage footer (opt-in: settings.showTokenCost)', () =
     setAiModel('claude-opus-4-8') // no pricing populated
     _resetSettingsStateForTest()
     const { container } = render(AiPanel, {
-      props: { title: 'Summary', state: doneWithUsage, onretry: vi.fn() },
+      props: { title: 'Summary', task: 'summary', state: doneWithUsage, onretry: vi.fn() },
     })
     const footer = container.querySelector('.ai-usage-footer')
     expect(footer).not.toBeNull()
@@ -151,7 +153,7 @@ describe('AiPanel — token usage footer (opt-in: settings.showTokenCost)', () =
     setShowTokenCost(true)
     _resetSettingsStateForTest()
     const { container } = render(AiPanel, {
-      props: { title: 'Summary', state: { status: 'done' as const }, onretry: vi.fn() },
+      props: { title: 'Summary', task: 'summary', state: { status: 'done' as const }, onretry: vi.fn() },
     })
     expect(container.querySelector('.ai-usage-footer')).toBeNull()
   })
@@ -160,7 +162,7 @@ describe('AiPanel — token usage footer (opt-in: settings.showTokenCost)', () =
     setShowTokenCost(true)
     _resetSettingsStateForTest()
     const { container } = render(AiPanel, {
-      props: { title: 'Summary', state: { status: 'loading' as const, usage: doneWithUsage.usage }, onretry: vi.fn() },
+      props: { title: 'Summary', task: 'summary', state: { status: 'loading' as const, usage: doneWithUsage.usage }, onretry: vi.fn() },
     })
     expect(container.querySelector('.ai-usage-footer')).toBeNull()
   })

@@ -26,6 +26,8 @@
   import { classifyFile } from '../lib/diff/diffFile'
   import StorySlideshow from './StorySlideshow.svelte'
   import Skeleton from './Skeleton.svelte'
+  import AiProgress from './AiProgress.svelte'
+  import Spinner from './Spinner.svelte'
   import { matchStoryPath } from '../lib/ai/schemas'
   import type { StoryOrderResult, GraphResult } from '../lib/ai/schemas'
   import type { PanelStatus } from '../lib/ai/run.svelte'
@@ -55,6 +57,7 @@
     onstorymode = null,
     story = null,
     storyStatus = 'idle',
+    storyActivity = undefined,
     storyError = null,
     onRetryStory = null,
     diagrams = null,
@@ -114,6 +117,8 @@
     story?: StoryOrderResult | null
     /** Status of the story AI task (for skeleton / fallback decisions). */
     storyStatus?: PanelStatus
+    /** Deep-mode tool-activity lines for the story task (unified progress log). */
+    storyActivity?: string[]
     /** Humanized reason the story task failed (shown in the error note + retry). */
     storyError?: string | null
     /** Re-invokes just the story task (used by the Retry button on an errored story). */
@@ -529,7 +534,7 @@
       aria-busy={isRunning}
     >
       {#if isRunning}
-        <span class="run-spinner" aria-hidden="true"></span>Running…
+        <Spinner size="0.75em" />Running…
       {:else}
         Run my reviewers ({enabledSkillCount})
       {/if}
@@ -541,42 +546,42 @@
   <div class="skill-run-status-bar" role="status" aria-label="Reviewer run status">
     {#each skillReviews as entry (entry.skillId)}
       <span class="skill-run-entry">
-        <span class="skill-run-name">{entry.name}</span>
         {#if entry.state.status === 'loading'}
-          <span class="skill-status-chip chip-running" aria-label="Running">
-            <span class="chip-spinner" aria-hidden="true"></span>running
-          </span>
-          {#if entry.state.activity && entry.state.activity.length > 0}
-            <!-- Deep review: latest tool activity line from the agentic loop -->
-            <span class="skill-tool-activity" aria-live="polite">{entry.state.activity[entry.state.activity.length - 1]}</span>
-          {/if}
-        {:else if entry.state.status === 'done'}
-          {@const findingCount = (entry.state.value as { findings?: unknown[] } | undefined)?.findings?.filter((f: unknown) => {
-            const finding = f as { path?: string }
-            return prPathSet.has(finding.path ?? '')
-          }).length ?? 0}
-          {#if findingCount === 0}
-            <span class="skill-status-chip chip-done" aria-label="Done, no significant issues">
-              ✓ no significant issues
-            </span>
-          {:else}
-            <span class="skill-status-chip chip-done" aria-label="Done, {findingCount} finding{findingCount !== 1 ? 's' : ''}">
-              ✓ {findingCount} finding{findingCount !== 1 ? 's' : ''}
-            </span>
-          {/if}
-          {#if entry.state.toolCallsUsed !== undefined && entry.state.toolCallsUsed > 0}
-            <span class="skill-deep-note" title="Deep review: this reviewer verified suspicions with tools before flagging">
-              verified with {entry.state.toolCallsUsed} tool {entry.state.toolCallsUsed === 1 ? 'call' : 'calls'}
-            </span>
-          {/if}
-        {:else if entry.state.status === 'error'}
-          <span class="skill-status-chip chip-error" aria-label="Error, retry available">
-            ↻ error
+          <!-- Unified AI progress: "Running {name}…" + (deep) the activity log,
+               identical to the panels' loved treatment. No bespoke chip spinner. -->
+          <span class="skill-run-progress">
+            <AiProgress task="skill" name={entry.name} state={entry.state} skeleton={false} />
           </span>
         {:else}
-          <span class="skill-status-chip chip-queued" aria-label="Queued">
-            ⏳ queued
-          </span>
+          <span class="skill-run-name">{entry.name}</span>
+          {#if entry.state.status === 'done'}
+            {@const findingCount = (entry.state.value as { findings?: unknown[] } | undefined)?.findings?.filter((f: unknown) => {
+              const finding = f as { path?: string }
+              return prPathSet.has(finding.path ?? '')
+            }).length ?? 0}
+            {#if findingCount === 0}
+              <span class="skill-status-chip chip-done" aria-label="Done, no significant issues">
+                ✓ no significant issues
+              </span>
+            {:else}
+              <span class="skill-status-chip chip-done" aria-label="Done, {findingCount} finding{findingCount !== 1 ? 's' : ''}">
+                ✓ {findingCount} finding{findingCount !== 1 ? 's' : ''}
+              </span>
+            {/if}
+            {#if entry.state.toolCallsUsed !== undefined && entry.state.toolCallsUsed > 0}
+              <span class="skill-deep-note" title="Deep review: this reviewer verified suspicions with tools before flagging">
+                verified with {entry.state.toolCallsUsed} tool {entry.state.toolCallsUsed === 1 ? 'call' : 'calls'}
+              </span>
+            {/if}
+          {:else if entry.state.status === 'error'}
+            <span class="skill-status-chip chip-error" aria-label="Error, retry available">
+              ↻ error
+            </span>
+          {:else}
+            <span class="skill-status-chip chip-queued" aria-label="Queued">
+              ⏳ queued
+            </span>
+          {/if}
         {/if}
       </span>
     {/each}
@@ -598,10 +603,14 @@
 {#if files.length === 0}
   <p>This PR has no changed files.</p>
 {:else if showStory && storyPending && !storyHasUsableSteps}
-  <!-- Story task still running: crafted skeleton (reuse the shared component). -->
-  <div class="story-skeleton" aria-busy="true" aria-label="Building the walkthrough">
-    <Skeleton lines={3} />
-    <Skeleton lines={6} />
+  <!-- Story task still running: unified AI progress — status line ("Ordering the
+       walkthrough…") + (deep) activity log + content-shaped skeleton. -->
+  <div class="story-skeleton" aria-label="Building the walkthrough">
+    <AiProgress
+      task="story"
+      state={{ status: storyStatus, ...(storyActivity ? { activity: storyActivity } : {}) }}
+      skeletonLines={6}
+    />
   </div>
 {:else if showStory && story}
   <StorySlideshow
@@ -1068,21 +1077,6 @@
     opacity: 0.85;
   }
 
-  .run-spinner {
-    display: inline-block;
-    width: 0.75em;
-    height: 0.75em;
-    border: 2px solid var(--text-muted);
-    border-top-color: var(--text);
-    border-radius: 50%;
-    animation: run-spin 0.6s linear infinite;
-    flex-shrink: 0;
-  }
-
-  @keyframes run-spin {
-    to { transform: rotate(360deg); }
-  }
-
   /* ---- Per-reviewer run status bar ---- */
   .skill-run-status-bar {
     display: flex;
@@ -1097,6 +1091,12 @@
     display: flex;
     align-items: center;
     gap: 0.35rem;
+  }
+
+  /* A running reviewer renders the unified AiProgress block; keep it compact in
+     the status strip (no extra top/bottom padding from the block default). */
+  .skill-run-progress :global(.ai-progress) {
+    padding: 0;
   }
 
   .skill-run-name {
@@ -1115,16 +1115,6 @@
     letter-spacing: 0.02em;
   }
 
-  .skill-tool-activity {
-    font-size: 0.72rem;
-    font-family: var(--font-mono, monospace);
-    color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 18rem;
-  }
-
   .skill-deep-note {
     font-size: 0.72rem;
     color: var(--text-muted);
@@ -1134,12 +1124,6 @@
     background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
     color: var(--text-muted);
-  }
-
-  .chip-running {
-    background: var(--legend-changed-bg);
-    border: 1px solid var(--legend-changed-border);
-    color: var(--legend-changed-color);
   }
 
   .chip-done {
@@ -1153,16 +1137,6 @@
     border: 1px solid var(--legend-removed-border);
     color: var(--legend-removed-color);
     cursor: pointer;
-  }
-
-  .chip-spinner {
-    display: inline-block;
-    width: 0.65em;
-    height: 0.65em;
-    border: 1.5px solid currentColor;
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: run-spin 0.6s linear infinite;
   }
 
   /* ---- Skill persona summaries ---- */

@@ -53,7 +53,7 @@
   })
 </script>
 
-<AiPanel title="Test coverage (AI-inferred)" state={run.tests} skeletonVariant="cards" onretry={() => run.retry('tests')}>
+<AiPanel title="Test coverage (AI-inferred)" task="tests" state={run.tests} skeletonVariant="cards" onretry={() => run.retry('tests')}>
   {#if tests}
     {#if tests.covered.length > 0}
       <p class="tests-ai-inferred-note">AI-inferred — not measured coverage</p>

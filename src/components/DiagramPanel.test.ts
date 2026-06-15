@@ -103,10 +103,15 @@ describe('DiagramPanel — state rendering', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
-  it('loading state shows loading indicator', () => {
-    render(DiagramPanel, { props: { result: null, panelState: 'loading' } })
-    expect(screen.getByRole('status', { name: /loading diagrams/i })).toBeInTheDocument()
-    expect(screen.getByText(/loading diagrams/i)).toBeInTheDocument()
+  it('loading state shows the unified AI progress treatment (status line + skeleton)', () => {
+    const { container } = render(DiagramPanel, { props: { result: null, panelState: 'loading' } })
+    // Accessible region label preserved on the wrapper
+    expect(container.querySelector('[aria-label="Loading diagrams"]')).not.toBeNull()
+    // Unified honest status line from aiProgressLabel('diagrams')
+    expect(screen.getByText(/mapping the architecture…/i)).toBeInTheDocument()
+    // Content-shaped skeleton instead of a bare spinner
+    expect(container.querySelector('.skeleton-rect')).not.toBeNull()
+    expect(container.querySelector('.spinner')).toBeNull()
   })
 
   it('error state shows error message', () => {

@@ -106,10 +106,14 @@ describe('UnderstandStep glance card — verdict pill', () => {
     expect(container.querySelector('.verdict-level')?.textContent).toContain('minor-changes')
   })
 
-  it('shows loading pill while verdict is loading', () => {
+  it('shows the unified verdict status line while verdict is loading', () => {
     const run = makeRun({ verdict: { status: 'loading' } })
-    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
-    expect(screen.getByLabelText(/verdict loading/i)).toBeInTheDocument()
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    // Unified per-task status copy from aiProgressLabel('verdict') — appears in
+    // the compact glance pill (and, consistently, in the Verdict detail panel).
+    const pill = container.querySelector('.glance-loading-pill')
+    expect(pill).not.toBeNull()
+    expect(pill!.textContent).toMatch(/forming a verdict…/i)
   })
 })
 

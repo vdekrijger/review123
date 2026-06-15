@@ -11,7 +11,7 @@
   let { run }: Props = $props()
 </script>
 
-<AiPanel title="Diagrams" state={run.diagrams} skeletonVariant="block" onretry={() => run.retry('diagrams')}>
+<AiPanel title="Diagrams" task="diagrams" state={run.diagrams} skeletonVariant="block" onretry={() => run.retry('diagrams')}>
   {#if run.diagrams.status === 'done'}
     <DiagramPanel result={run.diagrams.value as GraphResult} panelState="idle" />
   {/if}
