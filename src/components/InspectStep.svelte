@@ -25,6 +25,7 @@
   import { listSkills } from '../lib/skills/skills'
   import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
   import { classifyFile } from '../lib/diff/diffFile'
+  import { isGeneratedFile, sortGeneratedLast } from '../lib/diff/generated'
   import StorySlideshow from './StorySlideshow.svelte'
   import Skeleton from './Skeleton.svelte'
   import AiProgress from './AiProgress.svelte'
@@ -185,16 +186,29 @@
     }
   }
 
-  // File ordering per readingOrder (EC-12e)
+  // Generated-file predicate (path + loaded contents). Reused for ordering and
+  // for the per-file `generated` chip / focus-mode dimming inside FileDiff.
+  function fileIsGenerated(f: PrFile): boolean {
+    return isGeneratedFile(f.filename, contentsMap?.get(f.filename))
+  }
+
+  // File ordering per readingOrder (EC-12e), then generated files sunk last.
+  // The generated sink is a STABLE post-pass: it preserves the reading-order /
+  // file order WITHIN the generated and non-generated groups.
   const orderedFiles = $derived.by(() => {
-    if (!readingOrder.length) return files
-    const fileSet = new Set(files.map(f => f.filename))
-    // Only use readingOrder entries that exist in files
-    const validOrder = readingOrder.filter(p => fileSet.has(p))
-    const orderedPaths = new Set(validOrder)
-    const listedFiles = validOrder.map(p => files.find(f => f.filename === p)!).filter(Boolean)
-    const unlistedFiles = files.filter(f => !orderedPaths.has(f.filename))
-    return [...listedFiles, ...unlistedFiles]
+    let base: PrFile[]
+    if (!readingOrder.length) {
+      base = files
+    } else {
+      const fileSet = new Set(files.map(f => f.filename))
+      // Only use readingOrder entries that exist in files
+      const validOrder = readingOrder.filter(p => fileSet.has(p))
+      const orderedPaths = new Set(validOrder)
+      const listedFiles = validOrder.map(p => files.find(f => f.filename === p)!).filter(Boolean)
+      const unlistedFiles = files.filter(f => !orderedPaths.has(f.filename))
+      base = [...listedFiles, ...unlistedFiles]
+    }
+    return sortGeneratedLast(base, fileIsGenerated)
   })
 
   // Hotspot and testFlag lookups (unknown paths ignored — EC-13c)

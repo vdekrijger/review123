@@ -29,7 +29,7 @@
   import type { ReplyOutcome } from '../lib/provider/types'
   import type { AskFocus } from '../lib/ai/run.svelte'
   import type { StoryStep, StoryOrderResult, GraphResult } from '../lib/ai/schemas'
-  import { STORY_LAYERS, matchStoryPath, dedupeStorySteps } from '../lib/ai/schemas'
+  import { STORY_LAYERS, matchStoryPath, dedupeStorySteps, sinkGeneratedSteps } from '../lib/ai/schemas'
   import type { WhitespaceDisplay } from '../lib/diff/whitespace'
   import { slugify } from '../lib/slug'
   import { track } from '../lib/analytics/analytics'
@@ -94,8 +94,9 @@
       mapped.push({ ...s, files: stepFiles, relatedTests, index: mapped.length })
     }
     // De-duplicate against the resolved PR filenames so the same file can't be
-    // shown twice (keeps it in its first step; strips relatedTests that collide).
-    return dedupeStorySteps({ steps: mapped }).steps
+    // shown twice (keeps it in its first step; strips relatedTests that collide),
+    // then sink generated-file steps to the end (lowest reading priority).
+    return sinkGeneratedSteps(dedupeStorySteps({ steps: mapped })).steps
   })
 
   let current = $state(0)

@@ -50,7 +50,7 @@ import {
   type AskFocus,
 } from './tasks'
 export type { AskFocus }
-import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, STORY_MAX_STEPS } from './schemas'
+import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, sinkGeneratedSteps, STORY_MAX_STEPS } from './schemas'
 import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, SkillReviewResult } from './schemas'
 import type { Draft } from '../drafts/drafts.svelte'
 import type { CoachCodeContext } from './coachContext'
@@ -611,7 +611,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   function shapeStoryOrder(x: unknown): StoryOrderResult | null {
     const validated = validateStoryOrder(x) ?? salvageStoryOrder(x)
     if (validated === null) return null
-    const deduped = dedupeStorySteps(validated)
+    // Dedupe → sink generated-file steps to the end (lowest reading priority).
+    const deduped = sinkGeneratedSteps(dedupeStorySteps(validated))
     if (deduped.steps.length === 0) return null
     const capped = deduped.steps.length > STORY_MAX_STEPS
       ? { steps: deduped.steps.slice(0, STORY_MAX_STEPS).map((s, i) => ({ ...s, index: i })) }

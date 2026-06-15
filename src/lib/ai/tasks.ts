@@ -841,6 +841,9 @@ Ordering rule (the sequence is the whole point):
   primitive precedes its first consumer; a migration precedes the API that reads the new column).
 - Group a layer's steps together; within a layer, most load-bearing first.
 - index must be the 0-based position in the FINAL order (steps[0].index = 0, steps[1].index = 1, …).
+- GENERATED files (lockfiles, *.min.*, *.map, protobuf/*.pb.* stubs, *.generated.*, snapshot \
+  *.snap files, anything under a generated/ dir) are the LOWEST priority: place any step covering \
+  them LAST, after the narrative. Never open the story with generated output.
 
 Field rules:
 - files: one or more file paths that THIS step covers. Group files into a single step ONLY when they \

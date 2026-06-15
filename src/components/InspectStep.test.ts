@@ -47,6 +47,27 @@ describe('InspectStep ordering (EC-12e)', () => {
     const articles = document.querySelectorAll('article.file-diff')
     expect(articles).toHaveLength(1)
   })
+
+  it('sinks generated files to the END of the file list', () => {
+    // pnpm-lock.yaml is generated → must render LAST even though it leads the input.
+    const files = makeFiles(['pnpm-lock.yaml', 'a.ts', 'b.ts'])
+    render(InspectStep, { props: { files, changedFiles: 3, mode: 'unified', onmode: () => {}, draftStore: null, readingOrder: [] } })
+    const articles = document.querySelectorAll('article.file-diff')
+    expect(articles[0].closest('[id]')?.id).toBe('file-a-ts')
+    expect(articles[1].closest('[id]')?.id).toBe('file-b-ts')
+    expect(articles[2].closest('[id]')?.id).toBe('file-pnpm-lock-yaml')
+  })
+
+  it('keeps generated files last even after readingOrder is applied (stable)', () => {
+    // readingOrder lists the generated file first; the generated sink overrides it.
+    const files = makeFiles(['app.min.js', 'a.ts', 'b.ts'])
+    render(InspectStep, { props: { files, changedFiles: 3, mode: 'unified', onmode: () => {}, draftStore: null, readingOrder: ['app.min.js', 'b.ts', 'a.ts'] } })
+    const articles = document.querySelectorAll('article.file-diff')
+    // non-generated keep readingOrder (b before a); generated sinks last
+    expect(articles[0].closest('[id]')?.id).toBe('file-b-ts')
+    expect(articles[1].closest('[id]')?.id).toBe('file-a-ts')
+    expect(articles[2].closest('[id]')?.id).toBe('file-app-min-js')
+  })
 })
 
 describe('InspectStep hotspot badge and test flag (EC-13c, EC-13d)', () => {
