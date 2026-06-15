@@ -1592,4 +1592,19 @@ describe('totalUsage — per-review accumulation', () => {
       total_tokens: 15 * 6,
     })
   })
+
+  it('skill-review usage contributes to the per-PR total (#90 says core tasks + any skill reviews)', async () => {
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'focus on security')
+
+    const deps = makeDeps()
+    const run = createAiRun(makeInput(), deps)
+    // Only the skill review runs here — its WithUsage stub reports 15 tokens.
+    await run.runSkillReviews()
+
+    expect(run.skillReviews[0].state.status).toBe('done')
+    expect(run.skillReviews[0].state.usage).toEqual({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 })
+    // The per-PR total reflects the skill review's usage.
+    expect(run.totalUsage).toEqual({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 })
+  })
 })

@@ -3,7 +3,10 @@ import { render, screen } from '@testing-library/svelte'
 import InspectStep from './InspectStep.svelte'
 import type { AttentionResult } from '../lib/ai/schemas'
 import type { PrFile } from '../lib/github/types'
+import type { SkillReviewEntry } from '../lib/ai/run.svelte'
 import { createViewedStore } from '../lib/viewed/viewed.svelte'
+import { setShowTokenCost, setAiProvider, setAiModel } from '../lib/settings/settings'
+import { _resetSettingsStateForTest } from '../lib/settings/settingsState.svelte'
 
 // Minimal canvas stub so FileDiff doesn't throw in jsdom
 Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
@@ -148,6 +151,73 @@ describe('InspectStep — toolbar btn classes', () => {
 // ---------------------------------------------------------------------------
 // InspectStep — sticky drawer structural styles (task 5, item 3)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// InspectStep — skill-reviewer token-usage footer (opt-in: settings.showTokenCost)
+// Mirrors the AiPanel footer: shows alongside the finding chip / deep note on a
+// DONE skill-reviewer card, only when the toggle is on and usage was captured.
+// ---------------------------------------------------------------------------
+
+describe('InspectStep — skill-reviewer token-usage footer', () => {
+  const USAGE = { prompt_tokens: 8000, completion_tokens: 200, total_tokens: 8200 }
+
+  const doneEntry = (overrides: Partial<SkillReviewEntry['state']> = {}): SkillReviewEntry => ({
+    skillId: 'reviewer-1',
+    name: 'My Reviewer',
+    state: { status: 'done', value: { skillName: 'My Reviewer', findings: [] }, ...overrides },
+  })
+
+  beforeEach(() => {
+    _resetSettingsStateForTest()
+  })
+
+  it('renders NOTHING when showTokenCost is off (default)', () => {
+    const files = makeFiles(['a.ts'])
+    const { container } = render(InspectStep, {
+      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [doneEntry({ usage: USAGE })] },
+    })
+    expect(container.querySelector('.skill-usage-footer')).toBeNull()
+  })
+
+  it('renders tokens + $ when on and the active model has pricing', () => {
+    setShowTokenCost(true)
+    setAiProvider('anthropic')
+    setAiModel('claude-sonnet-4-6')
+    _resetSettingsStateForTest()
+    const files = makeFiles(['a.ts'])
+    const { container } = render(InspectStep, {
+      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [doneEntry({ usage: USAGE })] },
+    })
+    const footer = container.querySelector('.skill-usage-footer')
+    expect(footer).not.toBeNull()
+    expect(footer!.textContent).toContain('8.2k tokens')
+    expect(footer!.textContent).toContain('$0.03')
+  })
+
+  it('renders NOTHING when usage is absent (never fabricated)', () => {
+    setShowTokenCost(true)
+    _resetSettingsStateForTest()
+    const files = makeFiles(['a.ts'])
+    const { container } = render(InspectStep, {
+      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [doneEntry()] },
+    })
+    expect(container.querySelector('.skill-usage-footer')).toBeNull()
+  })
+
+  it('does NOT show the footer for non-done states even with usage', () => {
+    setShowTokenCost(true)
+    _resetSettingsStateForTest()
+    const files = makeFiles(['a.ts'])
+    const loading: SkillReviewEntry = {
+      skillId: 'reviewer-1', name: 'My Reviewer',
+      state: { status: 'loading', usage: USAGE },
+    }
+    const { container } = render(InspectStep, {
+      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [loading] },
+    })
+    expect(container.querySelector('.skill-usage-footer')).toBeNull()
+  })
+})
 
 describe('InspectStep — sticky drawer structure', () => {
   it('file-tree-drawer has data-open attribute (CSS keys the inline width off it)', () => {
