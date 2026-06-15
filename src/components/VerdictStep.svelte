@@ -35,8 +35,8 @@
   import type { ReviewProvider } from '../lib/provider/types'
   import type { LlmUsage } from '../lib/llm/llm'
   import { settingsState } from '../lib/settings/settingsState.svelte'
-  import { formatUsageLabel, formatModelUsageLabel } from '../lib/ai/tokenCost'
-  import { formatGeneratorImpact, formatVerifierImpact } from '../lib/ai/modelImpact'
+  import { formatUsageLabel } from '../lib/ai/tokenCost'
+  import ModelBreakdownTable from './ModelBreakdownTable.svelte'
   import type { VerdictModelBreakdown } from '../lib/ai/run.svelte'
   import { buildReviewPrompt } from '../lib/ai/reviewPrompt'
   import type { PrFile } from '../lib/github/types'
@@ -572,44 +572,9 @@
 
     <!-- Plan N: per-model cost + impact for the cross-verify ensemble. Shows
          whenever cross-verify ran this review; the $/token column is gated on
-         showTokenCost, the impact readout is always shown. -->
-    {#if verdictModels.length > 0}
-      <section class="model-breakdown" aria-label="Ensemble models">
-        <h3>Models used</h3>
-        <table class="model-table">
-          <thead>
-            <tr>
-              <th scope="col">Model</th>
-              <th scope="col">Role</th>
-              <th scope="col">Impact</th>
-              {#if showModelCost}<th scope="col" class="cost-col">Cost</th>{/if}
-            </tr>
-          </thead>
-          <tbody>
-            {#each verdictModels as m (m.providerId + ':' + m.modelId + ':' + m.role)}
-              <tr>
-                <td class="model-id">{m.modelId}</td>
-                <td class="model-role">{m.role}</td>
-                <td class="model-impact">
-                  {#if m.role === 'generator'}
-                    {formatGeneratorImpact(m.surfaced ?? 0)}
-                  {:else if m.impact}
-                    {formatVerifierImpact(m.impact)}
-                  {:else}
-                    —
-                  {/if}
-                </td>
-                {#if showModelCost}
-                  <td class="model-cost cost-col">
-                    {formatModelUsageLabel(m.providerId, m.modelId, m.usage) ?? '—'}
-                  </td>
-                {/if}
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </section>
-    {/if}
+         showTokenCost, the impact readout is always shown. Shared table (also
+         used on skill-reviewer cards). -->
+    <ModelBreakdownTable models={verdictModels} showCost={showModelCost} title="Models used" />
 
     <!-- Verdict radio group -->
     <fieldset class="verdict-group">
@@ -979,58 +944,6 @@
     font-size: 0.72rem;
     font-variant-numeric: tabular-nums;
     opacity: 0.5;
-  }
-
-  /* Plan N — per-model cost + impact table (step 3) */
-  .model-breakdown {
-    margin: 1rem 0;
-    padding: 0.75rem 0.85rem;
-    background: var(--surface-raised);
-    border: 1px solid var(--hairline);
-    border-radius: 8px;
-  }
-  .model-breakdown h3 {
-    margin: 0 0 0.5rem;
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-muted);
-  }
-  .model-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.8rem;
-  }
-  .model-table th {
-    text-align: left;
-    font-weight: 600;
-    color: var(--text-muted);
-    padding: 0.2rem 0.5rem 0.35rem 0;
-    border-bottom: 1px solid var(--hairline);
-  }
-  .model-table td {
-    padding: 0.3rem 0.5rem 0.3rem 0;
-    color: var(--text);
-    vertical-align: top;
-  }
-  .model-id {
-    font-family: var(--font-mono);
-    font-size: 0.76rem;
-  }
-  .model-role {
-    color: var(--text-muted);
-    text-transform: capitalize;
-  }
-  .model-impact {
-    color: var(--text);
-  }
-  .cost-col {
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-  .model-cost {
-    color: var(--text-muted);
   }
 
   .coach-card {

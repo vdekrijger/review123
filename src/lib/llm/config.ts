@@ -84,10 +84,12 @@ export function activeLlmConfig(): ActiveLlmConfig {
 export const MAX_VERIFIER_PROVIDERS = 3
 
 /**
- * Cap on TOTAL ensemble participants (generator + verifiers) — bounds cost.
+ * Cap on TOTAL ensemble participants (generator + verifiers) — a loose upper
+ * bound, not a cost governor. The real governor is the per-model cost+impact
+ * data the user watches as the panel grows; this just keeps the UI bounded.
  * Generator counts as 1, so verifiers are capped at MAX_ENSEMBLE_PARTICIPANTS-1.
  */
-export const MAX_ENSEMBLE_PARTICIPANTS = 4
+export const MAX_ENSEMBLE_PARTICIPANTS = 8
 
 /** A resolved ensemble participant: provider def + model def + its key. */
 export interface ResolvedParticipant {

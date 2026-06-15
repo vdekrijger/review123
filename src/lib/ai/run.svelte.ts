@@ -113,6 +113,13 @@ export interface PanelState<T> {
    * usage capture (footer then shows nothing for that task — never fabricated).
    */
   usage?: LlmUsage
+  /**
+   * Per-model cost + impact breakdown (Plan N) — populated for SKILL reviews
+   * whose cross-verify pass ran with an ensemble of >1 model. Generator row
+   * first, then one row per responding verifier. Empty/absent for single-model
+   * runs (the plain aggregate usage footer is shown instead). Display-only.
+   */
+  models?: VerdictModelBreakdown[]
 }
 
 // ---------------------------------------------------------------------------
@@ -1601,7 +1608,13 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // Cross-model verification (Plan M): adversarially judge each finding with
       // the user's OTHER providers. Short-circuit (byte-identical) when not
       // effective — no array build, no verifier call.
+      // Per-model cost+impact breakdown (Plan N) — populated only when an
+      // ensemble of >1 model actually verified this reviewer's findings.
+      let skillModels: VerdictModelBreakdown[] | undefined
       if (crossModelVerifyEffective()) {
+      // Generator usage captured BEFORE folding in verifier usage so the
+      // per-model cost attributes generation tokens to the generator model.
+      const generatorUsage = skillUsage
       const verifyOutcome = await verifyFindingSet(
         skillResult.findings.map((f) => ({
           id: `${f.path}:${f.line}:${djb2(f.body)}`,
@@ -1618,14 +1631,29 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         },
       )
       if (verifyOutcome.byId.size > 0) {
+        let surfacedCount = 0
         skillResult = {
           ...skillResult,
           findings: skillResult.findings.map((f) => {
             const v = verifyOutcome.byId.get(`${f.path}:${f.line}:${djb2(f.body)}`)
+            if (v?.surfaced) surfacedCount += 1
             return v ? { ...f, verification: v } : f
           }),
         }
         skillUsage = addUsage(skillUsage, verifyOutcome.usage)
+
+        // Build the per-model cost + impact breakdown — only meaningful when an
+        // ensemble of >1 model ran (a verifier responded). Reuses the SAME
+        // buildVerdictModels() the verdict step uses, so the table layout and the
+        // crossVerify per-model data are shared, not duplicated.
+        if (verifyOutcome.verifierImpact.length > 0) {
+          skillModels = buildVerdictModels(
+            generatorUsage,
+            surfacedCount,
+            verifyOutcome.perModelUsage,
+            verifyOutcome.verifierImpact,
+          )
+        }
       }
       }
 
@@ -1643,6 +1671,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           value: skillResult,
           ...(toolCallsUsed !== undefined ? { toolCallsUsed } : {}),
           ...(skillUsage ? { usage: skillUsage } : {}),
+          ...(skillModels ? { models: skillModels } : {}),
           ...(deep.note ? { note: deep.note } : {}),
         },
       }

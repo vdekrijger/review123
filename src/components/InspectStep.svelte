@@ -2,6 +2,7 @@
   import FileDiff from './FileDiff.svelte'
   import type { SkillFinding } from './FileDiff.svelte'
   import SkillFindingCard from './SkillFindingCard.svelte'
+  import ModelBreakdownTable from './ModelBreakdownTable.svelte'
   import FileTree from './FileTree.svelte'
   import type { PrFile } from '../lib/github/types'
   import type { DiffMode } from '../lib/settings/settings'
@@ -903,6 +904,32 @@
       {/each}
     </div>
   {/if}
+
+  <!-- Plan N: per-model cost + impact per reviewer, shown ONLY when that
+       reviewer's cross-verify ran with an ensemble of >1 model. Single-model
+       reviewers keep their plain aggregate token footer above (byte-identical).
+       Collapsible to stay tidy when several reviewers each list many models;
+       reuses the SAME ModelBreakdownTable the verdict step uses. -->
+  {@const ensembleEntries = settledEntries.filter(
+    (e) => (e.state.models?.length ?? 0) > 1
+  )}
+  {#if ensembleEntries.length > 0}
+    <div class="skill-model-breakdowns" aria-label="Reviewer ensemble breakdown">
+      {#each ensembleEntries as entry (entry.skillId)}
+        <details class="skill-model-details" data-skill-models={entry.skillId}>
+          <summary class="skill-model-summary">
+            {entry.name} — {entry.state.models!.length} models
+          </summary>
+          <ModelBreakdownTable
+            models={entry.state.models ?? []}
+            showCost={settingsState.current.showTokenCost}
+            title="{entry.name} — models used"
+            compact
+          />
+        </details>
+      {/each}
+    </div>
+  {/if}
 {/if}
 
 {#if skillPersonaSummaries.length > 0}
@@ -1638,6 +1665,23 @@
     font-variant-numeric: tabular-nums;
     color: var(--text-muted);
     opacity: 0.7;
+  }
+
+  /* Plan N — per-reviewer ensemble cost+impact breakdown (collapsible). */
+  .skill-model-breakdowns {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin: 0.3rem 0 0.6rem;
+  }
+  .skill-model-summary {
+    cursor: pointer;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    list-style-position: inside;
+  }
+  .skill-model-summary:hover {
+    color: var(--text);
   }
 
   .chip-queued {

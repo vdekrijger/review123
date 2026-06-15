@@ -241,6 +241,101 @@ describe('InspectStep — skill-reviewer token-usage footer', () => {
 })
 
 // ---------------------------------------------------------------------------
+// InspectStep — per-model cost + impact breakdown on skill-reviewer cards (Plan N)
+// When a reviewer's cross-verify ran with an ensemble of >1 model, render a
+// compact per-model table (model · impact, cost gated on showTokenCost) reusing
+// the verdict step's ModelBreakdownTable. A single-model reviewer keeps ONLY the
+// plain aggregate token footer.
+// ---------------------------------------------------------------------------
+
+describe('InspectStep — per-model skill breakdown (Plan N)', () => {
+  const USAGE = { prompt_tokens: 8000, completion_tokens: 200, total_tokens: 8200 }
+
+  const ensembleModels = [
+    {
+      providerId: 'anthropic',
+      modelId: 'claude-opus-4-8',
+      role: 'generator' as const,
+      usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 },
+      surfaced: 3,
+    },
+    {
+      providerId: 'anthropic',
+      modelId: 'claude-haiku-4-5',
+      role: 'verifier' as const,
+      usage: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 },
+      impact: { confirms: 1, refutes: 1, uncertains: 0, decisive: 1 },
+    },
+  ]
+
+  const ensembleEntry = (): SkillReviewEntry => ({
+    skillId: 'reviewer-1',
+    name: 'My Reviewer',
+    state: { status: 'done', value: { skillName: 'My Reviewer', findings: [] }, usage: USAGE, models: ensembleModels },
+  })
+
+  const singleEntry = (): SkillReviewEntry => ({
+    skillId: 'reviewer-2',
+    name: 'Solo Reviewer',
+    state: { status: 'done', value: { skillName: 'Solo Reviewer', findings: [] }, usage: USAGE },
+  })
+
+  beforeEach(() => {
+    _resetSettingsStateForTest()
+  })
+
+  it('renders the per-model table when the ensemble has >1 model', async () => {
+    const files = makeFiles(['a.ts'])
+    const { container } = render(InspectStep, {
+      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [ensembleEntry()] },
+    })
+    // Collapsible summary present
+    expect(container.querySelector('[data-skill-models="reviewer-1"]')).not.toBeNull()
+    expect(screen.getByText(/My Reviewer — 2 models/)).toBeInTheDocument()
+    // Generator + verifier impact readout (always shown, not gated on cost)
+    expect(screen.getByText('3 surfaced findings')).toBeInTheDocument()
+    expect(screen.getByText(/1 decisive refute \(removed a finding\)/)).toBeInTheDocument()
+    // Model ids rendered
+    expect(screen.getByText('claude-opus-4-8')).toBeInTheDocument()
+    expect(screen.getByText('claude-haiku-4-5')).toBeInTheDocument()
+  })
+
+  it('gates the cost column on showTokenCost', () => {
+    const files = makeFiles(['a.ts'])
+    // Off → no cost column
+    const off = render(InspectStep, {
+      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [ensembleEntry()] },
+    })
+    expect(off.container.querySelector('.skill-model-breakdowns .cost-col')).toBeNull()
+    off.unmount()
+
+    setShowTokenCost(true)
+    _resetSettingsStateForTest()
+    const on = render(InspectStep, {
+      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [ensembleEntry()] },
+    })
+    expect(on.container.querySelector('.skill-model-breakdowns .cost-col')).not.toBeNull()
+  })
+
+  it('shows ONLY the plain aggregate footer for a single-model reviewer (no per-model table)', () => {
+    setShowTokenCost(true)
+    setAiProvider('anthropic')
+    setAiModel('claude-sonnet-4-6')
+    _resetSettingsStateForTest()
+    const files = makeFiles(['a.ts'])
+    const { container } = render(InspectStep, {
+      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [singleEntry()] },
+    })
+    // Plain aggregate footer present, byte-identical behaviour
+    const footer = container.querySelector('.skill-usage-footer')
+    expect(footer).not.toBeNull()
+    expect(footer!.textContent).toContain('8.2k tokens')
+    // No per-model breakdown block
+    expect(container.querySelector('.skill-model-breakdowns')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // InspectStep — reviewer chip → finding navigation (jump / popover)
 // Clicking a reviewer's done result chip (or its suggestion summary chip):
 //   • 1 finding  → jumps straight to it (jumpToFinding with path/key)

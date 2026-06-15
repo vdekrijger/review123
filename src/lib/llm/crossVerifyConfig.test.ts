@@ -157,17 +157,18 @@ describe('resolveEnsemble — Plan N configurable ensemble', () => {
 
   it('caps total participants at MAX_ENSEMBLE_PARTICIPANTS (generator + verifiers)', () => {
     setAnthropicKey('a')
+    // Ten verifiers requested (single-key, same provider) — generator + 9 = 11
+    // participants, well over the cap. resolveEnsemble drops the overflow.
     setAiEnsemble({
       generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [
-        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
-        { provider: 'anthropic', model: 'claude-haiku-4-5' },
-        { provider: 'anthropic', model: 'claude-fable-5' },
-        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
-      ],
+      verifiers: Array.from({ length: 10 }, () => ({
+        provider: 'anthropic' as const,
+        model: 'claude-sonnet-4-6',
+      })),
     })
     const { generator, verifiers } = resolveEnsemble()
     expect(1 + verifiers.length).toBe(MAX_ENSEMBLE_PARTICIPANTS)
+    expect(MAX_ENSEMBLE_PARTICIPANTS).toBe(8)
     expect(generator).not.toBeNull()
   })
 })
