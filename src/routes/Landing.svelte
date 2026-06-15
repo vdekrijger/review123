@@ -8,6 +8,7 @@
   import { isSectionCollapsed, setSectionCollapsed, type LandingSectionId } from '../lib/landing/collapse'
   import { groupByRepo } from '../lib/landing/groupQueue'
   import { getCachedSizes, fetchMissingSizes, sizeKey, type DiffSize } from '../lib/landing/queueSizes'
+  import { listDraftSummaries, clearDraftsForPr, type DraftSummary } from '../lib/drafts/drafts.svelte'
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import { track } from '../lib/analytics/analytics'
   import ProviderIcon from '../components/ProviderIcon.svelte'
@@ -31,15 +32,119 @@
   // Collapsible sections — per-browser UI state, persisted in localStorage
   let queueCollapsed = $state(isSectionCollapsed('queue'))
   let recentCollapsed = $state(isSectionCollapsed('recent'))
+  let inflightCollapsed = $state(isSectionCollapsed('inflight'))
 
   function toggleSection(id: LandingSectionId) {
-    const collapsed = id === 'queue' ? !queueCollapsed : !recentCollapsed
+    const current =
+      id === 'queue' ? queueCollapsed : id === 'recent' ? recentCollapsed : inflightCollapsed
+    const collapsed = !current
     if (id === 'queue') queueCollapsed = collapsed
-    else recentCollapsed = collapsed
+    else if (id === 'recent') recentCollapsed = collapsed
+    else inflightCollapsed = collapsed
     setSectionCollapsed(id, collapsed)
     // Fire only on collapsed → expanded; ids only — never content.
     if (!collapsed) track('section_expanded', { section: id, surface: 'landing' })
   }
+
+  // ---- In-flight reviews (unsubmitted drafts) ----------------------------
+  // One row per PR IDENTITY (provider+owner+repo+number). A PR with drafts
+  // under several head-SHAs collapses to a single row with the SUMMED count;
+  // we keep every prKey so discard can reclaim all sha variants.
+  interface InflightRow {
+    /** Stable identity key: provider:owner/repo#number (sha-independent). */
+    id: string
+    provider: 'github' | 'gitlab' | 'bitbucket'
+    owner: string
+    repo: string
+    number: number
+    /** Every prKey (sha variant) contributing to this row. */
+    prKeys: string[]
+    draftCount: number
+    lastUpdatedAt: number
+    /** Title from history when known, else null (falls back to the ref). */
+    title: string | null
+    /** True when drafts live under more than one head-SHA. */
+    multipleShas: boolean
+    /** Internal: distinct head-SHAs seen, to derive multipleShas. */
+    _shas: Set<string>
+  }
+
+  let inflightRows = $state<InflightRow[]>([])
+
+  function groupInflight(summaries: DraftSummary[], hist: HistoryEntry[]): InflightRow[] {
+    const byIdentity = new Map<string, InflightRow>()
+    for (const s of summaries) {
+      const provider = (s.provider === 'gitlab' || s.provider === 'bitbucket' ? s.provider : 'github') as
+        | 'github'
+        | 'gitlab'
+        | 'bitbucket'
+      const id = `${provider}:${s.owner}/${s.repo}#${s.number}`
+      const existing = byIdentity.get(id)
+      if (existing) {
+        existing.prKeys.push(s.prKey)
+        existing.draftCount += s.draftCount
+        if (s.lastUpdatedAt > existing.lastUpdatedAt) existing.lastUpdatedAt = s.lastUpdatedAt
+        if (s.headSha && !existing._shas.has(s.headSha)) existing._shas.add(s.headSha)
+        existing.multipleShas = existing._shas.size > 1
+      } else {
+        const title =
+          hist.find((h) => (h.provider ?? 'github') === provider && h.owner === s.owner && h.repo === s.repo && h.number === s.number)?.title ?? null
+        byIdentity.set(id, {
+          id,
+          provider,
+          owner: s.owner,
+          repo: s.repo,
+          number: s.number,
+          prKeys: [s.prKey],
+          draftCount: s.draftCount,
+          lastUpdatedAt: s.lastUpdatedAt,
+          title,
+          multipleShas: false,
+          _shas: new Set(s.headSha ? [s.headSha] : []),
+        })
+      }
+    }
+    // Most-recently-edited first.
+    return [...byIdentity.values()].sort((a, b) => b.lastUpdatedAt - a.lastUpdatedAt)
+  }
+
+  async function loadInflight() {
+    const summaries = await listDraftSummaries()
+    inflightRows = groupInflight(summaries, history)
+  }
+
+  function resumeInflight(row: InflightRow) {
+    // Navigate to the inspect step, where line comments live. The review flow
+    // re-keys drafts to the current head-SHA and the since-last-visit interdiff
+    // already scopes the view — we just navigate.
+    navigate(`/review/${row.provider}/${row.owner}/${row.repo}/${row.number}/inspect`)
+  }
+
+  // Discard-with-confirm: a themed <dialog> (mirrors ConsentDialog) guards the
+  // destructive clear of unsubmitted comments.
+  let pendingDiscard = $state<InflightRow | null>(null)
+
+  function requestDiscard(row: InflightRow) {
+    pendingDiscard = row
+  }
+
+  function cancelDiscard() {
+    pendingDiscard = null
+  }
+
+  async function confirmDiscard() {
+    const row = pendingDiscard
+    pendingDiscard = null
+    if (!row) return
+    // Clear every sha variant of this PR, then drop the row reactively.
+    await Promise.all(row.prKeys.map((k) => clearDraftsForPr(k)))
+    inflightRows = inflightRows.filter((r) => r.id !== row.id)
+  }
+
+  // Load on mount (and so the section appears/hides as drafts change).
+  $effect(() => {
+    void loadInflight()
+  })
 
   // Queue state
   let queueLoading = $state(true) // fetch in flight with nothing to show — skeletons
@@ -264,6 +369,68 @@
     </div>
   {/if}
 
+  <!-- In-flight reviews: PRs with UNSUBMITTED draft comments. Surfaced ABOVE
+       Recent reviews (unfinished work ranks higher) and hidden entirely when
+       there are no drafts. Grouped by PR identity so multiple head-SHA variants
+       collapse to a single discardable row. -->
+  {#if inflightRows.length > 0}
+    <div class="inflight-section" data-testid="inflight-section">
+      <div class="inflight-header">
+        <h2 class="section-title">
+          <button
+            type="button"
+            class="section-toggle"
+            onclick={() => toggleSection('inflight')}
+            aria-expanded={!inflightCollapsed}
+            aria-controls="landing-inflight-body"
+          >
+            <span class="section-chevron" class:expanded={!inflightCollapsed} aria-hidden="true"></span>
+            In-flight reviews
+          </button>
+        </h2>
+      </div>
+      {#if !inflightCollapsed}
+      <ul class="inflight-list" id="landing-inflight-body">
+        {#each inflightRows as row (row.id)}
+          <li class="inflight-item">
+            <button
+              type="button"
+              class="inflight-link"
+              onclick={() => resumeInflight(row)}
+              aria-label="Resume review of {row.owner}/{row.repo}#{row.number} on {PROVIDER_NAMES[row.provider]}"
+            >
+              <span class="recent-icon">
+                <ProviderIcon provider={row.provider} size={14} label={PROVIDER_NAMES[row.provider]} />
+              </span>
+              <span class="recent-ref">{row.owner}/{row.repo}#{row.number}</span>
+              {#if row.title}
+                <span class="recent-sep"> — </span>
+                <span class="recent-title-text">{row.title}</span>
+              {:else}
+                <span class="recent-title-text"></span>
+              {/if}
+              <span class="inflight-count" data-testid="inflight-count">
+                {row.draftCount} comment{row.draftCount === 1 ? '' : 's'} drafted
+              </span>
+              {#if row.multipleShas}
+                <span class="inflight-hint" title="Some drafts were made on an earlier commit">from an earlier commit</span>
+              {/if}
+              <span class="inflight-time">{relativeTime(new Date(row.lastUpdatedAt).toISOString())}</span>
+            </button>
+            <button
+              type="button"
+              class="inflight-discard"
+              onclick={() => requestDiscard(row)}
+              aria-label="Discard drafts for {row.owner}/{row.repo}#{row.number}"
+              title="Discard drafts"
+            >✕</button>
+          </li>
+        {/each}
+      </ul>
+      {/if}
+    </div>
+  {/if}
+
   {#if history.length > 0}
     <div class="recent-reviews">
       <div class="recent-header">
@@ -311,6 +478,27 @@
     </div>
   {/if}
 </section>
+
+{#if pendingDiscard}
+  <dialog
+    class="discard-dialog"
+    aria-label="Discard drafts"
+    aria-modal="true"
+    open
+    oncancel={(e) => { e.preventDefault(); cancelDiscard() }}
+    onclick={(e) => { if (e.target === e.currentTarget) cancelDiscard() }}
+  >
+    <h2>Discard unsubmitted comments?</h2>
+    <p>
+      Discard {pendingDiscard.draftCount} unsubmitted comment{pendingDiscard.draftCount === 1 ? '' : 's'}
+      on {pendingDiscard.owner}/{pendingDiscard.repo}#{pendingDiscard.number}? This can't be undone.
+    </p>
+    <div class="discard-actions">
+      <button type="button" class="discard-confirm" onclick={confirmDiscard}>Discard</button>
+      <button type="button" class="discard-cancel" onclick={cancelDiscard}>Cancel</button>
+    </div>
+  </dialog>
+{/if}
 
 <style>
   .landing {
@@ -677,5 +865,131 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     flex: 1; /* pushes the diff-size chip to the row's right edge */
+  }
+
+  /* In-flight reviews — same card register as queue/recent sections */
+  .inflight-section {
+    margin-top: 2.5rem;
+    text-align: left;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+  }
+
+  .inflight-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+  }
+
+  .inflight-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .inflight-item {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .inflight-link {
+    display: flex;
+    align-items: baseline;
+    gap: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 0.9rem;
+    text-align: left;
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    width: 100%;
+    color: var(--text);
+    transition: background 100ms;
+  }
+
+  .inflight-link:hover {
+    background: var(--surface-raised);
+  }
+
+  /* Count chip — colored like the other count chips (uses the add token). */
+  .inflight-count {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    margin-left: 0.5rem;
+    flex-shrink: 0;
+    white-space: nowrap;
+    color: var(--diff-add);
+  }
+
+  .inflight-hint {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-style: italic;
+    margin-left: 0.5rem;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .inflight-time {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-left: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  .inflight-discard {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1;
+    padding: 0.25rem 0.4rem;
+    border-radius: 4px;
+    flex-shrink: 0;
+    transition: color 150ms, background 100ms;
+  }
+
+  .inflight-discard:hover {
+    color: var(--legend-removed-color);
+    background: var(--surface-raised);
+  }
+
+  /* Discard confirmation dialog — base dialog styles come from app.css */
+  .discard-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1rem;
+  }
+
+  .discard-confirm {
+    padding: 0.4rem 1rem;
+    border: 1px solid var(--legend-removed-color);
+    border-radius: 6px;
+    background: var(--legend-removed-color);
+    color: #0a1410;
+    font-family: var(--font-ui);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .discard-cancel {
+    padding: 0.4rem 1rem;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: none;
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 0.9rem;
+    cursor: pointer;
   }
 </style>

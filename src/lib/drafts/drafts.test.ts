@@ -373,6 +373,166 @@ describe('Fix-B: submitReview maps multiple same-line drafts', () => {
 // ---------------------------------------------------------------------------
 // Multi-line: startLine field on Draft
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// parsePrKey — provider-qualified + legacy + sha forms
+// ---------------------------------------------------------------------------
+describe('parsePrKey', () => {
+  it('parses a provider-qualified prKey with sha', async () => {
+    const { parsePrKey } = await import('./drafts.svelte')
+    expect(parsePrKey('github:acme/widgets#42@abc123')).toEqual({
+      prKey: 'github:acme/widgets#42@abc123',
+      provider: 'github',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 42,
+      headSha: 'abc123',
+    })
+  })
+
+  it('parses a legacy (unqualified) prKey, defaulting provider to github', async () => {
+    const { parsePrKey } = await import('./drafts.svelte')
+    expect(parsePrKey('acme/widgets#7@deadbeef')).toEqual({
+      prKey: 'acme/widgets#7@deadbeef',
+      provider: 'github',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 7,
+      headSha: 'deadbeef',
+    })
+  })
+
+  it('parses a prKey with no sha segment', async () => {
+    const { parsePrKey } = await import('./drafts.svelte')
+    expect(parsePrKey('gitlab:acme/widgets#9')).toMatchObject({
+      provider: 'gitlab',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 9,
+      headSha: '',
+    })
+  })
+
+  it('parses a gitlab host-qualified prKey (gitlab@host:...)', async () => {
+    const { parsePrKey } = await import('./drafts.svelte')
+    expect(parsePrKey('gitlab@git.example.com:acme/widgets#3@sha1')).toEqual({
+      prKey: 'gitlab@git.example.com:acme/widgets#3@sha1',
+      provider: 'gitlab@git.example.com',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 3,
+      headSha: 'sha1',
+    })
+  })
+
+  it('returns null for an unparseable key', async () => {
+    const { parsePrKey } = await import('./drafts.svelte')
+    expect(parsePrKey('not-a-prkey')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// listDraftSummaries — cross-PR enumeration grouped by prKey
+// ---------------------------------------------------------------------------
+describe('listDraftSummaries', () => {
+  it('groups drafts by prKey with counts and most-recent lastUpdatedAt', async () => {
+    const db = `test-db-summaries-${++testIndex}`
+    const { createDraftStore, listDraftSummaries } = await import('./drafts.svelte')
+
+    const prA = 'github:acme/widgets#1@shaA'
+    const prB = 'github:acme/widgets#2@shaB'
+
+    const storeA = createDraftStore(prA, db)
+    await storeA.load()
+    await storeA.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'a1' })
+    await storeA.upsert({ path: 'a.ts', line: 2, side: 'RIGHT', body: 'a2' })
+
+    const storeB = createDraftStore(prB, db)
+    await storeB.load()
+    await storeB.upsert({ path: 'b.ts', line: 1, side: 'LEFT', body: 'b1' })
+
+    const summaries = await listDraftSummaries(db)
+    const byKey = new Map(summaries.map((s) => [s.prKey, s]))
+
+    expect(byKey.get(prA)?.draftCount).toBe(2)
+    expect(byKey.get(prB)?.draftCount).toBe(1)
+    expect(byKey.get(prA)?.owner).toBe('acme')
+    expect(byKey.get(prA)?.repo).toBe('widgets')
+    expect(byKey.get(prA)?.number).toBe(1)
+    expect(byKey.get(prA)?.headSha).toBe('shaA')
+    // lastUpdatedAt is the max updatedAt across the group's drafts
+    expect(byKey.get(prA)?.lastUpdatedAt).toBe(
+      Math.max(...storeA.drafts.map((d) => d.updatedAt)),
+    )
+  })
+
+  it('surfaces multiple sha variants of one PR as separate summaries', async () => {
+    const db = `test-db-summaries-sha-${++testIndex}`
+    const { createDraftStore, listDraftSummaries } = await import('./drafts.svelte')
+
+    const old = 'github:acme/widgets#5@oldsha'
+    const fresh = 'github:acme/widgets#5@newsha'
+
+    const s1 = createDraftStore(old, db)
+    await s1.load()
+    await s1.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'on old commit' })
+
+    const s2 = createDraftStore(fresh, db)
+    await s2.load()
+    await s2.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'on new commit' })
+    await s2.upsert({ path: 'a.ts', line: 2, side: 'RIGHT', body: 'second on new' })
+
+    const summaries = await listDraftSummaries(db)
+    const variants = summaries.filter((s) => s.owner === 'acme' && s.repo === 'widgets' && s.number === 5)
+    expect(variants).toHaveLength(2)
+    const shas = variants.map((v) => v.headSha).sort()
+    expect(shas).toEqual(['newsha', 'oldsha'])
+  })
+
+  it('returns [] when there are no drafts', async () => {
+    const db = `test-db-summaries-empty-${++testIndex}`
+    const { listDraftSummaries } = await import('./drafts.svelte')
+    expect(await listDraftSummaries(db)).toEqual([])
+  })
+
+  it('returns [] when IndexedDB is unavailable', async () => {
+    vi.stubGlobal('indexedDB', undefined)
+    const { listDraftSummaries } = await import('./drafts.svelte')
+    expect(await listDraftSummaries('whatever')).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// clearDraftsForPr — removes every record for a prKey
+// ---------------------------------------------------------------------------
+describe('clearDraftsForPr', () => {
+  it('removes all drafts for a single prKey (all sha-specific records)', async () => {
+    const db = `test-db-cleardrafts-${++testIndex}`
+    const { createDraftStore, listDraftSummaries, clearDraftsForPr } = await import('./drafts.svelte')
+
+    const prA = 'github:acme/widgets#1@shaA'
+    const prB = 'github:acme/widgets#2@shaB'
+
+    const storeA = createDraftStore(prA, db)
+    await storeA.load()
+    await storeA.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'a1' })
+    await storeA.upsert({ path: 'a.ts', line: 2, side: 'RIGHT', body: 'a2' })
+
+    const storeB = createDraftStore(prB, db)
+    await storeB.load()
+    await storeB.upsert({ path: 'b.ts', line: 1, side: 'LEFT', body: 'b1' })
+
+    await clearDraftsForPr(prA, db)
+
+    const summaries = await listDraftSummaries(db)
+    expect(summaries.map((s) => s.prKey)).toEqual([prB])
+
+    // A fresh store for prA confirms nothing is left on disk
+    const reloadA = createDraftStore(prA, db)
+    await reloadA.load()
+    expect(reloadA.count).toBe(0)
+  })
+})
+
 describe('multi-line comments: startLine field', () => {
   it('upsert stores startLine and round-trips via load', async () => {
     const prKey = nextPrKey()
