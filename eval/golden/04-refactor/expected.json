@@ -1,0 +1,21 @@
+{
+  "real": [
+    {
+      "file": "src/lib/report.ts",
+      "line": 7,
+      "description": "behavior change: the numeric comparator was dropped, so sort() now sorts lexicographically (default string order), reordering scores like 10 before 2"
+    }
+  ],
+  "noise": [
+    {
+      "file": "src/lib/report.ts",
+      "line": 1,
+      "description": "extracting a formatLine helper changes behavior — it does not; the output string is identical"
+    },
+    {
+      "file": "src/lib/report.ts",
+      "line": 8,
+      "description": "converting the for-loop to map changes behavior — equivalent rewrite, same output"
+    }
+  ]
+}

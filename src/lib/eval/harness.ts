@@ -30,10 +30,11 @@ import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import {
   scoreCase,
-  type CaseExpectation,
+  normalizeExpectation,
   type CaseScore,
   type ProducedFinding,
   type MatchConfig,
+  type RawExpectation,
   DEFAULT_MATCH_CONFIG,
 } from './scorer'
 
@@ -60,13 +61,13 @@ export interface GoldenFixture {
   skills?: { name: string; content: string }[]
 }
 
-/** Hand-labeled expectations for a golden case (expected.json). */
-export interface GoldenExpected {
-  /** Findings a good reviewer SHOULD flag. */
-  real: { file: string; line: number | null; description: string }[]
-  /** Findings a good reviewer should NOT flag (nits, moot, unchanged code). */
-  noise: { file: string; line: number | null; description: string }[]
-}
+/**
+ * Hand-labeled expectations for a golden case (expected.json). Either the
+ * hand-authored `{ real, noise }` shape or the capture-tool's labeled
+ * `{ findings: [{ ..., label }] }` shape — both are accepted (see
+ * normalizeExpectation in scorer.ts; UNLABELED entries are skipped).
+ */
+export type GoldenExpected = RawExpectation
 
 /** A fully-loaded golden case: fixture + expectations. */
 export interface GoldenCase {
@@ -272,13 +273,77 @@ export async function runCase(
     scored = produced.filter((_, i) => surfaced[i] !== false)
   }
 
-  const expectation: CaseExpectation = {
-    real: goldenCase.expected.real,
-    noise: goldenCase.expected.noise,
-  }
+  const expectation = normalizeExpectation(goldenCase.expected)
   const score = scoreCase(goldenCase.name, scored, expectation, match)
 
   return { score, produced: scored, rawByTask }
+}
+
+/**
+ * A finding produced by a single review task, tagged with the task that
+ * produced it (and a severity when the task carries one). This is what the
+ * capture tool feeds to scaffoldCase() to rebuild a replayable mock + the
+ * UNLABELED expected.json.
+ */
+export interface TaggedFinding {
+  taskKey: string
+  file: string
+  line: number | null
+  description: string
+  severity?: string
+}
+
+/**
+ * Run the three review tasks LIVE over a fixture (no scoring) and return every
+ * produced finding tagged with its task key + severity. Used by the capture
+ * tool (eval/capture-case.mts) to turn a real PR review into a golden case.
+ *
+ * Mirrors runCase's task wiring exactly so the captured findings match what the
+ * app/harness would produce — but it keeps the per-task provenance the mock
+ * scaffold needs (which runCase flattens away).
+ */
+export async function captureFindings(
+  fixture: GoldenFixture,
+  complete: CompleteFn,
+  ci: CiSummary | null = null,
+  options: { deep?: boolean } = {},
+): Promise<TaggedFinding[]> {
+  const ctx = packFixture(fixture)
+  const out: TaggedFinding[] = []
+  const maybeDeep = (system: string): string =>
+    options.deep ? withDeepReviewGuidance(system, ['read_file', 'search_code']) : system
+
+  // --- Verdict ---
+  {
+    const prompts = verdictPrompt(ctx, ci)
+    const raw = await complete({ system: maybeDeep(prompts.system), user: prompts.user, taskKey: 'verdict' })
+    for (const f of verdictFindings(safeParse(raw))) {
+      out.push({ taskKey: 'verdict', file: f.file, line: f.line, description: f.description })
+    }
+  }
+
+  // --- Attention ---
+  {
+    const prompts = attentionPrompt(ctx, { deep: options.deep })
+    const raw = await complete({ system: prompts.system, user: prompts.user, taskKey: 'attention' })
+    const valid = validateAttention(safeParse(raw))
+    for (const h of valid?.hotspots ?? []) {
+      out.push({ taskKey: 'attention', file: h.path, line: null, description: h.reason, severity: h.level })
+    }
+  }
+
+  // --- Skill reviews (one per persona) ---
+  for (const skill of fixture.skills ?? []) {
+    const prompts = skillReviewPrompt(ctx, skill)
+    const taskKey = `skill:${skill.name}`
+    const raw = await complete({ system: maybeDeep(prompts.system), user: prompts.user, taskKey })
+    const valid = validateSkillReviewResult(safeParse(raw))
+    for (const f of valid?.findings ?? []) {
+      out.push({ taskKey, file: f.path, line: f.line, description: f.body, severity: f.severity })
+    }
+  }
+
+  return out
 }
 
 function safeParse(raw: string): unknown {

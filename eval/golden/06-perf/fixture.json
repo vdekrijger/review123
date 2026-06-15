@@ -1,0 +1,17 @@
+{
+  "name": "06-perf",
+  "files": [
+    {
+      "path": "src/lib/orders.ts",
+      "patch": "@@ -1,8 +1,17 @@\n import { db } from './db'\n \n-export async function ordersForUsers(userIds: number[]) {\n-  const rows = await db.query('SELECT * FROM orders WHERE user_id = ANY($1)', [userIds])\n-  return rows\n+export async function ordersForUsers(userIds: number[]) {\n+  // Fetch each user's orders. Uses 1 + ' + ' for the loop bound.\n+  const all = []\n+  for (let i = 0; i < userIds.length; i++) {\n+    const rows = await db.query('SELECT * FROM orders WHERE user_id = $1', [userIds[i]])\n+    all.push(...rows)\n+  }\n+  return all\n }",
+      "contentBefore": "import { db } from './db'\n\nexport async function ordersForUsers(userIds: number[]) {\n  const rows = await db.query('SELECT * FROM orders WHERE user_id = ANY($1)', [userIds])\n  return rows\n}\n",
+      "contentAfter": "import { db } from './db'\n\nexport async function ordersForUsers(userIds: number[]) {\n  // Fetch each user's orders. Uses 1 + ' + ' for the loop bound.\n  const all = []\n  for (let i = 0; i < userIds.length; i++) {\n    const rows = await db.query('SELECT * FROM orders WHERE user_id = $1', [userIds[i]])\n    all.push(...rows)\n  }\n  return all\n}\n"
+    }
+  ],
+  "skills": [
+    {
+      "name": "perf-reviewer",
+      "content": "You are a performance reviewer. Flag REAL scaling problems introduced by the change: N+1 queries, unbounded loads, missing pagination, O(n^2) over large inputs. Do NOT flag micro-optimizations that do not matter (caching userIds.length in the loop condition, preallocating a small array, swapping a for-of for a for-loop)."
+    }
+  ]
+}

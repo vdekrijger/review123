@@ -1,0 +1,21 @@
+{
+  "real": [
+    {
+      "file": "src/api/search.ts",
+      "line": 6,
+      "description": "SQL injection: the sort parameter is concatenated into the ORDER BY clause unsanitized; an attacker controls arbitrary SQL"
+    }
+  ],
+  "noise": [
+    {
+      "file": "src/api/search.ts",
+      "line": 7,
+      "description": "the LIKE term is a SQL injection — it is not; it is bound as a parameter ($1)"
+    },
+    {
+      "file": "src/api/search.ts",
+      "line": 12,
+      "description": "renderName interpolates name into HTML — XSS — but it is escapeHtml-escaped first, so it is safe"
+    }
+  ]
+}

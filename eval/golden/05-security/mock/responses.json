@@ -1,0 +1,37 @@
+{
+  "skill:security-reviewer": {
+    "skillName": "security-reviewer",
+    "findings": [
+      {
+        "path": "src/api/search.ts",
+        "line": 6,
+        "severity": "high",
+        "body": "SQL injection: `sort` is interpolated directly into the ORDER BY clause. Use an allow-list of column names instead of raw concatenation."
+      },
+      {
+        "path": "src/api/search.ts",
+        "line": 7,
+        "severity": "medium",
+        "body": "The LIKE term concatenation looks like SQL injection; the search term flows into the query."
+      }
+    ]
+  },
+  "attention": {
+    "readingOrder": ["src/api/search.ts"],
+    "hotspots": [
+      {
+        "path": "src/api/search.ts",
+        "level": "high",
+        "reason": "ORDER BY clause built from an untrusted sort parameter via string interpolation."
+      }
+    ],
+    "testFlags": []
+  },
+  "verdict": {
+    "level": "significant-changes",
+    "evidence": [
+      "src/api/search.ts: ORDER BY is built from an untrusted sort parameter, an injection vector."
+    ],
+    "notAnalyzed": []
+  }
+}

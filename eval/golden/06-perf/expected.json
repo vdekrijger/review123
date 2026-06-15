@@ -1,0 +1,16 @@
+{
+  "real": [
+    {
+      "file": "src/lib/orders.ts",
+      "line": 7,
+      "description": "N+1 query: a single batched ANY($1) query was replaced with one query per user inside a loop, issuing N round-trips"
+    }
+  ],
+  "noise": [
+    {
+      "file": "src/lib/orders.ts",
+      "line": 6,
+      "description": "micro-optimization: cache userIds.length in the loop condition — negligible, not worth flagging"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "skill:perf-reviewer": {
+    "skillName": "perf-reviewer",
+    "findings": [
+      {
+        "path": "src/lib/orders.ts",
+        "line": 7,
+        "severity": "high",
+        "body": "N+1 query: the batched `ANY($1)` query was replaced with one query per user inside the loop, issuing N database round-trips. Restore the single batched query."
+      }
+    ]
+  },
+  "attention": {
+    "readingOrder": ["src/lib/orders.ts"],
+    "hotspots": [
+      {
+        "path": "src/lib/orders.ts",
+        "level": "high",
+        "reason": "A single batched query became a per-user query in a loop — an N+1 round-trip pattern."
+      }
+    ],
+    "testFlags": []
+  },
+  "verdict": {
+    "level": "significant-changes",
+    "evidence": [
+      "src/lib/orders.ts: replaced a batched ANY query with a per-user query loop, an N+1 round-trip regression."
+    ],
+    "notAnalyzed": []
+  }
+}
