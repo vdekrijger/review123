@@ -7,6 +7,7 @@
   import CiSummary from './CiSummary.svelte'
   import MarkdownView from './MarkdownView.svelte'
   import Skeleton from './Skeleton.svelte'
+  import SectionStatus from './panels/SectionStatus.svelte'
   import { SECTION_REGISTRY } from './panels/sectionRegistry'
   import { isRailSectionExpanded, setRailSectionExpanded, type RailSectionId } from '../lib/rail/collapse'
   import { track } from '../lib/analytics/analytics'
@@ -113,7 +114,10 @@
 
         {#if section.id === 'summary'}
           <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
-            <summary class="rail-section-summary">{section.title}</summary>
+            <summary class="rail-section-summary">
+              <span class="rail-section-title">{section.title}</span>
+              <SectionStatus status={run.summary.status} title={section.title} />
+            </summary>
             <div class="rail-section-body">
               <SummaryPanel {run} />
             </div>
@@ -185,7 +189,10 @@
 
         {:else if section.id === 'diagrams'}
           <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
-            <summary class="rail-section-summary">{section.title}</summary>
+            <summary class="rail-section-summary">
+              <span class="rail-section-title">{section.title}</span>
+              <SectionStatus status={run.diagrams.status} title={section.title} />
+            </summary>
             <div class="rail-section-body">
               <DiagramsSection {run} />
             </div>
@@ -193,7 +200,10 @@
 
         {:else if section.id === 'test-insight'}
           <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
-            <summary class="rail-section-summary">{section.title}</summary>
+            <summary class="rail-section-summary">
+              <span class="rail-section-title">{section.title}</span>
+              <SectionStatus status={run.tests.status} title={section.title} />
+            </summary>
             <div class="rail-section-body">
               <TestInsightPanel {run} {onhotspot} />
             </div>
@@ -201,7 +211,10 @@
 
         {:else if section.id === 'alternatives'}
           <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
-            <summary class="rail-section-summary">{section.title}</summary>
+            <summary class="rail-section-summary">
+              <span class="rail-section-title">{section.title}</span>
+              <SectionStatus status={run.alternatives.status} title={section.title} />
+            </summary>
             <div class="rail-section-body">
               <AlternativesPanel {run} />
             </div>
@@ -209,7 +222,10 @@
 
         {:else if section.id === 'verdict-evidence'}
           <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
-            <summary class="rail-section-summary">{section.title}</summary>
+            <summary class="rail-section-summary">
+              <span class="rail-section-title">{section.title}</span>
+              <SectionStatus status={run.verdict.status} title={section.title} />
+            </summary>
             <div class="rail-section-body">
               <VerdictPanel {run} {onhotspot} />
             </div>
@@ -371,6 +387,13 @@
     font-size: 0.75rem;
     letter-spacing: 0.05em;
     opacity: 0.7;
+  }
+
+  /* Title takes the row; the header status indicator sits at the far right so
+     it's visible whether the rail section is expanded or collapsed. */
+  .rail-section-title {
+    flex: 1;
+    min-width: 0;
   }
 
   .rail-section-body {

@@ -40,6 +40,10 @@ const EVENTS = {
   // 'step' is '1' | '2' | '3' — step index only.
   // None of these can be used to reconstruct code, diffs, or private repo data.
   section_expanded: ['section', 'surface'],
+  // PRIVACY DECISION: fired when the user clicks "Expand all" / "Collapse all"
+  // on the Understand step. Carries only 'expanded' (boolean — whether the click
+  // opened or closed every section) and 'surface' ('page'). No content.
+  expand_all: ['expanded', 'surface'],
   file_expanded: ['origin'],
   drawer_opened: [],
   // Carries no content — fired when the user turns ON "Hide whitespace changes".

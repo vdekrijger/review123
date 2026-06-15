@@ -16,7 +16,7 @@
    *       unresolvable anchor → muted "line N — not in this diff" note
    */
 
-  import { renderInlineMarkdown } from '../lib/markdown/render'
+  import MarkdownView from './MarkdownView.svelte'
 
   interface Props {
     skillName: string
@@ -30,14 +30,20 @@
     added?: boolean
     /** Compact spacing for inline-at-line rendering */
     compact?: boolean
+    /**
+     * Stable finding key — emitted as `data-finding-key` so the reviewer result
+     * chips can scroll+flash THIS exact card (see jumpToFinding). Optional: cards
+     * rendered without a key are simply not jump-targets.
+     */
+    findingKey?: string | null
     onAdd: () => void
     onDismiss: () => void
   }
 
-  let { skillName, severity, body, line = null, anchored = false, added = false, compact = false, onAdd, onDismiss }: Props = $props()
+  let { skillName, severity, body, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss }: Props = $props()
 </script>
 
-<div class="skill-finding severity-{severity}" class:compact role="note" aria-label="{skillName} finding, severity {severity}">
+<div class="skill-finding severity-{severity}" class:compact role="note" aria-label="{skillName} finding, severity {severity}" data-finding-key={findingKey ?? undefined}>
   <div class="skill-finding-header">
     <span class="skill-persona-label">{skillName}</span>
     {#if line !== null && !anchored}
@@ -48,9 +54,11 @@
     {/if}
     <span class="skill-severity-chip severity-chip-{severity}">{severity}</span>
   </div>
-  <!-- {@html} is acceptable ONLY with renderInlineMarkdown() output (sanitization boundary) -->
-  <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-  <p class="skill-finding-body">{@html renderInlineMarkdown(body)}</p>
+  <!-- Full block markdown (paragraphs, fenced code, lists, inline code/bold/links).
+       MarkdownView enforces the sanitization boundary (marked → DOMPurify). -->
+  <div class="skill-finding-body">
+    <MarkdownView source={body} />
+  </div>
   <div class="skill-finding-actions">
     <button
       class="skill-add-draft-btn"
@@ -77,6 +85,23 @@
   .skill-finding.compact {
     padding: 0.4rem 0.6rem;
     border-radius: 3px;
+  }
+
+  /* Transient highlight when a reviewer chip jumps to this finding. Themed
+     light/dark via the same changed-bg token the draft flash uses. The class is
+     toggled imperatively by jumpToFinding (added on jump, removed after 1.5s). */
+  .skill-finding.finding-flash {
+    animation: finding-flash 1.5s ease-out forwards;
+  }
+
+  @keyframes finding-flash {
+    0%   { box-shadow: 0 0 0 3px var(--legend-changed-border, var(--accent)); }
+    80%  { box-shadow: 0 0 0 3px var(--legend-changed-border, var(--accent)); }
+    100% { box-shadow: 0 0 0 0 transparent; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skill-finding.finding-flash { animation: none; }
   }
 
   .skill-finding.severity-high {
@@ -162,13 +187,38 @@
     line-height: 1.4;
   }
 
-  /* Inline markdown in the model-generated finding body: code spans use the
-     same inline-code styling tokens as comment bodies / VerdictPanel evidence. */
+  /* The common case is a single-paragraph finding: strip the leading/trailing
+     paragraph margins from MarkdownView so the card stays compact (no extra
+     vertical padding from <p> wrapping). Block content (code fences, lists)
+     keeps its internal spacing. Works in both light and dark themes. */
+  .skill-finding-body :global(p:first-child) {
+    margin-top: 0;
+  }
+
+  .skill-finding-body :global(p:last-child) {
+    margin-bottom: 0;
+  }
+
+  /* Block + inline markdown in the model-generated finding body: code spans
+     and fenced blocks use the same code styling tokens as comment bodies /
+     VerdictPanel evidence (overriding MarkdownView's neutral defaults). */
   .skill-finding-body :global(code) {
     font-size: 0.85em;
     background: var(--surface-raised);
     padding: 0.1em 0.3em;
     border-radius: 3px;
+  }
+
+  .skill-finding-body :global(pre) {
+    background: var(--surface-raised);
+    padding: 0.5rem;
+    border-radius: 4px;
+    overflow-x: auto;
+  }
+
+  .skill-finding-body :global(pre code) {
+    background: none;
+    padding: 0;
   }
 
   .skill-finding-actions {

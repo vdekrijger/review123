@@ -28,8 +28,9 @@
   import AlternativesPanel from './panels/AlternativesPanel.svelte'
   import VerdictPanel from './panels/VerdictPanel.svelte'
   import Spinner from './Spinner.svelte'
+  import SectionStatus from './panels/SectionStatus.svelte'
   import { aiProgressLabel } from '../lib/ai/progressLabel'
-  import { SECTION_REGISTRY } from './panels/sectionRegistry'
+  import { SECTION_REGISTRY, type SectionId } from './panels/sectionRegistry'
   import { track } from '../lib/analytics/analytics'
   import { stripReadingOrder } from '../lib/ai/tasks'
   import { settingsState } from '../lib/settings/settingsState.svelte'
@@ -49,6 +50,33 @@
   }
 
   let { meta, files, ci, ciError, run, onhotspot }: Props = $props()
+
+  // --- Section open state (lifted out of the <details> so Expand all / Collapse
+  // all can set them en masse while individual toggles keep working). Seeded from
+  // the registry's per-page defaultOpen; each section's <details> binds its open
+  // attribute to its entry, so user clicks and the bulk button share one source.
+  const pageSections = $derived(SECTION_REGISTRY.filter((s) => s.show.page))
+
+  const openState = $state<Record<string, boolean>>(
+    Object.fromEntries(
+      SECTION_REGISTRY.filter((s) => s.show.page).map((s) => [s.id, s.defaultOpen.page]),
+    ),
+  )
+
+  // The bulk control's label/state derives reactively from whether EVERY page
+  // section is currently open. Not-all-open → "Expand all" (next click opens
+  // all); all-open → "Collapse all" (next click closes all).
+  const allExpanded = $derived(pageSections.every((s) => openState[s.id]))
+
+  function toggleExpandAll() {
+    const next = !allExpanded
+    for (const s of pageSections) openState[s.id] = next
+    track('expand_all', { expanded: next, surface: 'page' })
+  }
+
+  function openSection(id: SectionId) {
+    openState[id] = true
+  }
 
   // --- Derived: stripped summary ---
   const summaryText = $derived.by(() => {
@@ -86,10 +114,8 @@
     run.tests.status === 'done' ? (run.tests.value as TestInsight) : null
   )
 
-  let testsPanelEl: HTMLDetailsElement | undefined = $state()
-
   function openTestsPanel() {
-    if (testsPanelEl) testsPanelEl.open = true
+    openSection('test-insight')
   }
 
   // --- Alternatives ---
@@ -103,10 +129,8 @@
     alternatives.alternatives.some((a) => a.assessment === 'alternative-is-better')
   )
 
-  let alternativesPanelEl: HTMLDetailsElement | undefined = $state()
-
   function openAlternativesPanel() {
-    if (alternativesPanelEl) alternativesPanelEl.open = true
+    openSection('alternatives')
   }
 
   // --- Verdict ---
@@ -318,28 +342,49 @@
 
   </section>
 
+  <!-- ===== EXPAND ALL / COLLAPSE ALL (one bulk toggle) ===== -->
+  <div class="sections-control">
+    <button
+      type="button"
+      class="expand-all-btn"
+      onclick={toggleExpandAll}
+      aria-pressed={allExpanded}
+      aria-label={allExpanded ? 'Collapse all sections' : 'Expand all sections'}
+    >
+      {allExpanded ? 'Collapse all' : 'Expand all'}
+    </button>
+  </div>
+
   <!-- ===== COLLAPSED DETAIL PANELS (registry order) ===== -->
 
-  {#each SECTION_REGISTRY.filter((s) => s.show.page) as section (section.id)}
+  {#each pageSections as section (section.id)}
     {#if section.id === 'summary'}
-      <details class="detail-panel summary-panel" open={section.defaultOpen.page} ontoggle={(e) => handleSectionToggle(e, section.id)}>
-        <summary class="detail-summary">{section.title}</summary>
+      <details class="detail-panel summary-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
+        <summary class="detail-summary">
+          <span class="detail-summary-title">{section.title}</span>
+          <SectionStatus status={run.summary.status} title={section.title} />
+        </summary>
         <div class="detail-body">
           <SummaryPanel {run} />
         </div>
       </details>
 
     {:else if section.id === 'diagrams'}
-      <details class="detail-panel diagrams-panel" open={section.defaultOpen.page} ontoggle={(e) => handleSectionToggle(e, section.id)}>
-        <summary class="detail-summary">{section.title}</summary>
+      <details class="detail-panel diagrams-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
+        <summary class="detail-summary">
+          <span class="detail-summary-title">{section.title}</span>
+          <SectionStatus status={run.diagrams.status} title={section.title} />
+        </summary>
         <div class="detail-body">
           <DiagramsSection {run} />
         </div>
       </details>
 
     {:else if section.id === 'file-structure'}
-      <details class="detail-panel file-structure-panel" open={section.defaultOpen.page} ontoggle={(e) => handleSectionToggle(e, section.id)}>
-        <summary class="detail-summary">{section.title}</summary>
+      <details class="detail-panel file-structure-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
+        <summary class="detail-summary">
+          <span class="detail-summary-title">{section.title}</span>
+        </summary>
         <div class="detail-body file-structure-body">
           <FileTree
             {files}
@@ -352,40 +397,53 @@
       </details>
 
     {:else if section.id === 'test-insight'}
-      <details class="detail-panel tests-panel" bind:this={testsPanelEl} open={section.defaultOpen.page} ontoggle={(e) => handleSectionToggle(e, section.id)}>
-        <summary class="detail-summary">{section.title}</summary>
+      <details class="detail-panel tests-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
+        <summary class="detail-summary">
+          <span class="detail-summary-title">{section.title}</span>
+          <SectionStatus status={run.tests.status} title={section.title} />
+        </summary>
         <div class="detail-body">
           <TestInsightPanel {run} {onhotspot} />
         </div>
       </details>
 
     {:else if section.id === 'alternatives'}
-      <details class="detail-panel alternatives-panel" bind:this={alternativesPanelEl} open={section.defaultOpen.page} ontoggle={(e) => handleSectionToggle(e, section.id)}>
-        <summary class="detail-summary">{section.title}</summary>
+      <details class="detail-panel alternatives-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
+        <summary class="detail-summary">
+          <span class="detail-summary-title">{section.title}</span>
+          <SectionStatus status={run.alternatives.status} title={section.title} />
+        </summary>
         <div class="detail-body">
           <AlternativesPanel {run} />
         </div>
       </details>
 
     {:else if section.id === 'verdict-evidence'}
-      <details class="detail-panel verdict-panel" open={section.defaultOpen.page} ontoggle={(e) => handleSectionToggle(e, section.id)}>
-        <summary class="detail-summary">{section.title}</summary>
+      <details class="detail-panel verdict-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
+        <summary class="detail-summary">
+          <span class="detail-summary-title">{section.title}</span>
+          <SectionStatus status={run.verdict.status} title={section.title} />
+        </summary>
         <div class="detail-body">
           <VerdictPanel {run} {onhotspot} />
         </div>
       </details>
 
     {:else if section.id === 'ci-details'}
-      <details class="detail-panel ci-panel" open={section.defaultOpen.page} ontoggle={(e) => handleSectionToggle(e, section.id)}>
-        <summary class="detail-summary">{section.title}</summary>
+      <details class="detail-panel ci-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
+        <summary class="detail-summary">
+          <span class="detail-summary-title">{section.title}</span>
+        </summary>
         <div class="detail-body">
           <CiSummary {ci} error={ciError} />
         </div>
       </details>
 
     {:else if section.id === 'pr-description'}
-      <details class="detail-panel pr-description-details" open={section.defaultOpen.page} ontoggle={(e) => handleSectionToggle(e, section.id)}>
-        <summary class="detail-summary">{section.title}</summary>
+      <details class="detail-panel pr-description-details" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
+        <summary class="detail-summary">
+          <span class="detail-summary-title">{section.title}</span>
+        </summary>
         <div class="detail-body pr-description-body">
           {#if meta.body}
             <MarkdownView source={meta.body} />
@@ -675,12 +733,44 @@
     opacity: 0.5;
   }
 
+  /* ===== Expand all / Collapse all control ===== */
+
+  .sections-control {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: -0.1rem;
+  }
+
+  .expand-all-btn {
+    background: none;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    padding: 0.25rem 0.6rem;
+    transition: background 0.1s, color 0.1s;
+  }
+
+  .expand-all-btn:hover {
+    background: #8881;
+    color: var(--text);
+  }
+
   /* ===== Detail panels ===== */
 
   .detail-panel {
     border: 1px solid var(--hairline);
     border-radius: 6px;
     overflow: hidden;
+  }
+
+  /* Title takes the row; the header status indicator sits at the far right so
+     it's visible whether the section is expanded or collapsed. */
+  .detail-summary-title {
+    flex: 1;
+    min-width: 0;
   }
 
   .detail-body {

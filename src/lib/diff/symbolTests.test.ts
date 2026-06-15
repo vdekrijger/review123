@@ -135,6 +135,134 @@ describe('pairSymbolsWithTests — block range capture', () => {
   })
 })
 
+describe('pairSymbolsWithTests — Python multi-line signature capture', () => {
+  it('captures the `):` line AND the body when the signature spans lines', () => {
+    const content = [
+      'class T:', // 1
+      '    def test_event_properties(', // 2 (def header opens)
+      '        self,', // 3
+      '        _name: str,', // 4  <- `:` inside params must NOT end the header
+      '        condition: dict,', // 5
+      '    ):', // 6  <- dedented to def indent; old code broke here
+      '        result = compute_total(condition)', // 7  <- body
+      '        assert result == 1', // 8  <- body last line
+      '', // 9
+      '    def test_other(self):', // 10
+      '        pass', // 11
+    ].join('\n')
+    const pairs = pairSymbolsWithTests(
+      [sym('compute_total', 'billing.py')],
+      [{ path: 'test_billing.py', content }],
+    )
+    const range = pairs[0].tests[0].lineRange
+    // header is line 2; body assert is line 8 — both must be inside the range.
+    expect(range.start).toBe(2)
+    expect(range.end).toBeGreaterThanOrEqual(8)
+    // must not bleed into the next def (line 10).
+    expect(range.end).toBeLessThanOrEqual(9)
+  })
+
+  it('still captures a single-line Python def body', () => {
+    const content = [
+      'def test_x_works():', // 1
+      '    r = compute_total([1])', // 2
+      '    assert r == 1', // 3
+    ].join('\n')
+    const pairs = pairSymbolsWithTests(
+      [sym('compute_total', 'billing.py')],
+      [{ path: 'test_billing.py', content }],
+    )
+    const range = pairs[0].tests[0].lineRange
+    expect(range.start).toBe(1)
+    expect(range.end).toBe(3)
+  })
+
+  it('handles a `-> ReturnType:` annotated multi-line signature', () => {
+    const content = [
+      'def test_typed(', // 1
+      '    arg: int,', // 2
+      ') -> None:', // 3  <- colon after the return annotation, depth 0
+      '    out = compute_total([arg])', // 4
+      '    assert out == arg', // 5
+    ].join('\n')
+    const pairs = pairSymbolsWithTests(
+      [sym('compute_total', 'billing.py')],
+      [{ path: 'test_billing.py', content }],
+    )
+    const range = pairs[0].tests[0].lineRange
+    expect(range.start).toBe(1)
+    expect(range.end).toBe(5)
+  })
+
+  it('a `:` inside params (type annotation) does not prematurely end the header', () => {
+    const content = [
+      'def test_annot(', // 1
+      '    mapping: dict,', // 2  <- depth-1 colon, not the header terminator
+      '):', // 3
+      '    v = compute_total(mapping)', // 4
+      '    assert v', // 5
+    ].join('\n')
+    const pairs = pairSymbolsWithTests(
+      [sym('compute_total', 'billing.py')],
+      [{ path: 'test_billing.py', content }],
+    )
+    const range = pairs[0].tests[0].lineRange
+    // body line 5 must be captured.
+    expect(range.end).toBe(5)
+  })
+
+  it('captures the def+body for a decorated test (decorator above def)', () => {
+    const content = [
+      '@parameterized.expand([(1,), (2,)])', // 1 decorator
+      'def test_decorated(self, n):', // 2 def header
+      '    r = compute_total([n])', // 3 body
+      '    assert r == n', // 4 body
+    ].join('\n')
+    const pairs = pairSymbolsWithTests(
+      [sym('compute_total', 'billing.py')],
+      [{ path: 'test_billing.py', content }],
+    )
+    const range = pairs[0].tests[0].lineRange
+    // Range starts at the def (decorator not included), and captures the body.
+    expect(range.start).toBe(2)
+    expect(range.end).toBe(4)
+  })
+
+  it('truncates an over-cap body with a marker (range capped)', () => {
+    const bodyLines = Array.from({ length: 60 }, (_, i) => `    line_${i} = compute_total([${i}])`)
+    const content = ['def test_huge():', ...bodyLines].join('\n')
+    const pairs = pairSymbolsWithTests(
+      [sym('compute_total', 'billing.py')],
+      [{ path: 'test_billing.py', content }],
+    )
+    const range = pairs[0].tests[0].lineRange
+    // Capped to ≤ 40 lines.
+    expect(range.end - range.start + 1).toBeLessThanOrEqual(40)
+    expect(pairs[0].tests[0].truncated).toBe(true)
+  })
+})
+
+describe('pairSymbolsWithTests — JS multi-line signature capture', () => {
+  it('captures the body of a test with a multi-line arrow signature', () => {
+    const content = [
+      "describe('s', () => {", // 1
+      "  it('buildKey across many args',", // 2 (multi-line call/arrow)
+      '    async (', // 3
+      '      done', // 4
+      '    ) => {', // 5
+      '      const r = buildKey(1)', // 6 body
+      '      expect(r).toBe(2)', // 7 body
+      '    })', // 8
+      '})', // 9
+    ].join('\n')
+    const pairs = pairSymbolsWithTests([sym('buildKey')], [{ path: 'a.test.ts', content }])
+    const range = pairs[0].tests[0].lineRange
+    expect(range.start).toBe(2)
+    // body (lines 6-7) must be inside the range; brace match closes at line 8.
+    expect(range.end).toBeGreaterThanOrEqual(7)
+  })
+})
+
 describe('pairSymbolsWithTests — prefers named over referenced; multiple tests', () => {
   it('keeps the highest-confidence test first and reports count', () => {
     const t1 = "it('buildKey edge', () => { buildKey(0) })"

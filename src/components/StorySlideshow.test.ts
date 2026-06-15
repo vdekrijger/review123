@@ -219,6 +219,22 @@ function pairProps(overrides: Record<string, unknown> = {}) {
   return baseProps({ story, files, contentsMap, ...overrides })
 }
 
+describe('StorySlideshow — caption markdown', () => {
+  it('renders inline code in the step caption as a <code> element', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['src/db/schema.ts'], caption: 'Add `HogQLAlertConfig` as a shared type.', layer: 'data', relatedTests: [] },
+      ],
+    }
+    const { container } = render(StorySlideshow, { props: baseProps({ story, files: makeFiles(['src/db/schema.ts']) }) })
+    const code = container.querySelector('.story-caption code')
+    expect(code).not.toBeNull()
+    expect(code?.textContent).toBe('HogQLAlertConfig')
+    // The literal backtick must NOT survive into the rendered text.
+    expect(container.querySelector('.story-caption')?.textContent).not.toContain('`')
+  })
+})
+
 describe('StorySlideshow — symbol↔test pairing', () => {
   it('shows a collapsed "Tested by" affordance beneath the function diff', () => {
     render(StorySlideshow, { props: pairProps() })
