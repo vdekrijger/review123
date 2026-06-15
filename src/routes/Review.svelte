@@ -467,6 +467,9 @@
           ...(activeProvider.searchCode
             ? { searchCode: (query: string) => activeProvider.searchCode!({ owner, repo }, query) }
             : {}),
+          ...(activeProvider.findReferences
+            ? { findReferences: (symbol: string) => activeProvider.findReferences!({ owner, repo }, symbol) }
+            : {}),
         },
         // Per-comment code context for the coach (v16): the actual code at each
         // commented file:line — hunk excerpt + a wider window from the file
