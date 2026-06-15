@@ -45,17 +45,24 @@ interface Args {
   deep: boolean
   caseFilter: string | null
   crossVerify: boolean
+  /** Plan O: 'generate' enables multi-generator fusion (recall lift). */
+  fusion: 'verify' | 'generate'
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { live: false, deep: false, caseFilter: null, crossVerify: false }
+  const args: Args = { live: false, deep: false, caseFilter: null, crossVerify: false, fusion: 'verify' }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--live') args.live = true
     else if (a === '--mock') args.live = false
     else if (a === '--deep') args.deep = true
     else if (a === '--cross-verify') args.crossVerify = true
-    else if (a === '--case') args.caseFilter = argv[++i] ?? null
+    else if (a === '--fusion') {
+      const mode = argv[++i]
+      args.fusion = mode === 'generate' ? 'generate' : 'verify'
+      // 'generate' implies cross-confirm of the merged union.
+      if (args.fusion === 'generate') args.crossVerify = true
+    } else if (a === '--case') args.caseFilter = argv[++i] ?? null
   }
   return args
 }
@@ -70,6 +77,13 @@ interface LoadedCase {
   expected: unknown
   mockResponses: Record<string, unknown>
   mockVerifyVerdicts: Record<string, string>
+  /**
+   * Plan O: per-generator scripted responses for --fusion generate. Each entry
+   * is one simulated generator's response map (same shape as mockResponses).
+   * Loaded from mock/responses.<gen>.json (gen ∈ a, b, c…). When absent, the
+   * runner falls back to mockResponses for every generator (no recall lift).
+   */
+  mockGenerators: { name: string; responses: Record<string, unknown> }[]
 }
 
 function listCaseDirs(): string[] {
@@ -105,7 +119,17 @@ function loadCase(name: string): LoadedCase {
   } catch {
     mockVerifyVerdicts = {}
   }
-  return { name, fixture, expected, mockResponses, mockVerifyVerdicts }
+  // Plan O: optional per-generator scripted responses (mock/responses.<gen>.json).
+  const mockGenerators: { name: string; responses: Record<string, unknown> }[] = []
+  for (const gen of ['a', 'b', 'c', 'd', 'e']) {
+    try {
+      const responses = readJson(join(dir, 'mock', `responses.${gen}.json`)) as Record<string, unknown>
+      mockGenerators.push({ name: `gen-${gen}`, responses })
+    } catch {
+      // absent → skip
+    }
+  }
+  return { name, fixture, expected, mockResponses, mockVerifyVerdicts, mockGenerators }
 }
 
 // ---------------------------------------------------------------------------
@@ -256,12 +280,19 @@ async function main(): Promise<void> {
       ) => { surfaced: boolean }
     }
 
+    type GenCompleteFn = (a: CompleteArgs) => Promise<string>
     const { runCase } = harness as {
       runCase: (
         c: unknown,
         complete: (a: CompleteArgs) => Promise<string>,
         ci: null,
-        opts: { deep?: boolean; crossVerify?: boolean; verify?: VerifyFn },
+        opts: {
+          deep?: boolean
+          crossVerify?: boolean
+          verify?: VerifyFn
+          fusionGenerate?: boolean
+          generators?: { name: string; complete: GenCompleteFn }[]
+        },
       ) => Promise<{ score: Record<string, number | string>; produced: unknown[]; rawByTask: Record<string, string> }>
     }
     const { aggregate, evaluateGates, pct, DEFAULT_GATES } = scorer as {
@@ -287,7 +318,8 @@ async function main(): Promise<void> {
       modeLabel = '--mock (scripted stub — validates harness mechanics, NOT model quality)'
       complete = async () => '{}' // replaced per-case below
     }
-    if (args.crossVerify) modeLabel += ' --cross-verify'
+    if (args.fusion === 'generate') modeLabel += ' --fusion generate'
+    else if (args.crossVerify) modeLabel += ' --cross-verify'
 
     // Cross-verify pass (Plan M). In --live, the verify provider is the SAME
     // live provider (a single verifier here for harness simplicity — the app
@@ -356,10 +388,40 @@ async function main(): Promise<void> {
           : makeMockVerify(loaded.mockVerifyVerdicts)
         : undefined
 
+      // Plan O: build the per-generator completion functions for --fusion generate.
+      // Live: two stand-in generators using the same provider (harness simplicity —
+      // the app fans out to distinct ensemble models). Mock: each generator gets
+      // its own scripted response map (responses.<gen>.json); falls back to the
+      // base responses for both when no per-gen files exist (→ no recall lift).
+      let generators: { name: string; complete: GenCompleteFn }[] | undefined
+      if (args.fusion === 'generate') {
+        if (args.live) {
+          generators = [
+            { name: 'gen-1', complete },
+            { name: 'gen-2', complete },
+          ]
+        } else if (loaded.mockGenerators.length >= 2) {
+          generators = loaded.mockGenerators.map((g) => ({
+            name: g.name,
+            complete: mockComplete(
+              Object.fromEntries(Object.entries(g.responses).map(([k, v]) => [k, JSON.stringify(v)])),
+            ),
+          }))
+        } else {
+          // No per-gen mock files → two copies of the base scripted set.
+          generators = [
+            { name: 'gen-1', complete: caseComplete },
+            { name: 'gen-2', complete: caseComplete },
+          ]
+        }
+      }
+
       const result = await runCase(goldenCase, caseComplete, null, {
         deep: args.deep,
         crossVerify: args.crossVerify,
         ...(caseVerify ? { verify: caseVerify } : {}),
+        ...(args.fusion === 'generate' ? { fusionGenerate: true } : {}),
+        ...(generators ? { generators } : {}),
       })
       caseScores.push(result.score)
       const score = result.score as unknown as {

@@ -662,3 +662,32 @@ describe('AiModelsSection — ensemble editor (Plan N)', () => {
     expect(note.textContent).toMatch(/per-model impact/i)
   })
 })
+
+describe('AiModelsSection — fusion mode (Plan O)', () => {
+  it('renders the Verify / Generate radio group', () => {
+    render(AiModelsSection)
+    expect(screen.getByRole('radio', { name: /Verify/ })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /Generate/ })).toBeInTheDocument()
+  })
+
+  it('defaults to Verify and disables the radios with <2 keyed models', () => {
+    saveTokens({ githubPat: null, deepseekKey: 'k' })
+    render(AiModelsSection)
+    const verify = screen.getByRole('radio', { name: /Verify/ }) as HTMLInputElement
+    const generate = screen.getByRole('radio', { name: /Generate/ }) as HTMLInputElement
+    expect(verify.checked).toBe(true)
+    expect(generate.disabled).toBe(true)
+  })
+
+  it('selecting Generate with ≥2 keyed models persists fusionMode', async () => {
+    saveTokens({ githubPat: null, deepseekKey: 'k' })
+    const { setAnthropicKey } = await import('../../lib/settings/settings')
+    setAnthropicKey('a')
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    const generate = screen.getByRole('radio', { name: /Generate/ }) as HTMLInputElement
+    expect(generate.disabled).toBe(false)
+    await userEvent.click(generate)
+    expect(getSettings().fusionMode).toBe('generate')
+  })
+})

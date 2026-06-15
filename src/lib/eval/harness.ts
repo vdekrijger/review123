@@ -37,6 +37,7 @@ import {
   type RawExpectation,
   DEFAULT_MATCH_CONFIG,
 } from './scorer'
+import { findingsMatch } from '../ai/findingMatch'
 
 // ---------------------------------------------------------------------------
 // Golden-case shapes (mirrors eval/golden/<case>/*.json — see eval/README.md)
@@ -115,6 +116,16 @@ export interface RunCaseOptions {
    */
   crossVerify?: boolean
   verify?: VerifyFn
+  /**
+   * Multi-generator fusion (Plan O 'generate' mode). When `generators` (≥2
+   * complete functions, one per simulated generator) is provided AND this is
+   * true, the review runs once PER generator, the union is dedup-merged, then
+   * cross-confirmed (via `verify` when given) before scoring. Measures the RECALL
+   * lift from independent generators — multi-gen catches more known-real findings.
+   */
+  fusionGenerate?: boolean
+  /** Per-generator completion functions (one per simulated ensemble model). */
+  generators?: { name: string; complete: CompleteFn }[]
 }
 
 // ---------------------------------------------------------------------------
@@ -235,38 +246,55 @@ export async function runCase(
   const ctx = packFixture(goldenCase.fixture)
   const match = options.match ?? DEFAULT_MATCH_CONFIG
   const rawByTask: Record<string, string> = {}
-  const produced: ProducedFinding[] = []
 
   const maybeDeep = (system: string): string =>
     options.deep ? withDeepReviewGuidance(system, ['read_file', 'search_code']) : system
 
-  // --- Verdict ---
-  {
-    const prompts = verdictPrompt(ctx, ci)
-    const raw = await complete({ system: maybeDeep(prompts.system), user: prompts.user, taskKey: 'verdict' })
-    rawByTask['verdict'] = raw
-    produced.push(...verdictFindings(safeParse(raw)))
+  /** Run all three review tasks with one completion fn → flat findings. */
+  async function produceFindings(
+    completeFn: CompleteFn,
+    rawSink?: Record<string, string>,
+  ): Promise<ProducedFinding[]> {
+    const out: ProducedFinding[] = []
+    {
+      const prompts = verdictPrompt(ctx, ci)
+      const raw = await completeFn({ system: maybeDeep(prompts.system), user: prompts.user, taskKey: 'verdict' })
+      if (rawSink) rawSink['verdict'] = raw
+      out.push(...verdictFindings(safeParse(raw)))
+    }
+    {
+      const prompts = attentionPrompt(ctx, { deep: options.deep })
+      const raw = await completeFn({ system: prompts.system, user: prompts.user, taskKey: 'attention' })
+      if (rawSink) rawSink['attention'] = raw
+      out.push(...attentionFindings(safeParse(raw)))
+    }
+    for (const skill of goldenCase.fixture.skills ?? []) {
+      const prompts = skillReviewPrompt(ctx, skill)
+      const taskKey = `skill:${skill.name}`
+      const raw = await completeFn({ system: maybeDeep(prompts.system), user: prompts.user, taskKey })
+      if (rawSink) rawSink[taskKey] = raw
+      out.push(...skillFindings(safeParse(raw)))
+    }
+    return out
   }
 
-  // --- Attention ---
-  {
-    const prompts = attentionPrompt(ctx, { deep: options.deep })
-    const raw = await complete({ system: prompts.system, user: prompts.user, taskKey: 'attention' })
-    rawByTask['attention'] = raw
-    produced.push(...attentionFindings(safeParse(raw)))
+  let produced: ProducedFinding[]
+  if (options.fusionGenerate && options.generators && options.generators.length >= 2) {
+    // Plan O 'generate' mode: run the review once per simulated generator, then
+    // dedup-merge the union. A finding raised by ANY generator enters the union,
+    // so multi-gen catches more known-real findings (recall lift).
+    const perGen = await Promise.all(
+      options.generators.map((g, gi) =>
+        produceFindings(g.complete, gi === 0 ? rawByTask : undefined),
+      ),
+    )
+    produced = mergeProducedUnion(perGen, match)
+  } else {
+    produced = await produceFindings(complete, rawByTask)
   }
 
-  // --- Skill reviews (one per persona) ---
-  for (const skill of goldenCase.fixture.skills ?? []) {
-    const prompts = skillReviewPrompt(ctx, skill)
-    const taskKey = `skill:${skill.name}`
-    const raw = await complete({ system: maybeDeep(prompts.system), user: prompts.user, taskKey })
-    rawByTask[taskKey] = raw
-    produced.push(...skillFindings(safeParse(raw)))
-  }
-
-  // Cross-model verification (Plan M): drop demoted findings before scoring so
-  // the metrics reflect post-verification precision/recall/noise-rate.
+  // Cross-model verification (Plan M / Plan O cross-confirm): drop demoted
+  // findings before scoring so the metrics reflect post-verification surface.
   let scored = produced
   if (options.crossVerify && options.verify && produced.length > 0) {
     const { surfaced } = await options.verify(produced)
@@ -277,6 +305,25 @@ export async function runCase(
   const score = scoreCase(goldenCase.name, scored, expectation, match)
 
   return { score, produced: scored, rawByTask }
+}
+
+/**
+ * Dedup-merge per-generator finding lists into one union (Plan O). Findings that
+ * refer to the same issue (via findingsMatch — file + line proximity + fuzzy
+ * description) collapse; everything else is kept. The representative is the first
+ * encountered. This is the eval-harness analog of the app's mergeGeneratorFindings.
+ */
+export function mergeProducedUnion(
+  perGenerator: ProducedFinding[][],
+  match: MatchConfig = DEFAULT_MATCH_CONFIG,
+): ProducedFinding[] {
+  const union: ProducedFinding[] = []
+  for (const list of perGenerator) {
+    for (const f of list) {
+      if (!union.some((u) => findingsMatch(u, f, match))) union.push(f)
+    }
+  }
+  return union
 }
 
 /**

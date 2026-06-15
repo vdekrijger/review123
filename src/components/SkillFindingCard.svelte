@@ -25,6 +25,12 @@
     body: string
     /** Cross-model verification (Plan M) — drives the "confirmed by N/M" chip. */
     verification?: FindingVerification
+    /**
+     * Multi-generator provenance (Plan O 'generate' mode): the models that
+     * independently RAISED this finding. With ≥2 raisers a "raised by A,B" chip
+     * shows. Absent / single raiser in 'verify' mode → no chip.
+     */
+    raisedBy?: string[]
     /** The line the finding is anchored to, if any (shown only when not anchored inline) */
     line?: number | null
     /** Whether the card is rendered inline at its anchored diff line */
@@ -43,7 +49,19 @@
     onDismiss: () => void
   }
 
-  let { skillName, severity, body, verification = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss }: Props = $props()
+  let { skillName, severity, body, verification = undefined, raisedBy = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss }: Props = $props()
+
+  // "raised by A, B" provenance (Plan O 'generate' mode). Shown when the finding
+  // was NOT raised by every polled model — i.e. it's a recall-relevant catch
+  // (one/some models found it, the rest only confirmed). A finding everyone
+  // raised gets no chip (the provenance carries no signal there). In 'verify'
+  // mode raisedBy is absent → no chip.
+  const raisedByLabel = $derived.by(() => {
+    if (!raisedBy || raisedBy.length === 0) return ''
+    const polled = verification?.polledModels ?? raisedBy.length
+    if (raisedBy.length >= polled) return '' // everyone raised it → no signal
+    return `raised by ${raisedBy.join(', ')}`
+  })
 
   // Tooltip: one line per model's verdict, e.g. "DeepSeek: confirm — raised it".
   const verifyTooltip = $derived(
@@ -63,6 +81,9 @@
     {/if}
     {#if added}
       <span class="skill-state-chip" role="status">✓ added as draft</span>
+    {/if}
+    {#if raisedByLabel}
+      <span class="skill-raised-chip" aria-label={raisedByLabel}>{raisedByLabel}</span>
     {/if}
     {#if verification && verification.surfaced}
       <span
@@ -190,6 +211,18 @@
     background: var(--legend-added-bg);
     color: var(--legend-added-color);
     border: 1px solid var(--legend-added-border);
+    white-space: nowrap;
+  }
+
+  /* ---- Raised-by chip: multi-generator provenance "raised by A,B" (Plan O) ---- */
+  .skill-raised-chip {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    background: var(--surface-raised);
+    color: var(--text-muted);
+    border: 1px solid var(--border-subtle);
     white-space: nowrap;
   }
 

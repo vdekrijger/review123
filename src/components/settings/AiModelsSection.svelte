@@ -2,9 +2,10 @@
   import {
     getSettings, saveTokens, setAiProvider, setAiModel, setStoryMode, setCrossModelVerify,
     setAiTaskMode, setAllTasksDeep, setAllTasksStandard, setOffAllExtras, setAiEnsemble,
+    setFusionMode,
     AI_TASK_IDS, taskSupportsDeep,
     type AiProvider, type AiTaskId, type AiTaskMode,
-    type AiEnsemble, type EnsembleParticipant,
+    type AiEnsemble, type EnsembleParticipant, type FusionMode,
   } from '../../lib/settings/settings'
   import { settingsState } from '../../lib/settings/settingsState.svelte'
   import { PROVIDERS, getProvider, getModelDef, type LlmProviderId } from '../../lib/llm/providers'
@@ -75,6 +76,16 @@
   function onCrossModelVerifyChange(checked: boolean) {
     crossModelVerify = checked
     setCrossModelVerify(checked)
+  }
+
+  // Fusion mode (Plan O). 'verify' = active model generates, others verify
+  // (precision). 'generate' = every model generates; the union is dedup-merged
+  // and cross-confirmed (recall) — more tokens. Only EFFECTIVE with ≥2 keyed
+  // models AND cross-verify on; disabled with an honest cost hint otherwise.
+  let fusionMode = $state<FusionMode>(current.fusionMode)
+  function onFusionModeChange(mode: FusionMode) {
+    fusionMode = mode
+    setFusionMode(mode)
   }
 
   // -------------------------------------------------------------------------
@@ -433,6 +444,42 @@
     <p class="deep-review-hint">
       Your other models verify each finding — fewer false positives, more tokens.
       {#if !crossVerifyAvailable}<strong> Add a second model (any provider, or a second model of the same provider) below to enable.</strong>{/if}
+    </p>
+  </div>
+
+  <!-- Plan O — fusion mode (Verify vs Generate) -->
+  <div class="deep-review-row" class:disabled={!crossVerifyAvailable || !crossModelVerify}>
+    <span class="deep-review-label">How models combine</span>
+    <div class="fusion-mode-options" role="radiogroup" aria-label="Fusion mode">
+      <label class="fusion-mode-opt">
+        <input
+          type="radio"
+          name="fusionMode"
+          value="verify"
+          checked={fusionMode === 'verify'}
+          disabled={!crossVerifyAvailable || !crossModelVerify}
+          onchange={() => onFusionModeChange('verify')}
+        />
+        <span>Verify <small>(your active model finds, the others check — precision)</small></span>
+      </label>
+      <label class="fusion-mode-opt">
+        <input
+          type="radio"
+          name="fusionMode"
+          value="generate"
+          checked={fusionMode === 'generate'}
+          disabled={!crossVerifyAvailable || !crossModelVerify}
+          onchange={() => onFusionModeChange('generate')}
+        />
+        <span>Generate <small>(every model finds independently — catches more, costs more)</small></span>
+      </label>
+    </div>
+    <p class="deep-review-hint">
+      <strong>Generate</strong> runs the review with each model in your ensemble, then merges and
+      cross-confirms the union — so a real issue only one model spots can still surface (recall).
+      It costs noticeably more tokens (every model generates <em>and</em> verifies); with many
+      models that adds up fast. <strong>Verify</strong> is the cheaper default.
+      {#if !crossVerifyAvailable}<strong> Needs ≥2 models.</strong>{/if}
     </p>
   </div>
 
@@ -796,6 +843,27 @@
     font-size: 0.78em;
     color: var(--text-muted);
     margin: 0.3rem 0 0;
+  }
+
+  /* Plan O — fusion mode radio group */
+  .fusion-mode-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin: 0.4rem 0 0;
+  }
+  .fusion-mode-opt {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.45rem;
+    font-size: 0.85em;
+    cursor: pointer;
+  }
+  .fusion-mode-opt small {
+    color: var(--text-muted);
+  }
+  .deep-review-row.disabled .fusion-mode-options {
+    opacity: 0.5;
   }
 
   .hint {
