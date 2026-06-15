@@ -450,6 +450,12 @@ export const STORY_LAYERS = [
   'tests',
   'ui',
   'foundational',
+  // 'other' labels the deterministic catch-all step (Plan K) that sweeps any
+  // changed file the model left unplaced, so Story mode provably covers EVERY
+  // changed file. It's normally synthesized post-validation (not model-emitted),
+  // but including it here keeps the StoryLayer type + LAYER_LABEL in sync (a
+  // model echoing 'other' is harmless — it just renders as another step).
+  'other',
 ] as const
 
 export type StoryLayer = (typeof STORY_LAYERS)[number]
@@ -642,6 +648,52 @@ export function sinkGeneratedSteps(story: StoryOrderResult): StoryOrderResult {
   }
   const ordered = [...normal, ...generated]
   return { steps: ordered.map((s, i) => ({ ...s, index: i })) }
+}
+
+/**
+ * Label for the synthetic catch-all step's layer (Plan K). Exported so the
+ * caption and any reconciliation copy share one string.
+ */
+export const STORY_OTHER_LAYER: StoryLayer = 'other'
+
+/**
+ * Structural 100% coverage (Plan K). Given the already-shaped steps (paths
+ * resolved to REAL PR filenames, deduped, generated-sunk) and the PR's full
+ * changed-file list, sweep any changed file NOT placed in some step's primary
+ * `files` into a single synthetic catch-all step appended LAST:
+ *
+ *   { layer: 'other', caption: 'Other changes (N)', files: [...unplaced] }
+ *
+ * Guarantees union(all steps' files) == prFilenames — every changed file is
+ * provably in some step. relatedTests do NOT count as placement: a file that
+ * only ever appears as a related/secondary test is still "unplaced" and gets
+ * swept in here (so its diff is shown once as a primary). Order within the
+ * catch-all follows prFilenames order (deterministic).
+ *
+ * No unplaced files → steps returned unchanged (no empty catch-all step).
+ * `prFilenames` should already be the non-excluded changed files (the caller's
+ * `files` list); excluded/binary files the caller never renders aren't passed.
+ *
+ * Pure. Indices on the input steps are preserved; the catch-all gets index
+ * steps.length.
+ */
+export function appendCatchAllStep(steps: StoryStep[], prFilenames: readonly string[]): StoryStep[] {
+  const placed = new Set<string>()
+  for (const step of steps) {
+    for (const f of step.files) placed.add(f)
+  }
+  // Preserve prFilenames order; only files genuinely absent from every step.
+  const unplaced = prFilenames.filter((f) => !placed.has(f))
+  if (unplaced.length === 0) return steps
+
+  const catchAll: StoryStep = {
+    index: steps.length,
+    files: [...unplaced],
+    caption: `Other changes (${unplaced.length})`,
+    layer: STORY_OTHER_LAYER,
+    relatedTests: [],
+  }
+  return [...steps, catchAll]
 }
 
 /**
