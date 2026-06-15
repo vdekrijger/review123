@@ -1694,3 +1694,63 @@ describe('VerdictStep — Copy as LLM prompt', () => {
     expect(copyFn.mock.calls[0][0] as string).toContain('## Overall comment')
   })
 })
+
+describe('VerdictStep — per-model cost + impact (Plan N)', () => {
+  beforeEach(() => {
+    signOut()
+    signIn()
+    _setCaptureForTest(noopCapture)
+  })
+  afterEach(() => {
+    _setCaptureForTest(noopCapture)
+    setShowTokenCost(false)
+  })
+
+  const verdictModels = [
+    {
+      providerId: 'anthropic',
+      modelId: 'claude-opus-4-8',
+      role: 'generator' as const,
+      usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 },
+      surfaced: 4,
+    },
+    {
+      providerId: 'anthropic',
+      modelId: 'claude-haiku-4-5',
+      role: 'verifier' as const,
+      usage: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 },
+      impact: { confirms: 1, refutes: 1, uncertains: 0, decisive: 1 },
+    },
+  ]
+
+  it('shows the impact readout whenever cross-verify ran (NOT gated on showTokenCost)', () => {
+    setShowTokenCost(false)
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, verdictModels },
+    })
+    expect(screen.getByText('Models used')).toBeInTheDocument()
+    // Generator impact
+    expect(screen.getByText('4 surfaced findings')).toBeInTheDocument()
+    // Verifier decisive impact
+    expect(screen.getByText(/1 decisive refute \(removed a finding\)/)).toBeInTheDocument()
+    // Cost column hidden when showTokenCost off
+    expect(screen.queryByRole('columnheader', { name: /cost/i })).not.toBeInTheDocument()
+  })
+
+  it('adds the per-model cost column when showTokenCost is on', () => {
+    setShowTokenCost(true)
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, verdictModels },
+    })
+    expect(screen.getByRole('columnheader', { name: /cost/i })).toBeInTheDocument()
+    // claude-opus-4-8 has no pricing in providers.ts → tokens only
+    expect(screen.getByText('1.5k tokens')).toBeInTheDocument()
+  })
+
+  it('renders nothing when no models ran (empty breakdown)', () => {
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, verdictModels: [] },
+    })
+    expect(screen.queryByText('Models used')).not.toBeInTheDocument()
+  })
+})

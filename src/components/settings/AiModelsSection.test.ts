@@ -18,7 +18,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import AiModelsSection from './AiModelsSection.svelte'
-import { getSettings, saveTokens, setAiProvider, setAiModel } from '../../lib/settings/settings'
+import { getSettings, saveTokens, setAiProvider, setAiModel, setAiEnsemble } from '../../lib/settings/settings'
 import { _resetSettingsStateForTest } from '../../lib/settings/settingsState.svelte'
 import { PROVIDERS, getProvider } from '../../lib/llm/providers'
 import { llmTestConnection, LlmError } from '../../lib/llm/llm'
@@ -549,5 +549,70 @@ describe('AiModelsSection — story mode toggle', () => {
     const toggle = screen.getByRole('checkbox', { name: /Story mode/i }) as HTMLInputElement
     await userEvent.click(toggle)
     expect(getSettings().storyMode).toBe(false)
+  })
+})
+
+describe('AiModelsSection — ensemble editor (Plan N)', () => {
+  function setupAnthropic() {
+    localStorage.setItem('review123:settings', JSON.stringify({ aiProvider: 'anthropic', anthropicKey: 'sk-ant-test' }))
+    _resetSettingsStateForTest()
+  }
+
+  it('renders the ensemble panel with a generator row by default', () => {
+    setupAnthropic()
+    render(AiModelsSection)
+    expect(screen.getByText(/Ensemble \/ verification panel/i)).toBeInTheDocument()
+    expect(screen.getByText('Generator')).toBeInTheDocument()
+  })
+
+  it('adding a same-provider model writes a custom ensemble (single-key multi-model)', async () => {
+    setupAnthropic()
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /Add a model/i }))
+    const ensemble = getSettings().aiEnsemble
+    expect(ensemble).not.toBeNull()
+    expect(ensemble!.generator.provider).toBe('anthropic')
+    expect(ensemble!.verifiers.length).toBe(1)
+    expect(ensemble!.verifiers[0].provider).toBe('anthropic')
+  })
+
+  it('designating a verifier as generator swaps the generator', async () => {
+    setupAnthropic()
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [{ provider: 'anthropic', model: 'claude-haiku-4-5' }],
+    })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    const radios = screen.getAllByRole('radio', { name: /Generator|Verifier/i }) as HTMLInputElement[]
+    // The verifier row's radio (second one)
+    await userEvent.click(radios[1])
+    const ensemble = getSettings().aiEnsemble!
+    expect(ensemble.generator.model).toBe('claude-haiku-4-5')
+  })
+
+  it('disables a row whose provider has no key and shows the add-key hint', () => {
+    // Anthropic keyed + a custom ensemble with an unkeyed OpenAI verifier
+    setupAnthropic()
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [{ provider: 'openai', model: 'gpt-5.4' }],
+    })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    expect(screen.getByText(/No OpenAI key — add it above/i)).toBeInTheDocument()
+  })
+
+  it('removing a participant updates the ensemble', async () => {
+    setupAnthropic()
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [{ provider: 'anthropic', model: 'claude-haiku-4-5' }],
+    })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    const removeButtons = screen.getAllByRole('button', { name: /Remove participant/i })
+    await userEvent.click(removeButtons[removeButtons.length - 1])
+    expect(getSettings().aiEnsemble!.verifiers.length).toBe(0)
   })
 })

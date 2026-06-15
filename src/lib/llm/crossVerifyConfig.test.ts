@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
   verifierProviderConfigs,
   crossModelVerifyEffective,
+  resolveEnsemble,
   MAX_VERIFIER_PROVIDERS,
+  MAX_ENSEMBLE_PARTICIPANTS,
 } from './config'
 import {
   setDeepseekKey,
@@ -11,6 +13,7 @@ import {
   setGeminiKey,
   setAiProvider,
   setCrossModelVerify,
+  setAiEnsemble,
 } from '../settings/settings'
 
 beforeEach(() => {
@@ -80,5 +83,91 @@ describe('crossModelVerifyEffective — gating', () => {
     setAnthropicKey('a')
     setCrossModelVerify(false)
     expect(crossModelVerifyEffective()).toBe(false)
+  })
+})
+
+describe('resolveEnsemble — Plan N configurable ensemble', () => {
+  it('default ensemble reproduces #128: active generator + other keyed verifiers', () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setOpenaiKey('o')
+    const { generator, verifiers } = resolveEnsemble()
+    expect(generator?.providerId).toBe('deepseek')
+    expect(generator?.model.id).toBe('deepseek-v4-flash')
+    expect(verifiers.map((v) => v.providerId)).toEqual(['openai'])
+    // verifierProviderConfigs is the same list (byte-identical wrapper)
+    expect(verifierProviderConfigs()).toEqual(verifiers)
+  })
+
+  it('default generator is null when the active provider has no key', () => {
+    setAiProvider('deepseek')
+    setOpenaiKey('o')
+    expect(resolveEnsemble().generator).toBeNull()
+  })
+
+  it('custom ensemble: multiple models of the SAME provider on one key (the unlock)', () => {
+    setAnthropicKey('a')
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [
+        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        { provider: 'anthropic', model: 'claude-haiku-4-5' },
+      ],
+    })
+    const { generator, verifiers } = resolveEnsemble()
+    expect(generator?.model.id).toBe('claude-opus-4-8')
+    expect(verifiers.map((v) => v.model.id)).toEqual(['claude-sonnet-4-6', 'claude-haiku-4-5'])
+    expect(verifiers.every((v) => v.providerId === 'anthropic' && v.key === 'a')).toBe(true)
+    // Single key, 2+ models → cross-verify effective
+    expect(crossModelVerifyEffective()).toBe(true)
+  })
+
+  it('skips a participant whose provider key is missing', () => {
+    setAnthropicKey('a')
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [
+        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        { provider: 'openai', model: 'gpt-5.4' }, // no openai key → dropped
+      ],
+    })
+    const { verifiers } = resolveEnsemble()
+    expect(verifiers.map((v) => v.providerId)).toEqual(['anthropic'])
+  })
+
+  it('generator is null (and thus not effective) when its provider key is missing', () => {
+    setAnthropicKey('a')
+    setAiEnsemble({
+      generator: { provider: 'openai', model: 'gpt-5.4' }, // no openai key
+      verifiers: [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }],
+    })
+    expect(resolveEnsemble().generator).toBeNull()
+    expect(crossModelVerifyEffective()).toBe(false)
+  })
+
+  it('<2 usable models → no-op (single model, no verifiers)', () => {
+    setAnthropicKey('a')
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [{ provider: 'openai', model: 'gpt-5.4' }], // dropped, no key
+    })
+    expect(resolveEnsemble().verifiers).toEqual([])
+    expect(crossModelVerifyEffective()).toBe(false)
+  })
+
+  it('caps total participants at MAX_ENSEMBLE_PARTICIPANTS (generator + verifiers)', () => {
+    setAnthropicKey('a')
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [
+        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        { provider: 'anthropic', model: 'claude-haiku-4-5' },
+        { provider: 'anthropic', model: 'claude-fable-5' },
+        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      ],
+    })
+    const { generator, verifiers } = resolveEnsemble()
+    expect(1 + verifiers.length).toBe(MAX_ENSEMBLE_PARTICIPANTS)
+    expect(generator).not.toBeNull()
   })
 })

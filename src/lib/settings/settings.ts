@@ -1,3 +1,5 @@
+import { getProvider } from '../llm/providers'
+
 const KEY = 'review123:settings'
 
 // Lazy refresh hook: authState.svelte.ts registers itself here after it
@@ -56,6 +58,24 @@ export interface GitlabOAuth {
 }
 
 export type AiProvider = 'deepseek' | 'openai' | 'anthropic' | 'gemini'
+
+/** One participant in the configurable model ensemble (Plan N). */
+export interface EnsembleParticipant {
+  provider: AiProvider
+  /** Model id within that provider's lineup (providers.ts). */
+  model: string
+}
+
+/**
+ * A user-configured ensemble (Plan N): one generator participant and a list of
+ * verifier participants. Verifiers MAY repeat a provider with different models
+ * (e.g. anthropic claude-opus-4-8 generator + claude-sonnet-4-6 +
+ * claude-haiku-4-5 verifiers, all on one Anthropic key).
+ */
+export interface AiEnsemble {
+  generator: EnsembleParticipant
+  verifiers: EnsembleParticipant[]
+}
 
 /**
  * Per-task AI run mode (Plan J).
@@ -152,6 +172,14 @@ export interface Settings {
    * strict no-op (no extra calls, no UI), so single-key users are unaffected.
    */
   crossModelVerify: boolean
+  /**
+   * Configurable model ensemble (Plan N). When null/absent, the default ensemble
+   * is synthesized from the active provider+model (generator) plus the other
+   * keyed providers' default models (verifiers) — byte-identical to #128. When
+   * set, the user has hand-picked the generator + verifier participants, which
+   * MAY include multiple models of the SAME provider (single-key cross-verify).
+   */
+  aiEnsemble: AiEnsemble | null
   diffMode: DiffMode
   /** Hide whitespace-only changes in diffs (like GitHub's ?w=1). */
   hideWhitespace: boolean
@@ -211,6 +239,7 @@ const DEFAULTS: Settings = {
   aiTaskModes: defaultTaskModes(),
   storyMode: true,
   crossModelVerify: true,
+  aiEnsemble: null,
   diffMode: 'unified',
   hideWhitespace: false,
   githubAuth: null,
@@ -228,6 +257,37 @@ const DEFAULTS: Settings = {
   // Non-destructive dimming of imports is our recommendation → on by default.
   focusMode: 'imports',
   showTokenCost: false,
+}
+
+const AI_PROVIDER_IDS = new Set<string>(['deepseek', 'openai', 'anthropic', 'gemini'])
+
+/** Coerce one ensemble participant; returns null if provider/model invalid. */
+function coerceParticipant(raw: unknown): EnsembleParticipant | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const obj = raw as Record<string, unknown>
+  const provider = obj['provider']
+  const model = obj['model']
+  if (typeof provider !== 'string' || !AI_PROVIDER_IDS.has(provider)) return null
+  const prov = getProvider(provider as AiProvider)
+  if (!prov) return null
+  if (typeof model !== 'string' || !prov.models.some((m) => m.id === model)) return null
+  return { provider: provider as AiProvider, model }
+}
+
+/**
+ * Coerce a stored ensemble (Plan N). Returns null when absent/invalid (→ default
+ * ensemble synthesized at resolution time). Drops verifier entries with unknown
+ * provider/model; an invalid generator invalidates the whole stored ensemble.
+ */
+function coerceEnsemble(raw: unknown): AiEnsemble | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const obj = raw as Record<string, unknown>
+  const generator = coerceParticipant(obj['generator'])
+  if (!generator) return null
+  const verifiers = Array.isArray(obj['verifiers'])
+    ? obj['verifiers'].map(coerceParticipant).filter((p): p is EnsembleParticipant => p !== null)
+    : []
+  return { generator, verifiers }
 }
 
 function coerceGithubAuth(raw: unknown): GithubAuth | null {
@@ -339,6 +399,8 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const crossModelVerify = obj['crossModelVerify']
   if (typeof crossModelVerify === 'boolean') result.crossModelVerify = crossModelVerify
+
+  if ('aiEnsemble' in obj) result.aiEnsemble = coerceEnsemble(obj['aiEnsemble'])
 
   const gitlabToken = obj['gitlabToken']
   if (typeof gitlabToken === 'string') result.gitlabToken = gitlabToken
@@ -572,6 +634,7 @@ export function setOffAllExtras(): void {
 }
 export const setStoryMode = (v: boolean) => save({ storyMode: v })
 export const setCrossModelVerify = (v: boolean) => save({ crossModelVerify: v })
+export const setAiEnsemble = (v: AiEnsemble | null) => save({ aiEnsemble: v })
 export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
 export const setHideWhitespace = (hide: boolean) => save({ hideWhitespace: hide })
 export const setRailCollapsed = (collapsed: boolean) => save({ railCollapsed: collapsed })

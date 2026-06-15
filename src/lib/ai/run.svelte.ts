@@ -9,7 +9,7 @@
  * stub any combination without module-level mocking.
  */
 
-import { activeLlmConfig, activeProviderHasKey, crossModelVerifyEffective, verifierProviderConfigs } from '../llm/config'
+import { activeLlmConfig, activeProviderHasKey, crossModelVerifyEffective, verifierProviderConfigs, resolveEnsemble } from '../llm/config'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import {
@@ -27,6 +27,8 @@ import {
   validateVerifierResponse,
   type VerifiableFinding,
   type VerifyFn,
+  type ParticipantUsage,
+  type VerifierImpact,
 } from './crossVerify'
 import { getProvider } from '../llm/providers'
 import { llmToolLoop as defaultLlmToolLoop } from '../llm/llmToolLoop'
@@ -114,6 +116,28 @@ export interface PanelState<T> {
 }
 
 // ---------------------------------------------------------------------------
+// Per-model cost + impact for step 3 (Plan N)
+// ---------------------------------------------------------------------------
+
+/**
+ * One participant's contribution to the current review's verdict cross-verify
+ * pass. `usage` drives the per-model COST table (gated on showTokenCost; absent
+ * → tokens-only or omitted). `role`/impact fields drive the IMPACT readout
+ * (always shown when cross-verify ran).
+ */
+export interface VerdictModelBreakdown {
+  providerId: string
+  modelId: string
+  role: 'generator' | 'verifier'
+  /** Token usage attributed to this model, when captured. */
+  usage?: LlmUsage
+  /** Generator: count of its findings that SURVIVED verification (surfaced). */
+  surfaced?: number
+  /** Verifier impact (confirms/refutes/uncertains/decisive). */
+  impact?: { confirms: number; refutes: number; uncertains: number; decisive: number }
+}
+
+// ---------------------------------------------------------------------------
 // Task names (used as cache key discriminants + analytics)
 // ---------------------------------------------------------------------------
 
@@ -171,6 +195,12 @@ export interface AiRun {
    * panel states. Display-only — consumed by the showTokenCost total.
    */
   readonly totalUsage: LlmUsage | undefined
+  /**
+   * Per-model cost + impact breakdown for the VERDICT cross-verify pass (Plan N).
+   * Empty unless cross-verify actually ran for the verdict this review. Generator
+   * row first, then one row per responding verifier model. Display-only.
+   */
+  readonly verdictModels: VerdictModelBreakdown[]
   start(): Promise<void>
   retry(task: TaskName): Promise<void>
   coach(drafts: Draft[], prComments?: string[], verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'): Promise<CoachOutcome | { error: string }>
@@ -307,6 +337,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // Folded into totalUsage so the per-PR total includes coaching cost.
   let coachUsage = $state<LlmUsage | undefined>(undefined)
 
+  // Per-model cost + impact for the verdict's cross-verify pass (Plan N).
+  // Populated when cross-verify runs for the verdict; empty otherwise.
+  let verdictModelsState = $state<VerdictModelBreakdown[]>([])
+
   // Packed context — kept in closure so retry can reuse it without re-packing
   // (unless the initial pack failed, in which case retry re-packs)
   let packedCtx: PackedContext | null = null
@@ -362,12 +396,16 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   async function verifyFindingSet(
     findings: FindingToVerify[],
     onActivity?: (line: string) => void,
-  ): Promise<{ byId: Map<string, import('./schemas').FindingVerification>; usage: LlmUsage | undefined }> {
-    if (findings.length === 0 || !crossModelVerifyEffective()) {
-      return { byId: new Map(), usage: undefined }
-    }
+  ): Promise<{
+    byId: Map<string, import('./schemas').FindingVerification>
+    usage: LlmUsage | undefined
+    perModelUsage: ParticipantUsage[]
+    verifierImpact: VerifierImpact[]
+  }> {
+    const empty = { byId: new Map(), usage: undefined, perModelUsage: [], verifierImpact: [] }
+    if (findings.length === 0 || !crossModelVerifyEffective()) return empty
     const verifiers = verifierProviderConfigs()
-    if (verifiers.length === 0) return { byId: new Map(), usage: undefined }
+    if (verifiers.length === 0) return empty
 
     onActivity?.(crossCheckLabel(verifiers))
 
@@ -407,11 +445,60 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const generatorName = activeLlmConfig().provider.displayName
     try {
       const outcome = await crossVerify(verifiable, generatorName, verifiers, realVerify)
-      return { byId: outcome.byId, usage: outcome.usage }
+      return {
+        byId: outcome.byId,
+        usage: outcome.usage,
+        perModelUsage: outcome.perModelUsage,
+        verifierImpact: outcome.verifierImpact,
+      }
     } catch {
       // Verification itself failing must never drop findings.
-      return { byId: new Map(), usage: undefined }
+      return empty
     }
+  }
+
+  /**
+   * Build the per-model cost + impact breakdown for step 3 (Plan N). Generator
+   * row first (its generation usage + surfaced-finding count), then one row per
+   * responding verifier model (its usage + confirms/refutes/decisive impact).
+   * The generator identity is the ensemble generator (or active config default).
+   */
+  function buildVerdictModels(
+    generatorUsage: LlmUsage | undefined,
+    surfaced: number,
+    perModelUsage: ParticipantUsage[],
+    verifierImpact: VerifierImpact[],
+  ): VerdictModelBreakdown[] {
+    const gen = resolveEnsemble().generator
+    const genProviderId = gen?.providerId ?? activeLlmConfig().provider.id
+    const genModelId = gen?.model.id ?? activeLlmConfig().model.id
+    const usageByModel = new Map(perModelUsage.map((p) => [`${p.providerId}:${p.modelId}`, p.usage]))
+
+    const rows: VerdictModelBreakdown[] = [
+      {
+        providerId: genProviderId,
+        modelId: genModelId,
+        role: 'generator',
+        ...(generatorUsage ? { usage: generatorUsage } : {}),
+        surfaced,
+      },
+    ]
+    for (const imp of verifierImpact) {
+      const usage = usageByModel.get(`${imp.providerId}:${imp.modelId}`)
+      rows.push({
+        providerId: imp.providerId,
+        modelId: imp.modelId,
+        role: 'verifier',
+        ...(usage ? { usage } : {}),
+        impact: {
+          confirms: imp.confirms,
+          refutes: imp.refutes,
+          uncertains: imp.uncertains,
+          decisive: imp.decisive,
+        },
+      })
+    }
+    return rows
   }
 
   // ---------------------------------------------------------------------------
@@ -1047,17 +1134,27 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         body: bullet,
         side: 'RIGHT' as const,
       }))
+      // Generator usage captured BEFORE folding in verifier usage (Plan N
+      // per-model cost attributes generation tokens to the generator model).
+      const generatorUsage = verdictUsage
       const verdictVerify = await verifyFindingSet(evidenceFindings, (line) => {
         verdictState.activity = [...(verdictState.activity ?? []), line]
       })
       if (verdictVerify.byId.size > 0) {
         const evidenceVerification: Record<number, import('./schemas').FindingVerification> = {}
+        let surfacedCount = 0
         finalResult.evidence.forEach((_, i) => {
           const v = verdictVerify.byId.get(`ev:${i}`)
-          if (v) evidenceVerification[i] = v
+          if (v) {
+            evidenceVerification[i] = v
+            if (v.surfaced) surfacedCount += 1
+          }
         })
         finalResult = { ...finalResult, evidenceVerification }
         verdictUsage = addUsage(verdictUsage, verdictVerify.usage)
+
+        // Per-model cost + impact breakdown for step 3 (Plan N).
+        verdictModelsState = buildVerdictModels(generatorUsage, surfacedCount, verdictVerify.perModelUsage, verdictVerify.verifierImpact)
       }
       }
 
@@ -1683,6 +1780,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       total = addUsage(total, coachUsage)
       return total
     },
+    get verdictModels() { return verdictModelsState },
     start,
     retry,
     coach,

@@ -77,40 +77,115 @@ export function activeLlmConfig(): ActiveLlmConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Cross-model verification (Plan M)
+// Cross-model verification (Plan M) + configurable ensemble (Plan N)
 // ---------------------------------------------------------------------------
 
 /** Cap on verifier providers polled per verification — bounds token cost. */
 export const MAX_VERIFIER_PROVIDERS = 3
 
 /**
- * The "configured verifier providers": every provider with a key saved,
- * EXCLUDING the active generator provider. Picked deterministically in PROVIDERS
- * order and capped at MAX_VERIFIER_PROVIDERS to bound cost. Each verifier uses
- * its provider's default model. Returns [] when no other provider has a key.
+ * Cap on TOTAL ensemble participants (generator + verifiers) — bounds cost.
+ * Generator counts as 1, so verifiers are capped at MAX_ENSEMBLE_PARTICIPANTS-1.
  */
-export function verifierProviderConfigs(): ProviderConfig[] {
-  const settings = getSettings()
-  const activeId = activeLlmConfig().provider.id
-  const out: ProviderConfig[] = []
-  for (const provider of PROVIDERS) {
-    if (provider.id === activeId) continue
-    const key = settings[PROVIDER_KEY_FIELDS[provider.id]] as string | null
-    if (!key) continue
-    const model = getModelDef(provider, provider.defaultModel) ?? provider.models[0]
-    out.push({ providerId: provider.id, model, key })
-    if (out.length >= MAX_VERIFIER_PROVIDERS) break
-  }
-  return out
+export const MAX_ENSEMBLE_PARTICIPANTS = 4
+
+/** A resolved ensemble participant: provider def + model def + its key. */
+export interface ResolvedParticipant {
+  providerId: LlmProviderId
+  model: LlmModelDef
+  key: string
+}
+
+/** A fully-resolved ensemble ready for the run layer. */
+export interface ResolvedEnsemble {
+  /** Generator participant when its provider key exists, else null. */
+  generator: ResolvedParticipant | null
+  /** Verifier participants whose provider key exists, capped. */
+  verifiers: ProviderConfig[]
+}
+
+/** Read a provider's saved key (null when absent). */
+function providerKey(providerId: LlmProviderId): string | null {
+  return getSettings()[PROVIDER_KEY_FIELDS[providerId]] as string | null
 }
 
 /**
- * Whether cross-model verification is EFFECTIVE: the setting is on AND at least
- * one verifier provider (other than the active generator) has a key. With 0–1
- * keys this is false → the verification engine is a strict no-op, byte-identical
- * to behaviour before Plan M. Single-key users are unaffected.
+ * The DEFAULT ensemble (Plan M behaviour): generator = active provider+model;
+ * verifiers = other keyed providers' default models, PROVIDERS order, capped.
+ * Synthesized when no custom `aiEnsemble` is stored — byte-identical to #128.
+ */
+function defaultEnsemble(): ResolvedEnsemble {
+  const active = activeLlmConfig()
+  const activeKey = providerKey(active.provider.id)
+  const generator: ResolvedParticipant | null = activeKey
+    ? { providerId: active.provider.id, model: active.model, key: activeKey }
+    : null
+  const verifiers: ProviderConfig[] = []
+  for (const provider of PROVIDERS) {
+    if (provider.id === active.provider.id) continue
+    const key = providerKey(provider.id)
+    if (!key) continue
+    const model = getModelDef(provider, provider.defaultModel) ?? provider.models[0]
+    verifiers.push({ providerId: provider.id, model, key })
+    if (verifiers.length >= MAX_VERIFIER_PROVIDERS) break
+  }
+  return { generator, verifiers }
+}
+
+/**
+ * Resolve the effective ensemble (Plan N). When `aiEnsemble` is set, use the
+ * user's hand-picked generator + verifiers — which MAY include multiple models
+ * of the SAME provider (single-key cross-verify unlock). Participants whose
+ * provider key is missing are dropped. Total participants capped at
+ * MAX_ENSEMBLE_PARTICIPANTS. When no custom ensemble is stored, returns the
+ * DEFAULT (byte-identical to #128).
+ */
+export function resolveEnsemble(): ResolvedEnsemble {
+  const ensemble = getSettings().aiEnsemble
+  if (!ensemble) return defaultEnsemble()
+
+  // Generator: resolve provider/model/key; null when its key is missing.
+  const genProvider = getProvider(ensemble.generator.provider)
+  const genKey = genProvider ? providerKey(genProvider.id) : null
+  let generator: ResolvedParticipant | null = null
+  if (genProvider && genKey) {
+    const model = getModelDef(genProvider, ensemble.generator.model) ?? genProvider.models[0]
+    generator = { providerId: genProvider.id, model, key: genKey }
+  }
+
+  // Verifiers: drop key-missing, cap so generator + verifiers ≤ max.
+  const verifiers: ProviderConfig[] = []
+  const verifierCap = MAX_ENSEMBLE_PARTICIPANTS - (generator ? 1 : 0)
+  for (const v of ensemble.verifiers) {
+    const provider = getProvider(v.provider)
+    if (!provider) continue
+    const key = providerKey(provider.id)
+    if (!key) continue
+    const model = getModelDef(provider, v.model) ?? provider.models[0]
+    verifiers.push({ providerId: provider.id, model, key })
+    if (verifiers.length >= verifierCap) break
+  }
+  return { generator, verifiers }
+}
+
+/**
+ * Verifier provider configs for the current ensemble (Plan M call sites). Thin
+ * wrapper over resolveEnsemble().verifiers; the default ensemble reproduces the
+ * pre-Plan-N behaviour exactly.
+ */
+export function verifierProviderConfigs(): ProviderConfig[] {
+  return resolveEnsemble().verifiers
+}
+
+/**
+ * Whether cross-model verification is EFFECTIVE: the setting is on AND the
+ * ensemble has a usable generator plus ≥1 verifier. With the default ensemble
+ * this needs ≥2 keyed providers; with a custom ensemble a SINGLE provider key
+ * with ≥2 models suffices (the Plan N unlock). With <2 usable models it is a
+ * strict no-op, byte-identical to single-model behaviour.
  */
 export function crossModelVerifyEffective(): boolean {
   if (!getSettings().crossModelVerify) return false
-  return verifierProviderConfigs().length >= 1
+  const { generator, verifiers } = resolveEnsemble()
+  return generator !== null && verifiers.length >= 1
 }
