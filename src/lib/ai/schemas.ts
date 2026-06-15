@@ -75,6 +75,12 @@ export interface VerdictResult {
    * array index. Attached post-generation; absent rows render unverified.
    */
   evidenceVerification?: Record<number, FindingVerification>
+  /**
+   * Multi-generator provenance per evidence row (Plan O 'generate' mode), keyed
+   * by the evidence array index: the display names of every model that raised it.
+   * Absent in single-generator ('verify') mode.
+   */
+  evidenceRaisedBy?: Record<number, string[]>
 }
 
 const VERDICT_LEVELS = new Set<string>([
@@ -835,6 +841,12 @@ export interface SkillFinding {
   body: string
   /** Cross-model verification result (Plan M), attached post-generation. */
   verification?: FindingVerification
+  /**
+   * Multi-generator provenance (Plan O 'generate' mode): the display names of
+   * every ensemble model that independently RAISED this finding. Absent in
+   * single-generator ('verify') mode. With ≥2 raisers the UI shows "raised by A,B".
+   */
+  raisedBy?: string[]
 }
 
 export interface SkillReviewResult {

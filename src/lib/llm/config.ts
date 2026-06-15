@@ -197,3 +197,54 @@ export function crossModelVerifyEffective(): boolean {
   const { generator, verifiers } = resolveEnsemble()
   return generator !== null && verifiers.length >= 1
 }
+
+/**
+ * A fusion-mode participant (Plan O): a generator config that ALSO acts as a
+ * verifier for findings it didn't raise. Carries a display name for raisedBy.
+ */
+export interface FusionParticipant {
+  generator: string
+  cfg: ProviderConfig
+}
+
+/**
+ * Whether MULTI-GENERATOR fusion (Plan O 'generate' mode) is EFFECTIVE:
+ * `fusionMode === 'generate'`, cross-verify is effective, AND the ensemble
+ * resolves to ≥2 keyed participants (generator + ≥1 verifier). When false the
+ * run uses the single-generator 'verify' path (byte-identical to #130/#133), so
+ * single-model / single-key users and `fusionMode: 'verify'` users are unaffected.
+ */
+export function fusionGenerateEffective(): boolean {
+  if (getSettings().fusionMode !== 'generate') return false
+  if (!crossModelVerifyEffective()) return false
+  return fusionParticipants().length >= 2
+}
+
+/**
+ * All ensemble participants as fusion participants (generator first, then
+ * verifiers), each tagged with its provider display name (for raisedBy). The
+ * generator and each verifier both generate AND verify in 'generate' mode. Empty
+ * when there is no usable generator.
+ */
+export function fusionParticipants(): FusionParticipant[] {
+  const { generator, verifiers } = resolveEnsemble()
+  if (!generator) return []
+  const name = (id: LlmProviderId): string => getProvider(id)?.displayName ?? id
+  const out: FusionParticipant[] = [
+    {
+      generator: name(generator.providerId),
+      cfg: { providerId: generator.providerId, model: generator.model, key: generator.key },
+    },
+  ]
+  for (const v of verifiers) {
+    out.push({ generator: name(v.providerId), cfg: v })
+  }
+  // Disambiguate same-provider participants (multi-model on one key) by model id
+  // so raisedBy / impact don't collapse two models of one provider into one name.
+  const counts = new Map<string, number>()
+  for (const p of out) counts.set(p.generator, (counts.get(p.generator) ?? 0) + 1)
+  for (const p of out) {
+    if ((counts.get(p.generator) ?? 0) > 1) p.generator = `${p.generator} (${p.cfg.model.id})`
+  }
+  return out
+}

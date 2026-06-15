@@ -9,7 +9,7 @@
  * stub any combination without module-level mocking.
  */
 
-import { activeLlmConfig, activeProviderHasKey, crossModelVerifyEffective, verifierProviderConfigs, resolveEnsemble } from '../llm/config'
+import { activeLlmConfig, activeProviderHasKey, crossModelVerifyEffective, verifierProviderConfigs, resolveEnsemble, fusionGenerateEffective, fusionParticipants, type FusionParticipant } from '../llm/config'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import {
@@ -25,11 +25,15 @@ import {
   crossVerify,
   buildVerifyPrompt,
   validateVerifierResponse,
+  mergeGeneratorFindings,
+  fuseConfirm,
   type VerifiableFinding,
   type VerifyFn,
   type ParticipantUsage,
   type VerifierImpact,
+  type GeneratorFindings,
 } from './crossVerify'
+import { assignLenses } from './lenses'
 import { getProvider } from '../llm/providers'
 import { llmToolLoop as defaultLlmToolLoop } from '../llm/llmToolLoop'
 import {
@@ -140,8 +144,15 @@ export interface VerdictModelBreakdown {
   usage?: LlmUsage
   /** Generator: count of its findings that SURVIVED verification (surfaced). */
   surfaced?: number
+  /**
+   * Generator (Plan O 'generate' mode): of its surfaced findings, how many ONLY
+   * this model raised (the recall headline — "caught X the others missed").
+   */
+  uniqueCatch?: number
   /** Verifier impact (confirms/refutes/uncertains/decisive). */
   impact?: { confirms: number; refutes: number; uncertains: number; decisive: number }
+  /** Verifier lens (Plan O Part B), e.g. 'security'. Absent in 'verify' mode. */
+  lens?: import('./lenses').Lens
 }
 
 // ---------------------------------------------------------------------------
@@ -366,9 +377,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     side: 'LEFT' | 'RIGHT'
   }
 
-  /** Real per-verifier call: adversarial JSON judgement against one provider. */
-  const realVerify: VerifyFn = async (cfg: ProviderConfig, findings: VerifiableFinding[]) => {
-    const prompts = buildVerifyPrompt(findings)
+  /** Real per-verifier call: adversarial (optionally lensed) JSON judgement. */
+  const realVerify: VerifyFn = async (cfg: ProviderConfig, findings: VerifiableFinding[], lens) => {
+    const prompts = buildVerifyPrompt(findings, lens)
     const { result, usage } = await llmJsonWithRepairFor(
       cfg,
       { system: prompts.system, user: prompts.user },
@@ -503,9 +514,151 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           uncertains: imp.uncertains,
           decisive: imp.decisive,
         },
+        ...(imp.lens ? { lens: imp.lens } : {}),
       })
     }
     return rows
+  }
+
+  // ---------------------------------------------------------------------------
+  // Multi-generator fusion (Plan O Part A) — RECALL
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Generate a finding set with EACH ensemble participant independently (in
+   * parallel, via the participant's own provider config). `gen` maps a
+   * participant config → that participant's VerifiableFindings (or throws,
+   * which is swallowed so one slow/broken generator can't sink the fusion).
+   * Returns the per-generator finding sets + summed generation usage.
+   */
+  async function generateMultiGen(
+    participants: FusionParticipant[],
+    gen: (cfg: ProviderConfig) => Promise<{ findings: VerifiableFinding[]; usage?: LlmUsage }>,
+  ): Promise<{ perGenerator: GeneratorFindings[]; usage: LlmUsage | undefined; usageByModel: Map<string, LlmUsage> }> {
+    const results = await Promise.allSettled(participants.map((p) => gen(p.cfg)))
+    const perGenerator: GeneratorFindings[] = []
+    const usageByModel = new Map<string, LlmUsage>()
+    let usage: LlmUsage | undefined
+    results.forEach((res, i) => {
+      if (res.status !== 'fulfilled') return
+      const p = participants[i]
+      perGenerator.push({ generator: p.generator, cfg: p.cfg, findings: res.value.findings })
+      usage = addUsage(usage, res.value.usage)
+      if (res.value.usage) {
+        const key = `${p.cfg.providerId}:${p.cfg.model.id}`
+        usageByModel.set(key, addUsage(usageByModel.get(key), res.value.usage) as LlmUsage)
+      }
+    })
+    return { perGenerator, usage, usageByModel }
+  }
+
+  /**
+   * Build the per-model breakdown for a fusion run (Plan O): one GENERATOR row
+   * per participant (its generation usage + surfaced + uniqueCatch), each also
+   * carrying its assigned verify lens (every participant verifies in fusion).
+   */
+  function buildFusionModels(
+    participants: FusionParticipant[],
+    genUsageByModel: Map<string, LlmUsage>,
+    fusionPerModelUsage: ParticipantUsage[],
+    generatorImpact: import('./crossVerify').GeneratorImpact[],
+    lenses: import('./lenses').Lens[],
+  ): VerdictModelBreakdown[] {
+    const verifyUsage = new Map(fusionPerModelUsage.map((p) => [`${p.providerId}:${p.modelId}`, p.usage]))
+    const impactByGen = new Map(generatorImpact.map((g) => [g.generator, g]))
+    return participants.map((p, i) => {
+      const key = `${p.cfg.providerId}:${p.cfg.model.id}`
+      const usage = addUsage(genUsageByModel.get(key), verifyUsage.get(key))
+      const imp = impactByGen.get(p.generator)
+      return {
+        providerId: p.cfg.providerId,
+        modelId: p.cfg.model.id,
+        role: 'generator' as const,
+        ...(usage ? { usage } : {}),
+        surfaced: imp?.surfaced ?? 0,
+        uniqueCatch: imp?.uniqueCatch ?? 0,
+        ...(lenses[i] ? { lens: lenses[i] } : {}),
+      }
+    })
+  }
+
+  /**
+   * Plan O 'generate' mode for a skill review: run the skill prompt with EVERY
+   * ensemble participant as an independent generator, dedup-merge the union,
+   * cross-confirm (lensed), and rebuild a SkillReviewResult whose findings carry
+   * `raisedBy` + `verification`, surfaced-first. Returns null when fewer than 2
+   * generators produced findings (caller falls back to single-generator). Never
+   * throws — any failure returns null.
+   */
+  async function fuseSkillReview(
+    prompts: { system: string; user: string },
+    skillName: string,
+    idx: number,
+    onUpdate?: () => void,
+  ): Promise<{ result: SkillReviewResult; usage: LlmUsage | undefined; models: VerdictModelBreakdown[] } | null> {
+    try {
+      const participants = fusionParticipants()
+      if (participants.length < 2) return null
+      const note = (line: string): void => {
+        const entry = skillReviewsState[idx]
+        entry.state = { ...entry.state, activity: [...(entry.state.activity ?? []), line] }
+        onUpdate?.()
+      }
+      note(`Generating with ${participants.length} models (fusion)…`)
+
+      // 1. Each participant generates independently (parallel, own provider cfg).
+      const { perGenerator, usage: genUsage, usageByModel: genUsageByModel } = await generateMultiGen(
+        participants,
+        async (cfg) => {
+          const { result, usage } = await llmJsonWithRepairFor<SkillReviewResult>(
+            cfg,
+            { system: prompts.system, user: prompts.user },
+            validateSkillReviewResult,
+          )
+          const findings: VerifiableFinding[] = result.findings.map((f, i) => ({
+            id: `${cfg.providerId}:${cfg.model.id}:${i}:${djb2(f.body)}`,
+            path: f.path,
+            line: f.line,
+            severity: f.severity,
+            body: f.body,
+          }))
+          return { findings, usage }
+        },
+      )
+
+      if (perGenerator.length < 2) return null
+
+      // 2. Merge/dedup the union.
+      const merged = mergeGeneratorFindings(perGenerator)
+      if (merged.length === 0) {
+        return { result: { skillName, findings: [] }, usage: genUsage, models: [] }
+      }
+
+      // 3. Cross-confirm (each participant verifies findings it didn't raise), lensed.
+      const lenses = assignLenses(participants.length)
+      const outcome = await fuseConfirm(merged, participants, realVerify, lenses)
+
+      // 4. Rebuild findings, surfaced-first, carrying raisedBy + verification.
+      const findings = outcome.merged.map((m) => ({
+        path: m.merged.finding.path,
+        line: m.merged.finding.line,
+        severity: m.merged.finding.severity,
+        body: m.merged.finding.body,
+        verification: m.verification,
+        raisedBy: m.merged.raisedBy,
+      }))
+      const totalUsage = addUsage(genUsage, outcome.usage)
+      const models = buildFusionModels(
+        participants,
+        genUsageByModel,
+        outcome.perModelUsage,
+        outcome.generatorImpact,
+        lenses,
+      )
+      return { result: { skillName, findings }, usage: totalUsage, models }
+    } catch {
+      return null
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1583,10 +1736,27 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const prompts = skillReviewPrompt(ctx, { name: skill.name, content: skill.content }, existingComments)
 
     try {
-      let skillResult: SkillReviewResult
+      let skillResult: SkillReviewResult = { skillName: skill.name, findings: [] }
       let skillUsage: LlmUsage | undefined
       let toolCallsUsed: number | undefined
+      let skillModels: VerdictModelBreakdown[] | undefined
 
+      // Plan O 'generate' mode: every ensemble model generates this skill review
+      // independently; the union is dedup-merged and cross-confirmed so a real
+      // finding only one model caught can still surface (recall). Single-pass per
+      // participant — deep multi-gen stays on the verify path below.
+      let fusionHandled = false
+      if (fusionGenerateEffective() && !deep.enabled) {
+        const fused = await fuseSkillReview(prompts, skill.name, idx, onUpdate)
+        if (fused) {
+          skillResult = fused.result
+          skillUsage = fused.usage
+          skillModels = fused.models
+          fusionHandled = true
+        }
+      }
+
+      if (!fusionHandled) {
       if (deep.enabled) {
         const deepOutcome = await runDeepJson<SkillReviewResult>(prompts, validateSkillReviewResult, (line) => {
           const entry = skillReviewsState[idx]
@@ -1610,7 +1780,6 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // effective — no array build, no verifier call.
       // Per-model cost+impact breakdown (Plan N) — populated only when an
       // ensemble of >1 model actually verified this reviewer's findings.
-      let skillModels: VerdictModelBreakdown[] | undefined
       if (crossModelVerifyEffective()) {
       // Generator usage captured BEFORE folding in verifier usage so the
       // per-model cost attributes generation tokens to the generator model.
@@ -1656,6 +1825,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         }
       }
       }
+      } // end if (!fusionHandled)
 
       // Cache the (possibly verified) result. Skill deep-cache shape preserved.
       if (deep.enabled) {

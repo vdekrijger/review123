@@ -48,9 +48,9 @@
             <td class="model-role">{m.role}</td>
             <td class="model-impact">
               {#if m.role === 'generator'}
-                {formatGeneratorImpact(m.surfaced ?? 0)}
+                {formatGeneratorImpact(m.surfaced ?? 0, m.uniqueCatch ?? 0)}
               {:else if m.impact}
-                {formatVerifierImpact(m.impact)}
+                {formatVerifierImpact({ ...m.impact, lens: m.lens })}
               {:else}
                 —
               {/if}

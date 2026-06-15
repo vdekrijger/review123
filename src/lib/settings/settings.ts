@@ -59,6 +59,18 @@ export interface GitlabOAuth {
 
 export type AiProvider = 'deepseek' | 'openai' | 'anthropic' | 'gemini'
 
+/**
+ * Fusion mode (Plan O).
+ * - 'verify'   — single generator (active model) raises findings; the other
+ *                ensemble models VERIFY them (precision only). Byte-identical to
+ *                Plan M/N (#128/#130/#133). The default.
+ * - 'generate' — EVERY ensemble model generates findings independently; the union
+ *                is dedup-merged and cross-confirmed, so findings only one model
+ *                caught can still surface (recall). More tokens — N generations +
+ *                N×(N−1) verifications. Only active with ≥2 keyed models.
+ */
+export type FusionMode = 'verify' | 'generate'
+
 /** One participant in the configurable model ensemble (Plan N). */
 export interface EnsembleParticipant {
   provider: AiProvider
@@ -180,6 +192,14 @@ export interface Settings {
    * MAY include multiple models of the SAME provider (single-key cross-verify).
    */
   aiEnsemble: AiEnsemble | null
+  /**
+   * Fusion mode (Plan O). Default 'verify' (byte-identical to #130): the active
+   * model generates, the others verify (precision). 'generate' makes EVERY
+   * ensemble model an independent generator and dedup-merges the union, so a real
+   * issue only one model caught can still surface (recall) — costs more tokens and
+   * is EFFECTIVE only with ≥2 keyed models (else it falls back to verify behavior).
+   */
+  fusionMode: FusionMode
   diffMode: DiffMode
   /** Hide whitespace-only changes in diffs (like GitHub's ?w=1). */
   hideWhitespace: boolean
@@ -240,6 +260,7 @@ const DEFAULTS: Settings = {
   storyMode: true,
   crossModelVerify: true,
   aiEnsemble: null,
+  fusionMode: 'verify',
   diffMode: 'unified',
   hideWhitespace: false,
   githubAuth: null,
@@ -401,6 +422,9 @@ function coerce(raw: unknown): Partial<Settings> {
   if (typeof crossModelVerify === 'boolean') result.crossModelVerify = crossModelVerify
 
   if ('aiEnsemble' in obj) result.aiEnsemble = coerceEnsemble(obj['aiEnsemble'])
+
+  const fusionMode = obj['fusionMode']
+  if (fusionMode === 'verify' || fusionMode === 'generate') result.fusionMode = fusionMode
 
   const gitlabToken = obj['gitlabToken']
   if (typeof gitlabToken === 'string') result.gitlabToken = gitlabToken
@@ -635,6 +659,7 @@ export function setOffAllExtras(): void {
 export const setStoryMode = (v: boolean) => save({ storyMode: v })
 export const setCrossModelVerify = (v: boolean) => save({ crossModelVerify: v })
 export const setAiEnsemble = (v: AiEnsemble | null) => save({ aiEnsemble: v })
+export const setFusionMode = (v: FusionMode) => save({ fusionMode: v })
 export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
 export const setHideWhitespace = (hide: boolean) => save({ hideWhitespace: hide })
 export const setRailCollapsed = (collapsed: boolean) => save({ railCollapsed: collapsed })

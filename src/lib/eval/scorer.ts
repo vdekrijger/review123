@@ -18,6 +18,8 @@
  * the HARNESS MECHANICS, not model quality. Only --live mode measures the model.
  */
 
+import { findingsMatch } from '../ai/findingMatch'
+
 // ---------------------------------------------------------------------------
 // Finding shapes
 // ---------------------------------------------------------------------------
@@ -66,66 +68,27 @@ export const DEFAULT_MATCH_CONFIG: MatchConfig = {
 }
 
 // ---------------------------------------------------------------------------
-// Description fuzzy overlap (token Jaccard)
+// Description fuzzy overlap + single-pair match predicate
+//
+// The matching definition lives in src/lib/ai/findingMatch.ts (shared with
+// Plan O multi-generator dedup so there is ONE notion of "same finding"). These
+// re-exports/wrappers keep scorer.ts's public surface stable.
 // ---------------------------------------------------------------------------
 
-const STOP_WORDS = new Set([
-  'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'to', 'of', 'in', 'on',
-  'for', 'and', 'or', 'this', 'that', 'it', 'its', 'as', 'at', 'by', 'with',
-  'not', 'no', 'but', 'if', 'then', 'than', 'so', 'will', 'would', 'should',
-])
-
-/** Tokenize a description into lowercased word tokens, dropping stop words. */
-export function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9_]+/)
-    .filter((t) => t.length > 1 && !STOP_WORDS.has(t))
-}
+export { tokenize, descOverlap } from '../ai/findingMatch'
 
 /**
- * Jaccard token overlap between two descriptions (0 = disjoint, 1 = identical
- * token sets). Empty-on-either-side returns 0.
- */
-export function descOverlap(a: string, b: string): number {
-  const ta = new Set(tokenize(a))
-  const tb = new Set(tokenize(b))
-  if (ta.size === 0 || tb.size === 0) return 0
-  let inter = 0
-  for (const t of ta) if (tb.has(t)) inter++
-  const union = ta.size + tb.size - inter
-  return union === 0 ? 0 : inter / union
-}
-
-// ---------------------------------------------------------------------------
-// Single-pair match predicate
-// ---------------------------------------------------------------------------
-
-/**
- * Does a produced finding match an expectation?
- *
- * Rules:
- * - File must match exactly (paths are normalized by the caller's fixtures).
- * - Line: a file-level finding (line null) on either side matches any line on
- *   the same file. Otherwise both lines must be within `lineTolerance`.
- * - Description: token Jaccard must be ≥ descOverlapThreshold. A description
- *   match is REQUIRED so a same-line finding about a different concern does not
- *   spuriously count.
+ * Does a produced finding match an expectation? Delegates to the shared
+ * `findingsMatch` predicate (file exact + line proximity + fuzzy description
+ * overlap). A description match is REQUIRED so a same-line finding about a
+ * different concern does not spuriously count.
  */
 export function isMatch(
   produced: ProducedFinding,
   expected: ExpectedFinding,
   config: MatchConfig = DEFAULT_MATCH_CONFIG,
 ): boolean {
-  if (produced.file !== expected.file) return false
-
-  const lineOk =
-    produced.line === null ||
-    expected.line === null ||
-    Math.abs(produced.line - expected.line) <= config.lineTolerance
-  if (!lineOk) return false
-
-  return descOverlap(produced.description, expected.description) >= config.descOverlapThreshold
+  return findingsMatch(produced, expected, config)
 }
 
 // ---------------------------------------------------------------------------
