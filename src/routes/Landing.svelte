@@ -945,14 +945,24 @@
     flex-shrink: 0;
   }
 
+  /* Discard ✕ — a fixed square so the glyph centers regardless of the
+     surrounding row's mixed font-sizes. align-self centers it to the row;
+     flex centering inside places the ✕ dead-center in its own hit area. */
   .inflight-discard {
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 1.6rem;
+    height: 1.6rem;
     background: none;
     border: none;
     cursor: pointer;
     color: var(--text-muted);
     font-size: 0.85rem;
     line-height: 1;
-    padding: 0.25rem 0.4rem;
+    padding: 0;
     border-radius: 4px;
     flex-shrink: 0;
     transition: color 150ms, background 100ms;
@@ -961,6 +971,11 @@
   .inflight-discard:hover {
     color: var(--legend-removed-color);
     background: var(--surface-raised);
+  }
+
+  .inflight-discard:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   /* Discard confirmation dialog — base dialog styles come from app.css */

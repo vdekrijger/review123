@@ -71,6 +71,9 @@ describe('Landing in-flight reviews section', () => {
     expect(within(row).getByTestId('inflight-count')).toHaveTextContent('2 comments drafted')
     // Provider brand icon present
     expect(container.querySelector('.inflight-link [data-provider="github"] svg')).not.toBeNull()
+    // Discard ✕ carries its class (drives the centered square-button styling).
+    const discard = screen.getByRole('button', { name: /Discard drafts for acme\/widgets#42/i })
+    expect(discard).toHaveClass('inflight-discard')
   })
 
   it('groups multiple head-SHA variants of one PR into a single row with summed count', async () => {
