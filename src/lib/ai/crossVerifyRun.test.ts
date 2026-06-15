@@ -15,6 +15,7 @@ import {
   setAnthropicKey,
   setOpenaiKey,
   setAiProvider,
+  setAiEnsemble,
 } from '../settings/settings'
 import { djb2 } from '../viewed/viewed.svelte'
 
@@ -153,6 +154,40 @@ describe('cross-model verification in runSkillReviews', () => {
     expect(llmJsonWithRepairFor).not.toHaveBeenCalled()
     const result = run.skillReviews[0].state.value as SkillReviewResult
     expect(result.findings.every((f) => f.verification === undefined)).toBe(true)
+  })
+
+  it('runs verification with a SINGLE provider key + 2-model ensemble (Plan N unlock)', async () => {
+    // Only ONE key (anthropic), but a custom ensemble with two anthropic models
+    // → cross-verify is effective and the verifier model is called.
+    setAiProvider('anthropic')
+    setAnthropicKey('a')
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [{ provider: 'anthropic', model: 'claude-haiku-4-5' }],
+    })
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    const seenModels: string[] = []
+    const llmJsonWithRepairFor = vi.fn().mockImplementation(async (cfg, _opts, validate) => {
+      seenModels.push(cfg.model.id)
+      const resp = {
+        verdicts: [
+          { id: 'src/foo.ts:10:' + djb2('a real bug here'), verdict: 'confirm', reason: 'real' },
+          { id: 'src/foo.ts:20:' + djb2('a style nit there'), verdict: 'confirm', reason: 'ok' },
+        ],
+      }
+      return { result: validate(resp), usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }
+    })
+
+    const run = createAiRun(makeInput(), makeDeps({ llmJsonWithRepairFor }))
+    await run.runSkillReviews()
+
+    // The verifier model (haiku) was called even though only ONE provider key exists.
+    expect(seenModels).toEqual(['claude-haiku-4-5'])
+    const result = run.skillReviews[0].state.value as SkillReviewResult
+    expect(result.findings.find((f) => f.line === 10)!.verification!.surfaced).toBe(true)
   })
 
   it('a verifier failure never drops the findings (shown unverified)', async () => {

@@ -1,14 +1,15 @@
 <script lang="ts">
   import {
     getSettings, saveTokens, setAiProvider, setAiModel, setStoryMode, setCrossModelVerify,
-    setAiTaskMode, setAllTasksDeep, setAllTasksStandard, setOffAllExtras,
+    setAiTaskMode, setAllTasksDeep, setAllTasksStandard, setOffAllExtras, setAiEnsemble,
     AI_TASK_IDS, taskSupportsDeep,
     type AiProvider, type AiTaskId, type AiTaskMode,
+    type AiEnsemble, type EnsembleParticipant,
   } from '../../lib/settings/settings'
   import { settingsState } from '../../lib/settings/settingsState.svelte'
-  import { PROVIDERS, getModelDef, type LlmProviderId } from '../../lib/llm/providers'
+  import { PROVIDERS, getProvider, getModelDef, type LlmProviderId } from '../../lib/llm/providers'
   import { llmTestConnection, LlmError } from '../../lib/llm/llm'
-  import { activeProviderHasKey } from '../../lib/llm/config'
+  import { activeProviderHasKey, resolveEnsemble, MAX_ENSEMBLE_PARTICIPANTS } from '../../lib/llm/config'
   import { track } from '../../lib/analytics/analytics'
   import SecretInput from './SecretInput.svelte'
   import Spinner from '../Spinner.svelte'
@@ -71,10 +72,110 @@
     const s = settingsState.current
     return [s.deepseekKey, s.openaiKey, s.anthropicKey, s.geminiKey].filter(Boolean).length
   })
-  const crossVerifyAvailable = $derived(keyedProviderCount >= 2)
   function onCrossModelVerifyChange(checked: boolean) {
     crossModelVerify = checked
     setCrossModelVerify(checked)
+  }
+
+  // -------------------------------------------------------------------------
+  // Configurable ensemble (Plan N). A participant list with one generator. The
+  // current ensemble is the stored aiEnsemble, or the synthesized default
+  // (generator = active provider+model; verifiers = other keyed defaults). The
+  // editor writes aiEnsemble on every change so it becomes authoritative.
+  // -------------------------------------------------------------------------
+
+  /** Whether a provider has a key saved (drives row disabling + hints). */
+  function providerKeyed(p: AiProvider): boolean {
+    const s = settingsState.current
+    return !!(p === 'deepseek' ? s.deepseekKey : p === 'openai' ? s.openaiKey : p === 'anthropic' ? s.anthropicKey : s.geminiKey)
+  }
+
+  /**
+   * The ensemble shown in the editor: the stored one, or the synthesized
+   * default (so a user who never customized sees today's effective ensemble and
+   * can edit from there). Reactive to settingsState.
+   */
+  const editorEnsemble = $derived.by<AiEnsemble>(() => {
+    void settingsState.current
+    const stored = settingsState.current.aiEnsemble
+    if (stored) return stored
+    const resolved = resolveEnsemble()
+    const active = settingsState.current
+    const generator: EnsembleParticipant = {
+      provider: active.aiProvider,
+      model: resolved.generator?.model.id ?? (getProvider(active.aiProvider)?.defaultModel ?? ''),
+    }
+    return {
+      generator,
+      verifiers: resolved.verifiers.map((v) => ({ provider: v.providerId as AiProvider, model: v.model.id })),
+    }
+  })
+
+  /** Flatten generator + verifiers into rows with a generator flag, for the UI. */
+  const ensembleRows = $derived.by<{ participant: EnsembleParticipant; isGenerator: boolean }[]>(() => {
+    const e = editorEnsemble
+    return [
+      { participant: e.generator, isGenerator: true },
+      ...e.verifiers.map((v) => ({ participant: v, isGenerator: false })),
+    ]
+  })
+
+  /** Count of rows whose provider has a key (usable models). */
+  const usableEnsembleCount = $derived(ensembleRows.filter((r) => providerKeyed(r.participant.provider)).length)
+  /** Cross-verify possible when ≥2 usable models (single-key multi-model counts). */
+  const crossVerifyAvailable = $derived(usableEnsembleCount >= 2)
+  const canAddParticipant = $derived(ensembleRows.length < MAX_ENSEMBLE_PARTICIPANTS)
+
+  /** Persist a rows list (index 0 = generator) back to aiEnsemble. */
+  function commitRows(rows: { participant: EnsembleParticipant; isGenerator: boolean }[]) {
+    const genIdx = rows.findIndex((r) => r.isGenerator)
+    const generator = (genIdx >= 0 ? rows[genIdx] : rows[0]).participant
+    const verifiers = rows.filter((_, i) => i !== (genIdx >= 0 ? genIdx : 0)).map((r) => r.participant)
+    setAiEnsemble({ generator, verifiers })
+  }
+
+  function onRowProvider(i: number, providerId: AiProvider) {
+    const rows = ensembleRows.map((r) => ({ ...r, participant: { ...r.participant } }))
+    const prov = getProvider(providerId)
+    rows[i].participant = { provider: providerId, model: prov?.defaultModel ?? rows[i].participant.model }
+    commitRows(rows)
+  }
+
+  function onRowModel(i: number, modelId: string) {
+    const rows = ensembleRows.map((r) => ({ ...r, participant: { ...r.participant } }))
+    rows[i].participant.model = modelId
+    commitRows(rows)
+  }
+
+  function setGeneratorRow(i: number) {
+    const rows = ensembleRows.map((r, idx) => ({ ...r, participant: { ...r.participant }, isGenerator: idx === i }))
+    commitRows(rows)
+  }
+
+  function addParticipant() {
+    if (!canAddParticipant) return
+    // Default the new verifier to the active provider's default model.
+    const p = settingsState.current.aiProvider
+    const prov = getProvider(p)
+    const rows = [
+      ...ensembleRows.map((r) => ({ ...r, participant: { ...r.participant } })),
+      { participant: { provider: p, model: prov?.defaultModel ?? '' }, isGenerator: false },
+    ]
+    commitRows(rows)
+  }
+
+  function removeParticipant(i: number) {
+    if (ensembleRows.length <= 1) return
+    const wasGenerator = ensembleRows[i].isGenerator
+    const rows = ensembleRows.filter((_, idx) => idx !== i).map((r) => ({ ...r, participant: { ...r.participant } }))
+    // Removing the generator → first remaining row becomes the generator.
+    if (wasGenerator && rows.length > 0) rows[0].isGenerator = true
+    commitRows(rows)
+  }
+
+  /** Reset back to the synthesized default ensemble (clears the custom one). */
+  function resetEnsemble() {
+    setAiEnsemble(null)
   }
 
   // Per-provider model selection. Empty string means "use the provider default".
@@ -332,10 +433,75 @@
       <span class="deep-review-label">Cross-check findings with your other AI providers</span>
     </label>
     <p class="deep-review-hint">
-      When you have 2+ provider keys, your other models verify each finding — fewer false
-      positives, more tokens.
-      {#if !crossVerifyAvailable}<strong> Add a second provider key to enable.</strong>{/if}
+      Your other models verify each finding — fewer false positives, more tokens.
+      {#if !crossVerifyAvailable}<strong> Add a second model (any provider, or a second model of the same provider) below to enable.</strong>{/if}
     </p>
+  </div>
+
+  <!-- Plan N — configurable ensemble editor -->
+  <div class="ensemble-editor" class:disabled={!crossModelVerify}>
+    <div class="ensemble-head">
+      <span class="ensemble-title">Ensemble / verification panel</span>
+      <button type="button" class="ensemble-reset" onclick={resetEnsemble}>Reset to default</button>
+    </div>
+    <p class="deep-review-hint">
+      Pick which model GENERATES findings and which VERIFY them. You can use several models of the
+      same provider (one key) — e.g. Opus generates, Sonnet + Haiku verify.
+      <strong> Each model you add verifies every finding — more accuracy, more tokens.</strong>
+    </p>
+    <ul class="ensemble-rows">
+      {#each ensembleRows as row, i (i)}
+        {@const keyed = providerKeyed(row.participant.provider)}
+        <li class="ensemble-row" class:row-disabled={!keyed}>
+          <label class="gen-radio" title="Designate the generator">
+            <input
+              type="radio"
+              name="ensemble-generator"
+              checked={row.isGenerator}
+              disabled={!keyed}
+              onchange={() => setGeneratorRow(i)}
+            />
+            <span class="gen-label">{row.isGenerator ? 'Generator' : 'Verifier'}</span>
+          </label>
+          <select
+            class="ensemble-provider"
+            aria-label="Provider"
+            value={row.participant.provider}
+            onchange={(e) => onRowProvider(i, (e.currentTarget as HTMLSelectElement).value as AiProvider)}
+          >
+            {#each PROVIDERS as p (p.id)}
+              <option value={p.id}>{p.displayName}</option>
+            {/each}
+          </select>
+          <select
+            class="ensemble-model"
+            aria-label="Model"
+            value={row.participant.model}
+            onchange={(e) => onRowModel(i, (e.currentTarget as HTMLSelectElement).value)}
+          >
+            {#each (getProvider(row.participant.provider)?.models ?? []) as m (m.id)}
+              <option value={m.id}>{m.label}</option>
+            {/each}
+          </select>
+          {#if ensembleRows.length > 1}
+            <button
+              type="button"
+              class="ensemble-remove"
+              aria-label="Remove participant"
+              onclick={() => removeParticipant(i)}
+            >✕</button>
+          {/if}
+          {#if !keyed}
+            <span class="ensemble-nokey">No {getProvider(row.participant.provider)?.displayName} key — add it above</span>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+    {#if canAddParticipant}
+      <button type="button" class="ensemble-add" onclick={addParticipant}>+ Add a model</button>
+    {:else}
+      <p class="deep-review-hint">Maximum of {MAX_ENSEMBLE_PARTICIPANTS} models.</p>
+    {/if}
   </div>
 
   <div class="hint privacy-note">
@@ -639,5 +805,98 @@
 
   .privacy-note p {
     margin: 0 0 0.35rem;
+  }
+
+  /* Plan N — ensemble editor */
+  .ensemble-editor {
+    margin-top: 0.85rem;
+    padding: 0.85rem;
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .ensemble-editor.disabled {
+    opacity: 0.55;
+    pointer-events: none;
+  }
+  .ensemble-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .ensemble-title {
+    font-weight: 600;
+    font-size: 0.88em;
+  }
+  .ensemble-reset {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 0.78em;
+    cursor: pointer;
+    padding: 0;
+  }
+  .ensemble-rows {
+    list-style: none;
+    margin: 0.6rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .ensemble-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .ensemble-row.row-disabled {
+    opacity: 0.6;
+  }
+  .gen-radio {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 6.2rem;
+    font-size: 0.8em;
+    cursor: pointer;
+  }
+  .gen-label {
+    color: var(--text-muted);
+  }
+  .ensemble-provider,
+  .ensemble-model {
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: var(--surface-raised);
+    color: var(--text);
+    font-size: 0.82em;
+  }
+  .ensemble-remove {
+    background: none;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    width: 1.6rem;
+    height: 1.6rem;
+    line-height: 1;
+  }
+  .ensemble-nokey {
+    font-size: 0.74em;
+    color: var(--text-muted);
+    flex-basis: 100%;
+  }
+  .ensemble-add {
+    margin-top: 0.6rem;
+    background: none;
+    border: 1px dashed var(--hairline);
+    border-radius: 6px;
+    color: var(--accent);
+    font-size: 0.82em;
+    padding: 0.3rem 0.6rem;
+    cursor: pointer;
   }
 </style>

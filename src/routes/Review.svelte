@@ -796,6 +796,7 @@
         files={load.state.files}
         {contentsMap}
         coachFn={aiRun ? aiRun.coach : undefined}
+        verdictModels={aiRun ? aiRun.verdictModels : []}
         {prComments}
         provider={activeProvider}
         authorLogin={load.state.meta.authorLogin}

@@ -7,7 +7,7 @@ import {
   setAiDeepReview, setStoryMode, setFocusMode, setShowTokenCost,
   findInvalidKeyChar, invalidKeyCharMessage,
   setAiTaskMode, setAiTaskModes, setAllTasksDeep, setAllTasksStandard, setOffAllExtras,
-  defaultTaskModes, allDeepTaskModes,
+  defaultTaskModes, allDeepTaskModes, setAiEnsemble,
 } from './settings'
 
 describe('settings', () => {
@@ -34,6 +34,7 @@ describe('settings', () => {
       },
       storyMode: true,
       crossModelVerify: true,
+      aiEnsemble: null,
       diffMode: 'unified',
       hideWhitespace: false,
       githubAuth: null,
@@ -114,6 +115,7 @@ describe('settings', () => {
       },
       storyMode: true,
       crossModelVerify: true,
+      aiEnsemble: null,
       diffMode: 'unified',
       hideWhitespace: false,
       githubAuth: null,
@@ -736,6 +738,64 @@ describe('storyMode setting', () => {
   it('ignores a non-boolean stored value', () => {
     localStorage.setItem('review123:settings', JSON.stringify({ storyMode: 'yes' }))
     expect(getSettings().storyMode).toBe(true)
+  })
+})
+
+describe('aiEnsemble setting (Plan N — configurable ensemble)', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('defaults to null (synthesize the default ensemble)', () => {
+    expect(getSettings().aiEnsemble).toBeNull()
+  })
+
+  it('persists a valid ensemble (multi-model, same provider)', () => {
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [
+        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        { provider: 'anthropic', model: 'claude-haiku-4-5' },
+      ],
+    })
+    expect(getSettings().aiEnsemble).toEqual({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [
+        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        { provider: 'anthropic', model: 'claude-haiku-4-5' },
+      ],
+    })
+  })
+
+  it('drops verifier entries with unknown provider or model', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      aiEnsemble: {
+        generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+        verifiers: [
+          { provider: 'nope', model: 'x' },
+          { provider: 'anthropic', model: 'not-a-model' },
+          { provider: 'openai', model: 'gpt-5.4' },
+        ],
+      },
+    }))
+    expect(getSettings().aiEnsemble).toEqual({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [{ provider: 'openai', model: 'gpt-5.4' }],
+    })
+  })
+
+  it('invalidates the whole ensemble when the generator is invalid', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      aiEnsemble: {
+        generator: { provider: 'bogus', model: 'x' },
+        verifiers: [{ provider: 'openai', model: 'gpt-5.4' }],
+      },
+    }))
+    expect(getSettings().aiEnsemble).toBeNull()
+  })
+
+  it('clears back to null', () => {
+    setAiEnsemble({ generator: { provider: 'openai', model: 'gpt-5.4' }, verifiers: [] })
+    setAiEnsemble(null)
+    expect(getSettings().aiEnsemble).toBeNull()
   })
 })
 

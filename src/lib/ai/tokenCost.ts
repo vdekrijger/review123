@@ -9,7 +9,7 @@
 
 import type { LlmUsage } from '../llm/llm'
 import { activeLlmConfig } from '../llm/config'
-import { estimateCostUsd } from '../llm/providers'
+import { estimateCostUsd, getProvider, getModelDef } from '../llm/providers'
 
 /**
  * Round a raw token count to a short human label:
@@ -50,6 +50,27 @@ export function formatUsageLabel(usage: LlmUsage | undefined): string | null {
   if (!Number.isFinite(total) || total <= 0) return null
   const { model } = activeLlmConfig()
   const cost = estimateCostUsd(model, usage.prompt_tokens, usage.completion_tokens)
+  const tokensPart = `${formatTokens(total)} tokens`
+  return cost === null ? tokensPart : `${tokensPart} · ${formatCostUsd(cost)}`
+}
+
+/**
+ * Human label for a SPECIFIC provider+model's usage (Plan N per-model cost).
+ * Unlike formatUsageLabel (which prices against the active model), this prices
+ * against the named model so a verifier on a different model gets the right $.
+ * Returns null when there's no usage to show (never fabricated).
+ */
+export function formatModelUsageLabel(
+  providerId: string,
+  modelId: string,
+  usage: LlmUsage | undefined,
+): string | null {
+  if (!usage) return null
+  const total = usage.total_tokens
+  if (!Number.isFinite(total) || total <= 0) return null
+  const provider = getProvider(providerId as never)
+  const model = provider ? getModelDef(provider, modelId) : undefined
+  const cost = model ? estimateCostUsd(model, usage.prompt_tokens, usage.completion_tokens) : null
   const tokensPart = `${formatTokens(total)} tokens`
   return cost === null ? tokensPart : `${tokensPart} · ${formatCostUsd(cost)}`
 }

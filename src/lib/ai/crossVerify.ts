@@ -63,11 +63,38 @@ export interface VerifiedFinding {
   verification: FindingVerification
 }
 
+/** Per-participant token usage (Plan N per-model cost attribution). */
+export interface ParticipantUsage {
+  providerId: string
+  /** Model id this usage belongs to — distinguishes same-provider models. */
+  modelId: string
+  usage: LlmUsage
+}
+
+/**
+ * One verifier's per-review IMPACT (Plan N). `decisive` counts findings whose
+ * surface/demote outcome FLIPS when this verifier's vote is removed — the
+ * keep-this/drop-that signal. A verifier that only rubber-stamps consensus has
+ * many confirms but 0 decisive votes.
+ */
+export interface VerifierImpact {
+  providerId: string
+  modelId: string
+  confirms: number
+  refutes: number
+  uncertains: number
+  decisive: number
+}
+
 export interface CrossVerifyOutcome {
   /** Per-finding verification keyed by finding id. Empty when no verifier ran. */
   byId: Map<string, FindingVerification>
   /** Summed verifier usage (for token-cost totals). */
   usage: LlmUsage | undefined
+  /** Per-verifier-model usage (Plan N per-model cost). One entry per responder. */
+  perModelUsage: ParticipantUsage[]
+  /** Per-verifier impact (Plan N). One entry per responder. */
+  verifierImpact: VerifierImpact[]
   /** Verifier providers that actually responded (for the progress line). */
   respondedProviders: string[]
 }
@@ -181,6 +208,34 @@ export function aggregateFinding(
   return { confirmedBy, polledModels, surfaced, perModel }
 }
 
+/** The surface decision for a vote set (generator + given verifier votes). */
+function decideSurface(
+  verifierVotes: { verdict: 'confirm' | 'refute' | 'uncertain' }[],
+): boolean {
+  let score = 1 // generator's implicit confirm
+  for (const v of verifierVotes) score += voteWeight(v.verdict)
+  const polled = 1 + verifierVotes.length
+  return score >= polled / 2
+}
+
+/**
+ * Whether a single verifier's vote was DECISIVE for one finding (Plan N): the
+ * surface/demote decision FLIPS when that verifier's vote is removed from the
+ * tally. A redundant confirm on a finding that surfaces regardless is NOT
+ * decisive; a refute that tips a finding from surface to demote IS.
+ *
+ * @param votes  all verifier votes for the finding, in order.
+ * @param index  the position of the voter under test.
+ */
+export function isDecisiveVote(
+  votes: { verdict: 'confirm' | 'refute' | 'uncertain' }[],
+  index: number,
+): boolean {
+  const withVote = decideSurface(votes)
+  const without = decideSurface(votes.filter((_, i) => i !== index))
+  return withVote !== without
+}
+
 // ---------------------------------------------------------------------------
 // crossVerify — orchestrate fan-out + aggregation
 // ---------------------------------------------------------------------------
@@ -215,15 +270,22 @@ export async function crossVerify(
   verifiers: ProviderConfig[],
   verify: VerifyFn,
 ): Promise<CrossVerifyOutcome> {
-  if (findings.length === 0 || verifiers.length === 0) {
-    return { byId: new Map(), usage: undefined, respondedProviders: [] }
+  const empty: CrossVerifyOutcome = {
+    byId: new Map(),
+    usage: undefined,
+    perModelUsage: [],
+    verifierImpact: [],
+    respondedProviders: [],
   }
+  if (findings.length === 0 || verifiers.length === 0) return empty
 
   const results = await Promise.allSettled(
     verifiers.map((cfg) => verify(cfg, findings)),
   )
 
-  // Collect per-finding verifier votes; track usage + responders.
+  // Collect per-finding verifier votes; track usage + responders. Votes are
+  // pushed in RESPONDER order (matching `responders` below) so the vote index
+  // lines up with the responder for decisiveness attribution.
   const votesByFinding = new Map<
     string,
     { provider: string; verdict: 'confirm' | 'refute' | 'uncertain'; reason: string }[]
@@ -232,12 +294,18 @@ export async function crossVerify(
 
   let usage: LlmUsage | undefined
   const respondedProviders: string[] = []
+  const responders: ProviderConfig[] = []
+  const perModelUsage: ParticipantUsage[] = []
 
   results.forEach((res, i) => {
     if (res.status !== 'fulfilled') return // verifier failed → skip its votes
     const cfg = verifiers[i]
     respondedProviders.push(cfg.providerId)
+    responders.push(cfg)
     usage = sumUsage(usage, res.value.usage)
+    if (res.value.usage) {
+      perModelUsage.push({ providerId: cfg.providerId, modelId: cfg.model.id, usage: res.value.usage })
+    }
     const byId = new Map<string, VerifierVerdict>()
     for (const v of res.value.result.verdicts) byId.set(v.id, v)
     for (const f of findings) {
@@ -251,13 +319,36 @@ export async function crossVerify(
   })
 
   // No verifier responded → leave everything unverified.
-  if (respondedProviders.length === 0) {
-    return { byId: new Map(), usage: undefined, respondedProviders: [] }
-  }
+  if (respondedProviders.length === 0) return empty
 
   const out = new Map<string, FindingVerification>()
   for (const f of findings) {
     out.set(f.id, aggregateFinding(generatorProvider, votesByFinding.get(f.id)!))
   }
-  return { byId: out, usage, respondedProviders }
+
+  // Per-verifier impact (Plan N): confirms/refutes/uncertains + decisive votes.
+  const verifierImpact: VerifierImpact[] = responders.map((cfg, idx) => ({
+    providerId: cfg.providerId,
+    modelId: cfg.model.id,
+    confirms: 0,
+    refutes: 0,
+    uncertains: 0,
+    decisive: 0,
+    _idx: idx,
+  })).map((row) => {
+    for (const f of findings) {
+      const votes = votesByFinding.get(f.id)!
+      const vote = votes[row._idx]
+      if (!vote) continue
+      if (vote.verdict === 'confirm') row.confirms += 1
+      else if (vote.verdict === 'refute') row.refutes += 1
+      else row.uncertains += 1
+      if (isDecisiveVote(votes, row._idx)) row.decisive += 1
+    }
+    const { _idx, ...rest } = row
+    void _idx
+    return rest
+  })
+
+  return { byId: out, usage, perModelUsage, verifierImpact, respondedProviders }
 }

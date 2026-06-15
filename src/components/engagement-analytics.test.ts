@@ -60,6 +60,7 @@ function makeRun(): AiRun {
     story: { status: 'idle' },
     skillReviews: [],
     totalUsage: undefined,
+    verdictModels: [],
     start: async () => {},
     retry: async () => {},
     coach: async () => ({ error: 'no-key' }),
