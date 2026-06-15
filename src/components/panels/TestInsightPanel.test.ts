@@ -78,6 +78,100 @@ describe('TestInsightPanel', () => {
 // Markdown rendering — gap text with backticks becomes <code> element
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Hierarchy: covered = compact/terse, gaps = prominent/detailed
+// ---------------------------------------------------------------------------
+
+describe('TestInsightPanel — covered compacted, gaps prominent', () => {
+  it('renders a compact covered summary count', () => {
+    const tests: TestInsight = {
+      covered: [
+        { behavior: 'saves state', test: 'save.test.ts', file: 'src/save.ts' },
+        { behavior: 'loads state', test: 'load.test.ts', file: 'src/load.ts' },
+      ],
+      gaps: [],
+    }
+    render(TestInsightPanel, {
+      props: { run: makeRun({ tests: { status: 'done', value: tests } }) },
+    })
+    // A summary like "2 behaviors covered"
+    expect(screen.getByText(/2\s+behaviors?\s+covered/i)).toBeInTheDocument()
+  })
+
+  it('covered rows are compact: behavior + meta share one row (no per-row stacked block)', () => {
+    const tests: TestInsight = {
+      covered: [{ behavior: 'saves state', test: 'save.test.ts', file: 'src/save.ts' }],
+      gaps: [],
+    }
+    const { container } = render(TestInsightPanel, {
+      props: { run: makeRun({ tests: { status: 'done', value: tests } }) },
+    })
+    const item = container.querySelector('.tests-covered-item')
+    expect(item).not.toBeNull()
+    // Compact marker class present, and the old stacked-column content wrapper is gone.
+    expect(item!.classList.contains('tests-covered-item--compact')).toBe(true)
+    expect(container.querySelector('.tests-covered-content')).toBeNull()
+  })
+
+  it('covered file link remains reachable (button with jump aria-label)', () => {
+    const tests: TestInsight = {
+      covered: [{ behavior: 'does x', test: 'x.test.ts', file: 'src/x.ts' }],
+      gaps: [],
+    }
+    render(TestInsightPanel, {
+      props: { run: makeRun({ tests: { status: 'done', value: tests } }) },
+    })
+    expect(
+      screen.getByRole('button', { name: /Jump to src\/x\.ts/i })
+    ).toBeInTheDocument()
+  })
+
+  it('gaps keep the prominent detailed form (file chip + heading + full text)', () => {
+    const tests: TestInsight = {
+      covered: [],
+      gaps: ['src/foo.ts: the error path is never exercised by any test'],
+    }
+    const { container } = render(TestInsightPanel, {
+      props: { run: makeRun({ tests: { status: 'done', value: tests } }) },
+    })
+    // Prominent heading still present
+    expect(screen.getByText(/behaviors changed without test coverage/i)).toBeInTheDocument()
+    // File chip preserved
+    expect(
+      screen.getByRole('button', { name: /Jump to src\/foo\.ts/i })
+    ).toBeInTheDocument()
+    // Full description text preserved (detailed, not terse)
+    expect(
+      screen.getByText(/the error path is never exercised by any test/i)
+    ).toBeInTheDocument()
+    // Gap item is NOT marked compact
+    const gapItem = container.querySelector('.tests-gap-item')
+    expect(gapItem).not.toBeNull()
+    expect(gapItem!.classList.contains('tests-covered-item--compact')).toBe(false)
+  })
+
+  it('empty covered with gaps present: no covered summary, gaps shown', () => {
+    const tests: TestInsight = { covered: [], gaps: ['src/a.ts: missing case'] }
+    render(TestInsightPanel, {
+      props: { run: makeRun({ tests: { status: 'done', value: tests } }) },
+    })
+    expect(screen.queryByText(/behaviors?\s+covered/i)).toBeNull()
+    expect(screen.getByText(/missing case/i)).toBeInTheDocument()
+  })
+
+  it('empty gaps with covered present: covered summary shown, no gaps heading', () => {
+    const tests: TestInsight = {
+      covered: [{ behavior: 'does x', test: 'x.test.ts', file: 'src/x.ts' }],
+      gaps: [],
+    }
+    render(TestInsightPanel, {
+      props: { run: makeRun({ tests: { status: 'done', value: tests } }) },
+    })
+    expect(screen.getByText(/1\s+behaviors?\s+covered/i)).toBeInTheDocument()
+    expect(screen.queryByText(/behaviors changed without test coverage/i)).toBeNull()
+  })
+})
+
 describe('TestInsightPanel — markdown in covered behaviors and gaps', () => {
   it('gap text with backticks renders a <code> element (not raw backticks)', () => {
     const tests: TestInsight = {

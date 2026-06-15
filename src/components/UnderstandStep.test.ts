@@ -413,12 +413,23 @@ describe('UnderstandStep test coverage panel', () => {
     expect(testPanel.open).toBe(false)
   })
 
-  it('renders covered checklist rows with behavior and test name', () => {
+  it('renders compact covered rows: behavior visible, test name in row tooltip', () => {
     const run = makeRun({ tests: { status: 'done', value: sampleTests } })
     render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
     openAllDetails()
+    // Behavior title stays visible
     expect(screen.getByText('renders correctly')).toBeInTheDocument()
-    expect(screen.getByText(/it renders/)).toBeInTheDocument()
+    // Test name is de-emphasized into the compact row's title tooltip (not a full line)
+    const compactRow = document.querySelector('.tests-covered-item--compact') as HTMLElement
+    expect(compactRow).not.toBeNull()
+    expect(compactRow.getAttribute('title')).toContain('it renders')
+  })
+
+  it('renders a compact covered summary count', () => {
+    const run = makeRun({ tests: { status: 'done', value: sampleTests } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(screen.getByText(/2\s+behaviors?\s+covered/i)).toBeInTheDocument()
   })
 
   it('renders file as a button in covered rows', () => {

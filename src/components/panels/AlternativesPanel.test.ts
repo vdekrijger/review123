@@ -88,6 +88,28 @@ describe('AlternativesPanel — markdown in tradeoffs and rationale', () => {
     expect(codeEl!.textContent).toBe('REDIS_URL')
   })
 
+  it('approach TITLE with backticks renders a <code> element (not literal backticks)', () => {
+    const result: AlternativesResult = {
+      problem: 'Caching strategy.',
+      alternatives: [
+        {
+          approach: 'Execute the query inline by calling `calculate_for_query`',
+          tradeoffs: 'External dependency.',
+          assessment: 'alternative-is-better',
+          rationale: 'More scalable.',
+        },
+      ],
+    }
+    const { container } = render(AlternativesPanel, {
+      props: { run: makeRun({ alternatives: { status: 'done', value: result } }) },
+    })
+    const codeEl = container.querySelector('.alternative-approach code')
+    expect(codeEl).not.toBeNull()
+    expect(codeEl!.textContent).toBe('calculate_for_query')
+    // The literal backticks must NOT appear as text
+    expect(container.querySelector('.alternative-approach')!.textContent).not.toContain('`')
+  })
+
   it('rationale with backticks renders a <code> element', () => {
     const result: AlternativesResult = {
       problem: 'Caching strategy.',
