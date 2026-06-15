@@ -26,6 +26,7 @@
   import { classifyFile } from '../lib/diff/diffFile'
   import StorySlideshow from './StorySlideshow.svelte'
   import Skeleton from './Skeleton.svelte'
+  import { matchStoryPath } from '../lib/ai/schemas'
   import type { StoryOrderResult, GraphResult } from '../lib/ai/schemas'
   import type { PanelStatus } from '../lib/ai/run.svelte'
 
@@ -54,6 +55,8 @@
     onstorymode = null,
     story = null,
     storyStatus = 'idle',
+    storyError = null,
+    onRetryStory = null,
     diagrams = null,
   }: {
     files: PrFile[]
@@ -111,6 +114,10 @@
     story?: StoryOrderResult | null
     /** Status of the story AI task (for skeleton / fallback decisions). */
     storyStatus?: PanelStatus
+    /** Humanized reason the story task failed (shown in the error note + retry). */
+    storyError?: string | null
+    /** Re-invokes just the story task (used by the Retry button on an errored story). */
+    onRetryStory?: (() => void) | null
     /** Change-map source for the story progress map; null/pending → no map (never blocks). */
     diagrams?: GraphResult | null
   } = $props()
@@ -119,23 +126,32 @@
   // Story mode switching + fallback (Plan H)
   // ---------------------------------------------------------------------------
 
-  // Does the story result have at least one step that touches a file in this PR?
+  // Does the story result have at least one step that maps to a file in this PR?
+  // Tolerant matching (exact → suffix → basename) so a path the model echoed
+  // slightly differently still counts — ANY mapping step makes the story usable
+  // (no longer all-or-nothing on exact paths). The slideshow renders only the
+  // mappable steps/files; we only need to know if ≥1 maps.
   const storyHasUsableSteps = $derived.by(() => {
     if (!story || story.steps.length === 0) return false
-    const present = new Set(files.map((f) => f.filename))
-    return story.steps.some((s) => s.files.some((p) => present.has(p)))
+    const prFilenames = files.map((f) => f.filename)
+    return story.steps.some((s) => s.files.some((p) => matchStoryPath(p, prFilenames) !== null))
   })
 
   // The effective flow: story when available AND chosen AND a usable result
   // exists; otherwise files. While the story task is still loading we keep the
   // story surface (skeleton). On error / empty result we fall back to files with
-  // a note. No-key users never reach here (storyAvailable is false).
+  // a REASON-SPECIFIC note. No-key users never reach here (storyAvailable false).
   const storyPending = $derived(storyStatus === 'idle' || storyStatus === 'loading' || storyStatus === 'streaming')
   const showStory = $derived(storyAvailable && storyMode && (storyPending || storyHasUsableSteps))
-  // A one-line note when story was chosen but fell back to files.
-  const storyFellBack = $derived(
-    storyAvailable && storyMode && !storyPending && !storyHasUsableSteps,
+  // True when story was chosen but we fell back to Files. Two distinct reasons:
+  //  - errored: the task failed (invalid JSON / rate-limited / …) → show the
+  //    reason + a Retry button that re-runs just the story task.
+  //  - empty: the task finished but produced no usable walkthrough.
+  const storyErrored = $derived(storyAvailable && storyMode && storyStatus === 'error')
+  const storyEmpty = $derived(
+    storyAvailable && storyMode && !storyPending && !storyErrored && !storyHasUsableSteps,
   )
+  const storyFellBack = $derived(storyErrored || storyEmpty)
 
   function selectMode(toStory: boolean): void {
     onstorymode?.(toStory)
@@ -468,9 +484,16 @@
   </div>
 {/if}
 
-{#if storyFellBack}
+{#if storyErrored}
   <p class="story-fallback-note" role="note">
-    Story mode unavailable for this PR — showing all files.
+    Couldn't build the walkthrough{storyError ? ` — ${storyError}` : ''} Showing all files.
+    {#if onRetryStory}
+      <button type="button" class="story-retry-btn" onclick={() => onRetryStory?.()}>Retry</button>
+    {/if}
+  </p>
+{:else if storyEmpty}
+  <p class="story-fallback-note" role="note">
+    Couldn't build a walkthrough for this PR — showing all files.
   </p>
 {/if}
 
@@ -939,6 +962,19 @@
     color: var(--text-muted);
     margin: 0 0 0.5rem;
   }
+  .story-retry-btn {
+    margin-left: 0.4rem;
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--accent);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .story-retry-btn:hover { background: var(--surface-raised); }
+  .story-retry-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .story-skeleton {
     display: flex;
     flex-direction: column;

@@ -1133,7 +1133,8 @@ describe('validateAlternativesResult', () => {
 // validateStoryOrder (Plan H — Story mode)
 // ---------------------------------------------------------------------------
 
-import { validateStoryOrder, STORY_LAYERS } from './schemas'
+import { validateStoryOrder, STORY_LAYERS, STORY_MAX_STEPS, normalizeStoryPath, matchStoryPath, dedupeStorySteps, salvageStoryOrder } from './schemas'
+import type { StoryOrderResult } from './schemas'
 
 describe('validateStoryOrder', () => {
   const valid = {
@@ -1188,5 +1189,123 @@ describe('validateStoryOrder', () => {
   it('tolerates extra keys', () => {
     const x = { steps: [{ index: 0, files: ['a.ts'], caption: 'c', layer: 'data', relatedTests: [], extra: 'x' }], top: 1 }
     expect(validateStoryOrder(x)).not.toBeNull()
+  })
+})
+
+describe('normalizeStoryPath', () => {
+  it('strips whitespace, leading ./ and git a/ b/ prefixes', () => {
+    expect(normalizeStoryPath('  src/x.ts ')).toBe('src/x.ts')
+    expect(normalizeStoryPath('./src/x.ts')).toBe('src/x.ts')
+    expect(normalizeStoryPath('a/src/x.ts')).toBe('src/x.ts')
+    expect(normalizeStoryPath('b/src/x.ts')).toBe('src/x.ts')
+  })
+})
+
+describe('matchStoryPath', () => {
+  const pr = ['src/db/schema.ts', 'src/api/route.ts', 'src/ui/Card.svelte']
+
+  it('matches exactly after normalization', () => {
+    expect(matchStoryPath('./src/db/schema.ts', pr)).toBe('src/db/schema.ts')
+    expect(matchStoryPath('b/src/api/route.ts', pr)).toBe('src/api/route.ts')
+  })
+
+  it('matches by unique suffix', () => {
+    expect(matchStoryPath('db/schema.ts', pr)).toBe('src/db/schema.ts')
+  })
+
+  it('matches by unique basename', () => {
+    expect(matchStoryPath('Card.svelte', pr)).toBe('src/ui/Card.svelte')
+  })
+
+  it('refuses to guess when a basename is ambiguous', () => {
+    const ambiguous = ['src/a/util.ts', 'src/b/util.ts']
+    expect(matchStoryPath('util.ts', ambiguous)).toBeNull()
+  })
+
+  it('returns null when nothing matches', () => {
+    expect(matchStoryPath('totally/unknown.ts', pr)).toBeNull()
+    expect(matchStoryPath('', pr)).toBeNull()
+  })
+})
+
+describe('dedupeStorySteps', () => {
+  it('keeps a file in its first step and strips it from later steps', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['a.ts', 'b.ts'], caption: 'one', layer: 'data', relatedTests: [] },
+        { index: 1, files: ['b.ts', 'c.ts'], caption: 'two', layer: 'api', relatedTests: [] },
+      ],
+    }
+    const out = dedupeStorySteps(story)
+    expect(out.steps[0].files).toEqual(['a.ts', 'b.ts'])
+    expect(out.steps[1].files).toEqual(['c.ts'])
+  })
+
+  it('collapses paths that differ only by ./ or a/ b/ prefix', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['a.ts'], caption: 'one', layer: 'data', relatedTests: [] },
+        { index: 1, files: ['./a.ts', 'd.ts'], caption: 'two', layer: 'api', relatedTests: [] },
+      ],
+    }
+    const out = dedupeStorySteps(story)
+    expect(out.steps[1].files).toEqual(['d.ts'])
+  })
+
+  it('drops a step that becomes empty after de-duplication and re-indexes', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['a.ts'], caption: 'one', layer: 'data', relatedTests: [] },
+        { index: 1, files: ['a.ts'], caption: 'dup', layer: 'api', relatedTests: [] },
+        { index: 2, files: ['b.ts'], caption: 'three', layer: 'ui', relatedTests: [] },
+      ],
+    }
+    const out = dedupeStorySteps(story)
+    expect(out.steps.map((s) => s.caption)).toEqual(['one', 'three'])
+    expect(out.steps.map((s) => s.index)).toEqual([0, 1])
+  })
+
+  it('drops relatedTests that duplicate any primary file or an earlier relatedTest', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['a.ts'], caption: 'one', layer: 'data', relatedTests: ['a.ts', 'a.test.ts'] },
+        { index: 1, files: ['b.ts'], caption: 'two', layer: 'api', relatedTests: ['a.test.ts', 'b.test.ts'] },
+      ],
+    }
+    const out = dedupeStorySteps(story)
+    // 'a.ts' is a primary file → stripped; 'a.test.ts' kept in step 0 only
+    expect(out.steps[0].relatedTests).toEqual(['a.test.ts'])
+    expect(out.steps[1].relatedTests).toEqual(['b.test.ts'])
+  })
+})
+
+describe('salvageStoryOrder', () => {
+  it('keeps the valid steps and drops malformed ones', () => {
+    const x = {
+      steps: [
+        { index: 0, files: ['a.ts'], caption: 'good', layer: 'data', relatedTests: [] },
+        { files: [], caption: 'no files', layer: 'data', relatedTests: [] }, // dropped
+        { files: ['b.ts'], caption: 'bad layer', layer: 'frontend', relatedTests: [] }, // dropped
+        { files: ['c.ts'], layer: 'ui' }, // salvaged: missing caption → '', missing relatedTests → []
+      ],
+    }
+    const out = salvageStoryOrder(x)
+    expect(out).not.toBeNull()
+    expect(out!.steps.map((s) => s.files[0])).toEqual(['a.ts', 'c.ts'])
+    expect(out!.steps[1].caption).toBe('')
+    expect(out!.steps[1].relatedTests).toEqual([])
+    expect(out!.steps.map((s) => s.index)).toEqual([0, 1])
+  })
+
+  it('returns null when nothing usable survives', () => {
+    expect(salvageStoryOrder({ steps: [{ files: [], layer: 'data' }] })).toBeNull()
+    expect(salvageStoryOrder({ steps: 'nope' })).toBeNull()
+    expect(salvageStoryOrder(null)).toBeNull()
+  })
+})
+
+describe('STORY_MAX_STEPS', () => {
+  it('is a sane bound for big-PR walkthroughs', () => {
+    expect(STORY_MAX_STEPS).toBe(12)
   })
 })

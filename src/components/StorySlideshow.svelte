@@ -26,7 +26,7 @@
   import type { ReplyOutcome } from '../lib/provider/types'
   import type { AskFocus } from '../lib/ai/run.svelte'
   import type { StoryStep, StoryOrderResult, GraphResult } from '../lib/ai/schemas'
-  import { STORY_LAYERS } from '../lib/ai/schemas'
+  import { STORY_LAYERS, matchStoryPath, dedupeStorySteps } from '../lib/ai/schemas'
   import type { WhitespaceDisplay } from '../lib/diff/whitespace'
   import { slugify } from '../lib/slug'
   import { track } from '../lib/analytics/analytics'
@@ -72,22 +72,27 @@
 
   const fileByPath = $derived(new Map(files.map((f) => [f.filename, f])))
 
-  // Filter each step to files/tests that actually exist in this PR; drop steps
-  // whose files all vanished. Re-index defensively (model index ignored).
+  // Map each step's paths to the PR's REAL filenames via tolerant matching
+  // (exact → unique suffix → unique basename), then drop unmappable files and
+  // any step left empty — render ONLY what maps, never discard the whole story.
+  // A final dedupe pass guarantees no file appears in two steps (anti-overlap),
+  // even if the model echoed a path differently across steps. Re-index after.
   const steps = $derived.by<StoryStep[]>(() => {
-    const present = new Set(files.map((f) => f.filename))
-    const usable: StoryStep[] = []
+    const prFilenames = files.map((f) => f.filename)
+    const mapped: StoryStep[] = []
     for (const s of story.steps) {
-      const stepFiles = s.files.filter((p) => present.has(p))
+      const stepFiles = s.files
+        .map((p) => matchStoryPath(p, prFilenames))
+        .filter((p): p is string => p !== null)
       if (stepFiles.length === 0) continue
-      usable.push({
-        ...s,
-        files: stepFiles,
-        relatedTests: s.relatedTests.filter((p) => present.has(p) && !stepFiles.includes(p)),
-        index: usable.length,
-      })
+      const relatedTests = s.relatedTests
+        .map((p) => matchStoryPath(p, prFilenames))
+        .filter((p): p is string => p !== null)
+      mapped.push({ ...s, files: stepFiles, relatedTests, index: mapped.length })
     }
-    return usable
+    // De-duplicate against the resolved PR filenames so the same file can't be
+    // shown twice (keeps it in its first step; strips relatedTests that collide).
+    return dedupeStorySteps({ steps: mapped }).steps
   })
 
   let current = $state(0)

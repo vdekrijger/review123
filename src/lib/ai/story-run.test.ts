@@ -124,6 +124,86 @@ describe('storyOrder task — single-pass', () => {
   })
 })
 
+describe('storyOrder task — post-process (dedupe / cap / salvage)', () => {
+  it('de-duplicates a file shown in two steps before exposing/caching the result', async () => {
+    const deps = makeDeps()
+    const dup: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['a.ts', 'b.ts'], caption: 'one', layer: 'data', relatedTests: [] },
+        { index: 1, files: ['b.ts', 'c.ts'], caption: 'two', layer: 'api', relatedTests: [] },
+      ],
+    }
+    deps.llmJsonWithRepairWithUsage.mockImplementation(async (_o: unknown, validate: ValidateFn) => ({
+      result: validate(dup), // validator IS shapeStoryOrder now → returns deduped
+      usage: undefined,
+    }))
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+    expect(run.story.status).toBe('done')
+    const result = run.story.value as StoryOrderResult
+    expect(result.steps[0].files).toEqual(['a.ts', 'b.ts'])
+    expect(result.steps[1].files).toEqual(['c.ts'])
+    // the de-duplicated result is what gets cached
+    expect(deps.setCached).toHaveBeenCalledWith(expect.stringContaining('|story|'), result)
+  })
+
+  it('caps the story to STORY_MAX_STEPS on a big PR', async () => {
+    const deps = makeDeps()
+    const many: StoryOrderResult = {
+      steps: Array.from({ length: 20 }, (_, i) => ({
+        index: i,
+        files: [`f${i}.ts`],
+        caption: `step ${i}`,
+        layer: 'data' as const,
+        relatedTests: [],
+      })),
+    }
+    deps.llmJsonWithRepairWithUsage.mockImplementation(async (_o: unknown, validate: ValidateFn) => ({
+      result: validate(many),
+      usage: undefined,
+    }))
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+    const result = run.story.value as StoryOrderResult
+    expect(result.steps).toHaveLength(12)
+    expect(result.steps.map((s) => s.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+  })
+
+  it('salvages partial JSON: keeps valid steps, drops malformed ones', async () => {
+    const deps = makeDeps()
+    const partial = {
+      steps: [
+        { index: 0, files: ['ok.ts'], caption: 'good', layer: 'data', relatedTests: [] },
+        { files: ['bad.ts'], layer: 'frontend', relatedTests: [] }, // bad layer → dropped by salvage
+      ],
+    }
+    deps.llmJsonWithRepairWithUsage.mockImplementation(async (_o: unknown, validate: ValidateFn) => ({
+      result: validate(partial), // strict validate fails → salvage keeps ok.ts
+      usage: undefined,
+    }))
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+    expect(run.story.status).toBe('done')
+    const result = run.story.value as StoryOrderResult
+    expect(result.steps).toHaveLength(1)
+    expect(result.steps[0].files).toEqual(['ok.ts'])
+  })
+
+  it('errors (never caches) when nothing usable survives the salvage', async () => {
+    const deps = makeDeps()
+    // validate() returns null after shaping → llmJsonWithRepair throws invalid-output
+    deps.llmJsonWithRepairWithUsage.mockImplementation(async (_o: unknown, validate: ValidateFn) => {
+      const shaped = validate({ steps: [{ files: [], layer: 'data' }] })
+      if (shaped === null) throw new LlmError('invalid-output', 'no usable steps')
+      return { result: shaped, usage: undefined }
+    })
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+    expect(run.story.status).toBe('error')
+    expect(deps.setCached).not.toHaveBeenCalledWith(expect.stringContaining('|story|'), expect.anything())
+  })
+})
+
 describe('storyOrder task — deep (agentic) path', () => {
   it('runs the tool loop, caches under a |deep key, and surfaces toolCallsUsed', async () => {
     const deps = makeDeps({ deep: true })
