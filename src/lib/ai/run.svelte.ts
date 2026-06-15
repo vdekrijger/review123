@@ -23,10 +23,11 @@ import type { LlmUsage } from '../llm/llm'
 import { llmToolLoop as defaultLlmToolLoop } from '../llm/llmToolLoop'
 import {
   createDeepReviewToolkit,
-  deepReviewAvailability,
+  resolveTaskMode,
   DEEP_REVIEW_MAX_TOOL_CALLS,
 } from './deepReview'
 import type { DeepReviewSource } from './deepReview'
+import { getSettings } from '../settings/settings'
 import {
   cacheKey,
   getCached as defaultGetCached,
@@ -62,7 +63,20 @@ import { addUsage } from './tokenCost'
 // PanelState union
 // ---------------------------------------------------------------------------
 
-export type PanelStatus = 'idle' | 'no-key' | 'declined' | 'loading' | 'streaming' | 'done' | 'error'
+export type PanelStatus =
+  | 'idle'
+  | 'no-key'
+  | 'declined'
+  | 'loading'
+  | 'streaming'
+  | 'done'
+  | 'error'
+  /**
+   * Plan J: the task is turned OFF in AI settings (aiTaskModes[task] === 'off').
+   * No LLM call, no context, no cache — zero tokens. The UI renders a compact
+   * muted "Disabled — enable in AI settings" state (never a skeleton/spinner).
+   */
+  | 'disabled'
 
 export interface PanelState<T> {
   status: PanelStatus
@@ -258,6 +272,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // ---------------------------------------------------------------------------
 
   async function runSummaryTask(ctx: PackedContext): Promise<void> {
+    // Plan J: summary supports off/standard only. Off → never run, no cache.
+    if (!resolveTaskMode('summary', deepReview).run) {
+      summaryState.status = 'disabled'
+      return
+    }
     const key = cacheKey(prKey, 'summary', PROMPT_VERSION)
 
     // Cache check
@@ -309,7 +328,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // tasks so it can VERIFY each candidate hotspot (read the changed file and
     // its callers/dependencies) before reporting it — assume-best-intent: drop
     // hotspots it can't substantiate. Toggle off → byte-identical single-pass.
-    const deep = deepReviewAvailability(deepReview)
+    const mode = resolveTaskMode('attention', deepReview)
+    if (!mode.run) {
+      attentionState.status = 'disabled'
+      return
+    }
+    const deep = { enabled: mode.deep, note: mode.note }
     if (deep.note) attentionState.note = deep.note
     const key = cacheKey(prKey, deep.enabled ? 'attention|deep' : 'attention', PROMPT_VERSION)
 
@@ -388,7 +412,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // so it can walk one hop out (importers/callers + dependencies) and add
     // de-emphasized "context" nodes around the changed files. Toggle off →
     // byte-identical single-pass, diff-scoped behavior.
-    const deep = deepReviewAvailability(deepReview)
+    const mode = resolveTaskMode('diagrams', deepReview)
+    if (!mode.run) {
+      diagramsState.status = 'disabled'
+      return
+    }
+    const deep = { enabled: mode.deep, note: mode.note }
     if (deep.note) diagramsState.note = deep.note
     const key = cacheKey(prKey, deep.enabled ? 'diagrams|deep' : 'diagrams', PROMPT_VERSION)
 
@@ -462,7 +491,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   async function runTestsTask(ctx: PackedContext): Promise<void> {
-    const deep = deepReviewAvailability(deepReview)
+    const mode = resolveTaskMode('tests', deepReview)
+    if (!mode.run) {
+      testsState.status = 'disabled'
+      return
+    }
+    const deep = { enabled: mode.deep, note: mode.note }
     if (deep.note) testsState.note = deep.note
     const key = cacheKey(prKey, deep.enabled ? 'tests|deep' : 'tests', PROMPT_VERSION)
 
@@ -536,7 +570,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   async function runAlternativesTask(ctx: PackedContext): Promise<void> {
-    const deep = deepReviewAvailability(deepReview)
+    const mode = resolveTaskMode('alternatives', deepReview)
+    if (!mode.run) {
+      alternativesState.status = 'disabled'
+      return
+    }
+    const deep = { enabled: mode.deep, note: mode.note }
     if (deep.note) alternativesState.note = deep.note
     const key = cacheKey(prKey, deep.enabled ? 'alternatives|deep' : 'alternatives', PROMPT_VERSION)
 
@@ -631,7 +670,13 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // ORDERED narrative sequence. Runs through the deep harness when the
     // agentic toggle is on (verify ordering/test-pairing by reading deps),
     // single-pass otherwise — same branch shape as the other deep tasks.
-    const deep = deepReviewAvailability(deepReview)
+    // Story is not in the user-facing task matrix (Plan J). It has its own
+    // storyMode toggle and never goes 'off' here. Its deep depth piggybacks on
+    // the verdict task's mode resolution — the canonical "deep review" anchor —
+    // so the All/None quick-sets still reproduce story's old deep/standard
+    // behavior without exposing a separate story control.
+    const verdictMode = resolveTaskMode('verdict', deepReview)
+    const deep = { enabled: verdictMode.run && verdictMode.deep, note: verdictMode.note }
     if (deep.note) storyState.note = deep.note
     const key = cacheKey(prKey, deep.enabled ? 'story|deep' : 'story', PROMPT_VERSION)
 
@@ -783,7 +828,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   async function runVerdictTask(ctx: PackedContext, ciData: CiSummary | null): Promise<void> {
-    const deep = deepReviewAvailability(deepReview)
+    const mode = resolveTaskMode('verdict', deepReview)
+    if (!mode.run) {
+      verdictState.status = 'disabled'
+      return
+    }
+    const deep = { enabled: mode.deep, note: mode.note }
     if (deep.note) verdictState.note = deep.note
     const key = cacheKey(prKey, deep.enabled ? 'verdict|deep' : 'verdict', PROMPT_VERSION)
 
@@ -868,22 +918,29 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // ---------------------------------------------------------------------------
 
   function setAllPanels(status: 'no-key' | 'declined' | 'error', error?: string): void {
-    summaryState.status = status
-    attentionState.status = status
-    diagramsState.status = status
-    verdictState.status = status
-    testsState.status = status
-    alternativesState.status = status
-    storyState.status = status
-    if (error !== undefined) {
-      summaryState.error = error
-      attentionState.error = error
-      diagramsState.error = error
-      verdictState.error = error
-      testsState.error = error
-      alternativesState.error = error
-      storyState.error = error
+    // Plan J: an OFF task wins — it shows 'disabled' (no tokens were ever going
+    // to be spent on it) even when the whole run is no-key/declined/error. Only
+    // the story panel has no user mode (it's gated by storyMode), so it always
+    // takes the sweep status.
+    const apply = (
+      task: 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests' | 'alternatives',
+      state: PanelState<unknown>,
+    ): void => {
+      if (getSettings().aiTaskModes[task] === 'off') {
+        state.status = 'disabled'
+        return
+      }
+      state.status = status
+      if (error !== undefined) state.error = error
     }
+    apply('summary', summaryState)
+    apply('attention', attentionState)
+    apply('diagrams', diagramsState)
+    apply('verdict', verdictState)
+    apply('tests', testsState)
+    apply('alternatives', alternativesState)
+    storyState.status = status
+    if (error !== undefined) storyState.error = error
   }
 
   // ---------------------------------------------------------------------------
@@ -920,6 +977,29 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const allowed = await gateAi({ repo, isPrivate, ask: askConsent })
     if (!allowed) {
       setAllPanels('declined')
+      return
+    }
+
+    // Plan J: if EVERY auto task is turned off, there is nothing to pack or run.
+    // Avoid the pack()/ci() work entirely (cheap token/time win) and mark each
+    // panel disabled. Story shares the diff context, so it only short-circuits
+    // here when the matrix tasks are all off too.
+    const modes = getSettings().aiTaskModes
+    const allAutoOff =
+      modes.summary === 'off' &&
+      modes.attention === 'off' &&
+      modes.diagrams === 'off' &&
+      modes.tests === 'off' &&
+      modes.alternatives === 'off' &&
+      modes.verdict === 'off'
+    if (allAutoOff) {
+      summaryState.status = 'disabled'
+      attentionState.status = 'disabled'
+      diagramsState.status = 'disabled'
+      testsState.status = 'disabled'
+      alternativesState.status = 'disabled'
+      verdictState.status = 'disabled'
+      storyState.status = 'disabled'
       return
     }
 
@@ -1123,7 +1203,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     ctx: PackedContext,
     skill: { id: string; name: string; content: string },
     idx: number,
-    deep: ReturnType<typeof deepReviewAvailability>,
+    deep: { enabled: boolean; note?: string },
     onUpdate?: () => void,
     existingComments?: string[],
   ): Promise<void> {
@@ -1227,6 +1307,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   async function runSkillReviews(onUpdate?: () => void, existingComments?: string[]): Promise<void> {
+    // Plan J: skills 'off' → never offer/run reviewers (no entries, no tokens).
+    const skillsMode = resolveTaskMode('skills', deepReview)
+    if (!skillsMode.run) return
+
     // No-key gate: same early-exit as start() and coach()
     if (!activeProviderHasKey()) return
 
@@ -1246,8 +1330,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const skills = listSkills().filter((s) => s.enabled)
     if (skills.length === 0) return
 
-    // Deep review (Plan G): one availability check for the whole batch.
-    const deep = deepReviewAvailability(deepReview)
+    // Deep review (Plan G/J): one mode resolution for the whole batch, driven
+    // by the 'skills' task mode (deep / standard) resolved above.
+    const deep = { enabled: skillsMode.deep, note: skillsMode.note }
 
     // Initialize entries (loading state)
     skillReviewsState = skills.map((skill) => ({
@@ -1273,6 +1358,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // ---------------------------------------------------------------------------
 
   async function retrySkill(skillId: string, onUpdate?: () => void, existingComments?: string[]): Promise<void> {
+    // Plan J: skills 'off' → reviewers are not offered; nothing to retry.
+    const skillsMode = resolveTaskMode('skills', deepReview)
+    if (!skillsMode.run) return
+
     // No-key / consent gates: identical to the batch path.
     if (!activeProviderHasKey()) return
     const allowed = await gateAi({ repo, isPrivate, ask: askConsent })
@@ -1294,7 +1383,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const skill = listSkills().find((s) => s.id === skillId)
     if (!skill) return
 
-    const deep = deepReviewAvailability(deepReview)
+    const deep = { enabled: skillsMode.deep, note: skillsMode.note }
 
     // Set just this entry to loading — clears the prior error/activity.
     skillReviewsState[idx] = {

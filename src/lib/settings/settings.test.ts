@@ -6,6 +6,8 @@ import {
   setOpenaiKey, setAnthropicKey, setGeminiKey, setAiProvider, setAiModel,
   setAiDeepReview, setStoryMode, setFocusMode, setShowTokenCost,
   findInvalidKeyChar, invalidKeyCharMessage,
+  setAiTaskMode, setAiTaskModes, setAllTasksDeep, setAllTasksStandard, setOffAllExtras,
+  defaultTaskModes, allDeepTaskModes,
 } from './settings'
 
 describe('settings', () => {
@@ -21,6 +23,15 @@ describe('settings', () => {
       anthropicKey: null,
       geminiKey: null,
       aiDeepReview: false,
+      aiTaskModes: {
+        summary: 'standard',
+        attention: 'standard',
+        diagrams: 'standard',
+        tests: 'standard',
+        alternatives: 'standard',
+        verdict: 'standard',
+        skills: 'standard',
+      },
       storyMode: true,
       diffMode: 'unified',
       hideWhitespace: false,
@@ -91,6 +102,15 @@ describe('settings', () => {
       anthropicKey: null,
       geminiKey: null,
       aiDeepReview: false,
+      aiTaskModes: {
+        summary: 'standard',
+        attention: 'standard',
+        diagrams: 'standard',
+        tests: 'standard',
+        alternatives: 'standard',
+        verdict: 'standard',
+        skills: 'standard',
+      },
       storyMode: true,
       diffMode: 'unified',
       hideWhitespace: false,
@@ -803,6 +823,92 @@ describe('key character sanitization', () => {
       expect(() => saveBitbucketAuth({ email: 'a@b.c', token: 'tok—en' })).toThrow(/invalid character/)
       expect(() => saveBitbucketAuth({ email: 'a—b@c.d', token: 'token' })).toThrow(/invalid character/)
       expect(getSettings().bitbucketAuth).toBeNull()
+    })
+  })
+
+  describe('aiTaskModes (Plan J — per-task modes)', () => {
+    it('defaults to every task standard', () => {
+      expect(getSettings().aiTaskModes).toEqual({
+        summary: 'standard', attention: 'standard', diagrams: 'standard',
+        tests: 'standard', alternatives: 'standard', verdict: 'standard', skills: 'standard',
+      })
+      expect(defaultTaskModes()).toEqual(getSettings().aiTaskModes)
+    })
+
+    it('migration: legacy aiDeepReview=true (no matrix) → deep-capable tasks deep, summary standard', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ aiDeepReview: true }))
+      const m = getSettings().aiTaskModes
+      expect(m).toEqual(allDeepTaskModes())
+      expect(m.summary).toBe('standard')
+      for (const t of ['attention', 'diagrams', 'tests', 'alternatives', 'verdict', 'skills'] as const) {
+        expect(m[t]).toBe('deep')
+      }
+    })
+
+    it('migration: legacy aiDeepReview=false → all standard', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ aiDeepReview: false }))
+      expect(getSettings().aiTaskModes).toEqual(defaultTaskModes())
+    })
+
+    it('explicit aiTaskModes wins over legacy aiDeepReview=true', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({
+        aiDeepReview: true,
+        aiTaskModes: { verdict: 'off', diagrams: 'standard' },
+      }))
+      const m = getSettings().aiTaskModes
+      expect(m.verdict).toBe('off')
+      expect(m.diagrams).toBe('standard')
+      // unspecified keys fall back to the default, NOT to the deep migration
+      expect(m.attention).toBe('standard')
+    })
+
+    it('coerces summary="deep" (invalid) back to standard', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ aiTaskModes: { summary: 'deep' } }))
+      expect(getSettings().aiTaskModes.summary).toBe('standard')
+    })
+
+    it('coerces an invalid mode string back to the default standard', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ aiTaskModes: { tests: 'wat' } }))
+      expect(getSettings().aiTaskModes.tests).toBe('standard')
+    })
+
+    it('setAiTaskMode persists one task', () => {
+      setAiTaskMode('diagrams', 'off')
+      expect(getSettings().aiTaskModes.diagrams).toBe('off')
+      setAiTaskMode('verdict', 'deep')
+      expect(getSettings().aiTaskModes.verdict).toBe('deep')
+    })
+
+    it('setAiTaskMode coerces summary deep → standard', () => {
+      setAiTaskMode('summary', 'deep')
+      expect(getSettings().aiTaskModes.summary).toBe('standard')
+    })
+
+    it('setAiTaskModes replaces the whole matrix', () => {
+      setAiTaskModes({ ...defaultTaskModes(), tests: 'off', verdict: 'deep' })
+      expect(getSettings().aiTaskModes.tests).toBe('off')
+      expect(getSettings().aiTaskModes.verdict).toBe('deep')
+    })
+
+    it('setAllTasksDeep reproduces legacy all-deep', () => {
+      setAllTasksDeep()
+      expect(getSettings().aiTaskModes).toEqual(allDeepTaskModes())
+    })
+
+    it('setAllTasksStandard reproduces legacy all-standard', () => {
+      setAllTasksDeep()
+      setAllTasksStandard()
+      expect(getSettings().aiTaskModes).toEqual(defaultTaskModes())
+    })
+
+    it('setOffAllExtras keeps summary + verdict, turns the rest off', () => {
+      setOffAllExtras()
+      const m = getSettings().aiTaskModes
+      expect(m.summary).toBe('standard')
+      expect(m.verdict).toBe('standard')
+      for (const t of ['attention', 'diagrams', 'tests', 'alternatives', 'skills'] as const) {
+        expect(m[t]).toBe('off')
+      }
     })
   })
 })

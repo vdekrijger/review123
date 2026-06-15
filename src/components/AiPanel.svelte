@@ -68,6 +68,13 @@
   <div class="ai-panel-declined">
     AI analysis declined for this private repository
   </div>
+{:else if state.status === 'disabled'}
+  <!-- Plan J: this task is turned OFF in AI settings — intentionally not run,
+       so NO skeleton/spinner/empty. A compact muted state + a link to settings
+       (the header above stays present so the section is still visible as off). -->
+  <div class="ai-panel-disabled">
+    Disabled — <a href="/settings" onclick={goToSettings}>enable in AI settings</a>
+  </div>
 {:else if state.status === 'streaming'}
   <!-- Streaming: tokens have started → stream the content (priority 1). The
        unified AiProgress suppresses status/skeleton once streamStarted. -->
@@ -137,6 +144,16 @@
     font-size: 0.9rem;
     opacity: 0.75;
     padding: 0.5rem 0;
+  }
+
+  .ai-panel-disabled {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    padding: 0.4rem 0;
+  }
+
+  .ai-panel-disabled a {
+    color: var(--accent);
   }
 
   .ai-panel-note {

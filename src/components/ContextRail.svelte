@@ -11,6 +11,7 @@
   import { SECTION_REGISTRY } from './panels/sectionRegistry'
   import { isRailSectionExpanded, setRailSectionExpanded, type RailSectionId } from '../lib/rail/collapse'
   import { track } from '../lib/analytics/analytics'
+  import { navigate } from '../lib/router/router.svelte'
   import type { AiRun } from '../lib/ai/run.svelte'
   import type { AttentionResult } from '../lib/ai/schemas'
   import type { CiSummary as CiSummaryType } from '../lib/github/checks'
@@ -29,6 +30,13 @@
   }
 
   let { run, onhotspot, collapsed, oncollapse, onbackdropclick, ci = null, ciError = false, meta = null }: Props = $props()
+
+  // Plan J: link to settings from a disabled (off) section, preserving return-to.
+  function goToSettings(e: MouseEvent) {
+    e.preventDefault()
+    sessionStorage.setItem('review123:settingsReturnTo', location.pathname)
+    navigate('/settings')
+  }
 
   const attention = $derived(
     run.attention.status === 'done' ? (run.attention.value as AttentionResult) : undefined
@@ -152,6 +160,14 @@
                 {/if}
               </div>
             </details>
+          {:else if run.attention.status === 'disabled'}
+            <!-- Plan J: hotspots task turned off — compact muted state, no skeleton. -->
+            <details class="rail-section-details" open={isRailSectionExpanded('hotspots')} ontoggle={(e) => handleRailSectionToggle(e, 'hotspots')}>
+              <summary class="rail-section-summary">Hotspots</summary>
+              <div class="rail-section-body">
+                <p class="rail-disabled-note">Disabled — <a href="/settings" onclick={goToSettings}>enable in AI settings</a></p>
+              </div>
+            </details>
           {:else if attentionPending}
             <!-- Pending state must NOT force the section open — the skeleton
                  lives inside the (collapsed-by-default) section body. -->
@@ -243,6 +259,17 @@
 </aside>
 
 <style>
+  /* Plan J: compact muted "disabled" note for an off section (no skeleton). */
+  .rail-disabled-note {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .rail-disabled-note a {
+    color: var(--accent);
+  }
+
   .context-rail {
     position: fixed;
     right: 0;

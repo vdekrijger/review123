@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { getSettings, saveTokens, setAiProvider, setAiModel, setAiDeepReview, setStoryMode, type AiProvider } from '../../lib/settings/settings'
+  import {
+    getSettings, saveTokens, setAiProvider, setAiModel, setStoryMode,
+    setAiTaskMode, setAllTasksDeep, setAllTasksStandard, setOffAllExtras,
+    AI_TASK_IDS, taskSupportsDeep,
+    type AiProvider, type AiTaskId, type AiTaskMode,
+  } from '../../lib/settings/settings'
   import { settingsState } from '../../lib/settings/settingsState.svelte'
   import { PROVIDERS, getModelDef, type LlmProviderId } from '../../lib/llm/providers'
   import { llmTestConnection, LlmError } from '../../lib/llm/llm'
@@ -21,11 +26,30 @@
   })
   let error = $state<string | null>(null)
 
-  // Deep review (agentic) toggle — applies immediately, like provider/model.
-  let deepReview = $state<boolean>(current.aiDeepReview)
-  function onDeepReviewChange(checked: boolean) {
-    deepReview = checked
-    setAiDeepReview(checked)
+  // Per-task AI modes (Plan J) — applies immediately, like provider/model.
+  // Read reactively from settingsState so quick-set rows update every row live.
+  const taskModes = $derived<Record<AiTaskId, AiTaskMode>>(settingsState.current.aiTaskModes)
+
+  // Human label per task for the "What runs" list.
+  const TASK_LABELS: Record<AiTaskId, string> = {
+    summary: 'Summary',
+    attention: 'Hotspots',
+    diagrams: 'Diagrams',
+    tests: 'Test insight',
+    alternatives: 'Alternatives',
+    verdict: 'Verdict',
+    skills: 'My reviewers (skills)',
+  }
+
+  const MODE_OPTIONS: { value: AiTaskMode; label: string }[] = [
+    { value: 'off', label: 'Off' },
+    { value: 'standard', label: 'Standard' },
+    { value: 'deep', label: 'Deep' },
+  ]
+
+  function onTaskModeChange(task: AiTaskId, mode: AiTaskMode) {
+    setAiTaskMode(task, mode)
+    track('ai_task_mode_changed', { task, mode })
   }
 
   // Story mode (Plan H) toggle — applies immediately. Requires an LLM key
@@ -219,19 +243,49 @@
     {/each}
   </div>
 
-  <div class="deep-review-row">
-    <label class="deep-review-toggle">
-      <input
-        type="checkbox"
-        checked={deepReview}
-        onchange={(e) => onDeepReviewChange((e.currentTarget as HTMLInputElement).checked)}
-      />
-      <span class="deep-review-label">Deep review (agentic)</span>
-    </label>
-    <p class="deep-review-hint">
-      Lets the AI read extra files before flagging; slower, uses more tokens.
-      Applies to reviewer skills and the verdict. Requires a model with tool-calling support.
+  <div class="task-modes" aria-label="What runs and how deep">
+    <p class="task-modes-label">What runs (and how deep)</p>
+    <p class="task-modes-hint">
+      Choose per task: <strong>Off</strong> spends no tokens on it, <strong>Standard</strong> is a
+      single pass, <strong>Deep</strong> lets the AI read extra files first (slower, more tokens;
+      needs a tool-calling model). Saved as you change it.
     </p>
+
+    <div class="quick-set" role="group" aria-label="Quick set deep review">
+      <span class="quick-set-label">Deep review:</span>
+      <button type="button" class="quick-set-btn" onclick={() => setAllTasksDeep()}>All</button>
+      <button type="button" class="quick-set-btn" onclick={() => setAllTasksStandard()}>None</button>
+      <button type="button" class="quick-set-btn" onclick={() => setOffAllExtras()}>Off-all-extras</button>
+    </div>
+
+    <ul class="task-list">
+      {#each AI_TASK_IDS as task (task)}
+        <li class="task-row">
+          <span class="task-name">{TASK_LABELS[task]}</span>
+          <div
+            class="mode-segmented"
+            role="radiogroup"
+            aria-label="{TASK_LABELS[task]} mode"
+          >
+            {#each MODE_OPTIONS as opt (opt.value)}
+              {#if opt.value !== 'deep' || taskSupportsDeep(task)}
+                <label class="mode-option" class:selected={taskModes[task] === opt.value}>
+                  <input
+                    type="radio"
+                    name="task-mode-{task}"
+                    value={opt.value}
+                    checked={taskModes[task] === opt.value}
+                    onchange={() => onTaskModeChange(task, opt.value)}
+                  />
+                  <span>{opt.label}</span>
+                  {#if opt.value === 'deep'}<span class="cost-hint" aria-hidden="true">·more tokens</span>{/if}
+                </label>
+              {/if}
+            {/each}
+          </div>
+        </li>
+      {/each}
+    </ul>
   </div>
 
   <div class="deep-review-row">
@@ -399,6 +453,120 @@
     font-size: 0.78em;
     color: var(--text-muted);
     margin: 0.5rem 0 0;
+  }
+
+  /* Plan J: "What runs (and how deep)" per-task mode matrix. */
+  .task-modes {
+    margin: 0.85rem 0 0;
+    padding: 0.6rem 0.85rem;
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+  }
+
+  .task-modes-label {
+    font-size: 0.9em;
+    font-weight: 600;
+    margin: 0 0 0.3rem;
+    color: var(--text);
+  }
+
+  .task-modes-hint {
+    font-size: 0.78em;
+    color: var(--text-muted);
+    margin: 0 0 0.6rem;
+  }
+
+  .quick-set {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.7rem;
+  }
+
+  .quick-set-label {
+    font-size: 0.82em;
+    color: var(--text-muted);
+  }
+
+  .quick-set-btn {
+    font-size: 0.8em;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .quick-set-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .task-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .task-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .task-name {
+    font-size: 0.88em;
+    color: var(--text);
+  }
+
+  /* Themed segmented control — radios under the hood, consistent with siblings. */
+  .mode-segmented {
+    display: inline-flex;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .mode-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.22rem 0.55rem;
+    font-size: 0.8em;
+    cursor: pointer;
+    color: var(--text-muted);
+    border-left: 1px solid var(--hairline);
+  }
+
+  .mode-option:first-child {
+    border-left: none;
+  }
+
+  .mode-option.selected {
+    background: var(--accent);
+    color: var(--on-accent, #fff);
+    font-weight: 600;
+  }
+
+  /* The native radio is the a11y anchor but visually replaced by the segment. */
+  .mode-option input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    margin: -1px;
+  }
+
+  .cost-hint {
+    font-size: 0.85em;
+    opacity: 0.7;
   }
 
   .deep-review-row {

@@ -46,6 +46,9 @@
   const problem = $derived(
     status === 'no-key' || status === 'declined' || status === 'error'
   )
+  // Plan J: a task turned OFF in settings — a quiet muted "off" indicator
+  // (not a spinner, not an error), mirroring the disabled section body.
+  const disabled = $derived(status === 'disabled')
 
   // One quiet polite announcement per state. Empty while pending (the spinner is
   // visual; no need to announce "loading" repeatedly).
@@ -54,15 +57,18 @@
       : status === 'error' ? `${title} unavailable`
       : status === 'no-key' ? `${title} needs an API key`
       : status === 'declined' ? `${title} declined`
+      : disabled ? `${title} disabled`
       : ''
   )
 </script>
 
-<span class="section-status" class:is-problem={problem}>
+<span class="section-status" class:is-problem={problem} class:is-disabled={disabled}>
   {#if pending}
     <Spinner size="0.8em" />
   {:else if ready}
     <span class="section-status-ready" aria-hidden="true">✓</span>
+  {:else if disabled}
+    <span class="section-status-off" aria-hidden="true">off</span>
   {:else if problem}
     <span class="section-status-hint" aria-hidden="true">·</span>
   {/if}
@@ -92,6 +98,18 @@
   .section-status-hint {
     font-size: 1em;
     line-height: 1;
+    color: var(--text-muted, currentColor);
+  }
+
+  .is-disabled {
+    opacity: 0.6;
+  }
+
+  .section-status-off {
+    font-size: 0.68em;
+    line-height: 1;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
     color: var(--text-muted, currentColor);
   }
 

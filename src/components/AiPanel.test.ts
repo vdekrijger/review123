@@ -167,3 +167,25 @@ describe('AiPanel — token usage footer (opt-in: settings.showTokenCost)', () =
     expect(container.querySelector('.ai-usage-footer')).toBeNull()
   })
 })
+
+describe('AiPanel — disabled state (Plan J)', () => {
+  it('renders a compact "Disabled — enable in AI settings" link, NOT a skeleton', () => {
+    const { container } = render(AiPanel, {
+      props: { title: 'Diagrams', task: 'diagrams', state: { status: 'disabled' as const }, onretry: vi.fn() },
+    })
+    expect(screen.getByText(/disabled/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /enable in ai settings/i })).toBeInTheDocument()
+    // No skeleton / spinner / loading affordance.
+    expect(container.querySelector('.ai-panel-loading')).toBeNull()
+    expect(container.querySelector('.skeleton')).toBeNull()
+  })
+
+  it('the settings link navigates to /settings (preserving return-to)', async () => {
+    render(AiPanel, {
+      props: { title: 'Diagrams', task: 'diagrams', state: { status: 'disabled' as const }, onretry: vi.fn() },
+    })
+    await userEvent.click(screen.getByRole('link', { name: /enable in ai settings/i }))
+    expect(vi.mocked(navigate)).toHaveBeenCalledWith('/settings')
+    expect(sessionStorage.getItem('review123:settingsReturnTo')).not.toBeNull()
+  })
+})

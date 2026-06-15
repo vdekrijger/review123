@@ -14,6 +14,11 @@ const EVENTS = {
   // queries, or content. Added for deep-review cost/precision observability.
   ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls'],
   ai_task_failed: ['task', 'reason'],
+  // PRIVACY DECISION (Plan J — per-task AI modes): fired when the user changes
+  // a task's run mode in AI settings. Carries only 'task' (a stable task id like
+  // 'diagrams') and 'mode' ('off' | 'standard' | 'deep') — both fixed enums,
+  // never a file path, diff content, key, or any user-generated text.
+  ai_task_mode_changed: ['task', 'mode'],
   diagram_viewed: [],
   hotspot_clicked: [],
   ci_summary_viewed: ['conclusion'],
