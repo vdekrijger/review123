@@ -71,7 +71,7 @@
             {#if t.confidence !== 'named'}<span class="sym-test-likely">likely</span>{/if}
           </div>
           {#if snippet}
-            <pre class="sym-test-pre"><code>{snippet}</code></pre>
+            <pre class="sym-test-pre"><code>{snippet}{#if t.truncated}{'\n… (truncated)'}{/if}</code></pre>
           {:else}
             <p class="sym-test-empty">Test content unavailable for inline preview.</p>
           {/if}
