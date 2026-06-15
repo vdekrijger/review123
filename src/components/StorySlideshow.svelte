@@ -10,7 +10,11 @@
    *
    * Per-slide comments/drafts/viewed work because the SAME stores are threaded
    * through (keyed by file) — a file in a slide behaves exactly as in Files mode.
-   * Viewed state stays MANUAL (matching InspectStep — no auto-mark on view).
+   * Viewed is auto-marked on ADVANCE: a step's files become viewed when you move
+   * PAST that step (a later step is reached), NOT on arrival — "viewed" means "I
+   * finished this and moved on". The final step has no "next", so REACHING it
+   * counts as completion and marks it. A manual un-view still sticks (auto-mark
+   * fires at most once per file).
    *
    * Fallback: if the story has no usable steps, the parent shows Files mode; this
    * component assumes it only renders with ≥1 step.
@@ -162,35 +166,43 @@
     return map
   })
 
-  // Which step indices the user has actually visited (current step included on
-  // mount). Drives both the shared viewed-store marking and the change-map
-  // visited state. Plain Set in reactive state — reassign to notify.
-  let visitedSteps = $state<Set<number>>(new Set([0]))
-
-  // Record the current step as visited whenever it changes (one-way: visiting
-  // only ever ADDS — we never un-visit, so revision-aware un-viewing in Files
-  // mode stays the user's prerogative).
+  // The FURTHEST step index the user has reached (monotonic — only ever climbs;
+  // going Prev never lowers it). "Viewed" now means "I finished reviewing this
+  // step and moved on", so a step is marked viewed when you ADVANCE PAST it, not
+  // when you arrive at it. A step is "advanced past" once you've been to a LATER
+  // step (maxStepReached > index). The LAST step has no "next", so REACHING it
+  // counts as completion — it's marked once you're on it. Forward jumps that skip
+  // steps raise maxStepReached over all skipped steps, so they're advanced-past
+  // too. Going Back keeps maxStepReached, so a passed step stays viewed.
+  let maxStepReached = $state(0)
   $effect(() => {
-    if (currentStep && !visitedSteps.has(current)) {
-      const next = new Set(visitedSteps)
-      next.add(current)
-      visitedSteps = next
-    }
+    if (current > maxStepReached) maxStepReached = current
   })
 
+  // A step is "advanced past" (its files countable as viewed) when the user has
+  // been to a later step, OR it's the final step and has been reached (no "next"
+  // to advance past, so arrival = completion). lastIndex tracked off `total`.
+  const lastIndex = $derived(total - 1)
+  function advancedPast(i: number): boolean {
+    return maxStepReached > i || (i === lastIndex && maxStepReached >= i)
+  }
+
   // Mark a file VIEWED in the SHARED per-file viewed store once ALL of its
-  // primary slides have been visited (multi-slide files: only when every hunk's
-  // slide is seen). Marked AT MOST ONCE per file (tracked in autoMarked) so that
-  // if the user later MANUALLY un-views it (in Files mode or via FileDiff), this
-  // effect does NOT keep re-asserting it — the manual un-view + revision-aware
-  // re-view semantics stay the user's prerogative. Shared both directions: a
-  // file auto-marked here shows ✓ in Files mode and vice-versa.
+  // primary slides have been ADVANCED PAST (multi-slide files: only when every
+  // hunk's slide is left forward / is the reached final step). Marked AT MOST
+  // ONCE per file (tracked in autoMarked) so that if the user later MANUALLY
+  // un-views it (in Files mode or via FileDiff), this effect does NOT keep
+  // re-asserting it — the manual un-view + revision-aware re-view semantics stay
+  // the user's prerogative. Shared both directions: a file auto-marked here shows
+  // ✓ in Files mode and vice-versa.
   const autoMarked = new Set<string>()
   $effect(() => {
     if (!viewedStore) return
+    // Reference maxStepReached so this re-runs as the furthest step climbs.
+    void maxStepReached
     for (const [path, slides] of primarySlidesByFile) {
       if (autoMarked.has(path)) continue
-      const allSeen = [...slides].every((i) => visitedSteps.has(i))
+      const allSeen = [...slides].every((i) => advancedPast(i))
       if (!allSeen) continue
       const file = fileByPath.get(path)
       if (!file) continue
@@ -214,12 +226,16 @@
   const allSeen = $derived(totalUniqueFiles > 0 && seenCount === totalUniqueFiles)
   // Unseen unique changed files, in PR order, for the reconciliation panel.
   const unseenFiles = $derived(files.map((f) => f.filename).filter((p) => uniqueChangedFiles.has(p) && !seenFiles.has(p)))
-  // Files whose every primary slide has been visited → "visited" on the map
-  // (best-effort visual layer; never gates the accounting above).
+  // Files whose every primary slide has been advanced past → "visited" on the
+  // map (best-effort visual layer; never gates the accounting above). Uses the
+  // same advance-based predicate as the viewed marking so the map and the "N / M
+  // files seen" readout agree on what's been left behind.
   const visitedFiles = $derived.by<string[]>(() => {
+    // Reference maxStepReached so this re-derives as the furthest step climbs.
+    void maxStepReached
     const out: string[] = []
     for (const [path, slides] of primarySlidesByFile) {
-      if ([...slides].every((i) => visitedSteps.has(i))) out.push(path)
+      if ([...slides].every((i) => advancedPast(i))) out.push(path)
     }
     return out
   })

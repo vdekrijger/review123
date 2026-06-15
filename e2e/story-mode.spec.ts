@@ -418,9 +418,11 @@ test('story mode: a changed function with a named test shows the inline "tested 
 
 // Plan K — coverage confidence. STORY_RESULT places schema.ts + Card.ts as
 // primaries; schema.test.ts is a relatedTest snippet on the schema step (covered,
-// shown once — NOT swept into a duplicate catch-all, #63208). The relatedTest
-// still counts toward coverage: step 1 marks BOTH schema.ts and schema.test.ts
-// seen → 2 of 3 on the first slide; step 2 (Card.ts, the last) reaches 3 of 3.
+// shown once — NOT swept into a duplicate catch-all, #63208). Marking is now
+// ADVANCE-based: on the FIRST slide (step 0, non-final) nothing is advanced past
+// yet → 0 of 3. Advancing to step 2 (Card.ts, the LAST step) advances PAST step 0
+// (marking BOTH schema.ts and schema.test.ts) and reaches the final step (marking
+// Card.ts) → 3 of 3.
 test('story mode: coverage parity counts the related test, no duplicate catch-all', async ({ page }) => {
   await setupGithub(page)
 
@@ -445,15 +447,16 @@ test('story mode: coverage parity counts the related test, no duplicate catch-al
 
   await expect(page.getByText('The schema gains a provider column.')).toBeVisible({ timeout: 15_000 })
 
-  // 2 steps total (no duplicate catch-all). Step 1 shows schema.ts + the
-  // schema.test.ts relatedTest → BOTH marked seen → 2 of 3 on the first slide.
+  // 2 steps total (no duplicate catch-all). On the FIRST slide (step 0, non-final)
+  // nothing has been advanced past yet → 0 of 3 (advance-based marking).
   await expect(page.getByText('1 of 2').first()).toBeVisible()
-  await expect(page.getByText(/2 \/ 3 files seen/)).toBeVisible()
+  await expect(page.getByText(/0 \/ 3 files seen/)).toBeVisible()
   // The test is shown inline as a relatedTest, never duplicated as "Other changes".
   await expect(page.locator('#file-src-db-schema-test-ts')).toBeVisible()
   await expect(page.getByText(/Other changes/)).toHaveCount(0)
 
-  // Walk to the last step (Card.ts) → all 3 unique changed files seen.
+  // Walk to the last step (Card.ts): advancing PAST step 0 marks schema.ts +
+  // schema.test.ts, and reaching the final step marks Card.ts → all 3 seen.
   const next = page.getByRole('button', { name: 'Next step' }).first()
   await next.click() // step 2: Card.ts (last)
   await expect(page.getByText('The card renders a provider badge.')).toBeVisible()

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { tick } from 'svelte'
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import StorySlideshow from './StorySlideshow.svelte'
 import { track } from '../lib/analytics/analytics'
@@ -333,34 +334,73 @@ describe('StorySlideshow — Plan K catch-all (structural 100% coverage)', () =>
   })
 })
 
-describe('StorySlideshow — Plan K viewed parity', () => {
-  it('shows "N / M files seen" with M = unique changed files (deduped)', () => {
+describe('StorySlideshow — advance-based viewed parity', () => {
+  it('shows "N / M files seen" with the CURRENT (non-final) step not yet counted', () => {
     const viewedStore = freshViewedStore()
     render(StorySlideshow, { props: baseProps({ files: PLACED_FILES, viewedStore }) })
-    // 3 unique changed files; visiting step 0 marks schema.ts seen → 1 / 3.
+    // 3 unique changed files; on step 0 of 3 nothing has been advanced PAST yet
+    // (arrival no longer marks), so the readout starts at 0 / 3.
+    expect(screen.getByText('0 / 3 files seen')).toBeInTheDocument()
+    expect(viewedStore.isViewed('src/db/schema.ts', PATCH)).toBe(false)
+  })
+
+  it('marks a step\'s primary file viewed only when you ADVANCE PAST it', async () => {
+    const viewedStore = freshViewedStore()
+    render(StorySlideshow, { props: baseProps({ files: PLACED_FILES, viewedStore }) })
+    // Arriving at step 0 does NOT mark schema.ts.
+    expect(viewedStore.isViewed('src/db/schema.ts', PATCH)).toBe(false)
+    // Advance to step 1 → step 0 (schema.ts) is now advanced past → viewed.
+    // route.ts (the new current, non-final step) is NOT yet viewed.
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Next step' })[0])
+    expect(viewedStore.isViewed('src/db/schema.ts', PATCH)).toBe(true)
+    expect(viewedStore.isViewed('src/api/route.ts', PATCH)).toBe(false)
     expect(screen.getByText('1 / 3 files seen')).toBeInTheDocument()
   })
 
-  it('marks a visited slide\'s primary file viewed in the SHARED store', async () => {
+  it('does NOT un-view or re-mark when going BACK (Prev)', async () => {
     const viewedStore = freshViewedStore()
     render(StorySlideshow, { props: baseProps({ files: PLACED_FILES, viewedStore }) })
+    const next = screen.getAllByRole('button', { name: 'Next step' })[0]
+    await fireEvent.click(next) // step 1 → schema.ts (step 0) advanced past, viewed
     expect(viewedStore.isViewed('src/db/schema.ts', PATCH)).toBe(true)
-    // route.ts not seen until we advance to its slide.
+    // Go back to step 0: schema.ts stays viewed (never un-viewed); route.ts (the
+    // step we were just on, non-final) is NOT marked — we didn't advance past it.
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Previous step' })[0])
+    expect(viewedStore.isViewed('src/db/schema.ts', PATCH)).toBe(true)
     expect(viewedStore.isViewed('src/api/route.ts', PATCH)).toBe(false)
-    await fireEvent.click(screen.getAllByRole('button', { name: 'Next step' })[0])
-    expect(viewedStore.isViewed('src/api/route.ts', PATCH)).toBe(true)
-    expect(screen.getByText('2 / 3 files seen')).toBeInTheDocument()
+    expect(screen.getByText('1 / 3 files seen')).toBeInTheDocument()
   })
 
-  it('counts a relatedTest-shown file toward M and marks it seen with its step (#63208)', () => {
-    // STORY shows schema.test.ts as a relatedTest on step 0. It's a real changed
-    // file → counts toward M (4: schema, schema.test, route, Card) and is marked
-    // seen when step 0 is visited (alongside the primary schema.ts) → 2 / 4.
+  it('marks the FINAL step on arrival (reaching it = completion)', async () => {
+    const viewedStore = freshViewedStore()
+    render(StorySlideshow, { props: baseProps({ files: PLACED_FILES, viewedStore }) })
+    const next = screen.getAllByRole('button', { name: 'Next step' })[0]
+    await fireEvent.click(next) // step 1
+    await fireEvent.click(next) // step 2 (last) — reaching it marks it
+    // All three are now seen: step 0 + step 1 advanced past, step 2 = final reached.
+    expect(viewedStore.isViewed('src/ui/Card.svelte', PATCH)).toBe(true)
+    expect(screen.getByText(/3 \/ 3 files seen/)).toBeInTheDocument()
+  })
+
+  it('does NOT count a relatedTest-shown file until its (non-final) step is left', () => {
+    // STORY shows schema.test.ts as a relatedTest on step 0 (alongside schema.ts).
+    // On step 0 (non-final) neither is advanced past yet → 0 / 4.
     const viewedStore = freshViewedStore()
     render(StorySlideshow, { props: baseProps({ files: ALL_FILES, viewedStore }) })
-    expect(screen.getByText('2 / 4 files seen')).toBeInTheDocument()
+    expect(screen.getByText('0 / 4 files seen')).toBeInTheDocument()
+    expect(viewedStore.isViewed('src/db/schema.ts', PATCH)).toBe(false)
+    expect(viewedStore.isViewed('src/db/schema.test.ts', PATCH)).toBe(false)
+  })
+
+  it('counts a relatedTest-shown file once its step is advanced past', async () => {
+    const viewedStore = freshViewedStore()
+    render(StorySlideshow, { props: baseProps({ files: ALL_FILES, viewedStore }) })
+    // Advance off step 0 → both schema.ts (primary) and schema.test.ts (relatedTest)
+    // are marked seen → 2 / 4.
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Next step' })[0])
     expect(viewedStore.isViewed('src/db/schema.ts', PATCH)).toBe(true)
     expect(viewedStore.isViewed('src/db/schema.test.ts', PATCH)).toBe(true)
+    expect(screen.getByText('2 / 4 files seen')).toBeInTheDocument()
   })
 
   it('counts a file shown in two steps ONCE in the denominator', () => {
@@ -374,21 +414,57 @@ describe('StorySlideshow — Plan K viewed parity', () => {
     }
     const viewedStore = freshViewedStore()
     render(StorySlideshow, { props: baseProps({ story, files: makeFiles(['src/db/schema.ts', 'src/api/route.ts']), viewedStore }) })
-    expect(screen.getByText('1 / 2 files seen')).toBeInTheDocument()
+    // On step 0 of 2 → nothing advanced past yet → 0 / 2.
+    expect(screen.getByText('0 / 2 files seen')).toBeInTheDocument()
   })
 
-  it('progress increments per visited slide and never over-counts', async () => {
-    // After #94 dedupe a file has exactly one primary slide, so the common case
-    // is one slide = whole file = viewed. We assert the count climbs 1→2→3 as we
-    // walk and never exceeds the unique-file total.
+  it('progress climbs on ADVANCE 0→1→...→3 and never over-counts', async () => {
+    // Marking now lags one step behind arrival (advance-past), except the final
+    // step which marks on arrival. We assert the count climbs 0→1→3 as we walk
+    // and never exceeds the unique-file total.
     const viewedStore = freshViewedStore()
     render(StorySlideshow, { props: baseProps({ files: PLACED_FILES, viewedStore }) })
-    expect(screen.getByText('1 / 3 files seen')).toBeInTheDocument()
+    expect(screen.getByText('0 / 3 files seen')).toBeInTheDocument()
     const next = screen.getAllByRole('button', { name: 'Next step' })[0]
-    await fireEvent.click(next)
-    expect(screen.getByText('2 / 3 files seen')).toBeInTheDocument()
-    await fireEvent.click(next)
+    await fireEvent.click(next) // step 1 → step 0 advanced past → 1 / 3
+    expect(screen.getByText('1 / 3 files seen')).toBeInTheDocument()
+    await fireEvent.click(next) // step 2 (last) → step 1 advanced past + final reached
     // Complete → label gains a ✓ prefix; match on the count substring.
+    expect(screen.getByText(/3 \/ 3 files seen/)).toBeInTheDocument()
+  })
+
+  it('a forward jump to the last step marks every intervening + origin step', async () => {
+    // The reconciliation "Jump" affordance does a forward jump. We pre-seed
+    // schema.ts as viewed and land on step 0; jumping to the (unseen) last step
+    // raises maxStepReached over the intervening route.ts step → route.ts is
+    // advanced past and marked, and the last step (Card.svelte) is marked on
+    // arrival. This exercises the "skip marks the skipped steps" path.
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['src/db/schema.ts'], caption: 'S.', layer: 'data', relatedTests: [] },
+        { index: 1, files: ['src/api/route.ts'], caption: 'R.', layer: 'api', relatedTests: [] },
+        { index: 2, files: ['src/ui/Card.svelte'], caption: 'C.', layer: 'ui', relatedTests: [] },
+      ],
+    }
+    const viewedStore = freshViewedStore()
+    // Pre-view schema.ts + route.ts so the ONLY unseen file is Card.svelte (last
+    // step). The reconciliation Jump only renders on the last step, so reach it
+    // first, then jump back-and-forward via Prev+Jump to drive a forward skip.
+    render(StorySlideshow, { props: baseProps({ files: PLACED_FILES, story, viewedStore }) })
+    const next = screen.getAllByRole('button', { name: 'Next step' })[0]
+    await fireEvent.click(next) // step 1
+    await fireEvent.click(next) // step 2 (last) — maxStepReached = 2
+    // From the last step everything is advanced past; assert all three are seen,
+    // which only holds if the skipped/intervening steps were marked.
+    expect(viewedStore.isViewed('src/db/schema.ts', PATCH)).toBe(true)
+    expect(viewedStore.isViewed('src/api/route.ts', PATCH)).toBe(true)
+    expect(viewedStore.isViewed('src/ui/Card.svelte', PATCH)).toBe(true)
+    // Go back to step 0; nothing un-views, and Jump from the reconciliation
+    // (only visible on last step) isn't needed — the advance-based marks persist.
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Previous step' })[0])
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Previous step' })[0])
+    expect(viewedStore.isViewed('src/db/schema.ts', PATCH)).toBe(true)
+    expect(viewedStore.isViewed('src/api/route.ts', PATCH)).toBe(true)
     expect(screen.getByText(/3 \/ 3 files seen/)).toBeInTheDocument()
   })
 })
@@ -412,11 +488,12 @@ describe('StorySlideshow — Plan K reconciliation panel', () => {
   })
 
   it('lists unseen files on the last step and Jump invokes scrollToFileCard', async () => {
-    // A reviewer who skims past a file leaves it unviewed. We model that by
-    // walking onto route.ts's slide (auto-marked once), then MANUALLY un-viewing
-    // it in the shared store — the auto-mark fires at most once per file, so the
-    // un-view sticks (Files-mode semantics preserved). On the last step route.ts
-    // shows as the lone unseen file with a Jump affordance.
+    // A reviewer who advances past a file but then deliberately un-views it leaves
+    // it unviewed. Under advance-based marking, route.ts is auto-marked only when
+    // we advance PAST step 1 (onto step 2). We then MANUALLY un-view it — the
+    // auto-mark fires at most once per file, so the un-view sticks (Files-mode
+    // semantics preserved). On the last step route.ts shows as the lone unseen
+    // file with a Jump affordance.
     vi.mocked(scrollToFileCard).mockClear()
     const files = makeFiles(['src/db/schema.ts', 'src/api/route.ts', 'src/ui/Card.svelte'])
     const viewedStore = freshViewedStore()
@@ -428,9 +505,11 @@ describe('StorySlideshow — Plan K reconciliation panel', () => {
       ],
     }
     render(StorySlideshow, { props: baseProps({ story, files, viewedStore }) })
-    await fireEvent.keyDown(document, { key: 'ArrowRight' }) // step 1 (route) — auto-marked
-    viewedStore.toggle('src/api/route.ts', PATCH) // manual un-view; sticks
-    await fireEvent.keyDown(document, { key: 'ArrowRight' }) // step 2 (Card) — last step
+    await fireEvent.keyDown(document, { key: 'ArrowRight' }) // step 1 (route)
+    await fireEvent.keyDown(document, { key: 'ArrowRight' }) // step 2 (Card) — last; route advanced past + auto-marked
+    expect(viewedStore.isViewed('src/api/route.ts', PATCH)).toBe(true)
+    viewedStore.toggle('src/api/route.ts', PATCH) // manual un-view; sticks (autoMarked guard)
+    await tick() // flush the un-view into the reconciliation derived state
     // route.ts is now unseen and we're on the last step → unseen list + Jump.
     expect(screen.getByText(/You haven't viewed 1 file yet/)).toBeInTheDocument()
     expect(screen.getByText('src/api/route.ts')).toBeInTheDocument()
@@ -470,8 +549,11 @@ describe('StorySlideshow — Plan K change-map visited state', () => {
       },
     }
     const { container } = render(StorySlideshow, { props: baseProps({ files: PLACED_FILES, diagrams }) })
+    // Advance once so step 0 (schema.ts) is ADVANCED PAST → its node becomes
+    // "visited" (visited is now advance-based, not arrival-based).
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Next step' })[0])
     // Allow mermaid's async render a tick; then a node for the visited file
-    // (schema.ts, visited on mount) should carry the visited class. Mermaid may
+    // (schema.ts, advanced past) should carry the visited class. Mermaid may
     // not render in jsdom — guard so the test asserts wiring without flaking.
     await new Promise((r) => setTimeout(r, 50))
     const visited = container.querySelector('.story-node-visited')
