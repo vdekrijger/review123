@@ -54,6 +54,7 @@
     onAddDraft,
     onRemoveDraft,
     onAddSkillFindingDraft,
+    onDismissSkillFinding = undefined,
     askFn = null,
     askDisabledReason = null,
     replyFn = null,
@@ -72,6 +73,8 @@
     onAddDraft: (path: string, line: number, side: 'LEFT' | 'RIGHT', body: string) => void
     onRemoveDraft: (path: string, line: number, side: 'LEFT' | 'RIGHT') => void
     onAddSkillFindingDraft: (path: string, finding: { body: string; line: number; key: string }) => Promise<void>
+    /** Records a dismiss decision for the accept/dismiss telemetry loop. */
+    onDismissSkillFinding?: (key: string) => void
     askFn?: ((q: string, onDelta: (t: string) => void, focus?: AskFocus) => Promise<{ ok: true; answer: string } | { ok: false; error: string }>) | null
     askDisabledReason?: string | null
     replyFn?: ((root: PrComment, body: string) => Promise<ReplyOutcome>) | null
@@ -432,6 +435,7 @@
               onReply={replyFn}
               skillFindings={lineSkillFindingsByPath.get(path) ?? []}
               onAddSkillFindingDraft={(finding) => onAddSkillFindingDraft(path, finding)}
+              {onDismissSkillFinding}
               whitespace={whitespaceByPath.get(path) ?? null}
             />
             {#if stepPairingsByFile.get(path)}

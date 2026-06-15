@@ -13,6 +13,7 @@
   import ReviewProgress from '../components/ReviewProgress.svelte'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
   import { createDraftStore, getOrphanDraftsForPr, migrateOrphanDrafts } from '../lib/drafts/drafts.svelte'
+  import { createDecisionStore } from '../lib/eval/decisions'
   import VerdictStep from '../components/VerdictStep.svelte'
   import { createAiRun } from '../lib/ai/run.svelte'
   import { buildCoachCodeContext } from '../lib/ai/coachContext'
@@ -133,6 +134,10 @@
   // ---- Draft store — created once per PR+headSha (after the PR loads) -----
   // We keep a single store instance; it persists across step switches.
   let draftStore: ReturnType<typeof createDraftStore> | null = $state(null)
+  // ---- Decision store — accept/dismiss ground-truth (telemetry loop) -------
+  // Records each AI finding's accept/dismiss outcome locally so the eval capture
+  // flow can pre-label a golden case. Created alongside the draft store, same PR key.
+  let decisionStore: ReturnType<typeof createDecisionStore> | null = $state(null)
   let storeInitialized = false
   // Count of drafts restored from an earlier commit of this PR (head-sha changed
   // after they were drafted). >0 surfaces a dismissible "restored" note; 0 = silent.
@@ -172,6 +177,9 @@
       const prKey = `${providerId}:${owner}/${repo}#${number}@${meta.headSha}`
       const store = createDraftStore(prKey)
       draftStore = store
+      const decisions = createDecisionStore(prKey)
+      decisionStore = decisions
+      void decisions.load()
       // Un-awaited intentionally: causes a cosmetic 0-count flash on mount
       // but avoids blocking render. Load completes asynchronously.
       //
@@ -764,6 +772,7 @@
         onhidewhitespace={setHideWs}
         whitespaceDisabledReason={isCompareActive ? 'Hide whitespace is unavailable in compare view — file contents are fetched for the PR base/head, not the compared revisions' : null}
         {draftStore}
+        {decisionStore}
         attention={isCompareActive ? null : (aiRun?.attention.status === 'done' ? aiRun.attention.value as AttentionResult : null)}
         readingOrder={isCompareActive ? [] : readingOrder}
         {viewedStore}

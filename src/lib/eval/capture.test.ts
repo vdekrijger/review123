@@ -19,6 +19,7 @@ import {
 } from './capture'
 import { runCase, type GoldenCase } from './harness'
 import { mockComplete } from './mock'
+import { decisionLabelsByTail, findingMatchTail, type DecisionRecord, type DecisionVerificationContext } from './decisions'
 
 const pr: CapturedPr = {
   name: '07-captured',
@@ -102,6 +103,55 @@ describe('scaffoldCase', () => {
     const empty = buildMockResponses([])
     expect((empty.verdict as { level: string }).level).toBe('behavior-preserved')
     expect((empty.attention as { hotspots: unknown[] }).hotspots).toHaveLength(0)
+  })
+})
+
+describe('auto-labeling from accept/dismiss decisions', () => {
+  const vc: DecisionVerificationContext = {
+    deep: false, crossVerified: false, confirmedBy: 0, polledModels: 0, raisedByCount: 0,
+  }
+  function decision(findingKey: string, decision: 'accepted' | 'dismissed'): DecisionRecord {
+    return { prKey: 'p', findingKey, decision, severity: 'high', verificationContext: vc, at: 1 }
+  }
+  // Build a finding key (skillId + content tail) the way the runtime store does.
+  function keyFor(skillId: string, f: CapturedFinding): string {
+    return `${skillId}:${findingMatchTail(f.file, f.line, f.description)}`
+  }
+
+  it('maps accepted → real, dismissed → noise, none → UNLABELED', () => {
+    // The skill finding was accepted; the attention finding dismissed; the
+    // verdict finding has no decision.
+    const labels = decisionLabelsByTail([
+      decision(keyFor('bug-hunter', findings[0]), 'accepted'),
+      decision(keyFor('builtin:attention', findings[1]), 'dismissed'),
+    ])
+    const expected = buildExpected(findings, labels)
+    const byDesc = new Map(expected.findings.map((e) => [e.description, e.label]))
+    expect(byDesc.get(findings[0].description)).toBe('real')
+    expect(byDesc.get(findings[1].description)).toBe('noise')
+    expect(byDesc.get(findings[2].description)).toBe('UNLABELED')
+  })
+
+  it('matches regardless of the recorded skillId (skillId-independent tail)', () => {
+    // Decision recorded under a DIFFERENT skillId than the live reviewer name.
+    const labels = decisionLabelsByTail([
+      decision(`some-other-id:${findingMatchTail(findings[0].file, findings[0].line, findings[0].description)}`, 'accepted'),
+    ])
+    const expected = buildExpected(findings, labels)
+    const entry = expected.findings.find((e) => e.description === findings[0].description)
+    expect(entry?.label).toBe('real')
+  })
+
+  it('without decisions every finding stays UNLABELED (back-compat)', () => {
+    const expected = buildExpected(findings)
+    for (const f of expected.findings) expect(f.label).toBe('UNLABELED')
+  })
+
+  it('scaffoldCase threads decision labels into expected', () => {
+    const labels = decisionLabelsByTail([decision(keyFor('bug-hunter', findings[0]), 'accepted')])
+    const { expected } = scaffoldCase(pr, findings, labels)
+    const entry = expected.findings.find((e) => e.description === findings[0].description)
+    expect(entry?.label).toBe('real')
   })
 })
 

@@ -23,6 +23,23 @@ const EVENTS = {
   // 'diagrams') and 'mode' ('off' | 'standard' | 'deep') — both fixed enums,
   // never a file path, diff content, key, or any user-generated text.
   ai_task_mode_changed: ['task', 'mode'],
+  // PRIVACY DECISION (Plan — accept/dismiss telemetry loop): fired when the user
+  // ACCEPTS ('Add as draft') or DISMISSES an AI finding. This accept/dismiss
+  // signal is the best real-world precision measure and was previously discarded.
+  // Props are ids / enums / counts ONLY — NEVER finding text, code, file paths,
+  // line numbers, or comment bodies:
+  //   - 'reviewer'      : the reviewer/skill id, or 'builtin:<name>' for a non-skill
+  //                       source. A stable identifier, never user code or a path.
+  //   - 'severity'      : 'high' | 'medium' | 'low' — fixed enum.
+  //   - 'deep'          : boolean — was deep (tool-using) review on for this run.
+  //   - 'crossVerified' : boolean — did cross-model verification run on this finding.
+  //   - 'confirmedBy'   : integer count of models that confirmed it (0 when none).
+  //   - 'polledModels'  : integer count of models polled (0 when verification absent).
+  //   - 'fusionMode'    : 'verify' | 'generate' — the ensemble mode, when known.
+  //   - 'raisedByCount' : integer count of models that independently RAISED it.
+  // None of these can reconstruct the finding's content, the diff, or repo data.
+  ai_finding_accepted: ['reviewer', 'severity', 'deep', 'crossVerified', 'confirmedBy', 'polledModels', 'fusionMode', 'raisedByCount'],
+  ai_finding_dismissed: ['reviewer', 'severity', 'deep', 'crossVerified', 'confirmedBy', 'polledModels', 'fusionMode', 'raisedByCount'],
   diagram_viewed: [],
   hotspot_clicked: [],
   ci_summary_viewed: ['conclusion'],

@@ -40,6 +40,63 @@ describe('analytics privacy choke-point', () => {
     expect(capture.mock.calls[0][1]).toEqual({ task: 'summary', duration_ms: 1200, cached: false })
   })
 
+  it('ai_finding_accepted carries ids/enums/counts only — NO finding content', () => {
+    track('ai_finding_accepted', {
+      reviewer: 'bug-hunter',
+      severity: 'high',
+      deep: true,
+      crossVerified: true,
+      confirmedBy: 2,
+      polledModels: 3,
+      fusionMode: 'generate',
+      raisedByCount: 2,
+      // content that MUST be stripped by the choke-point:
+      body: 'SQL injection in users.ts',
+      path: 'src/api/users.ts',
+      line: 42,
+      code: 'const q = `...${id}`',
+    } as never)
+    const props = capture.mock.calls[0][1]
+    expect(props).toEqual({
+      reviewer: 'bug-hunter',
+      severity: 'high',
+      deep: true,
+      crossVerified: true,
+      confirmedBy: 2,
+      polledModels: 3,
+      fusionMode: 'generate',
+      raisedByCount: 2,
+    })
+    expect(props).not.toHaveProperty('body')
+    expect(props).not.toHaveProperty('path')
+    expect(props).not.toHaveProperty('line')
+    expect(props).not.toHaveProperty('code')
+  })
+
+  it('ai_finding_dismissed carries reviewer/severity/verification context only', () => {
+    track('ai_finding_dismissed', {
+      reviewer: 'builtin:attention',
+      severity: 'low',
+      deep: false,
+      crossVerified: false,
+      confirmedBy: 0,
+      polledModels: 0,
+      raisedByCount: 0,
+      description: 'leaky finding text',
+    } as never)
+    const props = capture.mock.calls[0][1]
+    expect(props).toEqual({
+      reviewer: 'builtin:attention',
+      severity: 'low',
+      deep: false,
+      crossVerified: false,
+      confirmedBy: 0,
+      polledModels: 0,
+      raisedByCount: 0,
+    })
+    expect(props).not.toHaveProperty('description')
+  })
+
   it('unknown events are dropped entirely', () => {
     track('rogue_event' as never, {} as never)
     expect(capture).not.toHaveBeenCalled()

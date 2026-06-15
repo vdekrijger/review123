@@ -45,17 +45,38 @@ interface Args {
   prRef: string | null
   name: string | null
   deep: boolean
+  /** Path to a JSON export of the local decision store (auto-labeling). */
+  decisions: string | null
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { prRef: null, name: null, deep: false }
+  const args: Args = { prRef: null, name: null, deep: false, decisions: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--name') args.name = argv[++i] ?? null
     else if (a === '--deep') args.deep = true
+    else if (a === '--decisions') args.decisions = argv[++i] ?? null
     else if (!a.startsWith('--') && args.prRef === null) args.prRef = a
   }
   return args
+}
+
+/**
+ * Load a JSON export of the local decision store and build the match-tail → label
+ * lookup. The browser store (IndexedDB) isn't reachable from Node, so the user
+ * exports their decisions to a file (a JSON array of decision records) and points
+ * --decisions at it. Returns undefined when no path is given → all-UNLABELED.
+ */
+async function loadDecisionLabels(
+  path: string | null,
+  decisionLabelsByTail: (records: unknown[]) => Map<string, string>,
+): Promise<Map<string, string> | undefined> {
+  if (!path) return undefined
+  const { readFileSync } = await import('node:fs')
+  const raw = readFileSync(path, 'utf8')
+  const parsed = JSON.parse(raw)
+  const records = Array.isArray(parsed) ? parsed : (parsed.decisions ?? [])
+  return decisionLabelsByTail(records as unknown[])
 }
 
 // ---------------------------------------------------------------------------
@@ -330,6 +351,11 @@ async function main(): Promise<void> {
     })
     const harness = await server.ssrLoadModule('/src/lib/eval/harness.ts')
     const capture = await server.ssrLoadModule('/src/lib/eval/capture.ts')
+    const decisions = await server.ssrLoadModule('/src/lib/eval/decisions.ts')
+
+    const { decisionLabelsByTail } = decisions as {
+      decisionLabelsByTail: (records: unknown[]) => Map<string, string>
+    }
 
     const { captureFindings } = harness as {
       captureFindings: (
@@ -345,6 +371,7 @@ async function main(): Promise<void> {
       scaffoldCase: (
         pr: unknown,
         findings: unknown[],
+        decisionLabels?: Map<string, string>,
       ) => { fixture: unknown; expected: unknown; mockResponses: unknown }
     }
 
@@ -355,9 +382,14 @@ async function main(): Promise<void> {
     const findings = await captureFindings(fixture, complete, null, { deep: args.deep })
     console.log(`  ${findings.length} finding(s) produced.`)
 
-    // 3. Scaffold the three case files.
+    // 3. Scaffold the three case files — pre-labeling from the user's recorded
+    //    accept/dismiss decisions when --decisions <export.json> is supplied.
+    const decisionLabels = await loadDecisionLabels(args.decisions, decisionLabelsByTail)
+    if (decisionLabels) {
+      console.log(`  Auto-labeling from ${decisionLabels.size} recorded decision(s).`)
+    }
     const pr = { name: args.name, files, skills: [DEFAULT_SKILL] }
-    const scaffold = scaffoldCase(pr, findings)
+    const scaffold = scaffoldCase(pr, findings, decisionLabels)
 
     mkdirSync(join(outDir, 'mock'), { recursive: true })
     writeFileSync(join(outDir, 'fixture.json'), JSON.stringify(scaffold.fixture, null, 2) + '\n')
