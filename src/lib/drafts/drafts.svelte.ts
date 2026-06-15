@@ -64,6 +64,84 @@ export function parseDraftKey(key: string): { prKey: string; path: string; line:
 }
 
 // ---------------------------------------------------------------------------
+// prKey parsing — provider:owner/repo#number@sha (+ legacy unqualified form)
+// ---------------------------------------------------------------------------
+
+/**
+ * A single in-flight PR's draft summary, grouped by prKey
+ * (one entry per provider:owner/repo#number@sha variant).
+ */
+export interface DraftSummary {
+  /** The full prKey: provider:owner/repo#number@sha (or legacy owner/repo#number@sha). */
+  prKey: string
+  provider: string
+  owner: string
+  repo: string
+  number: number
+  /** The head SHA segment, or '' when the prKey carried none. */
+  headSha: string
+  draftCount: number
+  lastUpdatedAt: number
+}
+
+/**
+ * Parse a prKey into its parts. Handles:
+ *   - provider-qualified:   "github:owner/repo#42@abc123"
+ *   - gitlab host-qualified: "gitlab@gitlab.example.com:owner/repo#42@abc123"
+ *   - legacy (unqualified): "owner/repo#42@abc123"
+ *   - sha may be absent:    "github:owner/repo#42"
+ *
+ * Returns null when the core owner/repo#number shape can't be recovered.
+ */
+export function parsePrKey(prKey: string): {
+  prKey: string
+  provider: string
+  owner: string
+  repo: string
+  number: number
+  headSha: string
+} | null {
+  let rest = prKey
+  let provider = 'github'
+
+  // Provider prefix: leading "<provider>:" where provider may be "gitlab@host".
+  // The owner/repo segment never contains ':' or '@' before the first '/',
+  // so a ':' that appears before the first '/' delimits the provider prefix.
+  const slashIdx = rest.indexOf('/')
+  const colonIdx = rest.indexOf(':')
+  if (colonIdx !== -1 && (slashIdx === -1 || colonIdx < slashIdx)) {
+    provider = rest.slice(0, colonIdx)
+    rest = rest.slice(colonIdx + 1)
+  }
+
+  // Split off the head sha: "...#number@sha". The sha is everything after the
+  // LAST '@' (host-qualified gitlab providers already had their '@' consumed
+  // above as part of the provider prefix).
+  let headSha = ''
+  const atIdx = rest.lastIndexOf('@')
+  if (atIdx !== -1) {
+    headSha = rest.slice(atIdx + 1)
+    rest = rest.slice(0, atIdx)
+  }
+
+  // rest is now "owner/repo#number"
+  const hashIdx = rest.lastIndexOf('#')
+  if (hashIdx === -1) return null
+  const ownerRepo = rest.slice(0, hashIdx)
+  const numberStr = rest.slice(hashIdx + 1)
+  const number = Number(numberStr)
+  if (!ownerRepo || numberStr === '' || isNaN(number)) return null
+
+  const firstSlash = ownerRepo.indexOf('/')
+  if (firstSlash === -1) return null
+  const owner = ownerRepo.slice(0, firstSlash)
+  const repo = ownerRepo.slice(firstSlash + 1)
+  if (!owner || !repo) return null
+
+  return { prKey, provider, owner, repo, number, headSha }
+}
+
+// ---------------------------------------------------------------------------
 // Tiny promisified IndexedDB helper (~60 lines)
 // ---------------------------------------------------------------------------
 
@@ -313,4 +391,93 @@ export function createDraftStore(prKey: string, dbName = 'review123-drafts') {
       if (db) await idbClearRange(db, prKey)
     },
   }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-PR draft enumeration (for the landing "In-flight reviews" section)
+// ---------------------------------------------------------------------------
+
+/** Open the shared drafts DB, returning null when IndexedDB is unavailable. */
+async function openSharedDb(dbName: string): Promise<IDBDatabase | null> {
+  if (typeof (globalThis as unknown as { indexedDB?: IDBFactory }).indexedDB === 'undefined') {
+    return null
+  }
+  try {
+    return await openDb(dbName)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Enumerate every prKey that has drafts, returning one summary per prKey.
+ *
+ * Cursors the whole object store, groups raw draft keys by their prKey segment
+ * (everything before the first '|'), and rolls each group up into a count and a
+ * most-recent updatedAt. SHA variants of the same PR remain SEPARATE summaries
+ * here — the landing layer groups them by PR identity.
+ *
+ * Returns [] when IndexedDB is unavailable (in-memory fallback has no cross-PR
+ * visibility, by design).
+ */
+export async function listDraftSummaries(dbName = 'review123-drafts'): Promise<DraftSummary[]> {
+  const db = await openSharedDb(dbName)
+  if (!db) return []
+
+  type Acc = { count: number; lastUpdatedAt: number }
+  const byPrKey = new Map<string, Acc>()
+
+  const tx = db.transaction(STORE_NAME, 'readonly')
+  const store = tx.objectStore(STORE_NAME)
+  await new Promise<void>((resolve, reject) => {
+    const req = store.openCursor()
+    req.onsuccess = () => {
+      const cursor = req.result
+      if (cursor) {
+        const rawKey = cursor.key as string
+        const pipeIdx = rawKey.indexOf('|')
+        const prKey = pipeIdx === -1 ? rawKey : rawKey.slice(0, pipeIdx)
+        const value = cursor.value as Draft
+        const updatedAt = typeof value?.updatedAt === 'number' ? value.updatedAt : 0
+        const existing = byPrKey.get(prKey)
+        if (existing) {
+          existing.count += 1
+          if (updatedAt > existing.lastUpdatedAt) existing.lastUpdatedAt = updatedAt
+        } else {
+          byPrKey.set(prKey, { count: 1, lastUpdatedAt: updatedAt })
+        }
+        cursor.continue()
+      } else {
+        resolve()
+      }
+    }
+    req.onerror = () => reject(req.error)
+  })
+
+  const summaries: DraftSummary[] = []
+  for (const [prKey, acc] of byPrKey) {
+    const parsed = parsePrKey(prKey)
+    if (!parsed) continue
+    summaries.push({
+      prKey,
+      provider: parsed.provider,
+      owner: parsed.owner,
+      repo: parsed.repo,
+      number: parsed.number,
+      headSha: parsed.headSha,
+      draftCount: acc.count,
+      lastUpdatedAt: acc.lastUpdatedAt,
+    })
+  }
+  return summaries
+}
+
+/**
+ * Delete every draft under a single prKey (all path/line/side/n records).
+ * Reuses idbClearRange. No-op when IndexedDB is unavailable.
+ */
+export async function clearDraftsForPr(prKey: string, dbName = 'review123-drafts'): Promise<void> {
+  const db = await openSharedDb(dbName)
+  if (!db) return
+  await idbClearRange(db, prKey)
 }

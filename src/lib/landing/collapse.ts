@@ -10,7 +10,7 @@
 
 const KEY = 'review123:landing-collapsed'
 
-export type LandingSectionId = 'queue' | 'recent'
+export type LandingSectionId = 'queue' | 'recent' | 'inflight'
 
 type CollapseMap = Record<string, boolean>
 
