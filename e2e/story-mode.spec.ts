@@ -221,6 +221,103 @@ test('story mode: walk slides, related tests, diagram highlight, and a draft per
   await expect(page.locator('#file-src-ui-Card-ts')).toBeVisible()
 })
 
+// Sticky file header in Story mode (#fix/story-sticky-headers): the primary step
+// diff's header pins below the app topbar so the file path + Viewed toggle stay
+// reachable while scrolling a long story-step file. We serve a LONG patch for the
+// step's primary file so there's scrollable content, then scroll the page and
+// assert the header stays glued to the topbar offset (not scrolled off-screen).
+const LONG_PATCH_LINES = ['@@ -1,1 +1,121 @@', ' const head = 0']
+for (let i = 1; i <= 120; i++) LONG_PATCH_LINES.push(`+const provider_line_${i} = ${i}`)
+const LONG_SCHEMA_PATCH = LONG_PATCH_LINES.join('\n')
+
+const LONG_STORY_RESULT = {
+  steps: [
+    { index: 0, files: ['src/db/schema.ts'], caption: 'The schema gains a provider column.', layer: 'data', relatedTests: [] },
+    { index: 1, files: ['src/ui/Card.ts'], caption: 'The card renders a provider badge.', layer: 'ui', relatedTests: [] },
+  ],
+}
+
+test('story mode: the primary step file header stays sticky below the topbar while scrolling', async ({ page }) => {
+  await page.route('**/*posthog.com/**', (route) => route.abort())
+  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+
+  await page.route('**/api.github.com/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}`) return route.fulfill({ json: makePrMeta() })
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) {
+      return route.fulfill({ json: [
+        { filename: 'src/db/schema.ts', status: 'modified', patch: LONG_SCHEMA_PATCH, additions: 120, deletions: 0 },
+        { filename: 'src/ui/Card.ts', status: 'modified', patch: UI_PATCH, additions: 1, deletions: 0 },
+      ] })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/commits/${HEAD_SHA}/check-runs`) return route.fulfill({ json: { total_count: 0, check_runs: [] } })
+    if (path.startsWith(`/repos/${OWNER}/${REPO}/contents/`)) return route.fulfill({ status: 404, json: { message: 'Not Found' } })
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/comments`) return route.fulfill({ json: [] })
+    if (path === `/repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments`) return route.fulfill({ json: [] })
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/commits`) return route.fulfill({ json: [] })
+    return route.fulfill({ json: {} })
+  })
+
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string | null }> } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* */ }
+    if (body?.stream === true) {
+      return route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }, body: makeStreamResponse(SUMMARY_TEXT) })
+    }
+    const system = (body.messages ?? []).find((m) => m.role === 'system')?.content ?? ''
+    if (/guided NARRATIVE walkthrough/i.test(system)) return route.fulfill({ status: 200, json: jsonChatCompletion(JSON.stringify(LONG_STORY_RESULT)) })
+    return route.fulfill({ status: 200, json: jsonChatCompletion(resultForSystem(system)) })
+  })
+
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test', storyMode: true, diffMode: 'unified', railCollapsed: true }))
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.setViewportSize({ width: 1100, height: 700 })
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Story mode test PR/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByText('The schema gains a provider column.')).toBeVisible({ timeout: 15_000 })
+
+  // The primary step file's header (and its Viewed toggle) is the sticky one.
+  const header = page.locator('#file-src-db-schema-ts article.file-diff > header')
+  await expect(header).toBeVisible()
+  const viewedToggle = page.locator('#file-src-db-schema-ts').getByRole('checkbox', { name: /Mark .* as viewed/i }).first()
+  await expect(viewedToggle).toBeVisible()
+
+  // Resolve the actual sticky offset: --topbar-h on the document root.
+  const topbarH = await page.evaluate(() => {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue('--topbar-h').trim()
+    const probe = document.createElement('div')
+    probe.style.height = raw || '2.75rem'
+    document.body.appendChild(probe)
+    const px = probe.getBoundingClientRect().height
+    probe.remove()
+    return px
+  })
+
+  // Scroll the diff into a position where the header WOULD have scrolled off the
+  // top without sticky, then assert it's pinned at the topbar offset.
+  await header.scrollIntoViewIfNeeded()
+  await page.mouse.wheel(0, 600)
+  await page.waitForTimeout(150)
+
+  const box = await header.boundingBox()
+  expect(box).not.toBeNull()
+  // Pinned: header top sits at the topbar offset (small tolerance for sub-pixel
+  // rounding), NOT scrolled above the viewport (negative) and NOT far below.
+  expect(box!.y).toBeGreaterThanOrEqual(topbarH - 2)
+  expect(box!.y).toBeLessThanOrEqual(topbarH + 4)
+
+  // The Viewed toggle is still on-screen (reachable) mid-scroll.
+  const toggleBox = await viewedToggle.boundingBox()
+  expect(toggleBox).not.toBeNull()
+  expect(toggleBox!.y).toBeGreaterThanOrEqual(0)
+  expect(toggleBox!.y).toBeLessThanOrEqual(700)
+})
+
 // A story whose first step references an unmappable path — the mappable steps
 // must still render (partial rendering), no fallback to Files.
 const STORY_WITH_UNMAPPABLE = {

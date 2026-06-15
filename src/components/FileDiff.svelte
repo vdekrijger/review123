@@ -91,8 +91,12 @@
     /**
      * Whether the file header sticks to the top of the viewport while the
      * file's diff is in view (so Viewed / collapse / path stay reachable on a
-     * long file). Enabled in Files mode; disabled in Story mode, where one file
-     * fills the slide and sticky would interact oddly with the slideshow scroll.
+     * long file). Enabled in Files mode AND on Story mode's PRIMARY step diffs
+     * (so the path + Viewed toggle stay reachable while scrolling a long story
+     * step). Disabled on the Story "Related test" snippets, which are short. The
+     * sticky top is `--topbar-h` in both modes: in Story mode the only sticky
+     * element above the diff is the app topbar (the flow switch, diff-mode
+     * toolbar, change map, step caption and Prev/Next nav all scroll away).
      */
     sticky?: boolean
     /**

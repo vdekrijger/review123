@@ -416,7 +416,7 @@
             <FileDiff
               {file}
               {mode}
-              sticky={false}
+              sticky={true}
               forceExpanded={true}
               drafts={draftsFor(path)}
               comments={commentsFor(path)}
