@@ -1203,7 +1203,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     ctx: PackedContext,
     skill: { id: string; name: string; content: string },
     idx: number,
-    deep: ReturnType<typeof deepReviewAvailability>,
+    deep: { enabled: boolean; note?: string },
     onUpdate?: () => void,
     existingComments?: string[],
   ): Promise<void> {
@@ -1358,6 +1358,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // ---------------------------------------------------------------------------
 
   async function retrySkill(skillId: string, onUpdate?: () => void, existingComments?: string[]): Promise<void> {
+    // Plan J: skills 'off' → reviewers are not offered; nothing to retry.
+    const skillsMode = resolveTaskMode('skills', deepReview)
+    if (!skillsMode.run) return
+
     // No-key / consent gates: identical to the batch path.
     if (!activeProviderHasKey()) return
     const allowed = await gateAi({ repo, isPrivate, ask: askConsent })
@@ -1379,7 +1383,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const skill = listSkills().find((s) => s.id === skillId)
     if (!skill) return
 
-    const deep = deepReviewAvailability(deepReview)
+    const deep = { enabled: skillsMode.deep, note: skillsMode.note }
 
     // Set just this entry to loading — clears the prior error/activity.
     skillReviewsState[idx] = {
