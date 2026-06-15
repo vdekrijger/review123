@@ -291,6 +291,124 @@ describe('classifyNoiseLines — multi-line block comments', () => {
   })
 })
 
+describe('classifyNoiseLines — unterminated import spans do not leak (defensive bound)', () => {
+  // The import-runaway bug: a `from x import (` whose closing `)` is NOT present
+  // in the given lines (it sat in collapsed diff context) must not keep marking
+  // the rest of the lines 'import'. A following `def`/`class`/dedented statement
+  // closes the span defensively, leaving real code bright.
+  it('[python] unclosed `from x import (` resets at a following `def` — def + body NOT import', () => {
+    const lines = [
+      'from posthog.models.integration import (', // opener, `)` is missing here
+      '    Integration,',
+      '    SlackIntegration,',
+      // ↓ no closing `)` — it was in collapsed context. A new hunk's def follows.
+      'def get_integrations(team):',
+      '    return Integration.objects.filter(team=team)',
+      '    other = 1',
+    ]
+    const k = classifyNoiseLines(lines, 'python')
+    expect(k[0]).toBe('import')
+    expect(k[1]).toBe('import')
+    expect(k[2]).toBe('import')
+    // The def and its body must NOT be dimmed as import.
+    expect(k[3]).toBeNull()
+    expect(k[4]).toBeNull()
+    expect(k[5]).toBeNull()
+  })
+
+  it('[python] unclosed import resets at a following `class`', () => {
+    const lines = ['from a.b import (', '    Thing,', 'class Foo:', '    x = 1']
+    const k = classifyNoiseLines(lines, 'python')
+    expect(k.slice(0, 2)).toEqual(['import', 'import'])
+    expect(k[2]).toBeNull()
+    expect(k[3]).toBeNull()
+  })
+
+  it('[python] unclosed import resets at a following `async def`', () => {
+    const lines = ['from a import (', '    b,', 'async def run():', '    pass']
+    const k = classifyNoiseLines(lines, 'python')
+    expect(k.slice(0, 2)).toEqual(['import', 'import'])
+    expect(k[2]).toBeNull()
+    expect(k[3]).toBeNull()
+  })
+
+  it('[js] unclosed `import {` resets at a following `function`/`export`', () => {
+    const lines = ['import {', '  Foo,', '  Bar,', 'export function go() {}', 'const x = 1']
+    const k = classifyNoiseLines(lines, 'js')
+    expect(k.slice(0, 3)).toEqual(['import', 'import', 'import'])
+    expect(k[3]).toBeNull()
+    expect(k[4]).toBeNull()
+  })
+
+  it('[go] unclosed `import (` resets at a following `func`', () => {
+    const lines = ['import (', '\t"fmt"', '\t"os"', 'func main() {}']
+    const k = classifyNoiseLines(lines, 'go')
+    expect(k.slice(0, 3)).toEqual(['import', 'import', 'import'])
+    expect(k[3]).toBeNull()
+  })
+
+  it('a contiguous multi-line import (with its `)` present) still fully classifies', () => {
+    const lines = ['from os.path import (', '    join,', '    exists,', ')', 'def f():\n']
+    const k = classifyNoiseLines(lines, 'python')
+    expect(k.slice(0, 4)).toEqual(['import', 'import', 'import', 'import'])
+    expect(k[4]).toBeNull()
+  })
+
+  it('an unclosed span stays import over import-like lines but resets at a `def`', () => {
+    // Conservative: lines that look like import body (incl. another `import …`)
+    // stay dimmed; only a real statement keyword (`def`) breaks the runaway.
+    const lines = ['from a import (', '    b,', 'import os', 'def f():', '    pass']
+    const k = classifyNoiseLines(lines, 'python')
+    expect(k.slice(0, 3)).toEqual(['import', 'import', 'import'])
+    expect(k[3]).toBeNull()
+    expect(k[4]).toBeNull()
+  })
+})
+
+describe('classifyNoiseLines — span resets at injected boundaries', () => {
+  it('[python] a boundary index between two hunks resets an open import span', () => {
+    // index 2 is the first line AFTER a collapsed gap / hunk boundary. The import
+    // opened in the first run must not carry across it.
+    const lines = [
+      'from a import (', //   0  opener (no close in this run)
+      '    b,', //            1  continuation
+      'def later():', //     2  ← first line of the NEXT hunk (boundary)
+      '    pass', //         3
+    ]
+    const withoutBoundary = classifyNoiseLines(lines, 'python')
+    // Even without the boundary, the def guard already protects line 2.
+    expect(withoutBoundary[2]).toBeNull()
+
+    const withBoundary = classifyNoiseLines(lines, 'python', new Set([2]))
+    expect(withBoundary.slice(0, 2)).toEqual(['import', 'import'])
+    expect(withBoundary[2]).toBeNull()
+    expect(withBoundary[3]).toBeNull()
+  })
+
+  it('a boundary resets even when the next line LOOKS like import-body', () => {
+    // Without the boundary, an indented name after an unclosed paren import would
+    // be absorbed as 'import'. The boundary forces a reset so it is classified
+    // fresh (here: a non-import indented statement → null).
+    const lines = ['from a import (', '    b,', '    some_call()', '    other = 1']
+    const noBoundary = classifyNoiseLines(lines, 'python')
+    // No boundary: the indented lines look like import body → dimmed.
+    expect(noBoundary[2]).toBe('import')
+
+    const boundary = classifyNoiseLines(lines, 'python', new Set([2]))
+    expect(boundary.slice(0, 2)).toEqual(['import', 'import'])
+    expect(boundary[2]).toBeNull()
+    expect(boundary[3]).toBeNull()
+  })
+
+  it('a block-comment span also resets at a boundary', () => {
+    const lines = ['/*', ' * doc', 'const real = 1', 'const more = 2']
+    const boundary = classifyNoiseLines(lines, 'js', new Set([2]))
+    expect(boundary.slice(0, 2)).toEqual(['comment', 'comment'])
+    expect(boundary[2]).toBeNull()
+    expect(boundary[3]).toBeNull()
+  })
+})
+
 describe('classifyNoiseLines — passthrough behaviour', () => {
   it('returns all-null for null language', () => {
     expect(classifyNoiseLines(['import x', 'foo'], null)).toEqual([null, null])
