@@ -218,7 +218,12 @@ describe('InspectStep — settled result chips', () => {
         ])],
       }),
     })
-    expect(screen.getByLabelText('Done, 1 finding')).toBeInTheDocument()
+    // The done chip is now a navigation button (jumps to the finding); its
+    // accessible name is "Show {N} finding(s) from {reviewer}", and it shows the
+    // finding count text.
+    const chip = screen.getByRole('button', { name: 'Show 1 finding from Security Reviewer' })
+    expect(chip).toBeInTheDocument()
+    expect(chip).toHaveTextContent('✓ 1 finding')
   })
 
   it('renders the no-issues chip for a clean reviewer', () => {
