@@ -180,6 +180,11 @@ function isCommentLine(text: string, lang: CodeLang): boolean {
  *
  * Imports take precedence over comments (an `import` line is never a comment),
  * but the two never genuinely collide for a single line.
+ *
+ * NOTE: This is the PER-LINE helper. It cannot detect multi-line import spans
+ * or multi-line block comments (those need sequence + state). Prefer
+ * {@link classifyNoiseLines} for the dimming path; this remains for single-line
+ * callers / back-compat.
  */
 export function classifyNoise(text: string, lang: CodeLang | null): NoiseKind | null {
   if (lang === null) return null
@@ -187,4 +192,220 @@ export function classifyNoise(text: string, lang: CodeLang | null): NoiseKind | 
   if (isImportLine(text, lang)) return 'import'
   if (isCommentLine(text, lang)) return 'comment'
   return null
+}
+
+// ---------------------------------------------------------------------------
+// Span-aware classification (stateful across an ORDERED list of lines)
+// ---------------------------------------------------------------------------
+//
+// A pure per-line predicate cannot tell a continuation/closing line of a
+// multi-line import (or block comment) apart from arbitrary code, because the
+// signal lives in an EARLIER line. classifyNoiseLines walks the file's lines in
+// order, tracking whether we're currently inside an OPEN import span (or open
+// block comment), and classifies every line of the span — opener, continuation,
+// AND closing delimiter — as 'import' (or 'comment').
+//
+// Conservative still wins: a span only OPENS on a real import-statement opener
+// (the same line-leading regexes the per-line path uses). A line that merely
+// contains the substring `import` (in a string or identifier) never opens one.
+
+/** Strip string and char literals so brace/paren matching ignores quoted text. */
+function stripStringLiterals(text: string): string {
+  // Replace the contents of '…', "…" and `…` with spaces. Best-effort: handles
+  // the common single-line cases; we only need brace/paren balance, not perfect
+  // lexing. Escaped quotes inside strings are rare in import statements.
+  return text.replace(/'[^']*'|"[^"]*"|`[^`]*`/g, (m) => ' '.repeat(m.length))
+}
+
+/** Net brace balance ( `{` minus `}` ) on a line, ignoring string contents. */
+function braceDelta(text: string): number {
+  const s = stripStringLiterals(text)
+  let d = 0
+  for (const ch of s) {
+    if (ch === '{') d++
+    else if (ch === '}') d--
+  }
+  return d
+}
+
+/** Net paren balance ( `(` minus `)` ) on a line, ignoring string contents. */
+function parenDelta(text: string): number {
+  const s = stripStringLiterals(text)
+  let d = 0
+  for (const ch of s) {
+    if (ch === '(') d++
+    else if (ch === ')') d--
+  }
+  return d
+}
+
+// State while scanning lines in order. Only ONE kind of multi-line span can be
+// open at a time for our purposes (imports never nest inside block comments and
+// vice-versa for the heuristics we care about).
+type SpanState =
+  | { kind: 'none' }
+  // JS/Rust brace-delimited multi-line import: `import {` / `use a::{` until braces rebalance.
+  | { kind: 'js-brace-import'; depth: number }
+  // Just closed a JS brace-import on a line with no `from`; an immediately
+  // following line that STARTS with `from` belongs to the same statement.
+  | { kind: 'js-expect-from' }
+  // JS dynamic `import(` / Go `import (` / Python `from x import (` paren block.
+  | { kind: 'paren-import'; depth: number }
+  // Python backslash line-continuation of a `from … import …` / `import …`.
+  | { kind: 'py-backslash-import' }
+  // Multi-line block comment `/* … */` (JS-family, CSS, SQL).
+  | { kind: 'block-comment' }
+
+const BLOCK_COMMENT_LANGS = new Set<CodeLang>(['js', 'go', 'java', 'kotlin', 'rust', 'css', 'sql'])
+
+/** Does this language use `/* … *​/` block comments? */
+function hasBlockComments(lang: CodeLang): boolean {
+  return BLOCK_COMMENT_LANGS.has(lang)
+}
+
+/**
+ * Detect a multi-line IMPORT span OPENING on `text` for `lang`. Returns the new
+ * span state when the line opens a span that does NOT close on the same line, or
+ * null when there's no open span (either not an import opener, or it's a
+ * complete single-line import). The caller still classifies the opener line as
+ * 'import' separately via the per-line predicate.
+ */
+function openImportSpan(text: string, lang: CodeLang): SpanState | null {
+  switch (lang) {
+    case 'js': {
+      // Dynamic import: `import(` possibly spanning lines.
+      if (/^\s*(?:await\s+)?import\s*\(/.test(text)) {
+        const d = parenDelta(text)
+        if (d > 0) return { kind: 'paren-import', depth: d }
+        return null
+      }
+      // Static import / `export … from`. A brace-delimited list that doesn't
+      // close on this line spans further: `import {` , `import x, {`.
+      if (RE_JS_IMPORT.test(text) || RE_JS_EXPORT_FROM.test(text)) {
+        const d = braceDelta(text)
+        if (d > 0) return { kind: 'js-brace-import', depth: d }
+        return null
+      }
+      return null
+    }
+    case 'rust': {
+      // `use a::{ … };` multi-line.
+      if (RE_RUST_USE.test(text)) {
+        const d = braceDelta(text)
+        if (d > 0) return { kind: 'js-brace-import', depth: d }
+      }
+      return null
+    }
+    case 'go': {
+      // `import (` block.
+      if (/^\s*import\s*\(/.test(text)) {
+        const d = parenDelta(text)
+        if (d > 0) return { kind: 'paren-import', depth: d }
+      }
+      return null
+    }
+    case 'python': {
+      // `from x import ( … )` paren block.
+      if (RE_PY_FROM.test(text) || RE_PY_IMPORT.test(text)) {
+        const stripped = stripStringLiterals(text)
+        const d = parenDelta(text)
+        if (d > 0) return { kind: 'paren-import', depth: d }
+        // Backslash line-continuation.
+        if (/\\\s*$/.test(stripped)) return { kind: 'py-backslash-import' }
+      }
+      return null
+    }
+    default:
+      return null
+  }
+}
+
+/**
+ * Span-aware classification over an ORDERED list of source lines (one file /
+ * one diff column, top to bottom). Returns a parallel array: for each input
+ * line index, its NoiseKind ('import' | 'comment') or null.
+ *
+ * Multi-line import statements (and multi-line `/* … *​/` block comments) have
+ * EVERY line of the span classified — opener, continuation, and closing
+ * delimiter. Single-line imports/comments behave exactly as {@link classifyNoise}.
+ *
+ * @param lines raw source text per line, WITHOUT diff markers, in document order
+ * @param lang  language derived from the filename, or null when unknown
+ */
+export function classifyNoiseLines(lines: string[], lang: CodeLang | null): (NoiseKind | null)[] {
+  const out: (NoiseKind | null)[] = new Array(lines.length).fill(null)
+  if (lang === null) return out
+
+  let span: SpanState = { kind: 'none' }
+
+  for (let i = 0; i < lines.length; i++) {
+    const text = lines[i]
+
+    // --- Continue an OPEN span ------------------------------------------------
+    if (span.kind === 'js-brace-import') {
+      out[i] = 'import'
+      span.depth += braceDelta(text)
+      if (span.depth <= 0) {
+        // If the closing line carries no `from`, a lone `from '…'` may follow on
+        // the next line (e.g. `}` newline `from './m'`).
+        span = /\bfrom\b/.test(stripStringLiterals(text)) ? { kind: 'none' } : { kind: 'js-expect-from' }
+      }
+      continue
+    }
+    if (span.kind === 'js-expect-from') {
+      // Only the immediately-following `from …` line is absorbed; anything else
+      // ends the statement and is classified fresh below.
+      if (/^\s*from\b/.test(text)) {
+        out[i] = 'import'
+        span = { kind: 'none' }
+        continue
+      }
+      span = { kind: 'none' }
+      // fall through to classify this line normally
+    }
+    if (span.kind === 'paren-import') {
+      out[i] = 'import'
+      span.depth += parenDelta(text)
+      if (span.depth <= 0) span = { kind: 'none' }
+      continue
+    }
+    if (span.kind === 'py-backslash-import') {
+      out[i] = 'import'
+      // Span continues while THIS line also ends with a backslash.
+      if (!/\\\s*$/.test(stripStringLiterals(text))) span = { kind: 'none' }
+      continue
+    }
+    if (span.kind === 'block-comment') {
+      out[i] = 'comment'
+      // Closes on the line that contains the `*/` terminator.
+      if (stripStringLiterals(text).includes('*/')) span = { kind: 'none' }
+      continue
+    }
+
+    // --- No open span: classify this line, maybe OPEN a new one --------------
+    if (text.trim() === '') continue
+
+    if (isImportLine(text, lang)) {
+      out[i] = 'import'
+      const opened = openImportSpan(text, lang)
+      if (opened) span = opened
+      continue
+    }
+
+    if (isCommentLine(text, lang)) {
+      out[i] = 'comment'
+      // A block-comment opener that doesn't terminate on the same line starts a
+      // multi-line comment span.
+      if (hasBlockComments(lang)) {
+        const stripped = stripStringLiterals(text)
+        const open = stripped.indexOf('/*')
+        if (open !== -1 && !stripped.includes('*/', open + 2)) {
+          span = { kind: 'block-comment' }
+        }
+      }
+      continue
+    }
+  }
+
+  return out
 }
