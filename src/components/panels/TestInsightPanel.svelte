@@ -55,28 +55,6 @@
 
 <AiPanel title="Test coverage (AI-inferred)" task="tests" state={run.tests} skeletonVariant="cards" onretry={() => run.retry('tests')}>
   {#if tests}
-    {#if tests.covered.length > 0}
-      <p class="tests-ai-inferred-note">AI-inferred — not measured coverage</p>
-      <ul class="tests-covered-list">
-        {#each tests.covered as item (item.behavior)}
-          <li class="tests-covered-item">
-            <span class="tests-covered-check">✓</span>
-            <span class="tests-covered-content">
-              <span class="tests-covered-behavior"><MarkdownView source={item.behavior} /></span>
-              <span class="tests-covered-meta">
-                {item.test} ·
-                <button
-                  class="tests-file-link"
-                  onclick={() => onhotspot?.(item.file)}
-                  title="Jump to {item.file} in Inspect"
-                  aria-label="Jump to {item.file}"
-                >{item.file}</button>
-              </span>
-            </span>
-          </li>
-        {/each}
-      </ul>
-    {/if}
     {#if tests.gaps.length > 0}
       <p class="tests-gaps-heading">AI-inferred gaps — behaviors changed without test coverage:</p>
       {#each gapGroups as group (group.file ?? 'General')}
@@ -100,6 +78,32 @@
         </ul>
       {/each}
     {/if}
+    {#if tests.covered.length > 0}
+      <details class="tests-covered" open={tests.gaps.length === 0}>
+        <summary class="tests-covered-summary">
+          <span class="tests-covered-check">✓</span>
+          {tests.covered.length}
+          {tests.covered.length === 1 ? 'behavior' : 'behaviors'} covered
+          <span class="tests-covered-note">· AI-inferred, not measured</span>
+        </summary>
+        <ul class="tests-covered-list">
+          {#each tests.covered as item (item.behavior)}
+            <li
+              class="tests-covered-item tests-covered-item--compact"
+              title="{item.test} — {item.file}"
+            >
+              <span class="tests-covered-behavior"><MarkdownView source={item.behavior} /></span>
+              <button
+                class="tests-file-link tests-file-link--compact"
+                onclick={() => onhotspot?.(item.file)}
+                title="Jump to {item.file} in Inspect ({item.test})"
+                aria-label="Jump to {item.file}"
+              >{item.file}</button>
+            </li>
+          {/each}
+        </ul>
+      </details>
+    {/if}
     {#if tests.covered.length === 0 && tests.gaps.length === 0}
       <p class="tests-empty">No AI-inferred test coverage data available.</p>
     {/if}
@@ -107,52 +111,62 @@
 </AiPanel>
 
 <style>
-  .tests-ai-inferred-note {
-    margin: 0 0 0.6rem;
-    font-size: 0.8rem;
-    opacity: 0.6;
-    font-style: italic;
-  }
-
-  .tests-covered-list,
   .tests-gaps-list {
     list-style: none;
     margin: 0 0 0.75rem;
     padding: 0;
   }
 
-  .tests-covered-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.4rem;
-    padding: 0.25rem 0;
-    border-bottom: 1px solid #8881;
-    font-size: 0.88rem;
+  /* --- Covered (compacted, recessive confirmation strip) --- */
+  .tests-covered {
+    margin: 0.85rem 0 0;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--hairline);
   }
 
-  .tests-covered-item:last-child { border-bottom: none; }
+  .tests-covered-summary {
+    gap: 0.35rem;
+    padding: 0;
+    font-size: 0.82rem;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--text-muted);
+  }
+
+  .tests-covered-note {
+    font-style: italic;
+    opacity: 0.7;
+  }
+
+  .tests-covered-list {
+    list-style: none;
+    margin: 0.35rem 0 0;
+    padding: 0 0 0 1.2rem;
+  }
 
   .tests-covered-check {
     color: var(--legend-added-color);
     font-weight: 700;
     flex-shrink: 0;
-    margin-top: 0.05rem;
   }
 
-  .tests-covered-content {
+  .tests-covered-item--compact {
     display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-    min-width: 0;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.08rem 0;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    line-height: 1.35;
   }
 
   .tests-covered-behavior {
-    font-weight: 500;
-  }
-
-  .tests-covered-meta {
-    font-size: 0.78rem;
-    opacity: 0.65;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 auto;
   }
 
   .tests-file-link {
@@ -169,19 +183,38 @@
 
   .tests-file-link:hover { opacity: 0.75; }
 
+  /* Compact file link: muted + truncated, surfaces fully on hover */
+  .tests-file-link--compact {
+    flex-shrink: 0;
+    max-width: 9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.55;
+    font-size: 0.72rem;
+    text-decoration: none;
+  }
+
+  .tests-file-link--compact:hover {
+    opacity: 1;
+    text-decoration: underline;
+  }
+
+  /* --- Gaps (prominent, the actionable part) --- */
   .tests-gaps-heading {
-    margin: 0 0 0.4rem;
-    font-size: 0.85rem;
-    font-weight: 600;
+    margin: 0 0 0.5rem;
+    font-size: 0.95rem;
+    font-weight: 700;
     color: var(--legend-changed-color);
   }
 
   .tests-gap-item {
     display: flex;
     align-items: flex-start;
-    gap: 0.4rem;
-    padding: 0.2rem 0;
-    font-size: 0.88rem;
+    gap: 0.45rem;
+    padding: 0.3rem 0;
+    font-size: 0.9rem;
+    line-height: 1.45;
   }
 
   .tests-gap-icon {
@@ -191,7 +224,7 @@
   }
 
   .tests-gap-text {
-    opacity: 0.9;
+    opacity: 1;
   }
 
   /* MarkdownView inside gap/behavior: inline-level, no block margins */
