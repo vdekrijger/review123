@@ -61,6 +61,31 @@ describe('SkillFindingCard — severity visual system', () => {
     expect(container.querySelector('.skill-finding-body')!.textContent).not.toContain('`')
   })
 
+  it('renders block markdown: a fenced code block becomes a <pre>/<code> block, not literal backticks', () => {
+    const body = 'Use a guard:\n\n```ts\nif (!user) return\n```'
+    const { container } = renderCard({ body })
+    const pre = container.querySelector('.skill-finding-body pre code')
+    expect(pre).not.toBeNull()
+    expect(pre!.textContent).toContain('if (!user) return')
+    // The fence markers do not leak through as literal text
+    expect(container.querySelector('.skill-finding-body')!.textContent).not.toContain('```')
+  })
+
+  it('renders block markdown: a bullet list becomes <li> elements', () => {
+    const body = '- first\n- second'
+    const { container } = renderCard({ body })
+    const items = container.querySelectorAll('.skill-finding-body li')
+    expect(items.length).toBe(2)
+    expect(items[0].textContent).toContain('first')
+  })
+
+  it('renders block markdown: plain prose becomes a <p>', () => {
+    const { container } = renderCard({ body: 'Consider extracting this into a helper' })
+    const p = container.querySelector('.skill-finding-body p')
+    expect(p).not.toBeNull()
+    expect(p!.textContent).toBe('Consider extracting this into a helper')
+  })
+
   it('exposes an aria-label naming the persona and severity', () => {
     renderCard({ severity: 'high' })
     expect(
