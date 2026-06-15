@@ -104,33 +104,68 @@
   </div>
 </header>
 
-{#if router.route.name === 'landing'}
-  <Landing />
-{:else if router.route.name === 'review'}
-  {@const route = router.route}
-  {#if Review}
-    {#key `${route.provider}/${route.owner}/${route.repo}/${route.number}`}
-      <Review owner={route.owner} repo={route.repo} number={route.number} step={route.step} provider={route.provider} />
-    {/key}
+<!-- The growing middle of the sticky-footer column. flex:1 makes it fill the
+     viewport on SHORT routes so the footer below pins to the page bottom; on
+     tall routes (the review/inspect flow) it sizes to its content and the
+     footer sits naturally below. No overflow here — the document/body stays the
+     scroll container, so the inspect flow's position:sticky descendants (file
+     tree drawer, toggle tab, sticky file headers) keep following window scroll. -->
+<main class="route-main">
+  {#if router.route.name === 'landing'}
+    <Landing />
+  {:else if router.route.name === 'review'}
+    {@const route = router.route}
+    {#if Review}
+      {#key `${route.provider}/${route.owner}/${route.repo}/${route.number}`}
+        <Review owner={route.owner} repo={route.repo} number={route.number} step={route.step} provider={route.provider} />
+      {/key}
+    {:else}
+      <section class="route-loading" aria-busy="true"><p>Loading review…</p></section>
+    {/if}
+  {:else if router.route.name === 'auth-callback'}
+    <AuthCallback />
+  {:else if router.route.name === 'settings'}
+    {@const route = router.route}
+    <SettingsPage section={route.section} />
   {:else}
-    <section class="route-loading" aria-busy="true"><p>Loading review…</p></section>
+    <section><h1>Not found</h1><p>That isn't a valid review link. <a href="/">Go home</a>.</p></section>
   {/if}
-{:else if router.route.name === 'auth-callback'}
-  <AuthCallback />
-{:else if router.route.name === 'settings'}
-  {@const route = router.route}
-  <SettingsPage section={route.section} />
-{:else}
-  <section><h1>Not found</h1><p>That isn't a valid review link. <a href="/">Go home</a>.</p></section>
-{/if}
+</main>
 
 <!-- Global, every-route build provenance: which commit + when the running
-     bundle was built — so a lagging Vercel deploy is obvious at a glance. -->
+     bundle was built — so a lagging Vercel deploy is obvious at a glance.
+     As the LAST child of the flex column it pins to the page bottom. -->
 <BuildIndicator />
 
 <style>
   :global(:root) {
     --topbar-h: 2.75rem;
+  }
+
+  /* ── Sticky-footer page layout ──
+     The app root (#app, the mount target in index.html) becomes a flex COLUMN
+     at least as tall as the viewport: topbar → growing route region → footer.
+     min-height uses 100dvh (correct against mobile browser chrome) with a 100vh
+     fallback for engines without dvh.
+     IMPORTANT: no `overflow` is set here — #app is NOT a scroll container, so
+     the document/body keeps scrolling and every `position: sticky` descendant
+     in the inspect flow (file-tree drawer, toggle tab, sticky file headers) and
+     the `position: fixed` draft bar keep behaving exactly as before. */
+  :global(#app) {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  /* The route region grows to absorb leftover column height. On a SHORT page
+     this fills the gap so the footer pins to the viewport bottom; on a TALL
+     page it just wraps its content and the footer follows below it. */
+  .route-main {
+    flex: 1 0 auto;
+    /* min-height:0 would let a flex item shrink below content; we want it to
+       grow only, never clip — sticky descendants must see full document height. */
+    display: block;
   }
 
   .topbar {
