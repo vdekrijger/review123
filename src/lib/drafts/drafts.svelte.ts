@@ -481,3 +481,139 @@ export async function clearDraftsForPr(prKey: string, dbName = 'review123-drafts
   if (!db) return
   await idbClearRange(db, prKey)
 }
+
+// ---------------------------------------------------------------------------
+// Orphan-draft recovery — adopt drafts left under an OLDER head-sha prKey
+// ---------------------------------------------------------------------------
+
+/**
+ * A draft recovered from another sha variant of the same PR, paired with the
+ * raw IDB key it was stored under (so the caller can delete the source once it
+ * has been migrated to the current prKey).
+ */
+export interface OrphanDraft {
+  /** The full source prKey (a DIFFERENT @sha than the current session's). */
+  sourcePrKey: string
+  /** The raw IDB key the draft lives under, e.g. "prKey|path|line|side|n". */
+  sourceKey: string
+  draft: Draft
+}
+
+/**
+ * Find drafts that belong to the SAME PR identity (provider + owner/repo#number)
+ * but live under a DIFFERENT head-sha prKey than the current session.
+ *
+ * This recovers drafts orphaned when a PR receives a new commit after they were
+ * drafted: the new session's prKey carries the new @sha, so the old-sha draft
+ * store is invisible to it. We surface those here so the caller can adopt them.
+ *
+ * Strict identity match: only same provider+owner+repo+number qualifies; other
+ * PRs and the current prKey itself are excluded. Returns [] when IndexedDB is
+ * unavailable or nothing matches.
+ */
+export async function getOrphanDraftsForPr(
+  currentPrKey: string,
+  dbName = 'review123-drafts',
+): Promise<OrphanDraft[]> {
+  const target = parsePrKey(currentPrKey)
+  if (!target) return []
+
+  const db = await openSharedDb(dbName)
+  if (!db) return []
+
+  const orphans: OrphanDraft[] = []
+
+  const tx = db.transaction(STORE_NAME, 'readonly')
+  const store = tx.objectStore(STORE_NAME)
+  await new Promise<void>((resolve, reject) => {
+    const req = store.openCursor()
+    req.onsuccess = () => {
+      const cursor = req.result
+      if (cursor) {
+        const rawKey = cursor.key as string
+        const pipeIdx = rawKey.indexOf('|')
+        const sourcePrKey = pipeIdx === -1 ? rawKey : rawKey.slice(0, pipeIdx)
+        // Skip the current session's own prKey — those are the live drafts.
+        if (sourcePrKey !== currentPrKey) {
+          const parsed = parsePrKey(sourcePrKey)
+          if (
+            parsed &&
+            parsed.provider === target.provider &&
+            parsed.owner === target.owner &&
+            parsed.repo === target.repo &&
+            parsed.number === target.number
+          ) {
+            const value = cursor.value as Draft
+            orphans.push({ sourcePrKey, sourceKey: rawKey, draft: value })
+          }
+        }
+        cursor.continue()
+      } else {
+        resolve()
+      }
+    }
+    req.onerror = () => reject(req.error)
+  })
+
+  return orphans
+}
+
+/**
+ * Adopt orphaned drafts into the current prKey.
+ *
+ * Each source draft is re-stored under `targetPrKey` (preserving
+ * path/line/side/body/n/startLine; rewriting prKey + bumping updatedAt) and the
+ * original source key is deleted — so the migrated drafts no longer re-surface
+ * in the in-flight list as a separate sha variant.
+ *
+ * When multiple source shas hold a draft at the SAME anchor (path|line|side|n),
+ * they are de-duped: the most-recently-updated one wins.
+ *
+ * Returns the number of drafts written under the target key. No-op (returns 0)
+ * when there are no orphans or IndexedDB is unavailable.
+ */
+export async function migrateOrphanDrafts(
+  targetPrKey: string,
+  orphans: OrphanDraft[],
+  dbName = 'review123-drafts',
+): Promise<number> {
+  if (orphans.length === 0) return 0
+  const db = await openSharedDb(dbName)
+  if (!db) return 0
+
+  // De-dupe by anchor (path|line|side|n), keeping the newest by updatedAt.
+  const byAnchor = new Map<string, Draft>()
+  for (const { draft } of orphans) {
+    const n = draft.n ?? 0
+    const anchor = `${draft.path}|${draft.line}|${draft.side}|${n}`
+    const prev = byAnchor.get(anchor)
+    if (!prev || (draft.updatedAt ?? 0) > (prev.updatedAt ?? 0)) {
+      byAnchor.set(anchor, draft)
+    }
+  }
+
+  const now = Date.now()
+  for (const draft of byAnchor.values()) {
+    const n = draft.n ?? 0
+    const startLine = (draft.startLine != null && draft.startLine < draft.line) ? draft.startLine : undefined
+    const record: Draft = {
+      path: draft.path,
+      line: draft.line,
+      side: draft.side,
+      body: draft.body,
+      prKey: targetPrKey,
+      n,
+      updatedAt: now,
+      ...(startLine != null ? { startLine } : {}),
+    }
+    const key = draftKey({ prKey: targetPrKey, path: record.path, line: record.line, side: record.side, n })
+    await idbPut(db, key, record)
+  }
+
+  // Delete the source records (migrated — avoid leaving duplicate sha variants).
+  for (const { sourceKey } of orphans) {
+    await idbDelete(db, sourceKey)
+  }
+
+  return byAnchor.size
+}
