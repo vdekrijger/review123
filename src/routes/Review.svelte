@@ -738,6 +738,7 @@
         {contentsMap}
         skillReviews={aiRun?.skillReviews ?? []}
         runSkillReviewsFn={aiRun != null ? (() => { void aiRun!.runSkillReviews(undefined, prComments.map((c) => c.body)) }) : null}
+        onRetrySkill={aiRun != null ? ((skillId) => { void aiRun!.retrySkill(skillId, undefined, prComments.map((c) => c.body)) }) : null}
         askFn={aiRun ? aiRun.ask : null}
         askDisabledReason={inlineAskDisabledReason}
         replyFn={activeProvider.capabilities.commentReplies && !isCompareActive ? postReply : null}

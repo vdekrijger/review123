@@ -38,6 +38,8 @@ export interface TestRef {
   /** The test title when the symbol was named in one (confidence 'named'). */
   title?: string
   confidence: PairingConfidence
+  /** True when the block exceeded the snippet cap and was truncated. */
+  truncated?: boolean
 }
 
 export interface SymbolTestPairing {
@@ -82,26 +84,70 @@ const JS_TITLE_RE = /\b(?:it|test|describe|context)\s*\(\s*(['"`])([^'"`]*)\1/
 const PY_TEST_DEF_RE = /^\s*(?:async\s+)?def\s+(test[A-Za-z0-9_]*)\s*\(/
 
 /**
+ * Maximum number of source lines a captured test snippet may span. A test that
+ * exceeds this is truncated (see `truncated` on the returned range) so the UI
+ * never renders an enormous block.
+ */
+const MAX_SNIPPET_LINES = 40
+
+/**
+ * Walk a (possibly multi-line) Python `def` header starting at `defLine` and
+ * return the 0-based index of the line that terminates the header — the line
+ * whose colon (at parenthesis depth 0) opens the function body. Handles
+ * single-line defs, multi-line signatures, `-> ReturnType:` annotations, and
+ * `:` characters that appear inside the parameter list (type annotations).
+ *
+ * Parens inside string/char literals are ignored via a cheap quote tracker; an
+ * unterminated quote on a line is reset at the newline (best-effort — real
+ * signatures rarely contain unbalanced quotes).
+ */
+function pyHeaderEndLine(lines: string[], defLine: number): number {
+  let depth = 0
+  for (let i = defLine; i < lines.length; i++) {
+    const text = lines[i]
+    let quote: string | null = null
+    for (let c = 0; c < text.length; c++) {
+      const ch = text[c]
+      if (quote) {
+        if (ch === '\\') { c++; continue } // skip escaped char
+        if (ch === quote) quote = null
+        continue
+      }
+      if (ch === '"' || ch === "'") { quote = ch; continue }
+      if (ch === '#') break // rest of line is a comment
+      if (ch === '(' || ch === '[' || ch === '{') depth++
+      else if (ch === ')' || ch === ']' || ch === '}') depth--
+      else if (ch === ':' && depth === 0) return i // header-terminating colon
+    }
+  }
+  return defLine // malformed — fall back to the def line itself
+}
+
+/**
  * Find the enclosing test block range for a reference on `line` (0-based index
  * into `lines`). Best-effort:
  *  - JS/TS: walk up to the nearest it/test/describe(… , () => {  opener, then
  *    brace-match forward to its close.
- *  - Python-ish: walk up to the nearest `def test...:`, then forward until the
- *    indentation returns to ≤ the def's indent (or EOF).
- * Returns 1-based inclusive { start, end }.
+ *  - Python-ish: walk up to the nearest `def test...:` header (consuming a
+ *    multi-line signature fully), then forward until the indentation returns to
+ *    ≤ the def's indent (or EOF).
+ * Returns 1-based inclusive { start, end }, plus `truncated` when capped.
  */
 function enclosingBlock(
   lines: string[],
   line: number,
   style: 'brace' | 'indent',
-): { start: number; end: number } {
+): { start: number; end: number; truncated: boolean } {
   if (style === 'indent') {
     // Walk up to a `def test...` (or any def) header.
     let start = line
     while (start > 0 && !/^\s*(?:async\s+)?def\s+/.test(lines[start])) start--
     const indent = (lines[start].match(/^\s*/)?.[0].length) ?? 0
-    let end = line
-    for (let i = start + 1; i < lines.length; i++) {
+    // Consume the (possibly multi-line) signature before scanning the body, so
+    // a `):` line dedented back to the def's indent does not end the block.
+    const headerEnd = pyHeaderEndLine(lines, start)
+    let end = headerEnd
+    for (let i = headerEnd + 1; i < lines.length; i++) {
       const text = lines[i]
       if (text.trim() === '') { end = i; continue }
       const ind = (text.match(/^\s*/)?.[0].length) ?? 0
@@ -110,7 +156,7 @@ function enclosingBlock(
     }
     // Trim a trailing run of blank lines from the block.
     while (end > start && lines[end].trim() === '') end--
-    return { start: start + 1, end: end + 1 }
+    return capRange(start, end)
   }
 
   // brace style — find the opener line (nearest title decl at/above `line`).
@@ -128,7 +174,36 @@ function enclosingBlock(
     end = i
     if (seenOpen && depth <= 0) break
   }
-  return { start: start + 1, end: end + 1 }
+  return capRange(start, end)
+}
+
+/**
+ * Convert 0-based inclusive [start, end] line indices to a 1-based inclusive
+ * range, capping the span to MAX_SNIPPET_LINES. When capped, `truncated` is
+ * true so the renderer can show a "… (truncated)" marker.
+ */
+function capRange(start: number, end: number): { start: number; end: number; truncated: boolean } {
+  const span = end - start + 1
+  if (span > MAX_SNIPPET_LINES) {
+    return { start: start + 1, end: start + MAX_SNIPPET_LINES, truncated: true }
+  }
+  return { start: start + 1, end: end + 1, truncated: false }
+}
+
+/** Build a TestRef, capturing the enclosing block and its truncation flag. */
+function makeRef(
+  testFile: string,
+  lines: string[],
+  line: number,
+  style: 'brace' | 'indent',
+  confidence: PairingConfidence,
+  title?: string,
+): TestRef {
+  const { start, end, truncated } = enclosingBlock(lines, line, style)
+  const ref: TestRef = { testFile, lineRange: { start, end }, confidence }
+  if (title !== undefined) ref.title = title
+  if (truncated) ref.truncated = true
+  return ref
 }
 
 /**
@@ -163,22 +238,12 @@ export function pairSymbolsWithTests(
         const lineText = tf.lines[i]
         const jsTitle = JS_TITLE_RE.exec(lineText)
         if (jsTitle && word.test(jsTitle[2])) {
-          named = {
-            testFile: tf.path,
-            lineRange: enclosingBlock(tf.lines, i, tf.style),
-            title: jsTitle[2],
-            confidence: 'named',
-          }
+          named = makeRef(tf.path, tf.lines, i, tf.style, 'named', jsTitle[2])
           break
         }
         const pyDef = PY_TEST_DEF_RE.exec(lineText)
         if (pyDef && pyTestNamesSymbol(pyDef[1], s.symbol)) {
-          named = {
-            testFile: tf.path,
-            lineRange: enclosingBlock(tf.lines, i, tf.style),
-            title: pyDef[1],
-            confidence: 'named',
-          }
+          named = makeRef(tf.path, tf.lines, i, tf.style, 'named', pyDef[1])
           break
         }
       }
@@ -187,11 +252,7 @@ export function pairSymbolsWithTests(
       // Pass 2: referenced — symbol used as a whole word anywhere in the file.
       for (let i = 0; i < tf.lines.length; i++) {
         if (word.test(tf.lines[i])) {
-          tests.push({
-            testFile: tf.path,
-            lineRange: enclosingBlock(tf.lines, i, tf.style),
-            confidence: 'referenced',
-          })
+          tests.push(makeRef(tf.path, tf.lines, i, tf.style, 'referenced'))
           break
         }
       }
