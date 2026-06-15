@@ -392,18 +392,18 @@ const ATTENTION_RESULT: AttentionResult = {
   testFlags: [],
 }
 
-// A deep-diagram changeMap including a de-emphasized one-hop "context" neighbor
-// (deep-diagram mode, v12). The serializer styles status:'context' as muted.
+// A deep-flow result (Plan L): an ordered execution flow whose steps carry the
+// change tags + files. before/after are emitted empty under the new shape.
 const DIAGRAM_RESULT: GraphResult = {
   kind: 'flow',
-  before: { nodes: [{ id: 'router', label: 'router.ts' }], edges: [] },
-  after: { nodes: [{ id: 'router', label: 'router.ts' }], edges: [] },
-  changeMap: {
-    nodes: [
-      { id: 'router', label: 'router.ts', status: 'changed' },
-      { id: 'app', label: 'app.ts', status: 'context' },
+  before: { nodes: [], edges: [] },
+  after: { nodes: [], edges: [] },
+  flow: {
+    steps: [
+      { id: 'entry', label: 'handleSubmit', file: 'src/router.ts', kind: 'entry', change: 'changed' },
+      { id: 'save', label: 'write to store', file: 'src/store.ts', kind: 'effect', change: 'added' },
     ],
-    edges: [{ from: 'app', to: 'router', label: 'uses', status: 'context' }],
+    transitions: [{ from: 'entry', to: 'save' }],
   },
 }
 
@@ -628,9 +628,9 @@ describe('deep diagrams task', () => {
     expect(diagramLoopCall).toBeDefined()
     const diagramSystem = (diagramLoopCall![0] as { system: string }).system
     expect(diagramSystem).toContain('Deep review mode')
-    // Deep-diagram-specific guidance: one-hop neighborhood + context status
-    expect(diagramSystem).toContain('situate the change in the broader architecture')
-    expect(diagramSystem).toMatch(/context/i)
+    // Deep-flow-specific guidance (Plan L): follow the real call chain with tools
+    expect(diagramSystem).toContain('follow the real call chain')
+    expect(diagramSystem).toMatch(/read_file|search_code/)
 
     const deepKey = `${PR_KEY}|diagrams|deep|v${PROMPT_VERSION}`
     expect(deps.getCached).toHaveBeenCalledWith(deepKey)
@@ -646,16 +646,19 @@ describe('deep diagrams task', () => {
     expect(run.diagrams.activity).toBeUndefined()
   })
 
-  it('surfaces a context node in the deep changeMap', async () => {
+  it('surfaces the execution flow steps with change tags + files', async () => {
     seedSettings({ aiDeepReview: true })
     const deps = makeMultiTaskDeps()
     const run = createAiRun(makeInput(makeSource()), deps)
     await run.start()
 
     const value = run.diagrams.value as GraphResult
-    const contextNode = value.changeMap?.nodes.find((n) => n.status === 'context')
-    expect(contextNode).toBeDefined()
-    expect(contextNode?.label).toBe('app.ts')
+    expect(value.flow?.steps.length).toBe(2)
+    const entry = value.flow?.steps.find((s) => s.kind === 'entry')
+    expect(entry?.change).toBe('changed')
+    expect(entry?.file).toBe('src/router.ts')
+    const effect = value.flow?.steps.find((s) => s.kind === 'effect')
+    expect(effect?.change).toBe('added')
   })
 
   it('unwraps a deep cache hit: result + toolCallsUsed, no diagram loop call', async () => {

@@ -69,16 +69,19 @@ const STORY_RESULT = {
   ],
 }
 
+// Plan L: the diagram task returns an execution flow whose steps carry the same
+// files as the story steps, so the flow doubles as the story progress map —
+// highlighting the current step's node (by step.file) and supporting click-jump.
 const DIAGRAM_RESULT = {
   kind: 'flow',
-  before: { nodes: [{ id: 'schema', label: 'schema.ts' }], edges: [] },
-  after: { nodes: [{ id: 'schema', label: 'schema.ts' }, { id: 'card', label: 'Card.ts' }], edges: [] },
-  changeMap: {
-    nodes: [
-      { id: 'schema', label: 'schema.ts', status: 'changed' },
-      { id: 'card', label: 'Card.ts', status: 'changed' },
+  before: { nodes: [], edges: [] },
+  after: { nodes: [], edges: [] },
+  flow: {
+    steps: [
+      { id: 'schema', label: 'add provider column', file: 'src/db/schema.ts', kind: 'entry', change: 'changed' },
+      { id: 'card', label: 'render provider badge', file: 'src/ui/Card.ts', kind: 'effect', change: 'changed' },
     ],
-    edges: [],
+    transitions: [{ from: 'schema', to: 'card' }],
   },
 }
 

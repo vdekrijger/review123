@@ -20,7 +20,7 @@ import {
   askPrompt,
   parseReadingOrder,
   stripReadingOrder,
-  DEEP_DIAGRAM_CONTEXT_NODE_CAP,
+  FLOW_MAX_STEPS,
 } from './tasks'
 import { STORY_LAYERS } from './schemas'
 import type { PackedContext } from '../context/pack'
@@ -192,32 +192,31 @@ describe('diagramsPrompt', () => {
     expect(system).toContain('FEW_SHOT_EXAMPLE_START')
   })
 
-  it('system prompt few-shot contains valid JSON example shape', () => {
+  // Plan L — flow-of-execution prompt
+
+  it('instructs the model to TRACE THE EXECUTION PATH the change touches', () => {
     const { system } = diagramsPrompt(makeCtx())
-    // The few-shot must include a valid JSON example with kind, before, after
-    expect(system).toContain('FEW_SHOT_EXAMPLE_END')
-    // The JSON snippet in the example has nodes and edges
-    expect(system).toContain('"nodes"')
-    expect(system).toContain('"edges"')
+    expect(system.toLowerCase()).toContain('execution path')
+    // entry → effect framing
+    expect(system.toLowerCase()).toContain('entry')
+    expect(system.toLowerCase()).toContain('effect')
   })
 
-  it('system prompt instructs max 14 nodes for changeMap (D1)', () => {
+  it('system prompt mentions the flow shape: steps + transitions', () => {
     const { system } = diagramsPrompt(makeCtx())
-    expect(system).toMatch(/14\s+nodes|14 nodes/i)
+    expect(system).toContain('"flow"')
+    expect(system).toContain('"steps"')
+    expect(system).toContain('"transitions"')
   })
 
-  it('system prompt instructs labels ≤ 3 words', () => {
+  it('system prompt advertises the step kind enum values', () => {
     const { system } = diagramsPrompt(makeCtx())
-    expect(system).toMatch(/3 words|three words/i)
+    for (const kind of ['"entry"', '"call"', '"branch"', '"effect"', '"return"']) {
+      expect(system).toContain(kind)
+    }
   })
 
-  // D1: changeMap instructions
-  it('system prompt mentions changeMap field (D1)', () => {
-    const { system } = diagramsPrompt(makeCtx())
-    expect(system).toContain('changeMap')
-  })
-
-  it('system prompt mentions all four status enum values (D1)', () => {
+  it('system prompt advertises the four change enum values', () => {
     const { system } = diagramsPrompt(makeCtx())
     expect(system).toContain('"added"')
     expect(system).toContain('"removed"')
@@ -225,66 +224,69 @@ describe('diagramsPrompt', () => {
     expect(system).toContain('"unchanged"')
   })
 
-  it('system prompt instructs that every node and edge in changeMap must carry a status (D1)', () => {
+  it('system prompt tells the model to set each step file (for jump/coverage)', () => {
     const { system } = diagramsPrompt(makeCtx())
-    // Should instruct status is required on all nodes and edges in changeMap
-    expect(system).toMatch(/every node.*status|every edge.*status|must carry a status/i)
+    expect(system).toContain('"file"')
   })
 
-  it('few-shot example contains status field on a node (D1)', () => {
+  it('system prompt instructs the graceful empty-flow fallback (no fabrication)', () => {
     const { system } = diagramsPrompt(makeCtx())
-    // The FEW_SHOT_EXAMPLE_START block must demonstrate statuses
-    const fewShotStart = system.indexOf('FEW_SHOT_EXAMPLE_START')
-    const fewShotEnd = system.indexOf('FEW_SHOT_EXAMPLE_END')
-    expect(fewShotStart).toBeGreaterThan(-1)
-    const fewShotBlock = system.slice(fewShotStart, fewShotEnd)
-    expect(fewShotBlock).toContain('"status"')
-    expect(fewShotBlock).toContain('"added"')
+    expect(system.toLowerCase()).toContain('no clear execution flow')
+    expect(system).toMatch(/empty flow|"steps": \[\]/i)
+    expect(system).toMatch(/do not fabricate|never invent|do not fabricate a flow/i)
+  })
+
+  it('system prompt instructs the flow step cap', () => {
+    const { system } = diagramsPrompt(makeCtx())
+    expect(system).toContain(String(FLOW_MAX_STEPS))
+    expect(FLOW_MAX_STEPS).toBe(14)
+  })
+
+  it('few-shot example demonstrates a flow with steps + change tags', () => {
+    const { system } = diagramsPrompt(makeCtx())
+    const start = system.indexOf('FEW_SHOT_EXAMPLE_START')
+    const end = system.indexOf('FEW_SHOT_EXAMPLE_END')
+    expect(start).toBeGreaterThan(-1)
+    const block = system.slice(start, end)
+    expect(block).toContain('"flow"')
+    expect(block).toContain('"kind"')
+    expect(block).toContain('"change"')
+    expect(block).toContain('"transitions"')
   })
 })
 
 // ---------------------------------------------------------------------------
-// diagramsPrompt — deep mode (deep-diagrams-context, v12)
+// diagramsPrompt — deep mode (follow the call chain; Plan L)
 // ---------------------------------------------------------------------------
 
-describe('diagramsPrompt — deep mode (context nodes)', () => {
-  it('single-pass (default / deep:false) omits the deep-diagram context section', () => {
+describe('diagramsPrompt — deep mode (call chain)', () => {
+  it('single-pass (default / deep:false) omits the deep call-chain section', () => {
     const { system: def } = diagramsPrompt(makeCtx())
     const { system: off } = diagramsPrompt(makeCtx(), { deep: false })
-    expect(def).not.toContain('situate the change in the broader architecture')
-    expect(off).not.toContain('situate the change in the broader architecture')
-    // Default and explicit deep:false are byte-identical (diff-scoped, unchanged)
+    expect(def).not.toContain('follow the real call chain')
+    expect(off).not.toContain('follow the real call chain')
+    // Default and explicit deep:false are byte-identical
     expect(def).toBe(off)
   })
 
-  it('deep mode adds the one-hop neighborhood / context-node guidance', () => {
+  it('deep mode tells the model to USE THE TOOLS to follow the call chain', () => {
     const { system } = diagramsPrompt(makeCtx(), { deep: true })
-    expect(system).toContain('situate the change in the broader architecture')
-    expect(system).toMatch(/importers/i)
-    expect(system).toMatch(/dependenc/i)
-    expect(system).toContain('"context"')
+    expect(system.toLowerCase()).toContain('follow the real call chain')
+    expect(system).toMatch(/read_file|search_code/)
+    // trace entry → effect using tools
+    expect(system.toLowerCase()).toContain('entry')
   })
 
-  it('deep mode mentions the context-node cap', () => {
+  it('deep mode tells the model to DROP steps it cannot substantiate', () => {
     const { system } = diagramsPrompt(makeCtx(), { deep: true })
-    expect(system).toContain(String(DEEP_DIAGRAM_CONTEXT_NODE_CAP))
-    expect(DEEP_DIAGRAM_CONTEXT_NODE_CAP).toBe(8)
+    expect(system.toLowerCase()).toMatch(/drop any step|cannot substantiate/)
   })
 
-  it('deep mode keeps the before/after/changeMap structure and the no-Mermaid rule', () => {
+  it('deep mode keeps the flow shape and the no-Mermaid rule', () => {
     const { system } = diagramsPrompt(makeCtx(), { deep: true })
-    expect(system).toContain('"before"')
-    expect(system).toContain('"after"')
-    expect(system).toContain('"changeMap"')
+    expect(system).toContain('"flow"')
+    expect(system).toContain('"steps"')
     expect(system.toLowerCase()).toContain('mermaid')
-  })
-
-  it('the context status appears in the changeMap enum (both modes)', () => {
-    const { system: deep } = diagramsPrompt(makeCtx(), { deep: true })
-    const { system: single } = diagramsPrompt(makeCtx())
-    // The schema enum advertises context so the validator and model agree.
-    expect(deep).toContain('"context"')
-    expect(single).toContain('"context"')
   })
 })
 
@@ -1724,21 +1726,20 @@ describe('alternativesPrompt — v11 one-sentence caps', () => {
 // diagramsPrompt — v11 terse edge labels + no explanatory prose
 // ---------------------------------------------------------------------------
 
-describe('diagramsPrompt — v11 terse labels', () => {
-  it('caps edge labels at ≤2 words', () => {
+describe('diagramsPrompt — terse labels (Plan L flow)', () => {
+  it('caps edge/condition labels at ≤3 words', () => {
     const { system } = diagramsPrompt(makeCtx())
-    expect(system).toMatch(/Edge labels must be ≤ 2 words/i)
+    expect(system).toMatch(/Edge \/ condition labels ≤ 3 words/i)
   })
 
-  it('forbids explanatory prose in the graph output (≤2 sentences happen downstream)', () => {
+  it('forbids explanatory prose in the flow output', () => {
     const { system } = diagramsPrompt(makeCtx())
-    expect(system).toMatch(/emit NO explanatory prose/i)
-    expect(system).toMatch(/≤2 sentences downstream/i)
+    expect(system).toMatch(/Emit NO explanatory prose/i)
   })
 
-  it('still caps node labels at ≤3 words (graph itself unchanged)', () => {
+  it('caps step labels at ≤6 words', () => {
     const { system } = diagramsPrompt(makeCtx())
-    expect(system).toMatch(/Node labels must be ≤ 3 words/i)
+    expect(system).toMatch(/Step labels ≤ 6 words/i)
   })
 })
 
@@ -1903,7 +1904,7 @@ describe('storyOrderPrompt', () => {
 })
 
 describe('PROMPT_VERSION', () => {
-  it('is bumped to 16 (coach per-comment code context: excerpt + fileWindow)', () => {
-    expect(PROMPT_VERSION).toBe(16)
+  it('is bumped to 17 (Plan L: diagram → flow-of-execution output shape)', () => {
+    expect(PROMPT_VERSION).toBe(17)
   })
 })

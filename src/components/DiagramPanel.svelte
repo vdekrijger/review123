@@ -21,7 +21,7 @@
    * v3 cached results without changeMap fall back to the before/after layout.
    */
   import { track } from '../lib/analytics/analytics'
-  import { graphToMermaid } from '../lib/diagram/mermaid'
+  import { graphToMermaid, flowToMermaid } from '../lib/diagram/mermaid'
   import { getMermaid } from '../lib/diagram/mermaidInit'
   import type { GraphResult } from '../lib/diagram/types'
   import { resolvedTheme } from '../lib/settings/appearance.svelte'
@@ -58,6 +58,7 @@
   let { result, panelState, highlightFiles = [], doneFiles = [], visitedFiles = [], onnodeclick = null }: Props = $props()
 
   // Containers for Mermaid SVG output
+  let flowContainer = $state<HTMLDivElement | null>(null)
   let changeMapContainer = $state<HTMLDivElement | null>(null)
   let beforeContainer = $state<HTMLDivElement | null>(null)
   let afterContainer = $state<HTMLDivElement | null>(null)
@@ -156,6 +157,84 @@
     return result.changeMap.nodes.map((n) => n.label)
   }
 
+  // ---- Flow-mode (Plan L): does the result carry an execution flow? ----------
+  // A flow with steps is the primary view. A flow present but with NO steps is
+  // the graceful-fallback signal: render an honest note, never a forced diagram.
+  const hasFlow = $derived(!!result?.flow && result.flow.steps.length > 0)
+  const flowFallback = $derived(!!result?.flow && result.flow.steps.length === 0)
+
+  // ---- Flow node ↔ file matching for click-jump + #114 coverage --------------
+  // Flow step nodes are labeled with the step's action text (e.g. "validate
+  // input"), NOT a file basename — so we resolve a rendered node to its file via
+  // the step's own `file` field (mapped by label). Steps without a file simply
+  // don't check off / aren't clickable (graceful).
+  function flowFileForLabel(label: string): string | null {
+    const trimmed = label.trim()
+    if (!trimmed || !result?.flow) return null
+    for (const step of result.flow.steps) {
+      if (step.file && step.label.trim() === trimmed) return step.file
+    }
+    return null
+  }
+
+  /**
+   * Decorate flow-step nodes after render: wire click-to-jump (by the step's
+   * file) and tag visited steps (#114 coverage). Maps a node to its file via the
+   * step.file field. No-ops when no onnodeclick and no visitedFiles. Each node is
+   * decorated once (dataset stamp), mirroring decorateStoryNodes.
+   */
+  function decorateFlowNodes(container: HTMLElement): void {
+    if (!onnodeclick && visitedFiles.length === 0 && highlightFiles.length === 0) return
+    const nodes = container.querySelectorAll('g.node, .node')
+    for (const node of nodes) {
+      const label = node.textContent ?? ''
+      const file = flowFileForLabel(label)
+      if (file && visitedFiles.includes(file)) node.classList.add('story-node-visited')
+      if (file && highlightFiles.includes(file)) node.classList.add('story-node-current')
+      if (onnodeclick && file) {
+        ;(node as HTMLElement).style.cursor = 'pointer'
+        node.classList.add('story-node-clickable')
+        if (!(node as HTMLElement).dataset['flowWired']) {
+          ;(node as HTMLElement).dataset['flowWired'] = '1'
+          node.addEventListener('click', (e) => {
+            e.stopPropagation()
+            onnodeclick?.(file)
+          })
+        }
+      }
+    }
+  }
+
+  // Render the execution-flow diagram (Plan L) — primary view when present.
+  $effect(() => {
+    if (!hasFlow || !result?.flow || !flowContainer) return
+
+    const flowMermaid = flowToMermaid(result.flow, { palette: resolvedTheme() }).mermaid
+    // Re-run when highlight/visited inputs change (re-decorate).
+    void highlightFiles
+    void visitedFiles
+
+    let cancelled = false
+
+    async function renderFlow() {
+      const fc = flowContainer
+      if (!fc) return
+      const svg = await renderDiagram(fc, flowMermaid, 'flow')
+      if (cancelled) return
+      decorateFlowNodes(fc)
+      if (svg && !hasTracked) {
+        hasTracked = true
+        track('diagram_viewed')
+      }
+    }
+
+    renderFlow()
+
+    return () => {
+      cancelled = true
+    }
+  })
+
   // Render the change-map diagram when container and result.changeMap are ready
   $effect(() => {
     if (!result?.changeMap || !changeMapContainer) return
@@ -233,10 +312,12 @@
     }
   })
 
-  function openOverlay(which: 'changemap' | 'before' | 'after') {
+  function openOverlay(which: 'flow' | 'changemap' | 'before' | 'after') {
     if (!result) return
     let container: HTMLDivElement | null
-    if (which === 'changemap') {
+    if (which === 'flow') {
+      container = flowContainer
+    } else if (which === 'changemap') {
       container = changeMapContainer
     } else if (which === 'before') {
       container = beforeContainer
@@ -265,10 +346,15 @@
     }
   }
 
-  // Derived: are both before/after graphs empty?
+  // Derived: are both before/after graphs empty? A flow result (Plan L) is
+  // NEVER "empty" here — it renders the flow (hasFlow) or the honest fallback
+  // note (flowFallback), so it must not fall through to "No structural changes".
   const bothEmpty = $derived(
     !result ||
-      (result.before.nodes.length === 0 && result.after.nodes.length === 0 && !result.changeMap)
+      (!result.flow &&
+        result.before.nodes.length === 0 &&
+        result.after.nodes.length === 0 &&
+        !result.changeMap)
   )
 
   // Derived: whether we have a change-map to show
@@ -292,9 +378,38 @@
   <div class="panel-empty" role="status">
     No structural changes detected.
   </div>
+{:else if flowFallback}
+  <!-- Plan L graceful fallback: the change has no meaningful execution flow
+       (pure data/config/schema/dependency change). Honest note, never a forced
+       or fabricated diagram. -->
+  <div class="panel-empty flow-fallback" role="status">
+    No clear execution flow for this change.
+  </div>
 {:else if result}
   <div class="diagram-panel">
-    {#if hasChangeMap}
+    {#if hasFlow}
+      <!-- Plan L: flow-of-execution (primary view, full width) -->
+      <div class="flow-section">
+        <div class="changemap-header">
+          <span class="changemap-title">Execution flow</span>
+          <div class="legend" aria-label="Execution flow legend">
+            <span class="chip legend-chip legend-added">Added</span>
+            <span class="chip legend-chip legend-changed">Changed</span>
+            <span class="chip legend-chip legend-removed">Removed</span>
+            <span class="chip legend-chip legend-unchanged">Unchanged</span>
+          </div>
+        </div>
+        <div
+          class="diagram-container diagram-container--full"
+          role="button"
+          tabindex="0"
+          aria-label="View execution flow full screen"
+          bind:this={flowContainer}
+          onclick={() => openOverlay('flow')}
+          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') openOverlay('flow') }}
+        ></div>
+      </div>
+    {:else if hasChangeMap}
       <!-- D1: Change-map section (full width, rendered first) -->
       <div class="changemap-section">
         <!-- Legend row -->

@@ -708,3 +708,143 @@ describe('graphToMermaid — context status (deep-diagram neighborhood)', () => 
     expect(mermaid).not.toContain('classDef added')
   })
 })
+
+// ---------------------------------------------------------------------------
+// flowToMermaid (Plan L) — flow-of-execution serializer
+// ---------------------------------------------------------------------------
+
+import { flowToMermaid } from './mermaid'
+import type { ExecutionFlow } from './types'
+
+function sampleFlow(): ExecutionFlow {
+  return {
+    steps: [
+      { id: 'h', label: 'handleSubmit', file: 'src/handler.ts', symbol: 'handleSubmit', kind: 'entry', change: 'changed' },
+      { id: 'v', label: 'validate input', file: 'src/validate.ts', kind: 'branch', change: 'added' },
+      { id: 'save', label: 'write to DB', file: 'src/store.ts', kind: 'effect', change: 'added' },
+      { id: 'old', label: 'legacy path', file: 'src/legacy.ts', kind: 'call', change: 'removed' },
+      { id: 'ret', label: 'return result', kind: 'return', change: 'unchanged' },
+    ],
+    transitions: [
+      { from: 'h', to: 'v' },
+      { from: 'v', to: 'save', condition: 'valid' },
+      { from: 'v', to: 'old', condition: 'invalid' },
+      { from: 'save', to: 'ret', label: 'then' },
+    ],
+  }
+}
+
+describe('flowToMermaid — basic', () => {
+  it('empty steps → empty mermaid (fallback signal)', () => {
+    const { mermaid, dropped } = flowToMermaid({ steps: [], transitions: [] })
+    expect(mermaid).toBe('')
+    expect(dropped).toEqual([])
+  })
+
+  it('emits flowchart TD header and remaps ids to sN', () => {
+    const { mermaid } = flowToMermaid(sampleFlow())
+    expect(mermaid.split('\n')[0]).toBe('flowchart TD')
+    expect(mermaid).toContain('s0')
+    expect(mermaid).toContain('s4')
+    // original ids never reach the output
+    expect(mermaid).not.toMatch(/\bhandleSubmit\["/) // label only inside quotes, not as id
+  })
+
+  it('is deterministic — same input yields byte-identical output', () => {
+    const a = flowToMermaid(sampleFlow()).mermaid
+    const b = flowToMermaid(sampleFlow()).mermaid
+    expect(a).toBe(b)
+  })
+})
+
+describe('flowToMermaid — change classDefs (both palettes)', () => {
+  for (const palette of ['dark', 'light'] as const) {
+    it(`${palette}: emits classDefs for each change present and assigns them`, () => {
+      const { mermaid } = flowToMermaid(sampleFlow(), { palette })
+      // four change tags present in the sample
+      expect(mermaid).toContain('classDef added')
+      expect(mermaid).toContain('classDef removed')
+      expect(mermaid).toContain('classDef changed')
+      expect(mermaid).toContain('classDef unchanged')
+      // class assignments by change → status
+      expect(mermaid).toContain('class s0 changed')
+      expect(mermaid).toContain('class s1 added')
+      expect(mermaid).toContain('class s3 removed')
+      expect(mermaid).toContain('class s4 unchanged')
+    })
+  }
+
+  it('only emits classDefs for change tags that appear', () => {
+    const flow: ExecutionFlow = {
+      steps: [{ id: 'a', label: 'go', kind: 'entry', change: 'added' }],
+      transitions: [],
+    }
+    const { mermaid } = flowToMermaid(flow)
+    expect(mermaid).toContain('classDef added')
+    expect(mermaid).not.toContain('classDef removed')
+    expect(mermaid).not.toContain('classDef unchanged')
+  })
+})
+
+describe('flowToMermaid — kind shapes', () => {
+  it('entry=stadium, effect=subroutine, branch=rhombus, call/return=rectangle', () => {
+    const { mermaid } = flowToMermaid(sampleFlow())
+    // entry stadium ([...])
+    expect(mermaid).toContain('s0(["handleSubmit"])')
+    // branch rhombus {...}
+    expect(mermaid).toContain('s1{"validate input"}')
+    // effect subroutine [[...]]
+    expect(mermaid).toContain('s2[["write to DB"]]')
+    // call rectangle [...]
+    expect(mermaid).toContain('s3["legacy path"]')
+    // return rectangle [...]
+    expect(mermaid).toContain('s4["return result"]')
+  })
+})
+
+describe('flowToMermaid — transitions', () => {
+  it('renders branch condition labels on edges', () => {
+    const { mermaid } = flowToMermaid(sampleFlow())
+    expect(mermaid).toContain('s1 -- "valid" --> s2')
+    expect(mermaid).toContain('s1 -- "invalid" --> s3')
+  })
+
+  it('renders plain ordered label when no condition', () => {
+    const { mermaid } = flowToMermaid(sampleFlow())
+    expect(mermaid).toContain('s2 -- "then" --> s4')
+  })
+
+  it('renders bare arrow when neither condition nor label', () => {
+    const { mermaid } = flowToMermaid(sampleFlow())
+    expect(mermaid).toContain('s0 --> s1')
+  })
+
+  it('drops transitions referencing unknown step ids', () => {
+    const flow: ExecutionFlow = {
+      steps: [{ id: 'a', label: 'go', kind: 'entry', change: 'added' }],
+      transitions: [{ from: 'a', to: 'ghost' }],
+    }
+    const { mermaid, dropped } = flowToMermaid(flow)
+    expect(dropped).toContain('ghost')
+    expect(mermaid).not.toContain('ghost')
+  })
+})
+
+describe('flowToMermaid — supports loops (back-edge)', () => {
+  it('serializes a back-edge labeled for-each naturally', () => {
+    const flow: ExecutionFlow = {
+      steps: [
+        { id: 'a', label: 'iterate items', kind: 'entry', change: 'changed' },
+        { id: 'b', label: 'process item', kind: 'call', change: 'added' },
+      ],
+      transitions: [
+        { from: 'a', to: 'b' },
+        { from: 'b', to: 'a', label: 'for each item' },
+      ],
+    }
+    const { mermaid, dropped } = flowToMermaid(flow)
+    expect(dropped).toEqual([])
+    expect(mermaid).toContain('s0 --> s1')
+    expect(mermaid).toContain('s1 -- "for each item" --> s0')
+  })
+})

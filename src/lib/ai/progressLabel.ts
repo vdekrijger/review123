@@ -28,7 +28,7 @@ export type AiProgressTask =
 const STATIC_LABELS: Record<Exclude<AiProgressTask, 'skill'>, string> = {
   summary: 'Summarizing the change…',
   attention: 'Finding what needs attention…',
-  diagrams: 'Mapping the architecture…',
+  diagrams: 'Tracing the execution path…',
   tests: 'Mapping tests to code…',
   alternatives: 'Weighing alternatives…',
   verdict: 'Forming a verdict…',

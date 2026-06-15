@@ -163,7 +163,7 @@ describe('UnderstandStep — section_expanded (surface: page)', () => {
 
     const detailsPanels = document.querySelectorAll('details.detail-panel')
     const diagramsPanel = Array.from(detailsPanels).find(
-      (d) => d.querySelector('summary')?.textContent?.match(/diagrams/i)
+      (d) => d.querySelector('summary')?.textContent?.match(/execution flow/i)
     ) as HTMLDetailsElement
     expect(diagramsPanel).toBeTruthy()
 

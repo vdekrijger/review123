@@ -84,19 +84,18 @@ const ALTERNATIVES_RESULT = {
   alternatives: [],
 }
 
-// Deep-diagram changeMap with a de-emphasized one-hop "context" neighbor
-// (deep-diagrams-context, v12). The changed file is the focus; app.ts is the
-// surrounding architecture pulled in via the verification tools.
+// Deep-flow result (Plan L): the deep diagram task follows the real call chain
+// with the tools and emits an execution flow whose steps carry change tags.
 const DIAGRAM_RESULT = {
   kind: 'flow',
-  before: { nodes: [{ id: 'feature', label: 'feature.ts' }], edges: [] },
-  after: { nodes: [{ id: 'feature', label: 'feature.ts' }], edges: [] },
-  changeMap: {
-    nodes: [
-      { id: 'feature', label: 'feature.ts', status: 'changed' },
-      { id: 'caller', label: 'AppRouter', status: 'context' },
+  before: { nodes: [], edges: [] },
+  after: { nodes: [], edges: [] },
+  flow: {
+    steps: [
+      { id: 'entry', label: 'handleFeature', file: 'src/feature.ts', kind: 'entry', change: 'changed' },
+      { id: 'save', label: 'persist feature', file: 'src/feature.ts', kind: 'effect', change: 'added' },
     ],
-    edges: [{ from: 'caller', to: 'feature', label: 'calls', status: 'context' }],
+    transitions: [{ from: 'entry', to: 'save' }],
   },
 }
 
@@ -312,21 +311,19 @@ test('deep review: 2-round tool conversation renders verdict with the tool-call 
   await expect(testsPanel).toContainText('extends the existing flow')
   await expect(testsPanel.locator('.ai-deep-footer')).toHaveText(/Deep review: verified with 1 tool call/)
 
-  // Diagram task ALSO ran through the deep harness (same toggle): its change-map
-  // renders the de-emphasized one-hop "context" neighbor (AppRouter) alongside
-  // the changed file, plus the same tool-call footer.
+  // Diagram task ALSO ran through the deep harness (same toggle): its execution
+  // flow renders with the steps' change classes (added + changed), plus the same
+  // tool-call footer.
   const diagramsPanel = page.locator('details.diagrams-panel')
   await expect(diagramsPanel).toBeVisible({ timeout: 20_000 })
   await diagramsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
-  // The change-map SVG renders with the de-emphasized one-hop neighbor.
-  const changeMapSvg = diagramsPanel.locator('.changemap-section svg')
-  await expect(changeMapSvg).toBeVisible({ timeout: 20_000 })
-  // Mermaid emits the `context` classDef styling ONLY when a node/edge carries
-  // status:'context'. Its presence in the rendered change-map SVG proves the deep
-  // diagram added the de-emphasized one-hop neighbor and that the new status
-  // round-trips through the serializer end-to-end (the diff-scoped single-pass
-  // path never produces context nodes).
-  await expect(changeMapSvg.locator('style')).toContainText('.context', { timeout: 20_000 })
+  // The flow SVG renders; mermaid injects a <style> block with the change-tag
+  // classDefs (added/changed), proving the flow round-trips through the
+  // deterministic serializer end-to-end.
+  const flowSvg = diagramsPanel.locator('.diagram-container--full svg').first()
+  await expect(flowSvg).toBeVisible({ timeout: 20_000 })
+  await expect(flowSvg.locator('style')).toContainText('.changed', { timeout: 20_000 })
+  await expect(flowSvg.locator('style')).toContainText('.added')
   await expect(diagramsPanel.locator('.ai-deep-footer')).toHaveText(/Deep review: verified with 1 tool call/)
 
   // Attention/hotspots task ALSO ran through the deep harness (same toggle): the

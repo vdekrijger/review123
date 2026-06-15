@@ -155,7 +155,7 @@ describe('ContextRail — pending AI state does not force sections open', () => 
 describe('ContextRail — expand/collapse persistence', () => {
   it('expanding a section writes { [id]: true } to the rail-expanded map', () => {
     const { container } = renderRail()
-    const diagrams = findSection(container, 'diagrams')
+    const diagrams = findSection(container, 'execution flow')
     diagrams.open = true
     diagrams.dispatchEvent(new Event('toggle'))
     expect(JSON.parse(localStorage.getItem(KEY)!)).toMatchObject({ diagrams: true })
@@ -176,7 +176,7 @@ describe('ContextRail — expand/collapse persistence', () => {
     expect(findSection(container, 'full summary').open).toBe(true)
     expect(findSection(container, 'ci details').open).toBe(true)
     // unmentioned sections stay collapsed
-    expect(findSection(container, 'diagrams').open).toBe(false)
+    expect(findSection(container, 'execution flow').open).toBe(false)
   })
 
   it('stored Hotspots expansion restores the section open (done variant)', () => {
@@ -187,7 +187,7 @@ describe('ContextRail — expand/collapse persistence', () => {
 
   it('multiple sections accumulate in ONE localStorage map', () => {
     const { container } = renderRail()
-    for (const title of ['diagrams', 'test coverage', 'alternative']) {
+    for (const title of ['execution flow', 'test coverage', 'alternative']) {
       const section = findSection(container, title)
       section.open = true
       section.dispatchEvent(new Event('toggle'))
@@ -204,7 +204,7 @@ describe('ContextRail — expand/collapse persistence', () => {
 describe('ContextRail — section_expanded analytics unchanged', () => {
   it('fires section_expanded with the section id when expanded', () => {
     const { container } = renderRail()
-    const diagrams = findSection(container, 'diagrams')
+    const diagrams = findSection(container, 'execution flow')
     diagrams.open = true
     diagrams.dispatchEvent(new Event('toggle'))
     expect(vi.mocked(track)).toHaveBeenCalledWith('section_expanded', { section: 'diagrams', surface: 'rail' })
@@ -214,7 +214,7 @@ describe('ContextRail — section_expanded analytics unchanged', () => {
     localStorage.setItem(KEY, JSON.stringify({ diagrams: true }))
     const { container } = renderRail()
     vi.mocked(track).mockClear()
-    const diagrams = findSection(container, 'diagrams')
+    const diagrams = findSection(container, 'execution flow')
     diagrams.open = false
     diagrams.dispatchEvent(new Event('toggle'))
     const calls = vi.mocked(track).mock.calls.filter((c) => c[0] === 'section_expanded')

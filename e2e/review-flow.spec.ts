@@ -254,26 +254,34 @@ const ATTENTION_RESULT = {
   testFlags: [{ path: 'src/feature.ts', note: 'No test covers this change' }],
 }
 
-// v4 contract: GRAPH_RESULT includes changeMap with status fields
+// Plan L contract: GRAPH_RESULT carries a flow-of-execution (steps + transitions
+// with change tags). before/after/changeMap kept empty/minimal for the type.
 const GRAPH_RESULT = {
   kind: 'flow',
-  before: { nodes: [{ id: 'a', label: 'Utils' }], edges: [] },
-  after: {
-    nodes: [
-      { id: 'a', label: 'Utils' },
-      { id: 'b', label: 'Feature' },
+  before: { nodes: [], edges: [] },
+  after: { nodes: [], edges: [] },
+  flow: {
+    steps: [
+      { id: 'entry', label: 'handleFeature', file: 'src/feature.ts', kind: 'entry', change: 'changed' },
+      { id: 'validate', label: 'validate input', file: 'src/feature.ts', kind: 'branch', change: 'added' },
+      { id: 'save', label: 'write feature', file: 'src/feature.ts', kind: 'effect', change: 'added' },
+      { id: 'ret', label: 'return result', file: 'src/feature.ts', kind: 'return', change: 'unchanged' },
     ],
-    edges: [{ from: 'a', to: 'b' }],
-  },
-  changeMap: {
-    nodes: [
-      { id: 'a', label: 'Utils', status: 'unchanged' },
-      { id: 'b', label: 'Feature', status: 'added' },
-    ],
-    edges: [
-      { from: 'a', to: 'b', status: 'added' },
+    transitions: [
+      { from: 'entry', to: 'validate' },
+      { from: 'validate', to: 'save', condition: 'valid' },
+      { from: 'save', to: 'ret' },
     ],
   },
+}
+
+// Plan L fallback: a pure-data change has NO meaningful execution flow → the
+// model returns an EMPTY flow and the panel shows an honest note.
+const GRAPH_RESULT_NO_FLOW = {
+  kind: 'flow',
+  before: { nodes: [], edges: [] },
+  after: { nodes: [], edges: [] },
+  flow: { steps: [], transitions: [] },
 }
 
 const VERDICT_RESULT = {
@@ -419,6 +427,8 @@ async function setupRoutes(
     aiDelayMs?: number
     /** Called with the JSON body of each POST to the review-comment reply endpoint */
     onReplyPost?: (body: unknown) => void
+    /** Plan L: return the EMPTY-flow diagram fixture (graceful-fallback note). */
+    emptyFlow?: boolean
   } = {},
 ) {
   // Block PostHog analytics
@@ -613,8 +623,8 @@ async function setupRoutes(
 
     if (systemContent.includes('hotspot') || systemContent.includes('readingorder')) {
       result = ATTENTION_RESULT
-    } else if (systemContent.includes('graphresult') || systemContent.includes('mermaid')) {
-      result = GRAPH_RESULT
+    } else if (systemContent.includes('execution path') || systemContent.includes('mermaid')) {
+      result = opts.emptyFlow ? GRAPH_RESULT_NO_FLOW : GRAPH_RESULT
     } else if (systemContent.includes('covered') || systemContent.includes('gaps')) {
       // testInsightPrompt system content mentions "covered" and "gaps" fields
       result = TEST_INSIGHT_RESULT
@@ -978,10 +988,11 @@ test('tests-panel: glance chip shows covered/gap counts; open panel shows checkl
 })
 
 // ---------------------------------------------------------------------------
-// Test 6: change-map — diagrams panel shows legend chips (D1 / v4 contract)
+// Test 6: flow-of-execution — execution-flow panel renders flowchart nodes with
+// change classes + the legend (Plan L)
 // ---------------------------------------------------------------------------
 
-test('change-map: diagrams panel shows Added/Removed/Changed/Unchanged legend chips', async ({
+test('execution flow: panel renders flowchart nodes with change classes + legend', async ({
   page,
 }) => {
   await setupRoutes(page)
@@ -991,26 +1002,51 @@ test('change-map: diagrams panel shows Added/Removed/Changed/Unchanged legend ch
 
   await page.goto(APP_REVIEW_PATH)
 
-  // Wait for PR to load
   await expect(
     page.getByRole('heading', { name: /Test PR: add feature/i }),
   ).toBeVisible({ timeout: 10_000 })
 
-  // Open the diagrams detail panel inside UnderstandStep
-  const diagramsPanel = page.locator('details').filter({ hasText: 'Diagrams' }).first()
+  // Open the execution-flow detail panel inside UnderstandStep
+  const diagramsPanel = page.locator('details').filter({ hasText: 'Execution flow' }).first()
   await diagramsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
 
-  // Wait for the change-map to render — the legend should appear
-  // The change-map legend is rendered when result.changeMap is present (D1)
-  // Use .first() to avoid strict-mode violation if multiple DiagramPanel instances exist
-  const legend = page.locator('[aria-label="Change map legend"]').first()
+  // The flow legend appears once the flow renders
+  const legend = page.locator('[aria-label="Execution flow legend"]').first()
   await expect(legend).toBeVisible({ timeout: 20_000 })
-
-  // All four legend chips must be present
   await expect(legend.locator('.legend-chip.legend-added')).toContainText('Added')
-  await expect(legend.locator('.legend-chip.legend-removed')).toContainText('Removed')
   await expect(legend.locator('.legend-chip.legend-changed')).toContainText('Changed')
-  await expect(legend.locator('.legend-chip.legend-unchanged')).toContainText('Unchanged')
+
+  // The deterministic serializer emits classDef-styled nodes; mermaid injects a
+  // <style> block applying each change class. Its presence proves the flow's
+  // change tags (added + changed) round-trip through the serializer end-to-end.
+  const flowSvg = diagramsPanel.locator('.diagram-container--full svg').first()
+  await expect(flowSvg).toBeVisible({ timeout: 20_000 })
+  await expect(flowSvg.locator('style')).toContainText('.added', { timeout: 20_000 })
+  await expect(flowSvg.locator('style')).toContainText('.changed')
+})
+
+// ---------------------------------------------------------------------------
+// Test 6b: graceful fallback — a pure-data change (empty flow) renders the
+// honest "no clear execution flow" note instead of a forced diagram (Plan L)
+// ---------------------------------------------------------------------------
+
+test('execution flow: empty flow renders the graceful fallback note', async ({ page }) => {
+  await setupRoutes(page, { emptyFlow: true })
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_PATH)
+
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  const diagramsPanel = page.locator('details').filter({ hasText: 'Execution flow' }).first()
+  await diagramsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+
+  // Honest fallback note — never a forced/empty diagram.
+  await expect(diagramsPanel.getByText(/no clear execution flow/i)).toBeVisible({ timeout: 20_000 })
 })
 
 // ---------------------------------------------------------------------------

@@ -9,11 +9,11 @@
  * in sync with the Mermaid serializer (Task 7).
  */
 
-import type { Graph, GraphResult, NodeStatus } from '../diagram/types'
+import type { Graph, GraphResult, NodeStatus, ExecutionFlow, FlowStep, FlowTransition } from '../diagram/types'
 import { isGeneratedPath } from '../diff/generated'
 
 // Re-export so consumers can import everything from one place.
-export type { Graph, GraphResult }
+export type { Graph, GraphResult, ExecutionFlow, FlowStep, FlowTransition }
 
 // ---------------------------------------------------------------------------
 // AttentionResult
@@ -140,9 +140,65 @@ export function validateGraphResult(x: unknown): GraphResult | null {
     changeMap = cm
   }
 
+  // flow — optional ExecutionFlow (Plan L). Absent → backward-compatible with
+  // cached change-map results. Present-but-malformed → null (strict).
+  let flow: ExecutionFlow | undefined
+  if ('flow' in x && x['flow'] !== undefined) {
+    const f = validateFlow(x['flow'])
+    if (f === null) return null
+    flow = f
+  }
+
   const result: GraphResult = { before, after, kind: x['kind'] as 'flow' | 'module' }
   if (changeMap !== undefined) result.changeMap = changeMap
+  if (flow !== undefined) result.flow = flow
   return result
+}
+
+// ---------------------------------------------------------------------------
+// ExecutionFlow (Plan L — flow-of-execution diagram)
+// ---------------------------------------------------------------------------
+
+const FLOW_STEP_KINDS = new Set<string>(['entry', 'call', 'branch', 'effect', 'return'])
+const FLOW_CHANGES = new Set<string>(['added', 'changed', 'unchanged', 'removed'])
+
+/**
+ * Validate an unknown value as ExecutionFlow.
+ * Returns the typed value or null if the shape is invalid.
+ *
+ * Strict on: steps array (each step's id/label strings, kind + change enums,
+ * optional file/symbol strings) and transitions array (from/to strings,
+ * optional label/condition strings). Tolerant of extra keys. An EMPTY steps
+ * array is VALID — it is the graceful-fallback signal (the panel renders the
+ * "no clear execution flow" note). Invalid kind/change enum → null.
+ */
+export function validateFlow(x: unknown): ExecutionFlow | null {
+  if (!isObject(x)) return null
+
+  // steps — required array (may be empty)
+  if (!Array.isArray(x['steps'])) return null
+  for (const step of x['steps']) {
+    if (!isObject(step)) return null
+    if (typeof step['id'] !== 'string') return null
+    if (typeof step['label'] !== 'string') return null
+    if (typeof step['kind'] !== 'string' || !FLOW_STEP_KINDS.has(step['kind'] as string)) return null
+    if (typeof step['change'] !== 'string' || !FLOW_CHANGES.has(step['change'] as string)) return null
+    // file / symbol — optional strings
+    if ('file' in step && step['file'] !== undefined && typeof step['file'] !== 'string') return null
+    if ('symbol' in step && step['symbol'] !== undefined && typeof step['symbol'] !== 'string') return null
+  }
+
+  // transitions — required array (may be empty)
+  if (!Array.isArray(x['transitions'])) return null
+  for (const t of x['transitions']) {
+    if (!isObject(t)) return null
+    if (typeof t['from'] !== 'string') return null
+    if (typeof t['to'] !== 'string') return null
+    if ('label' in t && t['label'] !== undefined && typeof t['label'] !== 'string') return null
+    if ('condition' in t && t['condition'] !== undefined && typeof t['condition'] !== 'string') return null
+  }
+
+  return x as unknown as ExecutionFlow
 }
 
 // ---------------------------------------------------------------------------

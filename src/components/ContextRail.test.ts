@@ -441,7 +441,7 @@ describe('ContextRail — registry section order', () => {
     })
     const summaries = Array.from(container.querySelectorAll('details > summary'))
     const summaryIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('full summary') || s.textContent?.toLowerCase() === 'summary')
-    const diagramsIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('diagrams'))
+    const diagramsIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('execution flow'))
     expect(summaryIdx).toBeGreaterThanOrEqual(0)
     expect(diagramsIdx).toBeGreaterThan(summaryIdx)
   })
@@ -451,7 +451,7 @@ describe('ContextRail — registry section order', () => {
       props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
     })
     const summaries = Array.from(container.querySelectorAll('details > summary'))
-    const diagramsIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('diagrams'))
+    const diagramsIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('execution flow'))
     const testsIdx = summaries.findIndex((s) => s.textContent?.toLowerCase().includes('test coverage'))
     expect(diagramsIdx).toBeGreaterThanOrEqual(0)
     expect(testsIdx).toBeGreaterThan(diagramsIdx)
@@ -502,7 +502,7 @@ describe('ContextRail — pending AI skeletons', () => {
       props: { run: makeRun(), onhotspot: vi.fn(), collapsed: false, oncollapse: vi.fn() },
     })
     const sections = Array.from(container.querySelectorAll('details.rail-section-details'))
-    const diagrams = sections.find((d) => d.querySelector('summary')?.textContent?.toLowerCase().includes('diagrams'))
+    const diagrams = sections.find((d) => d.querySelector('summary')?.textContent?.toLowerCase().includes('execution flow'))
     const tests = sections.find((d) => d.querySelector('summary')?.textContent?.toLowerCase().includes('test coverage'))
     expect(diagrams!.querySelector('.skeleton-rect')).not.toBeNull()
     expect(tests!.querySelectorAll('.skeleton-card')).toHaveLength(2)
