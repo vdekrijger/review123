@@ -30,14 +30,20 @@
     added?: boolean
     /** Compact spacing for inline-at-line rendering */
     compact?: boolean
+    /**
+     * Stable finding key — emitted as `data-finding-key` so the reviewer result
+     * chips can scroll+flash THIS exact card (see jumpToFinding). Optional: cards
+     * rendered without a key are simply not jump-targets.
+     */
+    findingKey?: string | null
     onAdd: () => void
     onDismiss: () => void
   }
 
-  let { skillName, severity, body, line = null, anchored = false, added = false, compact = false, onAdd, onDismiss }: Props = $props()
+  let { skillName, severity, body, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss }: Props = $props()
 </script>
 
-<div class="skill-finding severity-{severity}" class:compact role="note" aria-label="{skillName} finding, severity {severity}">
+<div class="skill-finding severity-{severity}" class:compact role="note" aria-label="{skillName} finding, severity {severity}" data-finding-key={findingKey ?? undefined}>
   <div class="skill-finding-header">
     <span class="skill-persona-label">{skillName}</span>
     {#if line !== null && !anchored}
@@ -79,6 +85,23 @@
   .skill-finding.compact {
     padding: 0.4rem 0.6rem;
     border-radius: 3px;
+  }
+
+  /* Transient highlight when a reviewer chip jumps to this finding. Themed
+     light/dark via the same changed-bg token the draft flash uses. The class is
+     toggled imperatively by jumpToFinding (added on jump, removed after 1.5s). */
+  .skill-finding.finding-flash {
+    animation: finding-flash 1.5s ease-out forwards;
+  }
+
+  @keyframes finding-flash {
+    0%   { box-shadow: 0 0 0 3px var(--legend-changed-border, var(--accent)); }
+    80%  { box-shadow: 0 0 0 3px var(--legend-changed-border, var(--accent)); }
+    100% { box-shadow: 0 0 0 0 transparent; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skill-finding.finding-flash { animation: none; }
   }
 
   .skill-finding.severity-high {

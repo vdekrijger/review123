@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { scrollToFileCard, jumpToFileDiff } from './jumpToFile'
+import { scrollToFileCard, jumpToFileDiff, jumpToFinding } from './jumpToFile'
 import { navigate, router } from '../router/router.svelte'
 
 /**
@@ -98,6 +98,80 @@ describe('scrollToFileCard', () => {
       rafCallbacks[i](0)
     }
     expect(rafCallbacks.length).toBeLessThan(50)
+  })
+})
+
+describe('jumpToFinding (reviewer chip → finding)', () => {
+  /** Mount a file card containing a finding card tagged with data-finding-key. */
+  function mountFinding(path: string, key: string, opts: { collapsed?: boolean } = {}): HTMLElement {
+    const { article } = mountCard(path, opts)
+    const card = document.createElement('div')
+    card.className = 'skill-finding'
+    card.setAttribute('data-finding-key', key)
+    article.appendChild(card)
+    return card
+  }
+
+  it('scrolls the owning file card AND the finding card into view, then flashes it', () => {
+    vi.useFakeTimers()
+    const key = 'rev:src/a.ts:5:body'
+    const card = mountFinding('src/a.ts', key)
+
+    jumpToFinding('src/a.ts', key)
+
+    // File card scrolled (block:start) + finding scrolled into center.
+    expect(card.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' })
+    expect(card.classList.contains('finding-flash')).toBe(true)
+    // Flash clears after the timeout.
+    vi.advanceTimersByTime(1500)
+    expect(card.classList.contains('finding-flash')).toBe(false)
+  })
+
+  it('expands a collapsed owning file before flashing the finding inside it', () => {
+    const key = 'rev:src/a.ts:5:body'
+    const { header } = mountCard('src/a.ts', { collapsed: true })
+    const headerClick = vi.fn()
+    header.addEventListener('click', headerClick)
+    const card = document.createElement('div')
+    card.setAttribute('data-finding-key', key)
+    document.querySelector('article.file-diff')!.appendChild(card)
+
+    jumpToFinding('src/a.ts', key)
+
+    expect(headerClick).toHaveBeenCalledTimes(1)
+    expect(card.classList.contains('finding-flash')).toBe(true)
+  })
+
+  it('retries across animation frames when the finding mounts late', () => {
+    const rafCallbacks: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      rafCallbacks.push(cb)
+      return rafCallbacks.length
+    })
+    const key = 'rev:src/late.ts:1:body'
+    mountCard('src/late.ts')
+
+    jumpToFinding('src/late.ts', key)
+    // Finding not there yet → frames scheduled
+    expect(rafCallbacks.length).toBeGreaterThan(0)
+    rafCallbacks[0](0)
+
+    // Finding mounts, then a later frame finds + flashes it
+    const card = mountFinding('src/late.ts', key)
+    for (let i = 1; i < rafCallbacks.length && i < 60; i++) rafCallbacks[i](0)
+    expect(card.classList.contains('finding-flash')).toBe(true)
+  })
+
+  it('gives up silently (bounded) when the finding never appears', () => {
+    const rafCallbacks: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      rafCallbacks.push(cb)
+      return rafCallbacks.length
+    })
+    expect(() => jumpToFinding('src/never.ts', 'rev:src/never.ts:1:x')).not.toThrow()
+    for (let i = 0; i < rafCallbacks.length && i < 200; i++) rafCallbacks[i](0)
+    // Two independent bounded loops (scrollToFileCard + finding lookup), ~30 each.
+    expect(rafCallbacks.length).toBeLessThan(70)
   })
 })
 

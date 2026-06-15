@@ -336,6 +336,58 @@ test('skill-reviewers: anchored finding inline at line, unanchored in per-file b
 })
 
 // ---------------------------------------------------------------------------
+// Test: clicking a reviewer's result chip (2 findings) opens a popover listing
+//       both findings; clicking an entry scrolls to + flashes that finding.
+// ---------------------------------------------------------------------------
+
+test('skill-reviewers: result chip opens finding list → clicking an entry jumps to + flashes the finding', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings())
+  await page.addInitScript(seedSkillScript())
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  await page.getByRole('button', { name: /run my reviewers/i }).click()
+
+  // The done result chip becomes a button: "Show 2 findings from Security Reviewer"
+  const chip = page.getByRole('button', { name: /Show 2 findings from Security Reviewer/i })
+  await expect(chip).toBeVisible({ timeout: 15_000 })
+
+  // No popover until clicked
+  await expect(page.locator('.findings-popover')).toHaveCount(0)
+  await chip.click()
+
+  // Popover lists BOTH findings (anchored line 2 + unanchored line 999)
+  const menu = page.locator('.findings-popover[role="menu"]')
+  await expect(menu).toBeVisible()
+  const items = menu.locator('[role="menuitem"]')
+  await expect(items).toHaveCount(2)
+  await expect(items.first()).toContainText('src/feature.ts:2')
+  await expect(items.nth(1)).toContainText('src/feature.ts:999')
+
+  // Click the SECOND entry (the unanchored finding in the per-file fallback block)
+  await items.nth(1).click()
+
+  // Popover closes; the target finding card gets the transient flash class.
+  await expect(page.locator('.findings-popover')).toHaveCount(0)
+  const target = page.locator('.skill-findings-annotations .skill-finding', { hasText: 'Hardcoded credential' })
+  await expect(target).toBeVisible()
+  // It's scrolled into the viewport (jumped to, not a dead link).
+  await expect(target).toBeInViewport()
+})
+
+// ---------------------------------------------------------------------------
 // Test: dismiss hides each finding from its placement
 // ---------------------------------------------------------------------------
 

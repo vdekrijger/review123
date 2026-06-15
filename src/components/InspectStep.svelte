@@ -18,7 +18,7 @@
   import type { PrComment } from '../lib/github/comments'
   import type { ReplyOutcome } from '../lib/github/replies'
   import { slugify } from '../lib/slug'
-  import { scrollToFileCard } from '../lib/diff/jumpToFile'
+  import { scrollToFileCard, jumpToFinding } from '../lib/diff/jumpToFile'
   import { observeDiffColHeight } from '../lib/tree/diffColHeight'
   import type { SkillReviewEntry, AskFocus } from '../lib/ai/run.svelte'
   import type { SkillReviewResult } from '../lib/ai/schemas'
@@ -415,6 +415,151 @@
     return [...counts.entries()].map(([name, count]) => ({ name, count }))
   })
 
+  // ---------------------------------------------------------------------------
+  // Chip → finding navigation (reveal/jump from the result + suggestion chips)
+  // ---------------------------------------------------------------------------
+  // A flat, navigable list of a reviewer's findings: each entry carries the
+  // finding's path, line, a one-line title (first line of the body) and the SAME
+  // key the rendered SkillFindingCard emits as data-finding-key — so clicking an
+  // entry scrolls+flashes the exact card (jumpToFinding). Keyed by skillId.
+  type NavFinding = { key: string; path: string; line: number | null; title: string }
+
+  function findingTitle(body: string): string {
+    // First non-empty line, markdown stripped of leading list/heading markers.
+    const firstLine = body.split('\n').map(l => l.trim()).find(l => l.length > 0) ?? body.trim()
+    return firstLine.replace(/^[-*#>\s]+/, '').slice(0, 120)
+  }
+
+  const navFindingsBySkill = $derived.by(() => {
+    const map = new Map<string, NavFinding[]>()
+    for (const review of skillReviews) {
+      if (review.state.status !== 'done' || !review.state.value) continue
+      const result = review.state.value as SkillReviewResult
+      const entries: NavFinding[] = []
+      for (const finding of result.findings) {
+        if (!prPathSet.has(finding.path)) continue
+        entries.push({
+          // MUST match SkillFindingCard's data-finding-key (see skillSuggestionsByPath).
+          key: `${review.skillId}:${finding.path}:${finding.line}:${finding.body.slice(0, 30)}`,
+          path: finding.path,
+          line: finding.line,
+          title: findingTitle(finding.body),
+        })
+      }
+      if (entries.length > 0) map.set(review.skillId, entries)
+    }
+    return map
+  })
+
+  // Open popover state — a compound `{surface}:{skillId}` token identifying WHICH
+  // chip's finding list is currently disclosed, or null when none is open. The
+  // surface prefix ('result' | 'summary') keeps the result chip and the
+  // suggestion summary chip for the SAME reviewer from opening together (they
+  // share a skillId). Single-finding chips never open a popover (jump straight).
+  type ChipSurface = 'result' | 'summary'
+  let openFindingsToken = $state<string | null>(null)
+
+  function popoverToken(surface: ChipSurface, skillId: string): string {
+    return `${surface}:${skillId}`
+  }
+
+  function isPopoverOpen(surface: ChipSurface, skillId: string): boolean {
+    return openFindingsToken === popoverToken(surface, skillId)
+  }
+
+  function navFindingsFor(skillId: string): NavFinding[] {
+    return navFindingsBySkill.get(skillId) ?? []
+  }
+
+  /** Activate a reviewer chip: jump (1 finding) or toggle its popover (N). */
+  function activateReviewerChip(surface: ChipSurface, skillId: string): void {
+    const findings = navFindingsFor(skillId)
+    if (findings.length === 0) return
+    if (findings.length === 1) {
+      openFindingsToken = null
+      const f = findings[0]
+      jumpToFinding(f.path, f.key)
+      return
+    }
+    const token = popoverToken(surface, skillId)
+    openFindingsToken = openFindingsToken === token ? null : token
+  }
+
+  /** Click a popover entry → jump+flash that finding and close the popover. */
+  function jumpToNavFinding(f: NavFinding): void {
+    openFindingsToken = null
+    jumpToFinding(f.path, f.key)
+  }
+
+  function closeFindingsPopover(): void {
+    openFindingsToken = null
+  }
+
+  // Focus the first finding entry when a popover opens (keyboard discoverability).
+  $effect(() => {
+    if (openFindingsToken === null) return
+    const token = openFindingsToken
+    requestAnimationFrame(() => {
+      if (openFindingsToken !== token) return
+      const first = document.querySelector('.findings-popover [role="menuitem"]') as HTMLElement | null
+      first?.focus()
+    })
+  })
+
+  // Close the open popover on an outside click (the chip + popover are excluded).
+  $effect(() => {
+    if (openFindingsToken === null) return
+    const onDocClick = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('.skill-chip-nav')) return
+      closeFindingsPopover()
+    }
+    document.addEventListener('click', onDocClick, true)
+    return () => document.removeEventListener('click', onDocClick, true)
+  })
+
+  // Roving focus inside an open popover (arrow keys / Enter / Escape).
+  function handlePopoverKeydown(event: KeyboardEvent, surface: ChipSurface, skillId: string): void {
+    const items = navFindingsFor(skillId)
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeFindingsPopover()
+      // Return focus to the chip that opened it.
+      const chip = document.querySelector(`[data-reviewer-chip="${surface}:${skillId}"]`) as HTMLElement | null
+      chip?.focus()
+      return
+    }
+    const target = event.target as HTMLElement
+    const list = target.closest('[role="menu"]')
+    if (!list) return
+    const buttons = Array.from(list.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
+    const idx = buttons.indexOf(target as HTMLButtonElement)
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      buttons[(idx + 1) % buttons.length]?.focus()
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      buttons[(idx - 1 + buttons.length) % buttons.length]?.focus()
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      buttons[0]?.focus()
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      buttons[buttons.length - 1]?.focus()
+    }
+    void items
+  }
+
+  // Map persona display-name → skillId so the suggestion summary chips (which
+  // are keyed by name) can reuse the SAME jump/popover behavior as result chips.
+  const skillIdByName = $derived.by(() => {
+    const m = new Map<string, string>()
+    for (const review of skillReviews) {
+      if (!m.has(review.name)) m.set(review.name, review.skillId)
+    }
+    return m
+  })
+
   // Session-only dismissed finding keys
   let dismissedKeys = $state<Set<string>>(new Set())
 
@@ -648,8 +793,39 @@
                 ✓ no significant issues
               </span>
             {:else}
-              <span class="skill-status-chip chip-done" aria-label="Done, {findingCount} finding{findingCount !== 1 ? 's' : ''}">
-                ✓ {findingCount} finding{findingCount !== 1 ? 's' : ''}
+              <span class="skill-chip-nav">
+                <button
+                  type="button"
+                  class="skill-status-chip chip-done chip-nav"
+                  data-reviewer-chip="result:{entry.skillId}"
+                  aria-label="Show {findingCount} finding{findingCount !== 1 ? 's' : ''} from {entry.name}"
+                  aria-haspopup={findingCount > 1 ? 'menu' : undefined}
+                  aria-expanded={findingCount > 1 ? isPopoverOpen('result', entry.skillId) : undefined}
+                  onclick={() => activateReviewerChip('result', entry.skillId)}
+                >
+                  ✓ {findingCount} finding{findingCount !== 1 ? 's' : ''}
+                </button>
+                {#if findingCount > 1 && isPopoverOpen('result', entry.skillId)}
+                  <div
+                    class="findings-popover"
+                    role="menu"
+                    tabindex="-1"
+                    aria-label="{entry.name} findings"
+                    onkeydown={(e) => handlePopoverKeydown(e, 'result', entry.skillId)}
+                  >
+                    {#each navFindingsFor(entry.skillId) as nav (nav.key)}
+                      <button
+                        type="button"
+                        role="menuitem"
+                        class="findings-popover-item"
+                        onclick={() => jumpToNavFinding(nav)}
+                      >
+                        <span class="findings-popover-loc">{nav.path}{nav.line !== null ? `:${nav.line}` : ''}</span>
+                        <span class="findings-popover-title">{nav.title}</span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
               </span>
             {/if}
             {#if entry.state.toolCallsUsed !== undefined && entry.state.toolCallsUsed > 0}
@@ -693,7 +869,43 @@
 {#if skillPersonaSummaries.length > 0}
   <div class="skill-summaries">
     {#each skillPersonaSummaries as s (s.name)}
-      <span class="skill-summary-line">{s.name}: {s.count} {s.count === 1 ? 'suggestion' : 'suggestions'}</span>
+      {@const sId = skillIdByName.get(s.name)}
+      {#if sId && navFindingsFor(sId).length > 0}
+        <span class="skill-chip-nav">
+          <button
+            type="button"
+            class="skill-summary-line summary-nav"
+            data-reviewer-chip="summary:{sId}"
+            aria-label="Show {s.count} {s.count === 1 ? 'suggestion' : 'suggestions'} from {s.name}"
+            aria-haspopup={s.count > 1 ? 'menu' : undefined}
+            aria-expanded={s.count > 1 ? isPopoverOpen('summary', sId) : undefined}
+            onclick={() => activateReviewerChip('summary', sId)}
+          >{s.name}: {s.count} {s.count === 1 ? 'suggestion' : 'suggestions'}</button>
+          {#if s.count > 1 && isPopoverOpen('summary', sId)}
+            <div
+              class="findings-popover"
+              role="menu"
+              tabindex="-1"
+              aria-label="{s.name} suggestions"
+              onkeydown={(e) => handlePopoverKeydown(e, 'summary', sId)}
+            >
+              {#each navFindingsFor(sId) as nav (nav.key)}
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="findings-popover-item"
+                  onclick={() => jumpToNavFinding(nav)}
+                >
+                  <span class="findings-popover-loc">{nav.path}{nav.line !== null ? `:${nav.line}` : ''}</span>
+                  <span class="findings-popover-title">{nav.title}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </span>
+      {:else}
+        <span class="skill-summary-line">{s.name}: {s.count} {s.count === 1 ? 'suggestion' : 'suggestions'}</span>
+      {/if}
     {/each}
   </div>
 {/if}
@@ -804,6 +1016,7 @@
                   body={suggestion.body}
                   line={suggestion.line}
                   anchored={false}
+                  findingKey={suggestion.key}
                   added={addedDraftKeys.has(suggestion.key)}
                   onAdd={() => addFindingAsDraft(suggestion)}
                   onDismiss={() => dismissFinding(suggestion.key)}
@@ -1351,6 +1564,106 @@
     border: 1px solid var(--legend-removed-border);
     color: var(--legend-removed-color);
     cursor: pointer;
+  }
+
+  /* ---- Chip → finding navigation (result + suggestion chips) ---- */
+  /* Wrapper anchors the popover to the chip. */
+  .skill-chip-nav {
+    position: relative;
+    display: inline-flex;
+  }
+
+  /* A result chip that navigates to its findings: same look, now a real button
+     with a discoverable (subtle) affordance — pointer + hover/focus emphasis. */
+  button.skill-status-chip.chip-nav {
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    transition: filter 0.12s, box-shadow 0.12s;
+  }
+  button.skill-status-chip.chip-nav:hover {
+    filter: brightness(1.06);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  button.skill-status-chip.chip-nav:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* Suggestion summary chip turned button — keep the pill look, add affordance. */
+  button.skill-summary-line.summary-nav {
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.82rem;
+    color: inherit;
+    transition: background 0.12s;
+  }
+  button.skill-summary-line.summary-nav:hover {
+    background: var(--surface-hover, color-mix(in srgb, var(--surface-raised) 80%, var(--text) 12%));
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  button.skill-summary-line.summary-nav:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* Disclosure popover listing a reviewer's findings (multi-finding chips). */
+  .findings-popover {
+    position: absolute;
+    top: calc(100% + 0.3rem);
+    left: 0;
+    z-index: 30;
+    min-width: 18rem;
+    max-width: min(32rem, 90vw);
+    max-height: 16rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    padding: 0.25rem;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
+    scrollbar-width: thin;
+  }
+
+  .findings-popover-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    align-items: flex-start;
+    text-align: left;
+    width: 100%;
+    padding: 0.3rem 0.5rem;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+  }
+  .findings-popover-item:hover {
+    background: var(--surface-hover, color-mix(in srgb, var(--surface-raised) 80%, var(--text) 12%));
+  }
+  .findings-popover-item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .findings-popover-loc {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    word-break: break-all;
+  }
+
+  .findings-popover-title {
+    font-size: 0.8rem;
+    line-height: 1.3;
   }
 
   /* The error chip is a real Retry button — reset button defaults so it matches
