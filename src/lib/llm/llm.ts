@@ -70,6 +70,18 @@ export interface LlmJsonWithRepairResult<T> {
   usage?: LlmUsage
 }
 
+/**
+ * An explicitly-specified provider config (Plan M cross-model verification).
+ * Lets a completion run against a provider OTHER than the active one — the
+ * verifier providers. The key is carried explicitly (read by the caller from
+ * settings) so the transport never falls back to the active provider's key.
+ */
+export interface ProviderConfig {
+  providerId: LlmProviderId
+  model: LlmModelDef
+  key: string
+}
+
 // ---------------------------------------------------------------------------
 // Public opts types (unchanged)
 // ---------------------------------------------------------------------------
@@ -186,8 +198,9 @@ async function openaiCompatComplete(
   model: LlmModelDef,
   opts: LlmCompleteOpts,
   includeUsage: boolean,
+  keyOverride?: string,
 ): Promise<LlmCompleteResult> {
-  const key = getKeyForProvider(provider)
+  const key = keyOverride ?? getKeyForProvider(provider)
   const { system, user, json, signal, maxTokens } = opts
 
   const body: Record<string, unknown> = {
@@ -369,8 +382,9 @@ async function anthropicComplete(
   provider: LlmProviderDef,
   model: LlmModelDef,
   opts: LlmCompleteOpts,
+  keyOverride?: string,
 ): Promise<LlmCompleteResult> {
-  const key = getKeyForProvider(provider)
+  const key = keyOverride ?? getKeyForProvider(provider)
   const { system, user, signal, maxTokens } = opts
 
   const body: Record<string, unknown> = {
@@ -577,8 +591,9 @@ async function geminiComplete(
   provider: LlmProviderDef,
   model: LlmModelDef,
   opts: LlmCompleteOpts,
+  keyOverride?: string,
 ): Promise<LlmCompleteResult> {
-  const key = getKeyForProvider(provider)
+  const key = keyOverride ?? getKeyForProvider(provider)
   const { system, user, json, signal } = opts
 
   const body = buildGeminiBody(system, user, !!json, false)
@@ -740,6 +755,31 @@ async function dispatchComplete(opts: LlmCompleteOpts, includeUsage: boolean): P
   }
 }
 
+/**
+ * Dispatch a completion against an EXPLICITLY specified provider config (Plan M).
+ * Routes through the same transport adapters as the active path, but uses the
+ * passed-in key (so a verifier provider's key is used, not the active one) and
+ * the passed-in model. OpenAI still goes via its proxy baseUrl. The key is
+ * passed through `keyOverride` so settings are never consulted for verifiers.
+ */
+async function dispatchCompleteFor(
+  cfg: ProviderConfig,
+  opts: LlmCompleteOpts,
+  includeUsage: boolean,
+): Promise<LlmCompleteResult> {
+  const provider = getProvider(cfg.providerId)
+  if (!provider) throw new LlmError('server', `Unknown provider: ${cfg.providerId}`)
+  if (!cfg.key) throw new LlmError('no-key', `No key for provider ${cfg.providerId}`)
+  switch (provider.transport) {
+    case 'openai-compat':
+      return openaiCompatComplete(provider, cfg.model, opts, includeUsage, cfg.key)
+    case 'anthropic':
+      return anthropicComplete(provider, cfg.model, opts, cfg.key)
+    case 'gemini':
+      return geminiComplete(provider, cfg.model, opts, cfg.key)
+  }
+}
+
 async function dispatchStream(
   opts: LlmStreamOpts,
   onDelta: (text: string) => void,
@@ -886,6 +926,68 @@ export async function llmJsonWithRepairWithUsage<T>(
   } catch (err) {
     error2 = err instanceof Error ? err.message : String(err)
   }
+
+  if (error2 === null) {
+    const valid2 = validate(parsed2)
+    if (valid2 !== null) return { result: valid2, usage }
+  }
+
+  throw new LlmError('invalid-output', 'LLM produced invalid JSON after repair retry')
+}
+
+// ---------------------------------------------------------------------------
+// llmJsonWithRepairFor — JSON-with-repair against an EXPLICIT provider (Plan M)
+//
+// Same two-attempt repair loop as llmJsonWithRepair, but every call routes
+// through the SPECIFIED provider config's transport (with its own key + model)
+// instead of the active provider. Returns usage so verifier cost can be folded
+// into per-PR / per-task totals.
+// ---------------------------------------------------------------------------
+
+export async function llmJsonWithRepairFor<T>(
+  cfg: ProviderConfig,
+  opts: LlmCompleteOpts,
+  validate: (x: unknown) => T | null,
+): Promise<LlmJsonWithRepairResult<T>> {
+  const { content: output1, usage: usage1 } = await dispatchCompleteFor(cfg, { ...opts, json: true }, true)
+
+  let parsed1: unknown
+  let error1: string | null = null
+  try {
+    parsed1 = JSON.parse(output1)
+  } catch (err) {
+    error1 = err instanceof Error ? err.message : String(err)
+  }
+
+  if (error1 === null) {
+    const valid1 = validate(parsed1)
+    if (valid1 !== null) return { result: valid1, usage: usage1 }
+    error1 = 'Output did not match expected schema'
+  }
+
+  const repairUser =
+    `${opts.user}\n\nYour previous output was invalid: ${error1}. Previous output:\n${output1}\nRespond with corrected JSON only.`
+  const { content: output2, usage: usage2 } = await dispatchCompleteFor(
+    cfg,
+    { ...opts, user: repairUser, json: true },
+    true,
+  )
+
+  let parsed2: unknown
+  let error2: string | null = null
+  try {
+    parsed2 = JSON.parse(output2)
+  } catch (err) {
+    error2 = err instanceof Error ? err.message : String(err)
+  }
+
+  const usage = usage1 && usage2
+    ? {
+        prompt_tokens: usage1.prompt_tokens + usage2.prompt_tokens,
+        completion_tokens: usage1.completion_tokens + usage2.completion_tokens,
+        total_tokens: usage1.total_tokens + usage2.total_tokens,
+      }
+    : (usage2 ?? usage1)
 
   if (error2 === null) {
     const valid2 = validate(parsed2)

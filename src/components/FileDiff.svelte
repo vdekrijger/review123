@@ -29,6 +29,8 @@
     severity: 'high' | 'medium' | 'low'
     body: string
     key: string
+    /** Cross-model verification (Plan M) — drives the "confirmed by N/M" chip. */
+    verification?: import('../lib/ai/schemas').FindingVerification
   }
 
   interface Props {
@@ -693,6 +695,7 @@
                 skillName={finding.skillName}
                 severity={finding.severity}
                 body={finding.body}
+                verification={finding.verification}
                 line={finding.line}
                 anchored={true}
                 compact={true}
@@ -749,6 +752,7 @@
             skillName={finding.skillName}
             severity={finding.severity}
             body={finding.body}
+            verification={finding.verification}
             line={finding.line}
             anchored={false}
             findingKey={finding.key}

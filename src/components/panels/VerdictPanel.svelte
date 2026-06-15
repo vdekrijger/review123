@@ -36,18 +36,42 @@
     const text = rest.replace(/^[-–—:\s]+/, '').trimStart()
     return { path, text: text || item }
   }
+
+  // Cross-model verification (Plan M): split evidence into surfaced vs demoted
+  // by the per-index verification. Rows without verification surface as before.
+  interface IndexedEvidence {
+    item: string
+    index: number
+    verification?: import('../../lib/ai/schemas').FindingVerification
+  }
+  const allEvidence = $derived.by<IndexedEvidence[]>(() =>
+    (verdict?.evidence ?? []).map((item, index) => ({
+      item,
+      index,
+      verification: verdict?.evidenceVerification?.[index],
+    })),
+  )
+  const surfacedEvidence = $derived(allEvidence.filter((e) => !e.verification || e.verification.surfaced))
+  const demotedEvidence = $derived(allEvidence.filter((e) => e.verification && !e.verification.surfaced))
+
+  function verifyChipLabel(v: import('../../lib/ai/schemas').FindingVerification): string {
+    return `✓ confirmed by ${v.confirmedBy}/${v.polledModels} models`
+  }
+  function verifyTooltip(v: import('../../lib/ai/schemas').FindingVerification): string {
+    return v.perModel.map((m) => `${m.provider}: ${m.verdict}${m.reason ? ` — ${m.reason}` : ''}`).join('\n')
+  }
 </script>
 
 <AiPanel title="Verdict" task="verdict" state={run.verdict} onretry={() => run.retry('verdict')}>
   {#if verdict}
     <p class="verdict-explainer">The specific observations the AI based the behavior verdict on — each row cites what changed and where.</p>
-    {#if verdict.evidence.length > 0}
+    {#if surfacedEvidence.length > 0}
       {@const visibleEvidence = evidenceExpanded
-        ? verdict.evidence
-        : verdict.evidence.slice(0, EVIDENCE_CLAMP)}
+        ? surfacedEvidence
+        : surfacedEvidence.slice(0, EVIDENCE_CLAMP)}
       <ul class="verdict-evidence">
-        {#each visibleEvidence as item (item)}
-          {@const row = parseEvidenceItem(item)}
+        {#each visibleEvidence as ev (ev.index)}
+          {@const row = parseEvidenceItem(ev.item)}
           <li class="verdict-evidence-row">
             {#if row.path}
               <button
@@ -60,10 +84,13 @@
             <span class="evidence-text">
               <MarkdownView source={row.text} />
             </span>
+            {#if ev.verification && ev.verification.surfaced}
+              <span class="evidence-verify-chip" title={verifyTooltip(ev.verification)}>{verifyChipLabel(ev.verification)}</span>
+            {/if}
           </li>
         {/each}
       </ul>
-      {#if verdict.evidence.length > EVIDENCE_CLAMP}
+      {#if surfacedEvidence.length > EVIDENCE_CLAMP}
         <button
           class="evidence-expander"
           onclick={() => { evidenceExpanded = !evidenceExpanded }}
@@ -71,9 +98,32 @@
         >
           {evidenceExpanded
             ? 'Show less'
-            : `Show all ${verdict.evidence.length}`}
+            : `Show all ${surfacedEvidence.length}`}
         </button>
       {/if}
+    {/if}
+    {#if demotedEvidence.length > 0}
+      <details class="verdict-lower-confidence">
+        <summary>Lower confidence — flagged by 1 model, not confirmed by others ({demotedEvidence.length})</summary>
+        <ul class="verdict-evidence">
+          {#each demotedEvidence as ev (ev.index)}
+            {@const row = parseEvidenceItem(ev.item)}
+            <li class="verdict-evidence-row">
+              {#if row.path}
+                <button
+                  class="evidence-path-chip"
+                  onclick={() => onhotspot?.(row.path!)}
+                  title="Jump to {row.path}"
+                  aria-label="Jump to {row.path}"
+                >{row.path}</button>
+              {/if}
+              <span class="evidence-text">
+                <MarkdownView source={row.text} />
+              </span>
+            </li>
+          {/each}
+        </ul>
+      </details>
     {/if}
     {#if verdict.notAnalyzed.length > 0}
       <div class="not-analyzed">
@@ -115,6 +165,36 @@
 
   .verdict-evidence-row:last-child {
     border-bottom: none;
+  }
+
+  /* ---- Cross-model verify chip + demoted group (Plan M) ---- */
+  .evidence-verify-chip {
+    display: inline-block;
+    margin-top: 0.25rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    background: var(--legend-added-bg);
+    color: var(--legend-added-color);
+    border: 1px solid var(--legend-added-border);
+    white-space: nowrap;
+    cursor: help;
+  }
+
+  .verdict-lower-confidence {
+    margin: 0.5rem 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    background: var(--surface-raised);
+  }
+
+  .verdict-lower-confidence > summary {
+    color: var(--text-muted);
+  }
+
+  .verdict-lower-confidence .verdict-evidence {
+    padding: 0.25rem 0.75rem 0.5rem;
   }
 
   .evidence-path-chip {

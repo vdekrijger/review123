@@ -91,10 +91,29 @@ export type CompleteFn = (args: {
   taskKey: string
 }) => Promise<string>
 
+/**
+ * A verify pass over produced findings (Plan M eval integration). Mirrors
+ * CompleteFn's injectability: a mock scripts per-finding verdicts; a live impl
+ * calls the real verifier providers. Returns, per finding (by 0-based index in
+ * the produced array), whether it SURVIVED cross-model verification (surfaced).
+ * Findings the verify pass demotes are dropped before scoring, so precision /
+ * recall / noise-rate are measured WITH cross-model verification.
+ */
+export type VerifyFn = (
+  findings: ProducedFinding[],
+) => Promise<{ surfaced: boolean[] }>
+
 export interface RunCaseOptions {
   /** When true, append the deep-review guidance to each task's system prompt. */
   deep?: boolean
   match?: MatchConfig
+  /**
+   * Cross-model verification (Plan M). When `verify` is provided AND this is
+   * true, produced findings are verified and demoted ones dropped before
+   * scoring — so the score reflects post-verification precision/recall.
+   */
+  crossVerify?: boolean
+  verify?: VerifyFn
 }
 
 // ---------------------------------------------------------------------------
@@ -245,13 +264,21 @@ export async function runCase(
     produced.push(...skillFindings(safeParse(raw)))
   }
 
+  // Cross-model verification (Plan M): drop demoted findings before scoring so
+  // the metrics reflect post-verification precision/recall/noise-rate.
+  let scored = produced
+  if (options.crossVerify && options.verify && produced.length > 0) {
+    const { surfaced } = await options.verify(produced)
+    scored = produced.filter((_, i) => surfaced[i] !== false)
+  }
+
   const expectation: CaseExpectation = {
     real: goldenCase.expected.real,
     noise: goldenCase.expected.noise,
   }
-  const score = scoreCase(goldenCase.name, produced, expectation, match)
+  const score = scoreCase(goldenCase.name, scored, expectation, match)
 
-  return { score, produced, rawByTask }
+  return { score, produced: scored, rawByTask }
 }
 
 function safeParse(raw: string): unknown {

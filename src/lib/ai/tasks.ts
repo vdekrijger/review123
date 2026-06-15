@@ -14,11 +14,15 @@ import type { CiSummary } from '../github/checks'
 import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
 
+// PROMPT_VERSION 18 (Plan M): cross-model verification. Skill-review + verdict
+// findings now carry an aggregated cross-model `verification` object (the new
+// adversarial verify prompt lives in crossVerify.ts). The bump invalidates
+// cached skill/verdict results so they re-run and verify under the new shape.
 // PROMPT_VERSION 17 (Plan L): the diagram task's output shape changed from the
 // module-dependency change-map to a flow-of-execution (GraphResult.flow). The
 // bump invalidates cached diagram results so old change-maps don't render under
 // the new "Execution flow" label.
-export const PROMPT_VERSION = 17
+export const PROMPT_VERSION = 18
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)

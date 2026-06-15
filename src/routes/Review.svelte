@@ -473,6 +473,10 @@
         // contents we already fetched (contentsMap). Lets the coach verify
         // rather than default to "cannot verify against the diff".
         coachCodeContext: (drafts) => buildCoachCodeContext(drafts, files, contentsMap),
+        // Per-finding code context for cross-model verification (Plan M): the
+        // actual code at each finding's file:line so verifier models judge
+        // against real code. Same source as the coach context above.
+        verifyCodeContext: (anchors) => buildCoachCodeContext(anchors, files, contentsMap),
       })
       aiRun = run
 
