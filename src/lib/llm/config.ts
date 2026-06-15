@@ -12,6 +12,7 @@
 import { getSettings } from '../settings/settings'
 import { PROVIDERS, getProvider, getModelDef, computeBudgetTokens } from './providers'
 import type { LlmProviderDef, LlmModelDef, LlmProviderId } from './providers'
+import type { ProviderConfig } from './llm'
 
 /** Settings field that stores each provider's API key. */
 export const PROVIDER_KEY_FIELDS = {
@@ -73,4 +74,43 @@ export function activeLlmConfig(): ActiveLlmConfig {
     model,
     budgetTokens: computeBudgetTokens(model.contextWindowTokens),
   }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-model verification (Plan M)
+// ---------------------------------------------------------------------------
+
+/** Cap on verifier providers polled per verification — bounds token cost. */
+export const MAX_VERIFIER_PROVIDERS = 3
+
+/**
+ * The "configured verifier providers": every provider with a key saved,
+ * EXCLUDING the active generator provider. Picked deterministically in PROVIDERS
+ * order and capped at MAX_VERIFIER_PROVIDERS to bound cost. Each verifier uses
+ * its provider's default model. Returns [] when no other provider has a key.
+ */
+export function verifierProviderConfigs(): ProviderConfig[] {
+  const settings = getSettings()
+  const activeId = activeLlmConfig().provider.id
+  const out: ProviderConfig[] = []
+  for (const provider of PROVIDERS) {
+    if (provider.id === activeId) continue
+    const key = settings[PROVIDER_KEY_FIELDS[provider.id]] as string | null
+    if (!key) continue
+    const model = getModelDef(provider, provider.defaultModel) ?? provider.models[0]
+    out.push({ providerId: provider.id, model, key })
+    if (out.length >= MAX_VERIFIER_PROVIDERS) break
+  }
+  return out
+}
+
+/**
+ * Whether cross-model verification is EFFECTIVE: the setting is on AND at least
+ * one verifier provider (other than the active generator) has a key. With 0–1
+ * keys this is false → the verification engine is a strict no-op, byte-identical
+ * to behaviour before Plan M. Single-key users are unaffected.
+ */
+export function crossModelVerifyEffective(): boolean {
+  if (!getSettings().crossModelVerify) return false
+  return verifierProviderConfigs().length >= 1
 }

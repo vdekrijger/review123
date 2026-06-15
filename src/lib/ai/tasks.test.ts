@@ -1904,7 +1904,7 @@ describe('storyOrderPrompt', () => {
 })
 
 describe('PROMPT_VERSION', () => {
-  it('is bumped to 17 (Plan L: diagram → flow-of-execution output shape)', () => {
-    expect(PROMPT_VERSION).toBe(17)
+  it('is bumped to 18 (Plan M: cross-model verification on skill/verdict findings)', () => {
+    expect(PROMPT_VERSION).toBe(18)
   })
 })

@@ -133,6 +133,47 @@ describe('SkillFindingCard — state chips (the only state styling)', () => {
   })
 })
 
+describe('SkillFindingCard — cross-model verification chip (Plan M)', () => {
+  const surfaced = {
+    confirmedBy: 2,
+    polledModels: 3,
+    surfaced: true,
+    perModel: [
+      { provider: 'DeepSeek', verdict: 'confirm' as const, reason: '' },
+      { provider: 'OpenAI', verdict: 'confirm' as const, reason: 'real off-by-one' },
+      { provider: 'Anthropic', verdict: 'refute' as const, reason: 'looks moot' },
+    ],
+  }
+
+  it('renders a "✓ confirmed by N/M models" chip when surfaced', () => {
+    const { container } = renderCard({ verification: surfaced })
+    const chip = container.querySelector('.skill-verify-chip')
+    expect(chip).toBeTruthy()
+    expect(chip?.textContent).toContain('confirmed by 2/3 models')
+  })
+
+  it('the chip tooltip lists each model verdict', () => {
+    const { container } = renderCard({ verification: surfaced })
+    const chip = container.querySelector('.skill-verify-chip')
+    const title = chip?.getAttribute('title') ?? ''
+    expect(title).toContain('DeepSeek: confirm')
+    expect(title).toContain('OpenAI: confirm — real off-by-one')
+    expect(title).toContain('Anthropic: refute — looks moot')
+  })
+
+  it('no chip when there is no verification (single-key / off)', () => {
+    const { container } = renderCard({})
+    expect(container.querySelector('.skill-verify-chip')).toBeNull()
+  })
+
+  it('no chip when the finding was demoted (surfaced=false)', () => {
+    const { container } = renderCard({
+      verification: { ...surfaced, surfaced: false, confirmedBy: 1 },
+    })
+    expect(container.querySelector('.skill-verify-chip')).toBeNull()
+  })
+})
+
 describe('SkillFindingCard — actions', () => {
   it('Add as draft calls onAdd', async () => {
     const onAdd = vi.fn()

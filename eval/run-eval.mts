@@ -44,15 +44,17 @@ interface Args {
   live: boolean
   deep: boolean
   caseFilter: string | null
+  crossVerify: boolean
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { live: false, deep: false, caseFilter: null }
+  const args: Args = { live: false, deep: false, caseFilter: null, crossVerify: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--live') args.live = true
     else if (a === '--mock') args.live = false
     else if (a === '--deep') args.deep = true
+    else if (a === '--cross-verify') args.crossVerify = true
     else if (a === '--case') args.caseFilter = argv[++i] ?? null
   }
   return args
@@ -67,6 +69,7 @@ interface LoadedCase {
   fixture: unknown
   expected: unknown
   mockResponses: Record<string, unknown>
+  mockVerifyVerdicts: Record<string, string>
 }
 
 function listCaseDirs(): string[] {
@@ -96,7 +99,13 @@ function loadCase(name: string): LoadedCase {
   } catch {
     mockResponses = {}
   }
-  return { name, fixture, expected, mockResponses }
+  let mockVerifyVerdicts: Record<string, string> = {}
+  try {
+    mockVerifyVerdicts = readJson(join(dir, 'mock', 'verify.json')) as Record<string, string>
+  } catch {
+    mockVerifyVerdicts = {}
+  }
+  return { name, fixture, expected, mockResponses, mockVerifyVerdicts }
 }
 
 // ---------------------------------------------------------------------------
@@ -232,13 +241,27 @@ async function main(): Promise<void> {
     const harness = await server.ssrLoadModule('/src/lib/eval/harness.ts')
     const scorer = await server.ssrLoadModule('/src/lib/eval/scorer.ts')
     const mockMod = await server.ssrLoadModule('/src/lib/eval/mock.ts')
+    const crossVerifyMod = await server.ssrLoadModule('/src/lib/ai/crossVerify.ts')
+
+    type ProducedFinding = { file: string; line: number | null; description: string }
+    type VerifyResult = { surfaced: boolean[] }
+    type VerifyFn = (findings: ProducedFinding[]) => Promise<VerifyResult>
+
+    const { buildVerifyPrompt, validateVerifierResponse, aggregateFinding } = crossVerifyMod as {
+      buildVerifyPrompt: (findings: unknown[]) => { system: string; user: string }
+      validateVerifierResponse: (x: unknown) => { verdicts: { id: string; verdict: string }[] } | null
+      aggregateFinding: (
+        gen: string,
+        votes: { provider: string; verdict: string; reason: string }[],
+      ) => { surfaced: boolean }
+    }
 
     const { runCase } = harness as {
       runCase: (
         c: unknown,
         complete: (a: CompleteArgs) => Promise<string>,
         ci: null,
-        opts: { deep?: boolean },
+        opts: { deep?: boolean; crossVerify?: boolean; verify?: VerifyFn },
       ) => Promise<{ score: Record<string, number | string>; produced: unknown[]; rawByTask: Record<string, string> }>
     }
     const { aggregate, evaluateGates, pct, DEFAULT_GATES } = scorer as {
@@ -254,14 +277,49 @@ async function main(): Promise<void> {
     // Build the completion function for the chosen mode.
     let complete: (a: CompleteArgs) => Promise<string>
     let modeLabel: string
+    let liveProvider: LiveProvider | null = null
     if (args.live) {
-      const provider = resolveLiveProvider()
-      complete = makeLiveComplete(provider)
-      modeLabel = `--live (${provider.label} ${provider.model})${args.deep ? ' --deep' : ''}`
+      liveProvider = resolveLiveProvider()
+      complete = makeLiveComplete(liveProvider)
+      modeLabel = `--live (${liveProvider.label} ${liveProvider.model})${args.deep ? ' --deep' : ''}`
     } else {
       // Mock: pick the per-case responses map at call time via a closure-by-case.
       modeLabel = '--mock (scripted stub — validates harness mechanics, NOT model quality)'
       complete = async () => '{}' // replaced per-case below
+    }
+    if (args.crossVerify) modeLabel += ' --cross-verify'
+
+    // Cross-verify pass (Plan M). In --live, the verify provider is the SAME
+    // live provider (a single verifier here for harness simplicity — the app
+    // polls up to 3 distinct providers); it judges each finding adversarially
+    // and we demote refute/uncertain. In --mock, an optional mock/verify.json
+    // maps finding descriptions to verdicts; absent → all surface (no-op).
+    function makeLiveVerify(provider: LiveProvider): VerifyFn {
+      const completeFn = makeLiveComplete(provider)
+      return async (findings) => {
+        const verifiable = findings.map((f, i) => ({ id: `f${i}`, path: f.file, line: f.line, severity: 'medium', body: f.description }))
+        const prompts = buildVerifyPrompt(verifiable)
+        const raw = await completeFn({ system: prompts.system, user: prompts.user, taskKey: 'verify' })
+        let parsed: unknown = null
+        try { parsed = JSON.parse(raw) } catch { parsed = null }
+        const validated = validateVerifierResponse(parsed)
+        const byId = new Map<string, string>()
+        for (const v of validated?.verdicts ?? []) byId.set(v.id, v.verdict)
+        return {
+          surfaced: findings.map((_, i) => {
+            const verdict = byId.get(`f${i}`) ?? 'uncertain'
+            return aggregateFinding(provider.label, [{ provider: provider.label, verdict, reason: '' }]).surfaced
+          }),
+        }
+      }
+    }
+    function makeMockVerify(verdictByDesc: Record<string, string>): VerifyFn {
+      return async (findings) => ({
+        surfaced: findings.map((f) => {
+          const verdict = verdictByDesc[f.description] ?? 'confirm'
+          return aggregateFinding('generator', [{ provider: 'mock-verifier', verdict, reason: '' }]).surfaced
+        }),
+      })
     }
 
     let names = listCaseDirs()
@@ -292,7 +350,17 @@ async function main(): Promise<void> {
             ),
           )
 
-      const result = await runCase(goldenCase, caseComplete, null, { deep: args.deep })
+      const caseVerify: VerifyFn | undefined = args.crossVerify
+        ? args.live
+          ? makeLiveVerify(liveProvider!)
+          : makeMockVerify(loaded.mockVerifyVerdicts)
+        : undefined
+
+      const result = await runCase(goldenCase, caseComplete, null, {
+        deep: args.deep,
+        crossVerify: args.crossVerify,
+        ...(caseVerify ? { verify: caseVerify } : {}),
+      })
       caseScores.push(result.score)
       const score = result.score as unknown as {
         produced: number

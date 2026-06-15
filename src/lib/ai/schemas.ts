@@ -70,6 +70,11 @@ export interface VerdictResult {
   level: 'behavior-preserved' | 'minor-changes' | 'significant-changes'
   evidence: string[]
   notAnalyzed: string[]
+  /**
+   * Cross-model verification per evidence row (Plan M), keyed by the evidence
+   * array index. Attached post-generation; absent rows render unverified.
+   */
+  evidenceVerification?: Record<number, FindingVerification>
 }
 
 const VERDICT_LEVELS = new Set<string>([
@@ -796,11 +801,40 @@ export function salvageStoryOrder(x: unknown): StoryOrderResult | null {
 // SkillFinding / SkillReviewResult (Skill reviewer feature)
 // ---------------------------------------------------------------------------
 
+/**
+ * One verifier model's verdict on a finding (Plan M cross-model verification).
+ */
+export interface FindingVerdict {
+  /** Provider that cast this vote (the verifier), or 'generator' for the raiser. */
+  provider: string
+  verdict: 'confirm' | 'refute' | 'uncertain'
+  /** ≤1-sentence reason. Empty for the implicit generator confirm. */
+  reason: string
+}
+
+/**
+ * Aggregated cross-model verification carried on a finding (Plan M). Absent when
+ * verification did not run (single-key / setting off / all verifiers failed) —
+ * its absence means "show the finding unverified, no chip, never demote".
+ */
+export interface FindingVerification {
+  /** Confirm votes, including the generator's implicit +1. */
+  confirmedBy: number
+  /** Total models polled (generator + verifiers that responded). */
+  polledModels: number
+  /** Decision: true = surface normally, false = demote to lower-confidence group. */
+  surfaced: boolean
+  /** Per-model verdicts (generator first), for the tooltip. */
+  perModel: FindingVerdict[]
+}
+
 export interface SkillFinding {
   path: string
   line: number | null
   severity: 'high' | 'medium' | 'low'
   body: string
+  /** Cross-model verification result (Plan M), attached post-generation. */
+  verification?: FindingVerification
 }
 
 export interface SkillReviewResult {

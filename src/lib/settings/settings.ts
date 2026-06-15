@@ -143,6 +143,15 @@ export interface Settings {
    * a key get the narrative first; flipping to Files in-step persists false.
    */
   storyMode: boolean
+  /**
+   * Cross-model verification (Plan M): after the active model generates review
+   * findings, the user's OTHER configured providers independently judge each
+   * one; only findings that survive cross-model agreement are surfaced, the rest
+   * are demoted into a "lower confidence" group. Default TRUE, but EFFECTIVE only
+   * when ≥2 providers have keys (active + ≥1 other) — with 0–1 keys it is a
+   * strict no-op (no extra calls, no UI), so single-key users are unaffected.
+   */
+  crossModelVerify: boolean
   diffMode: DiffMode
   /** Hide whitespace-only changes in diffs (like GitHub's ?w=1). */
   hideWhitespace: boolean
@@ -201,6 +210,7 @@ const DEFAULTS: Settings = {
   aiDeepReview: false,
   aiTaskModes: defaultTaskModes(),
   storyMode: true,
+  crossModelVerify: true,
   diffMode: 'unified',
   hideWhitespace: false,
   githubAuth: null,
@@ -326,6 +336,9 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const storyMode = obj['storyMode']
   if (typeof storyMode === 'boolean') result.storyMode = storyMode
+
+  const crossModelVerify = obj['crossModelVerify']
+  if (typeof crossModelVerify === 'boolean') result.crossModelVerify = crossModelVerify
 
   const gitlabToken = obj['gitlabToken']
   if (typeof gitlabToken === 'string') result.gitlabToken = gitlabToken
@@ -558,6 +571,7 @@ export function setOffAllExtras(): void {
   save({ aiTaskModes: modes })
 }
 export const setStoryMode = (v: boolean) => save({ storyMode: v })
+export const setCrossModelVerify = (v: boolean) => save({ crossModelVerify: v })
 export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
 export const setHideWhitespace = (hide: boolean) => save({ hideWhitespace: hide })
 export const setRailCollapsed = (collapsed: boolean) => save({ railCollapsed: collapsed })

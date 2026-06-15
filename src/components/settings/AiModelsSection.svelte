@@ -1,6 +1,6 @@
 <script lang="ts">
   import {
-    getSettings, saveTokens, setAiProvider, setAiModel, setStoryMode,
+    getSettings, saveTokens, setAiProvider, setAiModel, setStoryMode, setCrossModelVerify,
     setAiTaskMode, setAllTasksDeep, setAllTasksStandard, setOffAllExtras,
     AI_TASK_IDS, taskSupportsDeep,
     type AiProvider, type AiTaskId, type AiTaskMode,
@@ -61,6 +61,20 @@
   function onStoryModeChange(checked: boolean) {
     storyMode = checked
     setStoryMode(checked)
+  }
+
+  // Cross-model verification (Plan M) toggle — applies immediately. EFFECTIVE
+  // only when ≥2 providers have keys; disabled with a hint otherwise. Reactive
+  // to settingsState so adding a second key re-enables it live.
+  let crossModelVerify = $state<boolean>(current.crossModelVerify)
+  const keyedProviderCount = $derived.by(() => {
+    const s = settingsState.current
+    return [s.deepseekKey, s.openaiKey, s.anthropicKey, s.geminiKey].filter(Boolean).length
+  })
+  const crossVerifyAvailable = $derived(keyedProviderCount >= 2)
+  function onCrossModelVerifyChange(checked: boolean) {
+    crossModelVerify = checked
+    setCrossModelVerify(checked)
   }
 
   // Per-provider model selection. Empty string means "use the provider default".
@@ -303,6 +317,24 @@
       step at a time, in reading order, with related tests inline. Falls back to the all-files diff
       anytime via the Story / Files switch.
       {#if !storyKeyAvailable}<strong> Add an LLM API key above to enable it.</strong>{/if}
+    </p>
+  </div>
+
+  <div class="deep-review-row">
+    <label class="deep-review-toggle" class:disabled={!crossVerifyAvailable}>
+      <input
+        type="checkbox"
+        name="crossModelVerify"
+        checked={crossModelVerify}
+        disabled={!crossVerifyAvailable}
+        onchange={(e) => onCrossModelVerifyChange((e.currentTarget as HTMLInputElement).checked)}
+      />
+      <span class="deep-review-label">Cross-check findings with your other AI providers</span>
+    </label>
+    <p class="deep-review-hint">
+      When you have 2+ provider keys, your other models verify each finding — fewer false
+      positives, more tokens.
+      {#if !crossVerifyAvailable}<strong> Add a second provider key to enable.</strong>{/if}
     </p>
   </div>
 

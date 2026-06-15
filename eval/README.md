@@ -36,7 +36,40 @@ DEEPSEEK_API_KEY=sk-... pnpm eval -- --live
 
 # Live + agentic deep-review guidance
 DEEPSEEK_API_KEY=sk-... pnpm eval -- --live --deep
+
+# Cross-model verification (Plan M): measure precision/recall/noise-rate WITH
+# the adversarial verify pass applied (demoted findings dropped before scoring)
+pnpm eval -- --cross-verify                          # mock
+DEEPSEEK_API_KEY=sk-... pnpm eval -- --live --cross-verify
 ```
+
+### Measuring the cross-verification lift (`--cross-verify`)
+
+`--cross-verify` runs the same review, then a second **adversarial verify pass**
+(the prompt + aggregation from `src/lib/ai/crossVerify.ts`) over the produced
+findings. Findings the verifier **demotes** (refute / uncertain → below the
+surface threshold) are **dropped before scoring**, so the printed
+precision / recall / noise-rate reflect the *post-verification* surface.
+
+To measure the lift, run the same mode twice and compare:
+
+```bash
+pnpm eval -- --live                  # baseline (no verification)
+pnpm eval -- --live --cross-verify   # with verification
+```
+
+Expect cross-verification to **raise precision / cut noise-rate** (it drops
+findings other models don't back) at a possible small **recall** cost (a real
+finding the verifier wrongly refutes). The token cost rises (one extra verify
+call per case).
+
+- In **`--live`**, the verifier is the **same** live provider (one verifier, for
+  harness simplicity — the app polls up to 3 *distinct* providers). It judges
+  each finding and demotes refute/uncertain.
+- In **`--mock`**, an optional `eval/golden/<case>/mock/verify.json` maps a
+  finding's `description` string to a verdict (`confirm` | `refute` |
+  `uncertain`); absent entries default to `confirm` (surface), so without the
+  file `--cross-verify` is a no-op. This keeps the mock path deterministic.
 
 The runner prints a per-case + aggregate table and a one-line verdict, and writes
 a full JSON dump to `eval/results/` (gitignored). It exits **non-zero** when the

@@ -17,11 +17,14 @@
    */
 
   import MarkdownView from './MarkdownView.svelte'
+  import type { FindingVerification } from '../lib/ai/schemas'
 
   interface Props {
     skillName: string
     severity: 'high' | 'medium' | 'low'
     body: string
+    /** Cross-model verification (Plan M) — drives the "confirmed by N/M" chip. */
+    verification?: FindingVerification
     /** The line the finding is anchored to, if any (shown only when not anchored inline) */
     line?: number | null
     /** Whether the card is rendered inline at its anchored diff line */
@@ -40,7 +43,16 @@
     onDismiss: () => void
   }
 
-  let { skillName, severity, body, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss }: Props = $props()
+  let { skillName, severity, body, verification = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss }: Props = $props()
+
+  // Tooltip: one line per model's verdict, e.g. "DeepSeek: confirm — raised it".
+  const verifyTooltip = $derived(
+    verification
+      ? verification.perModel
+          .map((m) => `${m.provider}: ${m.verdict}${m.reason ? ` — ${m.reason}` : ''}`)
+          .join('\n')
+      : ''
+  )
 </script>
 
 <div class="skill-finding severity-{severity}" class:compact role="note" aria-label="{skillName} finding, severity {severity}" data-finding-key={findingKey ?? undefined}>
@@ -51,6 +63,13 @@
     {/if}
     {#if added}
       <span class="skill-state-chip" role="status">✓ added as draft</span>
+    {/if}
+    {#if verification && verification.surfaced}
+      <span
+        class="skill-verify-chip"
+        title={verifyTooltip}
+        aria-label="Confirmed by {verification.confirmedBy} of {verification.polledModels} models"
+      >✓ confirmed by {verification.confirmedBy}/{verification.polledModels} models</span>
     {/if}
     <span class="skill-severity-chip severity-chip-{severity}">{severity}</span>
   </div>
@@ -172,6 +191,19 @@
     color: var(--legend-added-color);
     border: 1px solid var(--legend-added-border);
     white-space: nowrap;
+  }
+
+  /* ---- Verification chip: cross-model "confirmed by N/M" (Plan M) ---- */
+  .skill-verify-chip {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    background: var(--legend-added-bg);
+    color: var(--legend-added-color);
+    border: 1px solid var(--legend-added-border);
+    white-space: nowrap;
+    cursor: help;
   }
 
   /* ---- Unresolvable-anchor note: muted, labeled, mono ---- */

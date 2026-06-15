@@ -350,7 +350,12 @@
   // Split into two maps: file-level (null line) stays above the file in InspectStep;
   // line-bearing findings are passed into FileDiff via skillFindings prop.
   // Shape: Map<path, entry[]>
-  type SuggestionEntry = { skillName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string }
+  type SuggestionEntry = { skillName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string; verification?: import('../lib/ai/schemas').FindingVerification }
+
+  /** True when cross-model verification demoted this finding (flagged by one, not confirmed). */
+  function isDemoted(s: SuggestionEntry): boolean {
+    return !!s.verification && !s.verification.surfaced
+  }
 
   const skillSuggestionsByPath = $derived.by(() => {
     const map = new Map<string, SuggestionEntry[]>()
@@ -367,6 +372,7 @@
           severity: finding.severity,
           body: finding.body,
           key: `${review.skillId}:${finding.path}:${finding.line}:${finding.body.slice(0, 30)}`,
+          verification: finding.verification,
         })
         map.set(finding.path, arr)
       }
@@ -374,11 +380,25 @@
     return map
   })
 
+  // Cross-model demoted findings (Plan M): flagged by one model, not confirmed by
+  // others. Collected into a single collapsed group so they're never silently
+  // dropped — the reviewer can expand to see them.
+  const demotedFindings = $derived.by(() => {
+    const out: SuggestionEntry[] = []
+    for (const suggestions of skillSuggestionsByPath.values()) {
+      for (const s of suggestions) {
+        if (isDemoted(s) && !dismissedKeys.has(s.key)) out.push(s)
+      }
+    }
+    return out
+  })
+
   // File-level (null-line) suggestions — rendered above the FileDiff
   const fileLevelSuggestionsByPath = $derived.by(() => {
     const map = new Map<string, SuggestionEntry[]>()
     for (const [path, suggestions] of skillSuggestionsByPath) {
-      const fileLevelOnly = suggestions.filter(s => s.line === null)
+      // Demoted findings are pulled out into the lower-confidence group.
+      const fileLevelOnly = suggestions.filter(s => s.line === null && !isDemoted(s))
       if (fileLevelOnly.length > 0) map.set(path, fileLevelOnly)
     }
     return map
@@ -389,13 +409,14 @@
     const map = new Map<string, SkillFinding[]>()
     for (const [path, suggestions] of skillSuggestionsByPath) {
       const lineOnly = suggestions
-        .filter(s => s.line !== null && !dismissedKeys.has(s.key))
+        .filter(s => s.line !== null && !dismissedKeys.has(s.key) && !isDemoted(s))
         .map(s => ({
           skillName: s.skillName,
           line: s.line as number,
           severity: s.severity,
           body: s.body,
           key: s.key,
+          verification: s.verification,
         }))
       if (lineOnly.length > 0) map.set(path, lineOnly)
     }
@@ -1032,6 +1053,7 @@
                   skillName={suggestion.skillName}
                   severity={suggestion.severity}
                   body={suggestion.body}
+                  verification={suggestion.verification}
                   line={suggestion.line}
                   anchored={false}
                   findingKey={suggestion.key}
@@ -1064,11 +1086,54 @@
           />
         </div>
       {/each}
+
+      {#if demotedFindings.length > 0}
+        <details class="lower-confidence-group">
+          <summary class="lower-confidence-summary">
+            Lower confidence — flagged by 1 model, not confirmed by others ({demotedFindings.length})
+          </summary>
+          <div class="lower-confidence-body">
+            {#each demotedFindings as suggestion (suggestion.key)}
+              <SkillFindingCard
+                skillName={suggestion.skillName}
+                severity={suggestion.severity}
+                body={suggestion.body}
+                verification={suggestion.verification}
+                line={suggestion.line}
+                anchored={false}
+                findingKey={suggestion.key}
+                added={addedDraftKeys.has(suggestion.key)}
+                onAdd={() => addFindingAsDraft(suggestion)}
+                onDismiss={() => dismissFinding(suggestion.key)}
+              />
+            {/each}
+          </div>
+        </details>
+      {/if}
     </div>
   </div>
 {/if}
 
 <style>
+  /* ---- Cross-model demoted findings group (Plan M) ---- */
+  .lower-confidence-group {
+    margin: 1rem 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    background: var(--surface-raised);
+  }
+
+  .lower-confidence-summary {
+    color: var(--text-muted);
+  }
+
+  .lower-confidence-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem 0.75rem;
+  }
+
   /*
    * ==========================================================================
    * DRAWER CSS — TWO ADAPTIVE REGIMES (pure CSS, no JS viewport tracking)

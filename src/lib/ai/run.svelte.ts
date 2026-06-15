@@ -9,7 +9,7 @@
  * stub any combination without module-level mocking.
  */
 
-import { activeLlmConfig, activeProviderHasKey } from '../llm/config'
+import { activeLlmConfig, activeProviderHasKey, crossModelVerifyEffective, verifierProviderConfigs } from '../llm/config'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import {
@@ -17,9 +17,18 @@ import {
   llmStreamWithUsage as defaultLlmStreamWithUsage,
   llmJsonWithRepair as defaultLlmJsonWithRepair,
   llmJsonWithRepairWithUsage as defaultLlmJsonWithRepairWithUsage,
+  llmJsonWithRepairFor as defaultLlmJsonWithRepairFor,
   LlmError,
 } from '../llm/llm'
-import type { LlmUsage } from '../llm/llm'
+import type { LlmUsage, ProviderConfig } from '../llm/llm'
+import {
+  crossVerify,
+  buildVerifyPrompt,
+  validateVerifierResponse,
+  type VerifiableFinding,
+  type VerifyFn,
+} from './crossVerify'
+import { getProvider } from '../llm/providers'
 import { llmToolLoop as defaultLlmToolLoop } from '../llm/llmToolLoop'
 import {
   createDeepReviewToolkit,
@@ -203,6 +212,15 @@ export interface AiRunInput {
    * behaviour). Best-effort: throwing is treated as "no context".
    */
   coachCodeContext?: (drafts: Draft[]) => CoachCodeContext[]
+  /**
+   * Build per-finding CODE context for cross-model verification (Plan M).
+   * Given a list of {path, line, side} anchors it returns the code at each
+   * (a hunk excerpt + optional wider file window) so verifier models judge
+   * findings against real code. Same source as coachCodeContext (the caller
+   * owns PR files + fetched contents). Absent → verification runs with whatever
+   * excerpt is derivable from the packed context only. Best-effort.
+   */
+  verifyCodeContext?: (anchors: { path: string; line: number; side: 'LEFT' | 'RIGHT' }[]) => CoachCodeContext[]
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +232,7 @@ interface AiRunDeps {
   llmStreamWithUsage: typeof defaultLlmStreamWithUsage
   llmJsonWithRepair: typeof defaultLlmJsonWithRepair
   llmJsonWithRepairWithUsage: typeof defaultLlmJsonWithRepairWithUsage
+  llmJsonWithRepairFor: typeof defaultLlmJsonWithRepairFor
   llmToolLoop: typeof defaultLlmToolLoop
   getCached: typeof defaultGetCached
   setCached: typeof defaultSetCached
@@ -250,6 +269,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     llmStreamWithUsage,
     llmJsonWithRepair,
     llmJsonWithRepairWithUsage,
+    llmJsonWithRepairFor,
     llmToolLoop,
     getCached,
     setCached,
@@ -260,6 +280,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     llmStreamWithUsage: defaultLlmStreamWithUsage,
     llmJsonWithRepair: defaultLlmJsonWithRepair,
     llmJsonWithRepairWithUsage: defaultLlmJsonWithRepairWithUsage,
+    llmJsonWithRepairFor: defaultLlmJsonWithRepairFor,
     llmToolLoop: defaultLlmToolLoop,
     getCached: defaultGetCached,
     setCached: defaultSetCached,
@@ -268,7 +289,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     ...deps,
   }
 
-  const { prKey, repo, isPrivate, pack, ci, ask: askConsent, deepReview, coachCodeContext } = input
+  const { prKey, repo, isPrivate, pack, ci, ask: askConsent, deepReview, coachCodeContext, verifyCodeContext } = input
 
   // Reactive panel state holders
   const summaryState = $state<PanelState<string>>({ status: 'idle' })
@@ -289,6 +310,109 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // Packed context — kept in closure so retry can reuse it without re-packing
   // (unless the initial pack failed, in which case retry re-packs)
   let packedCtx: PackedContext | null = null
+
+  // ---------------------------------------------------------------------------
+  // Cross-model verification (Plan M)
+  // ---------------------------------------------------------------------------
+
+  /** A finding to verify, with its UI key so we can write verification back. */
+  interface FindingToVerify {
+    id: string
+    path: string
+    line: number | null
+    severity: 'high' | 'medium' | 'low'
+    body: string
+    side: 'LEFT' | 'RIGHT'
+  }
+
+  /** Real per-verifier call: adversarial JSON judgement against one provider. */
+  const realVerify: VerifyFn = async (cfg: ProviderConfig, findings: VerifiableFinding[]) => {
+    const prompts = buildVerifyPrompt(findings)
+    const { result, usage } = await llmJsonWithRepairFor(
+      cfg,
+      { system: prompts.system, user: prompts.user },
+      validateVerifierResponse,
+    )
+    return { result, usage }
+  }
+
+  /** Best-effort path token from a verdict evidence bullet (for context lookup). */
+  const EVIDENCE_PATH_RE = /[\w@.\-/]+\.[A-Za-z0-9]+/
+  function extractEvidencePath(text: string): string | null {
+    const m = EVIDENCE_PATH_RE.exec(text)
+    if (!m) return null
+    const token = m[0]
+    if (token.includes('/')) return token
+    if (/\.(ts|tsx|js|jsx|svelte|py|go|rs|java|rb|json|css)$/i.test(token)) return token
+    return null
+  }
+
+  /** Humanized "Cross-checking with X, Y…" line for the activity channel. */
+  function crossCheckLabel(verifiers: ProviderConfig[]): string {
+    const names = verifiers.map((v) => getProvider(v.providerId)?.displayName ?? v.providerId)
+    return `Cross-checking with ${names.join(', ')}…`
+  }
+
+  /**
+   * Verify a finding set against the configured verifier providers, attaching an
+   * aggregated `verification` to each. No-op (returns the inputs unchanged, no
+   * usage) when cross-model verification is not effective (single-key / off).
+   * Graceful: any failure leaves findings unverified (never drops them).
+   */
+  async function verifyFindingSet(
+    findings: FindingToVerify[],
+    onActivity?: (line: string) => void,
+  ): Promise<{ byId: Map<string, import('./schemas').FindingVerification>; usage: LlmUsage | undefined }> {
+    if (findings.length === 0 || !crossModelVerifyEffective()) {
+      return { byId: new Map(), usage: undefined }
+    }
+    const verifiers = verifierProviderConfigs()
+    if (verifiers.length === 0) return { byId: new Map(), usage: undefined }
+
+    onActivity?.(crossCheckLabel(verifiers))
+
+    // Build per-finding code context (best-effort) and assemble VerifiableFindings.
+    let ctxByKey = new Map<string, CoachCodeContext>()
+    try {
+      if (verifyCodeContext) {
+        const anchors = findings
+          .filter((f) => f.line !== null)
+          .map((f) => ({ path: f.path, line: f.line as number, side: f.side }))
+        const ctxs = verifyCodeContext(anchors)
+        // verifyCodeContext returns entries in input order; key by path:line.
+        let i = 0
+        for (const f of findings) {
+          if (f.line === null) continue
+          const cc = ctxs[i++]
+          if (cc) ctxByKey.set(f.id, cc)
+        }
+      }
+    } catch {
+      ctxByKey = new Map() // best-effort: no context on failure
+    }
+
+    const verifiable: VerifiableFinding[] = findings.map((f) => {
+      const cc = ctxByKey.get(f.id)
+      return {
+        id: f.id,
+        path: f.path,
+        line: f.line,
+        severity: f.severity,
+        body: f.body,
+        ...(cc?.excerpt ? { excerpt: cc.excerpt } : {}),
+        ...(cc?.fileWindow ? { fileWindow: cc.fileWindow } : {}),
+      }
+    })
+
+    const generatorName = activeLlmConfig().provider.displayName
+    try {
+      const outcome = await crossVerify(verifiable, generatorName, verifiers, realVerify)
+      return { byId: outcome.byId, usage: outcome.usage }
+    } catch {
+      // Verification itself failing must never drop findings.
+      return { byId: new Map(), usage: undefined }
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Internal: run a single task (summary streams; others use llmJsonWithRepair)
@@ -909,7 +1033,34 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
       // Merge notAnalyzed: union of packed context's notAnalyzed + model's own list (EC-15c)
       const merged = [...new Set([...ctx.notAnalyzed, ...verdictResult.notAnalyzed])]
-      const finalResult: VerdictResult = { ...verdictResult, notAnalyzed: merged }
+      let finalResult: VerdictResult = { ...verdictResult, notAnalyzed: merged }
+
+      // Cross-model verification (Plan M): judge each evidence row adversarially.
+      // Short-circuit (byte-identical) when not effective. Evidence rows carry a
+      // path token where possible; rows without one are still judged on text.
+      if (crossModelVerifyEffective()) {
+      const evidenceFindings: FindingToVerify[] = finalResult.evidence.map((bullet, i) => ({
+        id: `ev:${i}`,
+        path: extractEvidencePath(bullet) ?? '(no file)',
+        line: null,
+        severity: 'medium' as const,
+        body: bullet,
+        side: 'RIGHT' as const,
+      }))
+      const verdictVerify = await verifyFindingSet(evidenceFindings, (line) => {
+        verdictState.activity = [...(verdictState.activity ?? []), line]
+      })
+      if (verdictVerify.byId.size > 0) {
+        const evidenceVerification: Record<number, import('./schemas').FindingVerification> = {}
+        finalResult.evidence.forEach((_, i) => {
+          const v = verdictVerify.byId.get(`ev:${i}`)
+          if (v) evidenceVerification[i] = v
+        })
+        finalResult = { ...finalResult, evidenceVerification }
+        verdictUsage = addUsage(verdictUsage, verdictVerify.usage)
+      }
+      }
+
       if (deep.enabled) {
         await setCached<DeepCached<VerdictResult>>(key, { deep: true, result: finalResult, toolCallsUsed: toolCallsUsed ?? 0, usage: verdictUsage })
       } else {
@@ -1341,7 +1492,6 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         skillResult = deepOutcome.result
         skillUsage = deepOutcome.usage
         toolCallsUsed = deepOutcome.toolCallsUsed
-        await setCached<DeepCached<SkillReviewResult>>(key, { deep: true, result: skillResult, toolCallsUsed, usage: skillUsage })
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<SkillReviewResult>(
           { system: prompts.system, user: prompts.user },
@@ -1349,6 +1499,43 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         )
         skillResult = singlePass.result
         skillUsage = singlePass.usage
+      }
+
+      // Cross-model verification (Plan M): adversarially judge each finding with
+      // the user's OTHER providers. Short-circuit (byte-identical) when not
+      // effective — no array build, no verifier call.
+      if (crossModelVerifyEffective()) {
+      const verifyOutcome = await verifyFindingSet(
+        skillResult.findings.map((f) => ({
+          id: `${f.path}:${f.line}:${djb2(f.body)}`,
+          path: f.path,
+          line: f.line,
+          severity: f.severity,
+          body: f.body,
+          side: 'RIGHT' as const,
+        })),
+        (line) => {
+          const entry = skillReviewsState[idx]
+          entry.state = { ...entry.state, activity: [...(entry.state.activity ?? []), line] }
+          onUpdate?.()
+        },
+      )
+      if (verifyOutcome.byId.size > 0) {
+        skillResult = {
+          ...skillResult,
+          findings: skillResult.findings.map((f) => {
+            const v = verifyOutcome.byId.get(`${f.path}:${f.line}:${djb2(f.body)}`)
+            return v ? { ...f, verification: v } : f
+          }),
+        }
+        skillUsage = addUsage(skillUsage, verifyOutcome.usage)
+      }
+      }
+
+      // Cache the (possibly verified) result. Skill deep-cache shape preserved.
+      if (deep.enabled) {
+        await setCached<DeepCached<SkillReviewResult>>(key, { deep: true, result: skillResult, toolCallsUsed: toolCallsUsed ?? 0, usage: skillUsage })
+      } else {
         await setCached<SkillReviewResult>(key, skillResult)
       }
       skillReviewsState[idx] = {
