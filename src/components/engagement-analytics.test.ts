@@ -35,7 +35,16 @@ vi.mock('../lib/settings/settings', () => ({
 }))
 
 vi.mock('../lib/settings/settingsState.svelte', () => ({
-  settingsState: { current: { testFileDisplay: 'normal' } },
+  settingsState: {
+    current: {
+      testFileDisplay: 'normal',
+      // Plan J: InspectStep reads aiTaskModes.skills for the reviewers gate.
+      aiTaskModes: {
+        summary: 'standard', attention: 'standard', diagrams: 'standard',
+        tests: 'standard', alternatives: 'standard', verdict: 'standard', skills: 'standard',
+      },
+    },
+  },
 }))
 
 // ---- Helpers ----

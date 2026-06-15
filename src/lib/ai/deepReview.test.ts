@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   createDeepReviewToolkit,
-  deepReviewAvailability,
+  resolveTaskMode,
   DEEP_REVIEW_MAX_TOOL_CALLS,
   DEEP_REVIEW_MAX_FETCHED_BYTES,
   DEEP_REVIEW_FILE_CAP_BYTES,
@@ -172,33 +172,44 @@ describe('createDeepReviewToolkit — humanize', () => {
 // Availability gate
 // ---------------------------------------------------------------------------
 
-describe('deepReviewAvailability', () => {
-  it('disabled (silently) when the aiDeepReview toggle is off — the default', () => {
+describe('resolveTaskMode (Plan J — per-task run resolution)', () => {
+  it('standard (the default for an unset task) → run single-pass, not deep', () => {
     localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-x' }))
-    expect(deepReviewAvailability(makeSource())).toEqual({ enabled: false })
+    expect(resolveTaskMode('verdict', makeSource())).toEqual({ run: true, deep: false })
   })
 
-  it('disabled (silently) when no source is wired', () => {
-    localStorage.setItem('review123:settings', JSON.stringify({ aiDeepReview: true }))
-    expect(deepReviewAvailability(undefined)).toEqual({ enabled: false })
+  it('a task set to off → does not run (no deep)', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ aiTaskModes: { diagrams: 'off' } }))
+    expect(resolveTaskMode('diagrams', makeSource())).toEqual({ run: false, deep: false })
   })
 
-  it('enabled when toggled on with a source and a tool-capable model', () => {
-    localStorage.setItem(
-      'review123:settings',
-      JSON.stringify({ aiDeepReview: true, aiProvider: 'deepseek', aiModel: 'deepseek-v4-flash' }),
-    )
-    expect(deepReviewAvailability(makeSource())).toEqual({ enabled: true })
+  it('a task at standard → single-pass run', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ aiTaskModes: { verdict: 'standard' } }))
+    expect(resolveTaskMode('verdict', makeSource())).toEqual({ run: true, deep: false })
   })
 
-  it('disabled WITH an honest note when the model lacks tool support (legacy deepseek-reasoner)', () => {
-    localStorage.setItem(
-      'review123:settings',
-      JSON.stringify({ aiDeepReview: true, aiProvider: 'deepseek', aiModel: 'deepseek-reasoner' }),
-    )
-    const availability = deepReviewAvailability(makeSource())
-    expect(availability.enabled).toBe(false)
-    expect(availability.note).toContain('does not support tool calling')
+  it('a deep task with a tool-capable model + source → runs deep', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      aiProvider: 'deepseek', aiModel: 'deepseek-v4-flash',
+      aiTaskModes: { verdict: 'deep' },
+    }))
+    expect(resolveTaskMode('verdict', makeSource())).toEqual({ run: true, deep: true })
+  })
+
+  it('a deep task with no source → falls back to single-pass (runs, not deep)', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ aiTaskModes: { verdict: 'deep' } }))
+    expect(resolveTaskMode('verdict', undefined)).toEqual({ run: true, deep: false })
+  })
+
+  it('a deep task on a model without tool support → runs standard WITH an honest note', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      aiProvider: 'deepseek', aiModel: 'deepseek-reasoner',
+      aiTaskModes: { verdict: 'deep' },
+    }))
+    const r = resolveTaskMode('verdict', makeSource())
+    expect(r.run).toBe(true)
+    expect(r.deep).toBe(false)
+    expect(r.note).toContain('does not support tool calling')
   })
 
   it('budget constants match the plan: 8 calls, 150KB', () => {

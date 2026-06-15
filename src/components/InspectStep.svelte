@@ -13,6 +13,7 @@
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
   import { draftKey } from '../lib/drafts/drafts.svelte'
   import { track } from '../lib/analytics/analytics'
+  import { navigate } from '../lib/router/router.svelte'
   import type { AttentionResult } from '../lib/ai/schemas'
   import type { createViewedStore } from '../lib/viewed/viewed.svelte'
   import type { PrComment } from '../lib/github/comments'
@@ -436,7 +437,20 @@
   const enabledSkillCount = $derived(listSkills().filter(s => s.enabled).length)
   // Run button gates on the ACTIVE provider's key (Plan F), not deepseekKey
   const hasKey = $derived(activeProviderHasKey())
-  const showRunButton = $derived(enabledSkillCount > 0 && hasKey && runSkillReviewsFn !== null)
+  // Plan J: when the 'skills' task mode is 'off', don't offer the reviewers at
+  // all — show a compact disabled note instead of the Run button. Reactive via
+  // settingsState so toggling it in settings updates the step live.
+  const skillsOff = $derived(settingsState.current.aiTaskModes.skills === 'off')
+  const showRunButton = $derived(!skillsOff && enabledSkillCount > 0 && hasKey && runSkillReviewsFn !== null)
+  // Show the disabled note only when reviewers WOULD otherwise be offered.
+  const showSkillsDisabled = $derived(skillsOff && enabledSkillCount > 0 && hasKey && runSkillReviewsFn !== null)
+
+  // Plan J: link to settings from the disabled reviewers note (preserve return-to).
+  function goToSettings(e: MouseEvent) {
+    e.preventDefault()
+    sessionStorage.setItem('review123:settingsReturnTo', location.pathname)
+    navigate('/settings')
+  }
 
   // Running state: true when any skill entry is in loading status
   const isRunning = $derived(skillReviews.some(e => e.state.status === 'loading'))
@@ -554,6 +568,10 @@
         Run my reviewers ({enabledSkillCount})
       {/if}
     </button>
+  {:else if showSkillsDisabled}
+    <p class="reviewers-disabled-note">
+      Reviewers disabled — <a href="/settings" onclick={goToSettings}>enable in AI settings</a>
+    </p>
   {/if}
 </div>
 
@@ -1032,6 +1050,16 @@
     margin-left: 0.4rem;
   }
   .run-reviewers-btn { margin-left: auto; }
+
+  /* Plan J: compact muted note when reviewers are turned off in AI settings. */
+  .reviewers-disabled-note {
+    margin: 0 0 0 auto;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+  .reviewers-disabled-note a {
+    color: var(--accent);
+  }
 
   .hotspot-badge {
     display: flex;

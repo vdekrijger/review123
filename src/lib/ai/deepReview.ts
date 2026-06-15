@@ -23,7 +23,7 @@
 import type { LlmToolDef, LlmToolResult } from '../llm/llmToolLoop'
 import { activeLlmConfig } from '../llm/config'
 import { modelSupportsTools } from '../llm/providers'
-import { getSettings } from '../settings/settings'
+import { getSettings, type AiTaskId, type AiTaskMode } from '../settings/settings'
 
 // ---------------------------------------------------------------------------
 // Budgets
@@ -61,14 +61,14 @@ export interface DeepReviewAvailability {
 }
 
 /**
- * Whether deep review should run for this AI run.
- * - Toggle off → disabled silently (byte-identical single-pass behavior).
- * - Toggle on but no source wired → disabled silently (non-PR contexts).
- * - Toggle on but the active model lacks function calling (e.g. legacy
- *   deepseek-reasoner) → disabled WITH a note so the UI can say so.
+ * Whether deep review *could* run given a source + the active model — i.e. the
+ * harness-availability part, independent of any per-task mode. Used by
+ * resolveTaskMode when a task is set to 'deep'.
+ * - No source wired → disabled silently (non-PR contexts).
+ * - Active model lacks function calling (e.g. legacy deepseek-reasoner) →
+ *   disabled WITH a note so the UI can say so.
  */
-export function deepReviewAvailability(source: DeepReviewSource | undefined): DeepReviewAvailability {
-  if (!getSettings().aiDeepReview) return { enabled: false }
+function deepHarnessAvailable(source: DeepReviewSource | undefined): DeepReviewAvailability {
   if (!source) return { enabled: false }
   const { model } = activeLlmConfig()
   if (!modelSupportsTools(model)) {
@@ -78,6 +78,40 @@ export function deepReviewAvailability(source: DeepReviewSource | undefined): De
     }
   }
   return { enabled: true }
+}
+
+/**
+ * Resolution of a single task's run mode (Plan J) — the per-task replacement
+ * for the old global deepReviewAvailability(deepReview) check.
+ *
+ * Reads aiTaskModes[task] from settings:
+ * - 'off'      → { run: false } — the task must NOT run at all (no LLM call,
+ *                no context, no cache); the panel goes to 'disabled'.
+ * - 'standard' → { run: true, deep: false } — single-pass.
+ * - 'deep'     → { run: true, deep: true } when the harness is available
+ *                (source present + tool-capable model); otherwise
+ *                { run: true, deep: false, note } — standard fallback + note.
+ */
+export interface TaskModeResolution {
+  /** Whether the task runs at all. false → panel becomes 'disabled'. */
+  run: boolean
+  /** Whether to use the agentic harness (only meaningful when run=true). */
+  deep: boolean
+  /** Honest UI note (e.g. deep requested but model can't call tools). */
+  note?: string
+}
+
+export function resolveTaskMode(
+  task: AiTaskId,
+  source: DeepReviewSource | undefined,
+): TaskModeResolution {
+  const mode: AiTaskMode = getSettings().aiTaskModes[task] ?? 'standard'
+  if (mode === 'off') return { run: false, deep: false }
+  if (mode === 'standard') return { run: true, deep: false }
+  // mode === 'deep'
+  const avail = deepHarnessAvailable(source)
+  if (avail.enabled) return { run: true, deep: true }
+  return { run: true, deep: false, ...(avail.note ? { note: avail.note } : {}) }
 }
 
 // ---------------------------------------------------------------------------

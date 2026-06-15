@@ -384,27 +384,63 @@ describe('AiModelsSection — save UX (zero ambiguous buttons)', () => {
 // Deep review (agentic) toggle — Plan G part 2
 // ---------------------------------------------------------------------------
 
-describe('AiModelsSection — deep review toggle', () => {
-  it('renders the toggle unchecked by default with honest cost copy', () => {
+describe('AiModelsSection — per-task modes (Plan J)', () => {
+  it('renders a 3-way control per task; Deep omitted for summary', () => {
     render(AiModelsSection)
-    const toggle = screen.getByRole('checkbox', { name: /deep review \(agentic\)/i })
-    expect(toggle).not.toBeChecked()
-    expect(screen.getByText(/slower, uses more tokens/i)).toBeInTheDocument()
+    // Summary's group has Off + Standard but NOT Deep.
+    const summaryGroup = within(screen.getByRole('radiogroup', { name: /Summary mode/i }))
+    expect(summaryGroup.getByRole('radio', { name: /Off/i })).toBeInTheDocument()
+    expect(summaryGroup.getByRole('radio', { name: /Standard/i })).toBeInTheDocument()
+    expect(summaryGroup.queryByRole('radio', { name: /Deep/i })).toBeNull()
+
+    // Verdict (deep-capable) has all three.
+    const verdictGroup = within(screen.getByRole('radiogroup', { name: /Verdict mode/i }))
+    expect(verdictGroup.getByRole('radio', { name: /Off/i })).toBeInTheDocument()
+    expect(verdictGroup.getByRole('radio', { name: /Standard/i })).toBeInTheDocument()
+    expect(verdictGroup.getByRole('radio', { name: /Deep/i })).toBeInTheDocument()
   })
 
-  it('checking the toggle persists aiDeepReview immediately', async () => {
+  it('defaults every task to Standard', () => {
     render(AiModelsSection)
-    const toggle = screen.getByRole('checkbox', { name: /deep review \(agentic\)/i })
-    await userEvent.click(toggle)
-    expect(getSettings().aiDeepReview).toBe(true)
-    await userEvent.click(toggle)
-    expect(getSettings().aiDeepReview).toBe(false)
+    const verdictGroup = within(screen.getByRole('radiogroup', { name: /Verdict mode/i }))
+    expect(verdictGroup.getByRole('radio', { name: /Standard/i })).toBeChecked()
   })
 
-  it('reflects a previously saved aiDeepReview=true on render', () => {
+  it('changing a task control persists the mode immediately', async () => {
+    render(AiModelsSection)
+    const diagramsGroup = within(screen.getByRole('radiogroup', { name: /Diagrams mode/i }))
+    await userEvent.click(diagramsGroup.getByRole('radio', { name: /Off/i }))
+    expect(getSettings().aiTaskModes.diagrams).toBe('off')
+    await userEvent.click(diagramsGroup.getByRole('radio', { name: /Deep/i }))
+    expect(getSettings().aiTaskModes.diagrams).toBe('deep')
+  })
+
+  it('quick-set All → every deep-capable task deep, summary standard', async () => {
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /^All$/i }))
+    const m = getSettings().aiTaskModes
+    expect(m.summary).toBe('standard')
+    expect(m.verdict).toBe('deep')
+    expect(m.diagrams).toBe('deep')
+  })
+
+  it('quick-set None → every task standard', async () => {
     localStorage.setItem('review123:settings', JSON.stringify({ aiDeepReview: true }))
+    _resetSettingsStateForTest()
     render(AiModelsSection)
-    expect(screen.getByRole('checkbox', { name: /deep review \(agentic\)/i })).toBeChecked()
+    await userEvent.click(screen.getByRole('button', { name: /^None$/i }))
+    const m = getSettings().aiTaskModes
+    for (const v of Object.values(m)) expect(v).toBe('standard')
+  })
+
+  it('quick-set Off-all-extras → summary+verdict standard, the rest off', async () => {
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /Off-all-extras/i }))
+    const m = getSettings().aiTaskModes
+    expect(m.summary).toBe('standard')
+    expect(m.verdict).toBe('standard')
+    expect(m.diagrams).toBe('off')
+    expect(m.skills).toBe('off')
   })
 })
 

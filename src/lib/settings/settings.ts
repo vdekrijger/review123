@@ -57,6 +57,59 @@ export interface GitlabOAuth {
 
 export type AiProvider = 'deepseek' | 'openai' | 'anthropic' | 'gemini'
 
+/**
+ * Per-task AI run mode (Plan J).
+ * - 'off'      — task never runs: no LLM call, no context pack/fetch, no cache
+ *                read. Spends zero tokens. UI shows a compact "disabled" state.
+ * - 'standard' — single-pass run (today's non-deep path).
+ * - 'deep'     — agentic harness run (today's deep path); only for tasks that
+ *                support tools, and only when the active model can call tools.
+ */
+export type AiTaskMode = 'off' | 'standard' | 'deep'
+
+/**
+ * The user-controllable AI tasks (Plan J). The six AUTO tasks that run on PR
+ * open, plus `skills` (manual Run-my-reviewers — deep makes it the most
+ * expensive). `coach`, `ask`, and `story` are NOT user-controlled here.
+ */
+export type AiTaskId =
+  | 'summary'
+  | 'attention'
+  | 'diagrams'
+  | 'tests'
+  | 'alternatives'
+  | 'verdict'
+  | 'skills'
+
+/** All controllable task ids, in display order. */
+export const AI_TASK_IDS: readonly AiTaskId[] = [
+  'summary',
+  'attention',
+  'diagrams',
+  'tests',
+  'alternatives',
+  'verdict',
+  'skills',
+] as const
+
+/**
+ * Tasks that support the deep (agentic) harness. `summary` is pure description
+ * (no harness) so it only supports off/standard — 'deep' is never valid for it.
+ */
+export const DEEP_CAPABLE_TASKS: readonly AiTaskId[] = [
+  'attention',
+  'diagrams',
+  'tests',
+  'alternatives',
+  'verdict',
+  'skills',
+] as const
+
+/** Whether a task supports 'deep'. (Everything except `summary`.) */
+export function taskSupportsDeep(task: AiTaskId): boolean {
+  return task !== 'summary'
+}
+
 export interface Settings {
   githubPat: string | null
   deepseekKey: string | null
@@ -75,6 +128,14 @@ export interface Settings {
    * before flagging findings. Opt-in: slower and uses more tokens (Plan G).
    */
   aiDeepReview: boolean
+  /**
+   * Per-task AI run modes (Plan J). The source of truth for whether/how-deep
+   * each controllable task runs. Defaults to all 'standard' (byte-identical to
+   * legacy aiDeepReview=false). Legacy aiDeepReview=true migrates the
+   * deep-capable tasks to 'deep' once, on first load — after that this matrix
+   * is authoritative and aiDeepReview is no longer read for run decisions.
+   */
+  aiTaskModes: Record<AiTaskId, AiTaskMode>
   /**
    * Story mode (Plan H): in step 2, lead with the guided NARRATIVE walkthrough
    * instead of the all-files diff. Requires an LLM key (a classification task);
@@ -109,6 +170,26 @@ export interface Settings {
   showTokenCost: boolean
 }
 
+/** Default task-mode matrix: every task 'standard' (today's behavior). */
+export function defaultTaskModes(): Record<AiTaskId, AiTaskMode> {
+  return {
+    summary: 'standard',
+    attention: 'standard',
+    diagrams: 'standard',
+    tests: 'standard',
+    alternatives: 'standard',
+    verdict: 'standard',
+    skills: 'standard',
+  }
+}
+
+/** The all-deep matrix that reproduces legacy aiDeepReview=true. */
+export function allDeepTaskModes(): Record<AiTaskId, AiTaskMode> {
+  const modes = defaultTaskModes()
+  for (const t of DEEP_CAPABLE_TASKS) modes[t] = 'deep'
+  return modes
+}
+
 const DEFAULTS: Settings = {
   githubPat: null,
   deepseekKey: null,
@@ -118,6 +199,7 @@ const DEFAULTS: Settings = {
   anthropicKey: null,
   geminiKey: null,
   aiDeepReview: false,
+  aiTaskModes: defaultTaskModes(),
   storyMode: true,
   diffMode: 'unified',
   hideWhitespace: false,
@@ -170,6 +252,37 @@ function coerceBitbucketAuth(raw: unknown): BitbucketAuth | null {
   return { email: obj['email'] as string, token: obj['token'] as string }
 }
 
+/** A valid mode string for a given task (summary may not be 'deep'). */
+function isValidModeFor(task: AiTaskId, mode: unknown): mode is AiTaskMode {
+  if (mode !== 'off' && mode !== 'standard' && mode !== 'deep') return false
+  if (mode === 'deep' && !taskSupportsDeep(task)) return false
+  return true
+}
+
+/**
+ * Coerce + migrate the per-task mode matrix (Plan J).
+ * - Explicit stored aiTaskModes wins (per-key validated, merged over defaults).
+ * - No stored aiTaskModes but legacy aiDeepReview===true → deep-capable tasks
+ *   become 'deep' (one-time migration of the old global toggle).
+ * - Otherwise → defaults (all 'standard').
+ */
+function coerceTaskModes(obj: Record<string, unknown>): Record<AiTaskId, AiTaskMode> {
+  const raw = obj['aiTaskModes']
+  if (typeof raw === 'object' && raw !== null) {
+    const src = raw as Record<string, unknown>
+    const result = defaultTaskModes()
+    for (const task of AI_TASK_IDS) {
+      const m = src[task]
+      if (isValidModeFor(task, m)) result[task] = m
+      // summary='deep' (invalid) falls back to the default 'standard'
+    }
+    return result
+  }
+  // No explicit matrix — migrate the legacy global toggle once.
+  if (obj['aiDeepReview'] === true) return allDeepTaskModes()
+  return defaultTaskModes()
+}
+
 function coerce(raw: unknown): Partial<Settings> {
   if (typeof raw !== 'object' || raw === null) return {}
   const obj = raw as Record<string, unknown>
@@ -207,6 +320,9 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const aiDeepReview = obj['aiDeepReview']
   if (typeof aiDeepReview === 'boolean') result.aiDeepReview = aiDeepReview
+
+  // Per-task mode matrix (Plan J) — coerced + migrated from legacy toggle.
+  result.aiTaskModes = coerceTaskModes(obj)
 
   const storyMode = obj['storyMode']
   if (typeof storyMode === 'boolean') result.storyMode = storyMode
@@ -406,6 +522,41 @@ export const setGeminiKey = (v: string | null) => saveTokens({ geminiKey: v })
 export const setAiProvider = (v: AiProvider) => save({ aiProvider: v })
 export const setAiModel = (v: string) => save({ aiModel: v })
 export const setAiDeepReview = (v: boolean) => save({ aiDeepReview: v })
+
+/**
+ * Set the run mode for one task (Plan J). Invalid combinations (e.g.
+ * summary='deep') are coerced to 'standard' before saving. Applies immediately
+ * (reactive via settingsState), like the other AI-models controls.
+ */
+export function setAiTaskMode(task: AiTaskId, mode: AiTaskMode): void {
+  const safe: AiTaskMode = isValidModeFor(task, mode) ? mode : 'standard'
+  const next = { ...getSettings().aiTaskModes, [task]: safe }
+  save({ aiTaskModes: next })
+}
+
+/** Replace the whole task-mode matrix at once (quick-set rows). */
+export function setAiTaskModes(modes: Record<AiTaskId, AiTaskMode>): void {
+  const next = { ...defaultTaskModes() }
+  for (const task of AI_TASK_IDS) {
+    if (isValidModeFor(task, modes[task])) next[task] = modes[task]
+  }
+  save({ aiTaskModes: next })
+}
+
+/** Quick-set: all deep-capable tasks deep, summary standard (legacy All). */
+export const setAllTasksDeep = () => save({ aiTaskModes: allDeepTaskModes() })
+/** Quick-set: every task standard (legacy None). */
+export const setAllTasksStandard = () => save({ aiTaskModes: defaultTaskModes() })
+/**
+ * Quick-set: keep summary + verdict on, turn the rest off (minimal tokens).
+ */
+export function setOffAllExtras(): void {
+  const modes = defaultTaskModes()
+  for (const task of AI_TASK_IDS) {
+    if (task !== 'summary' && task !== 'verdict') modes[task] = 'off'
+  }
+  save({ aiTaskModes: modes })
+}
 export const setStoryMode = (v: boolean) => save({ storyMode: v })
 export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
 export const setHideWhitespace = (hide: boolean) => save({ hideWhitespace: hide })
