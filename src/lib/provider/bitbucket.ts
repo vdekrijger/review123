@@ -154,6 +154,7 @@ interface BbComment {
   }
   user: { display_name: string; links?: { avatar?: { href: string } } }
   parent?: { id: number }
+  links?: { html?: { href?: string } }
 }
 
 interface BbCommit {
@@ -402,6 +403,8 @@ export const bitbucketProvider: ReviewProvider = {
           line,
           side,
           inReplyTo: c.parent?.id ?? null,
+          // Bitbucket gives a direct comment permalink under links.html.href.
+          ...(c.links?.html?.href ? { url: c.links.html.href } : {}),
         }
       })
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))

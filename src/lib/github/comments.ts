@@ -16,6 +16,13 @@ export interface PrComment {
    * GitLab: discussion id. GitHub: not needed (reply uses the root comment id).
    */
   threadId?: string
+  /**
+   * Permalink to this comment in its native provider UI, when the provider
+   * supplies one. GitHub/Bitbucket give it directly (html_url / links.html.href);
+   * GitLab is constructed as {mrWebUrl}#note_{id}. Absent (undefined) when no
+   * clean URL can be built or for local draft comments not yet submitted.
+   */
+  url?: string
 }
 
 export interface RawReviewComment {
@@ -27,6 +34,7 @@ export interface RawReviewComment {
   line: number | null
   side: 'LEFT' | 'RIGHT'
   in_reply_to_id: number | null
+  html_url?: string
 }
 
 export function mapReviewComment(r: RawReviewComment): PrComment {
@@ -40,6 +48,7 @@ export function mapReviewComment(r: RawReviewComment): PrComment {
     line: r.line,
     side: r.side,
     inReplyTo: r.in_reply_to_id,
+    ...(r.html_url ? { url: r.html_url } : {}),
   }
 }
 
@@ -48,6 +57,7 @@ interface RawIssueComment {
   user: { login: string; avatar_url: string | null }
   body: string
   created_at: string
+  html_url?: string
 }
 
 const MAX_PAGES = 5
@@ -87,6 +97,7 @@ export async function getPrComments(ref: PrRef): Promise<PrComment[]> {
     line: null,
     side: null,
     inReplyTo: null,
+    ...(r.html_url ? { url: r.html_url } : {}),
   }))
 
   const all = [...reviewComments, ...issueComments]
