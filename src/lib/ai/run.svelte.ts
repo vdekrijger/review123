@@ -55,6 +55,14 @@ import { validateAttention, validateVerdict, validateGraphResult, validateTestIn
 import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, SkillReviewResult } from './schemas'
 import type { Draft } from '../drafts/drafts.svelte'
 import type { CoachCodeContext } from './coachContext'
+import {
+  chunk,
+  mergeChunkOutcomes,
+  mapWithConcurrency,
+  COACH_CHUNK_SIZE,
+  COACH_CHUNK_CONCURRENCY,
+  type ChunkOutcome,
+} from './coachBatch'
 import { listSkills } from '../skills/skills'
 import { djb2 } from '../viewed/viewed.svelte'
 import { addUsage } from './tokenCost'
@@ -113,11 +121,26 @@ export interface SkillReviewEntry {
 }
 
 /**
+ * Honest note about comments the coach could NOT grade. The coach batches
+ * drafts into chunks (one LLM call each); when SOME chunks fail but others
+ * succeed we return the succeeded reviews PLUS this note so the UI can show the
+ * partial results and a retry affordance — never silently dropping comments.
+ */
+export interface CoachNotCoached {
+  /** Original draft indices that no chunk successfully coached. */
+  indices: number[]
+  /** Human-readable reason (mapped from the failed chunk's LlmError kind). */
+  message: string
+}
+
+/**
  * Coach success result + the token usage the transport captured for the run
  * (when available). usage is display-only — surfaced behind showTokenCost and
  * folded into the per-PR totalUsage. Absent when the transport reported none.
+ * `notCoached` is present only on a PARTIAL run (some chunks failed); it lists
+ * the comments that were not graded and why.
  */
-export type CoachOutcome = CoachResult & { usage?: LlmUsage }
+export type CoachOutcome = CoachResult & { usage?: LlmUsage; notCoached?: CoachNotCoached }
 
 // ---------------------------------------------------------------------------
 // AiRun public interface
@@ -1057,7 +1080,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     drafts: Draft[],
     prComments?: string[],
     verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT',
-  ): Promise<CoachResult | { error: string }> {
+  ): Promise<CoachOutcome | { error: string }> {
     // No-key check: same early-exit as start()
     if (!activeProviderHasKey()) {
       return { error: humanMessage('no-key') }
@@ -1069,7 +1092,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       return { error: 'AI analysis was declined. Enable AI analysis in the consent dialog to use the comment coach.' }
     }
 
-    // Map drafts to the coachPrompt input shape (index = array position)
+    // Map drafts to the coachPrompt input shape. index = ORIGINAL array
+    // position — preserved across chunk boundaries so the merged result maps
+    // back to drafts by index regardless of how the chunks split.
     const draftInputs = drafts.map((d, i) => ({
       index: i,
       path: d.path,
@@ -1077,20 +1102,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       body: d.body,
     }))
 
-    // Pack context if not already packed (best-effort, mirrors ask()) — the
-    // diff context grounds the accuracy and grounded dimensions.
-    if (packedCtx === null) {
-      try {
-        packedCtx = await pack()
-      } catch {
-        // Continue without packed context — coach still grades the rest
-        packedCtx = { text: '', notAnalyzed: [], includedFiles: [], importGraph: '' }
-      }
-    }
-
     // Per-comment code context (v16): the actual code at each comment's
     // file:line so the coach can verify rather than default to "cannot verify".
-    // Best-effort — never block coaching if context building throws.
+    // Best-effort — never block coaching if context building throws. This is the
+    // grounding now; we no longer pack/send the full prContext (it was largely
+    // redundant with the per-comment excerpt + file window and bloated the
+    // prompt — dropping it is what keeps each chunk comfortably within limits).
     let codeContexts: CoachCodeContext[] | undefined
     if (coachCodeContext) {
       try {
@@ -1099,32 +1116,90 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         codeContexts = undefined
       }
     }
+    const codeByIndex = new Map<number, CoachCodeContext>()
+    for (const cc of codeContexts ?? []) codeByIndex.set(cc.index, cc)
 
-    const prompts = coachPrompt(draftInputs, prComments, {
-      ...(verdict !== undefined ? { verdict } : {}),
-      ...(packedCtx.text ? { contextText: packedCtx.text } : {}),
-      ...(codeContexts && codeContexts.length > 0 ? { codeContexts } : {}),
-    })
+    // Split into bounded chunks — each chunk is its own LLM call carrying ONLY
+    // that chunk's drafts + their code context. A ~30-comment review that used
+    // to blow a single prompt is now several small prompts.
+    const chunks = chunk(draftInputs, COACH_CHUNK_SIZE)
     const t1 = performance.now()
 
-    try {
-      const { result: coachResult, usage } = await llmJsonWithRepairWithUsage<CoachResult>(
-        { system: prompts.system, user: prompts.user },
-        validateCoachResult,
-      )
-      coachUsage = usage
-      track('ai_task_completed', {
-        task: 'coach',
-        duration_ms: Math.round(performance.now() - t1),
-        cached: false,
-        ...(usage?.total_tokens !== undefined ? { tokens: usage.total_tokens } : {}),
+    // Coach ONE chunk. Returns its CoachResult, or an error kind + the original
+    // draft indices it covered (so failures are accounted for, never dropped).
+    // verdict coherence is a run-level signal: only the first chunk is asked for
+    // it (asking every chunk would yield N conflicting answers).
+    async function coachChunk(
+      chunkDrafts: typeof draftInputs,
+      chunkIndex: number,
+    ): Promise<ChunkOutcome & { usage?: LlmUsage }> {
+      const chunkContexts = chunkDrafts
+        .map((d) => codeByIndex.get(d.index))
+        .filter((cc): cc is CoachCodeContext => cc !== undefined)
+      const prompts = coachPrompt(chunkDrafts, prComments, {
+        ...(verdict !== undefined && chunkIndex === 0 ? { verdict } : {}),
+        ...(chunkContexts.length > 0 ? { codeContexts: chunkContexts } : {}),
       })
-      return { ...coachResult, ...(usage ? { usage } : {}) }
-    } catch (err) {
-      const kind = err instanceof LlmError ? err.kind : 'unknown'
+      try {
+        const { result, usage } = await llmJsonWithRepairWithUsage<CoachResult>(
+          { system: prompts.system, user: prompts.user },
+          validateCoachResult,
+        )
+        return { ok: true, result, usage }
+      } catch (err) {
+        const kind = err instanceof LlmError ? err.kind : 'unknown'
+        return { ok: false, kind, indices: chunkDrafts.map((d) => d.index) }
+      }
+    }
+
+    // Bounded concurrency: a few chunks at a time, not all at once, so a big
+    // review doesn't trip provider rate limits.
+    const chunkResults = await mapWithConcurrency(
+      chunks,
+      COACH_CHUNK_CONCURRENCY,
+      (chunkDrafts, i) => coachChunk(chunkDrafts, i),
+    )
+
+    // Sum usage across every chunk that reported it.
+    let usage: LlmUsage | undefined
+    for (const r of chunkResults) usage = sumUsage(usage, r.usage)
+    coachUsage = usage
+
+    const merged = mergeChunkOutcomes(chunkResults)
+
+    // Every chunk failed → no partial result to show; surface the error so the
+    // UI takes the error path (with retry), same as the old single-call coach.
+    if (merged.reviews.length === 0 && merged.failedIndices.length > 0) {
+      const kind = merged.failureKind ?? 'unknown'
       track('ai_task_failed', { task: 'coach', reason: kind })
       return { error: humanMessage(kind) }
     }
+
+    track('ai_task_completed', {
+      task: 'coach',
+      duration_ms: Math.round(performance.now() - t1),
+      cached: false,
+      chunks: chunks.length,
+      ...(merged.failedIndices.length > 0 ? { partial: true } : {}),
+      ...(usage?.total_tokens !== undefined ? { tokens: usage.total_tokens } : {}),
+    })
+
+    const result: CoachOutcome = {
+      reviews: merged.reviews,
+      ...(merged.verdictCoherence !== undefined ? { verdictCoherence: merged.verdictCoherence } : {}),
+      ...(usage ? { usage } : {}),
+    }
+    // Partial run: account for the comments we couldn't coach with an honest note.
+    if (merged.failedIndices.length > 0) {
+      const reason = humanMessage(merged.failureKind ?? 'unknown')
+      const n = merged.failedIndices.length
+      track('ai_task_failed', { task: 'coach', reason: merged.failureKind ?? 'unknown', partial: true })
+      result.notCoached = {
+        indices: merged.failedIndices,
+        message: `Couldn't coach ${n} comment${n === 1 ? '' : 's'} (${reason}) — retry to grade ${n === 1 ? 'it' : 'them'}.`,
+      }
+    }
+    return result
   }
 
   // ---------------------------------------------------------------------------

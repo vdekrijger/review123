@@ -1118,6 +1118,216 @@ describe('coach() — error mapping', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// coach() — batching across chunks (the ~30-comment robustness fix)
+// ---------------------------------------------------------------------------
+
+describe('coach() — batching', () => {
+  // Build N drafts; the coach must split them into ceil(N/chunk) LLM calls.
+  function manyDrafts(n: number): Draft[] {
+    return Array.from({ length: n }, (_, i) => ({
+      prKey: 'owner/repo#1@abc',
+      path: `src/f${i}.ts`,
+      line: i + 1,
+      side: 'RIGHT' as const,
+      body: `Comment ${i}`,
+      updatedAt: 0,
+    }))
+  }
+
+  // A mock that grades exactly the drafts present in THIS chunk's user payload,
+  // echoing each draft's original index — so the merge mapping is exercised.
+  function gradeChunkByPayload() {
+    return async (opts: unknown) => {
+      const user = (opts as { user: string }).user
+      const payload = JSON.parse(user) as { drafts: { index: number }[] }
+      return {
+        result: {
+          reviews: payload.drafts.map((d) => ({
+            index: d.index,
+            clarity: 3,
+            actionable: true,
+            tone: 'ok',
+            biasQuestion: null,
+            suggestion: null,
+            accuracy: 'consistent',
+            accuracyNote: null,
+            duplicate: false,
+          })),
+        },
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }
+    }
+  }
+
+  it('20 drafts → 3 chunks → 20 graded reviews in index order', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepairWithUsage.mockImplementation(gradeChunkByPayload())
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.coach(manyDrafts(20))
+
+    expect('error' in result).toBe(false)
+    // 7 + 7 + 6 = 20 → 3 LLM calls
+    expect(deps.llmJsonWithRepairWithUsage).toHaveBeenCalledTimes(3)
+    const reviews = (result as { reviews: { index: number }[] }).reviews
+    expect(reviews.map((r) => r.index)).toEqual(Array.from({ length: 20 }, (_, i) => i))
+  })
+
+  it('30 drafts are split — no single giant prompt; each chunk payload is bounded', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepairWithUsage.mockImplementation(gradeChunkByPayload())
+
+    const run = createAiRun(makeInput(), deps)
+    await run.coach(manyDrafts(30))
+
+    expect(deps.llmJsonWithRepairWithUsage.mock.calls.length).toBeGreaterThan(1)
+    for (const call of deps.llmJsonWithRepairWithUsage.mock.calls) {
+      const payload = JSON.parse((call[0] as { user: string }).user) as { drafts: unknown[] }
+      expect(payload.drafts.length).toBeLessThanOrEqual(7)
+    }
+  })
+
+  it('each chunk carries ONLY its own drafts code context (correct mapping)', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepairWithUsage.mockImplementation(gradeChunkByPayload())
+
+    const input = makeInput()
+    input.coachCodeContext = (drafts) =>
+      drafts.map((d, i) => ({
+        index: i,
+        path: d.path,
+        line: d.line,
+        side: d.side,
+        excerpt: `EXCERPT-${i}`,
+      }))
+
+    const run = createAiRun(input, deps)
+    await run.coach(manyDrafts(20))
+
+    // The first chunk (drafts 0–6) must carry EXCERPT-0 but NOT EXCERPT-19.
+    const firstUser = (deps.llmJsonWithRepairWithUsage.mock.calls[0][0] as { user: string }).user
+    expect(firstUser).toContain('EXCERPT-0')
+    expect(firstUser).not.toContain('EXCERPT-19')
+  })
+
+  it('verdict coherence is requested on the first chunk only', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepairWithUsage.mockImplementation(gradeChunkByPayload())
+
+    const run = createAiRun(makeInput(), deps)
+    await run.coach(manyDrafts(20), undefined, 'APPROVE')
+
+    const firstPayload = JSON.parse((deps.llmJsonWithRepairWithUsage.mock.calls[0][0] as { user: string }).user)
+    const secondPayload = JSON.parse((deps.llmJsonWithRepairWithUsage.mock.calls[1][0] as { user: string }).user)
+    expect(firstPayload.chosenVerdict).toBe('APPROVE')
+    expect('chosenVerdict' in secondPayload).toBe(false)
+  })
+
+  it('sums usage across all chunks into the outcome + totalUsage', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepairWithUsage.mockImplementation(gradeChunkByPayload())
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.coach(manyDrafts(20)) // 3 chunks × {1,1,2}
+
+    expect((result as { usage?: unknown }).usage).toEqual({
+      prompt_tokens: 3,
+      completion_tokens: 3,
+      total_tokens: 6,
+    })
+    expect(run.totalUsage).toEqual({ prompt_tokens: 3, completion_tokens: 3, total_tokens: 6 })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// coach() — partial failure (some chunks fail, others succeed)
+// ---------------------------------------------------------------------------
+
+describe('coach() — partial failure', () => {
+  function manyDrafts(n: number): Draft[] {
+    return Array.from({ length: n }, (_, i) => ({
+      prKey: 'owner/repo#1@abc',
+      path: `src/f${i}.ts`,
+      line: i + 1,
+      side: 'RIGHT' as const,
+      body: `Comment ${i}`,
+      updatedAt: 0,
+    }))
+  }
+
+  it('one chunk errors → other chunks returned + a notCoached note for the failed drafts', async () => {
+    const deps = makeDeps()
+    let call = 0
+    deps.llmJsonWithRepairWithUsage.mockImplementation(async (opts: unknown) => {
+      const payload = JSON.parse((opts as { user: string }).user) as { drafts: { index: number }[] }
+      call++
+      // Fail the SECOND chunk only.
+      if (call === 2) throw new LlmError('rate-limited', 'slow down')
+      return {
+        result: { reviews: payload.drafts.map((d) => ({
+          index: d.index, clarity: 3, actionable: true, tone: 'ok',
+          biasQuestion: null, suggestion: null, accuracy: 'consistent',
+          accuracyNote: null, duplicate: false,
+        })) },
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.coach(manyDrafts(20)) // chunks: [0-6],[7-13],[14-19]
+
+    expect('error' in result).toBe(false)
+    const r = result as { reviews: { index: number }[]; notCoached?: { indices: number[]; message: string } }
+    // Chunk 1 (0-6) and chunk 3 (14-19) succeeded → 13 reviews.
+    expect(r.reviews.map((x) => x.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 14, 15, 16, 17, 18, 19])
+    // The failed chunk's drafts (7-13) are accounted for — never silently dropped.
+    expect(r.notCoached).toBeDefined()
+    expect(r.notCoached!.indices).toEqual([7, 8, 9, 10, 11, 12, 13])
+    expect(r.notCoached!.message).toMatch(/Rate limited/)
+    expect(r.notCoached!.message).toMatch(/retry/i)
+  })
+
+  it('ALL chunks fail → error path (specific message, not the catch-all)', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepairWithUsage.mockRejectedValue(new LlmError('rate-limited', 'slow down'))
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.coach(manyDrafts(20))
+
+    expect('error' in result).toBe(true)
+    const err = (result as { error: string }).error
+    expect(err).toMatch(/Rate limited/)
+    expect(err).not.toMatch(/An unexpected error occurred/)
+  })
+
+  it('the failed-chunk indices map back to the right drafts (mapping integrity)', async () => {
+    const deps = makeDeps()
+    let call = 0
+    deps.llmJsonWithRepairWithUsage.mockImplementation(async (opts: unknown) => {
+      const payload = JSON.parse((opts as { user: string }).user) as { drafts: { index: number }[] }
+      call++
+      if (call === 1) throw new LlmError('network', 'down') // first chunk fails
+      return {
+        result: { reviews: payload.drafts.map((d) => ({
+          index: d.index, clarity: 3, actionable: true, tone: 'ok',
+          biasQuestion: null, suggestion: null, accuracy: 'consistent',
+          accuracyNote: null, duplicate: false,
+        })) },
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.coach(manyDrafts(20))
+
+    const r = result as { reviews: { index: number }[]; notCoached?: { indices: number[] } }
+    // First chunk = drafts 0-6 failed; 7-19 graded.
+    expect(r.notCoached!.indices).toEqual([0, 1, 2, 3, 4, 5, 6])
+    expect(r.reviews.map((x) => x.index)).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
+  })
+})
+
 describe('coach() — never touches cache', () => {
   it('coach does not call getCached or setCached', async () => {
     const deps = makeDeps()
@@ -1199,24 +1409,28 @@ describe('coach() — verdict and diff context threading (v9)', () => {
     expect('chosenVerdict' in lastCoachUserPrompt(deps)).toBe(false)
   })
 
-  it('packs the PR context and passes it as prContext (grounds accuracy/grounded)', async () => {
+  it('TRIMS the full prContext from the coach prompt — relies on per-comment code context', async () => {
+    // The full packed prContext was largely redundant with the per-comment
+    // excerpt + file window and bloated the prompt; batching dropped it so each
+    // chunk stays within model limits. The trimmed prompt must NOT carry it.
     const deps = makeDeps()
     deps.llmJsonWithRepair.mockResolvedValue(COACH_RESULT)
 
     const run = createAiRun(makeInput(), deps)
     await run.coach(DRAFT_FIXTURE)
 
-    expect(lastCoachUserPrompt(deps)['prContext']).toBe('some PR context')
+    expect('prContext' in lastCoachUserPrompt(deps)).toBe(false)
   })
 
-  it('still coaches when pack() fails — no prContext, no error', async () => {
+  it('does not pack the PR context for coaching (no pack() call)', async () => {
     const deps = makeDeps()
     deps.llmJsonWithRepair.mockResolvedValue(COACH_RESULT)
+    const pack = vi.fn(async () => PACKED_CTX)
 
-    const run = createAiRun(makeInput({ pack: async () => { throw new Error('pack broke') } }), deps)
-    const result = await run.coach(DRAFT_FIXTURE)
+    const run = createAiRun(makeInput({ pack }), deps)
+    await run.coach(DRAFT_FIXTURE)
 
-    expect('error' in result).toBe(false)
+    expect(pack).not.toHaveBeenCalled()
     expect('prContext' in lastCoachUserPrompt(deps)).toBe(false)
   })
 })

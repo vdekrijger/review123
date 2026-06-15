@@ -12,8 +12,12 @@ const EVENTS = {
   // PRIVACY DECISION (Plan G): 'deep' is a boolean mode flag and 'tool_calls'
   // is a count of verification tool invocations — neither carries file paths,
   // queries, or content. Added for deep-review cost/precision observability.
-  ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls'],
-  ai_task_failed: ['task', 'reason'],
+  // PRIVACY DECISION (coach batching): 'chunks' is the integer count of LLM
+  // calls a coach run split into, and 'partial' is a boolean (some chunks
+  // failed) — neither carries comment bodies, code, file paths, or counts of
+  // content. Added for coach-robustness observability only.
+  ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls', 'chunks', 'partial'],
+  ai_task_failed: ['task', 'reason', 'partial'],
   // PRIVACY DECISION (Plan J — per-task AI modes): fired when the user changes
   // a task's run mode in AI settings. Carries only 'task' (a stable task id like
   // 'diagrams') and 'mode' ('off' | 'standard' | 'deep') — both fixed enums,

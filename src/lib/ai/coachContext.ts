@@ -37,8 +37,13 @@ export interface CoachCodeContext {
   fileWindow?: string
 }
 
-/** Default count of drafts to attach code context for (token budget). */
-export const COACH_CONTEXT_MAX_DRAFTS = 20
+/**
+ * Default count of drafts to attach code context for. Raised well past typical
+ * review sizes now that the coach BATCHES drafts into bounded chunks (each chunk
+ * is its own LLM call carrying only its drafts' context) — prompt size is bounded
+ * by the chunk size, not by this cap, so it no longer needs to be small.
+ */
+export const COACH_CONTEXT_MAX_DRAFTS = 200
 /** Lines of file content above/below the commented line for fileWindow. */
 export const COACH_WINDOW_LINES = 40
 /** Hard cap on fileWindow characters (defensive against very long lines). */
