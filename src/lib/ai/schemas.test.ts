@@ -1385,12 +1385,30 @@ describe('appendCatchAllStep (Plan K — structural 100% coverage)', () => {
     expect([...union].sort()).toEqual([...pr].sort())
   })
 
-  it('treats a relatedTest-only file as UNPLACED (swept into the catch-all)', () => {
-    // src/a.test.ts only appears as a relatedTest, never a primary file → unplaced.
+  it('treats a relatedTest-shown file as COVERED (NOT swept into the catch-all)', () => {
+    // src/a.test.ts appears as a relatedTest snippet on the code step — it is
+    // already shown (once), so it must NOT be re-added as a catch-all primary.
+    // This is the #63208 repro shape: one code step + its inline test, no catch-all.
     const steps = [step(['src/a.ts'], 'a', ['src/a.test.ts'])]
     const out = appendCatchAllStep(steps, ['src/a.ts', 'src/a.test.ts'])
+    expect(out).toBe(steps)
+    expect(out).toHaveLength(1)
+  })
+
+  it('still sweeps a truly-unreferenced file even when other files are relatedTest-covered', () => {
+    // src/a.test.ts is covered (relatedTest), but src/c.ts is referenced nowhere
+    // → only src/c.ts is swept into the catch-all (completeness preserved).
+    const steps = [step(['src/a.ts'], 'a', ['src/a.test.ts'])]
+    const out = appendCatchAllStep(steps, ['src/a.ts', 'src/a.test.ts', 'src/c.ts'])
     expect(out).toHaveLength(2)
-    expect(out[1].files).toEqual(['src/a.test.ts'])
+    expect(out[1].files).toEqual(['src/c.ts'])
+    expect(out[1].caption).toBe('Other changes (1)')
+  })
+
+  it('matches relatedTest coverage by normalized path (./ and a/ prefixes collapse)', () => {
+    const steps = [step(['src/a.ts'], 'a', ['./src/a.test.ts'])]
+    const out = appendCatchAllStep(steps, ['src/a.ts', 'src/a.test.ts'])
+    expect(out).toBe(steps)
   })
 
   it('returns the steps unchanged when every changed file is already placed', () => {

@@ -182,15 +182,18 @@ test('story mode: walk slides, related tests, diagram highlight, and a draft per
   await expect(storyBtn).toBeVisible({ timeout: 15_000 })
   await expect(storyBtn).toHaveAttribute('aria-pressed', 'true')
 
-  // First step caption + counter. 3 steps: 2 placed + the Plan K catch-all
-  // (schema.test.ts is a relatedTest-only file, swept into "Other changes").
+  // First step caption + counter. 2 steps: schema.test.ts is shown as a
+  // relatedTest snippet on step 1 (covered, on screen once), so it is NOT swept
+  // into a duplicate "Other changes" catch-all (#63208) — no third step.
   await expect(page.getByText('The schema gains a provider column.')).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByText('1 of 3').first()).toBeVisible()
+  await expect(page.getByText('1 of 2').first()).toBeVisible()
 
-  // The step's diff renders + the related test file renders inline.
+  // The step's diff renders + the related test file renders inline (exactly once).
   await expect(page.locator('#file-src-db-schema-ts article.file-diff')).toBeVisible()
   await expect(page.getByText('Related tests — sense-check the change')).toBeVisible()
   await expect(page.locator('#file-src-db-schema-test-ts')).toBeVisible()
+  // No duplicate "Other changes" catch-all anywhere in the story.
+  await expect(page.getByText(/Other changes/)).toHaveCount(0)
 
   // The change-map highlights the current step's node (schema.ts).
   await expect(page.locator('.story-node-current')).toHaveCount(1, { timeout: 15_000 })
@@ -203,7 +206,7 @@ test('story mode: walk slides, related tests, diagram highlight, and a draft per
   // slide navigation (the draft store is not per-slide).
   await page.getByRole('button', { name: 'Next step' }).first().click()
   await expect(page.getByText('The card renders a provider badge.')).toBeVisible()
-  await expect(page.getByText('2 of 3').first()).toBeVisible()
+  await expect(page.getByText('2 of 2').first()).toBeVisible()
   await expect(page.getByText(/1 comment drafted/)).toBeVisible()
   await page.getByRole('button', { name: 'Previous step' }).first().click()
   await expect(page.getByText('The schema gains a provider column.')).toBeVisible()
@@ -251,9 +254,9 @@ test('story mode: a story with an unmappable path still renders the mappable ste
   // No fallback note; the ghost step is dropped and the first mappable step shows.
   await expect(page.getByText('The schema gains a provider column.')).toBeVisible({ timeout: 15_000 })
   await expect(page.getByText(/showing all files/)).toHaveCount(0)
-  // Two mappable steps survive (ghost dropped) + the Plan K catch-all for the
-  // relatedTest-only schema.test.ts → counter reads "1 of 3".
-  await expect(page.getByText('1 of 3').first()).toBeVisible()
+  // Two mappable steps survive (ghost dropped). schema.test.ts is a relatedTest
+  // on the schema step (covered) → no catch-all → counter reads "1 of 2".
+  await expect(page.getByText('1 of 2').first()).toBeVisible()
   await expect(page.getByText('A step for a file not in this PR.')).toHaveCount(0)
 })
 
@@ -411,11 +414,11 @@ test('story mode: a changed function with a named test shows the inline "tested 
 })
 
 // Plan K — coverage confidence. STORY_RESULT places schema.ts + Card.ts as
-// primaries; schema.test.ts is ONLY a relatedTest, so the deterministic catch-all
-// sweeps it into a final "Other changes" step → the walkthrough provably covers
-// all 3 changed files. We walk to the end and assert the progress readout,
-// catch-all, and the "you saw everything" reconciliation moment.
-test('story mode: coverage parity, catch-all, and end-of-story reconciliation', async ({ page }) => {
+// primaries; schema.test.ts is a relatedTest snippet on the schema step (covered,
+// shown once — NOT swept into a duplicate catch-all, #63208). The relatedTest
+// still counts toward coverage: step 1 marks BOTH schema.ts and schema.test.ts
+// seen → 2 of 3 on the first slide; step 2 (Card.ts, the last) reaches 3 of 3.
+test('story mode: coverage parity counts the related test, no duplicate catch-all', async ({ page }) => {
   await setupGithub(page)
 
   await page.route('**/api.deepseek.com/**', async (route) => {
@@ -439,17 +442,18 @@ test('story mode: coverage parity, catch-all, and end-of-story reconciliation', 
 
   await expect(page.getByText('The schema gains a provider column.')).toBeVisible({ timeout: 15_000 })
 
-  // 3 steps total: 2 placed + 1 catch-all (schema.test.ts swept in). Coverage
-  // readout shows 1 of 3 files seen on the first slide.
-  await expect(page.getByText('1 of 3').first()).toBeVisible()
-  await expect(page.getByText(/1 \/ 3 files seen/)).toBeVisible()
-
-  // Walk to the catch-all (last) step.
-  const next = page.getByRole('button', { name: 'Next step' }).first()
-  await next.click() // step 2: Card.ts
-  await next.click() // step 3: catch-all
-  await expect(page.getByText('Other changes (1)')).toBeVisible()
+  // 2 steps total (no duplicate catch-all). Step 1 shows schema.ts + the
+  // schema.test.ts relatedTest → BOTH marked seen → 2 of 3 on the first slide.
+  await expect(page.getByText('1 of 2').first()).toBeVisible()
+  await expect(page.getByText(/2 \/ 3 files seen/)).toBeVisible()
+  // The test is shown inline as a relatedTest, never duplicated as "Other changes".
   await expect(page.locator('#file-src-db-schema-test-ts')).toBeVisible()
+  await expect(page.getByText(/Other changes/)).toHaveCount(0)
+
+  // Walk to the last step (Card.ts) → all 3 unique changed files seen.
+  const next = page.getByRole('button', { name: 'Next step' }).first()
+  await next.click() // step 2: Card.ts (last)
+  await expect(page.getByText('The card renders a provider badge.')).toBeVisible()
 
   // All 3 unique changed files seen → the reconciliation "you saw everything".
   await expect(page.getByText(/3 \/ 3 files seen/)).toBeVisible()
@@ -485,21 +489,20 @@ test('story mode: reconciliation lists an unseen file and Jump navigates to it',
   await page.getByRole('button', { name: 'Next step' }).click()
   await expect(page.getByText('The schema gains a provider column.')).toBeVisible({ timeout: 15_000 })
 
-  // Walk to step 2 (Card.ts), then UN-VIEW it via the in-diff Viewed checkbox —
-  // modelling a reviewer who skimmed past a file. The auto-mark fires at most
-  // once per file, so the manual un-view STICKS (Files-mode semantics preserved).
+  // Walk to step 2 (Card.ts — the LAST step now, no catch-all), then UN-VIEW it
+  // via the in-diff Viewed checkbox — modelling a reviewer who skimmed past a
+  // file. The auto-mark fires at most once per file, so the manual un-view STICKS
+  // (Files-mode semantics preserved). schema.ts + schema.test.ts (the relatedTest)
+  // were both marked seen on step 1, leaving Card.ts as the only unseen file.
   const next = page.getByRole('button', { name: 'Next step' }).first()
-  await next.click() // step 2: Card.ts
+  await next.click() // step 2: Card.ts (last step)
   await expect(page.getByText('The card renders a provider badge.')).toBeVisible()
   const cardViewed = page.locator('#file-src-ui-Card-ts').getByRole('checkbox', { name: /Mark .* as viewed/i }).first()
   await expect(cardViewed).toBeChecked() // auto-marked viewed on arrival
   await cardViewed.uncheck()
 
-  // Advance to the catch-all (last) step. Card.ts stays unviewed.
-  await next.click() // step 3: catch-all (schema.test.ts)
-  await expect(page.getByText('Other changes (1)')).toBeVisible({ timeout: 10_000 })
-
-  // The reconciliation lists Card.ts as unviewed with a Jump affordance.
+  // On the last step with Card.ts unviewed → the reconciliation lists it with a
+  // Jump affordance (schema.ts + schema.test.ts already seen on step 1).
   await expect(page.getByText(/You haven't viewed 1 file yet/)).toBeVisible()
   const jump = page.getByRole('button', { name: 'Jump to src/ui/Card.ts' })
   await expect(jump).toBeVisible()
