@@ -39,6 +39,19 @@ export interface ExpectedFinding {
   description: string
 }
 
+/**
+ * A finding label in the capture-tool's expected.json `findings` array.
+ * `UNLABELED` means the user has not yet resolved the entry — the scorer SKIPS
+ * it (it counts toward neither real nor noise) so a half-labeled case never
+ * scores garbage.
+ */
+export type ExpectedLabel = 'real' | 'noise' | 'UNLABELED'
+
+/** A labeled entry in the capture-tool's expected.json `findings` array. */
+export interface LabeledFinding extends ExpectedFinding {
+  label: ExpectedLabel
+}
+
 /** Tuning knobs for the matcher. Defaults documented in DEFAULT_MATCH_CONFIG. */
 export interface MatchConfig {
   /** A produced finding matches an expectation if |Δline| ≤ this many lines. */
@@ -124,6 +137,40 @@ export interface CaseExpectation {
   real: ExpectedFinding[]
   /** Findings a good reviewer should NOT flag (style nits, moot, unchanged code). */
   noise: ExpectedFinding[]
+}
+
+/**
+ * The two shapes an expected.json may take:
+ * - legacy/hand-authored: `{ real: [...], noise: [...] }`
+ * - capture-tool: `{ findings: [{ ..., label: "real" | "noise" | "UNLABELED" }] }`
+ */
+export type RawExpectation =
+  | { real?: ExpectedFinding[]; noise?: ExpectedFinding[] }
+  | { findings: LabeledFinding[] }
+
+/**
+ * Normalize either expected.json shape into a `{ real, noise }` CaseExpectation.
+ *
+ * For the capture-tool's labeled `findings` array, `UNLABELED` entries are
+ * SKIPPED entirely — they count toward neither real nor noise, so a partially
+ * labeled case scores only on the entries the user has actually resolved (its
+ * recall/noise-rate stay meaningful instead of being polluted by unresolved
+ * findings).
+ */
+export function normalizeExpectation(raw: RawExpectation): CaseExpectation {
+  if ('findings' in raw && Array.isArray(raw.findings)) {
+    const real: ExpectedFinding[] = []
+    const noise: ExpectedFinding[] = []
+    for (const f of raw.findings) {
+      const entry: ExpectedFinding = { file: f.file, line: f.line, description: f.description }
+      if (f.label === 'real') real.push(entry)
+      else if (f.label === 'noise') noise.push(entry)
+      // 'UNLABELED' (or any unrecognized label) → skipped on purpose.
+    }
+    return { real, noise }
+  }
+  const legacy = raw as { real?: ExpectedFinding[]; noise?: ExpectedFinding[] }
+  return { real: legacy.real ?? [], noise: legacy.noise ?? [] }
 }
 
 export interface CaseScore {

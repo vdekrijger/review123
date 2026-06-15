@@ -1,0 +1,17 @@
+{
+  "name": "05-security",
+  "files": [
+    {
+      "path": "src/api/search.ts",
+      "patch": "@@ -1,12 +1,18 @@\n import { db } from './db'\n+import { escapeHtml } from './html'\n \n-export async function search(term: string) {\n-  return db.query('SELECT id, name FROM products WHERE name LIKE $1', ['%' + term + '%'])\n+export async function search(term: string, sort: string) {\n+  // Parameterized term is fine; but `sort` is concatenated straight in.\n+  const sql = `SELECT id, name FROM products WHERE name LIKE $1 ORDER BY ${sort}`\n+  return db.query(sql, ['%' + term + '%'])\n }\n \n+export function renderName(name: string): string {\n+  // Output is HTML-escaped before rendering — safe.\n+  return `<span>${escapeHtml(name)}</span>`\n+}",
+      "contentBefore": "import { db } from './db'\n\nexport async function search(term: string) {\n  return db.query('SELECT id, name FROM products WHERE name LIKE $1', ['%' + term + '%'])\n}\n",
+      "contentAfter": "import { db } from './db'\nimport { escapeHtml } from './html'\n\nexport async function search(term: string, sort: string) {\n  // Parameterized term is fine; but `sort` is concatenated straight in.\n  const sql = `SELECT id, name FROM products WHERE name LIKE $1 ORDER BY ${sort}`\n  return db.query(sql, ['%' + term + '%'])\n}\n\nexport function renderName(name: string): string {\n  // Output is HTML-escaped before rendering — safe.\n  return `<span>${escapeHtml(name)}</span>`\n}\n"
+    }
+  ],
+  "skills": [
+    {
+      "name": "security-reviewer",
+      "content": "You are a security reviewer. Flag REAL injection (SQL/command/path), broken authz, and leaked secrets introduced by the change. Do NOT flag patterns that are already safe: parameterized queries, output that is HTML-escaped, or constants that are not secrets."
+    }
+  ]
+}

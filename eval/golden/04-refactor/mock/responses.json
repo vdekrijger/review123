@@ -1,0 +1,31 @@
+{
+  "skill:refactor-reviewer": {
+    "skillName": "refactor-reviewer",
+    "findings": [
+      {
+        "path": "src/lib/report.ts",
+        "line": 7,
+        "severity": "high",
+        "body": "Behavior change: `sort()` lost its numeric comparator, so it now sorts lexicographically and reorders scores (e.g. 10 sorts before 2). Restore `(a, b) => a - b`."
+      }
+    ]
+  },
+  "attention": {
+    "readingOrder": ["src/lib/report.ts"],
+    "hotspots": [
+      {
+        "path": "src/lib/report.ts",
+        "level": "high",
+        "reason": "The refactor dropped the sort comparator, silently changing the result ordering."
+      }
+    ],
+    "testFlags": []
+  },
+  "verdict": {
+    "level": "significant-changes",
+    "evidence": [
+      "src/lib/report.ts: the extraction is equivalent, but sort() lost its numeric comparator, changing output ordering."
+    ],
+    "notAnalyzed": []
+  }
+}

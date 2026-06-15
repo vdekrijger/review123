@@ -90,6 +90,65 @@ It picks a provider from the environment, in priority order:
 
 Set `LLM_MODEL` to override the model for any provider.
 
+## Capturing a real PR as a golden case
+
+Hand-authoring fixtures is fine, but the fastest way to grow the set is to point
+the capture tool at a **real PR** and let it scaffold the case for you:
+
+```bash
+GITHUB_TOKEN=ghp_... DEEPSEEK_API_KEY=sk-... \
+  pnpm eval:capture https://github.com/owner/repo/pull/42 --name 07-my-case
+
+# owner/repo/number shorthand also works:
+GITHUB_TOKEN=ghp_... DEEPSEEK_API_KEY=sk-... \
+  pnpm eval:capture owner/repo/42 --name 07-my-case
+```
+
+What it does, in three steps:
+
+1. **Fetch** the PR via GitHub's REST API (the same meta + files/patches + full
+   after-contents the app's review path consumes) into `fixture.json`.
+2. **Run the REAL review tasks LIVE** (verdict + attention + a default
+   `bug-hunter`/security/perf skill persona) against the configured provider —
+   the **same** env keys and OpenAI-compatible call `pnpm eval -- --live` uses —
+   and records every finding the model produces. Those are written to
+   `mock/responses.json`, so the case is **replayable offline** under `--mock`.
+3. **Scaffold `expected.json`** pre-populated with every AI finding under a
+   `findings` array, each `{ file, line, description, label: "UNLABELED" }`.
+
+> **UNLABELED is the load-bearing part.** A freshly captured case is **not yet
+> labeled** — every finding starts `"label": "UNLABELED"`, and the scorer
+> **SKIPS** UNLABELED entries entirely (they count toward neither *real* nor
+> *noise*). So a half-labeled case never scores garbage. You finish the case by
+> editing each label:
+>
+> - `"real"` — a genuine defect a reviewer SHOULD flag.
+> - `"noise"` — tempting-but-moot; a reviewer should NOT flag it.
+> - leave `"UNLABELED"` — ignored until you resolve it.
+>
+> You can also **add real findings the AI MISSED** (with `"label": "real"`) — the
+> mock won't surface them, so they show up as a recall miss under `--live`, which
+> is exactly what you want to measure.
+
+Then:
+
+```bash
+# Replay offline against the captured model output (deterministic):
+pnpm eval -- --case 07-my-case
+# Measure how the real model scores on your labeled case:
+DEEPSEEK_API_KEY=sk-... pnpm eval -- --case 07-my-case --live
+```
+
+The capture tool fails **honestly**: no `GITHUB_TOKEN` → clear message; PR fetch
+failure → clear; no provider key (`DEEPSEEK_API_KEY` / `OPENAI_API_KEY` /
+`LLM_API_KEY`) → clear; an existing `eval/golden/<slug>/` → it refuses to
+overwrite. The scaffolding logic (PR + findings → the three file shapes, and the
+UNLABELED contract) lives in `src/lib/eval/capture.ts` and is unit-tested.
+
+Captured cases use the labeled `{ findings: [...] }` form of `expected.json`;
+hand-authored cases use the `{ real, noise }` form. The scorer accepts **both**
+(see `normalizeExpectation` in `scorer.ts`).
+
 ## Metrics
 
 Every review task's output is reduced to a flat list of findings
@@ -145,6 +204,9 @@ plus the reviewer `skills` (persona content) to review with.
 ### `expected.json`
 
 The hand labels. `line` is 1-based, or `null` for a file-level expectation.
+**Two accepted shapes** (the scorer normalizes both — `normalizeExpectation`):
+
+**(a) hand-authored `{ real, noise }`** — what the seed cases use:
 
 ```jsonc
 {
@@ -155,6 +217,23 @@ The hand labels. `line` is 1-based, or `null` for a file-level expectation.
   "noise": [  // things a reviewer should NOT flag (style nits, moot, unchanged code)
     { "file": "src/lib/paginate.ts", "line": 2,
       "description": "comment style: prefer a doc comment over an inline comment" }
+  ]
+}
+```
+
+**(b) labeled `{ findings: [...] }`** — what `pnpm eval:capture` scaffolds. Each
+entry carries a `label`; `UNLABELED` entries are **SKIPPED** by the scorer until
+you resolve them to `"real"` or `"noise"`:
+
+```jsonc
+{
+  "findings": [
+    { "file": "src/api/search.ts", "line": 6,
+      "description": "SQL injection via ORDER BY interpolation", "label": "real" },
+    { "file": "src/api/search.ts", "line": 7,
+      "description": "the LIKE term is parameterized — safe", "label": "noise" },
+    { "file": "src/api/search.ts", "line": 12,
+      "description": "not yet reviewed", "label": "UNLABELED" }   // ignored by the scorer
   ]
 }
 ```
@@ -184,12 +263,18 @@ mock metrics demonstrate the scoring end to end.
 
 ## Growing the golden set
 
-1. **Pick a real-ish PR** that exercises a behavior you care about. The three seed
-   cases cover the archetypes: a real bug that **should** be caught
-   (`01-real-bug`), a clean refactor that should produce **~no** findings
-   (`02-clean-pr`), and a noise-trap with tempting-but-moot things that should
-   **not** be flagged (`03-noise-trap`).
-2. `mkdir eval/golden/04-your-case/` and add `fixture.json` + `expected.json`.
+0. **Easiest path:** `pnpm eval:capture <pr> --name <slug>` (see *Capturing a real
+   PR as a golden case* above), then label the scaffolded `expected.json`.
+1. **Or hand-author.** Pick a real-ish PR that exercises a behavior you care
+   about. The six seed cases cover the archetypes: a real bug that **should** be
+   caught (`01-real-bug`), a clean refactor that should produce **~no** findings
+   (`02-clean-pr`), a noise-trap with tempting-but-moot things that should **not**
+   be flagged (`03-noise-trap`), a behavior-preserving refactor that hides one
+   genuine behavior change among equivalent rewrites (`04-refactor`), a real
+   injection alongside a tempting-but-safe parameterized/escaped pattern
+   (`05-security`), and a real N+1 alongside a noise micro-optimization
+   (`06-perf`).
+2. `mkdir eval/golden/07-your-case/` and add `fixture.json` + `expected.json`.
    Keep fixtures **small** — a focused hunk beats a giant diff.
 3. Label honestly: KNOWN-REAL = genuine defects a reviewer should catch;
    KNOWN-NOISE = the things a *fatigued* reviewer over-flags (style, pre-existing

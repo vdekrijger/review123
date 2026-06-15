@@ -14,7 +14,8 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
-    "eval": "node eval/run-eval.mts"
+    "eval": "node eval/run-eval.mts",
+    "eval:capture": "node eval/capture-case.mts"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",

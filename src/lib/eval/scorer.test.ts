@@ -17,6 +17,7 @@ import {
   descOverlap,
   isMatch,
   scoreCase,
+  normalizeExpectation,
   aggregate,
   evaluateGates,
   pct,
@@ -294,5 +295,68 @@ describe('pct', () => {
     expect(pct(0.5)).toBe('50%')
     expect(pct(1)).toBe('100%')
     expect(pct(0)).toBe('0%')
+  })
+})
+
+describe('normalizeExpectation', () => {
+  it('passes through the legacy { real, noise } shape', () => {
+    const norm = normalizeExpectation({
+      real: [{ file: 'a.ts', line: 1, description: 'real bug' }],
+      noise: [{ file: 'a.ts', line: 2, description: 'style nit' }],
+    })
+    expect(norm.real).toHaveLength(1)
+    expect(norm.noise).toHaveLength(1)
+  })
+
+  it('defaults missing legacy arrays to empty', () => {
+    const norm = normalizeExpectation({})
+    expect(norm.real).toEqual([])
+    expect(norm.noise).toEqual([])
+  })
+
+  it('splits a labeled findings array into real and noise', () => {
+    const norm = normalizeExpectation({
+      findings: [
+        { file: 'a.ts', line: 1, description: 'real bug', label: 'real' },
+        { file: 'a.ts', line: 2, description: 'style nit', label: 'noise' },
+      ],
+    })
+    expect(norm.real.map((r) => r.description)).toEqual(['real bug'])
+    expect(norm.noise.map((n) => n.description)).toEqual(['style nit'])
+  })
+
+  it('SKIPS UNLABELED entries so a half-labeled case does not score garbage', () => {
+    const norm = normalizeExpectation({
+      findings: [
+        { file: 'a.ts', line: 1, description: 'resolved real', label: 'real' },
+        { file: 'a.ts', line: 2, description: 'not yet resolved', label: 'UNLABELED' },
+        { file: 'a.ts', line: 3, description: 'resolved noise', label: 'noise' },
+      ],
+    })
+    expect(norm.real).toHaveLength(1)
+    expect(norm.noise).toHaveLength(1)
+    // The UNLABELED entry appears in neither bucket.
+    const all = [...norm.real, ...norm.noise].map((e) => e.description)
+    expect(all).not.toContain('not yet resolved')
+  })
+
+  it('scoreCase ignores UNLABELED entries end to end', () => {
+    const expectation = normalizeExpectation({
+      findings: [
+        { file: 'f.ts', line: 5, description: 'genuine off-by-one bug', label: 'real' },
+        { file: 'f.ts', line: 9, description: 'unresolved entry to ignore', label: 'UNLABELED' },
+      ],
+    })
+    // Produce a finding that matches the UNLABELED entry's line+text. Because it
+    // is skipped, this counts as unmatched (lowers precision) but is NOT noise.
+    const score = scoreCase(
+      'unlabeled',
+      [{ file: 'f.ts', line: 9, description: 'unresolved entry to ignore' }],
+      expectation,
+    )
+    expect(score.realTotal).toBe(1)
+    expect(score.noiseTotal).toBe(0)
+    expect(score.noiseFlagged).toBe(0)
+    expect(score.unmatched).toBe(1)
   })
 })

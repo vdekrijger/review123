@@ -1,0 +1,17 @@
+{
+  "name": "04-refactor",
+  "files": [
+    {
+      "path": "src/lib/report.ts",
+      "patch": "@@ -1,16 +1,18 @@\n-export function summarize(scores: number[]): string {\n-  const sorted = [...scores].sort((a, b) => a - b)\n-  const lines: string[] = []\n-  for (let i = 0; i < sorted.length; i++) {\n-    lines.push('#' + (i + 1) + ': ' + sorted[i].toFixed(2))\n-  }\n-  return lines.join('\\n')\n+function formatLine(rank: number, score: number): string {\n+  return `#${rank}: ${score.toFixed(2)}`\n+}\n+\n+export function summarize(scores: number[]): string {\n+  // Refactor: extract formatLine + use map. NOTE: comparator dropped here.\n+  const sorted = [...scores].sort()\n+  return sorted.map((score, i) => formatLine(i + 1, score)).join('\\n')\n }",
+      "contentBefore": "export function summarize(scores: number[]): string {\n  const sorted = [...scores].sort((a, b) => a - b)\n  const lines: string[] = []\n  for (let i = 0; i < sorted.length; i++) {\n    lines.push('#' + (i + 1) + ': ' + sorted[i].toFixed(2))\n  }\n  return lines.join('\\n')\n}\n",
+      "contentAfter": "function formatLine(rank: number, score: number): string {\n  return `#${rank}: ${score.toFixed(2)}`\n}\n\nexport function summarize(scores: number[]): string {\n  // Refactor: extract formatLine + use map. NOTE: comparator dropped here.\n  const sorted = [...scores].sort()\n  return sorted.map((score, i) => formatLine(i + 1, score)).join('\\n')\n}\n"
+    }
+  ],
+  "skills": [
+    {
+      "name": "refactor-reviewer",
+      "content": "You are reviewing a refactor that should PRESERVE behavior. Flag ONLY changes that actually alter observable behavior (different output, ordering, types, or error paths). Do NOT flag equivalent rewrites: loop-to-map, string concat to template literal, or an extracted helper that produces identical output. Be precise about whether behavior truly changed."
+    }
+  ]
+}
