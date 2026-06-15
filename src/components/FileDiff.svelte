@@ -151,6 +151,46 @@
   }
 
   /**
+   * Read the SOURCE line numbers (old + new) for a content cell's row. Used to
+   * detect contiguous runs vs collapsed-context / hunk-boundary gaps: within a
+   * single hunk the source numbers increment by 1 row-to-row; across a hunk
+   * header or a collapsed (expandable) region they JUMP. That jump is exactly
+   * where a multi-line import span must reset (its closing delimiter may live in
+   * the hidden gap), so it cannot leak its dimming onto the next hunk's code.
+   *
+   * The @git-diff-view DOM exposes them per row:
+   *  - unified:  spans `[data-line-old-num]` / `[data-line-new-num]` (a deletion
+   *              row carries only old, an addition row only new, context both).
+   *  - split:    the sibling num cell carries a single `[data-line-num]`; we read
+   *              it as the side matching this content column (old-content → old,
+   *              new-content → new), so each column is independently monotonic.
+   * Returns 0 for an absent side. `data-line` (the rendered index) is NOT used:
+   * it re-indexes contiguously across hunk gaps, so it cannot see the boundary.
+   */
+  function cellRowNums(cell: Element): { old: number; new: number } {
+    const row = cell.closest('tr')
+    if (!row) return { old: 0, new: 0 }
+    const parse = (raw: string | null | undefined): number => {
+      if (raw == null) return 0
+      const n = parseInt(raw.trim(), 10)
+      return Number.isFinite(n) && n > 0 ? n : 0
+    }
+    if (cell.classList.contains('diff-line-old-content')) {
+      const v = parse(row.querySelector('td.diff-line-old-num [data-line-num]')?.getAttribute('data-line-num'))
+      return { old: v, new: 0 }
+    }
+    if (cell.classList.contains('diff-line-new-content')) {
+      const v = parse(row.querySelector('td.diff-line-new-num [data-line-num]')?.getAttribute('data-line-num'))
+      return { old: 0, new: v }
+    }
+    // Unified single column: both sides may be present.
+    return {
+      old: parse(row.querySelector('[data-line-old-num]')?.getAttribute('data-line-old-num')),
+      new: parse(row.querySelector('[data-line-new-num]')?.getAttribute('data-line-new-num')),
+    }
+  }
+
+  /**
    * Decorate a single COLUMN of content cells. Cells are collected in document
    * order, their source text run through the SPAN-AWARE classifier (so a
    * multi-line import dims its continuation + closing lines, not just the
@@ -171,7 +211,40 @@
       }
       return
     }
-    const kinds = classifyNoiseLines(cells.map(cellText), noiseLang)
+    // Boundary detection (the import-span runaway fix). querySelectorAll
+    // collects content cells across ALL hunks into one flat array, but those
+    // rows are NOT a contiguous slice of the source file: collapsed-context
+    // regions and hunk boundaries omit lines. Feeding them to the span-aware
+    // classifier as one sequence lets a multi-line import whose closing
+    // delimiter sits in a hidden gap leak its 'import' span onto a LATER hunk's
+    // real code. We therefore mark every index where this column's source line
+    // number is NOT exactly one past the previous rendered row (a gap, a reset,
+    // or an unreadable number) as a BOUNDARY, and the classifier resets any open
+    // span there. Within a contiguous run, balance is meaningful and multi-line
+    // imports still fully dim.
+    // Detect hunk / collapsed-context gaps via the source numbers. Within one
+    // hunk the rendered rows advance one source line at a time, but a deletion
+    // reports only an OLD number and an addition only a NEW one (context reports
+    // both). So we CARRY FORWARD the last-seen old and new and flag a boundary
+    // only when a row's reported side SKIPS AHEAD past carried+1 — that skip is a
+    // collapsed region or a new hunk. A del→add pair (old 2 / new 2 in the same
+    // hunk) is NOT a boundary: neither carried side skips. The first row never
+    // is. Rows with no readable number start a fresh run (carried stays 0 → a
+    // later real number > 1 is treated as a skip only if carried was set).
+    const boundaries = new Set<number>()
+    let carryOld = 0
+    let carryNew = 0
+    for (let i = 0; i < cells.length; i++) {
+      const cur = cellRowNums(cells[i])
+      if (i > 0) {
+        const oldSkips = carryOld > 0 && cur.old > 0 && cur.old > carryOld + 1
+        const newSkips = carryNew > 0 && cur.new > 0 && cur.new > carryNew + 1
+        if (oldSkips || newSkips) boundaries.add(i)
+      }
+      if (cur.old > 0) carryOld = cur.old
+      if (cur.new > 0) carryNew = cur.new
+    }
+    const kinds = classifyNoiseLines(cells.map(cellText), noiseLang, boundaries)
     for (let i = 0; i < cells.length; i++) {
       cells[i].classList.toggle('dimmed-noise', dimsKind(kinds[i]))
     }

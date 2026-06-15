@@ -263,6 +263,38 @@ function hasBlockComments(lang: CodeLang): boolean {
   return BLOCK_COMMENT_LANGS.has(lang)
 }
 
+// A line that clearly STARTS a new top-level statement and therefore cannot be
+// the continuation/body of a multi-line import list. Used as a DEFENSIVE bound:
+// if an import paren/brace span never closed (because its closing delimiter sits
+// in a hidden/collapsed diff region, or the heuristic mis-balanced), it must NOT
+// keep marking arbitrary code as 'import'. Conservative ethos: we'd rather leave
+// an unterminated import bright than dim a real `def`/`class`/`function` line.
+//
+// We match the common block-opening keywords across the languages that use
+// paren/brace import spans (Python `def`/`class`/`async def`; JS/TS
+// `function`/`class`/`export`/`const`/`let`/`var`/`return`/`if`/`for`/`while`;
+// Rust `fn`/`pub fn`/`struct`/`impl`/`enum`; Go `func`/`type`/`var`/`const`).
+// All are line-LEADING (after optional indentation) to stay conservative.
+const RE_STATEMENT_BREAKS_IMPORT =
+  /^\s*(?:async\s+)?(?:export\s+)?(?:default\s+)?(?:pub\s+)?(?:def|class|function|func|fn|struct|impl|enum|trait|interface|type|return|if|for|while|switch|match|const|let|var)\b/
+
+/**
+ * Is `text` a plausible CONTINUATION/body line of a multi-line import list?
+ * Import bodies are import names, dotted paths, commas, parens/braces, `as`
+ * aliases, trailing `from`, quoted package strings, and blank lines. A line that
+ * opens a new top-level statement (a `def`/`class`/`function`/… — see
+ * RE_STATEMENT_BREAKS_IMPORT) is NOT, and forces the span to close defensively.
+ *
+ * This is the guard that stops an unclosed span (closing `)` hidden in collapsed
+ * context) from leaking onto a later hunk's real code.
+ */
+function isImportContinuationLine(text: string): boolean {
+  if (text.trim() === '') return true // blank lines inside a list are fine
+  // A line that begins a new top-level statement ends the import body.
+  if (RE_STATEMENT_BREAKS_IMPORT.test(text)) return false
+  return true
+}
+
 /**
  * Detect a multi-line IMPORT span OPENING on `text` for `lang`. Returns the new
  * span state when the line opens a span that does NOT close on the same line, or
@@ -331,8 +363,19 @@ function openImportSpan(text: string, lang: CodeLang): SpanState | null {
  *
  * @param lines raw source text per line, WITHOUT diff markers, in document order
  * @param lang  language derived from the filename, or null when unknown
+ * @param boundaries optional set of line indices at which any OPEN multi-line
+ *   span (import / block comment) is forcibly RESET *before* the line is
+ *   classified. Callers pass the indices where the rendered lines are NOT
+ *   contiguous in the real source (a hunk header, an expander/collapsed-context
+ *   gap). Paren/brace balance across a hidden gap is meaningless, so a span must
+ *   never carry across one — otherwise an import opened in one hunk would keep
+ *   dimming code in the next. Indices outside [0, lines.length) are ignored.
  */
-export function classifyNoiseLines(lines: string[], lang: CodeLang | null): (NoiseKind | null)[] {
+export function classifyNoiseLines(
+  lines: string[],
+  lang: CodeLang | null,
+  boundaries?: ReadonlySet<number>,
+): (NoiseKind | null)[] {
   const out: (NoiseKind | null)[] = new Array(lines.length).fill(null)
   if (lang === null) return out
 
@@ -341,16 +384,29 @@ export function classifyNoiseLines(lines: string[], lang: CodeLang | null): (Noi
   for (let i = 0; i < lines.length; i++) {
     const text = lines[i]
 
+    // --- Boundary reset: a discontinuity in the rendered lines (hunk header /
+    // collapsed-context gap) means any open span's delimiter may be hidden and
+    // can never be matched here. Drop the span so it cannot leak across the gap.
+    if (boundaries?.has(i)) span = { kind: 'none' }
+
     // --- Continue an OPEN span ------------------------------------------------
     if (span.kind === 'js-brace-import') {
-      out[i] = 'import'
-      span.depth += braceDelta(text)
-      if (span.depth <= 0) {
-        // If the closing line carries no `from`, a lone `from '…'` may follow on
-        // the next line (e.g. `}` newline `from './m'`).
-        span = /\bfrom\b/.test(stripStringLiterals(text)) ? { kind: 'none' } : { kind: 'js-expect-from' }
+      // Defensive bound: if this line clearly opens a new top-level statement,
+      // the import body must have ended (its `}` was hidden / mis-balanced).
+      // Reset and re-classify the line fresh rather than dimming real code.
+      if (!isImportContinuationLine(text)) {
+        span = { kind: 'none' }
+        // fall through to classify this line normally below
+      } else {
+        out[i] = 'import'
+        span.depth += braceDelta(text)
+        if (span.depth <= 0) {
+          // If the closing line carries no `from`, a lone `from '…'` may follow on
+          // the next line (e.g. `}` newline `from './m'`).
+          span = /\bfrom\b/.test(stripStringLiterals(text)) ? { kind: 'none' } : { kind: 'js-expect-from' }
+        }
+        continue
       }
-      continue
     }
     if (span.kind === 'js-expect-from') {
       // Only the immediately-following `from …` line is absorbed; anything else
@@ -364,16 +420,32 @@ export function classifyNoiseLines(lines: string[], lang: CodeLang | null): (Noi
       // fall through to classify this line normally
     }
     if (span.kind === 'paren-import') {
-      out[i] = 'import'
-      span.depth += parenDelta(text)
-      if (span.depth <= 0) span = { kind: 'none' }
-      continue
+      // Defensive bound (the import-runaway fix): a `from x import (` whose
+      // closing `)` is hidden in collapsed context would otherwise mark every
+      // subsequent line 'import'. If this line opens a new top-level statement
+      // (a `def`/`class`/…), the import body has ended — reset and re-classify.
+      if (!isImportContinuationLine(text)) {
+        span = { kind: 'none' }
+        // fall through to classify this line normally below
+      } else {
+        out[i] = 'import'
+        span.depth += parenDelta(text)
+        if (span.depth <= 0) span = { kind: 'none' }
+        continue
+      }
     }
     if (span.kind === 'py-backslash-import') {
-      out[i] = 'import'
-      // Span continues while THIS line also ends with a backslash.
-      if (!/\\\s*$/.test(stripStringLiterals(text))) span = { kind: 'none' }
-      continue
+      // Same defensive bound: a backslash-continued import that lost its
+      // continuation (hidden line) must not absorb a following statement.
+      if (!isImportContinuationLine(text)) {
+        span = { kind: 'none' }
+        // fall through to classify this line normally below
+      } else {
+        out[i] = 'import'
+        // Span continues while THIS line also ends with a backslash.
+        if (!/\\\s*$/.test(stripStringLiterals(text))) span = { kind: 'none' }
+        continue
+      }
     }
     if (span.kind === 'block-comment') {
       out[i] = 'comment'

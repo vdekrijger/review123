@@ -146,6 +146,82 @@ describe('FileDiff — focus mode dimming', () => {
     })
   }
 
+  // ── Import-span runaway across a collapsed-context / hunk boundary ──────────
+  // The reported bug: a multi-line Python `from x import (` whose closing `)`
+  // sits in COLLAPSED (unrendered) context opens a paren-import span that, before
+  // the fix, kept marking every subsequent rendered row 'import' — including a
+  // LATER hunk's `def …` and its body. With the fix the span resets at the
+  // hunk-boundary line-number discontinuity, so the def + body stay bright.
+  //
+  // Two hunks far apart in the file. Hunk 1's last added line is the import
+  // opener (its names + `)` are in the gap between hunks → never rendered).
+  // Hunk 2 adds `def get_integrations(team):`. The def + later context must NOT
+  // be dimmed; the rendered import opener still is.
+  const RUNAWAY_PATCH = [
+    '@@ -1,3 +1,4 @@',
+    ' line_1',
+    ' line_2',
+    '+from posthog.models.integration import (',
+    ' line_3',
+    '@@ -30,3 +31,4 @@',
+    ' line_30',
+    '+def get_integrations(team):',
+    ' line_31',
+    ' line_32',
+  ].join('\n')
+
+  function makeRunawayFile(filename = 'src/integrations.py'): PrFile {
+    return { filename, status: 'modified', additions: 2, deletions: 0, patch: RUNAWAY_PATCH }
+  }
+
+  for (const mode of ['unified', 'split'] as const) {
+    it(`[${mode}] unclosed import in collapsed context does NOT dim a later hunk's def`, async () => {
+      setFocusMode('imports')
+      _resetSettingsStateForTest()
+      const { container } = render(FileDiff, { props: { file: makeRunawayFile(), mode } })
+      await settle()
+      const texts = dimmedRowTexts(container)
+      // The rendered import opener IS dimmed.
+      expect(texts.some((t) => t.includes('from posthog.models.integration import'))).toBe(true)
+      // The later hunk's def and its surrounding context are NOT dimmed.
+      expect(texts.some((t) => t.includes('def get_integrations'))).toBe(false)
+      expect(texts.some((t) => t.includes('line_30'))).toBe(false)
+      expect(texts.some((t) => t.includes('line_31'))).toBe(false)
+      expect(texts.some((t) => t.includes('line_32'))).toBe(false)
+    })
+  }
+
+  // Defensive guard WITHIN a single contiguous run: even with no hunk boundary,
+  // an unclosed `from x import (` immediately followed by a `def` must not dim
+  // the def (the statement-break guard closes the span).
+  const GUARD_PATCH = [
+    '@@ -1,1 +1,5 @@',
+    ' anchor = 0',
+    '+from posthog.models.integration import (',
+    '+    Integration,',
+    '+def get_integrations(team):',
+    '+    return Integration',
+  ].join('\n')
+
+  function makeGuardFile(filename = 'src/guard.py'): PrFile {
+    return { filename, status: 'modified', additions: 4, deletions: 0, patch: GUARD_PATCH }
+  }
+
+  for (const mode of ['unified', 'split'] as const) {
+    it(`[${mode}] defensive guard: unclosed import does not dim a following def in the same run`, async () => {
+      setFocusMode('imports')
+      _resetSettingsStateForTest()
+      const { container } = render(FileDiff, { props: { file: makeGuardFile(), mode } })
+      await settle()
+      const texts = dimmedRowTexts(container)
+      expect(texts.some((t) => t.includes('from posthog.models.integration import'))).toBe(true)
+      expect(texts.some((t) => t.includes('Integration,'))).toBe(true)
+      // The def and its body stay bright — the runaway is bounded.
+      expect(texts.some((t) => t.includes('def get_integrations'))).toBe(false)
+      expect(texts.some((t) => t.includes('return Integration'))).toBe(false)
+    })
+  }
+
   it('unknown extension dims nothing even with focus on', async () => {
     setFocusMode('imports-comments')
     _resetSettingsStateForTest()
