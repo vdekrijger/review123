@@ -9,7 +9,8 @@
  * EC-CT-06: relative time utility — "3h ago", "2d ago", "just now"
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/svelte'
+import { render, screen, within, fireEvent } from '@testing-library/svelte'
+import { tick } from 'svelte'
 import CommentThread from './CommentThread.svelte'
 import type { PrComment } from '../lib/github/comments'
 
@@ -252,5 +253,132 @@ describe('CommentThread — comment body prose styling (EC-CT-07)', () => {
     expect(item).toBeInTheDocument()
     // Must NOT use class that implies a solid navy/filled background
     expect(item!.classList.contains('filled-block')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// EC-CT-08: per-comment menu (Copy link + Quote reply)
+// ---------------------------------------------------------------------------
+
+describe('CommentThread — per-comment menu (EC-CT-08)', () => {
+  let writeText: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+  })
+
+  function openMenu(container: HTMLElement) {
+    const trigger = container.querySelector(
+      'button[aria-label="Comment actions"]',
+    ) as HTMLButtonElement
+    expect(trigger).toBeInTheDocument()
+    return trigger
+  }
+
+  it('renders a kebab menu button with aria-haspopup and aria-label', () => {
+    const { container } = render(CommentThread, {
+      props: { comments: [makeComment({ url: 'https://x/c/1' })] },
+    })
+    const trigger = openMenu(container)
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu')
+    expect(trigger.getAttribute('aria-label')).toBe('Comment actions')
+  })
+
+  it('opens an accessible role=menu on click and sets aria-expanded', async () => {
+    const { container } = render(CommentThread, {
+      props: { comments: [makeComment({ url: 'https://x/c/1' })] },
+    })
+    const trigger = openMenu(container)
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    await fireEvent.click(trigger)
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(container.querySelector('[role="menu"]')).toBeInTheDocument()
+  })
+
+  it('"Copy link to comment" copies comment.url and shows a transient confirmation', async () => {
+    const { container } = render(CommentThread, {
+      props: { comments: [makeComment({ url: 'https://github.com/o/r/pull/1#discussion_r9' })] },
+    })
+    await fireEvent.click(openMenu(container))
+    const copyItem = screen.getByRole('menuitem', { name: /copy link to comment/i })
+    await fireEvent.click(copyItem)
+    expect(writeText).toHaveBeenCalledWith('https://github.com/o/r/pull/1#discussion_r9')
+    await tick()
+    // transient confirmation, aria-live
+    const confirm = container.querySelector('[aria-live]')
+    expect(confirm).toBeInTheDocument()
+    expect(confirm!.textContent).toMatch(/copied/i)
+  })
+
+  it('omits "Copy link to comment" when comment.url is absent', async () => {
+    const { container } = render(CommentThread, {
+      props: { comments: [makeComment({ url: undefined })] },
+    })
+    await fireEvent.click(openMenu(container))
+    expect(screen.queryByRole('menuitem', { name: /copy link to comment/i })).not.toBeInTheDocument()
+    // Quote reply still available
+    expect(screen.getByRole('menuitem', { name: /quote reply/i })).toBeInTheDocument()
+  })
+
+  it('"Quote reply" copies the body as a markdown quote with an attribution line', async () => {
+    const { container } = render(CommentThread, {
+      props: {
+        comments: [
+          makeComment({ author: 'alice', body: 'first line\nsecond line', url: undefined }),
+        ],
+      },
+    })
+    await fireEvent.click(openMenu(container))
+    const quoteItem = screen.getByRole('menuitem', { name: /quote reply/i })
+    await fireEvent.click(quoteItem)
+    expect(writeText).toHaveBeenCalledTimes(1)
+    const copied = writeText.mock.calls[0][0] as string
+    expect(copied).toContain('> @alice wrote:')
+    expect(copied).toContain('> first line')
+    expect(copied).toContain('> second line')
+  })
+
+  it('closes the menu on Escape', async () => {
+    const { container } = render(CommentThread, {
+      props: { comments: [makeComment({ url: 'https://x/c/1' })] },
+    })
+    const trigger = openMenu(container)
+    await fireEvent.click(trigger)
+    expect(container.querySelector('[role="menu"]')).toBeInTheDocument()
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    await tick()
+    expect(container.querySelector('[role="menu"]')).not.toBeInTheDocument()
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('closes the menu on outside click', async () => {
+    const { container } = render(CommentThread, {
+      props: { comments: [makeComment({ url: 'https://x/c/1' })] },
+    })
+    const trigger = openMenu(container)
+    await fireEvent.click(trigger)
+    expect(container.querySelector('[role="menu"]')).toBeInTheDocument()
+    await fireEvent.click(document.body)
+    await tick()
+    expect(container.querySelector('[role="menu"]')).not.toBeInTheDocument()
+  })
+
+  it('each comment in a thread gets its own menu', () => {
+    const top = makeComment({ id: 1, author: 'alice', url: 'https://x/c/1' })
+    const reply = makeComment({ id: 2, author: 'bob', inReplyTo: 1, url: 'https://x/c/2' })
+    const { container } = render(CommentThread, { props: { comments: [top, reply] } })
+    const triggers = container.querySelectorAll('button[aria-label="Comment actions"]')
+    expect(triggers).toHaveLength(2)
+  })
+
+  it('menu uses within() scoping — quote works alongside copy when url present', async () => {
+    const { container } = render(CommentThread, {
+      props: { comments: [makeComment({ author: 'carol', body: 'hi', url: 'https://x/c/5' })] },
+    })
+    await fireEvent.click(openMenu(container))
+    const menu = container.querySelector('[role="menu"]') as HTMLElement
+    expect(within(menu).getByRole('menuitem', { name: /copy link to comment/i })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: /quote reply/i })).toBeInTheDocument()
   })
 })

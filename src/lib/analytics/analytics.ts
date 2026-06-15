@@ -30,6 +30,11 @@ const EVENTS = {
   // PRIVACY DECISION: 'ok' is a boolean outcome only — no body content,
   // thread ids, or repo identifiers are ever sent.
   reply_posted: ['ok'],
+  // PRIVACY DECISION: fired when a reviewer copies a permalink to an existing
+  // comment via the per-comment menu. Carries NOTHING — no URL, comment id,
+  // body, author, repo, or PR identifier. It is a pure interaction counter
+  // ("did anyone use copy-link?"), ids-only being the empty set here.
+  comment_link_copied: [],
   review_submitted: ['verdict', 'comment_count'],
   // PRIVACY DECISION: 'item_count' is an integer count of drafted items exported
   // when the reviewer clicks "Copy as LLM prompt". No comment bodies, code,
