@@ -71,7 +71,7 @@
      * Review.svelte passes run.coach. The third argument is the verdict
      * selected at coaching time, enabling the verdict-coherence check.
      */
-    coachFn?: (drafts: Draft[], prComments?: string[], verdict?: Verdict) => Promise<(CoachResult & { usage?: LlmUsage }) | { error: string }>
+    coachFn?: (drafts: Draft[], prComments?: string[], verdict?: Verdict) => Promise<(CoachResult & { usage?: LlmUsage; notCoached?: { indices: number[]; message: string } }) | { error: string }>
     /**
      * Existing PR review comments — passed through to coachFn for duplicate detection.
      * Capped at 30, truncated at 200ch inside coachPrompt.
@@ -168,6 +168,10 @@
   let coachPending = $state(false)
   let coachResult = $state<CoachResult | null>(null)
   let coachError = $state<string | null>(null)
+  // Partial-failure note: present when SOME comments couldn't be coached (a
+  // chunk failed) while others succeeded. We still show the graded results plus
+  // this honest note + a Retry affordance — never silently dropping comments.
+  let coachNotCoached = $state<{ indices: number[]; message: string } | null>(null)
   // Token usage from the last coach run (display-only, behind showTokenCost).
   let coachUsage = $state<LlmUsage | undefined>(undefined)
   const coachUsageLabel = $derived(
@@ -187,6 +191,7 @@
     coachError = null
     coachResult = null
     coachUsage = undefined
+    coachNotCoached = null
     dismissedSuggestions = new Set()
     try {
       // Pass existing PR comment bodies for duplicate detection, and the
@@ -198,6 +203,9 @@
       } else {
         coachResult = result
         coachUsage = result.usage
+        // Partial run: keep the graded results AND surface which comments were
+        // not coached + why (the message carries a retry hint).
+        coachNotCoached = result.notCoached ?? null
         track('ai_task_completed', { task: 'coach', cached: false })
       }
     } finally {
@@ -395,7 +403,7 @@
           disabled={coachPending}
           aria-busy={coachPending}
         >
-          {#if coachPending}<Spinner size="0.8em" />{/if}{coachPending ? 'Coaching…' : 'Coach my comments'}
+          {#if coachPending}<Spinner size="0.8em" />{/if}<span class="coach-btn-label">{coachPending ? 'Coaching…' : 'Coach my comments'}</span>
         </button>
 
         {#if coachPending}
@@ -405,6 +413,17 @@
 
         {#if coachError}
           <p class="coach-error" role="alert">{coachError}</p>
+        {/if}
+
+        {#if coachNotCoached}
+          <!-- Partial failure: some chunks failed. Show graded results + an
+               honest note for the comments that weren't coached, with retry. -->
+          <div class="coach-partial-note" role="alert" data-testid="coach-partial-note">
+            <span>{coachNotCoached.message}</span>
+            <button class="coach-retry-btn" type="button" onclick={handleCoach} disabled={coachPending}>
+              Retry
+            </button>
+          </div>
         {/if}
 
         {#if coachResult}
@@ -821,6 +840,11 @@
 
   .coach-btn {
     align-self: flex-start;
+    /* Lay the spinner and label out as a row with a gap so the spinner never
+       butts up against the "Coaching…" text (the indicator had no space). */
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
     padding: 0.4rem 1rem;
     border: 1px solid var(--hairline);
     border-radius: 6px;
@@ -830,6 +854,10 @@
     font-weight: 500;
     cursor: pointer;
     transition: background 0.15s;
+  }
+
+  .coach-btn-label {
+    line-height: 1;
   }
 
   .coach-btn:hover:not(:disabled) {
@@ -855,6 +883,42 @@
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+  }
+
+  /* Partial-failure note: graded results shown, but N comments couldn't be
+     coached — honest message + retry. Uses the "changed" (warning) palette so
+     it reads as a soft warning in both themes, distinct from a hard error. */
+  .coach-partial-note {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    background: var(--legend-changed-bg);
+    border: 1px solid var(--legend-changed-border);
+    color: var(--legend-changed-color);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.88rem;
+  }
+
+  .coach-retry-btn {
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--legend-changed-border);
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .coach-retry-btn:hover:not(:disabled) {
+    background: var(--surface-raised);
+  }
+
+  .coach-retry-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 
   .coach-usage-footer {

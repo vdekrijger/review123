@@ -637,6 +637,114 @@ describe('VerdictStep', () => {
       expect(screen.getByRole('button', { name: /submit review/i })).not.toBeDisabled()
     })
 
+    // --- Spinner spacing (cosmetic): the in-progress indicator must keep a
+    //     gap between the spinner and the "Coaching…" label. ---
+
+    it('coaching indicator wraps the label in its own element (spacing seam)', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      const { container } = render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: hangingCoach() },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        const label = container.querySelector('.coach-btn-label')
+        expect(label).not.toBeNull()
+        expect(label!.textContent).toBe('Coaching…')
+        // The spinner is a separate element from the label — not jammed together.
+        const btn = container.querySelector('.coach-btn')!
+        expect(btn.querySelector('.coach-btn-label')).not.toBeNull()
+      })
+    })
+
+    // --- Partial failure: graded results + an honest note + retry ---
+
+    it('partial failure: shows graded results AND a notCoached note with retry', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      const partialCoach = vi.fn().mockResolvedValue({
+        reviews: [makeCoachResult().reviews[0]],
+        notCoached: { indices: [1, 2], message: "Couldn't coach 2 comments (Rate limited by DeepSeek. Please try again in a moment.) — retry to grade them." },
+      })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: partialCoach },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        // Graded result is rendered.
+        expect(screen.getByLabelText(/clarity/i)).toBeInTheDocument()
+        // Honest note for the uncoached comments.
+        const note = screen.getByTestId('coach-partial-note')
+        expect(note.textContent).toMatch(/couldn't coach 2 comments/i)
+        expect(note.textContent).toMatch(/Rate limited/)
+      })
+      // Retry affordance present.
+      expect(screen.getByRole('button', { name: /^retry$/i })).toBeInTheDocument()
+    })
+
+    it('partial-failure Retry re-runs the coach', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      const coach = vi.fn()
+        .mockResolvedValueOnce({
+          reviews: [makeCoachResult().reviews[0]],
+          notCoached: { indices: [1], message: "Couldn't coach 1 comment (network) — retry to grade it." },
+        })
+        .mockResolvedValueOnce(makeCoachResult()) // clean second run
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: coach },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+      await waitFor(() => expect(screen.getByTestId('coach-partial-note')).toBeInTheDocument())
+
+      await user.click(screen.getByRole('button', { name: /^retry$/i }))
+
+      await waitFor(() => {
+        // After a clean retry, the partial note is gone.
+        expect(screen.queryByTestId('coach-partial-note')).toBeNull()
+      })
+      expect(coach).toHaveBeenCalledTimes(2)
+    })
+
+    it('coach error shows the SPECIFIC message, not the catch-all', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: errorCoach('Rate limited by DeepSeek. Please try again in a moment.') },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        const alert = screen.getByRole('alert')
+        expect(alert.textContent).toMatch(/Rate limited/)
+        expect(alert.textContent).not.toMatch(/An unexpected error occurred/)
+      })
+    })
+
     it('Submit button stays enabled after successful coaching', async () => {
       signIn()
       setDeepseek()
