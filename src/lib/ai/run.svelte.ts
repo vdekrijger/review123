@@ -53,6 +53,7 @@ export type { AskFocus }
 import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, STORY_MAX_STEPS } from './schemas'
 import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, SkillReviewResult } from './schemas'
 import type { Draft } from '../drafts/drafts.svelte'
+import type { CoachCodeContext } from './coachContext'
 import { listSkills } from '../skills/skills'
 import { djb2 } from '../viewed/viewed.svelte'
 import { addUsage } from './tokenCost'
@@ -97,6 +98,13 @@ export interface SkillReviewEntry {
   state: PanelState<SkillReviewResult>
 }
 
+/**
+ * Coach success result + the token usage the transport captured for the run
+ * (when available). usage is display-only — surfaced behind showTokenCost and
+ * folded into the per-PR totalUsage. Absent when the transport reported none.
+ */
+export type CoachOutcome = CoachResult & { usage?: LlmUsage }
+
 // ---------------------------------------------------------------------------
 // AiRun public interface
 // ---------------------------------------------------------------------------
@@ -119,7 +127,7 @@ export interface AiRun {
   readonly totalUsage: LlmUsage | undefined
   start(): Promise<void>
   retry(task: TaskName): Promise<void>
-  coach(drafts: Draft[], prComments?: string[], verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'): Promise<CoachResult | { error: string }>
+  coach(drafts: Draft[], prComments?: string[], verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'): Promise<CoachOutcome | { error: string }>
   ask(question: string, onDelta: (t: string) => void, focus?: AskFocus): Promise<{ ok: true; answer: string } | { ok: false; error: string }>
   runSkillReviews(onUpdate?: () => void, existingComments?: string[]): Promise<void>
 }
@@ -142,6 +150,16 @@ export interface AiRunInput {
    * Absent / toggle off → behavior is byte-identical to single-pass.
    */
   deepReview?: DeepReviewSource
+  /**
+   * Build per-comment CODE context for the coach (v16). Supplied by the
+   * caller, which owns the PR files (patches) and fetched file contents.
+   * For each draft it returns the code at that comment's file:line — a hunk
+   * excerpt plus an optional wider file window — so the coach can VERIFY
+   * accuracy/grounded/specificity against real code instead of defaulting to
+   * "cannot verify against the diff". Absent → coach runs without it (prior
+   * behaviour). Best-effort: throwing is treated as "no context".
+   */
+  coachCodeContext?: (drafts: Draft[]) => CoachCodeContext[]
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +225,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     ...deps,
   }
 
-  const { prKey, repo, isPrivate, pack, ci, ask: askConsent, deepReview } = input
+  const { prKey, repo, isPrivate, pack, ci, ask: askConsent, deepReview, coachCodeContext } = input
 
   // Reactive panel state holders
   const summaryState = $state<PanelState<string>>({ status: 'idle' })
@@ -220,6 +238,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
   // Skill review entries — populated on-demand by runSkillReviews()
   let skillReviewsState = $state<SkillReviewEntry[]>([])
+
+  // Token usage from the most recent coach() run (on-demand, never cached).
+  // Folded into totalUsage so the per-PR total includes coaching cost.
+  let coachUsage = $state<LlmUsage | undefined>(undefined)
 
   // Packed context — kept in closure so retry can reuse it without re-packing
   // (unless the initial pack failed, in which case retry re-packs)
@@ -979,24 +1001,38 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       }
     }
 
+    // Per-comment code context (v16): the actual code at each comment's
+    // file:line so the coach can verify rather than default to "cannot verify".
+    // Best-effort — never block coaching if context building throws.
+    let codeContexts: CoachCodeContext[] | undefined
+    if (coachCodeContext) {
+      try {
+        codeContexts = coachCodeContext(drafts)
+      } catch {
+        codeContexts = undefined
+      }
+    }
+
     const prompts = coachPrompt(draftInputs, prComments, {
       ...(verdict !== undefined ? { verdict } : {}),
       ...(packedCtx.text ? { contextText: packedCtx.text } : {}),
+      ...(codeContexts && codeContexts.length > 0 ? { codeContexts } : {}),
     })
     const t1 = performance.now()
 
     try {
-      const { result: coachResult, usage: coachUsage } = await llmJsonWithRepairWithUsage<CoachResult>(
+      const { result: coachResult, usage } = await llmJsonWithRepairWithUsage<CoachResult>(
         { system: prompts.system, user: prompts.user },
         validateCoachResult,
       )
+      coachUsage = usage
       track('ai_task_completed', {
         task: 'coach',
         duration_ms: Math.round(performance.now() - t1),
         cached: false,
-        ...(coachUsage?.total_tokens !== undefined ? { tokens: coachUsage.total_tokens } : {}),
+        ...(usage?.total_tokens !== undefined ? { tokens: usage.total_tokens } : {}),
       })
-      return coachResult
+      return { ...coachResult, ...(usage ? { usage } : {}) }
     } catch (err) {
       const kind = err instanceof LlmError ? err.kind : 'unknown'
       track('ai_task_failed', { task: 'coach', reason: kind })
@@ -1224,6 +1260,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, storyState]
       for (const s of states) total = addUsage(total, s.usage)
       for (const e of skillReviewsState) total = addUsage(total, e.state.usage)
+      // Coach is on-demand (never one of the six core tasks); fold in its usage
+      // so the per-PR total reflects coaching cost too.
+      total = addUsage(total, coachUsage)
       return total
     },
     start,

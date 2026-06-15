@@ -14,6 +14,7 @@
   import { createDraftStore } from '../lib/drafts/drafts.svelte'
   import VerdictStep from '../components/VerdictStep.svelte'
   import { createAiRun } from '../lib/ai/run.svelte'
+  import { buildCoachCodeContext } from '../lib/ai/coachContext'
   import { packContext, fetchContents } from '../lib/context/pack'
   import { LLM_CONFIG } from '../lib/llm/config'
   import { getProvider } from '../lib/llm/providers'
@@ -446,6 +447,11 @@
             ? { searchCode: (query: string) => activeProvider.searchCode!({ owner, repo }, query) }
             : {}),
         },
+        // Per-comment code context for the coach (v16): the actual code at each
+        // commented file:line — hunk excerpt + a wider window from the file
+        // contents we already fetched (contentsMap). Lets the coach verify
+        // rather than default to "cannot verify against the diff".
+        coachCodeContext: (drafts) => buildCoachCodeContext(drafts, files, contentsMap),
       })
       aiRun = run
 
