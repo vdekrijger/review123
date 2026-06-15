@@ -25,11 +25,16 @@ const BASE_SHA = 'def0987654321'
 
 const APP_REVIEW_PATH = `/review/github/${OWNER}/${REPO}/${PR_NUMBER}`
 
-// src/sample.ts — adds an import line and a real code line.
-const SAMPLE_PATCH = `@@ -1,2 +1,4 @@
+// src/sample.ts — adds a single-line import, a MULTI-LINE import (opener +
+// continuation names + `} from '…'` closing line), and a real code line.
+const SAMPLE_PATCH = `@@ -1,2 +1,8 @@
  const existing = 1
  const keep = 2
 +import { bar } from './bar'
++import {
++  WidgetCardContent,
++  WidgetCardBodyMessage,
++} from './widget'
 +const added = 3`
 
 test('inspect: focus mode dims import lines and toggling off restores them', async ({ page }) => {
@@ -109,6 +114,15 @@ test('inspect: focus mode dims import lines and toggling off restores them', asy
   // …and the real code line does not.
   const codeCell = page.locator('.diff-line-content', { hasText: 'const added = 3' })
   await expect(codeCell.first()).not.toHaveClass(/dimmed-noise/)
+
+  // The MULTI-LINE import dims its continuation AND closing lines, not just the
+  // opener — the original bug. Each of these content cells must be dimmed.
+  const opener = page.locator('.diff-line-content', { hasText: 'import {' })
+  const contName = page.locator('.diff-line-content', { hasText: 'WidgetCardContent,' })
+  const closing = page.locator('.diff-line-content', { hasText: "} from './widget'" })
+  await expect(opener.first()).toHaveClass(/dimmed-noise/)
+  await expect(contName.first()).toHaveClass(/dimmed-noise/)
+  await expect(closing.first()).toHaveClass(/dimmed-noise/)
 
   // Cycle imports → imports-comments → off, then verify dimming is removed.
   await focusToggle.click() // → imports-comments

@@ -878,7 +878,7 @@ test('draft bar shows draft count; step 3 shows sign-in prompt when signed out',
 
   // Draft bar: the status region should eventually show draft count
   // The seeded draft should show "1 comment drafted"
-  const draftStatus = page.getByRole('status')
+  const draftStatus = page.locator('.draft-bar').getByRole('status')
   await expect(draftStatus).toContainText(/1 comment/i, { timeout: 5_000 })
 
   // --- Step 3: VerdictStep should show sign-in prompt when no auth ---
@@ -1070,7 +1070,7 @@ test('viewed-state: mark first file viewed → collapses → reload → still co
   await expect(fileDiffs.first()).toHaveClass(/is-collapsed/, { timeout: 3_000 })
 
   // The sticky bar should show "viewed 1/2"
-  const draftStatus = page.getByRole('status')
+  const draftStatus = page.locator('.draft-bar').getByRole('status')
   await expect(draftStatus).toContainText('viewed 1/2', { timeout: 5_000 })
 })
 

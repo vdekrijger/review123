@@ -6,7 +6,7 @@
   import type { DiffMode, FocusMode } from '../lib/settings/settings'
   import { type TestFileDisplay } from '../lib/settings/settings'
   import { settingsState } from '../lib/settings/settingsState.svelte'
-  import { langForFilename, classifyNoise } from '../lib/diff/codeNoise'
+  import { langForFilename, classifyNoiseLines } from '../lib/diff/codeNoise'
   import { isTestFile } from '../lib/testFile'
   import type { Draft } from '../lib/drafts/drafts.svelte'
   import DraftThread from './DraftThread.svelte'
@@ -110,10 +110,9 @@
   const focusMode = $derived<FocusMode>(settingsState.current.focusMode)
   const noiseLang = $derived(langForFilename(file.filename))
 
-  /** True for lines we should dim under the active focusMode. */
-  function shouldDim(rawText: string): boolean {
-    if (focusMode === 'off' || noiseLang === null) return false
-    const kind = classifyNoise(rawText, noiseLang)
+  /** True for a classified NoiseKind under the active focusMode. */
+  function dimsKind(kind: ReturnType<typeof classifyNoiseLines>[number]): boolean {
+    if (focusMode === 'off' || kind === null) return false
     if (kind === 'import') return true
     if (kind === 'comment') return focusMode === 'imports-comments'
     return false
@@ -133,18 +132,39 @@
   }
 
   /**
-   * Decorate each diff CONTENT CELL independently. Cell-level (not row-level)
-   * matters in split mode, where one <tr> holds both the old (LEFT) and new
-   * (RIGHT) sides — they may classify differently. Unified rows have a single
-   * content cell, so behaviour is identical there.
+   * Decorate a single COLUMN of content cells. Cells are collected in document
+   * order, their source text run through the SPAN-AWARE classifier (so a
+   * multi-line import dims its continuation + closing lines, not just the
+   * opener), then each cell toggled accordingly.
+   *
+   * Why per-column: span detection needs the lines IN SEQUENCE. In split mode
+   * the old (LEFT) and new (RIGHT) sides are independent sequences — classifying
+   * them together would let a span on one side leak onto the other. We therefore
+   * decorate each side's column separately. Unified has a single column.
+   */
+  function decorateColumn(cells: Element[]): void {
+    const kinds = classifyNoiseLines(cells.map(cellText), noiseLang)
+    for (let i = 0; i < cells.length; i++) {
+      cells[i].classList.toggle('dimmed-noise', dimsKind(kinds[i]))
+    }
+  }
+
+  /**
+   * Decorate the diff. Unified rows expose one content column
+   * (`.diff-line-content`); split rows expose two (`.diff-line-old-content`,
+   * `.diff-line-new-content`). Each column is a top-to-bottom sequence handed to
+   * the span-aware classifier.
    */
   function decorateRows(root: HTMLElement): void {
-    const cells = root.querySelectorAll(
-      '.diff-line-content, .diff-line-old-content, .diff-line-new-content',
-    )
-    for (const cell of cells) {
-      cell.classList.toggle('dimmed-noise', shouldDim(cellText(cell)))
+    if (focusMode === 'off' || noiseLang === null) {
+      for (const cell of root.querySelectorAll('.dimmed-noise')) {
+        cell.classList.remove('dimmed-noise')
+      }
+      return
     }
+    decorateColumn([...root.querySelectorAll('.diff-line-content')])
+    decorateColumn([...root.querySelectorAll('.diff-line-old-content')])
+    decorateColumn([...root.querySelectorAll('.diff-line-new-content')])
   }
 
   /**

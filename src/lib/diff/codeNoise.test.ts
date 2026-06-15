@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { langForFilename, classifyNoise, type CodeLang } from './codeNoise'
+import { langForFilename, classifyNoise, classifyNoiseLines, type CodeLang } from './codeNoise'
 
 describe('langForFilename', () => {
   const cases: [string, CodeLang][] = [
@@ -143,5 +143,160 @@ describe('classifyNoise — null language and blanks', () => {
   it('returns null for blank lines', () => {
     expect(classifyNoise('   ', 'js')).toBeNull()
     expect(classifyNoise('', 'js')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Span-aware classification (multi-line imports + block comments)
+// ---------------------------------------------------------------------------
+
+/** Convenience: assert every line of `lines` classified to `kind`. */
+function allKinds(lines: string[], lang: CodeLang) {
+  return classifyNoiseLines(lines, lang)
+}
+
+describe('classifyNoiseLines — multi-line imports', () => {
+  it('[js/tsx] the exact reported TSX case: import { \\n names \\n } from — all lines import', () => {
+    const lines = [
+      "import { DetectiveHog } from 'lib/components/hedgehogs'",
+      'import {',
+      '    WIDGET_LIST_COUNT_EVENTS,',
+      '    WidgetCardBodyMessage,',
+      '    WidgetCardContent,',
+      "} from '../../components/WidgetCard'",
+    ]
+    expect(allKinds(lines, 'js')).toEqual([
+      'import',
+      'import',
+      'import',
+      'import',
+      'import',
+      'import',
+    ])
+  })
+
+  it('[js] import x, { … } default + named multi-line', () => {
+    const lines = ['import React, {', '  useState,', '  useEffect,', "} from 'react'"]
+    expect(allKinds(lines, 'js')).toEqual(['import', 'import', 'import', 'import'])
+  })
+
+  it('[js] lone `}` then a separate `from` line is included', () => {
+    const lines = ['import {', '  a,', '  b,', '}', "from './m'"]
+    expect(allKinds(lines, 'js')).toEqual(['import', 'import', 'import', 'import', 'import'])
+  })
+
+  it('[js] dynamic import( … ) spanning lines (line-leading)', () => {
+    const lines = ['import(', "  './lazy'", ')', 'const x = 1']
+    const k = allKinds(lines, 'js')
+    expect(k.slice(0, 3)).toEqual(['import', 'import', 'import'])
+    expect(k[3]).toBeNull()
+  })
+
+  it('[js] single-line imports still detected; span closes before real code', () => {
+    const lines = [
+      "import { a } from 'x'",
+      'import {',
+      '  b,',
+      "} from 'y'",
+      'const real = doWork()',
+      'function f() {}',
+    ]
+    const k = allKinds(lines, 'js')
+    expect(k.slice(0, 4)).toEqual(['import', 'import', 'import', 'import'])
+    expect(k[4]).toBeNull()
+    expect(k[5]).toBeNull()
+  })
+
+  it('[go] import ( … ) block — all lines import, closes on )', () => {
+    const lines = ['import (', '\t"fmt"', '\t"os"', ')', 'func main() {}']
+    const k = allKinds(lines, 'go')
+    expect(k.slice(0, 4)).toEqual(['import', 'import', 'import', 'import'])
+    expect(k[4]).toBeNull()
+  })
+
+  it('[python] from x import ( … ) paren block', () => {
+    const lines = ['from os.path import (', '    join,', '    exists,', ')', 'x = 1']
+    const k = allKinds(lines, 'python')
+    expect(k.slice(0, 4)).toEqual(['import', 'import', 'import', 'import'])
+    expect(k[4]).toBeNull()
+  })
+
+  it('[python] backslash-continued from import', () => {
+    const lines = ['from mod import a, \\', '    b, \\', '    c', 'x = 1']
+    const k = allKinds(lines, 'python')
+    expect(k.slice(0, 3)).toEqual(['import', 'import', 'import'])
+    expect(k[3]).toBeNull()
+  })
+
+  it('[rust] use a::{ … }; multi-line', () => {
+    const lines = ['use std::collections::{', '    HashMap,', '    HashSet,', '};', 'fn main() {}']
+    const k = allKinds(lines, 'rust')
+    expect(k.slice(0, 4)).toEqual(['import', 'import', 'import', 'import'])
+    expect(k[4]).toBeNull()
+  })
+
+  it('multi-line import immediately followed by real code — code NOT dimmed', () => {
+    const lines = ['import {', '  Foo,', "} from 'foo'", 'export const VALUE = { a: 1 }']
+    const k = allKinds(lines, 'js')
+    expect(k[3]).toBeNull()
+  })
+})
+
+describe('classifyNoiseLines — negative (no false spans)', () => {
+  it('[js] const importType = ... does not open a span', () => {
+    const lines = ['const importType = {', '  kind: 1,', '}', 'const next = 2']
+    expect(allKinds(lines, 'js').every((k) => k === null)).toBe(true)
+  })
+
+  it('[js] a string containing "import {" does not open a span', () => {
+    const lines = ["const s = 'import {'", 'const next = 2', 'const again = 3']
+    expect(allKinds(lines, 'js').every((k) => k === null)).toBe(true)
+  })
+
+  it('[js] single-line import { a } from does not start a span (next code stays bright)', () => {
+    const lines = ["import { a } from 'x'", 'const real = 1']
+    const k = allKinds(lines, 'js')
+    expect(k[0]).toBe('import')
+    expect(k[1]).toBeNull()
+  })
+})
+
+describe('classifyNoiseLines — multi-line block comments', () => {
+  it('[js] /* … */ block comment dims the full span', () => {
+    const lines = ['/*', ' * a doc block', ' * over lines', ' */', 'const real = 1']
+    const k = allKinds(lines, 'js')
+    expect(k.slice(0, 4)).toEqual(['comment', 'comment', 'comment', 'comment'])
+    expect(k[4]).toBeNull()
+  })
+
+  it('[js] block comment opened with text on the opening line', () => {
+    const lines = ['/* opening text', 'middle', 'closing */', 'const x = 1']
+    const k = allKinds(lines, 'js')
+    expect(k.slice(0, 3)).toEqual(['comment', 'comment', 'comment'])
+    expect(k[3]).toBeNull()
+  })
+
+  it('[css] /* … */ multi-line', () => {
+    const lines = ['/* theme', '   tokens */', '.a { color: red }']
+    const k = allKinds(lines, 'css')
+    expect(k.slice(0, 2)).toEqual(['comment', 'comment'])
+    expect(k[2]).toBeNull()
+  })
+
+  it('single-line /* … */ does not open a span', () => {
+    const lines = ['/* one line */', 'const real = 1']
+    const k = allKinds(lines, 'js')
+    expect(k[0]).toBe('comment')
+    expect(k[1]).toBeNull()
+  })
+})
+
+describe('classifyNoiseLines — passthrough behaviour', () => {
+  it('returns all-null for null language', () => {
+    expect(classifyNoiseLines(['import x', 'foo'], null)).toEqual([null, null])
+  })
+  it('preserves single-line comment + import classification per line', () => {
+    const lines = ["import os", "# a comment", "x = 1"]
+    expect(classifyNoiseLines(lines, 'python')).toEqual(['import', 'comment', null])
   })
 })

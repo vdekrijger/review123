@@ -95,6 +95,57 @@ describe('FileDiff — focus mode dimming', () => {
     })
   }
 
+  // A patch that ADDS a multi-line import spanning opener + continuation lines +
+  // closing `} from '…'`, then a real code line that must stay bright.
+  const MULTILINE_PATCH = [
+    '@@ -1,1 +1,7 @@',
+    ' const keep = 1',
+    '+import {',
+    '+  WIDGET_LIST_COUNT_EVENTS,',
+    '+  WidgetCardContent,',
+    "+} from '../../components/WidgetCard'",
+    '+const added = 2',
+  ].join('\n')
+
+  function makeMultilineFile(filename = 'src/widget.tsx'): PrFile {
+    return { filename, status: 'modified', additions: 5, deletions: 0, patch: MULTILINE_PATCH }
+  }
+
+  for (const mode of ['unified', 'split'] as const) {
+    it(`[${mode}] dims EVERY line of a multi-line import span (continuation + closing)`, async () => {
+      setFocusMode('imports')
+      _resetSettingsStateForTest()
+      const { container } = render(FileDiff, {
+        props: { file: makeMultilineFile(), mode },
+      })
+      await settle()
+      const texts = dimmedRowTexts(container)
+      // Opener, every continuation name, and the `} from '…'` closing line.
+      expect(texts.some((t) => t.includes('import {'))).toBe(true)
+      expect(texts.some((t) => t.includes('WIDGET_LIST_COUNT_EVENTS'))).toBe(true)
+      expect(texts.some((t) => t.includes('WidgetCardContent'))).toBe(true)
+      expect(texts.some((t) => t.includes("from '../../components/WidgetCard'"))).toBe(true)
+      // Real code after the span stays bright.
+      expect(texts.some((t) => t.includes('const added'))).toBe(false)
+      expect(texts.some((t) => t.includes('const keep'))).toBe(false)
+    })
+
+    it(`[${mode}] toggling focus off clears multi-line-import dimming`, async () => {
+      setFocusMode('imports')
+      _resetSettingsStateForTest()
+      const { container } = render(FileDiff, {
+        props: { file: makeMultilineFile(), mode },
+      })
+      await settle()
+      expect(container.querySelectorAll(DIM_SEL).length).toBeGreaterThan(0)
+
+      setFocusMode('off')
+      _resetSettingsStateForTest()
+      await settle()
+      expect(container.querySelectorAll(DIM_SEL).length).toBe(0)
+    })
+  }
+
   it('unknown extension dims nothing even with focus on', async () => {
     setFocusMode('imports-comments')
     _resetSettingsStateForTest()
