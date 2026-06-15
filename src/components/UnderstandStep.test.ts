@@ -1118,3 +1118,165 @@ describe('UnderstandStep — file structure section', () => {
     expect(dot).not.toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Expand all / Collapse all — one bulk toggle (feat/expand-all-section-status)
+// ---------------------------------------------------------------------------
+
+describe('UnderstandStep — expand all / collapse all', () => {
+  function pagePanels() {
+    return Array.from(document.querySelectorAll('.detail-panel')) as HTMLDetailsElement[]
+  }
+
+  it('renders an Expand all button when sections are collapsed (default)', () => {
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    const btn = screen.getByRole('button', { name: /expand all sections/i })
+    expect(btn).toBeInTheDocument()
+    expect(btn.textContent).toMatch(/expand all/i)
+    // Not all expanded → aria-pressed false
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('clicking Expand all opens every page section and flips the label to Collapse all', async () => {
+    const user = userEvent.setup()
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    // Default: all collapsed
+    expect(pagePanels().every((d) => !d.open)).toBe(true)
+
+    await user.click(screen.getByRole('button', { name: /expand all sections/i }))
+
+    // Every page section now open
+    expect(pagePanels().every((d) => d.open)).toBe(true)
+    // Label flips to "Collapse all" and aria-pressed true
+    const btn = screen.getByRole('button', { name: /collapse all sections/i })
+    expect(btn.textContent).toMatch(/collapse all/i)
+    expect(btn.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('clicking Collapse all (when all open) closes every section and flips back to Expand all', async () => {
+    const user = userEvent.setup()
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    // Open them all first
+    await user.click(screen.getByRole('button', { name: /expand all sections/i }))
+    expect(pagePanels().every((d) => d.open)).toBe(true)
+    // Now collapse all
+    await user.click(screen.getByRole('button', { name: /collapse all sections/i }))
+    expect(pagePanels().every((d) => !d.open)).toBe(true)
+    expect(screen.getByRole('button', { name: /expand all sections/i })).toBeInTheDocument()
+  })
+
+  it('individual section toggle still works after Expand all (close one, button reverts to Expand all)', async () => {
+    const user = userEvent.setup()
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    await user.click(screen.getByRole('button', { name: /expand all sections/i }))
+    expect(pagePanels().every((d) => d.open)).toBe(true)
+
+    // Close exactly one section by toggling its <details> open programmatically
+    // (mirrors a user clicking that section's summary). The bulk label must
+    // revert to "Expand all" because not all are open anymore.
+    const first = pagePanels()[0]
+    first.open = false
+    first.dispatchEvent(new Event('toggle', { bubbles: true }))
+
+    // Button label derives from "all expanded" → now false. Svelte flushes the
+    // bind:open → openState sync on a microtask, so wait for the label to flip.
+    await vi.waitFor(() =>
+      expect(screen.getByRole('button', { name: /expand all sections/i })).toBeInTheDocument()
+    )
+
+    // And clicking Expand all re-opens the one we closed (en masse set still works)
+    await user.click(screen.getByRole('button', { name: /expand all sections/i }))
+    expect(pagePanels().every((d) => d.open)).toBe(true)
+  })
+
+  it('individual section can be opened on its own without Expand all', async () => {
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    const panels = pagePanels()
+    expect(panels.every((d) => !d.open)).toBe(true)
+    // Open just one
+    panels[0].open = true
+    panels[0].dispatchEvent(new Event('toggle'))
+    // Only that one is open; button stays "Expand all"
+    expect(panels[0].open).toBe(true)
+    expect(panels.slice(1).every((d) => !d.open)).toBe(true)
+    expect(screen.getByRole('button', { name: /expand all sections/i })).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Per-section header status indicator (feat/expand-all-section-status)
+// AI-backed section headers show a spinner while pending, a ready cue when
+// done, and a muted hint for no-key/error. Synchronous sections show neither.
+// The indicator lives in the header so it's visible even when collapsed.
+// ---------------------------------------------------------------------------
+
+describe('UnderstandStep — per-section header status indicator', () => {
+  function summaryHeaderOf(match: RegExp): HTMLElement {
+    const details = Array.from(document.querySelectorAll('.detail-panel')).find(
+      (d) => d.querySelector('.detail-summary-title')?.textContent?.match(match)
+    ) as HTMLDetailsElement
+    return details.querySelector('.detail-summary') as HTMLElement
+  }
+
+  it('shows a spinner in the Full summary header while the summary task is loading (even though section is collapsed)', () => {
+    const run = makeRun({ summary: { status: 'loading' } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    const header = summaryHeaderOf(/full summary/i)
+    // Section is collapsed by default but the header indicator is still present
+    const panel = header.closest('details') as HTMLDetailsElement
+    expect(panel.open).toBe(false)
+    expect(header.querySelector('.ui-spinner')).not.toBeNull()
+  })
+
+  it('shows a spinner while the task is still idle (queued)', () => {
+    const run = makeRun({ verdict: { status: 'idle' } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    const header = summaryHeaderOf(/why this verdict/i)
+    expect(header.querySelector('.ui-spinner')).not.toBeNull()
+  })
+
+  it('shows a ready cue (no spinner) in the header when the task is done', () => {
+    const verdict: VerdictResult = { level: 'behavior-preserved', evidence: ['ok'], notAnalyzed: [] }
+    const run = makeRun({ verdict: { status: 'done', value: verdict } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    const header = summaryHeaderOf(/why this verdict/i)
+    expect(header.querySelector('.ui-spinner')).toBeNull()
+    expect(header.querySelector('.section-status-ready')).not.toBeNull()
+    // Polite live region announces readiness
+    const live = header.querySelector('.section-status-live')
+    expect(live?.textContent).toMatch(/ready/i)
+  })
+
+  it('shows a muted hint (no spinner) for no-key status', () => {
+    const run = makeRun({ summary: { status: 'no-key' } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    const header = summaryHeaderOf(/full summary/i)
+    expect(header.querySelector('.ui-spinner')).toBeNull()
+    expect(header.querySelector('.section-status-hint')).not.toBeNull()
+  })
+
+  it('shows a muted hint (no spinner) for error status', () => {
+    const run = makeRun({ tests: { status: 'error', error: 'boom' } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    const header = summaryHeaderOf(/test coverage/i)
+    expect(header.querySelector('.ui-spinner')).toBeNull()
+    expect(header.querySelector('.section-status-hint')).not.toBeNull()
+  })
+
+  it('synchronous sections (CI details, PR description, Changed files) show NO status indicator in the header', () => {
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    for (const match of [/ci details/i, /original pr description/i, /changed files/i]) {
+      const header = summaryHeaderOf(match)
+      expect(header.querySelector('.section-status')).toBeNull()
+    }
+  })
+
+  it('AI sections (summary, diagrams, tests, alternatives, verdict) each render a status indicator', () => {
+    const run = makeRun({})
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    for (const match of [/full summary/i, /diagrams/i, /test coverage/i, /alternative approaches/i, /why this verdict/i]) {
+      const header = summaryHeaderOf(match)
+      expect(header.querySelector('.section-status')).not.toBeNull()
+    }
+  })
+})
