@@ -170,11 +170,40 @@ pnpm eval -- --case 07-my-case
 DEEPSEEK_API_KEY=sk-... pnpm eval -- --case 07-my-case --live
 ```
 
+### Auto-labeling from your accept/dismiss decisions
+
+When you **actually review a PR in the app**, every AI finding you **accept**
+("Add as draft") or **dismiss** is recorded locally in a per-browser decision
+store (`src/lib/eval/decisions.ts`, IndexedDB, keyed by the PR + finding). That
+accept/dismiss signal is real ground truth — so the capture tool can use it to
+**pre-label the case for you**, turning a reviewed PR into a (mostly) labeled
+eval case with near-zero manual effort:
+
+- a finding you **accepted** → `"label": "real"`
+- a finding you **dismissed** → `"label": "noise"`
+- a finding with **no decision** → `"label": "UNLABELED"` (the default above)
+
+The decision store lives in the browser (IndexedDB) and isn't reachable from
+Node, so export your decisions to a JSON file (a JSON array of decision records,
+or `{ "decisions": [...] }`) and point `--decisions` at it:
+
+```bash
+pnpm eval:capture owner/repo/42 --name 07-my-case --decisions ./my-decisions.json
+```
+
+The match is **skillId-independent** — findings are re-matched by
+`path:line:bodyPrefix` (the content tail of the finding key), so the captured
+live reviewer name need not equal the runtime skill id. Decisions carry **only**
+ids/enums/counts + the finding key/anchor needed to re-match — never finding
+body text beyond the 30-char prefix already in the key, never code or diffs.
+Findings with no decision stay UNLABELED for you to resolve as before.
+
 The capture tool fails **honestly**: no `GITHUB_TOKEN` → clear message; PR fetch
 failure → clear; no provider key (`DEEPSEEK_API_KEY` / `OPENAI_API_KEY` /
 `LLM_API_KEY`) → clear; an existing `eval/golden/<slug>/` → it refuses to
-overwrite. The scaffolding logic (PR + findings → the three file shapes, and the
-UNLABELED contract) lives in `src/lib/eval/capture.ts` and is unit-tested.
+overwrite. The scaffolding logic (PR + findings → the three file shapes, the
+UNLABELED contract, and the decision auto-labeling) lives in
+`src/lib/eval/capture.ts` + `src/lib/eval/decisions.ts` and is unit-tested.
 
 Captured cases use the labeled `{ findings: [...] }` form of `expected.json`;
 hand-authored cases use the `{ real, noise }` form. The scorer accepts **both**

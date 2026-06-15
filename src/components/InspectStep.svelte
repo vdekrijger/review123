@@ -13,6 +13,7 @@
   import type { DiffWidth } from '../lib/settings/settings'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
   import { draftKey } from '../lib/drafts/drafts.svelte'
+  import type { createDecisionStore, DecisionVerificationContext } from '../lib/eval/decisions'
   import { track } from '../lib/analytics/analytics'
   import { navigate } from '../lib/router/router.svelte'
   import type { AttentionResult } from '../lib/ai/schemas'
@@ -42,6 +43,7 @@
     mode,
     onmode,
     draftStore,
+    decisionStore = null,
     attention = null,
     readingOrder = [],
     viewedStore = null,
@@ -72,6 +74,8 @@
     mode: DiffMode
     onmode: (m: DiffMode) => void
     draftStore: ReturnType<typeof createDraftStore> | null
+    /** Records accept/dismiss outcomes for the eval telemetry loop. null → disabled. */
+    decisionStore?: ReturnType<typeof createDecisionStore> | null
     attention?: AttentionResult | null
     readingOrder?: string[]
     viewedStore?: ReturnType<typeof createViewedStore> | null
@@ -585,11 +589,79 @@
     return m
   })
 
+  // ---------------------------------------------------------------------------
+  // Accept/dismiss telemetry loop (analytics + local decision store)
+  // ---------------------------------------------------------------------------
+  // For each AI finding we record its accept ('Add as draft') / dismiss outcome:
+  //   1. a PostHog event (ids/enums/counts ONLY — the choke-point strips content)
+  //   2. a local decision row (durable ground-truth the eval capture flow reads)
+  // The metadata lookup is keyed by the SAME finding key the cards emit, so the
+  // existing handlers don't need new arguments.
+  type DecisionMeta = {
+    reviewer: string
+    severity: 'high' | 'medium' | 'low'
+    verificationContext: DecisionVerificationContext
+  }
+
+  // Run-level verification context shared by every finding this run.
+  const runDeep = $derived(settingsState.current.aiTaskModes.skills === 'deep')
+  const runFusionMode = $derived(settingsState.current.fusionMode)
+
+  const decisionMetaByKey = $derived.by(() => {
+    const map = new Map<string, DecisionMeta>()
+    for (const review of skillReviews) {
+      if (review.state.status !== 'done' || !review.state.value) continue
+      const result = review.state.value as SkillReviewResult
+      for (const finding of result.findings) {
+        const key = `${review.skillId}:${finding.path}:${finding.line}:${finding.body.slice(0, 30)}`
+        const v = finding.verification
+        map.set(key, {
+          reviewer: review.skillId,
+          severity: finding.severity,
+          verificationContext: {
+            deep: runDeep,
+            crossVerified: !!v,
+            confirmedBy: v?.confirmedBy ?? 0,
+            polledModels: v?.polledModels ?? 0,
+            fusionMode: runFusionMode,
+            raisedByCount: finding.raisedBy?.length ?? 0,
+          },
+        })
+      }
+    }
+    return map
+  })
+
+  // Record a finding's accept/dismiss decision: fire the (content-free) analytics
+  // event AND persist the durable local decision row. Invisible — no UI change.
+  function recordDecision(key: string, decision: 'accepted' | 'dismissed'): void {
+    const meta = decisionMetaByKey.get(key)
+    if (!meta) return
+    const vc = meta.verificationContext
+    track(decision === 'accepted' ? 'ai_finding_accepted' : 'ai_finding_dismissed', {
+      reviewer: meta.reviewer,
+      severity: meta.severity,
+      deep: vc.deep,
+      crossVerified: vc.crossVerified,
+      confirmedBy: vc.confirmedBy,
+      polledModels: vc.polledModels,
+      ...(vc.fusionMode ? { fusionMode: vc.fusionMode } : {}),
+      raisedByCount: vc.raisedByCount,
+    })
+    void decisionStore?.record({
+      findingKey: key,
+      decision,
+      severity: meta.severity,
+      verificationContext: vc,
+    })
+  }
+
   // Session-only dismissed finding keys
   let dismissedKeys = $state<Set<string>>(new Set())
 
   function dismissFinding(key: string) {
     dismissedKeys = new Set([...dismissedKeys, key])
+    recordDecision(key, 'dismissed')
   }
 
   // Add-as-draft confirmation: track which finding keys have been "added" (session-only)
@@ -604,6 +676,8 @@
       body: finding.body,
     })
     track('comment_drafted')
+    // Accept signal: record the accept/dismiss telemetry (event + local store).
+    recordDecision(finding.key, 'accepted')
     // "Added as draft" is session state — shown as a labeled state chip on the card
     addedDraftKeys = new Set([...addedDraftKeys, finding.key])
   }
@@ -1009,6 +1083,7 @@
     onAddDraft={handleAddDraft}
     onRemoveDraft={handleRemoveDraft}
     onAddSkillFindingDraft={(path, finding) => addFindingAsDraft({ findingPath: path, line: finding.line, body: finding.body, key: finding.key })}
+    onDismissSkillFinding={(key) => recordDecision(key, 'dismissed')}
     {askFn}
     {askDisabledReason}
     replyFn={replyFn}
@@ -1112,6 +1187,7 @@
             onReply={replyFn}
             skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
             onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key })}
+            onDismissSkillFinding={(key) => recordDecision(key, 'dismissed')}
             whitespace={whitespaceByPath.get(file.filename) ?? null}
           />
         </div>

@@ -79,6 +79,12 @@
      */
     onAddSkillFindingDraft?: (finding: { body: string; line: number; key: string }) => Promise<void>
     /**
+     * Called when the user DISMISSES a skill finding inside FileDiff (the accept
+     * path flows through onAddSkillFindingDraft). Lets the parent record the
+     * accept/dismiss telemetry. Receives only the finding's stable key.
+     */
+    onDismissSkillFinding?: (key: string) => void
+    /**
      * Posts a reply to an existing comment thread IMMEDIATELY (not queued
      * with the review). null → no Reply affordance (provider unsupported).
      */
@@ -116,7 +122,7 @@
     forceExpanded?: boolean
   }
 
-  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onReply = null, whitespace = null, sticky = true, forceExpanded = false }: Props = $props()
+  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onDismissSkillFinding, onReply = null, whitespace = null, sticky = true, forceExpanded = false }: Props = $props()
 
   // Test-file display (must be declared before collapsed)
   const testFileDisplay = $derived<TestFileDisplay>(settingsState.current.testFileDisplay)
@@ -411,6 +417,7 @@
 
   function dismissSkillFinding(key: string) {
     dismissedSkillKeys = new Set([...dismissedSkillKeys, key])
+    onDismissSkillFinding?.(key)
   }
 
   async function handleAddSkillFindingDraft(finding: SkillFinding) {

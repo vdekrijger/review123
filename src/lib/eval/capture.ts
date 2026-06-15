@@ -12,14 +12,19 @@
  *   - expected.json       ({ findings: [{ file, line, description, label }] })
  *   - mock/responses.json (task key → scripted response object)
  *
- * The expected.json starts every finding as UNLABELED. The user then edits each
- * label to "real" or "noise" (and may add real findings the AI missed). The
- * scorer SKIPS UNLABELED entries (see normalizeExpectation in scorer.ts) so a
- * half-labeled case never scores garbage.
+ * The expected.json starts every finding as UNLABELED *unless* the user already
+ * accepted/dismissed it during their real review: a recorded ACCEPT pre-labels
+ * the entry "real", a DISMISS pre-labels it "noise" (see decisions.ts + the
+ * "Auto-labeling from your accept/dismiss decisions" section in eval/README.md).
+ * Findings with no decision stay UNLABELED. The user then resolves any remaining
+ * labels (and may add real findings the AI missed). The scorer SKIPS UNLABELED
+ * entries (see normalizeExpectation in scorer.ts) so a half-labeled case never
+ * scores garbage.
  */
 
 import type { GoldenFile, GoldenFixture } from './harness'
 import type { ExpectedLabel } from './scorer'
+import { findingMatchTail, type FindingDecision } from './decisions'
 
 /** A finding the live review produced, normalized for scaffolding. */
 export interface CapturedFinding {
@@ -75,11 +80,23 @@ export function buildFixture(pr: CapturedPr): GoldenFixture {
 }
 
 /**
- * Build the expected.json object: every captured finding listed once, each
- * pre-labeled UNLABELED. Findings are de-duplicated by (file, line, description)
- * so two tasks surfacing the same issue produce a single entry to label.
+ * Build the expected.json object: every captured finding listed once.
+ *
+ * Each entry is pre-labeled from the user's REAL accept/dismiss decisions when
+ * `decisionLabels` is supplied: a finding whose match-tail (path:line:bodyPrefix)
+ * was ACCEPTED → "real", DISMISSED → "noise". Findings with no decision (and the
+ * whole array when no decisions are passed) stay "UNLABELED" — the prior default.
+ *
+ * Findings are de-duplicated by (file, line, description) so two tasks surfacing
+ * the same issue produce a single entry to label.
+ *
+ * @param decisionLabels match-tail → 'accepted'|'dismissed' (see
+ *   decisionLabelsByTail in decisions.ts). Omit for the all-UNLABELED behavior.
  */
-export function buildExpected(findings: CapturedFinding[]): ExpectedFile {
+export function buildExpected(
+  findings: CapturedFinding[],
+  decisionLabels?: Map<string, FindingDecision>,
+): ExpectedFile {
   const seen = new Set<string>()
   const entries: ExpectedEntry[] = []
   for (const f of findings) {
@@ -90,10 +107,25 @@ export function buildExpected(findings: CapturedFinding[]): ExpectedFile {
       file: f.file,
       line: f.line,
       description: f.description,
-      label: 'UNLABELED',
+      label: labelFor(f, decisionLabels),
     })
   }
   return { findings: entries }
+}
+
+/**
+ * Resolve a captured finding's pre-label from the recorded decisions:
+ * accepted → 'real', dismissed → 'noise', no decision (or no map) → 'UNLABELED'.
+ */
+function labelFor(
+  f: CapturedFinding,
+  decisionLabels: Map<string, FindingDecision> | undefined,
+): ExpectedLabel {
+  if (!decisionLabels) return 'UNLABELED'
+  const decision = decisionLabels.get(findingMatchTail(f.file, f.line, f.description))
+  if (decision === 'accepted') return 'real'
+  if (decision === 'dismissed') return 'noise'
+  return 'UNLABELED'
 }
 
 /**
@@ -170,11 +202,19 @@ function uniquePaths(findings: CapturedFinding[]): string[] {
  * Scaffold a complete golden case from a fetched PR + its captured findings.
  * The single entry point the CLI calls; returns the three file objects ready to
  * be JSON-serialized to disk.
+ *
+ * When `decisionLabels` is provided (the user reviewed this PR and their
+ * accept/dismiss decisions were read from the local decision store), each
+ * captured finding's expected entry is PRE-LABELED accepted→real / dismissed→noise.
  */
-export function scaffoldCase(pr: CapturedPr, findings: CapturedFinding[]): ScaffoldedCase {
+export function scaffoldCase(
+  pr: CapturedPr,
+  findings: CapturedFinding[],
+  decisionLabels?: Map<string, FindingDecision>,
+): ScaffoldedCase {
   return {
     fixture: buildFixture(pr),
-    expected: buildExpected(findings),
+    expected: buildExpected(findings, decisionLabels),
     mockResponses: buildMockResponses(findings),
   }
 }
