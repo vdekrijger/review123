@@ -271,3 +271,188 @@ describe('crossVerify — per-model usage + impact (Plan N)', () => {
     expect(out.verifierImpact[0].decisive).toBe(0)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Plan O — Part A: multi-raiser aggregation + merge/dedup + fusion
+// ---------------------------------------------------------------------------
+
+import {
+  aggregateMultiRaiser,
+  mergeGeneratorFindings,
+  fuseConfirm,
+  type GeneratorFindings,
+} from './crossVerify'
+
+function vf(id: string, file: string, line: number | null, body: string, severity: 'high' | 'medium' | 'low' = 'medium'): VerifiableFinding {
+  return { id, path: file, line, severity, body }
+}
+
+describe('aggregateMultiRaiser', () => {
+  it('1 raiser reduces to aggregateFinding', () => {
+    const multi = aggregateMultiRaiser(['A'], [{ provider: 'B', verdict: 'refute', reason: 'no' }], 2)
+    const single = aggregateFinding('A', [{ provider: 'B', verdict: 'refute', reason: 'no' }])
+    expect(multi.surfaced).toBe(single.surfaced)
+    expect(multi.confirmedBy).toBe(single.confirmedBy)
+    expect(multi.polledModels).toBe(single.polledModels)
+  })
+
+  it('finding raised by ONE, others CONFIRM → surfaces (recall win)', () => {
+    // raiser(1) + 2 confirms = 3, polled 3, half 1.5 → surface
+    const v = aggregateMultiRaiser(
+      ['B'],
+      [
+        { provider: 'A', verdict: 'confirm', reason: 'agree' },
+        { provider: 'C', verdict: 'confirm', reason: 'agree' },
+      ],
+      3,
+    )
+    expect(v.surfaced).toBe(true)
+    expect(v.confirmedBy).toBe(3)
+    expect(v.polledModels).toBe(3)
+  })
+
+  it('finding raised by ONE, others REFUTE → demotes', () => {
+    // raiser(1) + 2 refutes(0) = 1, polled 3, half 1.5 → demote
+    const v = aggregateMultiRaiser(
+      ['B'],
+      [
+        { provider: 'A', verdict: 'refute', reason: 'no' },
+        { provider: 'C', verdict: 'refute', reason: 'no' },
+      ],
+      3,
+    )
+    expect(v.surfaced).toBe(false)
+  })
+
+  it('finding raised by TWO of three surfaces regardless of the third', () => {
+    const v = aggregateMultiRaiser(['A', 'B'], [{ provider: 'C', verdict: 'refute', reason: 'no' }], 3)
+    // raisers(2) + refute(0) = 2 >= 1.5 → surface
+    expect(v.surfaced).toBe(true)
+    expect(v.perModel.filter((p) => p.verdict === 'confirm').length).toBe(2)
+  })
+})
+
+describe('mergeGeneratorFindings', () => {
+  const cfgA = cfg('openai')
+  const cfgB = cfg('anthropic')
+
+  it('two generators raising the SAME issue merge with raisedBy=[A,B]', () => {
+    const gens: GeneratorFindings[] = [
+      { generator: 'A', cfg: cfgA, findings: [vf('a1', 'src/x.ts', 10, 'off-by-one in pagination loop')] },
+      { generator: 'B', cfg: cfgB, findings: [vf('b1', 'src/x.ts', 11, 'off-by-one error in the pagination loop')] },
+    ]
+    const merged = mergeGeneratorFindings(gens)
+    expect(merged.length).toBe(1)
+    expect(merged[0].raisedBy.sort()).toEqual(['A', 'B'])
+  })
+
+  it('distinct issues stay separate', () => {
+    const gens: GeneratorFindings[] = [
+      { generator: 'A', cfg: cfgA, findings: [vf('a1', 'src/x.ts', 10, 'SQL injection in query builder')] },
+      { generator: 'B', cfg: cfgB, findings: [vf('b1', 'src/y.ts', 5, 'unbounded loop allocation')] },
+    ]
+    const merged = mergeGeneratorFindings(gens)
+    expect(merged.length).toBe(2)
+    for (const m of merged) expect(m.raisedBy.length).toBe(1)
+  })
+
+  it('representative is the highest-severity finding in the group', () => {
+    const gens: GeneratorFindings[] = [
+      { generator: 'A', cfg: cfgA, findings: [vf('a1', 'src/x.ts', 10, 'null pointer dereference risk', 'low')] },
+      { generator: 'B', cfg: cfgB, findings: [vf('b1', 'src/x.ts', 10, 'null pointer dereference risk here', 'high')] },
+    ]
+    const merged = mergeGeneratorFindings(gens)
+    expect(merged.length).toBe(1)
+    expect(merged[0].finding.severity).toBe('high')
+  })
+})
+
+describe('fuseConfirm — recall + unique catch', () => {
+  const cfgA = cfg('openai')
+  const cfgB = cfg('anthropic')
+
+  it('a finding model B raised alone, A confirms → surfaces with uniqueCatch on B', async () => {
+    const merged = mergeGeneratorFindings([
+      { generator: 'A', cfg: cfgA, findings: [vf('a1', 'src/x.ts', 5, 'shared issue both see')] },
+      { generator: 'B', cfg: cfgB, findings: [
+        vf('b1', 'src/x.ts', 5, 'shared issue both see'),
+        vf('b2', 'src/y.ts', 20, 'race condition only B caught'),
+      ] },
+    ])
+    // Verify: A confirms B's unique finding; B's verdict on A's findings is implicit.
+    const verify: VerifyFn = async (c) => ({
+      result: {
+        verdicts: merged.map((m) => ({ id: m.id, verdict: 'confirm' as const, reason: 'agree' })),
+      },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    })
+    const out = await fuseConfirm(
+      merged,
+      [{ generator: 'A', cfg: cfgA }, { generator: 'B', cfg: cfgB }],
+      verify,
+    )
+    const unique = out.merged.find((m) => m.merged.finding.id === 'b2')!
+    expect(unique.verification.surfaced).toBe(true)
+    const impB = out.generatorImpact.find((g) => g.generator === 'B')!
+    expect(impB.uniqueCatch).toBe(1)
+    const impA = out.generatorImpact.find((g) => g.generator === 'A')!
+    expect(impA.uniqueCatch).toBe(0)
+  })
+
+  it("a finding one model raised alone that others REFUTE demotes", async () => {
+    const merged = mergeGeneratorFindings([
+      { generator: 'A', cfg: cfgA, findings: [vf('a1', 'src/z.ts', 9, 'speculative concern A alone raised')] },
+    ])
+    const verify: VerifyFn = async () => ({
+      result: { verdicts: [{ id: 'a1', verdict: 'refute' as const, reason: 'not real' }] },
+    })
+    const out = await fuseConfirm(
+      merged,
+      [{ generator: 'A', cfg: cfgA }, { generator: 'B', cfg: cfgB }],
+      verify,
+    )
+    // raiser(1) + refute(0) = 1, polled 2, half 1 → ties surface? 1 >= 1 → surfaces.
+    // Make it demote: two non-raisers refute.
+    const out2 = await fuseConfirm(
+      merged,
+      [
+        { generator: 'A', cfg: cfgA },
+        { generator: 'B', cfg: cfgB },
+        { generator: 'C', cfg: cfg('gemini') },
+      ],
+      verify,
+    )
+    expect(out2.merged[0].verification.surfaced).toBe(false)
+  })
+})
+
+describe('buildVerifyPrompt — lens framing (Plan O Part B)', () => {
+  it('no lens → plain adversarial prompt (no lens text)', () => {
+    const { system } = buildVerifyPrompt([finding('f1')])
+    expect(system).not.toContain('SECURITY lens')
+    expect(system).not.toContain('PERFORMANCE lens')
+  })
+
+  it('lens → prompt carries that lens framing', () => {
+    const { system } = buildVerifyPrompt([finding('f1')], 'security')
+    expect(system).toContain('SECURITY lens')
+  })
+
+  it('crossVerify threads per-verifier lenses into the verify call + impact', async () => {
+    const seen: (string | undefined)[] = []
+    const verify: VerifyFn = async (_cfg, _findings, lens) => {
+      seen.push(lens)
+      return { result: { verdicts: [{ id: 'f1', verdict: 'confirm', reason: 'ok' }] } }
+    }
+    const out = await crossVerify(
+      [finding('f1')],
+      'deepseek',
+      [modelCfg('anthropic', 'claude-sonnet-4-6'), modelCfg('anthropic', 'claude-haiku-4-5')],
+      verify,
+      ['correctness', 'security'],
+    )
+    expect(seen).toEqual(['correctness', 'security'])
+    expect(out.verifierImpact[0].lens).toBe('correctness')
+    expect(out.verifierImpact[1].lens).toBe('security')
+  })
+})

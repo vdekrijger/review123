@@ -190,3 +190,85 @@ describe('resolveEnsemble — Plan N configurable ensemble', () => {
     expect(ENSEMBLE_RUNAWAY_BACKSTOP).toBeGreaterThan(8)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Plan O — fusionMode gating
+// ---------------------------------------------------------------------------
+
+import { fusionGenerateEffective, fusionParticipants } from './config'
+import { setFusionMode } from '../settings/settings'
+
+describe('fusionGenerateEffective — Plan O gating', () => {
+  it("default ('verify') → false even with 2+ keys (byte-identical to #130)", () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+    // crossModelVerify is effective, but fusionMode defaults to 'verify'.
+    expect(crossModelVerifyEffective()).toBe(true)
+    expect(fusionGenerateEffective()).toBe(false)
+  })
+
+  it("'generate' with only 1 keyed model → false (needs ≥2)", () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setFusionMode('generate')
+    expect(fusionGenerateEffective()).toBe(false)
+  })
+
+  it("'generate' with ≥2 keyed models → true", () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+    setFusionMode('generate')
+    expect(fusionGenerateEffective()).toBe(true)
+  })
+
+  it("'generate' but crossModelVerify off → false", () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+    setFusionMode('generate')
+    setCrossModelVerify(false)
+    expect(fusionGenerateEffective()).toBe(false)
+  })
+
+  it("'generate' single-key multi-model ensemble → true (Plan N unlock composes)", () => {
+    setAnthropicKey('a')
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }],
+    })
+    setFusionMode('generate')
+    expect(fusionGenerateEffective()).toBe(true)
+  })
+})
+
+describe('fusionParticipants', () => {
+  it('generator first, then verifiers; each tagged with a display name', () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+    const ps = fusionParticipants()
+    expect(ps.length).toBe(2)
+    expect(ps[0].cfg.providerId).toBe('deepseek')
+    expect(ps[1].cfg.providerId).toBe('anthropic')
+    expect(ps.every((p) => p.generator.length > 0)).toBe(true)
+  })
+
+  it('disambiguates same-provider participants by model id', () => {
+    setAnthropicKey('a')
+    setAiEnsemble({
+      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      verifiers: [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }],
+    })
+    const ps = fusionParticipants()
+    const names = ps.map((p) => p.generator)
+    expect(new Set(names).size).toBe(2) // distinct names despite same provider
+    expect(names[0]).toContain('claude-opus-4-8')
+  })
+
+  it('empty when no usable generator', () => {
+    setAiProvider('deepseek') // no key
+    expect(fusionParticipants()).toEqual([])
+  })
+})

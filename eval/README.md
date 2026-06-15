@@ -71,6 +71,37 @@ call per case).
   `uncertain`); absent entries default to `confirm` (surface), so without the
   file `--cross-verify` is a no-op. This keeps the mock path deterministic.
 
+### Measuring the multi-generator RECALL lift (`--fusion generate`, Plan O)
+
+`--cross-verify` is **precision-only**: a single generator produces findings and
+the others can only PRUNE them. `--fusion generate` measures the orthogonal win —
+**recall** from independent generators. The review runs once **per generator**,
+the union is **dedup-merged** (via the shared `findingsMatch` predicate in
+`src/lib/ai/findingMatch.ts`, the same notion the app's `mergeGeneratorFindings`
+uses), then cross-confirmed before scoring. A real finding only ONE generator
+caught now enters the union — so multi-gen catches **more** of a case's known-real
+findings. `--fusion generate` implies `--cross-verify` (the merged union is
+cross-confirmed).
+
+To measure the lift, run single-gen vs multi-gen and compare **recall**:
+
+```bash
+pnpm eval -- --live                    # single-generator baseline
+pnpm eval -- --live --fusion generate  # multi-generator union (recall)
+```
+
+Expect `--fusion generate` to **raise recall** (it surfaces real bugs only one
+model caught) at a higher token cost (every generator generates AND verifies).
+
+- In **`--live`**, two stand-in generators use the **same** live provider (harness
+  simplicity — the app fans out to the distinct ensemble models the user picked).
+- In **`--mock`**, each generator reads its own scripted response map from
+  `eval/golden/<case>/mock/responses.<gen>.json` (`<gen>` ∈ `a`, `b`, `c`…). When
+  a case has ≥2 such files, give each generator a DIFFERENT subset of the case's
+  real findings to demonstrate the union catching more than either alone. With no
+  per-gen files the runner falls back to the base `responses.json` for every
+  generator (deterministic, but no recall lift — the union equals one generator).
+
 The runner prints a per-case + aggregate table and a one-line verdict, and writes
 a full JSON dump to `eval/results/` (gitignored). It exits **non-zero** when the
 aggregate **recall** drops below — or the **noise-rate** rises above — the gates

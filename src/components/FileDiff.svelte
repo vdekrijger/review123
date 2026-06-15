@@ -31,6 +31,8 @@
     key: string
     /** Cross-model verification (Plan M) — drives the "confirmed by N/M" chip. */
     verification?: import('../lib/ai/schemas').FindingVerification
+    /** Multi-generator provenance (Plan O) — drives the "raised by A,B" chip. */
+    raisedBy?: string[]
   }
 
   interface Props {
@@ -696,6 +698,7 @@
                 severity={finding.severity}
                 body={finding.body}
                 verification={finding.verification}
+                raisedBy={finding.raisedBy}
                 line={finding.line}
                 anchored={true}
                 compact={true}
@@ -753,6 +756,7 @@
             severity={finding.severity}
             body={finding.body}
             verification={finding.verification}
+            raisedBy={finding.raisedBy}
             line={finding.line}
             anchored={false}
             findingKey={finding.key}

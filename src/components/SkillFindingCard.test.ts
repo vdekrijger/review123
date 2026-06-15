@@ -196,3 +196,27 @@ describe('SkillFindingCard — actions', () => {
     expect(onAdd).not.toHaveBeenCalled()
   })
 })
+
+describe('SkillFindingCard — raised-by chip (Plan O)', () => {
+  const verif = (polled: number) => ({ confirmedBy: 2, polledModels: polled, surfaced: true, perModel: [] })
+
+  it('shows "raised by B" when one model raised it but more were polled (recall catch)', () => {
+    renderCard({ raisedBy: ['Anthropic'], verification: verif(2) })
+    expect(screen.getByText('raised by Anthropic')).toBeTruthy()
+  })
+
+  it('shows "raised by A, B" when a subset of the polled models raised it', () => {
+    renderCard({ raisedBy: ['DeepSeek', 'Anthropic'], verification: verif(3) })
+    expect(screen.getByText('raised by DeepSeek, Anthropic')).toBeTruthy()
+  })
+
+  it('no chip when every polled model raised it (no signal)', () => {
+    const { container } = renderCard({ raisedBy: ['DeepSeek', 'Anthropic'], verification: verif(2) })
+    expect(container.querySelector('.skill-raised-chip')).toBeNull()
+  })
+
+  it('no chip when raisedBy is absent (verify mode)', () => {
+    const { container } = renderCard({})
+    expect(container.querySelector('.skill-raised-chip')).toBeNull()
+  })
+})

@@ -5,11 +5,15 @@
  * even with many confirms. Display-only, no network, no analytics.
  */
 
+import type { Lens } from './lenses'
+
 export interface VerifierImpactRow {
   confirms: number
   refutes: number
   uncertains: number
   decisive: number
+  /** Lens this verifier judged through (Plan O Part B). */
+  lens?: Lens
 }
 
 /** Pluralize: "1 finding" / "2 findings". */
@@ -19,10 +23,19 @@ function plural(n: number, word: string): string {
 
 /**
  * Impact phrase for the GENERATOR: how many of its findings survived
- * verification (surfaced). E.g. "4 surfaced findings".
+ * verification (surfaced), plus — in Plan O 'generate' mode — how many it caught
+ * that NO other model did (the recall headline). E.g. "4 surfaced findings" or
+ * "4 surfaced findings · caught 2 the others missed".
  */
-export function formatGeneratorImpact(surfaced: number): string {
-  return plural(surfaced, 'surfaced finding')
+export function formatGeneratorImpact(surfaced: number, uniqueCatch = 0): string {
+  const base = plural(surfaced, 'surfaced finding')
+  if (uniqueCatch > 0) return `${base} · caught ${uniqueCatch} the others missed`
+  return base
+}
+
+/** Capitalized "<lens> lens" label, e.g. "security lens". Empty when no lens. */
+export function formatLensLabel(lens: Lens | undefined): string {
+  return lens ? `${lens} lens` : ''
 }
 
 /**
@@ -33,15 +46,16 @@ export function formatGeneratorImpact(surfaced: number): string {
  *   "no findings"              (nothing to verify)
  */
 export function formatVerifierImpact(row: VerifierImpactRow): string {
+  const lensPrefix = row.lens ? `${row.lens} lens · ` : ''
   const total = row.confirms + row.refutes + row.uncertains
-  if (total === 0) return 'no findings'
+  if (total === 0) return `${lensPrefix}no findings`
   const tally = `${row.confirms}c/${row.refutes}r`
   if (row.decisive === 0) {
-    return `rubber-stamped · ${tally}`
+    return `${lensPrefix}rubber-stamped · ${tally}`
   }
   // A single decisive refute is the highest-signal case: it removed a finding.
   if (row.decisive === 1 && row.refutes >= 1) {
-    return `1 decisive refute (removed a finding) · ${tally}`
+    return `${lensPrefix}1 decisive refute (removed a finding) · ${tally}`
   }
-  return `${plural(row.decisive, 'decisive vote')} · ${tally}`
+  return `${lensPrefix}${plural(row.decisive, 'decisive vote')} · ${tally}`
 }

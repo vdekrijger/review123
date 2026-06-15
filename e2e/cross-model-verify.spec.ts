@@ -265,6 +265,92 @@ test('single-model ensemble: skill card shows ONLY the aggregate footer, no per-
   await expect(page.locator('.skill-model-breakdowns')).toHaveCount(0)
 })
 
+// ---------------------------------------------------------------------------
+// Plan O — multi-generator fusion ('generate' mode)
+// ---------------------------------------------------------------------------
+
+// In 'generate' mode BOTH providers generate skill findings. DeepSeek raises
+// only the line-2 finding; Anthropic raises a UNIQUE line-4 finding DeepSeek
+// missed. On cross-confirm both confirm the other's → both surface, and the
+// line-4 finding shows "raised by Anthropic" provenance (the recall win).
+const DEEPSEEK_GEN = {
+  skillName: 'Security Reviewer',
+  findings: [
+    { path: 'src/feature.ts', line: 2, severity: 'high', body: 'Shared bug: unsanitized input' },
+  ],
+}
+const ANTHROPIC_GEN = {
+  skillName: 'Security Reviewer',
+  findings: [
+    { path: 'src/feature.ts', line: 4, severity: 'high', body: 'Anthropic-only bug: missing authz check' },
+  ],
+}
+
+// DeepSeek in 'generate' mode: skill-review system prompt → its generated set;
+// verify (adversarial) prompt → confirm everything; summary stream unchanged.
+async function setupDeepseekGenerate(page: import('@playwright/test').Page) {
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string }> } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* non-JSON */ }
+    if (body?.stream === true) {
+      return route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }, body: makeDeepSeekStreamResponse(SUMMARY_TEXT) })
+    }
+    const system = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
+    const user = body?.messages?.find((m) => m.role === 'user')?.content ?? ''
+    if (system.includes('adversarial verifier')) {
+      const ids = [...user.matchAll(/"id":\s*"([^"]+)"/g)].map((m) => m[1])
+      const verdicts = ids.map((id) => ({ id, verdict: 'confirm', reason: 'agree' }))
+      return route.fulfill({ status: 200, json: { choices: [{ message: { role: 'assistant', content: JSON.stringify({ verdicts }) }, finish_reason: 'stop', index: 0 }] } })
+    }
+    if (system.includes('reviewer persona') || system.includes('security reviewer')) {
+      return route.fulfill({ status: 200, json: { choices: [{ message: { role: 'assistant', content: JSON.stringify(DEEPSEEK_GEN) }, finish_reason: 'stop', index: 0 }] } })
+    }
+    return route.fulfill({ status: 200, json: { choices: [{ message: { role: 'assistant', content: JSON.stringify({ level: 'minor-changes', evidence: ['src/feature.ts modified'], notAnalyzed: [] }) }, finish_reason: 'stop', index: 0 }] } })
+  })
+}
+
+// Anthropic in 'generate' mode: skill-review prompt → its UNIQUE finding;
+// verify prompt → confirm everything.
+async function setupAnthropicGenerate(page: import('@playwright/test').Page) {
+  await page.route('**/api.anthropic.com/**', async (route) => {
+    let body: { system?: string; messages?: Array<{ role: string; content: string }> } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* non-JSON */ }
+    const system = (body?.system ?? '').toLowerCase()
+    const user = body?.messages?.find((m) => m.role === 'user')?.content ?? ''
+    if (system.includes('adversarial verifier')) {
+      const ids = [...user.matchAll(/"id":\s*"([^"]+)"/g)].map((m) => m[1])
+      const verdicts = ids.map((id) => ({ id, verdict: 'confirm', reason: 'agree' }))
+      return route.fulfill({ status: 200, json: { content: [{ type: 'text', text: JSON.stringify({ verdicts }) }], usage: { input_tokens: 10, output_tokens: 5 } } })
+    }
+    return route.fulfill({ status: 200, json: { content: [{ type: 'text', text: JSON.stringify(ANTHROPIC_GEN) }], usage: { input_tokens: 10, output_tokens: 5 } } })
+  })
+}
+
+test('fusion generate: a finding only one model raised surfaces with "raised by" provenance (recall)', async ({ page }) => {
+  await setupGithub(page)
+  await setupDeepseekGenerate(page)
+  await setupAnthropicGenerate(page)
+  // Two keys + fusionMode 'generate' → both models generate; the union surfaces
+  // findings only one caught.
+  await seedAll(page, seedSettings({ anthropicKey: 'sk-ant-test-key', fusionMode: 'generate' }))
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  await page.getByRole('button', { name: /run my reviewers/i }).click()
+
+  // The Anthropic-only finding (which DeepSeek missed) SURFACES — the recall win.
+  await expect(page.getByText(/Anthropic-only bug/i)).toBeVisible({ timeout: 15_000 })
+  // It carries "raised by Anthropic" provenance and a confirmed-by chip.
+  const uniqueCard = page.locator('.skill-finding', { hasText: 'Anthropic-only bug' })
+  await expect(uniqueCard.locator('.skill-raised-chip')).toContainText(/raised by/i)
+  await expect(uniqueCard.locator('.skill-verify-chip')).toContainText(/confirmed by \d+\/\d+ models/i)
+  // The shared finding is also present.
+  await expect(page.getByText(/Shared bug/i)).toBeVisible()
+})
+
 test('single-key control: no cross-verify UI (no chip, no lower-confidence group)', async ({ page }) => {
   await setupGithub(page)
   await setupDeepseek(page)

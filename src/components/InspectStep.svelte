@@ -351,7 +351,7 @@
   // Split into two maps: file-level (null line) stays above the file in InspectStep;
   // line-bearing findings are passed into FileDiff via skillFindings prop.
   // Shape: Map<path, entry[]>
-  type SuggestionEntry = { skillName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string; verification?: import('../lib/ai/schemas').FindingVerification }
+  type SuggestionEntry = { skillName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string; verification?: import('../lib/ai/schemas').FindingVerification; raisedBy?: string[] }
 
   /** True when cross-model verification demoted this finding (flagged by one, not confirmed). */
   function isDemoted(s: SuggestionEntry): boolean {
@@ -374,6 +374,7 @@
           body: finding.body,
           key: `${review.skillId}:${finding.path}:${finding.line}:${finding.body.slice(0, 30)}`,
           verification: finding.verification,
+          raisedBy: finding.raisedBy,
         })
         map.set(finding.path, arr)
       }
@@ -418,6 +419,7 @@
           body: s.body,
           key: s.key,
           verification: s.verification,
+          raisedBy: s.raisedBy,
         }))
       if (lineOnly.length > 0) map.set(path, lineOnly)
     }
@@ -1081,6 +1083,7 @@
                   severity={suggestion.severity}
                   body={suggestion.body}
                   verification={suggestion.verification}
+                  raisedBy={suggestion.raisedBy}
                   line={suggestion.line}
                   anchored={false}
                   findingKey={suggestion.key}
@@ -1126,6 +1129,7 @@
                 severity={suggestion.severity}
                 body={suggestion.body}
                 verification={suggestion.verification}
+                raisedBy={suggestion.raisedBy}
                 line={suggestion.line}
                 anchored={false}
                 findingKey={suggestion.key}
