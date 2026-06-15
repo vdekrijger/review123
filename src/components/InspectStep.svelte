@@ -7,6 +7,7 @@
   import type { DiffMode } from '../lib/settings/settings'
   import { getSettings, setTreeOpen, setFocusMode, type FocusMode } from '../lib/settings/settings'
   import { settingsState } from '../lib/settings/settingsState.svelte'
+  import { formatUsageLabel } from '../lib/ai/tokenCost'
   import { activeProviderHasKey } from '../lib/llm/config'
   import type { DiffWidth } from '../lib/settings/settings'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
@@ -573,6 +574,12 @@
                 verified with {entry.state.toolCallsUsed} tool {entry.state.toolCallsUsed === 1 ? 'call' : 'calls'}
               </span>
             {/if}
+            {#if settingsState.current.showTokenCost}
+              {@const usageLabel = formatUsageLabel(entry.state.usage)}
+              {#if usageLabel}
+                <span class="skill-usage-footer" aria-label="Token usage">·· {usageLabel}</span>
+              {/if}
+            {/if}
           {:else if entry.state.status === 'error'}
             <span class="skill-status-chip chip-error" aria-label="Error, retry available">
               ↻ error
@@ -1118,6 +1125,13 @@
   .skill-deep-note {
     font-size: 0.72rem;
     color: var(--text-muted);
+  }
+
+  .skill-usage-footer {
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    opacity: 0.7;
   }
 
   .chip-queued {
