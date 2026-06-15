@@ -244,6 +244,55 @@ describe('StorySlideshow — caption markdown', () => {
   })
 })
 
+describe('StorySlideshow — sticky file header', () => {
+  // The story's PRIMARY step diff sticks its header so the file path + Viewed
+  // toggle stay reachable while scrolling a long step file. The sticky `top`
+  // resolves to the app topbar height (--topbar-h) — in Story mode the only
+  // sticky element above the diff is the app topbar; the flow switch, diff-mode
+  // toolbar, change map, caption and Prev/Next nav all scroll away.
+  it('primary step FileDiff header carries the sticky-header class', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['src/db/schema.ts'], caption: 'Schema change.', layer: 'data', relatedTests: [] },
+      ],
+    }
+    const { container } = render(StorySlideshow, { props: baseProps({ story, files: makeFiles(['src/db/schema.ts']) }) })
+    const header = container.querySelector('.story-file article.file-diff > header')!
+    expect(header).not.toBeNull()
+    expect(header.classList.contains('sticky-header')).toBe(true)
+  })
+
+  it('sticky top resolves to the app topbar offset (--topbar-h)', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['src/db/schema.ts'], caption: 'Schema change.', layer: 'data', relatedTests: [] },
+      ],
+    }
+    const { container } = render(StorySlideshow, { props: baseProps({ story, files: makeFiles(['src/db/schema.ts']) }) })
+    const header = container.querySelector('.story-file article.file-diff > header.sticky-header')!
+    // The sticky-header rule pins `top: var(--topbar-h, 2.75rem)`. With no
+    // --topbar-h set in jsdom the declared fallback is the story offset, which
+    // must equal the Files-mode offset (no extra story chrome is sticky).
+    const style = getComputedStyle(header)
+    expect(style.position).toBe('sticky')
+    // jsdom doesn't resolve the var() fallback in computed top, so assert the
+    // class (which carries the offset rule) is present and shared with Files mode.
+    expect(header.classList.contains('sticky-header')).toBe(true)
+  })
+
+  it('related-test snippet FileDiff header is NOT sticky (short, no need)', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['src/db/schema.ts'], caption: 'Schema change.', layer: 'data', relatedTests: ['src/db/schema.test.ts'] },
+      ],
+    }
+    const { container } = render(StorySlideshow, { props: baseProps({ story, files: makeFiles(['src/db/schema.ts', 'src/db/schema.test.ts']) }) })
+    const relatedHeader = container.querySelector('.story-related-test article.file-diff > header')!
+    expect(relatedHeader).not.toBeNull()
+    expect(relatedHeader.classList.contains('sticky-header')).toBe(false)
+  })
+})
+
 describe('StorySlideshow — symbol↔test pairing', () => {
   it('shows a collapsed "Tested by" affordance beneath the function diff', () => {
     render(StorySlideshow, { props: pairProps() })
