@@ -10,6 +10,7 @@
  */
 
 import type { Graph, GraphResult, NodeStatus } from '../diagram/types'
+import { isGeneratedPath } from '../diff/generated'
 
 // Re-export so consumers can import everything from one place.
 export type { Graph, GraphResult }
@@ -612,6 +613,35 @@ export function dedupeStorySteps(story: StoryOrderResult): StoryOrderResult {
   }
 
   return { steps: out }
+}
+
+/**
+ * Deterministic post-process that sinks GENERATED-file steps to the END of the
+ * story, after the narrative — generated artifacts (lockfiles, snapshots, codegen
+ * output) are the lowest-priority reading and shouldn't interrupt the data → api
+ * → logic → tests → ui flow. The prompt already requests this; this enforces it
+ * in code so a non-compliant model can't break it.
+ *
+ * A step is "generated" when EVERY one of its primary `files` is a generated
+ * path. A mixed step (some hand-written files) stays in place — its generated
+ * files are incidental to a real change. Stable: preserves relative order within
+ * the generated and non-generated groups. Re-indexes 0..n-1. Pure.
+ *
+ * Path-only detection (story steps carry filenames, not contents) — matches the
+ * file-tree's path-only stance.
+ */
+export function sinkGeneratedSteps(story: StoryOrderResult): StoryOrderResult {
+  const stepIsGenerated = (s: StoryStep): boolean =>
+    s.files.length > 0 && s.files.every((f) => isGeneratedPath(normalizeStoryPath(f)))
+
+  const normal: StoryStep[] = []
+  const generated: StoryStep[] = []
+  for (const step of story.steps) {
+    if (stepIsGenerated(step)) generated.push(step)
+    else normal.push(step)
+  }
+  const ordered = [...normal, ...generated]
+  return { steps: ordered.map((s, i) => ({ ...s, index: i })) }
 }
 
 /**

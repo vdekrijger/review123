@@ -7,6 +7,7 @@
   import { type TestFileDisplay } from '../lib/settings/settings'
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import { langForFilename, classifyNoiseLines } from '../lib/diff/codeNoise'
+  import { isGeneratedFile } from '../lib/diff/generated'
   import { isTestFile } from '../lib/testFile'
   import type { Draft } from '../lib/drafts/drafts.svelte'
   import DraftThread from './DraftThread.svelte'
@@ -110,6 +111,13 @@
   const focusMode = $derived<FocusMode>(settingsState.current.focusMode)
   const noiseLang = $derived(langForFilename(file.filename))
 
+  // A GENERATED file (lockfile, *.min.*, codegen output, snapshot, …) gets the
+  // SAME focus-mode treatment as imports/comments — but for the WHOLE file: when
+  // focus mode is on, every code line is dimmed (never hidden/collapsed). The
+  // header also shows a `generated` chip so the file is labelled. Detection uses
+  // the path plus loaded contents (the `@generated` marker) when available.
+  const isGenerated = $derived(isGeneratedFile(file.filename, contents))
+
   /** True for a classified NoiseKind under the active focusMode. */
   function dimsKind(kind: ReturnType<typeof classifyNoiseLines>[number]): boolean {
     if (focusMode === 'off' || kind === null) return false
@@ -143,6 +151,15 @@
    * decorate each side's column separately. Unified has a single column.
    */
   function decorateColumn(cells: Element[]): void {
+    // Generated file: dim EVERY non-empty line (the whole file is noise). This
+    // is language-agnostic — generated files (lockfiles, *.map, …) often have no
+    // recognised code language, so we can't rely on classifyNoiseLines here.
+    if (isGenerated) {
+      for (const cell of cells) {
+        cell.classList.toggle('dimmed-noise', cellText(cell).trim() !== '')
+      }
+      return
+    }
     const kinds = classifyNoiseLines(cells.map(cellText), noiseLang)
     for (let i = 0; i < cells.length; i++) {
       cells[i].classList.toggle('dimmed-noise', dimsKind(kinds[i]))
@@ -156,7 +173,9 @@
    * the span-aware classifier.
    */
   function decorateRows(root: HTMLElement): void {
-    if (focusMode === 'off' || noiseLang === null) {
+    // Nothing to dim when focus is off, or for a non-generated file with no
+    // recognised language. Generated files dim regardless of language.
+    if (focusMode === 'off' || (noiseLang === null && !isGenerated)) {
       for (const cell of root.querySelectorAll('.dimmed-noise')) {
         cell.classList.remove('dimmed-noise')
       }
@@ -481,6 +500,9 @@
       {#if isTest && testFileDisplay !== 'normal'}
         <span class="test-chip chip">test</span>
       {/if}
+      {#if isGenerated}
+        <span class="generated-chip chip">generated</span>
+      {/if}
       <label class="viewed-label">
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -514,7 +536,7 @@
     <div
       class="focus-dim-host"
       data-focus-mode={focusMode}
-      use:focusDim={[focusMode, file.filename, mode]}
+      use:focusDim={[focusMode, file.filename, mode, isGenerated]}
     >
     <DiffView
       {diffFile}
@@ -756,6 +778,20 @@
     background: var(--accent-subtle);
     border-color: color-mix(in srgb, var(--accent) 50%, transparent);
     color: var(--accent);
+    font-size: 0.68rem;
+    padding: 0.08rem 0.4rem;
+    border-radius: 999px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+  }
+
+  /* Generated chip — neutral/muted treatment so it reads as "lower priority"
+     rather than an accent highlight. Shown whenever the file is detected as
+     generated, independent of focus mode. */
+  .generated-chip {
+    background: var(--surface-raised);
+    border: 1px solid var(--hairline);
+    color: var(--text-muted);
     font-size: 0.68rem;
     padding: 0.08rem 0.4rem;
     border-radius: 999px;

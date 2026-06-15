@@ -1,4 +1,5 @@
 import type { PrFile } from '../github/types'
+import { isGeneratedPath } from '../diff/generated'
 
 export interface TreeNode {
   name: string
@@ -77,13 +78,27 @@ function collapse(node: MutableNode): TreeNode {
   }
 }
 
-/** Sort: directories before files, then alphabetical within each group. */
+/**
+ * Sort: directories before files; generated file leaves AFTER non-generated
+ * file leaves; alphabetical within each group.
+ *
+ * Generated detection here is PATH-only (the tree builder has no file
+ * contents); a content-marked-but-innocuous-path file won't sink in the tree,
+ * which is acceptable — the tree mirrors path structure and path-detected
+ * generated files (lockfiles, generated/ dirs, snapshots) are the common case.
+ */
 function sortNodes(nodes: MutableNode[]): MutableNode[] {
   return nodes.slice().sort((a, b) => {
     const aIsDir = a.file === null
     const bIsDir = b.file === null
     if (aIsDir && !bIsDir) return -1
     if (!aIsDir && bIsDir) return 1
+    // Both are file leaves: generated sinks below non-generated.
+    if (!aIsDir && !bIsDir) {
+      const aGen = isGeneratedPath(a.path)
+      const bGen = isGeneratedPath(b.path)
+      if (aGen !== bGen) return aGen ? 1 : -1
+    }
     return a.name.localeCompare(b.name)
   })
 }

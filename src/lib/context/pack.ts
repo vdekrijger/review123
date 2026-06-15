@@ -12,6 +12,7 @@
 
 import type { PrFile, PrMeta } from '../github/types'
 import { getFileAtRef } from '../github/api'
+import { isGeneratedPath } from '../diff/generated'
 
 // ---------------------------------------------------------------------------
 // CiInput — structural type accepted by pack (adapts to full CiSummary in Task 8)
@@ -55,19 +56,12 @@ export function estimateTokens(text: string): number {
 // Exclusion rules (EC-16e)
 // ---------------------------------------------------------------------------
 
-const LOCK_FILES = new Set(['pnpm-lock.yaml', 'package-lock.json', 'yarn.lock'])
-
-// Matches dist/ or generated/ as a path segment anywhere (including root-level)
-const GENERATED_PATH_RE = /(^|\/)dist\/|(^|\/)generated\//
-
-const GENERATED_FILENAME_RE = /\.min\.[^.]+$|\.map$/
-
+// Exclusion reuses the single source of truth for generated-PATH detection
+// (lib/diff/generated.ts). That module subsumes the old lockfile / dist /
+// generated / *.min / *.map rules and adds more (protobuf, snapshots, …), so
+// the packer now excludes everything the generated-file feature labels.
 function isExcluded(filename: string): boolean {
-  const base = filename.split('/').at(-1) ?? filename
-  if (LOCK_FILES.has(base)) return true
-  if (GENERATED_PATH_RE.test(filename)) return true
-  if (GENERATED_FILENAME_RE.test(base)) return true
-  return false
+  return isGeneratedPath(filename)
 }
 
 // ---------------------------------------------------------------------------

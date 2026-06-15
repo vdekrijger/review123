@@ -1133,7 +1133,7 @@ describe('validateAlternativesResult', () => {
 // validateStoryOrder (Plan H — Story mode)
 // ---------------------------------------------------------------------------
 
-import { validateStoryOrder, STORY_LAYERS, STORY_MAX_STEPS, normalizeStoryPath, matchStoryPath, dedupeStorySteps, salvageStoryOrder } from './schemas'
+import { validateStoryOrder, STORY_LAYERS, STORY_MAX_STEPS, normalizeStoryPath, matchStoryPath, dedupeStorySteps, salvageStoryOrder, sinkGeneratedSteps } from './schemas'
 import type { StoryOrderResult } from './schemas'
 
 describe('validateStoryOrder', () => {
@@ -1276,6 +1276,56 @@ describe('dedupeStorySteps', () => {
     // 'a.ts' is a primary file → stripped; 'a.test.ts' kept in step 0 only
     expect(out.steps[0].relatedTests).toEqual(['a.test.ts'])
     expect(out.steps[1].relatedTests).toEqual(['b.test.ts'])
+  })
+})
+
+describe('sinkGeneratedSteps', () => {
+  it('moves a fully-generated step to the end, preserving narrative order', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['pnpm-lock.yaml'], caption: 'lock', layer: 'config', relatedTests: [] },
+        { index: 1, files: ['src/api.ts'], caption: 'api', layer: 'api', relatedTests: [] },
+        { index: 2, files: ['src/ui.ts'], caption: 'ui', layer: 'ui', relatedTests: [] },
+      ],
+    }
+    const out = sinkGeneratedSteps(story)
+    expect(out.steps.map((s) => s.caption)).toEqual(['api', 'ui', 'lock'])
+    expect(out.steps.map((s) => s.index)).toEqual([0, 1, 2])
+  })
+
+  it('is stable within each group (multiple generated + normal steps)', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['app.min.js'], caption: 'min', layer: 'ui', relatedTests: [] },
+        { index: 1, files: ['src/a.ts'], caption: 'a', layer: 'data', relatedTests: [] },
+        { index: 2, files: ['bundle.js.map'], caption: 'map', layer: 'ui', relatedTests: [] },
+        { index: 3, files: ['src/b.ts'], caption: 'b', layer: 'logic', relatedTests: [] },
+      ],
+    }
+    const out = sinkGeneratedSteps(story)
+    expect(out.steps.map((s) => s.caption)).toEqual(['a', 'b', 'min', 'map'])
+  })
+
+  it('keeps a MIXED step (some hand-written files) in place', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['pnpm-lock.yaml', 'src/real.ts'], caption: 'mixed', layer: 'config', relatedTests: [] },
+        { index: 1, files: ['src/api.ts'], caption: 'api', layer: 'api', relatedTests: [] },
+      ],
+    }
+    const out = sinkGeneratedSteps(story)
+    expect(out.steps.map((s) => s.caption)).toEqual(['mixed', 'api'])
+  })
+
+  it('handles normalized paths (./ prefix) when detecting generated steps', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['./yarn.lock'], caption: 'lock', layer: 'config', relatedTests: [] },
+        { index: 1, files: ['src/x.ts'], caption: 'x', layer: 'logic', relatedTests: [] },
+      ],
+    }
+    const out = sinkGeneratedSteps(story)
+    expect(out.steps.map((s) => s.caption)).toEqual(['x', 'lock'])
   })
 })
 

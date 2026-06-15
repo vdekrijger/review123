@@ -89,6 +89,28 @@ describe('StorySlideshow — navigation', () => {
   })
 })
 
+describe('StorySlideshow — generated steps sink last', () => {
+  it('orders a generated-file step LAST regardless of its model index', async () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['pnpm-lock.yaml'], caption: 'Lockfile bumped.', layer: 'config', relatedTests: [] },
+        { index: 1, files: ['src/api/route.ts'], caption: 'API change.', layer: 'api', relatedTests: [] },
+        { index: 2, files: ['src/ui/Card.svelte'], caption: 'UI change.', layer: 'ui', relatedTests: [] },
+      ],
+    }
+    const files = makeFiles(['pnpm-lock.yaml', 'src/api/route.ts', 'src/ui/Card.svelte'])
+    render(StorySlideshow, { props: baseProps({ story, files }) })
+    // First slide is the API change, NOT the lockfile.
+    expect(screen.getByText('API change.')).toBeInTheDocument()
+    expect(screen.queryByText('Lockfile bumped.')).not.toBeInTheDocument()
+    const next = screen.getAllByRole('button', { name: 'Next step' })[0]
+    await fireEvent.click(next) // → UI change
+    await fireEvent.click(next) // → Lockfile (last)
+    expect(screen.getByText('Lockfile bumped.')).toBeInTheDocument()
+    expect(screen.getAllByText('3 of 3').length).toBeGreaterThan(0)
+  })
+})
+
 describe('StorySlideshow — related tests + content', () => {
   it('renders related test files inline beneath the step', () => {
     render(StorySlideshow, { props: baseProps() })

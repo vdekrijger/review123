@@ -115,4 +115,32 @@ describe('buildFileTree', () => {
     const root = buildFileTree([])
     expect(root.children).toHaveLength(0)
   })
+
+  it('sorts generated file leaves AFTER non-generated ones in the same dir', () => {
+    // pnpm-lock.yaml (generated) should sink below index.ts despite "i" < "p".
+    const files = [makeFile('src/pnpm-lock.yaml'), makeFile('src/index.ts')]
+    const root = buildFileTree(files)
+    const names = root.children[0].children.map(n => n.name)
+    expect(names).toEqual(['index.ts', 'pnpm-lock.yaml'])
+  })
+
+  it('keeps non-generated files alpha-sorted, then generated alpha-sorted', () => {
+    const files = [
+      makeFile('app.min.js'), // generated
+      makeFile('zebra.ts'), // normal (alpha-last among normals)
+      makeFile('alpha.ts'), // normal
+      makeFile('bundle.js.map'), // generated
+    ]
+    const root = buildFileTree(files)
+    const names = root.children.map(n => n.name)
+    // normals first (alpha), then generated (alpha)
+    expect(names).toEqual(['alpha.ts', 'zebra.ts', 'app.min.js', 'bundle.js.map'])
+  })
+
+  it('keeps directories before all files including generated ones', () => {
+    const files = [makeFile('yarn.lock'), makeFile('src/a.ts')]
+    const root = buildFileTree(files)
+    expect(root.children[0].name).toBe('src') // dir first
+    expect(root.children[1].name).toBe('yarn.lock') // generated file last
+  })
 })
