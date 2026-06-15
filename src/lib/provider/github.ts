@@ -39,6 +39,11 @@ function toRef(ref: PrRefX): { owner: string; repo: string; number: number } {
   return { owner: ref.owner, repo: ref.repo, number: ref.number }
 }
 
+/** Escape a string for safe inclusion in a RegExp (find_references symbols). */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 // ---------------------------------------------------------------------------
 // Viewer identity (shared by getViewerLogin and the mining helpers)
 // ---------------------------------------------------------------------------
@@ -244,6 +249,55 @@ export const githubProvider: ReviewProvider = {
       for (const m of item.text_matches ?? []) {
         if (m.fragment) lines.push(m.fragment)
       }
+    }
+    return lines.join('\n')
+  },
+
+  // Plan G deep review: targeted "find references" for a symbol. Built on the
+  // same /search/code endpoint but more precise than raw searchCode:
+  //  - matches the symbol on word boundaries (drops substring-only fragments,
+  //    e.g. "configure" when searching "config"),
+  //  - dedups to one block per file and ranks files by match count, so the
+  //    model sees WHERE a symbol lives, not a flat fragment dump.
+  // Requires auth (GitHub rejects unauthenticated /search/code). Errors
+  // propagate as GithubApiError → converted to tool-result errors by the
+  // deep-review toolkit.
+  async findReferences(repo: { owner: string; repo: string }, symbol: string): Promise<string> {
+    const q = encodeURIComponent(`${symbol} repo:${repo.owner}/${repo.repo}`)
+    const data = await ghFetch<{
+      total_count: number
+      items: {
+        path: string
+        text_matches?: { fragment?: string }[]
+      }[]
+    }>(`/search/code?q=${q}&per_page=20`, {
+      headers: { Accept: 'application/vnd.github.text-match+json' },
+    })
+    if (!data.items || data.items.length === 0) return `No references to "${symbol}" found.`
+
+    // Word-boundary matcher — the symbol must appear as a whole identifier.
+    const boundary = new RegExp(`(?<![\\w$])${escapeRegExp(symbol)}(?![\\w$])`)
+
+    // Keep only fragments where the symbol appears on a boundary; group by file.
+    const byFile = new Map<string, string[]>()
+    for (const item of data.items) {
+      const frags = (item.text_matches ?? [])
+        .map((m) => m.fragment)
+        .filter((f): f is string => typeof f === 'string' && boundary.test(f))
+      if (frags.length === 0) continue
+      const existing = byFile.get(item.path) ?? []
+      byFile.set(item.path, [...existing, ...frags])
+    }
+    if (byFile.size === 0) return `No exact references to "${symbol}" found (only substring matches).`
+
+    // Rank files by fragment count (most references first), cap at 10 files.
+    const ranked = [...byFile.entries()]
+      .sort((a, b) => b[1].length - a[1].length)
+      .slice(0, 10)
+    const lines: string[] = [`References to "${symbol}" in ${byFile.size} file(s):`]
+    for (const [path, frags] of ranked) {
+      lines.push(`## ${path} (${frags.length})`)
+      for (const f of frags) lines.push(f)
     }
     return lines.join('\n')
   },

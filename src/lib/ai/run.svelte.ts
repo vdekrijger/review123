@@ -38,6 +38,7 @@ import { getProvider } from '../llm/providers'
 import { llmToolLoop as defaultLlmToolLoop } from '../llm/llmToolLoop'
 import {
   createDeepReviewToolkit,
+  createDeepReviewCache,
   resolveTaskMode,
   DEEP_REVIEW_MAX_TOOL_CALLS,
 } from './deepReview'
@@ -338,6 +339,14 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   const { prKey, repo, isPrivate, pack, ci, ask: askConsent, deepReview, coachCodeContext, verifyCodeContext } = input
+
+  // Shared per-REVIEW deep-review fetch cache (Plan G cost reduction). Created
+  // ONCE per createAiRun — and the Review route makes a fresh run per PR — so
+  // it is naturally scoped to this PR/run and discarded (along with the whole
+  // run) when the user opens a different PR. No cross-PR leak: a sibling PR
+  // gets its own createAiRun and thus its own cache. Every deep task in THIS
+  // review shares it, so once any task reads a file the others reuse it.
+  const deepCache = createDeepReviewCache()
 
   // Reactive panel state holders
   const summaryState = $state<PanelState<string>>({ status: 'idle' })
@@ -1176,6 +1185,39 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   /**
+   * Completeness guard (Plan G anti-lazy-loop). A deep task can declare "done"
+   * having explored nothing — emitting code-dependent claims it never verified.
+   * When `completeness` is supplied, runDeepJson checks the loop's FIRST answer:
+   * if it used ZERO tool calls on a NON-TRIVIAL change AND the output makes a
+   * claim that depends on code (per the task's predicate), it nudges the loop
+   * ONCE to read the relevant file(s) or state confidence, then re-runs the
+   * loop. The re-run shares the SAME toolkit, so its tool calls keep counting
+   * against the same per-task budget (the nudge cannot blow the budget) and its
+   * fetches reuse the shared cache.
+   *
+   * Heuristic (deliberately conservative — never forces tools on trivial work):
+   *  - ZERO tool calls only (any verification already breaks the lazy pattern).
+   *  - `nonTrivial` gates out tiny changes (e.g. ≤1 changed file) where reading
+   *    isn't warranted.
+   *  - `outputClaimsCode(result)` must be true: the answer asserts something
+   *    about code (e.g. a verdict with evidence, a finding) rather than the
+   *    silent "no issues" outcome. A clean "nothing to flag" answer is NOT
+   *    nudged.
+   * At most ONE nudge per task.
+   */
+  interface CompletenessGuard<T> {
+    nonTrivial: boolean
+    outputClaimsCode: (result: T) => boolean
+  }
+
+  const COMPLETENESS_NUDGE =
+    'You finalized WITHOUT using any verification tools, yet your answer makes ' +
+    'claims that depend on code not shown in the diff. Before finalizing, read ' +
+    'the relevant file(s) with the tools to confirm those claims — or, if you ' +
+    'are confident without reading them, drop any claim you cannot stand behind ' +
+    'and restate your answer. Respond with the JSON only.'
+
+  /**
    * Run one deep (agentic) JSON task: tool loop → validate → at most one
    * single-pass repair grounded in the loop's tool-verified output.
    */
@@ -1183,21 +1225,50 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     prompts: { system: string; user: string },
     validate: (x: unknown) => T | null,
     onActivity: (line: string) => void,
+    completeness?: CompletenessGuard<T>,
   ): Promise<{ result: T; usage?: LlmUsage; toolCallsUsed: number }> {
-    const toolkit = createDeepReviewToolkit(deepReview!)
-    const loop = await llmToolLoop({
-      system: withDeepReviewGuidance(prompts.system, toolkit.tools.map((t) => t.name)),
-      user: prompts.user,
+    const toolkit = createDeepReviewToolkit(deepReview!, deepCache)
+    const system = withDeepReviewGuidance(prompts.system, toolkit.tools.map((t) => t.name))
+    const baseOpts = {
+      system,
       tools: toolkit.tools,
       executeTool: toolkit.executeTool,
       humanize: toolkit.humanize,
       maxToolCalls: DEEP_REVIEW_MAX_TOOL_CALLS,
-      onToolEvent: (ev) => onActivity(ev.detail),
-    })
+      onToolEvent: (ev: { detail: string }) => onActivity(ev.detail),
+    }
+
+    let loop = await llmToolLoop({ ...baseOpts, user: prompts.user })
+    let usage = loop.usage
+    let toolCallsUsed = loop.toolCallsUsed
+
+    // Completeness nudge (at most once): a zero-tool finalize that still claims
+    // code → re-run with a nudge. Only when the first answer parses to a valid
+    // code-claiming result (a broken answer goes to the repair pass below).
+    if (completeness && completeness.nonTrivial && loop.toolCallsUsed === 0) {
+      let firstValid: T | null = null
+      try {
+        firstValid = validate(JSON.parse(loop.content) as unknown)
+      } catch {
+        firstValid = null
+      }
+      if (firstValid !== null && completeness.outputClaimsCode(firstValid)) {
+        onActivity('Double-checking — no files were read for a code-dependent claim…')
+        const nudged = await llmToolLoop({
+          ...baseOpts,
+          user: `${prompts.user}\n\n${COMPLETENESS_NUDGE}`,
+        })
+        loop = nudged
+        usage = sumUsage(usage, nudged.usage)
+        // Total tool calls across both passes (toolkit budget is shared, so the
+        // re-run cannot exceed the per-task cap — accounting stays honest).
+        toolCallsUsed += nudged.toolCallsUsed
+      }
+    }
 
     try {
       const valid = validate(JSON.parse(loop.content) as unknown)
-      if (valid !== null) return { result: valid, usage: loop.usage, toolCallsUsed: loop.toolCallsUsed }
+      if (valid !== null) return { result: valid, usage, toolCallsUsed }
     } catch {
       // fall through to the repair pass
     }
@@ -1216,8 +1287,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     )
     return {
       result: repaired.result,
-      usage: sumUsage(loop.usage, repaired.usage),
-      toolCallsUsed: loop.toolCallsUsed,
+      usage: sumUsage(usage, repaired.usage),
+      toolCallsUsed,
     }
   }
 
@@ -1265,6 +1336,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       if (deep.enabled) {
         const deepOutcome = await runDeepJson<VerdictResult>(prompts, validateVerdict, (line) => {
           verdictState.activity = [...(verdictState.activity ?? []), line]
+        }, {
+          // Non-trivial = the PR touches more than one file (a single tiny file
+          // doesn't warrant forcing a read). A verdict that lists evidence is
+          // making code-dependent claims.
+          nonTrivial: ctx.includedFiles.length > 1,
+          outputClaimsCode: (r) => r.evidence.length > 0,
         })
         verdictResult = deepOutcome.result
         verdictUsage = deepOutcome.usage
@@ -1762,6 +1839,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           const entry = skillReviewsState[idx]
           entry.state = { ...entry.state, activity: [...(entry.state.activity ?? []), line] }
           onUpdate?.()
+        }, {
+          // A skill review that surfaces findings is making code-dependent
+          // claims; non-trivial when the PR touches more than one file.
+          nonTrivial: ctx.includedFiles.length > 1,
+          outputClaimsCode: (r) => r.findings.length > 0,
         })
         skillResult = deepOutcome.result
         skillUsage = deepOutcome.usage

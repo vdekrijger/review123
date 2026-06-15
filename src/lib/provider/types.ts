@@ -215,6 +215,21 @@ export interface ReviewProvider {
   searchCode?(repo: { owner: string; repo: string }, query: string): Promise<string>
 
   /**
+   * Find references to a SYMBOL (an identifier — function/type/variable name)
+   * across a repository (Plan G deep review tool). A more targeted sibling of
+   * searchCode: the provider matches the symbol on word boundaries (not as a
+   * substring), dedups hits to files, and ranks them. Returns a compact
+   * plain-text list (file + matched fragments) for feeding back to an LLM.
+   * Throws on API errors — the deep-review toolkit converts those to
+   * tool-result errors.
+   *
+   * Optional — capability by method presence (GitHub-only in v1; GitLab and
+   * Bitbucket have no usable symbol search wired yet). When absent, the
+   * deep-review tool list omits find_references.
+   */
+  findReferences?(repo: { owner: string; repo: string }, symbol: string): Promise<string>
+
+  /**
    * Return open PRs/MRs in the current user's review queue.
    * - authorIsMe=false → awaiting this user's review (reviewer-requested)
    * - authorIsMe=true  → authored by this user (open PRs)
