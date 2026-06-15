@@ -248,6 +248,21 @@
     clearHistory()
     history = []
   }
+
+  // First-run footnote: a subtle nudge to sign in / open Settings, shown only
+  // before the user has reviewed anything (empty history). It fades away
+  // naturally on their first review — it's a one-time nicety, not a banner.
+  let showFirstTimeHint = $derived(history.length === 0)
+
+  // SPA navigation for the hint's links — real <a href> for accessibility,
+  // intercepted so we route in-app instead of a full reload. Mirrors the
+  // goToSettings pattern used across the app (AiPanel, InspectStep, …).
+  function goTo(path: string) {
+    return (e: MouseEvent) => {
+      e.preventDefault()
+      navigate(path)
+    }
+  }
 </script>
 
 <!--
@@ -306,6 +321,21 @@
     <button type="submit">Review</button>
   </form>
   {#if error}<p role="alert" class="error">{error}</p>{/if}
+
+  <!-- First-run footnote: a single muted line directly under the input — NOT a
+       bordered card/section. Shown only before the first review (empty
+       history); content adapts to auth state. -->
+  {#if showFirstTimeHint}
+    {#if anyAuthConfigured}
+      <p class="input-hint">
+        Tip: open <a href="/settings" onclick={goTo('/settings')}>Settings</a> to tune reviewers, AI models, and appearance.
+      </p>
+    {:else}
+      <p class="input-hint">
+        New here? <a href="/settings/providers" onclick={goTo('/settings/providers')}>Sign in</a> with GitHub or GitLab and open <a href="/settings" onclick={goTo('/settings')}>Settings</a> to tune reviewers, AI models, and appearance.
+      </p>
+    {/if}
+  {/if}
 
   <!-- Whole section (header included) only exists when at least one queue
        provider has auth configured — signed-out users see no queue at all.
@@ -543,6 +573,26 @@
     color: var(--legend-removed-color);
     font-size: 0.9rem;
     margin-top: 0.5rem;
+  }
+
+  /* First-run footnote — a single unobtrusive muted line under the input.
+     Deliberately NOT a card/section: no border, no background, just text. */
+  .input-hint {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin: 0.6rem 0 0;
+    line-height: 1.4;
+  }
+
+  .input-hint a {
+    color: var(--text-muted);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 150ms ease;
+  }
+
+  .input-hint a:hover {
+    color: var(--text);
   }
 
   /* Queue section */
