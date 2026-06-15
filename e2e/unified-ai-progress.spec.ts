@@ -184,16 +184,24 @@ test('unified AI progress: pending panels show status line + skeleton (no bare s
   // The unified status line is what pending panels show (one per pending panel).
   expect(await page.locator('.ai-panel-loading .ai-status-line').count()).toBeGreaterThan(0)
 
-  // --- Surface 2: deep skill reviewer shows the unified status + activity log ---
+  // --- Surface 2: deep skill reviewer shows the COMPACT bounded run layout ---
+  // The many-concurrent case is organized as a single global "Running… (N)"
+  // indicator + one compact row per reviewer (spinner + name + ONLY the latest
+  // activity line, truncated) — NOT N stacked full activity logs.
   await page.getByRole('button', { name: 'Next step' }).click()
   await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
 
   await page.getByRole('button', { name: /run my reviewers \(1\)/i }).click()
 
-  // The honest per-reviewer status line ("Running Security Reviewer…") appears…
-  await expect(page.getByText('Running Security Reviewer…')).toBeVisible({ timeout: 5_000 })
-  // …beneath it, the loved activity log streams the tool line from the loop.
-  await expect(page.locator('.skill-run-progress .ai-activity-log')).toContainText('Reading src/feature.ts', { timeout: 10_000 })
+  // Single global "Running… (1)" indicator heads the running region.
+  const runningRegion = page.getByLabel('Reviewers running')
+  await expect(runningRegion).toContainText(/Running…\s*\(1\)/, { timeout: 5_000 })
+  // The compact row shows the reviewer NAME…
+  await expect(runningRegion.locator('.skill-running-name')).toContainText('Security Reviewer')
+  // …and ONLY its latest activity line (the single truncated row, not a full log).
+  await expect(runningRegion.locator('.skill-running-activity')).toContainText('Reading src/feature.ts', { timeout: 10_000 })
+  // The old per-reviewer full AiProgress treatment is gone — no stacked status line.
+  await expect(page.getByText('Running Security Reviewer…')).toHaveCount(0)
 
   // Eventually the reviewer completes and the finding renders.
   await expect(page.getByText(/Potential XSS vulnerability/i)).toBeVisible({ timeout: 20_000 })
