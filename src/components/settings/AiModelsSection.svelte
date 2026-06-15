@@ -9,7 +9,7 @@
   import { settingsState } from '../../lib/settings/settingsState.svelte'
   import { PROVIDERS, getProvider, getModelDef, type LlmProviderId } from '../../lib/llm/providers'
   import { llmTestConnection, LlmError } from '../../lib/llm/llm'
-  import { activeProviderHasKey, resolveEnsemble, MAX_ENSEMBLE_PARTICIPANTS } from '../../lib/llm/config'
+  import { activeProviderHasKey, resolveEnsemble } from '../../lib/llm/config'
   import { track } from '../../lib/analytics/analytics'
   import SecretInput from './SecretInput.svelte'
   import Spinner from '../Spinner.svelte'
@@ -124,7 +124,6 @@
   const usableEnsembleCount = $derived(ensembleRows.filter((r) => providerKeyed(r.participant.provider)).length)
   /** Cross-verify possible when ≥2 usable models (single-key multi-model counts). */
   const crossVerifyAvailable = $derived(usableEnsembleCount >= 2)
-  const canAddParticipant = $derived(ensembleRows.length < MAX_ENSEMBLE_PARTICIPANTS)
 
   /** Persist a rows list (index 0 = generator) back to aiEnsemble. */
   function commitRows(rows: { participant: EnsembleParticipant; isGenerator: boolean }[]) {
@@ -153,7 +152,6 @@
   }
 
   function addParticipant() {
-    if (!canAddParticipant) return
     // Default the new verifier to the active provider's default model.
     const p = settingsState.current.aiProvider
     const prov = getProvider(p)
@@ -504,11 +502,7 @@
         which earn their keep.
       </p>
     {/if}
-    {#if canAddParticipant}
-      <button type="button" class="ensemble-add" onclick={addParticipant}>+ Add a model</button>
-    {:else}
-      <p class="deep-review-hint">Maximum of {MAX_ENSEMBLE_PARTICIPANTS} models.</p>
-    {/if}
+    <button type="button" class="ensemble-add" onclick={addParticipant}>+ Add a model</button>
   </div>
 
   <div class="hint privacy-note">
