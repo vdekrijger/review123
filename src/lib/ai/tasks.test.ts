@@ -901,8 +901,8 @@ describe('coachPrompt', () => {
   it('system prompt carries the evidence-discipline calibration block', () => {
     const { system } = coachPrompt(drafts)
     expect(system).toContain('Evidence discipline')
-    expect(system).toMatch(/Ground every assessment in what you can SEE/i)
-    expect(system.toLowerCase()).toContain('provided context')
+    expect(system).toMatch(/ground every assessment.*in what you can SEE/i)
+    expect(system.toLowerCase()).toContain('codecontext')
     expect(system.toLowerCase()).toMatch(/neutral, factual phrasing over alarm/)
   })
 
@@ -977,6 +977,54 @@ describe('coachPrompt', () => {
     expect(parsed.existingPrComments).toEqual(['Existing comment.'])
     expect(parsed.chosenVerdict).toBe('COMMENT')
     expect(parsed.prContext).toBe('packed context')
+  })
+
+  // --- v16: per-comment code context (excerpt + fileWindow) ---
+
+  it('embeds per-comment codeContext (excerpt + fileWindow) on the matching draft', () => {
+    const { user } = coachPrompt(drafts, undefined, {
+      codeContexts: [
+        {
+          index: 0,
+          path: 'src/auth.ts',
+          line: 42,
+          side: 'RIGHT',
+          excerpt: '+ const userName = getUser()',
+          fileWindow: '42: const userName = getUser()',
+        },
+      ],
+    })
+    const parsed = JSON.parse(user)
+    expect(parsed.drafts[0].codeContext).toBeDefined()
+    expect(parsed.drafts[0].codeContext.excerpt).toContain('userName')
+    expect(parsed.drafts[0].codeContext.fileWindow).toContain('userName')
+    expect(parsed.drafts[0].codeContext.side).toBe('RIGHT')
+    // Draft 1 had no code context provided → none attached.
+    expect(parsed.drafts[1].codeContext).toBeUndefined()
+  })
+
+  it('omits fileWindow from codeContext when not provided', () => {
+    const { user } = coachPrompt(drafts, undefined, {
+      codeContexts: [
+        { index: 0, path: 'src/auth.ts', line: 42, side: 'RIGHT', excerpt: '+ x' },
+      ],
+    })
+    const parsed = JSON.parse(user)
+    expect(parsed.drafts[0].codeContext.excerpt).toBe('+ x')
+    expect('fileWindow' in parsed.drafts[0].codeContext).toBe(false)
+  })
+
+  it('system prompt instructs the model to VERIFY against codeContext rather than default to cannot-verify', () => {
+    const { system } = coachPrompt(drafts, undefined, {
+      codeContexts: [
+        { index: 0, path: 'src/auth.ts', line: 42, side: 'RIGHT', excerpt: '+ x' },
+      ],
+    })
+    // Mentions the concrete code-context evidence and the verify-don't-default rule.
+    expect(system).toContain('codeContext')
+    expect(system).toMatch(/VERIFY/)
+    expect(system.toLowerCase()).toContain('cannot verify')
+    expect(system.toLowerCase()).toMatch(/do not default|do not default to/)
   })
 })
 
@@ -1855,7 +1903,7 @@ describe('storyOrderPrompt', () => {
 })
 
 describe('PROMPT_VERSION', () => {
-  it('is bumped to 15 (story-mode robustness: cap + anti-overlap prompt)', () => {
-    expect(PROMPT_VERSION).toBe(15)
+  it('is bumped to 16 (coach per-comment code context: excerpt + fileWindow)', () => {
+    expect(PROMPT_VERSION).toBe(16)
   })
 })

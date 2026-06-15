@@ -11,9 +11,10 @@
 
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
+import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
 
-export const PROMPT_VERSION = 15
+export const PROMPT_VERSION = 16
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)
@@ -440,6 +441,14 @@ export interface CoachPromptOptions {
    * prContext field so accuracy/grounded can be assessed against real evidence.
    */
   contextText?: string
+  /**
+   * Per-comment CODE context (v16): the actual code at each draft's anchor —
+   * a hunk excerpt and (when available) a wider file window. Keyed by the same
+   * `index` as the drafts. Embedded on each draft as `codeContext` so the
+   * accuracy / grounded / specificity dimensions can VERIFY against real code
+   * rather than defaulting to "cannot verify against the diff".
+   */
+  codeContexts?: CoachCodeContext[]
 }
 
 /**
@@ -546,12 +555,21 @@ Field rules:
   shown in the diff" for a consistent accuracy. Keys: clarity, tone, actionable, accuracy, \
   duplicate, specificity, grounded.${verdictRules}
 
-Evidence discipline (IMPORTANT — apply to accuracy and grounded):
-- Ground every assessment in what you can SEE in the provided PR context. Do not speculate \
-  about code that is not shown.
-- When you cannot verify a claim because the relevant code is not in the provided context, \
-  say that in reasons.grounded ("couldn't verify against the provided context") instead of \
-  asserting the comment is wrong.
+Evidence discipline (IMPORTANT — apply to accuracy, grounded, and specificity):
+- Each draft carries a "codeContext" object with the ACTUAL code at the comment's anchor: \
+  "excerpt" is a hunk excerpt around path:line, and "fileWindow" (when present) is a wider \
+  numbered window of the file's contents around that line. This is the comment's own code — \
+  USE IT to verify the comment's claim. Do NOT default to "cannot verify against the diff" or \
+  "claims not verifiable" when codeContext shows the relevant code.
+- When codeContext is present, VERIFY accuracy and grounded against that concrete code: mark \
+  "consistent"/grounded=true when the code supports the claim, "contradicted" when the code \
+  shows the opposite. Only say "couldn't verify" (reasons.grounded / accuracy="questionable") \
+  when the provided excerpt AND fileWindow genuinely do not contain the code the claim is about.
+- specificity: the comment is specific when it names code that is actually present in the \
+  provided codeContext (identifier, function, line) — check the excerpt/fileWindow before \
+  grading it vague.
+- Still ground every assessment only in what you can SEE (codeContext + prContext). Do not \
+  speculate about code that is not shown.
 - Prefer neutral, factual phrasing over alarm. Grades must reflect evidence, not worst-case \
   speculation.
 
@@ -560,8 +578,31 @@ Be brief and concrete. Do not pad. Do not include any text outside the JSON obje
   // Cap prComments at 30, truncate each to 200 chars
   const capped = (prComments ?? []).slice(0, 30).map((c) => c.slice(0, 200))
 
+  // Per-comment code context (v16), keyed by draft index.
+  const codeByIndex = new Map<number, CoachCodeContext>()
+  for (const cc of options?.codeContexts ?? []) codeByIndex.set(cc.index, cc)
+
   const payload: unknown = {
-    drafts: drafts.map((d) => ({ index: d.index, path: d.path, line: d.line, body: d.body })),
+    drafts: drafts.map((d) => {
+      const cc = codeByIndex.get(d.index)
+      return {
+        index: d.index,
+        path: d.path,
+        line: d.line,
+        body: d.body,
+        ...(cc
+          ? {
+              codeContext: {
+                path: cc.path,
+                line: cc.line,
+                side: cc.side,
+                excerpt: cc.excerpt,
+                ...(cc.fileWindow ? { fileWindow: cc.fileWindow } : {}),
+              },
+            }
+          : {}),
+      }
+    }),
     ...(capped.length > 0 ? { existingPrComments: capped } : {}),
     ...(options?.verdict ? { chosenVerdict: options.verdict } : {}),
     ...(options?.contextText ? { prContext: options.contextText } : {}),

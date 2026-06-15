@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import VerdictStep from './VerdictStep.svelte'
-import { setGithubPat, saveGithubAuth, setDeepseekKey } from '../lib/settings/settings'
+import { setGithubPat, saveGithubAuth, setDeepseekKey, setShowTokenCost } from '../lib/settings/settings'
 import { _resetAuthStateForTest } from '../lib/auth/authState.svelte'
 import { createDraftStore } from '../lib/drafts/drafts.svelte'
 import type { PrRef } from '../lib/github/parse'
@@ -966,6 +966,52 @@ describe('VerdictStep', () => {
 
       await waitFor(() => expect(coachFn).toHaveBeenCalledOnce())
       expect(coachFn.mock.calls[0][2]).toBe('APPROVE')
+    })
+
+    // --- v16: token-cost footer on coach result (opt-in: settings.showTokenCost) ---
+
+    const USAGE = { prompt_tokens: 1000, completion_tokens: 200, total_tokens: 1200 }
+
+    /** coachFn stub returning a result WITH usage attached. */
+    function okCoachWithUsage() {
+      return vi.fn().mockResolvedValue({ ...makeCoachResult(), usage: USAGE })
+    }
+
+    async function coachOnce(coachFn: ReturnType<typeof okCoachWithUsage>) {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+      const { container } = render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn },
+      })
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+      await waitFor(() => expect(screen.getByLabelText(/clarity/i)).toBeInTheDocument())
+      return container
+    }
+
+    it('renders the token-cost footer when showTokenCost is on and usage present', async () => {
+      setShowTokenCost(true)
+      const container = await coachOnce(okCoachWithUsage())
+      const footer = container.querySelector('.coach-usage-footer')
+      expect(footer).not.toBeNull()
+      expect(footer!.textContent).toMatch(/1\.2k tokens/)
+      setShowTokenCost(false)
+    })
+
+    it('renders NOTHING when showTokenCost is off even with usage present', async () => {
+      setShowTokenCost(false)
+      const container = await coachOnce(okCoachWithUsage())
+      expect(container.querySelector('.coach-usage-footer')).toBeNull()
+    })
+
+    it('renders NOTHING when usage is absent even with showTokenCost on', async () => {
+      setShowTokenCost(true)
+      // okCoach() returns no usage field.
+      const container = await coachOnce(okCoach() as ReturnType<typeof okCoachWithUsage>)
+      expect(container.querySelector('.coach-usage-footer')).toBeNull()
+      setShowTokenCost(false)
     })
   })
 

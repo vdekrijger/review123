@@ -33,6 +33,9 @@
   import { COACH_DIMENSIONS, type CoachDimension, type CoachResult, type CommentReview } from '../lib/ai/schemas'
   import type { PrComment } from '../lib/github/comments'
   import type { ReviewProvider } from '../lib/provider/types'
+  import type { LlmUsage } from '../lib/llm/llm'
+  import { settingsState } from '../lib/settings/settingsState.svelte'
+  import { formatUsageLabel } from '../lib/ai/tokenCost'
 
   interface Props {
     prRef: PrRef
@@ -55,7 +58,7 @@
      * Review.svelte passes run.coach. The third argument is the verdict
      * selected at coaching time, enabling the verdict-coherence check.
      */
-    coachFn?: (drafts: Draft[], prComments?: string[], verdict?: Verdict) => Promise<CoachResult | { error: string }>
+    coachFn?: (drafts: Draft[], prComments?: string[], verdict?: Verdict) => Promise<(CoachResult & { usage?: LlmUsage }) | { error: string }>
     /**
      * Existing PR review comments — passed through to coachFn for duplicate detection.
      * Capped at 30, truncated at 200ch inside coachPrompt.
@@ -148,6 +151,11 @@
   let coachPending = $state(false)
   let coachResult = $state<CoachResult | null>(null)
   let coachError = $state<string | null>(null)
+  // Token usage from the last coach run (display-only, behind showTokenCost).
+  let coachUsage = $state<LlmUsage | undefined>(undefined)
+  const coachUsageLabel = $derived(
+    settingsState.current.showTokenCost ? formatUsageLabel(coachUsage) : null,
+  )
   // Track dismissed suggestions by draft index
   let dismissedSuggestions = $state<Set<number>>(new Set())
 
@@ -161,6 +169,7 @@
     coachPending = true
     coachError = null
     coachResult = null
+    coachUsage = undefined
     dismissedSuggestions = new Set()
     try {
       // Pass existing PR comment bodies for duplicate detection, and the
@@ -171,6 +180,7 @@
         coachError = result.error
       } else {
         coachResult = result
+        coachUsage = result.usage
         track('ai_task_completed', { task: 'coach', cached: false })
       }
     } finally {
@@ -434,6 +444,9 @@
               {/if}
             {/each}
           </div>
+          {#if coachUsageLabel}
+            <p class="coach-usage-footer" aria-label="Token usage">·· {coachUsageLabel}</p>
+          {/if}
         {/if}
       </section>
     {/if}
@@ -719,6 +732,13 @@
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+  }
+
+  .coach-usage-footer {
+    margin: 0.3rem 0 0;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.5;
   }
 
   .coach-card {

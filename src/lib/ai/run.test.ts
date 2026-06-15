@@ -1021,7 +1021,55 @@ describe('coach() — success', () => {
     const result = await run.coach(DRAFT_FIXTURE)
 
     expect('error' in result).toBe(false)
-    expect(result).toEqual(COACH_RESULT)
+    // CoachResult fields are returned verbatim; usage is attached separately.
+    expect(result).toMatchObject(COACH_RESULT)
+  })
+
+  it('attaches captured usage to the coach outcome and folds it into totalUsage', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockResolvedValue(COACH_RESULT)
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.coach(DRAFT_FIXTURE)
+
+    expect('error' in result).toBe(false)
+    // makeDeps' WithUsage stub returns { prompt:10, completion:5, total:15 }
+    expect((result as { usage?: unknown }).usage).toEqual({
+      prompt_tokens: 10,
+      completion_tokens: 5,
+      total_tokens: 15,
+    })
+    // Coach usage contributes to the per-PR total (no other task ran here).
+    expect(run.totalUsage).toEqual({
+      prompt_tokens: 10,
+      completion_tokens: 5,
+      total_tokens: 15,
+    })
+  })
+
+  it('passes per-comment code context (excerpt + fileWindow) into the prompt', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockResolvedValue(COACH_RESULT)
+
+    const input = makeInput()
+    input.coachCodeContext = (drafts) =>
+      drafts.map((d, i) => ({
+        index: i,
+        path: d.path,
+        line: d.line,
+        side: d.side,
+        excerpt: `+ const x = ${i}`,
+        fileWindow: `${d.line}: const x = ${i}`,
+      }))
+
+    const run = createAiRun(input, deps)
+    await run.coach(DRAFT_FIXTURE)
+
+    const call = deps.llmJsonWithRepairWithUsage.mock.calls[0]
+    const user = (call[0] as { user: string }).user
+    expect(user).toContain('codeContext')
+    expect(user).toContain('const x = 0')
+    expect(user).toContain('fileWindow')
   })
 
   it('tracks ai_task_completed with task:coach on success', async () => {
