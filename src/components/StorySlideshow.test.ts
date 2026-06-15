@@ -299,18 +299,37 @@ describe('StorySlideshow — Plan K catch-all (structural 100% coverage)', () =>
     expect(document.getElementById('file-src-orphan-ts')).not.toBeNull()
   })
 
-  it('sweeps a relatedTest-only file (never primary) into the catch-all', async () => {
-    // schema.test.ts is ONLY a relatedTest in STORY → unplaced as a primary.
+  it('does NOT sweep a relatedTest-shown file into the catch-all (#63208)', async () => {
+    // schema.test.ts is shown as a relatedTest snippet on step 0 — it's covered
+    // (on screen once), so it must NOT be re-added as an "Other changes" primary.
+    // No genuinely-unplaced file remains → no catch-all step → 3 steps, not 4.
     const files = makeFiles(['src/db/schema.ts', 'src/db/schema.test.ts', 'src/api/route.ts', 'src/ui/Card.svelte'])
     render(StorySlideshow, { props: baseProps({ files }) })
+    expect(screen.getAllByText('1 of 3').length).toBeGreaterThan(0)
+    // It renders inline on step 0 as the related-test snippet (shown exactly once).
+    expect(document.getElementById('file-src-db-schema-test-ts')).not.toBeNull()
+    expect(screen.getByText('Related test')).toBeInTheDocument()
+    // Walk every step → no "Other changes" duplicate ever appears.
+    const next = screen.getAllByRole('button', { name: 'Next step' })[0]
+    await fireEvent.click(next)
+    await fireEvent.click(next)
+    expect(screen.queryByText(/Other changes/)).not.toBeInTheDocument()
+  })
+
+  it('still sweeps a truly-unreferenced file when others are relatedTest-covered', async () => {
+    // schema.test.ts is covered (relatedTest); orphan.ts is referenced nowhere →
+    // only orphan.ts goes into the catch-all (completeness preserved).
+    const files = makeFiles(['src/db/schema.ts', 'src/db/schema.test.ts', 'src/api/route.ts', 'src/ui/Card.svelte', 'src/orphan.ts'])
+    render(StorySlideshow, { props: baseProps({ files }) })
     expect(screen.getAllByText('1 of 4').length).toBeGreaterThan(0)
-    // Walk to the last (catch-all) step where the swept relatedTest renders.
     const next = screen.getAllByRole('button', { name: 'Next step' })[0]
     await fireEvent.click(next)
     await fireEvent.click(next)
     await fireEvent.click(next)
     expect(screen.getByText('Other changes (1)')).toBeInTheDocument()
-    expect(document.getElementById('file-src-db-schema-test-ts')).not.toBeNull()
+    expect(document.getElementById('file-src-orphan-ts')).not.toBeNull()
+    // The covered relatedTest is NOT in the catch-all.
+    expect(document.getElementById('file-src-db-schema-test-ts')).toBeNull()
   })
 })
 
@@ -331,6 +350,17 @@ describe('StorySlideshow — Plan K viewed parity', () => {
     await fireEvent.click(screen.getAllByRole('button', { name: 'Next step' })[0])
     expect(viewedStore.isViewed('src/api/route.ts', PATCH)).toBe(true)
     expect(screen.getByText('2 / 3 files seen')).toBeInTheDocument()
+  })
+
+  it('counts a relatedTest-shown file toward M and marks it seen with its step (#63208)', () => {
+    // STORY shows schema.test.ts as a relatedTest on step 0. It's a real changed
+    // file → counts toward M (4: schema, schema.test, route, Card) and is marked
+    // seen when step 0 is visited (alongside the primary schema.ts) → 2 / 4.
+    const viewedStore = freshViewedStore()
+    render(StorySlideshow, { props: baseProps({ files: ALL_FILES, viewedStore }) })
+    expect(screen.getByText('2 / 4 files seen')).toBeInTheDocument()
+    expect(viewedStore.isViewed('src/db/schema.ts', PATCH)).toBe(true)
+    expect(viewedStore.isViewed('src/db/schema.test.ts', PATCH)).toBe(true)
   })
 
   it('counts a file shown in two steps ONCE in the denominator', () => {

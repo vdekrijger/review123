@@ -664,13 +664,19 @@ export const STORY_OTHER_LAYER: StoryLayer = 'other'
  *
  *   { layer: 'other', caption: 'Other changes (N)', files: [...unplaced] }
  *
- * Guarantees union(all steps' files) == prFilenames — every changed file is
- * provably in some step. relatedTests do NOT count as placement: a file that
- * only ever appears as a related/secondary test is still "unplaced" and gets
- * swept in here (so its diff is shown once as a primary). Order within the
- * catch-all follows prFilenames order (deterministic).
+ * A file is "covered" when it appears as a PRIMARY `files` entry in ANY step OR
+ * as a `relatedTests` snippet in any step — both are shown to the reader exactly
+ * once (the relatedTest as the inline "Tested by" snippet from #95). Only a file
+ * that appears in NEITHER is genuinely unplaced and gets swept into the catch-all
+ * (so its diff is shown once). This prevents the #63208 duplicate: a test shown
+ * inline on a code step is NOT re-added here as an "Other changes" primary.
  *
- * No unplaced files → steps returned unchanged (no empty catch-all step).
+ * Order within the catch-all follows prFilenames order (deterministic). Paths
+ * are compared by their normalized form (so `./a/x.ts` and `x.ts` collapse),
+ * matching dedupeStorySteps.
+ *
+ * No unplaced files → steps returned unchanged (no empty catch-all step). This
+ * is the common single-code-step-plus-inline-test case: nothing left to sweep.
  * `prFilenames` should already be the non-excluded changed files (the caller's
  * `files` list); excluded/binary files the caller never renders aren't passed.
  *
@@ -678,12 +684,17 @@ export const STORY_OTHER_LAYER: StoryLayer = 'other'
  * steps.length.
  */
 export function appendCatchAllStep(steps: StoryStep[], prFilenames: readonly string[]): StoryStep[] {
-  const placed = new Set<string>()
+  // Covered = union of every step's primary files AND every step's relatedTests.
+  // A relatedTest-shown file is already on screen (once), so it must not be
+  // re-swept as a catch-all primary (#63208).
+  const covered = new Set<string>()
   for (const step of steps) {
-    for (const f of step.files) placed.add(f)
+    for (const f of step.files) covered.add(normalizeStoryPath(f))
+    for (const t of step.relatedTests) covered.add(normalizeStoryPath(t))
   }
-  // Preserve prFilenames order; only files genuinely absent from every step.
-  const unplaced = prFilenames.filter((f) => !placed.has(f))
+  // Preserve prFilenames order; only files genuinely absent (neither a primary
+  // nor a relatedTest anywhere) are unplaced.
+  const unplaced = prFilenames.filter((f) => !covered.has(normalizeStoryPath(f)))
   if (unplaced.length === 0) return steps
 
   const catchAll: StoryStep = {

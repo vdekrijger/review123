@@ -122,30 +122,42 @@
 
   // ── Coverage accounting (Plan K) ──────────────────────────────────────────
   // The set of UNIQUE changed file paths the walkthrough is responsible for.
-  // After appendCatchAllStep, union(all steps' primary files) == every changed
+  // A file is "covered" when it's shown as a PRIMARY `files` entry in some step
+  // OR as a relatedTest snippet — both put it on screen exactly once. After
+  // appendCatchAllStep, union(primary files ∪ relatedTests) == every changed
   // file, so this is the denominator for "N / M files seen". A file referenced
-  // by multiple steps counts ONCE (Set membership). Excludes relatedTests —
-  // those secondary files surface as PRIMARY in the catch-all (or their own
-  // step), so they're already in this set via some step's `files`.
+  // by multiple steps counts ONCE (Set membership). relatedTest-shown files are
+  // INCLUDED here: they're real changed files the reader sees, so they count
+  // toward M and are markable seen (#63208) — they no longer get duplicated into
+  // the catch-all just to be counted.
   const uniqueChangedFiles = $derived.by<Set<string>>(() => {
     const set = new Set<string>()
-    for (const s of steps) for (const f of s.files) set.add(f)
+    for (const s of steps) {
+      for (const f of s.files) set.add(f)
+      for (const t of s.relatedTests) set.add(t)
+    }
     return set
   })
   const totalUniqueFiles = $derived(uniqueChangedFiles.size)
 
-  // path → the set of step indices that show it as a PRIMARY file. A file that
-  // legitimately spans MULTIPLE primary slides is only "fully seen" once ALL of
-  // those slides have been visited (so seeing one hunk doesn't falsely mark the
-  // whole file done). Post-#94 dedupe the common case is one slide per file.
+  // path → the set of step indices that SHOW it (as a primary `files` entry OR a
+  // relatedTest snippet). A file that legitimately spans MULTIPLE slides is only
+  // "fully seen" once ALL of those slides have been visited (so seeing one hunk
+  // doesn't falsely mark the whole file done). A relatedTest-shown file is fully
+  // seen when its step is visited, same as a primary. dedupeStorySteps guarantees
+  // a file is never simultaneously a primary AND a relatedTest, so there's no
+  // double-count; Set membership dedupes by path regardless. Post-#94 dedupe the
+  // common case is one slide per file.
   const primarySlidesByFile = $derived.by<Map<string, Set<number>>>(() => {
     const map = new Map<string, Set<number>>()
+    const add = (f: string, i: number) => {
+      const slides = map.get(f) ?? new Set<number>()
+      slides.add(i)
+      map.set(f, slides)
+    }
     steps.forEach((s, i) => {
-      for (const f of s.files) {
-        const slides = map.get(f) ?? new Set<number>()
-        slides.add(i)
-        map.set(f, slides)
-      }
+      for (const f of s.files) add(f, i)
+      for (const t of s.relatedTests) add(t, i)
     })
     return map
   })
@@ -232,8 +244,10 @@
   })
 
   // Jump to the step covering a still-unseen file, then scroll its card in view.
+  // Checks relatedTests too — a file shown only as an inline test snippet still
+  // counts toward coverage and must be jumpable from the reconciliation panel.
   function jumpToFile(path: string): void {
-    const idx = steps.findIndex((s) => s.files.includes(path))
+    const idx = steps.findIndex((s) => s.files.includes(path) || s.relatedTests.includes(path))
     if (idx !== -1) go(idx)
     scrollToFileCard(path)
   }
