@@ -153,13 +153,15 @@ test('single-key 2-model ensemble: step-3 shows per-model cost + impact readout'
   await expect(breakdown).toBeVisible({ timeout: 15_000 })
   await expect(breakdown.getByText('Models used')).toBeVisible()
 
-  // Generator row: impact = surfaced findings count (1 surfaced after ev:1 demoted).
+  // Generator row: impact = surfaced findings count. With a SINGLE verifier,
+  // a tie surfaces, so both evidence rows surface → "2 surfaced findings".
   await expect(breakdown.locator('.model-id', { hasText: 'claude-opus-4-8' })).toBeVisible()
-  await expect(breakdown.getByText(/surfaced finding/i)).toBeVisible()
+  await expect(breakdown.getByText(/2 surfaced findings/i)).toBeVisible()
 
-  // Verifier row: a decisive refute removed a finding.
+  // Verifier row: 1 confirm + 1 refute, neither decisive (one dissent can't bury
+  // a finding) → rubber-stamped tally. The impact readout leads with that.
   await expect(breakdown.locator('.model-id', { hasText: 'claude-haiku-4-5' })).toBeVisible()
-  await expect(breakdown.getByText(/decisive refute \(removed a finding\)/i)).toBeVisible()
+  await expect(breakdown.getByText(/1c\/1r/i)).toBeVisible()
 
   // showTokenCost is on → the cost column is present.
   await expect(breakdown.getByRole('columnheader', { name: /cost/i })).toBeVisible()
