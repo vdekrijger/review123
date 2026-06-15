@@ -11,6 +11,8 @@
   import { PROVIDER_KEY_FIELDS } from '../../lib/llm/config'
   import { getProvider } from '../../lib/llm/providers'
   import { settingsState } from '../../lib/settings/settingsState.svelte'
+  import Spinner from '../Spinner.svelte'
+  import AiProgress from '../AiProgress.svelte'
 
   // ---- Reviewer skills state ----
   let skills = $state<ReviewerSkill[]>(listSkills())
@@ -340,12 +342,16 @@
             title={mineFilterIncomplete ? 'Fill both owner and repo to filter, or leave both empty to mine your whole account' : undefined}
           >
             {#if mineRunning}
-              <span class="mine-spinner" aria-hidden="true"></span>Analyzing…
+              <Spinner size="0.8em" />Analyzing…
             {:else}
               Analyze my comments
             {/if}
           </button>
         </div>
+        {#if mineRunning}
+          <!-- Unified AI progress: honest status line for the mining task. -->
+          <AiProgress task="mining" state={{ status: 'loading' }} skeleton={false} />
+        {/if}
         {#if mineError}
           <p role="alert" class="skill-error">{mineError}</p>
         {/if}
@@ -624,21 +630,6 @@
 
   .mine-btn:not(:disabled):hover {
     background: var(--surface-raised);
-  }
-
-  .mine-spinner {
-    display: inline-block;
-    width: 0.8em;
-    height: 0.8em;
-    border: 2px solid var(--text-muted);
-    border-top-color: var(--text);
-    border-radius: 50%;
-    animation: spin 0.6s linear infinite;
-    flex-shrink: 0;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
   }
 
   .mine-privacy-note {

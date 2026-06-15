@@ -6,6 +6,7 @@
   import { activeProviderHasKey } from '../../lib/llm/config'
   import { track } from '../../lib/analytics/analytics'
   import SecretInput from './SecretInput.svelte'
+  import Spinner from '../Spinner.svelte'
 
   const current = getSettings()
 
@@ -195,7 +196,7 @@
             aria-label="Save & test {p.displayName} connection"
             aria-busy={testStates[p.id].status === 'testing'}
           >
-            {testStates[p.id].status === 'testing' ? 'Testing…' : 'Save & test'}
+            {#if testStates[p.id].status === 'testing'}<Spinner size="0.8em" />{/if}{testStates[p.id].status === 'testing' ? 'Testing…' : 'Save & test'}
           </button>
           {#if dirtyKeys[p.id]}<span class="dirty-hint">Unsaved changes</span>{/if}
           <span class="saved-note" class:visible={savedStates[p.id]} aria-live="polite">{savedStates[p.id] ? 'Saved ✓' : ''}</span>

@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import type { PanelStatus } from '../lib/ai/run.svelte'
-  import Skeleton from './Skeleton.svelte'
+  import AiProgress from './AiProgress.svelte'
+  import type { AiProgressTask } from '../lib/ai/progressLabel'
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import { getProvider } from '../lib/llm/providers'
   import { navigate } from '../lib/router/router.svelte'
@@ -10,6 +11,8 @@
 
   interface Props {
     title: string
+    /** AI task this panel renders — drives the unified status line. */
+    task: AiProgressTask
     state: { status: PanelStatus; error?: string; activity?: string[]; toolCallsUsed?: number; note?: string; usage?: LlmUsage }
     onretry: () => void
     /** Shape of the pending skeleton — content-shaped per section. */
@@ -19,7 +22,7 @@
     children?: Snippet
   }
 
-  let { title, state, onretry, skeletonVariant = 'text', skeletonLines = 3, children }: Props = $props()
+  let { title, task, state, onretry, skeletonVariant = 'text', skeletonLines = 3, children }: Props = $props()
 
   // Name the ACTIVE provider in the no-key hint (Plan F) — reactive via settingsState.
   const providerName = $derived(
@@ -45,18 +48,12 @@
 {#if state.status === 'idle' || state.status === 'loading'}
   <!-- 'idle' counts as pending: the run hasn't signalled 'loading' yet
        (consent gate / context packing / cache check are all async), so the
-       skeleton must be there from the FIRST render — no blank gap. -->
-  <div class="ai-panel-loading" aria-busy="true">
-    <Skeleton variant={skeletonVariant} lines={skeletonLines} />
+       unified progress (status line + skeleton) must be there from the FIRST
+       render — no blank gap. Deep-mode activity lines flow through the same
+       AiProgress treatment used everywhere else. -->
+  <div class="ai-panel-loading">
+    <AiProgress {task} {state} {skeletonVariant} skeletonLines={skeletonLines} />
     <span class="sr-only">Loading {title}…</span>
-    {#if state.activity && state.activity.length > 0}
-      <!-- Deep review: live tool activity from the agentic loop -->
-      <ul class="ai-tool-activity" aria-live="polite" aria-label="Deep review activity">
-        {#each state.activity as line, i (i)}
-          <li>{line}</li>
-        {/each}
-      </ul>
-    {/if}
   </div>
 {:else if state.status === 'error'}
   <div class="ai-panel-error" role="alert">
@@ -72,11 +69,11 @@
     AI analysis declined for this private repository
   </div>
 {:else if state.status === 'streaming'}
-  <div class="ai-panel-streaming">
-    <span class="spinner" aria-hidden="true"></span>
-    <span class="sr-only">Streaming…</span>
+  <!-- Streaming: tokens have started → stream the content (priority 1). The
+       unified AiProgress suppresses status/skeleton once streamStarted. -->
+  <AiProgress {task} state={{ ...state, streamStarted: true }} {skeletonVariant} skeletonLines={skeletonLines}>
     {@render children?.()}
-  </div>
+  </AiProgress>
 {:else if state.status === 'done'}
   {@render children?.()}
   {#if state.note}
@@ -142,24 +139,6 @@
     padding: 0.5rem 0;
   }
 
-  .ai-panel-streaming {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .ai-tool-activity {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    font-size: 0.78rem;
-    font-family: var(--font-mono, monospace);
-    opacity: 0.65;
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-  }
-
   .ai-panel-note {
     margin: 0.5rem 0 0;
     font-size: 0.78rem;
@@ -180,20 +159,5 @@
     font-size: 0.72rem;
     font-variant-numeric: tabular-nums;
     opacity: 0.5;
-  }
-
-  .spinner {
-    display: inline-block;
-    width: 0.9em;
-    height: 0.9em;
-    border: 2px solid currentColor;
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-    vertical-align: middle;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
   }
 </style>

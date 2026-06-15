@@ -38,7 +38,7 @@
   }
 </script>
 
-<AiPanel title="Verdict" state={run.verdict} onretry={() => run.retry('verdict')}>
+<AiPanel title="Verdict" task="verdict" state={run.verdict} onretry={() => run.retry('verdict')}>
   {#if verdict}
     <p class="verdict-explainer">The specific observations the AI based the behavior verdict on — each row cites what changed and where.</p>
     {#if verdict.evidence.length > 0}

@@ -25,6 +25,8 @@
   import { activeProviderHasKey } from '../lib/llm/config'
   import CommentEditor from './CommentEditor.svelte'
   import GitHubSignInButton from './GitHubSignInButton.svelte'
+  import Spinner from './Spinner.svelte'
+  import AiProgress from './AiProgress.svelte'
   import type { PrRef } from '../lib/github/parse'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
   import type { Draft } from '../lib/drafts/drafts.svelte'
@@ -324,8 +326,13 @@
           disabled={coachPending}
           aria-busy={coachPending}
         >
-          {coachPending ? 'Coaching…' : 'Coach my comments'}
+          {#if coachPending}<Spinner size="0.8em" />{/if}{coachPending ? 'Coaching…' : 'Coach my comments'}
         </button>
+
+        {#if coachPending}
+          <!-- Unified AI progress: honest status line for the coach task. -->
+          <AiProgress task="coach" state={{ status: 'loading' }} skeleton={false} />
+        {/if}
 
         {#if coachError}
           <p class="coach-error" role="alert">{coachError}</p>

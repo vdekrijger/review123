@@ -27,6 +27,8 @@
   import TestInsightPanel from './panels/TestInsightPanel.svelte'
   import AlternativesPanel from './panels/AlternativesPanel.svelte'
   import VerdictPanel from './panels/VerdictPanel.svelte'
+  import Spinner from './Spinner.svelte'
+  import { aiProgressLabel } from '../lib/ai/progressLabel'
   import { SECTION_REGISTRY } from './panels/sectionRegistry'
   import { track } from '../lib/analytics/analytics'
   import { stripReadingOrder } from '../lib/ai/tasks'
@@ -188,7 +190,9 @@
           {verdict.level}
         </span>
       {:else if run.verdict.status === 'loading'}
-        <span class="glance-loading-pill" aria-label="Verdict loading">⏳ verdict…</span>
+        <span class="glance-loading-pill" role="status" aria-live="polite">
+          <Spinner size="0.7em" />{aiProgressLabel('verdict')}
+        </span>
       {/if}
 
       {#if ciBadge}
@@ -220,9 +224,9 @@
           {/if}
         </button>
       {:else if run.tests.status === 'loading'}
-        <span class="glance-loading-inline" aria-busy="true">
-          <span class="spinner-sm" aria-hidden="true"></span>
-          Analyzing tests…
+        <span class="glance-loading-inline" role="status" aria-live="polite" aria-busy="true">
+          <Spinner size="0.75em" />
+          {aiProgressLabel('tests')}
         </span>
       {/if}
 
@@ -242,9 +246,9 @@
       {#if run.summary.status === 'streaming'}
         <p class="tldr-text tldr-streaming">{summaryText}</p>
       {:else if run.summary.status === 'loading'}
-        <span class="glance-loading-inline" aria-busy="true">
-          <span class="spinner-sm" aria-hidden="true"></span>
-          Summarizing…
+        <span class="glance-loading-inline" role="status" aria-live="polite" aria-busy="true">
+          <Spinner size="0.75em" />
+          {aiProgressLabel('summary')}
         </span>
       {:else if tldr}
         <p class="tldr-text tldr-done"><MarkdownView source={tldr} /></p>
@@ -268,9 +272,9 @@
       </div>
     {:else if run.attention.status === 'loading'}
       <div class="glance-row">
-        <span class="glance-loading-inline" aria-busy="true">
-          <span class="spinner-sm" aria-hidden="true"></span>
-          Analyzing hotspots…
+        <span class="glance-loading-inline" role="status" aria-live="polite" aria-busy="true">
+          <Spinner size="0.75em" />
+          {aiProgressLabel('attention')}
         </span>
       </div>
     {/if}
@@ -454,6 +458,9 @@
   }
 
   .glance-loading-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     font-size: 0.8rem;
     opacity: 0.6;
     padding: 0.2rem 0.6rem;
@@ -550,18 +557,6 @@
     text-decoration: underline;
   }
 
-  .spinner-sm {
-    display: inline-block;
-    width: 0.75em;
-    height: 0.75em;
-    border: 1.5px solid currentColor;
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-    flex-shrink: 0;
-  }
-
-  @keyframes spin { to { transform: rotate(360deg); } }
 
   /* Row 3 — hotspot chips */
 

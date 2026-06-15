@@ -15,7 +15,7 @@
   )
 </script>
 
-<AiPanel title="Alternative approaches (AI)" state={run.alternatives} skeletonVariant="cards" onretry={() => run.retry('alternatives')}>
+<AiPanel title="Alternative approaches (AI)" task="alternatives" state={run.alternatives} skeletonVariant="cards" onretry={() => run.retry('alternatives')}>
   {#if alternatives}
     <p class="alternatives-problem">{alternatives.problem}</p>
     {#if alternatives.alternatives.length === 0}
