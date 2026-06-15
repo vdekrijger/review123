@@ -15,6 +15,7 @@ import {
   validateTestInsight,
   validateCoachResult,
   validateAlternativesResult,
+  validateFlow,
 } from './schemas'
 
 // ---------------------------------------------------------------------------
@@ -1404,5 +1405,109 @@ describe('appendCatchAllStep (Plan K — structural 100% coverage)', () => {
     const steps = [step(['src/a.ts'], 'a')]
     const out = appendCatchAllStep(steps, ['z.ts', 'src/a.ts', 'm.ts'])
     expect(out[out.length - 1].files).toEqual(['z.ts', 'm.ts'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// validateFlow (Plan L) + validateGraphResult with flow
+// ---------------------------------------------------------------------------
+
+describe('validateFlow', () => {
+  const validFlow = {
+    steps: [
+      { id: 'h', label: 'handleSubmit', file: 'src/handler.ts', symbol: 'handleSubmit', kind: 'entry', change: 'changed' },
+      { id: 's', label: 'write DB', file: 'src/store.ts', kind: 'effect', change: 'added' },
+    ],
+    transitions: [{ from: 'h', to: 's', condition: 'valid' }],
+  }
+
+  it('accepts a well-formed flow', () => {
+    expect(validateFlow(validFlow)).not.toBeNull()
+  })
+
+  it('accepts an empty steps array (graceful-fallback signal)', () => {
+    expect(validateFlow({ steps: [], transitions: [] })).not.toBeNull()
+  })
+
+  it('accepts steps without optional file/symbol', () => {
+    const x = { steps: [{ id: 'a', label: 'go', kind: 'return', change: 'unchanged' }], transitions: [] }
+    expect(validateFlow(x)).not.toBeNull()
+  })
+
+  it('tolerates extra keys on step, transition, and root', () => {
+    const x = {
+      steps: [{ id: 'a', label: 'go', kind: 'call', change: 'added', extra: 1 }],
+      transitions: [{ from: 'a', to: 'a', label: 'loop', junk: true }],
+      meta: 'ignored',
+    }
+    expect(validateFlow(x)).not.toBeNull()
+  })
+
+  it('rejects an invalid kind enum', () => {
+    const x = { steps: [{ id: 'a', label: 'go', kind: 'sideways', change: 'added' }], transitions: [] }
+    expect(validateFlow(x)).toBeNull()
+  })
+
+  it('rejects an invalid change enum', () => {
+    const x = { steps: [{ id: 'a', label: 'go', kind: 'call', change: 'context' }], transitions: [] }
+    expect(validateFlow(x)).toBeNull()
+  })
+
+  it('rejects a non-string label', () => {
+    const x = { steps: [{ id: 'a', label: 42, kind: 'call', change: 'added' }], transitions: [] }
+    expect(validateFlow(x)).toBeNull()
+  })
+
+  it('rejects a transition missing from/to', () => {
+    const x = { steps: [{ id: 'a', label: 'go', kind: 'call', change: 'added' }], transitions: [{ from: 'a' }] }
+    expect(validateFlow(x)).toBeNull()
+  })
+
+  it('rejects a non-array steps / transitions', () => {
+    expect(validateFlow({ steps: {}, transitions: [] })).toBeNull()
+    expect(validateFlow({ steps: [], transitions: 'x' })).toBeNull()
+  })
+
+  it('rejects non-objects', () => {
+    expect(validateFlow(null)).toBeNull()
+    expect(validateFlow([])).toBeNull()
+    expect(validateFlow('flow')).toBeNull()
+  })
+})
+
+describe('validateGraphResult with flow', () => {
+  const base = {
+    kind: 'flow',
+    before: { nodes: [], edges: [] },
+    after: { nodes: [], edges: [] },
+  }
+
+  it('accepts a result carrying a valid flow', () => {
+    const x = {
+      ...base,
+      flow: {
+        steps: [{ id: 'a', label: 'go', kind: 'entry', change: 'added' }],
+        transitions: [],
+      },
+    }
+    const out = validateGraphResult(x)
+    expect(out).not.toBeNull()
+    expect(out?.flow?.steps.length).toBe(1)
+  })
+
+  it('accepts a result with an empty-steps flow (fallback)', () => {
+    const out = validateGraphResult({ ...base, flow: { steps: [], transitions: [] } })
+    expect(out).not.toBeNull()
+    expect(out?.flow?.steps).toEqual([])
+  })
+
+  it('rejects a result whose flow is malformed', () => {
+    const x = { ...base, flow: { steps: [{ id: 'a', label: 'go', kind: 'bad', change: 'added' }], transitions: [] } }
+    expect(validateGraphResult(x)).toBeNull()
+  })
+
+  it('stays backward compatible — a result without flow validates', () => {
+    expect(validateGraphResult(base)).not.toBeNull()
+    expect(validateGraphResult(base)?.flow).toBeUndefined()
   })
 })

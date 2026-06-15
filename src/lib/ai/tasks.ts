@@ -14,7 +14,11 @@ import type { CiSummary } from '../github/checks'
 import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
 
-export const PROMPT_VERSION = 16
+// PROMPT_VERSION 17 (Plan L): the diagram task's output shape changed from the
+// module-dependency change-map to a flow-of-execution (GraphResult.flow). The
+// bump invalidates cached diagram results so old change-maps don't render under
+// the new "Execution flow" label.
+export const PROMPT_VERSION = 17
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)
@@ -200,166 +204,159 @@ Do not include any text outside the JSON object.`
 }
 
 // ---------------------------------------------------------------------------
-// diagramsPrompt — JSON GraphResult with few-shot example
+// diagramsPrompt — JSON GraphResult.flow (flow-of-execution; Plan L)
 // ---------------------------------------------------------------------------
 
 // The few-shot marker is intentional so tests can assert its presence.
-// DIAGRAMS_FEW_SHOT_MARKER is not exported but the string appears verbatim.
 const FEW_SHOT_EXAMPLE = `/* FEW_SHOT_EXAMPLE_START */
-Example input sketch (three files touched: api.ts, router.ts, handler.ts — handler.ts is new):
+Example: a PR adds input validation to a submit handler and writes the result to the store; \
+the old direct-write path is removed.
 
-Example valid output JSON (note status fields on every node and edge in changeMap):
+Example valid output JSON (one delta-annotated execution flow — note kind:"flow", an empty \
+before/after, and the flow's steps + transitions):
 {
   "kind": "flow",
-  "before": {
-    "nodes": [
-      { "id": "api", "label": "api.ts" },
-      { "id": "router", "label": "router.ts" }
+  "before": { "nodes": [], "edges": [] },
+  "after": { "nodes": [], "edges": [] },
+  "flow": {
+    "steps": [
+      { "id": "entry", "label": "handleSubmit", "file": "src/handler.ts", "symbol": "handleSubmit", "kind": "entry", "change": "changed" },
+      { "id": "validate", "label": "validate input", "file": "src/validate.ts", "kind": "branch", "change": "added" },
+      { "id": "save", "label": "write to store", "file": "src/store.ts", "kind": "effect", "change": "added" },
+      { "id": "directWrite", "label": "old direct write", "file": "src/handler.ts", "kind": "effect", "change": "removed" },
+      { "id": "ret", "label": "return result", "file": "src/handler.ts", "kind": "return", "change": "unchanged" }
     ],
-    "edges": [
-      { "from": "router", "to": "api", "label": "calls" }
-    ]
-  },
-  "after": {
-    "nodes": [
-      { "id": "api", "label": "api.ts" },
-      { "id": "router", "label": "router.ts" },
-      { "id": "handler", "label": "handler.ts" }
-    ],
-    "edges": [
-      { "from": "router", "to": "handler", "label": "calls" },
-      { "from": "handler", "to": "api", "label": "delegates" }
-    ]
-  },
-  "changeMap": {
-    "nodes": [
-      { "id": "api", "label": "api.ts", "status": "unchanged" },
-      { "id": "router", "label": "router.ts", "status": "changed" },
-      { "id": "handler", "label": "handler.ts", "status": "added" }
-    ],
-    "edges": [
-      { "from": "router", "to": "api", "label": "calls", "status": "removed" },
-      { "from": "router", "to": "handler", "label": "calls", "status": "added" },
-      { "from": "handler", "to": "api", "label": "delegates", "status": "added" }
+    "transitions": [
+      { "from": "entry", "to": "validate" },
+      { "from": "validate", "to": "save", "condition": "valid" },
+      { "from": "validate", "to": "ret", "condition": "invalid" },
+      { "from": "save", "to": "ret" }
     ]
   }
 }
 /* FEW_SHOT_EXAMPLE_END */`
 
 /**
- * Build prompts for the diagram generation task.
+ * Cap on the number of execution-flow steps. Keeping the flow small (the model
+ * groups/elides trivial plumbing) keeps the structured output short enough to
+ * come back intact and the diagram readable. Exported for the prompt test.
+ */
+export const FLOW_MAX_STEPS = 14
+
+/**
+ * Build prompts for the diagram generation task (Plan L — flow of execution).
  *
- * Output must be JSON-only, matching GraphResult:
+ * Output must be JSON-only, matching GraphResult with a `flow` field:
  *   {
  *     kind: "flow" | "module",
- *     before: Graph,
- *     after: Graph
+ *     before: Graph,   // emitted empty — legacy fields kept for the type
+ *     after: Graph,
+ *     flow: { steps: FlowStep[], transitions: FlowTransition[] }
  *   }
  *
- * The model NEVER writes Mermaid syntax — it emits graph data that the
- * serializer (Task 7 lib/diagram/mermaid.ts) converts to Mermaid.
+ * The model traces the EXECUTION PATH the diff changes — entry point → handler
+ * → service → store/effect — and marks each step's change-status. It NEVER
+ * writes Mermaid syntax; the serializer (lib/diagram/mermaid.ts flowToMermaid)
+ * converts the flow to Mermaid.
  *
- * A compact few-shot example is embedded in the system prompt so the model
- * learns the exact shape by demonstration.
+ * Graceful fallback: when the change has no meaningful execution flow (pure
+ * data/config/schema/dependency change) the model returns an EMPTY steps array
+ * — the panel then shows an honest note instead of a fabricated flow.
+ *
+ * Deep variant (options.deep): the model USES THE TOOLS to follow the real call
+ * chain (read the entry function, find what it calls) so the flow is accurate.
  */
-/**
- * Cap on `context` (one-hop neighborhood) nodes in deep-diagram mode. The
- * model is told to keep the most-connected neighbors and drop the rest so a
- * large neighborhood cannot explode the diagram. Exported for the prompt test.
- */
-export const DEEP_DIAGRAM_CONTEXT_NODE_CAP = 8
-
 export function diagramsPrompt(
   ctx: PackedContext,
   options?: { deep?: boolean },
 ): { system: string; user: string } {
   const importGraphSection = ctx.importGraph
-    ? `\n\n## Module relationships (extracted from code)\n\n${ctx.importGraph}\n\nGround your nodes and edges in these REAL import relationships. Prefer files and modules \
-that appear in the import graph above. Statuses (added/removed/changed/unchanged) are still \
-required on every node and edge in changeMap.`
+    ? `\n\n## Module relationships (extracted from code)\n\n${ctx.importGraph}\n\nUse these REAL import/call relationships to follow the execution path — which file calls \
+which — so each step's \`file\` and the order of transitions reflect the actual call chain.`
     : ''
 
-  // Deep-diagram guidance (PROMPT_VERSION 12): when the agentic harness is on,
-  // the model situates the changed files inside the BROADER architecture by
-  // walking one hop out (importers/callers + direct dependencies) with the
-  // verification tools, then tagging those neighbors with status "context".
-  const deepContextSection = options?.deep
-    ? `\n\n## Deep mode — situate the change in the broader architecture (IMPORTANT)
-You have verification tools (search_code / read_file). After forming the changed-file graph as \
-described above, use them to find the IMMEDIATE architectural neighborhood — ONE HOP OUT, not \
-the whole repo:
-- Direct IMPORTERS / CALLERS of the changed modules (search_code for the changed symbol/file).
-- Direct DEPENDENCIES the changed modules import (read the changed file's imports).
-Add the highest-signal of these neighbors as nodes with status "context" so the diagram shows \
-WHERE the change sits in the system. Context nodes appear in before/after/changeMap where \
-relevant. Edges between a context node and a changed node carry status "context" and a \
-"uses"/"calls" verb label so they read as ambient relationships (the serializer de-emphasizes \
-them visually). The five change statuses still apply to the changed nodes/edges themselves.
-
-Budget & cap discipline:
-- Stay within the tool budget: prefer the most-connected, highest-signal neighbors. Do NOT \
-  enumerate the whole repo or chase second-hop neighbors.
-- At most ${DEEP_DIAGRAM_CONTEXT_NODE_CAP} context nodes. If more neighbors exist, keep the \
-  most-connected ones and drop the rest silently (do NOT add a placeholder "+N more" node — \
-  changeMap's 14-node total cap still holds).
-- "context" is the ONLY new status — never invent others.`
+  // Deep-flow guidance (Plan L): when the agentic harness is on, the model
+  // FOLLOWS THE REAL CALL CHAIN with the tools — read the entry function, find
+  // what it calls, step through to the effect — so the flow is accurate, not
+  // guessed. withDeepReviewGuidance() adds the generic tool-loop discipline.
+  const deepFlowSection = options?.deep
+    ? `\n\n## Deep mode — follow the real call chain with the tools (IMPORTANT)
+You have verification tools (read_file / read_file_at_base / search_code). Trace the execution \
+path for real instead of guessing:
+- Read the ENTRY function the change affects (read_file) and see what it actually calls.
+- search_code for each called symbol to follow the chain one hop at a time, through to the \
+  EFFECT (DB write, API response, state change).
+- Mark each step's change from the diff (read_file_at_base to compare against the pre-PR code \
+  when a step's status is ambiguous).
+- DROP any step you cannot substantiate from what the tools show — a guessed step must not \
+  appear. A short, accurate flow beats a long speculative one.`
     : ''
 
-  const system = `You are an expert code reviewer assistant. Analyze the pull request changes \
-and respond with JSON ONLY — no explanation, no markdown, no code fences, and absolutely NO \
-Mermaid syntax. Your response must be valid JSON matching this shape exactly:
+  const system = `You are an expert code reviewer assistant. Trace the EXECUTION PATH this pull \
+request changes and respond with JSON ONLY — no explanation, no markdown, no code fences, and \
+absolutely NO Mermaid syntax. Your response must be valid JSON matching this shape exactly:
 
 {
   "kind": "flow" | "module",
-  "before": {
-    "nodes": [{ "id": "<unique-id>", "label": "<display-label>" }, ...],
-    "edges": [{ "from": "<node-id>", "to": "<node-id>", "label": "<optional-label>" }, ...]
-  },
-  "after": {
-    "nodes": [{ "id": "<unique-id>", "label": "<display-label>" }, ...],
-    "edges": [{ "from": "<node-id>", "to": "<node-id>", "label": "<optional-label>" }, ...]
-  },
-  "changeMap": {
-    "nodes": [{ "id": "<unique-id>", "label": "<display-label>", "status": "added"|"removed"|"changed"|"unchanged"|"context" }, ...],
-    "edges": [{ "from": "<node-id>", "to": "<node-id>", "label": "<optional-label>", "status": "added"|"removed"|"changed"|"unchanged"|"context" }, ...]
+  "before": { "nodes": [], "edges": [] },
+  "after": { "nodes": [], "edges": [] },
+  "flow": {
+    "steps": [
+      {
+        "id": "<unique-id>",
+        "label": "<what happens, ≤6 words>",
+        "file": "<path the step lives in, optional>",
+        "symbol": "<function/symbol, optional>",
+        "kind": "entry" | "call" | "branch" | "effect" | "return",
+        "change": "added" | "changed" | "unchanged" | "removed"
+      }
+    ],
+    "transitions": [
+      { "from": "<step-id>", "to": "<step-id>", "label": "<optional>", "condition": "<optional branch condition>" }
+    ]
   }
 }
 
+What to produce — ONE delta-annotated execution flow (NOT before/after):
+- Trace the path the change touches: start at the ENTRY POINT(s) the change affects (a request \
+  handler, an endpoint, a job, or the function under test), follow the calls through to the \
+  EFFECT (a DB write, an API response, a state/store change), and end at the return/result.
+- Each step is one stop on that path. Mark each step's "change" from the diff: "added" (new \
+  step in this run), "changed" (existing step whose behavior changed), "removed" (a step the PR \
+  deletes from the path), "unchanged" (ambient step kept for context). The delta is visible in \
+  ONE view — added/changed/removed steps render visually distinct.
+- "kind" classifies the step for shape: "entry" (where the run starts), "call" (a function \
+  call), "branch" (a decision that fans out), "effect" (a side effect — DB/API/state), \
+  "return" (the result).
+- transitions are ORDERED edges between steps. A "branch" step may fan to ≥2 transitions, each \
+  with a "condition" label (e.g. "valid" / "invalid"). A loop is a back-edge labeled "for each \
+  …". Keep transitions consistent with the steps' ids.
+- Set each step's "file" to the path it lives in (so the reviewer can jump to it). Steps with \
+  no single file may omit it.
+
 Choosing kind:
-- "flow": use when the PR changes control flow, call chains, request/response paths, or \
-  event handling (behavior-oriented changes).
-- "module": use when the PR changes module structure, imports, package boundaries, or file \
-  organization (structure-oriented changes).
+- "flow": the normal case for this task — the PR changes behavior / a call path.
+- "module": rarely; only when the change is purely structural with no runnable path.
 
-Nodes and edges must describe the structure of the TOUCHED CODE only — before the PR (before) \
-and after the PR (after). Node ids must be unique strings without spaces. Labels are \
-human-readable display names. Edges reference node ids in the same graph; do not reference ids \
-that do not exist in the same graph's nodes array.
+GRACEFUL FALLBACK (IMPORTANT — do NOT fabricate a flow):
+- If this PR has NO meaningful execution flow — a pure data/config/schema/dependency/styling \
+  change, generated output, or you genuinely cannot construct an accurate path — return \
+  "flow": { "steps": [], "transitions": [] } (an EMPTY flow). The UI renders an honest \
+  "no clear execution flow" note. An empty flow is a GOOD, expected outcome for such changes \
+  — never invent steps to fill the diagram.
 
-changeMap (PRIMARY OUTPUT — this is what the UI renders first):
-- Emit a SINGLE merged graph combining all nodes from before and after.
-- Every node and every edge in changeMap MUST carry a status field:
-  "added" — present only in after; "removed" — present only in before;
-  "changed" — present in both but behavior/signature changed;
-  "unchanged" — present in both, unaffected by this PR;
-  "context" — a surrounding architectural neighbor (NOT touched by this PR) included only to \
-  situate the change; emit these ONLY in deep mode (see below) — never invent them otherwise.
-- Statuses must reflect this PR's actual effect, not guesses.
-- before and after remain for the toggle view (compact is fine — mirror the changeMap nodes).
+DO NOT write any Mermaid syntax. The downstream serializer converts your flow data to Mermaid.
 
-DO NOT write any Mermaid syntax. The downstream serializer converts your graph data to Mermaid.
+Size & label constraints (IMPORTANT):
+- At most ${FLOW_MAX_STEPS} steps. If the real path is longer, GROUP / ELIDE trivial plumbing \
+  (logging, getters, glue) so the flow stays readable. Multiple independent changed paths → \
+  pick the most important 1–2; do not sprawl.
+- Step labels ≤ 6 words — name what happens, not a sentence (e.g. "validate input", not "this \
+  step validates the user's input").
+- Edge / condition labels ≤ 3 words. Emit NO explanatory prose anywhere — the output is JSON \
+  only.
 
-Graph size constraints (IMPORTANT):
-- changeMap: at most 14 nodes total. If more files are touched, \
-  only include nodes whose relationships CHANGED or are needed for context.
-- Node labels must be ≤ 3 words — prefer module/file names over sentences (e.g. \
-  "router.ts" not "The router module that handles requests").
-- Edge labels must be ≤ 2 words (a verb is enough, e.g. "calls", "delegates") — never a \
-  sentence. The graph speaks for itself; emit NO explanatory prose anywhere (the output is \
-  JSON graph data only — any captioning happens in ≤2 sentences downstream, not here).
-- Edges: only include edges that represent CHANGED or newly-added relationships.
-
-${FEW_SHOT_EXAMPLE}${importGraphSection}${deepContextSection}
+${FEW_SHOT_EXAMPLE}${importGraphSection}${deepFlowSection}
 
 Do not include any text outside the JSON object.`
 
