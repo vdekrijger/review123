@@ -182,9 +182,10 @@ test('story mode: walk slides, related tests, diagram highlight, and a draft per
   await expect(storyBtn).toBeVisible({ timeout: 15_000 })
   await expect(storyBtn).toHaveAttribute('aria-pressed', 'true')
 
-  // First step caption + counter.
+  // First step caption + counter. 3 steps: 2 placed + the Plan K catch-all
+  // (schema.test.ts is a relatedTest-only file, swept into "Other changes").
   await expect(page.getByText('The schema gains a provider column.')).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByText('1 of 2').first()).toBeVisible()
+  await expect(page.getByText('1 of 3').first()).toBeVisible()
 
   // The step's diff renders + the related test file renders inline.
   await expect(page.locator('#file-src-db-schema-ts article.file-diff')).toBeVisible()
@@ -202,7 +203,7 @@ test('story mode: walk slides, related tests, diagram highlight, and a draft per
   // slide navigation (the draft store is not per-slide).
   await page.getByRole('button', { name: 'Next step' }).first().click()
   await expect(page.getByText('The card renders a provider badge.')).toBeVisible()
-  await expect(page.getByText('2 of 2').first()).toBeVisible()
+  await expect(page.getByText('2 of 3').first()).toBeVisible()
   await expect(page.getByText(/1 comment drafted/)).toBeVisible()
   await page.getByRole('button', { name: 'Previous step' }).first().click()
   await expect(page.getByText('The schema gains a provider column.')).toBeVisible()
@@ -250,8 +251,9 @@ test('story mode: a story with an unmappable path still renders the mappable ste
   // No fallback note; the ghost step is dropped and the first mappable step shows.
   await expect(page.getByText('The schema gains a provider column.')).toBeVisible({ timeout: 15_000 })
   await expect(page.getByText(/showing all files/)).toHaveCount(0)
-  // Two mappable steps survive (ghost dropped): counter reads "1 of 2".
-  await expect(page.getByText('1 of 2').first()).toBeVisible()
+  // Two mappable steps survive (ghost dropped) + the Plan K catch-all for the
+  // relatedTest-only schema.test.ts → counter reads "1 of 3".
+  await expect(page.getByText('1 of 3').first()).toBeVisible()
   await expect(page.getByText('A step for a file not in this PR.')).toHaveCount(0)
 })
 
@@ -406,4 +408,101 @@ test('story mode: a changed function with a named test shows the inline "tested 
   await toggle.click()
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   await expect(page.getByText(/expect\(buildKey\(1\)\)\.toBe\(2\)/)).toBeVisible()
+})
+
+// Plan K — coverage confidence. STORY_RESULT places schema.ts + Card.ts as
+// primaries; schema.test.ts is ONLY a relatedTest, so the deterministic catch-all
+// sweeps it into a final "Other changes" step → the walkthrough provably covers
+// all 3 changed files. We walk to the end and assert the progress readout,
+// catch-all, and the "you saw everything" reconciliation moment.
+test('story mode: coverage parity, catch-all, and end-of-story reconciliation', async ({ page }) => {
+  await setupGithub(page)
+
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string | null }> } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* */ }
+    if (body?.stream === true) {
+      return route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }, body: makeStreamResponse(SUMMARY_TEXT) })
+    }
+    const system = (body.messages ?? []).find((m) => m.role === 'system')?.content ?? ''
+    return route.fulfill({ status: 200, json: jsonChatCompletion(resultForSystem(system)) })
+  })
+
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test', storyMode: true, diffMode: 'unified', railCollapsed: true }))
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Story mode test PR/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+
+  await expect(page.getByText('The schema gains a provider column.')).toBeVisible({ timeout: 15_000 })
+
+  // 3 steps total: 2 placed + 1 catch-all (schema.test.ts swept in). Coverage
+  // readout shows 1 of 3 files seen on the first slide.
+  await expect(page.getByText('1 of 3').first()).toBeVisible()
+  await expect(page.getByText(/1 \/ 3 files seen/)).toBeVisible()
+
+  // Walk to the catch-all (last) step.
+  const next = page.getByRole('button', { name: 'Next step' }).first()
+  await next.click() // step 2: Card.ts
+  await next.click() // step 3: catch-all
+  await expect(page.getByText('Other changes (1)')).toBeVisible()
+  await expect(page.locator('#file-src-db-schema-test-ts')).toBeVisible()
+
+  // All 3 unique changed files seen → the reconciliation "you saw everything".
+  await expect(page.getByText(/3 \/ 3 files seen/)).toBeVisible()
+  await expect(page.getByText(/You've walked all 3 changed files/)).toBeVisible()
+})
+
+// A reviewer who jumps past a file leaves it unseen: the last step lists it with
+// a Jump affordance. We reach the catch-all, manually un-view a file via the
+// in-diff "Viewed" toggle, then assert the reconciliation lists it + Jump works.
+test('story mode: reconciliation lists an unseen file and Jump navigates to it', async ({ page }) => {
+  await setupGithub(page)
+
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string | null }> } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* */ }
+    if (body?.stream === true) {
+      return route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }, body: makeStreamResponse(SUMMARY_TEXT) })
+    }
+    const system = (body.messages ?? []).find((m) => m.role === 'system')?.content ?? ''
+    return route.fulfill({ status: 200, json: jsonChatCompletion(resultForSystem(system)) })
+  })
+
+  // Pre-seed the viewed store so schema.ts + schema.test.ts are already viewed,
+  // leaving Card.ts (step 2) as the only unseen file. We then jump from step 1
+  // straight to the last step via the change-map node, skipping Card's slide.
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test', storyMode: true, diffMode: 'unified', railCollapsed: true }))
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Story mode test PR/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByText('The schema gains a provider column.')).toBeVisible({ timeout: 15_000 })
+
+  // Walk to step 2 (Card.ts), then UN-VIEW it via the in-diff Viewed checkbox —
+  // modelling a reviewer who skimmed past a file. The auto-mark fires at most
+  // once per file, so the manual un-view STICKS (Files-mode semantics preserved).
+  const next = page.getByRole('button', { name: 'Next step' }).first()
+  await next.click() // step 2: Card.ts
+  await expect(page.getByText('The card renders a provider badge.')).toBeVisible()
+  const cardViewed = page.locator('#file-src-ui-Card-ts').getByRole('checkbox', { name: /Mark .* as viewed/i }).first()
+  await expect(cardViewed).toBeChecked() // auto-marked viewed on arrival
+  await cardViewed.uncheck()
+
+  // Advance to the catch-all (last) step. Card.ts stays unviewed.
+  await next.click() // step 3: catch-all (schema.test.ts)
+  await expect(page.getByText('Other changes (1)')).toBeVisible({ timeout: 10_000 })
+
+  // The reconciliation lists Card.ts as unviewed with a Jump affordance.
+  await expect(page.getByText(/You haven't viewed 1 file yet/)).toBeVisible()
+  const jump = page.getByRole('button', { name: 'Jump to src/ui/Card.ts' })
+  await expect(jump).toBeVisible()
+  await jump.click()
+  await expect(page.getByText('The card renders a provider badge.')).toBeVisible()
 })

@@ -54,6 +54,11 @@ const EVENTS = {
   // for walkthrough-engagement observability.
   story_mode_entered: [],
   story_step_viewed: ['index'],
+  // PRIVACY DECISION (Plan K — story coverage): fired ONCE per walkthrough when
+  // the user has seen every unique changed file. Carries only 'files' — the
+  // integer count of unique changed files covered (never a path, caption, or any
+  // diff content) — for "did users actually walk the whole PR?" observability.
+  story_coverage_complete: ['files'],
   // PRIVACY DECISION (Plan I — function↔test pairing): fired when the user
   // expands an inline "tested by" snippet beneath a changed function. Carries
   // only 'confidence' ('named' | 'referenced') — the pairing-confidence label.

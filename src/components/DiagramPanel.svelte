@@ -41,6 +41,13 @@
     /** File paths already visited (steps before the current one) → "done" state. */
     doneFiles?: string[]
     /**
+     * File paths the user has actually walked (every primary slide showing them
+     * visited) → "visited" check state on the map (Plan K coverage map). Purely
+     * visual/best-effort: a node that can't map to a file just isn't checked,
+     * and this never feeds the file-set accounting in StorySlideshow.
+     */
+    visitedFiles?: string[]
+    /**
      * Story mode: called with a file path when the user clicks a change-map
      * node, so the slideshow can jump to the step covering that file. null/absent
      * → nodes are not click-to-jump (the existing zoom overlay still works).
@@ -48,7 +55,7 @@
     onnodeclick?: ((file: string) => void) | null
   }
 
-  let { result, panelState, highlightFiles = [], doneFiles = [], onnodeclick = null }: Props = $props()
+  let { result, panelState, highlightFiles = [], doneFiles = [], visitedFiles = [], onnodeclick = null }: Props = $props()
 
   // Containers for Mermaid SVG output
   let changeMapContainer = $state<HTMLDivElement | null>(null)
@@ -113,7 +120,7 @@
    * diagram byte-identical.
    */
   function decorateStoryNodes(container: HTMLElement): void {
-    if (highlightFiles.length === 0 && doneFiles.length === 0 && !onnodeclick) return
+    if (highlightFiles.length === 0 && doneFiles.length === 0 && visitedFiles.length === 0 && !onnodeclick) return
     // Mermaid node groups carry the `.node` class. Match only those (NOT nested
     // label spans) so each rendered node is decorated exactly once.
     const nodes = container.querySelectorAll('g.node, .node')
@@ -121,8 +128,11 @@
       const label = node.textContent ?? ''
       const currentFile = matchNodeToFile(label, highlightFiles)
       const doneFile = currentFile ? null : matchNodeToFile(label, doneFiles)
+      // Visited (Plan K): best-effort check on nodes whose file has been walked.
+      const visitedFile = matchNodeToFile(label, visitedFiles)
       node.classList.toggle('story-node-current', currentFile !== null)
       node.classList.toggle('story-node-done', doneFile !== null)
+      node.classList.toggle('story-node-visited', visitedFile !== null)
       const file = currentFile ?? doneFile ?? matchNodeToFile(label, [...highlightFiles, ...doneFiles])
       if (onnodeclick) {
         const target = file ?? matchNodeToFile(label, allMapFiles())
@@ -156,6 +166,7 @@
     // story step changes (re-renders + re-decorates the nodes).
     void highlightFiles
     void doneFiles
+    void visitedFiles
 
     let cancelled = false
 
@@ -579,6 +590,15 @@
   /* DONE steps: dimmed (already walked). */
   .diagram-container :global(.story-node-done) {
     opacity: 0.55;
+  }
+  /* VISITED files (Plan K coverage map): a soft "checked" tint on the node so
+     the diagram doubles as a "what's left" map. Visual only — graceful when a
+     node can't map to a file (no class applied). */
+  .diagram-container :global(.story-node-visited rect),
+  .diagram-container :global(.story-node-visited circle),
+  .diagram-container :global(.story-node-visited polygon) {
+    stroke: var(--legend-added-border) !important;
+    fill: var(--legend-added-bg) !important;
   }
   .diagram-container :global(.story-node-clickable) {
     cursor: pointer;

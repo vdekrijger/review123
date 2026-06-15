@@ -1133,7 +1133,8 @@ describe('validateAlternativesResult', () => {
 // validateStoryOrder (Plan H — Story mode)
 // ---------------------------------------------------------------------------
 
-import { validateStoryOrder, STORY_LAYERS, STORY_MAX_STEPS, normalizeStoryPath, matchStoryPath, dedupeStorySteps, salvageStoryOrder, sinkGeneratedSteps } from './schemas'
+import { validateStoryOrder, STORY_LAYERS, STORY_MAX_STEPS, normalizeStoryPath, matchStoryPath, dedupeStorySteps, salvageStoryOrder, sinkGeneratedSteps, appendCatchAllStep, STORY_OTHER_LAYER } from './schemas'
+import type { StoryStep } from './schemas'
 import type { StoryOrderResult } from './schemas'
 
 describe('validateStoryOrder', () => {
@@ -1357,5 +1358,51 @@ describe('salvageStoryOrder', () => {
 describe('STORY_MAX_STEPS', () => {
   it('is a sane bound for big-PR walkthroughs', () => {
     expect(STORY_MAX_STEPS).toBe(12)
+  })
+})
+
+describe('appendCatchAllStep (Plan K — structural 100% coverage)', () => {
+  const step = (files: string[], caption: string, relatedTests: string[] = []): StoryStep =>
+    ({ index: 0, files, caption, layer: 'logic', relatedTests })
+
+  it('sweeps an unplaced changed file into a final "Other changes" catch-all step', () => {
+    const steps = [step(['src/a.ts'], 'a'), step(['src/b.ts'], 'b')]
+    const out = appendCatchAllStep(steps, ['src/a.ts', 'src/b.ts', 'src/c.ts'])
+    expect(out).toHaveLength(3)
+    const last = out[out.length - 1]
+    expect(last.layer).toBe(STORY_OTHER_LAYER)
+    expect(last.layer).toBe('other')
+    expect(last.files).toEqual(['src/c.ts'])
+    expect(last.caption).toBe('Other changes (1)')
+    expect(last.index).toBe(2)
+  })
+
+  it('guarantees union(all steps.files) == all changed PR filenames', () => {
+    const pr = ['src/a.ts', 'src/b.ts', 'src/c.ts', 'src/d.ts']
+    const steps = [step(['src/a.ts'], 'a'), step(['src/c.ts'], 'c')]
+    const out = appendCatchAllStep(steps, pr)
+    const union = new Set(out.flatMap((s) => s.files))
+    expect([...union].sort()).toEqual([...pr].sort())
+  })
+
+  it('treats a relatedTest-only file as UNPLACED (swept into the catch-all)', () => {
+    // src/a.test.ts only appears as a relatedTest, never a primary file → unplaced.
+    const steps = [step(['src/a.ts'], 'a', ['src/a.test.ts'])]
+    const out = appendCatchAllStep(steps, ['src/a.ts', 'src/a.test.ts'])
+    expect(out).toHaveLength(2)
+    expect(out[1].files).toEqual(['src/a.test.ts'])
+  })
+
+  it('returns the steps unchanged when every changed file is already placed', () => {
+    const steps = [step(['src/a.ts'], 'a'), step(['src/b.ts'], 'b')]
+    const out = appendCatchAllStep(steps, ['src/a.ts', 'src/b.ts'])
+    expect(out).toBe(steps)
+    expect(out).toHaveLength(2)
+  })
+
+  it('orders catch-all files by the PR filename order (deterministic)', () => {
+    const steps = [step(['src/a.ts'], 'a')]
+    const out = appendCatchAllStep(steps, ['z.ts', 'src/a.ts', 'm.ts'])
+    expect(out[out.length - 1].files).toEqual(['z.ts', 'm.ts'])
   })
 })
