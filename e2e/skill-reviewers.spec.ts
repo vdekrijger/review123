@@ -385,3 +385,108 @@ test('skill-reviewers: dismiss hides inline and block findings without affecting
   // Draft count stays at 0 (use class selector to avoid ambiguity with skill-run-status-bar)
   await expect(page.locator('.draft-status')).toContainText('0 comments')
 })
+
+// ---------------------------------------------------------------------------
+// Test: a FAILED reviewer's "↻ error" chip is a Retry button — clicking it
+//       re-runs JUST that reviewer (errors are never cached → re-hits the LLM),
+//       and the chip updates to a findings result.
+// ---------------------------------------------------------------------------
+
+test('skill-reviewers: errored reviewer chip retries and resolves to findings', async ({
+  page,
+}) => {
+  // Block analytics
+  await page.route('**/*posthog.com/**', (route) => route.abort())
+  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+
+  // GitHub API — same fixtures as setupRoutes
+  await page.route('**/api.github.com/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}`) return route.fulfill({ json: makePrMeta() })
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) return route.fulfill({ json: makePrFiles() })
+    if (path === `/repos/${OWNER}/${REPO}/commits/${HEAD_SHA}/check-runs`) return route.fulfill({ json: { total_count: 0, check_runs: [] } })
+    if (path.startsWith(`/repos/${OWNER}/${REPO}/contents/`)) {
+      const ref = url.searchParams.get('ref') ?? ''
+      const filePath = decodeURIComponent(path.replace(`/repos/${OWNER}/${REPO}/contents/`, ''))
+      if (filePath === 'src/feature.ts' && ref === BASE_SHA) return route.fulfill({ json: makeFileContent('const old = 1\nremoved line\ntrailing context') })
+      if (filePath === 'src/feature.ts' && ref === HEAD_SHA) return route.fulfill({ json: makeFileContent('const old = 1\nunchanged line\nadded line\nanother added line\ntrailing context') })
+      return route.fulfill({ status: 404, json: { message: 'Not Found' } })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/comments`) return route.fulfill({ json: [] })
+    if (path === `/repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments`) return route.fulfill({ json: [] })
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/commits`) return route.fulfill({ json: [] })
+    return route.fulfill({ json: {} })
+  })
+
+  // DeepSeek — fail the FIRST skill-review request (server error), succeed after.
+  let skillCalls = 0
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string }> } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* non-JSON */ }
+
+    if (body?.stream === true) {
+      return route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+        body: makeDeepSeekStreamResponse(SUMMARY_TEXT),
+      })
+    }
+
+    const systemContent = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
+    if (systemContent.includes('reviewer persona') || systemContent.includes('security reviewer')) {
+      skillCalls += 1
+      if (skillCalls === 1) {
+        // First run fails → the reviewer enters the error state.
+        return route.fulfill({ status: 500, json: { error: { message: 'server error' } } })
+      }
+      // Retry succeeds.
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify(SKILL_REVIEW_RESULT) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
+    return route.fulfill({
+      status: 200,
+      json: {
+        id: 'chatcmpl-test',
+        object: 'chat.completion',
+        choices: [{ message: { role: 'assistant', content: JSON.stringify({ level: 'minor-changes', evidence: ['x'], notAnalyzed: [] }) }, finish_reason: 'stop', index: 0 }],
+      },
+    })
+  })
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings())
+  await page.addInitScript(seedSkillScript())
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Run reviewers — first attempt fails.
+  await page.getByRole('button', { name: /run my reviewers/i }).click()
+
+  // The errored reviewer's chip is a Retry button.
+  const retryBtn = page.getByRole('button', { name: /retry security reviewer/i })
+  await expect(retryBtn).toBeVisible({ timeout: 15_000 })
+  await expect(retryBtn).toHaveAttribute('title', 'Click to retry')
+
+  // Click retry → the reviewer re-runs and resolves to findings.
+  await retryBtn.click()
+
+  // The finding now appears and the error chip is gone.
+  await expect(page.getByText(/Potential XSS vulnerability/i)).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByRole('button', { name: /retry security reviewer/i })).toHaveCount(0)
+  // It re-hit the LLM (cache never served the error): two skill-review calls.
+  expect(skillCalls).toBeGreaterThanOrEqual(2)
+})

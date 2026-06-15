@@ -48,6 +48,7 @@
     contentsMap = null,
     skillReviews = [],
     runSkillReviewsFn = null,
+    onRetrySkill = null,
     askFn = null,
     askDisabledReason = null,
     replyFn = null,
@@ -85,6 +86,11 @@
     skillReviews?: SkillReviewEntry[]
     /** Optional callback to trigger runSkillReviews on the AiRun instance */
     runSkillReviewsFn?: (() => void) | null
+    /**
+     * Re-runs JUST one reviewer (the error-chip retry). Receives the skillId of
+     * the errored reviewer; wired to AiRun.retrySkill. null → retry unavailable.
+     */
+    onRetrySkill?: ((skillId: string) => void) | null
     /**
      * Optional Ask AI function — when provided, DraftThread widgets show the
      * "Comment | Ask AI" tab toggle. Threaded from Review via AiRun.ask.
@@ -441,6 +447,29 @@
   // Running state: true when any skill entry is in loading status
   const isRunning = $derived(skillReviews.some(e => e.state.status === 'loading'))
 
+  // How many reviewers are in flight — drives the single global "Running… (N)"
+  // indicator and the aria-live announcement (announces the count, not each
+  // per-reviewer activity line, so screen readers aren't spammed).
+  const runningCount = $derived(skillReviews.filter(e => e.state.status === 'loading').length)
+
+  // Latest activity line for a running reviewer (deep mode). We show ONLY the
+  // most recent line per row — truncated with ellipsis via CSS — rather than the
+  // full scrolling log, so N concurrent reviewers stay bounded and aligned.
+  function latestActivity(entry: SkillReviewEntry): string | null {
+    const activity = entry.state.activity
+    if (!activity || activity.length === 0) return null
+    return activity[activity.length - 1] ?? null
+  }
+
+  // Session-only: which running rows the user expanded to see the full log.
+  let expandedRunIds = $state<Set<string>>(new Set())
+  function toggleExpandRun(skillId: string): void {
+    const next = new Set(expandedRunIds)
+    if (next.has(skillId)) next.delete(skillId)
+    else next.add(skillId)
+    expandedRunIds = next
+  }
+
   // ---------------------------------------------------------------------------
   // Hide whitespace changes (git diff -w semantics)
   // ---------------------------------------------------------------------------
@@ -558,16 +587,56 @@
 </div>
 
 {#if skillReviews.length > 0}
-  <div class="skill-run-status-bar" role="status" aria-label="Reviewer run status">
-    {#each skillReviews as entry (entry.skillId)}
-      <span class="skill-run-entry">
-        {#if entry.state.status === 'loading'}
-          <!-- Unified AI progress: "Running {name}…" + (deep) the activity log,
-               identical to the panels' loved treatment. No bespoke chip spinner. -->
-          <span class="skill-run-progress">
-            <AiProgress task="skill" name={entry.name} state={entry.state} skeleton={false} />
-          </span>
-        {:else}
+  {@const runningEntries = skillReviews.filter(e => e.state.status === 'loading')}
+  {@const settledEntries = skillReviews.filter(e => e.state.status !== 'loading')}
+
+  <!-- RUNNING region: a BOUNDED, ALIGNED list of compact one-line rows. Each row
+       is a small spinner + the reviewer NAME + (deep mode) ONLY its latest
+       activity line (truncated). A single global "Running… (N)" indicator heads
+       the block. aria-live announces the count, not every activity line, so
+       screen readers aren't spammed by N concurrent logs. -->
+  {#if runningEntries.length > 0}
+    <div class="skill-running-region" aria-live="polite" aria-label="Reviewers running">
+      <p class="skill-running-head">
+        <Spinner size="0.75em" />Running… ({runningCount})
+      </p>
+      <ul class="skill-running-list">
+        {#each runningEntries as entry (entry.skillId)}
+          {@const activity = latestActivity(entry)}
+          {@const expanded = expandedRunIds.has(entry.skillId)}
+          <li class="skill-running-row">
+            <Spinner size="0.7em" />
+            <span class="skill-running-name">{entry.name}</span>
+            {#if activity}
+              {#if expanded}
+                <ul class="skill-running-fulllog" aria-label="{entry.name} activity">
+                  {#each entry.state.activity ?? [] as line, i (i)}
+                    <li>{line}</li>
+                  {/each}
+                </ul>
+              {:else}
+                <span class="skill-running-activity" title={activity}>{activity}</span>
+              {/if}
+              <button
+                type="button"
+                class="skill-running-expand"
+                aria-expanded={expanded}
+                aria-label={expanded ? `Collapse ${entry.name} activity` : `Expand ${entry.name} activity`}
+                onclick={() => toggleExpandRun(entry.skillId)}
+              >{expanded ? '⌃' : '⌄'}</button>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
+
+  <!-- SETTLED region: done/error result chips, aligned and wrapping for many
+       reviewers. An errored reviewer's chip is a real Retry BUTTON. -->
+  {#if settledEntries.length > 0}
+    <div class="skill-run-status-bar" role="status" aria-label="Reviewer run results">
+      {#each settledEntries as entry (entry.skillId)}
+        <span class="skill-run-entry">
           <span class="skill-run-name">{entry.name}</span>
           {#if entry.state.status === 'done'}
             {@const findingCount = (entry.state.value as { findings?: unknown[] } | undefined)?.findings?.filter((f: unknown) => {
@@ -595,18 +664,30 @@
               {/if}
             {/if}
           {:else if entry.state.status === 'error'}
-            <span class="skill-status-chip chip-error" aria-label="Error, retry available">
-              ↻ error
-            </span>
+            {#if onRetrySkill}
+              <button
+                type="button"
+                class="skill-status-chip chip-error"
+                aria-label="Retry {entry.name}"
+                title="Click to retry"
+                onclick={() => onRetrySkill?.(entry.skillId)}
+              >
+                ↻ error
+              </button>
+            {:else}
+              <span class="skill-status-chip chip-error" aria-label="Error">
+                ↻ error
+              </span>
+            {/if}
           {:else}
             <span class="skill-status-chip chip-queued" aria-label="Queued">
               ⏳ queued
             </span>
           {/if}
-        {/if}
-      </span>
-    {/each}
-  </div>
+        </span>
+      {/each}
+    </div>
+  {/if}
 {/if}
 
 {#if skillPersonaSummaries.length > 0}
@@ -1098,7 +1179,118 @@
     opacity: 0.85;
   }
 
-  /* ---- Per-reviewer run status bar ---- */
+  /* ---- Running reviewers: bounded, aligned compact list ----
+     One row per running reviewer: spinner + name + (deep) latest activity line.
+     Fixed row height + aligned columns keep the block calm regardless of how
+     many reviewers run concurrently — NOT N stacked full activity logs. */
+  .skill-running-region {
+    padding: 0.4rem 0;
+  }
+
+  .skill-running-head {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0 0 0.35rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  .skill-running-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    /* spinner | name (content, capped) | activity (rest) | expand */
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.25rem 0.6rem;
+  }
+
+  .skill-running-row {
+    display: grid;
+    grid-template-columns: subgrid;
+    grid-column: 1 / -1;
+    align-items: center;
+    min-height: 1.5rem;
+  }
+
+  /* The spinner sits in the first cell before the name; align it. */
+  .skill-running-row > :global(.ui-spinner) {
+    grid-column: 1;
+  }
+
+  .skill-running-name {
+    grid-column: 2;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 16rem;
+  }
+
+  /* ONLY the latest activity line, truncated with ellipsis — not the full log. */
+  .skill-running-activity {
+    grid-column: 3 / 4;
+    font-size: 0.75rem;
+    font-family: var(--font-mono, monospace);
+    color: var(--text-muted);
+    opacity: 0.85;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    justify-self: start;
+  }
+
+  /* Expanded: the full activity log spans the activity column. */
+  .skill-running-fulllog {
+    grid-column: 3 / 4;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-size: 0.75rem;
+    font-family: var(--font-mono, monospace);
+    color: var(--text-muted);
+    opacity: 0.85;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+
+  .skill-running-fulllog li {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .skill-running-expand {
+    grid-column: 4;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+  }
+
+  .skill-running-expand:hover {
+    color: var(--text);
+    background: var(--surface-raised);
+  }
+
+  .skill-running-expand:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  /* ---- Per-reviewer run results bar (settled chips) ---- */
   .skill-run-status-bar {
     display: flex;
     flex-wrap: wrap;
@@ -1112,12 +1304,6 @@
     display: flex;
     align-items: center;
     gap: 0.35rem;
-  }
-
-  /* A running reviewer renders the unified AiProgress block; keep it compact in
-     the status strip (no extra top/bottom padding from the block default). */
-  .skill-run-progress :global(.ai-progress) {
-    padding: 0;
   }
 
   .skill-run-name {
@@ -1165,6 +1351,22 @@
     border: 1px solid var(--legend-removed-border);
     color: var(--legend-removed-color);
     cursor: pointer;
+  }
+
+  /* The error chip is a real Retry button — reset button defaults so it matches
+     the chip span visually, and add hover/focus affordances. */
+  button.chip-error {
+    font-family: inherit;
+    line-height: 1.2;
+  }
+
+  button.chip-error:hover {
+    background: color-mix(in srgb, var(--legend-removed-bg) 80%, var(--text) 12%);
+  }
+
+  button.chip-error:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   /* ---- Skill persona summaries ---- */

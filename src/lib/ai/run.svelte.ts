@@ -130,6 +130,12 @@ export interface AiRun {
   coach(drafts: Draft[], prComments?: string[], verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'): Promise<CoachOutcome | { error: string }>
   ask(question: string, onDelta: (t: string) => void, focus?: AskFocus): Promise<{ ok: true; answer: string } | { ok: false; error: string }>
   runSkillReviews(onUpdate?: () => void, existingComments?: string[]): Promise<void>
+  /**
+   * Re-run exactly one reviewer by skill id (the error-chip retry). Sets only
+   * that reviewer's entry to loading and re-invokes its review through the
+   * normal cache-miss path; sibling reviews and drafts are untouched.
+   */
+  retrySkill(skillId: string, onUpdate?: () => void, existingComments?: string[]): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -1106,6 +1112,120 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // Gated once: no-key + consent check (shared gateAi/ask pattern).
   // ---------------------------------------------------------------------------
 
+  /**
+   * Execute ONE skill review and write its outcome into skillReviewsState[idx].
+   * Shared by the batch runSkillReviews() and the per-skill retrySkill() so a
+   * retry goes through the EXACT same cache-miss path (errors are never cached,
+   * so a re-run re-hits the LLM). Mutates only entry [idx] — sibling reviews and
+   * drafts are untouched. Assumes the entry at [idx] is already in loading state.
+   */
+  async function executeSkillReview(
+    ctx: PackedContext,
+    skill: { id: string; name: string; content: string },
+    idx: number,
+    deep: ReturnType<typeof deepReviewAvailability>,
+    onUpdate?: () => void,
+    existingComments?: string[],
+  ): Promise<void> {
+    // Content-addressed cache key: includes djb2(skill.content).
+    // Deep runs carry a '|deep' marker so they never collide with
+    // single-pass results for the same skill content.
+    const key = cacheKey(prKey, 'skill:' + djb2(skill.content) + (deep.enabled ? '|deep' : ''), PROMPT_VERSION)
+
+    const t0 = performance.now()
+
+    // Cache check
+    if (deep.enabled) {
+      const hit = await getCached<DeepCached<SkillReviewResult>>(key)
+      if (hit !== null) {
+        skillReviewsState[idx] = {
+          skillId: skill.id,
+          name: skill.name,
+          state: { status: 'done', value: hit.result, toolCallsUsed: hit.toolCallsUsed, ...(hit.usage ? { usage: hit.usage } : {}) },
+        }
+        track('ai_task_completed', {
+          task: 'skill-review',
+          duration_ms: Math.round(performance.now() - t0),
+          cached: true,
+          deep: true,
+        })
+        onUpdate?.()
+        return
+      }
+    } else {
+      const hit = await getCached<SkillReviewResult>(key)
+      if (hit !== null) {
+        skillReviewsState[idx] = {
+          skillId: skill.id,
+          name: skill.name,
+          state: { status: 'done', value: hit, ...(deep.note ? { note: deep.note } : {}) },
+        }
+        track('ai_task_completed', {
+          task: 'skill-review',
+          duration_ms: Math.round(performance.now() - t0),
+          cached: true,
+        })
+        onUpdate?.()
+        return
+      }
+    }
+
+    const prompts = skillReviewPrompt(ctx, { name: skill.name, content: skill.content }, existingComments)
+
+    try {
+      let skillResult: SkillReviewResult
+      let skillUsage: LlmUsage | undefined
+      let toolCallsUsed: number | undefined
+
+      if (deep.enabled) {
+        const deepOutcome = await runDeepJson<SkillReviewResult>(prompts, validateSkillReviewResult, (line) => {
+          const entry = skillReviewsState[idx]
+          entry.state = { ...entry.state, activity: [...(entry.state.activity ?? []), line] }
+          onUpdate?.()
+        })
+        skillResult = deepOutcome.result
+        skillUsage = deepOutcome.usage
+        toolCallsUsed = deepOutcome.toolCallsUsed
+        await setCached<DeepCached<SkillReviewResult>>(key, { deep: true, result: skillResult, toolCallsUsed, usage: skillUsage })
+      } else {
+        const singlePass = await llmJsonWithRepairWithUsage<SkillReviewResult>(
+          { system: prompts.system, user: prompts.user },
+          validateSkillReviewResult,
+        )
+        skillResult = singlePass.result
+        skillUsage = singlePass.usage
+        await setCached<SkillReviewResult>(key, skillResult)
+      }
+      skillReviewsState[idx] = {
+        skillId: skill.id,
+        name: skill.name,
+        state: {
+          status: 'done',
+          value: skillResult,
+          ...(toolCallsUsed !== undefined ? { toolCallsUsed } : {}),
+          ...(skillUsage ? { usage: skillUsage } : {}),
+          ...(deep.note ? { note: deep.note } : {}),
+        },
+      }
+      track('ai_task_completed', {
+        task: 'skill-review',
+        duration_ms: Math.round(performance.now() - t0),
+        cached: false,
+        ...(skillUsage?.total_tokens !== undefined ? { tokens: skillUsage.total_tokens } : {}),
+        ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
+      })
+    } catch (err) {
+      const kind = err instanceof LlmError ? err.kind : 'unknown'
+      skillReviewsState[idx] = {
+        skillId: skill.id,
+        name: skill.name,
+        state: { status: 'error', error: humanMessage(kind) },
+      }
+      track('ai_task_failed', { task: 'skill-review', reason: kind })
+    }
+    onUpdate?.()
+  }
+
   async function runSkillReviews(onUpdate?: () => void, existingComments?: string[]): Promise<void> {
     // No-key gate: same early-exit as start() and coach()
     if (!activeProviderHasKey()) return
@@ -1139,106 +1259,52 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
     // Run each skill in parallel, isolated
     await Promise.all(
-      skills.map(async (skill, idx) => {
-        // Content-addressed cache key: includes djb2(skill.content).
-        // Deep runs carry a '|deep' marker so they never collide with
-        // single-pass results for the same skill content.
-        const key = cacheKey(prKey, 'skill:' + djb2(skill.content) + (deep.enabled ? '|deep' : ''), PROMPT_VERSION)
-
-        const t0 = performance.now()
-
-        // Cache check
-        if (deep.enabled) {
-          const hit = await getCached<DeepCached<SkillReviewResult>>(key)
-          if (hit !== null) {
-            skillReviewsState[idx] = {
-              skillId: skill.id,
-              name: skill.name,
-              state: { status: 'done', value: hit.result, toolCallsUsed: hit.toolCallsUsed, ...(hit.usage ? { usage: hit.usage } : {}) },
-            }
-            track('ai_task_completed', {
-              task: 'skill-review',
-              duration_ms: Math.round(performance.now() - t0),
-              cached: true,
-              deep: true,
-            })
-            onUpdate?.()
-            return
-          }
-        } else {
-          const hit = await getCached<SkillReviewResult>(key)
-          if (hit !== null) {
-            skillReviewsState[idx] = {
-              skillId: skill.id,
-              name: skill.name,
-              state: { status: 'done', value: hit, ...(deep.note ? { note: deep.note } : {}) },
-            }
-            track('ai_task_completed', {
-              task: 'skill-review',
-              duration_ms: Math.round(performance.now() - t0),
-              cached: true,
-            })
-            onUpdate?.()
-            return
-          }
-        }
-
-        const prompts = skillReviewPrompt(ctx, { name: skill.name, content: skill.content }, existingComments)
-
-        try {
-          let skillResult: SkillReviewResult
-          let skillUsage: LlmUsage | undefined
-          let toolCallsUsed: number | undefined
-
-          if (deep.enabled) {
-            const deepOutcome = await runDeepJson<SkillReviewResult>(prompts, validateSkillReviewResult, (line) => {
-              const entry = skillReviewsState[idx]
-              entry.state = { ...entry.state, activity: [...(entry.state.activity ?? []), line] }
-              onUpdate?.()
-            })
-            skillResult = deepOutcome.result
-            skillUsage = deepOutcome.usage
-            toolCallsUsed = deepOutcome.toolCallsUsed
-            await setCached<DeepCached<SkillReviewResult>>(key, { deep: true, result: skillResult, toolCallsUsed, usage: skillUsage })
-          } else {
-            const singlePass = await llmJsonWithRepairWithUsage<SkillReviewResult>(
-              { system: prompts.system, user: prompts.user },
-              validateSkillReviewResult,
-            )
-            skillResult = singlePass.result
-            skillUsage = singlePass.usage
-            await setCached<SkillReviewResult>(key, skillResult)
-          }
-          skillReviewsState[idx] = {
-            skillId: skill.id,
-            name: skill.name,
-            state: {
-              status: 'done',
-              value: skillResult,
-              ...(toolCallsUsed !== undefined ? { toolCallsUsed } : {}),
-              ...(skillUsage ? { usage: skillUsage } : {}),
-              ...(deep.note ? { note: deep.note } : {}),
-            },
-          }
-          track('ai_task_completed', {
-            task: 'skill-review',
-            duration_ms: Math.round(performance.now() - t0),
-            cached: false,
-            ...(skillUsage?.total_tokens !== undefined ? { tokens: skillUsage.total_tokens } : {}),
-            ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
-          })
-        } catch (err) {
-          const kind = err instanceof LlmError ? err.kind : 'unknown'
-          skillReviewsState[idx] = {
-            skillId: skill.id,
-            name: skill.name,
-            state: { status: 'error', error: humanMessage(kind) },
-          }
-          track('ai_task_failed', { task: 'skill-review', reason: kind })
-        }
-        onUpdate?.()
-      }),
+      skills.map((skill, idx) => executeSkillReview(ctx, skill, idx, deep, onUpdate, existingComments)),
     )
+  }
+
+  // ---------------------------------------------------------------------------
+  // retrySkill(skillId) — re-run exactly ONE reviewer (the error-chip retry).
+  //
+  // Mirrors retry(task) for the panels: re-uses the packed context, sets just
+  // that reviewer's entry to loading, and re-invokes its review through the same
+  // cache-miss path (errors are never cached, so it re-hits the LLM). Only the
+  // targeted entry is touched — sibling reviews and drafts are never disturbed.
+  // ---------------------------------------------------------------------------
+
+  async function retrySkill(skillId: string, onUpdate?: () => void, existingComments?: string[]): Promise<void> {
+    // No-key / consent gates: identical to the batch path.
+    if (!activeProviderHasKey()) return
+    const allowed = await gateAi({ repo, isPrivate, ask: askConsent })
+    if (!allowed) return
+
+    // Locate the existing entry. If runSkillReviews never ran, there's nothing
+    // to retry — the error chip only renders after a batch run.
+    const idx = skillReviewsState.findIndex((e) => e.skillId === skillId)
+    if (idx === -1) return
+
+    // Re-use the already-packed context (re-pack if the initial pack failed).
+    if (packedCtx === null) {
+      const ctx = await getPackedContext()
+      if (ctx === null) return
+    }
+    const ctx = packedCtx!
+
+    // Resolve the skill content fresh (the user may have edited it since the run).
+    const skill = listSkills().find((s) => s.id === skillId)
+    if (!skill) return
+
+    const deep = deepReviewAvailability(deepReview)
+
+    // Set just this entry to loading — clears the prior error/activity.
+    skillReviewsState[idx] = {
+      skillId: skill.id,
+      name: skill.name,
+      state: { status: 'loading', ...(deep.note ? { note: deep.note } : {}) },
+    }
+    onUpdate?.()
+
+    await executeSkillReview(ctx, skill, idx, deep, onUpdate, existingComments)
   }
 
   // ---------------------------------------------------------------------------
@@ -1271,5 +1337,6 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     coach,
     ask,
     runSkillReviews,
+    retrySkill,
   }
 }
