@@ -26,6 +26,7 @@ function makeRawReviewComment(overrides: Partial<{
   line: number | null
   side: 'LEFT' | 'RIGHT'
   in_reply_to_id: number | null
+  html_url: string | undefined
 }> = {}) {
   return {
     id: 101,
@@ -36,6 +37,7 @@ function makeRawReviewComment(overrides: Partial<{
     line: 42,
     side: 'RIGHT' as const,
     in_reply_to_id: null,
+    html_url: 'https://github.com/acme/web/pull/7#discussion_r101',
     ...overrides,
   }
 }
@@ -45,6 +47,7 @@ function makeRawIssueComment(overrides: Partial<{
   user: { login: string; avatar_url: string | null }
   body: string
   created_at: string
+  html_url: string | undefined
 }> = {}) {
   return {
     id: 201,
@@ -87,6 +90,7 @@ describe('getPrComments — review comment mapping (EC-COMM-01)', () => {
       line: 15,
       side: 'RIGHT',
       in_reply_to_id: null,
+      html_url: 'https://github.com/acme/web/pull/7#discussion_r501',
     })
 
     vi.stubGlobal('fetch', vi.fn()
@@ -106,6 +110,7 @@ describe('getPrComments — review comment mapping (EC-COMM-01)', () => {
       line: 15,
       side: 'RIGHT',
       inReplyTo: null,
+      url: 'https://github.com/acme/web/pull/7#discussion_r501',
     })
   })
 
@@ -168,6 +173,49 @@ describe('getPrComments — issue comment mapping (EC-COMM-02)', () => {
       side: null,
       inReplyTo: null,
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// EC-COMM-URL: html_url → comment.url permalink mapping
+// ---------------------------------------------------------------------------
+
+describe('getPrComments — comment permalink mapping (EC-COMM-URL)', () => {
+  it('maps review comment html_url to comment.url', async () => {
+    const raw = makeRawReviewComment({
+      id: 701,
+      html_url: 'https://github.com/acme/web/pull/7#discussion_r701',
+    })
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(pageOf([raw]))
+      .mockResolvedValueOnce(pageOf([]))
+    )
+    const comments = await getPrComments(REF)
+    expect(comments[0].url).toBe('https://github.com/acme/web/pull/7#discussion_r701')
+  })
+
+  it('maps issue comment html_url to comment.url', async () => {
+    const raw = makeRawIssueComment({
+      id: 801,
+      html_url: 'https://github.com/acme/web/pull/7#issuecomment-801',
+    })
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(pageOf([]))
+      .mockResolvedValueOnce(pageOf([raw]))
+    )
+    const comments = await getPrComments(REF)
+    expect(comments[0].url).toBe('https://github.com/acme/web/pull/7#issuecomment-801')
+  })
+
+  it('leaves comment.url undefined when html_url is absent', async () => {
+    const raw = makeRawReviewComment({ id: 901, html_url: undefined })
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(pageOf([raw]))
+      .mockResolvedValueOnce(pageOf([]))
+    )
+    const comments = await getPrComments(REF)
+    expect(comments[0].url).toBeUndefined()
+    expect('url' in comments[0]).toBe(false)
   })
 })
 

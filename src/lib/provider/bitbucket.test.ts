@@ -614,6 +614,7 @@ describe('getComments', () => {
         display_name: 'Alice',
         links: { avatar: { href: 'https://example.com/alice.png' } },
       },
+      links: { html: { href: 'https://bitbucket.org/myws/myrepo/pull-requests/42#comment-1' } },
     },
     {
       id: 2,
@@ -715,6 +716,19 @@ describe('getComments', () => {
   it('returns 4 comments (1 deleted filtered)', async () => {
     const comments = await bitbucketProvider.getComments(REF)
     expect(comments).toHaveLength(4)
+  })
+
+  it('maps links.html.href to comment.url', async () => {
+    const comments = await bitbucketProvider.getComments(REF)
+    const c = comments.find((c) => c.id === 1)!
+    expect(c.url).toBe('https://bitbucket.org/myws/myrepo/pull-requests/42#comment-1')
+  })
+
+  it('leaves comment.url undefined when links.html.href is absent', async () => {
+    const comments = await bitbucketProvider.getComments(REF)
+    const c = comments.find((c) => c.id === 3)!
+    expect(c.url).toBeUndefined()
+    expect('url' in c).toBe(false)
   })
 })
 

@@ -395,6 +395,7 @@ function mapCompareDiff(d: GlCompareFile): PrFile {
 function mapNote(
   note: GlNote,
   thread?: { discussionId: string; rootNoteId: number | null },
+  mrWebUrl?: string,
 ): PrComment | null {
   // Skip system notes (e.g. "approved this merge request", pipeline events)
   if (note.system) return null
@@ -429,6 +430,9 @@ function mapNote(
     side,
     inReplyTo: isReply ? thread.rootNoteId : null,
     ...(thread ? { threadId: thread.discussionId } : {}),
+    // GitLab note permalinks are the MR web URL + a #note_{id} fragment. We can
+    // only build one when the caller supplies the MR web URL; otherwise omit it.
+    ...(mrWebUrl ? { url: `${mrWebUrl}#note_${note.id}` } : {}),
   }
 }
 
@@ -566,6 +570,7 @@ export const gitlabProvider: ReviewProvider = {
 
   async getComments(ref: PrRefX): Promise<PrComment[]> {
     const pid = projectId(ref)
+    const mrWebUrl = this.prWebUrl(ref)
     const discussions = await fetchAll<GlDiscussion>(
       `/projects/${pid}/merge_requests/${ref.number}/discussions?per_page=100`,
     )
@@ -575,10 +580,14 @@ export const gitlabProvider: ReviewProvider = {
       // First non-system note = thread root; later notes are replies to it.
       const rootNote = disc.notes.find((n) => !n.system)
       for (const note of disc.notes) {
-        const comment = mapNote(note, {
-          discussionId: disc.id,
-          rootNoteId: rootNote?.id ?? null,
-        })
+        const comment = mapNote(
+          note,
+          {
+            discussionId: disc.id,
+            rootNoteId: rootNote?.id ?? null,
+          },
+          mrWebUrl,
+        )
         if (comment) comments.push(comment)
       }
     }
@@ -793,7 +802,11 @@ export const gitlabProvider: ReviewProvider = {
         `/projects/${pid}/merge_requests/${ref.number}/discussions/${encodeURIComponent(root.threadId)}/notes`,
         { method: 'POST', body: JSON.stringify({ body }) },
       )
-      const comment = mapNote(note, { discussionId: root.threadId, rootNoteId: root.id })
+      const comment = mapNote(
+        note,
+        { discussionId: root.threadId, rootNoteId: root.id },
+        this.prWebUrl(ref),
+      )
       if (!comment) {
         return { ok: false, message: 'GitLab returned an unexpected note payload.' }
       }

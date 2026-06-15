@@ -541,6 +541,18 @@ describe('getComments', () => {
     expect(comments[0].id).toBe(19)
     expect(comments[1].id).toBe(20)
   })
+
+  it('constructs a note permalink as {mrWebUrl}#note_{id}', async () => {
+    vi.stubGlobal('fetch', mockFetch([
+      makeDiscussion({
+        notes: [makeNote({ id: 555 })],
+      }),
+    ]))
+    const comments = await gitlabProvider.getComments(REF)
+    expect(comments[0].url).toBe(
+      'https://gitlab.com/mygroup/myproject/-/merge_requests/42#note_555',
+    )
+  })
 })
 
 describe('getResolvedCommentIds', () => {
