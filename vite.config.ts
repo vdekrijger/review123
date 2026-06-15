@@ -1,9 +1,37 @@
 /// <reference types="vitest/config" />
+import { execSync } from 'node:child_process'
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 
-export default defineConfig({
+// Build-time provenance, captured once at config eval (which runs at build time
+// — not the runtime-forbidden case). Prefer the sha Vercel injects on deploys;
+// fall back to the local git short sha; fall back again to 'dev' for non-git/CI
+// checkouts so the build never fails on missing git.
+function resolveBuildSha(): string {
+  const vercelSha = process.env.VERCEL_GIT_COMMIT_SHA
+  if (vercelSha) return vercelSha.slice(0, 7)
+  try {
+    return execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim()
+  } catch {
+    return 'dev'
+  }
+}
+
+const BUILD_SHA = resolveBuildSha()
+const BUILD_TIME = new Date().toISOString()
+
+export default defineConfig(({ mode }) => ({
   plugins: [svelte()],
+  // Injected for the app bundle, but NOT during `vitest` (mode === 'test'),
+  // where buildInfo.ts's typeof-guard fallback ('test') keeps unit tests from
+  // depending on a real git checkout.
+  define:
+    mode === 'test'
+      ? {}
+      : {
+          __BUILD_SHA__: JSON.stringify(BUILD_SHA),
+          __BUILD_TIME__: JSON.stringify(BUILD_TIME),
+        },
   resolve: {
     conditions: ['browser'],
   },
@@ -58,4 +86,4 @@ export default defineConfig({
       VITE_GITLAB_CLIENT_ID: 'test_gitlab_client_id',
     },
   },
-})
+}))

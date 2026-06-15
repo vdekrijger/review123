@@ -5,6 +5,7 @@
   import SettingsPage from './routes/SettingsPage.svelte'
   import GitHubSignInButton from './components/GitHubSignInButton.svelte'
   import GitLabSignInButton from './components/GitLabSignInButton.svelte'
+  import BuildIndicator from './components/BuildIndicator.svelte'
   import { signOut } from './lib/auth/auth'
   import { signOutGitlab } from './lib/auth/gitlabAuth'
   import { beginOAuth } from './lib/auth/oauthFlow'
@@ -122,6 +123,10 @@
 {:else}
   <section><h1>Not found</h1><p>That isn't a valid review link. <a href="/">Go home</a>.</p></section>
 {/if}
+
+<!-- Global, every-route build provenance: which commit + when the running
+     bundle was built — so a lagging Vercel deploy is obvious at a glance. -->
+<BuildIndicator />
 
 <style>
   :global(:root) {

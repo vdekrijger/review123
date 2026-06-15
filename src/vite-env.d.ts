@@ -1,6 +1,13 @@
 /// <reference types="svelte" />
 /// <reference types="vite/client" />
 
+// Injected by Vite's `define` at build time (see vite.config.ts): the short git
+// sha and an ISO build timestamp of the running bundle. Declared here so TS
+// resolves the bare globals; buildInfo.ts guards them with a typeof check for
+// environments (vitest) where the define is absent.
+declare const __BUILD_SHA__: string
+declare const __BUILD_TIME__: string
+
 // svelte-check's default (non-incremental) mode uses the TypeScript language service,
 // which strips the *.svelte ambient declaration from svelte/types/index.d.ts and is
 // supposed to resolve .svelte imports via its own snapshot mechanism. However, with
