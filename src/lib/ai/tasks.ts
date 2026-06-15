@@ -11,9 +11,9 @@
 
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
-import { STORY_LAYERS } from './schemas'
+import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
 
-export const PROMPT_VERSION = 14
+export const PROMPT_VERSION = 15
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)
@@ -812,10 +812,23 @@ Field rules:
 - layer: exactly one of the ids above.
 - relatedTests: test file paths (from the PR) that exercise THIS step's code — for inline \
   sense-checking. Empty array when no test in the PR covers it. Ground pairings in the import graph \
-  and the test files touched by this PR; do not guess.
+  and the test files touched by this PR; do not guess. relatedTests may ONLY list test files that do \
+  NOT already appear as a primary \`files\` entry in ANY step.
 
-Keep the walkthrough tight: prefer FEWER, coherent steps over one-step-per-file. Cover every changed \
-non-test file in some step (as files or relatedTests).
+NO OVERLAP (CRITICAL — adjacent steps must never show the same code):
+- Every changed non-test file appears in EXACTLY ONE step's \`files\`. A file in one step's \`files\` \
+  MUST NOT also appear in another step's \`files\`, nor in any step's relatedTests. No file is repeated \
+  across the walkthrough.
+
+Bound the output (IMPORTANT for large PRs):
+- Emit AT MOST ${STORY_MAX_STEPS} steps. Never one step per file. On a large PR, GROUP AGGRESSIVELY: \
+  combine files of the same layer/feature into a single coherent step so the whole walkthrough stays \
+  within the cap.
+- If there are many files, PRIORITIZE the most important ones and group the rest into broader steps — \
+  but still cover every changed non-test file in some step (as \`files\` or relatedTests) where it fits \
+  within the cap. A tight, bounded story beats an exhaustive one that gets truncated.
+
+Keep the walkthrough tight: prefer FEWER, coherent steps over one-step-per-file.
 ${importGraphSection}${deepStorySection}
 
 Do not include any text outside the JSON object.`

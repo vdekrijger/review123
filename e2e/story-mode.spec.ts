@@ -214,6 +214,92 @@ test('story mode: walk slides, related tests, diagram highlight, and a draft per
   await expect(page.locator('#file-src-ui-Card-ts')).toBeVisible()
 })
 
+// A story whose first step references an unmappable path — the mappable steps
+// must still render (partial rendering), no fallback to Files.
+const STORY_WITH_UNMAPPABLE = {
+  steps: [
+    { index: 0, files: ['ghost/removed.ts'], caption: 'A step for a file not in this PR.', layer: 'data', relatedTests: [] },
+    { index: 1, files: ['src/db/schema.ts'], caption: 'The schema gains a provider column.', layer: 'data', relatedTests: ['src/db/schema.test.ts'] },
+    { index: 2, files: ['src/ui/Card.ts'], caption: 'The card renders a provider badge.', layer: 'ui', relatedTests: [] },
+  ],
+}
+
+test('story mode: a story with an unmappable path still renders the mappable steps', async ({ page }) => {
+  await setupGithub(page)
+
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string | null }> } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* */ }
+    if (body?.stream === true) {
+      return route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }, body: makeStreamResponse(SUMMARY_TEXT) })
+    }
+    const system = (body.messages ?? []).find((m) => m.role === 'system')?.content ?? ''
+    if (/guided NARRATIVE walkthrough/i.test(system)) return route.fulfill({ status: 200, json: jsonChatCompletion(JSON.stringify(STORY_WITH_UNMAPPABLE)) })
+    return route.fulfill({ status: 200, json: jsonChatCompletion(resultForSystem(system)) })
+  })
+
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test', storyMode: true, diffMode: 'unified', railCollapsed: true }))
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Story mode test PR/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+
+  // No fallback note; the ghost step is dropped and the first mappable step shows.
+  await expect(page.getByText('The schema gains a provider column.')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText(/showing all files/)).toHaveCount(0)
+  // Two mappable steps survive (ghost dropped): counter reads "1 of 2".
+  await expect(page.getByText('1 of 2').first()).toBeVisible()
+  await expect(page.getByText('A step for a file not in this PR.')).toHaveCount(0)
+})
+
+// An errored story task → reason-specific note + Retry. The first story call
+// returns malformed JSON (errors); Retry re-invokes ONLY the story task, which
+// succeeds the second time and renders the walkthrough.
+test('story mode: an errored story shows the reason + Retry, and Retry re-runs just the story', async ({ page }) => {
+  await setupGithub(page)
+
+  let storyCalls = 0
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string | null }> } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* */ }
+    if (body?.stream === true) {
+      return route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }, body: makeStreamResponse(SUMMARY_TEXT) })
+    }
+    const system = (body.messages ?? []).find((m) => m.role === 'system')?.content ?? ''
+    if (/guided NARRATIVE walkthrough/i.test(system)) {
+      storyCalls++
+      // First story request (+ its repair retry) returns unparseable junk → error.
+      // After Retry, return a valid story so the walkthrough renders.
+      if (storyCalls <= 2) return route.fulfill({ status: 200, json: jsonChatCompletion('not json at all') })
+      return route.fulfill({ status: 200, json: jsonChatCompletion(JSON.stringify(STORY_RESULT)) })
+    }
+    return route.fulfill({ status: 200, json: jsonChatCompletion(resultForSystem(system)) })
+  })
+
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test', storyMode: true, diffMode: 'unified', railCollapsed: true }))
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Story mode test PR/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+
+  // Error note with the reason + a Retry button; Files render underneath.
+  await expect(page.getByText(/Couldn't build the walkthrough/)).toBeVisible({ timeout: 15_000 })
+  const retry = page.getByRole('button', { name: 'Retry' })
+  await expect(retry).toBeVisible()
+
+  await retry.click()
+
+  // Retry re-runs just the story task → the walkthrough now renders.
+  await expect(page.getByText('The schema gains a provider column.')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText(/Couldn't build the walkthrough/)).toHaveCount(0)
+})
+
 test('story mode: no LLM key → unavailable, classic Files renders', async ({ page }) => {
   await setupGithub(page)
   await page.route('**/api.deepseek.com/**', (route) => route.abort())

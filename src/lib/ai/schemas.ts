@@ -515,6 +515,134 @@ export function validateStoryOrder(x: unknown): StoryOrderResult | null {
   return x as unknown as StoryOrderResult
 }
 
+/**
+ * Hard cap on the number of steps a story may render. Big PRs that produce a
+ * long nested JSON cause DeepSeek to truncate/malform the output; keeping the
+ * step count bounded (and instructing the model to GROUP AGGRESSIVELY) keeps
+ * the structured output short enough to come back intact. Exported so the
+ * prompt builder and the consumer share the same number.
+ */
+export const STORY_MAX_STEPS = 12
+
+/**
+ * Normalize a file path for tolerant matching against the PR's filenames.
+ * Strips surrounding whitespace, a leading `./`, and the git `a/` or `b/`
+ * diff prefixes. Lowercase is NOT applied — paths are case-sensitive.
+ */
+export function normalizeStoryPath(p: string): string {
+  let s = p.trim()
+  if (s.startsWith('./')) s = s.slice(2)
+  if (s.startsWith('a/') || s.startsWith('b/')) s = s.slice(2)
+  return s
+}
+
+/**
+ * Resolve a story-step path against the PR's real filenames, tolerantly.
+ *
+ * Match precedence (most specific first):
+ *   1. exact (after normalization),
+ *   2. unique suffix match (a filename ends with `/<normalized>`),
+ *   3. unique basename match (same final path segment).
+ *
+ * Returns the matched PR filename, or null when nothing matches or a basename
+ * is ambiguous (>1 PR file shares it — we refuse to guess).
+ */
+export function matchStoryPath(p: string, prFilenames: readonly string[]): string | null {
+  const norm = normalizeStoryPath(p)
+  if (norm === '') return null
+
+  // 1. exact (normalize both sides so `./a/x.ts` matches `x.ts` etc.)
+  const exact = prFilenames.find((f) => normalizeStoryPath(f) === norm)
+  if (exact) return exact
+
+  // 2. unique suffix: a PR file path ends with `/<norm>`
+  const suffixMatches = prFilenames.filter((f) => normalizeStoryPath(f).endsWith('/' + norm))
+  if (suffixMatches.length === 1) return suffixMatches[0]
+
+  // 3. unique basename
+  const base = norm.split('/').pop() ?? norm
+  const baseMatches = prFilenames.filter((f) => (normalizeStoryPath(f).split('/').pop() ?? '') === base)
+  if (baseMatches.length === 1) return baseMatches[0]
+
+  return null
+}
+
+/**
+ * Deterministic anti-overlap post-process for a story result (fixes adjacent
+ * steps showing the same code). Enforces the prompt's invariant in code so a
+ * non-compliant model can't break it:
+ *   - every file appears in EXACTLY ONE step's `files` (kept in the FIRST step
+ *     that lists it; stripped from later steps),
+ *   - a step's `relatedTests` never duplicates any file shown as a primary
+ *     `files` entry anywhere, nor a relatedTest already shown earlier,
+ *   - steps left with no `files` after de-duplication are dropped,
+ *   - the remaining steps are re-indexed 0..n-1.
+ *
+ * Paths are compared by their normalized form so `./a/x.ts` and `x.ts` collapse.
+ * Pure function — returns a new result, never mutates the input.
+ */
+export function dedupeStorySteps(story: StoryOrderResult): StoryOrderResult {
+  const seenFiles = new Set<string>() // normalized primary-file keys, across all steps
+  const out: StoryStep[] = []
+
+  for (const step of story.steps) {
+    const files: string[] = []
+    for (const f of step.files) {
+      const key = normalizeStoryPath(f)
+      if (key === '' || seenFiles.has(key)) continue
+      seenFiles.add(key)
+      files.push(f)
+    }
+    if (files.length === 0) continue // nothing left to show → drop the step
+    out.push({ ...step, files, index: out.length })
+  }
+
+  // Second pass: relatedTests must not duplicate ANY primary file (now known)
+  // nor a relatedTest already surfaced in an earlier step.
+  const seenTests = new Set<string>()
+  for (const step of out) {
+    const tests: string[] = []
+    for (const t of step.relatedTests) {
+      const key = normalizeStoryPath(t)
+      if (key === '' || seenFiles.has(key) || seenTests.has(key)) continue
+      seenTests.add(key)
+      tests.push(t)
+    }
+    step.relatedTests = tests
+  }
+
+  return { steps: out }
+}
+
+/**
+ * Best-effort salvage of a malformed story-order payload (final guard for big
+ * PRs where DeepSeek truncates the long nested JSON). Walks `x.steps` leniently
+ * and keeps only the steps that individually validate — dropping malformed ones
+ * rather than discarding the whole story. Returns null when nothing usable
+ * survives (caller then takes the error path).
+ *
+ * Unlike validateStoryOrder this is permissive PER STEP: a single bad step no
+ * longer nukes an otherwise-good big-PR story.
+ */
+export function salvageStoryOrder(x: unknown): StoryOrderResult | null {
+  if (!isObject(x) || !Array.isArray(x['steps'])) return null
+  const steps: StoryStep[] = []
+  for (const raw of x['steps']) {
+    if (!isObject(raw)) continue
+    const files = Array.isArray(raw['files']) ? raw['files'].filter((f) => typeof f === 'string') : []
+    if (files.length === 0) continue
+    const layer = raw['layer']
+    if (typeof layer !== 'string' || !STORY_LAYER_SET.has(layer)) continue
+    const caption = typeof raw['caption'] === 'string' ? raw['caption'] : ''
+    const relatedTests = Array.isArray(raw['relatedTests'])
+      ? raw['relatedTests'].filter((t): t is string => typeof t === 'string')
+      : []
+    steps.push({ index: steps.length, files: files as string[], caption, layer: layer as StoryLayer, relatedTests })
+  }
+  if (steps.length === 0) return null
+  return { steps }
+}
+
 // ---------------------------------------------------------------------------
 // SkillFinding / SkillReviewResult (Skill reviewer feature)
 // ---------------------------------------------------------------------------

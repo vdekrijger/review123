@@ -50,7 +50,7 @@ import {
   type AskFocus,
 } from './tasks'
 export type { AskFocus }
-import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateStoryOrder, validateSkillReviewResult } from './schemas'
+import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, STORY_MAX_STEPS } from './schemas'
 import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, SkillReviewResult } from './schemas'
 import type { Draft } from '../drafts/drafts.svelte'
 import { listSkills } from '../skills/skills'
@@ -581,6 +581,22 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
   }
 
+  // Story post-process: strict-validate → salvage partial JSON → dedupe/no-overlap
+  // → cap to STORY_MAX_STEPS. Returns null only when NOTHING usable survives
+  // (caller then takes the error path). Used as the validator passed to the LLM
+  // transport so the salvage + dedupe guards apply on every parse, including the
+  // repair pass.
+  function shapeStoryOrder(x: unknown): StoryOrderResult | null {
+    const validated = validateStoryOrder(x) ?? salvageStoryOrder(x)
+    if (validated === null) return null
+    const deduped = dedupeStorySteps(validated)
+    if (deduped.steps.length === 0) return null
+    const capped = deduped.steps.length > STORY_MAX_STEPS
+      ? { steps: deduped.steps.slice(0, STORY_MAX_STEPS).map((s, i) => ({ ...s, index: i })) }
+      : deduped
+    return capped
+  }
+
   async function runStoryOrderTask(ctx: PackedContext): Promise<void> {
     // Story mode (Plan H): classify changed files into layers and emit an
     // ORDERED narrative sequence. Runs through the deep harness when the
@@ -622,7 +638,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       let toolCallsUsed: number | undefined
 
       if (deep.enabled) {
-        const deepOutcome = await runDeepJson<StoryOrderResult>(prompts, validateStoryOrder, (line) => {
+        const deepOutcome = await runDeepJson<StoryOrderResult>(prompts, shapeStoryOrder, (line) => {
           storyState.activity = [...(storyState.activity ?? []), line]
         })
         storyResult = deepOutcome.result
@@ -632,7 +648,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<StoryOrderResult>(
           { system: prompts.system, user: prompts.user },
-          validateStoryOrder,
+          shapeStoryOrder,
         )
         storyResult = singlePass.result
         storyUsage = singlePass.usage

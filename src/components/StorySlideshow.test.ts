@@ -118,6 +118,50 @@ describe('StorySlideshow — filtering unusable steps', () => {
   })
 })
 
+describe('StorySlideshow — tolerant path matching', () => {
+  it('maps a step path that differs by a leading ./ (renders, not dropped)', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['./src/api/route.ts'], caption: 'Normalized path step.', layer: 'api', relatedTests: [] },
+      ],
+    }
+    render(StorySlideshow, { props: baseProps({ story }) })
+    expect(screen.getByText('Normalized path step.')).toBeInTheDocument()
+    expect(document.getElementById('file-src-api-route-ts')).not.toBeNull()
+  })
+
+  it('maps a step path by unique basename', () => {
+    const story: StoryOrderResult = {
+      steps: [{ index: 0, files: ['route.ts'], caption: 'Basename step.', layer: 'api', relatedTests: [] }],
+    }
+    render(StorySlideshow, { props: baseProps({ story }) })
+    expect(screen.getByText('Basename step.')).toBeInTheDocument()
+    expect(document.getElementById('file-src-api-route-ts')).not.toBeNull()
+  })
+})
+
+describe('StorySlideshow — anti-overlap (dedupe across steps)', () => {
+  it('does not render the same file in two adjacent steps', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['src/db/schema.ts'], caption: 'First touches schema.', layer: 'data', relatedTests: [] },
+        { index: 1, files: ['src/db/schema.ts', 'src/api/route.ts'], caption: 'Second re-lists schema.', layer: 'api', relatedTests: [] },
+      ],
+    }
+    render(StorySlideshow, { props: baseProps({ story }) })
+    // Step 1 keeps schema; step 2 keeps only route (schema stripped as a dupe).
+    expect(screen.getByText('First touches schema.')).toBeInTheDocument()
+    expect(document.getElementById('file-src-db-schema-ts')).not.toBeNull()
+    const next = screen.getAllByRole('button', { name: 'Next step' })[0]
+    return fireEvent.click(next).then(() => {
+      expect(screen.getByText('Second re-lists schema.')).toBeInTheDocument()
+      // schema.ts no longer rendered on step 2 — only route.ts
+      expect(document.getElementById('file-src-db-schema-ts')).toBeNull()
+      expect(document.getElementById('file-src-api-route-ts')).not.toBeNull()
+    })
+  })
+})
+
 describe('StorySlideshow — analytics', () => {
   it('fires story_mode_entered once and story_step_viewed with index only', async () => {
     render(StorySlideshow, { props: baseProps() })

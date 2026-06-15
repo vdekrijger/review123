@@ -1830,6 +1830,18 @@ describe('storyOrderPrompt', () => {
     expect(system).toContain('A imports B')
   })
 
+  it('caps the step count and tells the model to group aggressively on big PRs', () => {
+    const { system } = storyOrderPrompt(makeCtx())
+    expect(system).toMatch(/AT MOST 12 steps/i)
+    expect(system).toMatch(/GROUP AGGRESSIVELY/i)
+  })
+
+  it('states the no-overlap invariant (every file in EXACTLY ONE step)', () => {
+    const { system } = storyOrderPrompt(makeCtx())
+    expect(system).toMatch(/EXACTLY ONE step/i)
+    expect(system).toMatch(/NO OVERLAP/i)
+  })
+
   it('single-pass variant does NOT include deep verification guidance', () => {
     const { system } = storyOrderPrompt(makeCtx())
     expect(system).not.toMatch(/Deep mode/i)
@@ -1843,7 +1855,7 @@ describe('storyOrderPrompt', () => {
 })
 
 describe('PROMPT_VERSION', () => {
-  it('is bumped to 14 for the storyOrder task', () => {
-    expect(PROMPT_VERSION).toBe(14)
+  it('is bumped to 15 (story-mode robustness: cap + anti-overlap prompt)', () => {
+    expect(PROMPT_VERSION).toBe(15)
   })
 })

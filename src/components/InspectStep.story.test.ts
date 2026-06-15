@@ -79,16 +79,55 @@ describe('InspectStep — story fallback', () => {
     expect(screen.getByLabelText('Building the walkthrough')).toBeInTheDocument()
   })
 
-  it('falls back to Files with a note when the story has no usable steps', () => {
+  it('falls back to Files with an EMPTY note when the story has no usable steps', () => {
     const empty: StoryOrderResult = { steps: [] }
     render(InspectStep, { props: base({ storyAvailable: true, storyMode: true, story: empty, storyStatus: 'done' }) })
-    expect(screen.getByText('Story mode unavailable for this PR — showing all files.')).toBeInTheDocument()
+    expect(screen.getByText("Couldn't build a walkthrough for this PR — showing all files.")).toBeInTheDocument()
     expect(document.getElementById('file-src-db-ts')).not.toBeNull()
   })
 
-  it('falls back to Files when the story task errored', () => {
-    render(InspectStep, { props: base({ storyAvailable: true, storyMode: true, story: null, storyStatus: 'error' }) })
-    expect(screen.getByText('Story mode unavailable for this PR — showing all files.')).toBeInTheDocument()
+  it('falls back to Files with an ERROR note (showing the reason) + a Retry button when the story task errored', () => {
+    render(InspectStep, {
+      props: base({ storyAvailable: true, storyMode: true, story: null, storyStatus: 'error', storyError: 'AI returned an unexpected response format. Please retry.', onRetryStory: () => {} }),
+    })
+    expect(screen.getByText(/Couldn't build the walkthrough/)).toBeInTheDocument()
+    expect(screen.getByText(/AI returned an unexpected response format/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
     expect(document.getElementById('file-src-db-ts')).not.toBeNull()
+  })
+
+  it('Retry button re-invokes onRetryStory (re-runs just the story task)', async () => {
+    let retried = 0
+    render(InspectStep, {
+      props: base({ storyAvailable: true, storyMode: true, story: null, storyStatus: 'error', storyError: 'Rate limited.', onRetryStory: () => { retried++ } }),
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(retried).toBe(1)
+  })
+
+  it('renders the story (no fallback) when a step maps via tolerant suffix/basename matching', () => {
+    // Story emits a leading ./ and a bare basename; both must still map.
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['./src/db.ts'], caption: 'Data layer changes.', layer: 'data', relatedTests: [] },
+        { index: 1, files: ['ui.ts'], caption: 'UI changes.', layer: 'ui', relatedTests: [] },
+      ],
+    }
+    render(InspectStep, { props: base({ storyAvailable: true, storyMode: true, story, storyStatus: 'done' }) })
+    expect(screen.getByText('Data layer changes.')).toBeInTheDocument()
+    expect(screen.queryByText(/showing all files/)).not.toBeInTheDocument()
+  })
+
+  it('renders only the mappable steps when SOME paths are unmappable (no fallback)', () => {
+    const story: StoryOrderResult = {
+      steps: [
+        { index: 0, files: ['ghost/gone.ts'], caption: 'Ghost step.', layer: 'data', relatedTests: [] },
+        { index: 1, files: ['src/db.ts'], caption: 'Real step.', layer: 'data', relatedTests: [] },
+      ],
+    }
+    render(InspectStep, { props: base({ storyAvailable: true, storyMode: true, story, storyStatus: 'done' }) })
+    expect(screen.getByText('Real step.')).toBeInTheDocument()
+    expect(screen.queryByText('Ghost step.')).not.toBeInTheDocument()
+    expect(screen.queryByText(/showing all files/)).not.toBeInTheDocument()
   })
 })
