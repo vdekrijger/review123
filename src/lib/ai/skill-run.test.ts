@@ -306,6 +306,95 @@ describe('runSkillReviews — analytics', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// runSkillReviews — concurrency cap (Feature A: real queue, max 2 in flight)
+// ---------------------------------------------------------------------------
+
+describe('runSkillReviews — concurrency cap', () => {
+  it('never runs more than REVIEWER_CONCURRENCY (2) LLM calls at once, yet completes all reviewers', async () => {
+    const { REVIEWER_CONCURRENCY } = await import('./coachBatch')
+    const deps = makeDeps()
+
+    // Instrument the LLM transport to record how many calls are simultaneously
+    // in flight. Each call holds the slot until we release it on the next tick,
+    // so genuine overlap is observable.
+    let active = 0
+    let peak = 0
+    deps.llmJsonWithRepairWithUsage.mockImplementation(
+      async (_opts: unknown, _validate: ValidateFn) => {
+        active++
+        peak = Math.max(peak, active)
+        // Yield a few microtasks so other queued workers get a chance to start
+        // if the gate were broken (they wouldn't, because the gate holds them).
+        await new Promise((r) => setTimeout(r, 5))
+        active--
+        return {
+          result: SKILL_RESULT_A,
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        }
+      },
+    )
+
+    // Five reviewers — more than the cap of 2, so the rest must queue.
+    const skills = [
+      addSkill('Reviewer 1', 'one'),
+      addSkill('Reviewer 2', 'two'),
+      addSkill('Reviewer 3', 'three'),
+      addSkill('Reviewer 4', 'four'),
+      addSkill('Reviewer 5', 'five'),
+    ]
+
+    const run = createAiRun(makeInput(), deps)
+    await run.runSkillReviews()
+
+    // The cap held: at most 2 calls were ever in flight at once.
+    expect(peak).toBeLessThanOrEqual(REVIEWER_CONCURRENCY)
+    // With 5 reviewers and a cap of 2, both slots are kept busy until the queue
+    // drains — the observed peak is exactly the cap.
+    expect(peak).toBe(2)
+    expect(REVIEWER_CONCURRENCY).toBe(2)
+    // …and all five still completed.
+    expect(run.skillReviews).toHaveLength(5)
+    expect(run.skillReviews.every((sr) => sr.state.status === 'done')).toBe(true)
+    expect(deps.llmJsonWithRepairWithUsage).toHaveBeenCalledTimes(5)
+
+    skills.forEach((s) => removeSkill(s.id))
+  })
+
+  it('starts every reviewer queued, then flips to loading via onUpdate as slots free', async () => {
+    const deps = makeDeps()
+
+    // Capture the set of statuses observed across the whole run via onUpdate.
+    const seenStatuses = new Set<string>()
+    deps.llmJsonWithRepairWithUsage.mockImplementation(
+      async (_opts: unknown, _validate: ValidateFn) => {
+        await new Promise((r) => setTimeout(r, 5))
+        return { result: SKILL_RESULT_A, usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }
+      },
+    )
+
+    const skills = [
+      addSkill('Reviewer 1', 'one'),
+      addSkill('Reviewer 2', 'two'),
+      addSkill('Reviewer 3', 'three'),
+    ]
+
+    const run = createAiRun(makeInput(), deps)
+    const onUpdate = () => {
+      for (const sr of run.skillReviews) seenStatuses.add(sr.state.status)
+    }
+    await run.runSkillReviews(onUpdate)
+
+    // The queue state was actually observed (reviewers waited for a slot) and
+    // every reviewer eventually ran (loading) and finished (done).
+    expect(seenStatuses.has('queued')).toBe(true)
+    expect(seenStatuses.has('loading')).toBe(true)
+    expect(seenStatuses.has('done')).toBe(true)
+
+    skills.forEach((s) => removeSkill(s.id))
+  })
+})
+
 describe('runSkillReviews — consent gate', () => {
   it('does nothing when gateAi returns false', async () => {
     const deps = makeDeps({ gateResult: false })

@@ -93,11 +93,11 @@ describe('skillReviews state transitions', () => {
     expect(run.skillReviews).toHaveLength(0)
   })
 
-  it('initializes entries with loading status for each enabled skill', async () => {
+  it('initializes entries as queued, then flips them to loading as slots free', async () => {
     addSkill('Skill A', 'content A')
     addSkill('Skill B', 'content B')
 
-    const captured: string[] = []
+    const snapshots: string[][] = []
     const deps = makeStubDeps({
       llmJsonWithRepair: vi.fn().mockImplementation(() =>
         new Promise(() => { /* never resolve — freeze in loading */ })
@@ -106,14 +106,20 @@ describe('skillReviews state transitions', () => {
     const run = createAiRun(makeStubInput(), deps)
 
     const runPromise = run.runSkillReviews(() => {
-      captured.push(...run.skillReviews.map(e => e.state.status))
+      snapshots.push(run.skillReviews.map(e => e.state.status))
     })
 
-    // Give it a tick to initialize entries
+    // Give it a tick to initialize entries and dispatch through the queue.
     await new Promise(r => setTimeout(r, 0))
 
-    // First onUpdate call should have 2 loading entries
-    expect(captured.slice(0, 2)).toEqual(['loading', 'loading'])
+    // The FIRST onUpdate (right after init) snapshots every entry as queued —
+    // none has a concurrency slot yet.
+    expect(snapshots[0]).toEqual(['queued', 'queued'])
+
+    // The concurrency cap is 2, so with 2 skills BOTH get a slot and flip to
+    // loading (the queue is observable, but here it drains immediately).
+    const final = run.skillReviews.map(e => e.state.status)
+    expect(final).toEqual(['loading', 'loading'])
 
     // Cleanup — don't wait for the hanging promise
     runPromise.catch(() => { /* ignore */ })

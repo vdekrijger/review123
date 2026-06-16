@@ -528,10 +528,11 @@ test('skill-reviewers: errored reviewer chip retries and resolves to findings', 
   // Run reviewers — first attempt fails.
   await page.getByRole('button', { name: /run my reviewers/i }).click()
 
-  // The errored reviewer's chip is a Retry button.
-  const retryBtn = page.getByRole('button', { name: /retry security reviewer/i })
+  // The errored reviewer's chip is a Retry button that surfaces the failure
+  // reason on hover (title) and includes it in the accessible name.
+  const retryBtn = page.getByRole('button', { name: /security reviewer failed:.*click to retry/i })
   await expect(retryBtn).toBeVisible({ timeout: 15_000 })
-  await expect(retryBtn).toHaveAttribute('title', 'Click to retry')
+  await expect(retryBtn).toHaveAttribute('title', /click to retry$/i)
 
   // Click retry → the reviewer re-runs and resolves to findings.
   await retryBtn.click()
@@ -542,7 +543,119 @@ test('skill-reviewers: errored reviewer chip retries and resolves to findings', 
     hasText: 'Potential XSS vulnerability',
   })
   await expect(inlineCard).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByRole('button', { name: /retry security reviewer/i })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /security reviewer failed:.*click to retry/i })).toHaveCount(0)
   // It re-hit the LLM (cache never served the error): two skill-review calls.
   expect(skillCalls).toBeGreaterThanOrEqual(2)
+})
+
+// ---------------------------------------------------------------------------
+// Test: with >2 reviewers enabled, the queue caps in-flight reviewers at 2 —
+//       the rest sit visibly in the "Waiting" region (queued), and never more
+//       than 2 are "Running" at once.
+// ---------------------------------------------------------------------------
+
+test('skill-reviewers: queue caps running reviewers at 2, rest show in Waiting region', async ({
+  page,
+}) => {
+  // Block analytics
+  await page.route('**/*posthog.com/**', (route) => route.abort())
+  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+
+  // GitHub API — same fixtures as setupRoutes.
+  await page.route('**/api.github.com/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}`) return route.fulfill({ json: makePrMeta() })
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) return route.fulfill({ json: makePrFiles() })
+    if (path === `/repos/${OWNER}/${REPO}/commits/${HEAD_SHA}/check-runs`) return route.fulfill({ json: { total_count: 0, check_runs: [] } })
+    if (path.startsWith(`/repos/${OWNER}/${REPO}/contents/`)) {
+      const ref = url.searchParams.get('ref') ?? ''
+      const filePath = decodeURIComponent(path.replace(`/repos/${OWNER}/${REPO}/contents/`, ''))
+      if (filePath === 'src/feature.ts' && ref === BASE_SHA) return route.fulfill({ json: makeFileContent('const old = 1\nremoved line\ntrailing context') })
+      if (filePath === 'src/feature.ts' && ref === HEAD_SHA) return route.fulfill({ json: makeFileContent('const old = 1\nunchanged line\nadded line\nanother added line\ntrailing context') })
+      return route.fulfill({ status: 404, json: { message: 'Not Found' } })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/comments`) return route.fulfill({ json: [] })
+    if (path === `/repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments`) return route.fulfill({ json: [] })
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/commits`) return route.fulfill({ json: [] })
+    return route.fulfill({ json: {} })
+  })
+
+  // DeepSeek — hold each skill-review call open for a beat so several reviewers
+  // are genuinely in flight at once. The cap must keep that at ≤2 while the
+  // rest queue. The delay is generous enough that the waiting state is stable.
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string }> } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* non-JSON */ }
+
+    if (body?.stream === true) {
+      return route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+        body: makeDeepSeekStreamResponse(SUMMARY_TEXT),
+      })
+    }
+
+    const systemContent = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
+    if (systemContent.includes('reviewer persona') || systemContent.includes('reviewer')) {
+      // Hold the response so concurrency is observable in the UI.
+      await new Promise((r) => setTimeout(r, 900))
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify(SKILL_REVIEW_RESULT) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
+    return route.fulfill({
+      status: 200,
+      json: {
+        id: 'chatcmpl-test',
+        object: 'chat.completion',
+        choices: [{ message: { role: 'assistant', content: JSON.stringify({ level: 'minor-changes', evidence: ['x'], notAnalyzed: [] }) }, finish_reason: 'stop', index: 0 }],
+      },
+    })
+  })
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings())
+  // Seed FOUR enabled reviewers — more than the concurrency cap of 2.
+  await page.addInitScript(() => {
+    const skills = [1, 2, 3, 4].map((n) => ({
+      id: `skill-e2e-${n}`,
+      name: `Reviewer ${n}`,
+      content: `## Reviewer ${n}\nCheck the diff.`,
+      enabled: true,
+      addedAt: 1700000000000 + n,
+    }))
+    localStorage.setItem('review123:reviewer-skills', JSON.stringify(skills))
+  })
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Run all four reviewers.
+  await page.getByRole('button', { name: /run my reviewers \(4\)/i }).click()
+
+  // While the run is in flight: the Waiting region appears (queued reviewers),
+  // and the global "Running… (N)" count never exceeds the cap of 2.
+  const waiting = page.getByLabel('Reviewers waiting')
+  await expect(waiting).toBeVisible({ timeout: 10_000 })
+  // The running header shows at most 2 in flight.
+  await expect(page.getByText(/Running…\s*\(1\)|Running…\s*\(2\)/)).toBeVisible()
+  await expect(page.getByText(/Running…\s*\([3-9]\)/)).toHaveCount(0)
+  // At least one reviewer is queued in the waiting region.
+  await expect(waiting.getByText('queued').first()).toBeVisible()
+
+  // Eventually all four settle (the queue drains) and no waiting region remains.
+  await expect(page.getByLabel('Reviewers waiting')).toHaveCount(0, { timeout: 20_000 })
+  await expect(page.getByLabel('Reviewer run results')).toBeVisible()
 })

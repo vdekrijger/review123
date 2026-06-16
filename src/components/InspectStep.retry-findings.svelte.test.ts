@@ -181,7 +181,7 @@ describe('FIX 2 — retry after dismiss: a fresh re-run is not pre-suppressed', 
     })
 
     // Click Retry — this clears the reviewer's suppressed keys, then re-runs it.
-    await userEvent.click(screen.getByRole('button', { name: /retry security/i }))
+    await userEvent.click(screen.getByRole('button', { name: /click to retry/i }))
 
     await waitFor(() => {
       const inline = container.querySelector('.diff-line-extend .line-findings .skill-finding')
@@ -209,7 +209,7 @@ describe('FIX 2 — retry after dismiss: a fresh re-run is not pre-suppressed', 
     retry(errorEntry())
     await waitFor(() => expect(container.querySelector('.chip-error')).not.toBeNull())
 
-    await userEvent.click(screen.getByRole('button', { name: /retry security/i }))
+    await userEvent.click(screen.getByRole('button', { name: /click to retry/i }))
     await waitFor(() => {
       expect(container.querySelector('.skill-findings-annotations')?.textContent).toContain(body)
     })
