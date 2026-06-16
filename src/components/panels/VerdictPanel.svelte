@@ -1,6 +1,7 @@
 <script lang="ts">
   import AiPanel from '../AiPanel.svelte'
   import MarkdownView from '../MarkdownView.svelte'
+  import VerifyVotesTooltip from '../VerifyVotesTooltip.svelte'
   import type { AiRun } from '../../lib/ai/run.svelte'
   import type { VerdictResult } from '../../lib/ai/schemas'
 
@@ -57,9 +58,6 @@
   function verifyChipLabel(v: import('../../lib/ai/schemas').FindingVerification): string {
     return `✓ confirmed by ${v.confirmedBy}/${v.polledModels} models`
   }
-  function verifyTooltip(v: import('../../lib/ai/schemas').FindingVerification): string {
-    return v.perModel.map((m) => `${m.provider}: ${m.verdict}${m.reason ? ` — ${m.reason}` : ''}`).join('\n')
-  }
 </script>
 
 <AiPanel title="Verdict" task="verdict" state={run.verdict} onretry={() => run.retry('verdict')}>
@@ -85,7 +83,14 @@
               <MarkdownView source={row.text} />
             </span>
             {#if ev.verification && ev.verification.surfaced}
-              <span class="evidence-verify-chip" title={verifyTooltip(ev.verification)}>{verifyChipLabel(ev.verification)}</span>
+              <VerifyVotesTooltip verification={ev.verification}>
+                <span
+                  class="evidence-verify-chip"
+                  tabindex="0"
+                  role="button"
+                  aria-label={verifyChipLabel(ev.verification)}
+                >{verifyChipLabel(ev.verification)}</span>
+              </VerifyVotesTooltip>
             {/if}
           </li>
         {/each}
@@ -180,6 +185,11 @@
     border: 1px solid var(--legend-added-border);
     white-space: nowrap;
     cursor: help;
+  }
+
+  .evidence-verify-chip:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   .verdict-lower-confidence {
