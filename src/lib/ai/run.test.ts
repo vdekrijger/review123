@@ -539,6 +539,55 @@ describe('verdict notAnalyzed union (EC-15c)', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Verdict always records its generator row (consolidated cost panel)
+// ---------------------------------------------------------------------------
+
+describe('verdict records its generator row even without evidence', () => {
+  it('an evidence-free verdict still yields a verdictModels/modelPerformance generator row with usage', async () => {
+    // No-evidence verdict → no cross-verify rows. Single deepseek key →
+    // crossModelVerifyEffective() is false. Previously this left verdictModels
+    // empty; now the generator row is recorded unconditionally.
+    const evidenceFreeVerdict: VerdictResult = {
+      level: 'behavior-preserved',
+      evidence: [],
+      notAnalyzed: [],
+    }
+
+    const deps = makeDeps()
+    // The verdict single-pass goes through llmJsonWithRepairWithUsage; return the
+    // evidence-free verdict for it while letting other tasks use their fixtures.
+    deps.llmJsonWithRepairWithUsage.mockImplementation(
+      async (opts: unknown, validate: ValidateFn) => {
+        // The verdict task's validator (validateVerdict) accepts the evidence-free
+        // verdict; for any other task fall back to the default fixture dispatch.
+        if (validate(evidenceFreeVerdict) !== null) {
+          return { result: evidenceFreeVerdict, usage: { prompt_tokens: 30, completion_tokens: 12, total_tokens: 42 } }
+        }
+        return { result: await deps.llmJsonWithRepair(opts, validate), usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }
+      },
+    )
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.verdict.status).toBe('done')
+    expect((run.verdict.value as VerdictResult).evidence).toEqual([])
+
+    // Generator row present, role generator, usage carried.
+    expect(run.verdictModels.length).toBeGreaterThanOrEqual(1)
+    const gen = run.verdictModels[0]
+    expect(gen.role).toBe('generator')
+    expect(gen.usage).toBeDefined()
+    expect(gen.usage!.total_tokens).toBe(42)
+
+    // And it flows through the consolidated aggregate getter.
+    const aggGen = run.modelPerformance.find((m) => m.role === 'generator')
+    expect(aggGen).toBeDefined()
+    expect(aggGen!.usage!.total_tokens).toBe(42)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Retry single task
 // ---------------------------------------------------------------------------
 

@@ -83,6 +83,7 @@ import {
 import { listSkills } from '../skills/skills'
 import { djb2 } from '../viewed/viewed.svelte'
 import { addUsage } from './tokenCost'
+import { aggregateModelPerformance } from './modelPerformance'
 
 // ---------------------------------------------------------------------------
 // PanelState union
@@ -227,6 +228,13 @@ export interface AiRun {
    * row first, then one row per responding verifier model. Display-only.
    */
   readonly verdictModels: VerdictModelBreakdown[]
+  /**
+   * Consolidated per-model cost + performance for the WHOLE review — the verdict
+   * task's generator/verifiers AND every skill reviewer's models, aggregated by
+   * (provider, model, role). Drives the Step-3 "Review cost & model performance"
+   * panel. Empty when no task recorded per-model data. Display-only.
+   */
+  readonly modelPerformance: VerdictModelBreakdown[]
   start(): Promise<void>
   retry(task: TaskName): Promise<void>
   coach(drafts: Draft[], prComments?: string[], verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'): Promise<CoachOutcome | { error: string }>
@@ -1381,6 +1389,15 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       const merged = [...new Set([...ctx.notAnalyzed, ...verdictResult.notAnalyzed])]
       let finalResult: VerdictResult = { ...verdictResult, notAnalyzed: merged }
 
+      // Generator usage captured BEFORE folding in verifier usage (Plan N
+      // per-model cost attributes generation tokens to the generator model).
+      // Hoisted out of the cross-verify block so the verdict's generator row is
+      // ALWAYS recorded (consolidated cost panel), even on an evidence-free or
+      // single-model verdict. The fuller breakdown below REPLACES this baseline
+      // with generator + verifier rows when evidence got cross-verified.
+      const generatorUsage = verdictUsage
+      verdictModelsState = buildVerdictModels(generatorUsage, 0, [], [])
+
       // Cross-model verification (Plan M): judge each evidence row adversarially.
       // Short-circuit (byte-identical) when not effective. Evidence rows carry a
       // path token where possible; rows without one are still judged on text.
@@ -1393,9 +1410,6 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         body: bullet,
         side: 'RIGHT' as const,
       }))
-      // Generator usage captured BEFORE folding in verifier usage (Plan N
-      // per-model cost attributes generation tokens to the generator model).
-      const generatorUsage = verdictUsage
       const verdictVerify = await verifyFindingSet(evidenceFindings, (line) => {
         verdictState.activity = [...(verdictState.activity ?? []), line]
       })
@@ -2095,6 +2109,15 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       return total
     },
     get verdictModels() { return verdictModelsState },
+    get modelPerformance(): VerdictModelBreakdown[] {
+      // Aggregate the verdict's per-model rows together with every reviewer's,
+      // so Step 3 is the single place showing the whole review's cost +
+      // per-model performance (verdict + all reviewers).
+      return aggregateModelPerformance([
+        verdictModelsState,
+        ...skillReviewsState.map((e) => e.state.models ?? []),
+      ])
+    },
     start,
     retry,
     coach,

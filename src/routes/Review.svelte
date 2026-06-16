@@ -808,7 +808,8 @@
         files={load.state.files}
         {contentsMap}
         coachFn={aiRun ? aiRun.coach : undefined}
-        verdictModels={aiRun ? aiRun.verdictModels : []}
+        modelPerformance={aiRun ? aiRun.modelPerformance : []}
+        totalUsage={aiRun ? aiRun.totalUsage : undefined}
         {prComments}
         provider={activeProvider}
         authorLogin={load.state.meta.authorLogin}
