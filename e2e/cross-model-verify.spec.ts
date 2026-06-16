@@ -212,58 +212,10 @@ test('cross-model verify: confirmed finding shows chip, refuted finding renders 
   await expect(page.locator('.skill-finding', { hasText: 'Refuted style nit' })).toHaveCount(1)
 })
 
-test('ensemble >1 model: skill card shows per-model cost + impact breakdown (Plan N)', async ({ page }) => {
-  await setupGithub(page)
-  await setupDeepseek(page)
-  await setupAnthropicVerifier(page)
-  // DeepSeek generator + Anthropic verifier = 2-model ensemble. showTokenCost on
-  // → the per-model breakdown table renders with a cost column.
-  await seedAll(page, seedSettings({ anthropicKey: 'sk-ant-test-key', showTokenCost: true }))
-
-  await page.goto(APP_REVIEW_PATH)
-  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
-  await page.getByRole('button', { name: 'Next step' }).click()
-  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
-
-  await page.getByRole('button', { name: /run my reviewers/i }).click()
-  await expect(page.getByText(/Confirmed real bug/i)).toBeVisible({ timeout: 15_000 })
-
-  // The per-reviewer per-model breakdown is rendered (collapsible). Expand it.
-  const breakdownWrap = page.locator('.skill-model-breakdowns')
-  await expect(breakdownWrap).toBeVisible({ timeout: 10_000 })
-  const details = page.locator('[data-skill-models="skill-e2e-test"]')
-  await expect(details).toBeVisible()
-  await details.locator('summary').click()
-
-  // Both ensemble models listed: DeepSeek generator + Anthropic verifier
-  // (default models, since no custom aiEnsemble is seeded here).
-  await expect(details.locator('.model-id', { hasText: 'deepseek-v4-flash' })).toBeVisible()
-  await expect(details.locator('.model-id', { hasText: 'claude-sonnet-4-6' })).toBeVisible()
-  // showTokenCost on → cost column present.
-  await expect(details.getByRole('columnheader', { name: /cost/i })).toBeVisible()
-  // The plain aggregate footer is still present (per-model is ADDITIVE).
-  // (Confirmed-by chip / lower-confidence group are covered by the test above.)
-})
-
-test('single-model ensemble: skill card shows ONLY the aggregate footer, no per-model table', async ({ page }) => {
-  await setupGithub(page)
-  await setupDeepseek(page)
-  await setupAnthropicVerifier(page) // routed but never called (single model)
-  // Only one key → single-model ensemble. showTokenCost on so the aggregate
-  // footer renders; there must be NO per-model breakdown.
-  await seedAll(page, seedSettings({ showTokenCost: true }))
-
-  await page.goto(APP_REVIEW_PATH)
-  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
-  await page.getByRole('button', { name: 'Next step' }).click()
-  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
-
-  await page.getByRole('button', { name: /run my reviewers/i }).click()
-  await expect(page.getByText(/Confirmed real bug/i)).toBeVisible({ timeout: 15_000 })
-
-  // No per-model breakdown block for a single-model run.
-  await expect(page.locator('.skill-model-breakdowns')).toHaveCount(0)
-})
+// NOTE: the per-REVIEWER per-model cost/impact breakdown (`.skill-model-breakdowns`,
+// Plan N) was REMOVED from Step 3 — per-model cost/impact now lives only in the
+// consolidated end-of-verdict ReviewCostPanel. The two tests that asserted on the
+// per-reviewer breakdown were dropped with that change.
 
 // ---------------------------------------------------------------------------
 // Plan O — multi-generator fusion ('generate' mode)
