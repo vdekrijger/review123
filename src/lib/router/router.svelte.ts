@@ -3,6 +3,7 @@ export type Route =
   | { name: 'review'; provider: 'github' | 'gitlab' | 'bitbucket'; owner: string; repo: string; number: number; step: 1 | 2 | 3 }
   | { name: 'auth-callback' }
   | { name: 'settings'; section?: string }
+  | { name: 'demo' }
   | { name: 'not-found' }
 
 const STEP_SLUGS: Record<string, 1 | 2 | 3> = {
@@ -25,6 +26,7 @@ function isProvider(s: string): s is 'github' | 'gitlab' | 'bitbucket' {
 
 export function matchRoute(pathname: string): Route {
   if (pathname === '/') return { name: 'landing' }
+  if (pathname === '/demo') return { name: 'demo' }
   if (pathname === '/auth/callback') return { name: 'auth-callback' }
 
   // Settings route: /settings or /settings/:section

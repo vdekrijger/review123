@@ -10,6 +10,7 @@
   import { getCachedSizes, fetchMissingSizes, sizeKey, type DiffSize } from '../lib/landing/queueSizes'
   import { listDraftSummaries, clearDraftsForPr, type DraftSummary } from '../lib/drafts/drafts.svelte'
   import { settingsState } from '../lib/settings/settingsState.svelte'
+  import { activeProviderHasKey } from '../lib/llm/config'
   import { track } from '../lib/analytics/analytics'
   import ProviderIcon from '../components/ProviderIcon.svelte'
   import Skeleton from '../components/Skeleton.svelte'
@@ -181,6 +182,20 @@
     )
   })
 
+  // Cold-start user: nothing configured (no VCS auth, no LLM key). For them the
+  // demo CTA is the most valuable path, so it's emphasized as a primary button;
+  // once anything is set up it stays available but becomes a quiet secondary link.
+  const nothingConfigured = $derived.by(() => {
+    void settingsState.current // reactive dependency (mirrors anyAuthConfigured)
+    return !anyAuthConfigured && !activeProviderHasKey()
+  })
+
+  function goToDemo(e: MouseEvent) {
+    e.preventDefault()
+    track('demo_opened')
+    navigate('/demo')
+  }
+
   // Derived groups
   let awaitingReview = $derived(queueItems.filter((i) => !i.authorIsMe))
   let myOpenPrs = $derived(queueItems.filter((i) => i.authorIsMe))
@@ -332,6 +347,21 @@
     <button type="submit">Review</button>
   </form>
   {#if error}<p role="alert" class="error">{error}</p>{/if}
+
+  <!-- One-click demo path: shows the FULL review experience on a bundled example
+       PR with pre-generated AI output — no setup, no key, no auth, no network.
+       Emphasized as the primary action for cold-start users; a quiet link once
+       the user has configured auth or an LLM key. -->
+  <div class="demo-cta" class:emphasized={nothingConfigured}>
+    {#if nothingConfigured}
+      <button type="button" class="demo-cta-btn" onclick={goToDemo}>
+        Try a live demo — no setup needed
+      </button>
+      <p class="demo-cta-sub">See a full review on an example PR. No API key or sign‑in required.</p>
+    {:else}
+      <a href="/demo" class="demo-cta-link" onclick={goToDemo}>Try a live demo — no setup needed</a>
+    {/if}
+  </div>
 
   <!-- First-run footnote: a single muted line directly under the input — NOT a
        bordered card/section. Shown only before the first review (empty
@@ -605,6 +635,51 @@
   }
 
   .input-hint a:hover {
+    color: var(--text);
+  }
+
+  /* Demo CTA — emphasized as a primary button for cold-start users, a quiet
+     link once auth or an LLM key is configured. */
+  .demo-cta {
+    margin-top: 0.85rem;
+  }
+  .demo-cta.emphasized {
+    margin-top: 1.1rem;
+  }
+  .demo-cta-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5rem 1.25rem;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--accent);
+    font-family: var(--font-ui);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 150ms ease, color 150ms ease;
+  }
+  .demo-cta-btn:hover,
+  .demo-cta-btn:focus-visible {
+    background: var(--accent);
+    color: #0a1410;
+  }
+  .demo-cta-sub {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin: 0.45rem 0 0;
+    line-height: 1.4;
+  }
+  .demo-cta-link {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 150ms ease;
+  }
+  .demo-cta-link:hover {
     color: var(--text);
   }
 

@@ -30,6 +30,17 @@
     }
   })
 
+  // The demo route reuses the same diff-viewer display components as Review, so
+  // lazy-load it the same way to keep the highlighter chunk out of the entry.
+  let Demo = $state<typeof import('./routes/Demo.svelte').default | null>(null)
+  $effect(() => {
+    if (router.route.name === 'demo' && !Demo) {
+      void import('./routes/Demo.svelte').then((m) => {
+        Demo = m.default
+      })
+    }
+  })
+
   // Both handlers go through the shared beginOAuth helper: it clears stale
   // pending sessions (from abandoned attempts) and stores returnTo, so all
   // entry points behave identically and the callback dispatch stays correct.
@@ -121,6 +132,12 @@
       {/key}
     {:else}
       <section class="route-loading" aria-busy="true"><p>Loading review…</p></section>
+    {/if}
+  {:else if router.route.name === 'demo'}
+    {#if Demo}
+      <Demo />
+    {:else}
+      <section class="route-loading" aria-busy="true"><p>Loading demo…</p></section>
     {/if}
   {:else if router.route.name === 'auth-callback'}
     <AuthCallback />
