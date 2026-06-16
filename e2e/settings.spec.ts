@@ -319,7 +319,10 @@ test('ai models: switch to OpenAI card → per-card model dropdown → key saves
   // The ping went through the real openai-compat adapter: proxy header + active model
   expect(lastPingHeaders['x-user-openai-key']).toBe('sk-test-openai-e2e')
   expect(lastPingBody?.model).toBe('gpt-5.4-mini')
-  expect(lastPingBody?.max_tokens).toBe(1)
+  // OpenAI's GPT-5 family rejects max_tokens (400) → the cap rides on
+  // max_completion_tokens for OpenAI (DeepSeek still uses max_tokens).
+  expect(lastPingBody?.max_completion_tokens).toBe(1)
+  expect(lastPingBody?.max_tokens).toBeUndefined()
 
   // Settings were persisted (key save + provider + model)
   const stored = await page.evaluate(() =>

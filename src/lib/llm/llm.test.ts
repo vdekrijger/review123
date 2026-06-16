@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { llmComplete, llmCompleteWithUsage, llmStream, llmStreamWithUsage, llmJsonWithRepair, llmJsonWithRepairWithUsage, LlmError } from './llm'
-import { setDeepseekKey } from '../settings/settings'
+import { llmComplete, llmCompleteWithUsage, llmStream, llmStreamWithUsage, llmJsonWithRepair, llmJsonWithRepairWithUsage, llmTestConnection, LlmError } from './llm'
+import { setDeepseekKey, setOpenaiKey } from '../settings/settings'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -605,5 +605,33 @@ describe('llmJsonWithRepairWithUsage — returns usage from first attempt', () =
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse(completionBody('{"x":1}'))))
     const { usage } = await llmJsonWithRepairWithUsage({ system: 's', user: 'u' }, (x) => x)
     expect(usage).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// llmTestConnection — output-token cap field per provider
+// OpenAI's GPT-5 family rejects `max_tokens` with a 400 ("Use
+// 'max_completion_tokens' instead"); DeepSeek keeps `max_tokens`.
+// ---------------------------------------------------------------------------
+
+describe('llmTestConnection — output-token cap field', () => {
+  it('OpenAI sends max_completion_tokens, not max_tokens', async () => {
+    setOpenaiKey('sk-openai')
+    const f = vi.fn().mockResolvedValue(makeJsonResponse(completionBody('ok')))
+    vi.stubGlobal('fetch', f)
+    await llmTestConnection('openai')
+    const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
+    expect(body.max_completion_tokens).toBe(1)
+    expect(body.max_tokens).toBeUndefined()
+  })
+
+  it('DeepSeek keeps max_tokens', async () => {
+    setDeepseekKey('sk-deepseek')
+    const f = vi.fn().mockResolvedValue(makeJsonResponse(completionBody('ok')))
+    vi.stubGlobal('fetch', f)
+    await llmTestConnection('deepseek')
+    const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
+    expect(body.max_tokens).toBe(1)
+    expect(body.max_completion_tokens).toBeUndefined()
   })
 })

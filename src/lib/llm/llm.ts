@@ -211,7 +211,9 @@ async function openaiCompatComplete(
     ],
   }
   if (json) body.response_format = { type: 'json_object' }
-  if (maxTokens !== undefined) body.max_tokens = maxTokens
+  // OpenAI's GPT-5 family rejects `max_tokens` (400) — use the provider's
+  // declared field (max_completion_tokens for OpenAI, max_tokens elsewhere).
+  if (maxTokens !== undefined) body[provider.maxTokensParam ?? 'max_tokens'] = maxTokens
 
   const effectiveSignal = signal ?? AbortSignal.timeout(60_000)
 
