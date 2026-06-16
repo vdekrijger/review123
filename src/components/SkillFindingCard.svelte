@@ -63,6 +63,18 @@
     return `raised by ${raisedBy.join(', ')}`
   })
 
+  // Cross-model DEMOTED state (Plan M): one model flagged it, the others didn't
+  // confirm (verification present but surfaced=false). The card stays visible —
+  // dimmed, with a "lower confidence" badge — rather than being hidden in a
+  // collapsed group. Distinct from "no verification" (single-key / off), where no
+  // chip shows at all.
+  const isLowerConfidence = $derived(!!verification && !verification.surfaced)
+  const lowerConfidenceLabel = $derived(
+    verification
+      ? `flagged by ${verification.confirmedBy}/${verification.polledModels} · lower confidence`
+      : '',
+  )
+
   // Tooltip: one line per model's verdict, e.g. "DeepSeek: confirm — raised it".
   const verifyTooltip = $derived(
     verification
@@ -73,7 +85,7 @@
   )
 </script>
 
-<div class="skill-finding severity-{severity}" class:compact role="note" aria-label="{skillName} finding, severity {severity}" data-finding-key={findingKey ?? undefined}>
+<div class="skill-finding severity-{severity}" class:compact class:lower-confidence={isLowerConfidence} role="note" aria-label="{skillName} finding, severity {severity}" data-finding-key={findingKey ?? undefined}>
   <div class="skill-finding-header">
     <span class="skill-persona-label">{skillName}</span>
     {#if line !== null && !anchored}
@@ -91,6 +103,12 @@
         title={verifyTooltip}
         aria-label="Confirmed by {verification.confirmedBy} of {verification.polledModels} models"
       >✓ confirmed by {verification.confirmedBy}/{verification.polledModels} models</span>
+    {:else if isLowerConfidence}
+      <span
+        class="skill-lower-confidence-chip"
+        title={verifyTooltip}
+        aria-label={lowerConfidenceLabel}
+      >{lowerConfidenceLabel}</span>
     {/if}
     <span class="skill-severity-chip severity-chip-{severity}">{severity}</span>
   </div>
@@ -125,6 +143,21 @@
   .skill-finding.compact {
     padding: 0.4rem 0.6rem;
     border-radius: 3px;
+  }
+
+  /* ---- Lower-confidence (cross-model demoted, Plan M) ----
+     One model flagged it, the others didn't confirm. Still shown (never hidden),
+     but dimmed and muted so it reads as a weaker signal than a surfaced finding.
+     Severity still drives the chip; the muted overlay just lowers the emphasis. */
+  .skill-finding.lower-confidence {
+    border-style: dashed;
+    border-color: var(--border-subtle);
+    background: var(--surface-raised);
+    opacity: 0.72;
+  }
+  .skill-finding.lower-confidence:hover,
+  .skill-finding.lower-confidence:focus-within {
+    opacity: 1;
   }
 
   /* Transient highlight when a reviewer chip jumps to this finding. Themed
@@ -235,6 +268,19 @@
     background: var(--legend-added-bg);
     color: var(--legend-added-color);
     border: 1px solid var(--legend-added-border);
+    white-space: nowrap;
+    cursor: help;
+  }
+
+  /* ---- Lower-confidence chip: cross-model demoted "flagged by N/M" (Plan M) ---- */
+  .skill-lower-confidence-chip {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    background: var(--surface-raised);
+    color: var(--text-muted);
+    border: 1px dashed var(--border-subtle);
     white-space: nowrap;
     cursor: help;
   }
