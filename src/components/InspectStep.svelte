@@ -1128,7 +1128,7 @@
     onAddFileLevelDraft={(suggestion) => addFindingAsDraft(suggestion)}
     onDismissFileLevelFinding={(key) => dismissFinding(key)}
     onAddSkillFindingDraft={(path, finding) => addFindingAsDraft({ findingPath: path, line: finding.line, body: finding.body, key: finding.key })}
-    onDismissSkillFinding={(key) => recordDecision(key, 'dismissed')}
+    onDismissSkillFinding={(key) => dismissFinding(key)}
     {askFn}
     {askDisabledReason}
     replyFn={replyFn}
@@ -1232,7 +1232,7 @@
             onReply={replyFn}
             skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
             onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key })}
-            onDismissSkillFinding={(key) => recordDecision(key, 'dismissed')}
+            onDismissSkillFinding={(key) => dismissFinding(key)}
             whitespace={whitespaceByPath.get(file.filename) ?? null}
           />
         </div>
