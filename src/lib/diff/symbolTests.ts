@@ -294,6 +294,38 @@ export interface StepPairingInput {
  *
  * Grouped by implFile so the UI can render pairings beneath the right diff.
  */
+/**
+ * Several changed symbols in one impl file often pair to the SAME test file,
+ * which would render an identical "Tested by <file>" block once PER symbol
+ * (the triplication users see). Merge pairings that share a LEAD test file
+ * (tests[0].testFile) into a single pairing, unioning the covering TestRefs so
+ * the one rendered block still highlights every covered test. Insertion order
+ * is preserved; pairings with different lead files stay separate.
+ */
+function mergePairingsBySharedLeadFile(pairings: SymbolTestPairing[]): SymbolTestPairing[] {
+  const byLeadFile = new Map<string, SymbolTestPairing>()
+  const order: string[] = []
+  for (const p of pairings) {
+    const leadFile = p.tests[0]?.testFile
+    if (!leadFile) continue
+    const existing = byLeadFile.get(leadFile)
+    if (!existing) {
+      byLeadFile.set(leadFile, { ...p, tests: [...p.tests] })
+      order.push(leadFile)
+      continue
+    }
+    // Fold this symbol's TestRefs for the shared lead file into the kept block,
+    // deduping by start line so the same test isn't highlighted twice.
+    for (const t of p.tests) {
+      if (t.testFile !== leadFile) continue
+      if (!existing.tests.some((e) => e.testFile === t.testFile && e.lineRange.start === t.lineRange.start)) {
+        existing.tests.push(t)
+      }
+    }
+  }
+  return order.map((f) => byLeadFile.get(f)!)
+}
+
 export function pairStepTests(input: StepPairingInput): Map<string, SymbolTestPairing[]> {
   const { contentsMap } = input
   const byFile = new Map<string, SymbolTestPairing[]>()
@@ -312,7 +344,7 @@ export function pairStepTests(input: StepPairingInput): Map<string, SymbolTestPa
     const symbols = extractChangedSymbols(f)
     if (symbols.length === 0) continue
     const pairings = pairSymbolsWithTests(symbols, testContents)
-    if (pairings.length > 0) byFile.set(f.filename, pairings)
+    if (pairings.length > 0) byFile.set(f.filename, mergePairingsBySharedLeadFile(pairings))
   }
 
   return byFile
