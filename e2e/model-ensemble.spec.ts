@@ -151,8 +151,9 @@ test('single-key 2-model ensemble: step-3 shows per-model cost + impact readout'
   await page.getByRole('button', { name: 'Next step' }).click()
   await page.getByRole('button', { name: 'Next step' }).click()
 
-  // The consolidated per-model breakdown appears (cross-verify ran).
-  const breakdown = page.locator('.model-breakdown')
+  // The consolidated per-model breakdown appears (cross-verify ran). Each model
+  // is now an expandable row whose total reconciles with the review total.
+  const breakdown = page.locator('.review-cost')
   await expect(breakdown).toBeVisible({ timeout: 15_000 })
   await expect(breakdown.getByText('Model performance')).toBeVisible()
 
@@ -166,6 +167,11 @@ test('single-key 2-model ensemble: step-3 shows per-model cost + impact readout'
   await expect(breakdown.locator('.model-id', { hasText: 'claude-haiku-4-5' })).toBeVisible()
   await expect(breakdown.getByText(/1c\/1r/i)).toBeVisible()
 
-  // showTokenCost is on → the cost column is present.
-  await expect(breakdown.getByRole('columnheader', { name: /cost/i })).toBeVisible()
+  // showTokenCost is on → a per-row cost shows. Expanding a row reveals its
+  // per-task drilldown (which task spent what).
+  const genRow = breakdown.locator('.model-row-toggle', { hasText: 'claude-opus-4-8' })
+  await expect(genRow).toHaveAttribute('aria-expanded', 'false')
+  await genRow.click()
+  await expect(genRow).toHaveAttribute('aria-expanded', 'true')
+  await expect(breakdown.locator('.task-name', { hasText: 'Verdict' })).toBeVisible()
 })

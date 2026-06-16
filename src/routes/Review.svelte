@@ -809,6 +809,7 @@
         {contentsMap}
         coachFn={aiRun ? aiRun.coach : undefined}
         modelPerformance={aiRun ? aiRun.modelPerformance : []}
+        modelCostBreakdown={aiRun ? aiRun.modelCostBreakdown : []}
         totalUsage={aiRun ? aiRun.totalUsage : undefined}
         {prComments}
         provider={activeProvider}

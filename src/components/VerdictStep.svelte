@@ -38,6 +38,7 @@
   import { formatUsageLabel } from '../lib/ai/tokenCost'
   import ReviewCostPanel from './ReviewCostPanel.svelte'
   import type { VerdictModelBreakdown } from '../lib/ai/run.svelte'
+  import type { ModelCostRow } from '../lib/ai/modelCostBreakdown'
   import { buildReviewPrompt } from '../lib/ai/reviewPrompt'
   import type { PrFile } from '../lib/github/types'
 
@@ -81,6 +82,13 @@
      * on showTokenCost; the impact readout shows whenever this is non-empty.
      */
     modelPerformance?: VerdictModelBreakdown[]
+    /**
+     * Per-model cost breakdown that RECONCILES with totalUsage — each row's
+     * total sums ALL its task contributions (ensemble verdict/reviewer rows AND
+     * the single-pass tasks on the active model). Drives the expandable Step-3
+     * cost panel. The cost is gated on showTokenCost; impact always shows.
+     */
+    modelCostBreakdown?: ModelCostRow[]
     /** Sum of every task's captured usage for this review — the aggregate total. */
     totalUsage?: LlmUsage
     /**
@@ -118,6 +126,7 @@
     submitFn = submitReview,
     coachFn,
     modelPerformance = [],
+    modelCostBreakdown = [],
     totalUsage,
     prComments = [],
     provider,
@@ -576,7 +585,7 @@
          AND every reviewer's models). The $/token parts are gated on
          showTokenCost; the impact readout always shows. Single place on Step 3
          for "what did this review cost / which models earned their keep". -->
-    <ReviewCostPanel {modelPerformance} {totalUsage} />
+    <ReviewCostPanel {modelCostBreakdown} {totalUsage} />
 
     <!-- Verdict radio group -->
     <fieldset class="verdict-group">

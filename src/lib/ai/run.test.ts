@@ -587,6 +587,37 @@ describe('verdict records its generator row even without evidence', () => {
   })
 })
 
+describe('modelCostBreakdown reconciles with totalUsage', () => {
+  it('sums every task across rows to equal totalUsage, with single-pass labels in the generator byTask', async () => {
+    // Default deps: summary streams (usage 8), the five JSON tasks + verdict each
+    // report usage 15. Single deepseek key → no cross-verify, so the verdict
+    // yields one generator row. Every single-pass task is attributed to the active
+    // model's generator row, so the rows must sum to totalUsage.
+    const deps = makeDeps()
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    const total = run.totalUsage
+    expect(total).toBeDefined()
+
+    // RECONCILIATION INVARIANT: Σ rows' total === totalUsage.
+    const rows = run.modelCostBreakdown
+    expect(rows.length).toBeGreaterThanOrEqual(1)
+    const summed = rows.reduce((acc, r) => acc + (r.total?.total_tokens ?? 0), 0)
+    expect(summed).toBe(total!.total_tokens)
+
+    // The active model's generator row carries the single-pass task labels.
+    const gen = rows.find((r) => r.role === 'generator')!
+    const taskNames = gen.byTask.map((t) => t.task)
+    for (const label of ['Summary', 'Hotspots', 'Diagrams', 'Tests', 'Alternatives', 'Story', 'Verdict']) {
+      expect(taskNames).toContain(label)
+    }
+    // No task's tokens dropped: the generator row's byTask usage sums to its total.
+    const byTaskSum = gen.byTask.reduce((acc, t) => acc + (t.usage?.total_tokens ?? 0), 0)
+    expect(byTaskSum).toBe(gen.total!.total_tokens)
+  })
+})
+
 // ---------------------------------------------------------------------------
 // Retry single task
 // ---------------------------------------------------------------------------

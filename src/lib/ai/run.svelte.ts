@@ -84,6 +84,7 @@ import { listSkills } from '../skills/skills'
 import { djb2 } from '../viewed/viewed.svelte'
 import { addUsage } from './tokenCost'
 import { aggregateModelPerformance } from './modelPerformance'
+import { buildModelCostBreakdown, type CostContribution, type ModelCostRow } from './modelCostBreakdown'
 
 // ---------------------------------------------------------------------------
 // PanelState union
@@ -235,6 +236,16 @@ export interface AiRun {
    * panel. Empty when no task recorded per-model data. Display-only.
    */
   readonly modelPerformance: VerdictModelBreakdown[]
+  /**
+   * Per-model cost breakdown that RECONCILES with totalUsage: one row per
+   * (model, role) whose `total` sums ALL its task contributions (the ensemble
+   * verdict/reviewer cross-verify rows AND the single-pass tasks that ran on the
+   * active model — summary/hotspots/diagrams/tests/alternatives/story/coach).
+   * Each row carries a per-task drilldown (`byTask`). Summing every row's
+   * `total` equals `totalUsage` — no task's tokens are dropped or double-counted.
+   * Drives the Step-3 expandable cost panel. Display-only.
+   */
+  readonly modelCostBreakdown: ModelCostRow[]
   start(): Promise<void>
   retry(task: TaskName): Promise<void>
   coach(drafts: Draft[], prComments?: string[], verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'): Promise<CoachOutcome | { error: string }>
@@ -2264,6 +2275,83 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         verdictModelsState,
         ...skillReviewsState.map((e) => e.state.models ?? []),
       ])
+    },
+    get modelCostBreakdown(): ModelCostRow[] {
+      // Assemble one CostContribution per (model, role, task) so that EVERY
+      // task's usage is accounted for exactly once — then summing all the rows'
+      // totals reconciles with totalUsage. Two contribution shapes:
+      //   (a) ENSEMBLE tasks with per-model rows (verdict / each reviewer):
+      //       emit one contribution per row, carrying that row's usage/role/
+      //       impact — the rows already sum to the task's aggregate usage, so we
+      //       do NOT also add the task's own .usage.
+      //   (b) any task with NO per-model rows (every single-pass task, plus a
+      //       single-model reviewer or an evidence-free / no-ensemble verdict):
+      //       emit ONE generator contribution on the ACTIVE model with that
+      //       task's .usage. This is what makes the single-pass spend visible
+      //       and keeps the reconciliation invariant.
+      const active = activeLlmConfig()
+      const activeProviderId = active.provider.id
+      const activeModelId = active.model.id
+      const contributions: CostContribution[] = []
+
+      const addModelRows = (rows: VerdictModelBreakdown[], task: string): void => {
+        for (const r of rows) {
+          contributions.push({
+            providerId: r.providerId,
+            modelId: r.modelId,
+            role: r.role,
+            task,
+            ...(r.usage ? { usage: r.usage } : {}),
+            ...(r.surfaced !== undefined ? { surfaced: r.surfaced } : {}),
+            ...(r.uniqueCatch !== undefined ? { uniqueCatch: r.uniqueCatch } : {}),
+            ...(r.impact ? { impact: r.impact } : {}),
+          })
+        }
+      }
+
+      // Single-pass task: one active-model generator contribution carrying its
+      // captured usage. Emitted even with no usage so the task still appears
+      // (byTask shows it ran); an undefined usage contributes 0 to the total.
+      const addSinglePass = (usage: LlmUsage | undefined, task: string): void => {
+        contributions.push({
+          providerId: activeProviderId,
+          modelId: activeModelId,
+          role: 'generator',
+          task,
+          ...(usage ? { usage } : {}),
+        })
+      }
+
+      // Verdict: per-model rows if it cross-verified; else attribute its usage to
+      // the active model (covers evidence-free / no-ensemble verdicts).
+      if (verdictModelsState.length > 0) {
+        addModelRows(verdictModelsState, 'Verdict')
+      } else if (verdictState.usage) {
+        addSinglePass(verdictState.usage, 'Verdict')
+      }
+
+      // Single-pass tasks that always run on the active model.
+      if (summaryState.usage) addSinglePass(summaryState.usage, 'Summary')
+      if (attentionState.usage) addSinglePass(attentionState.usage, 'Hotspots')
+      if (diagramsState.usage) addSinglePass(diagramsState.usage, 'Diagrams')
+      if (testsState.usage) addSinglePass(testsState.usage, 'Tests')
+      if (alternativesState.usage) addSinglePass(alternativesState.usage, 'Alternatives')
+      if (storyState.usage) addSinglePass(storyState.usage, 'Story')
+      if (coachUsage) addSinglePass(coachUsage, 'Coach')
+
+      // Reviewers: per-model rows when an ensemble ran; else attribute the
+      // reviewer's total usage to the active model.
+      for (const e of skillReviewsState) {
+        const task = `Reviewer: ${e.name}`
+        const models = e.state.models ?? []
+        if (models.length > 0) {
+          addModelRows(models, task)
+        } else if (e.state.usage) {
+          addSinglePass(e.state.usage, task)
+        }
+      }
+
+      return buildModelCostBreakdown(contributions)
     },
     start,
     retry,
