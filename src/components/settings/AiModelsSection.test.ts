@@ -18,7 +18,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import AiModelsSection from './AiModelsSection.svelte'
-import { getSettings, saveTokens, setAiProvider, setAiModel, setAiEnsemble } from '../../lib/settings/settings'
+import { getSettings, saveTokens, setAiProvider, setAiModel, setAiPanel, type PanelParticipant } from '../../lib/settings/settings'
 import { _resetSettingsStateForTest } from '../../lib/settings/settingsState.svelte'
 import { PROVIDERS, getProvider } from '../../lib/llm/providers'
 import { llmTestConnection, LlmError } from '../../lib/llm/llm'
@@ -552,142 +552,139 @@ describe('AiModelsSection — story mode toggle', () => {
   })
 })
 
-describe('AiModelsSection — ensemble editor (Plan N)', () => {
+describe('AiModelsSection — unified model panel (Plan P)', () => {
   function setupAnthropic() {
     localStorage.setItem('review123:settings', JSON.stringify({ aiProvider: 'anthropic', anthropicKey: 'sk-ant-test' }))
     _resetSettingsStateForTest()
   }
+  const gen = (provider: string, model: string): PanelParticipant =>
+    ({ provider: provider as PanelParticipant['provider'], model, role: 'generator' })
+  const ver = (provider: string, model: string): PanelParticipant =>
+    ({ provider: provider as PanelParticipant['provider'], model, role: 'verifier' })
 
-  it('renders the ensemble panel with a generator row by default', () => {
+  it('renders ONE Model panel section with a generator row by default and no verify/generate radio', () => {
     setupAnthropic()
     render(AiModelsSection)
-    expect(screen.getByText(/Ensemble \/ verification panel/i)).toBeInTheDocument()
-    expect(screen.getByText('Generator')).toBeInTheDocument()
+    expect(screen.getByText(/^Model panel$/i)).toBeInTheDocument()
+    expect(screen.getByTestId('model-panel')).toBeInTheDocument()
+    // The old verify/generate "How models combine" radio is gone.
+    expect(screen.queryByText(/How models combine/i)).toBeNull()
+    expect(screen.queryByText(/Ensemble \/ verification panel/i)).toBeNull()
+    // The default row shows a Generator role.
+    expect(screen.getAllByRole('radio', { name: /generator/i }).length).toBeGreaterThan(0)
   })
 
-  it('adding a same-provider model writes a custom ensemble (single-key multi-model)', async () => {
+  it('renders the One generator / All generate presets', () => {
+    setupAnthropic()
+    render(AiModelsSection)
+    expect(screen.getByRole('button', { name: /One generator/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /All generate/i })).toBeInTheDocument()
+  })
+
+  it('adding a same-provider model writes a verifier participant (single-key multi-model)', async () => {
     setupAnthropic()
     render(AiModelsSection)
     await userEvent.click(screen.getByRole('button', { name: /Add a model/i }))
-    const ensemble = getSettings().aiEnsemble
-    expect(ensemble).not.toBeNull()
-    expect(ensemble!.generator.provider).toBe('anthropic')
-    expect(ensemble!.verifiers.length).toBe(1)
-    expect(ensemble!.verifiers[0].provider).toBe('anthropic')
+    const panel = getSettings().aiPanel
+    expect(panel).not.toBeNull()
+    expect(panel!.participants[0].role).toBe('generator')
+    expect(panel!.participants.length).toBe(2)
+    expect(panel!.participants[1].role).toBe('verifier')
+    expect(panel!.participants[1].provider).toBe('anthropic')
   })
 
-  it('designating a verifier as generator swaps the generator', async () => {
+  it('toggling a verifier row to Generator updates its role (emergent generate)', async () => {
     setupAnthropic()
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [{ provider: 'anthropic', model: 'claude-haiku-4-5' }],
-    })
+    setAiPanel({ participants: [gen('anthropic', 'claude-opus-4-8'), ver('anthropic', 'claude-haiku-4-5')] })
     _resetSettingsStateForTest()
     render(AiModelsSection)
-    const radios = screen.getAllByRole('radio', { name: /Generator|Verifier/i }) as HTMLInputElement[]
-    // The verifier row's radio (second one)
-    await userEvent.click(radios[1])
-    const ensemble = getSettings().aiEnsemble!
-    expect(ensemble.generator.model).toBe('claude-haiku-4-5')
+    // The second row's Generator radio.
+    const genRadios = screen.getAllByRole('radio', { name: /generator/i }) as HTMLInputElement[]
+    await userEvent.click(genRadios[1])
+    const panel = getSettings().aiPanel!
+    expect(panel.participants.every((p) => p.role === 'generator')).toBe(true)
+  })
+
+  it('"All generate" preset sets every row to generator', async () => {
+    setupAnthropic()
+    setAiPanel({ participants: [gen('anthropic', 'claude-opus-4-8'), ver('anthropic', 'claude-haiku-4-5')] })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /All generate/i }))
+    expect(getSettings().aiPanel!.participants.every((p) => p.role === 'generator')).toBe(true)
+  })
+
+  it('"One generator" preset leaves only the first row a generator', async () => {
+    setupAnthropic()
+    setAiPanel({ participants: [gen('anthropic', 'claude-opus-4-8'), gen('anthropic', 'claude-haiku-4-5')] })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /One generator/i }))
+    const roles = getSettings().aiPanel!.participants.map((p) => p.role)
+    expect(roles).toEqual(['generator', 'verifier'])
+  })
+
+  it('the last generator cannot be toggled to verifier (≥1 constraint)', async () => {
+    setupAnthropic()
+    setAiPanel({ participants: [gen('anthropic', 'claude-opus-4-8'), ver('anthropic', 'claude-haiku-4-5')] })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    // The sole generator's Verifier radio is disabled.
+    const verRadios = screen.getAllByRole('radio', { name: /verifier/i }) as HTMLInputElement[]
+    expect(verRadios[0].disabled).toBe(true)
   })
 
   it('disables a row whose provider has no key and shows the add-key hint', () => {
-    // Anthropic keyed + a custom ensemble with an unkeyed OpenAI verifier
     setupAnthropic()
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [{ provider: 'openai', model: 'gpt-5.4' }],
-    })
+    setAiPanel({ participants: [gen('anthropic', 'claude-opus-4-8'), ver('openai', 'gpt-5.4')] })
     _resetSettingsStateForTest()
     render(AiModelsSection)
     expect(screen.getByText(/No OpenAI key — add it above/i)).toBeInTheDocument()
   })
 
-  it('removing a participant updates the ensemble', async () => {
+  it('removing a participant updates the panel', async () => {
     setupAnthropic()
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [{ provider: 'anthropic', model: 'claude-haiku-4-5' }],
-    })
+    setAiPanel({ participants: [gen('anthropic', 'claude-opus-4-8'), ver('anthropic', 'claude-haiku-4-5')] })
     _resetSettingsStateForTest()
     render(AiModelsSection)
     const removeButtons = screen.getAllByRole('button', { name: /Remove participant/i })
     await userEvent.click(removeButtons[removeButtons.length - 1])
-    expect(getSettings().aiEnsemble!.verifiers.length).toBe(0)
+    expect(getSettings().aiPanel!.participants.length).toBe(1)
   })
 
-  // No hard cap: the Add control never disappears, even past the old limit of 8.
   it('keeps the Add control available beyond 8 participants (no hard block)', async () => {
     setupAnthropic()
-    // generator + 8 verifiers = 9 participants — past the old cap of 8.
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: Array.from({ length: 8 }, () => ({ provider: 'anthropic' as const, model: 'claude-haiku-4-5' })),
-    })
+    setAiPanel({ participants: [
+      gen('anthropic', 'claude-opus-4-8'),
+      ...Array.from({ length: 8 }, () => ver('anthropic', 'claude-haiku-4-5')),
+    ] })
     _resetSettingsStateForTest()
     render(AiModelsSection)
-    // Add is still present (no disable / hide at the old 8-limit)…
     const addBtn = screen.getByRole('button', { name: /Add a model/i })
     expect(addBtn).toBeInTheDocument()
     expect(addBtn).not.toBeDisabled()
-    // …and there is no "maximum" copy blocking the user.
     expect(screen.queryByText(/Maximum of \d+ models/i)).toBeNull()
-    // Clicking it actually adds a 10th participant.
     await userEvent.click(addBtn)
-    expect(getSettings().aiEnsemble!.verifiers.length).toBe(9)
+    expect(getSettings().aiPanel!.participants.length).toBe(10)
   })
 
   it('shows the soft scale/cost note once the panel reaches 4+ participants', () => {
     setupAnthropic()
-    // 2 participants → no note yet.
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [{ provider: 'anthropic', model: 'claude-haiku-4-5' }],
-    })
+    setAiPanel({ participants: [gen('anthropic', 'claude-opus-4-8'), ver('anthropic', 'claude-haiku-4-5')] })
     _resetSettingsStateForTest()
     const two = render(AiModelsSection)
     expect(two.queryByTestId('ensemble-scale-note')).toBeNull()
     two.unmount()
 
-    // 4 participants → note appears.
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: Array.from({ length: 3 }, () => ({ provider: 'anthropic' as const, model: 'claude-haiku-4-5' })),
-    })
+    setAiPanel({ participants: [
+      gen('anthropic', 'claude-opus-4-8'),
+      ...Array.from({ length: 3 }, () => ver('anthropic', 'claude-haiku-4-5')),
+    ] })
     _resetSettingsStateForTest()
     const four = render(AiModelsSection)
     const note = four.getByTestId('ensemble-scale-note')
     expect(note).toBeInTheDocument()
     expect(note.textContent).toMatch(/more models means more tokens/i)
     expect(note.textContent).toMatch(/per-model impact/i)
-  })
-})
-
-describe('AiModelsSection — fusion mode (Plan O)', () => {
-  it('renders the Verify / Generate radio group', () => {
-    render(AiModelsSection)
-    expect(screen.getByRole('radio', { name: /Verify/ })).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: /Generate/ })).toBeInTheDocument()
-  })
-
-  it('defaults to Verify and disables the radios with <2 keyed models', () => {
-    saveTokens({ githubPat: null, deepseekKey: 'k' })
-    render(AiModelsSection)
-    const verify = screen.getByRole('radio', { name: /Verify/ }) as HTMLInputElement
-    const generate = screen.getByRole('radio', { name: /Generate/ }) as HTMLInputElement
-    expect(verify.checked).toBe(true)
-    expect(generate.disabled).toBe(true)
-  })
-
-  it('selecting Generate with ≥2 keyed models persists fusionMode', async () => {
-    saveTokens({ githubPat: null, deepseekKey: 'k' })
-    const { setAnthropicKey } = await import('../../lib/settings/settings')
-    setAnthropicKey('a')
-    _resetSettingsStateForTest()
-    render(AiModelsSection)
-    const generate = screen.getByRole('radio', { name: /Generate/ }) as HTMLInputElement
-    expect(generate.disabled).toBe(false)
-    await userEvent.click(generate)
-    expect(getSettings().fusionMode).toBe('generate')
   })
 })

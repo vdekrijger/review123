@@ -3,6 +3,8 @@ import {
   verifierProviderConfigs,
   crossModelVerifyEffective,
   resolveEnsemble,
+  resolvePanel,
+  panelMode,
   MAX_VERIFIER_PROVIDERS,
   ENSEMBLE_RUNAWAY_BACKSTOP,
 } from './config'
@@ -13,12 +15,18 @@ import {
   setGeminiKey,
   setAiProvider,
   setCrossModelVerify,
-  setAiEnsemble,
+  setAiPanel,
+  type PanelParticipant,
 } from '../settings/settings'
 
 beforeEach(() => {
   localStorage.clear()
 })
+
+const gen = (provider: string, model: string): PanelParticipant =>
+  ({ provider: provider as PanelParticipant['provider'], model, role: 'generator' })
+const ver = (provider: string, model: string): PanelParticipant =>
+  ({ provider: provider as PanelParticipant['provider'], model, role: 'verifier' })
 
 describe('verifierProviderConfigs', () => {
   it('is empty with only the active provider keyed', () => {
@@ -38,7 +46,7 @@ describe('verifierProviderConfigs', () => {
     expect(cfgs.every((c) => c.key.length > 0 && c.model.id.length > 0)).toBe(true)
   })
 
-  it('caps verifiers at MAX_VERIFIER_PROVIDERS', () => {
+  it('caps default verifiers at MAX_VERIFIER_PROVIDERS', () => {
     setAiProvider('deepseek')
     setDeepseekKey('k')
     setOpenaiKey('o')
@@ -56,6 +64,19 @@ describe('verifierProviderConfigs', () => {
     const cfgs = verifierProviderConfigs()
     expect(cfgs.map((c) => c.providerId)).toEqual(['anthropic'])
     expect(cfgs[0].model.id).toBe('claude-sonnet-4-6')
+  })
+
+  it('includes extra generators (beyond the first) as verifiers of the primary set', () => {
+    setAnthropicKey('a')
+    // Two generators + one verifier; verifierProviderConfigs surfaces the
+    // non-primary generator too (it verifies findings it did not raise).
+    setAiPanel({ participants: [
+      gen('anthropic', 'claude-opus-4-8'),
+      gen('anthropic', 'claude-sonnet-4-6'),
+      ver('anthropic', 'claude-haiku-4-5'),
+    ] })
+    const cfgs = verifierProviderConfigs()
+    expect(cfgs.map((c) => c.model.id).sort()).toEqual(['claude-haiku-4-5', 'claude-sonnet-4-6'])
   })
 })
 
@@ -86,165 +107,154 @@ describe('crossModelVerifyEffective — gating', () => {
   })
 })
 
-describe('resolveEnsemble — Plan N configurable ensemble', () => {
-  it('default ensemble reproduces #128: active generator + other keyed verifiers', () => {
+describe('resolvePanel / resolveEnsemble — Plan P unified panel', () => {
+  it('default panel reproduces #128: active sole generator + other keyed verifiers', () => {
     setAiProvider('deepseek')
     setDeepseekKey('k')
     setOpenaiKey('o')
-    const { generator, verifiers } = resolveEnsemble()
-    expect(generator?.providerId).toBe('deepseek')
-    expect(generator?.model.id).toBe('deepseek-v4-flash')
+    const { generators, verifiers } = resolvePanel()
+    expect(generators.map((g) => g.providerId)).toEqual(['deepseek'])
+    expect(generators[0].model.id).toBe('deepseek-v4-flash')
     expect(verifiers.map((v) => v.providerId)).toEqual(['openai'])
-    // verifierProviderConfigs is the same list (byte-identical wrapper)
+    // resolveEnsemble exposes the first generator + verifiers (byte-identical wrapper)
+    const ens = resolveEnsemble()
+    expect(ens.generator?.providerId).toBe('deepseek')
     expect(verifierProviderConfigs()).toEqual(verifiers)
   })
 
-  it('default generator is null when the active provider has no key', () => {
+  it('default has no generator when the active provider has no key', () => {
     setAiProvider('deepseek')
     setOpenaiKey('o')
+    expect(resolvePanel().generators).toEqual([])
     expect(resolveEnsemble().generator).toBeNull()
   })
 
-  it('custom ensemble: multiple models of the SAME provider on one key (the unlock)', () => {
+  it('custom panel: multiple models of the SAME provider on one key (the unlock)', () => {
     setAnthropicKey('a')
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [
-        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
-        { provider: 'anthropic', model: 'claude-haiku-4-5' },
-      ],
-    })
-    const { generator, verifiers } = resolveEnsemble()
-    expect(generator?.model.id).toBe('claude-opus-4-8')
+    setAiPanel({ participants: [
+      gen('anthropic', 'claude-opus-4-8'),
+      ver('anthropic', 'claude-sonnet-4-6'),
+      ver('anthropic', 'claude-haiku-4-5'),
+    ] })
+    const { generators, verifiers } = resolvePanel()
+    expect(generators[0].model.id).toBe('claude-opus-4-8')
     expect(verifiers.map((v) => v.model.id)).toEqual(['claude-sonnet-4-6', 'claude-haiku-4-5'])
     expect(verifiers.every((v) => v.providerId === 'anthropic' && v.key === 'a')).toBe(true)
-    // Single key, 2+ models → cross-verify effective
     expect(crossModelVerifyEffective()).toBe(true)
+    expect(panelMode()).toBe('verify') // exactly 1 generator
   })
 
   it('skips a participant whose provider key is missing', () => {
     setAnthropicKey('a')
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [
-        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
-        { provider: 'openai', model: 'gpt-5.4' }, // no openai key → dropped
-      ],
-    })
-    const { verifiers } = resolveEnsemble()
-    expect(verifiers.map((v) => v.providerId)).toEqual(['anthropic'])
+    setAiPanel({ participants: [
+      gen('anthropic', 'claude-opus-4-8'),
+      ver('anthropic', 'claude-sonnet-4-6'),
+      ver('openai', 'gpt-5.4'), // no openai key → dropped
+    ] })
+    expect(resolvePanel().verifiers.map((v) => v.providerId)).toEqual(['anthropic'])
   })
 
-  it('generator is null (and thus not effective) when its provider key is missing', () => {
+  it('no generator (and thus not effective) when the generator key is missing', () => {
     setAnthropicKey('a')
-    setAiEnsemble({
-      generator: { provider: 'openai', model: 'gpt-5.4' }, // no openai key
-      verifiers: [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }],
-    })
-    expect(resolveEnsemble().generator).toBeNull()
+    setAiPanel({ participants: [
+      gen('openai', 'gpt-5.4'), // no openai key
+      ver('anthropic', 'claude-sonnet-4-6'),
+    ] })
+    expect(resolvePanel().generators).toEqual([])
     expect(crossModelVerifyEffective()).toBe(false)
   })
 
   it('<2 usable models → no-op (single model, no verifiers)', () => {
     setAnthropicKey('a')
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [{ provider: 'openai', model: 'gpt-5.4' }], // dropped, no key
-    })
-    expect(resolveEnsemble().verifiers).toEqual([])
+    setAiPanel({ participants: [
+      gen('anthropic', 'claude-opus-4-8'),
+      ver('openai', 'gpt-5.4'), // dropped, no key
+    ] })
+    expect(resolvePanel().verifiers).toEqual([])
     expect(crossModelVerifyEffective()).toBe(false)
   })
 
-  it('does NOT truncate to a product cap: a 10-participant ensemble resolves all 10', () => {
+  it('does NOT truncate to a product cap: a 10-participant panel resolves all 10', () => {
     setAnthropicKey('a')
-    // Generator + 9 verifiers = 10 participants (single-key, same provider).
-    // There is no hard product cap (the old 8) — all 10 resolve since each
-    // provider key is present and the count is under the runaway backstop.
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: Array.from({ length: 9 }, () => ({
-        provider: 'anthropic' as const,
-        model: 'claude-sonnet-4-6',
-      })),
-    })
-    const { generator, verifiers } = resolveEnsemble()
-    expect(generator).not.toBeNull()
-    expect(1 + verifiers.length).toBe(10)
+    setAiPanel({ participants: [
+      gen('anthropic', 'claude-opus-4-8'),
+      ...Array.from({ length: 9 }, () => ver('anthropic', 'claude-sonnet-4-6')),
+    ] })
+    const { generators, verifiers } = resolvePanel()
+    expect(generators.length + verifiers.length).toBe(10)
   })
 
   it('applies only the runaway backstop, never a product cap of 8', () => {
     setAnthropicKey('a')
-    // Far more verifiers than the backstop — generator + 30 requested. Only the
-    // runaway backstop trims the overflow; the old 8-cap is gone.
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: Array.from({ length: 30 }, () => ({
-        provider: 'anthropic' as const,
-        model: 'claude-sonnet-4-6',
-      })),
-    })
-    const { generator, verifiers } = resolveEnsemble()
-    expect(generator).not.toBeNull()
-    // Bounded by the runaway backstop, not 8.
-    expect(1 + verifiers.length).toBe(ENSEMBLE_RUNAWAY_BACKSTOP)
+    setAiPanel({ participants: [
+      gen('anthropic', 'claude-opus-4-8'),
+      ...Array.from({ length: 30 }, () => ver('anthropic', 'claude-sonnet-4-6')),
+    ] })
+    const { generators, verifiers } = resolvePanel()
+    expect(generators.length + verifiers.length).toBe(ENSEMBLE_RUNAWAY_BACKSTOP)
     expect(ENSEMBLE_RUNAWAY_BACKSTOP).toBeGreaterThan(8)
   })
 })
 
 // ---------------------------------------------------------------------------
-// Plan O — fusionMode gating
+// Plan P — emergent mode + multi-generator gating
 // ---------------------------------------------------------------------------
 
-import { fusionGenerateEffective, fusionParticipants } from './config'
-import { setFusionMode } from '../settings/settings'
+import { fusionGenerateEffective, fusionParticipants, fusionGenerators } from './config'
 
-describe('fusionGenerateEffective — Plan O gating', () => {
-  it("default ('verify') → false even with 2+ keys (byte-identical to #130)", () => {
+describe('fusionGenerateEffective — Plan P emergent gating', () => {
+  it('default (1 generator) → false even with 2+ keys (byte-identical to verify)', () => {
     setAiProvider('deepseek')
     setDeepseekKey('k')
     setAnthropicKey('a')
-    // crossModelVerify is effective, but fusionMode defaults to 'verify'.
     expect(crossModelVerifyEffective()).toBe(true)
     expect(fusionGenerateEffective()).toBe(false)
+    expect(panelMode()).toBe('verify')
   })
 
-  it("'generate' with only 1 keyed model → false (needs ≥2)", () => {
+  it('1 generator with only 1 keyed model → false', () => {
     setAiProvider('deepseek')
     setDeepseekKey('k')
-    setFusionMode('generate')
     expect(fusionGenerateEffective()).toBe(false)
   })
 
-  it("'generate' with ≥2 keyed models → true", () => {
+  it('≥2 generators with ≥2 keyed models → true (emergent generate)', () => {
     setAiProvider('deepseek')
     setDeepseekKey('k')
     setAnthropicKey('a')
-    setFusionMode('generate')
+    setAiPanel({ participants: [
+      gen('deepseek', 'deepseek-v4-flash'),
+      gen('anthropic', 'claude-opus-4-8'),
+    ] })
     expect(fusionGenerateEffective()).toBe(true)
+    expect(panelMode()).toBe('generate')
   })
 
-  it("'generate' but crossModelVerify off → false", () => {
+  it('≥2 generators but crossModelVerify off → false', () => {
     setAiProvider('deepseek')
     setDeepseekKey('k')
     setAnthropicKey('a')
-    setFusionMode('generate')
+    setAiPanel({ participants: [
+      gen('deepseek', 'deepseek-v4-flash'),
+      gen('anthropic', 'claude-opus-4-8'),
+    ] })
     setCrossModelVerify(false)
     expect(fusionGenerateEffective()).toBe(false)
   })
 
-  it("'generate' single-key multi-model ensemble → true (Plan N unlock composes)", () => {
+  it('single-key multi-model all-generate panel → true', () => {
     setAnthropicKey('a')
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }],
-    })
-    setFusionMode('generate')
+    setAiPanel({ participants: [
+      gen('anthropic', 'claude-opus-4-8'),
+      gen('anthropic', 'claude-sonnet-4-6'),
+    ] })
     expect(fusionGenerateEffective()).toBe(true)
+    expect(panelMode()).toBe('generate')
   })
 })
 
-describe('fusionParticipants', () => {
-  it('generator first, then verifiers; each tagged with a display name', () => {
+describe('fusionParticipants / fusionGenerators', () => {
+  it('generators first, then verifiers; each tagged with a display name', () => {
     setAiProvider('deepseek')
     setDeepseekKey('k')
     setAnthropicKey('a')
@@ -253,17 +263,30 @@ describe('fusionParticipants', () => {
     expect(ps[0].cfg.providerId).toBe('deepseek')
     expect(ps[1].cfg.providerId).toBe('anthropic')
     expect(ps.every((p) => p.generator.length > 0)).toBe(true)
+    // Default = 1 generator → fusionGenerators is just that one.
+    expect(fusionGenerators().map((p) => p.cfg.providerId)).toEqual(['deepseek'])
+  })
+
+  it('fusionGenerators returns all generators in an all-generate panel', () => {
+    setAnthropicKey('a')
+    setAiPanel({ participants: [
+      gen('anthropic', 'claude-opus-4-8'),
+      gen('anthropic', 'claude-sonnet-4-6'),
+      ver('anthropic', 'claude-haiku-4-5'),
+    ] })
+    expect(fusionGenerators().map((p) => p.cfg.model.id)).toEqual(['claude-opus-4-8', 'claude-sonnet-4-6'])
+    expect(fusionParticipants().length).toBe(3)
   })
 
   it('disambiguates same-provider participants by model id', () => {
     setAnthropicKey('a')
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }],
-    })
+    setAiPanel({ participants: [
+      gen('anthropic', 'claude-opus-4-8'),
+      ver('anthropic', 'claude-sonnet-4-6'),
+    ] })
     const ps = fusionParticipants()
     const names = ps.map((p) => p.generator)
-    expect(new Set(names).size).toBe(2) // distinct names despite same provider
+    expect(new Set(names).size).toBe(2)
     expect(names[0]).toContain('claude-opus-4-8')
   })
 

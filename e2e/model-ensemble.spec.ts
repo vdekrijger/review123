@@ -61,10 +61,12 @@ function seedSettings() {
     anthropicKey: 'sk-ant-test-key',
     aiProvider: 'anthropic',
     aiModel: 'claude-opus-4-8',
-    // Plan N: single-key, two-model ensemble.
-    aiEnsemble: {
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [{ provider: 'anthropic', model: 'claude-haiku-4-5' }],
+    // Plan P: single-key, two-model panel — one generator + one verifier.
+    aiPanel: {
+      participants: [
+        { provider: 'anthropic', model: 'claude-opus-4-8', role: 'generator' },
+        { provider: 'anthropic', model: 'claude-haiku-4-5', role: 'verifier' },
+      ],
     },
     showTokenCost: true,
     diffMode: 'unified',

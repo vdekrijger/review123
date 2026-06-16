@@ -1904,7 +1904,7 @@ describe('storyOrderPrompt', () => {
 })
 
 describe('PROMPT_VERSION', () => {
-  it('is bumped to 19 (Plan O: fusion v2 — multi-generator union + lenses)', () => {
-    expect(PROMPT_VERSION).toBe(19)
+  it('is bumped to 20 (Plan P: unified panel — lenses in the verify path too)', () => {
+    expect(PROMPT_VERSION).toBe(20)
   })
 })

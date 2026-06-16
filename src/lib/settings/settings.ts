@@ -60,33 +60,49 @@ export interface GitlabOAuth {
 export type AiProvider = 'deepseek' | 'openai' | 'anthropic' | 'gemini'
 
 /**
- * Fusion mode (Plan O).
- * - 'verify'   — single generator (active model) raises findings; the other
- *                ensemble models VERIFY them (precision only). Byte-identical to
- *                Plan M/N (#128/#130/#133). The default.
- * - 'generate' — EVERY ensemble model generates findings independently; the union
- *                is dedup-merged and cross-confirmed, so findings only one model
- *                caught can still surface (recall). More tokens — N generations +
- *                N×(N−1) verifications. Only active with ≥2 keyed models.
+ * Emergent fusion mode (Plan P). Derived from the panel's generator count — it
+ * is NOT a stored setting any longer. Kept as a type for the analytics label and
+ * the migration of the legacy `fusionMode` field.
+ * - 'verify'   — exactly 1 generator: it raises, the rest verify (precision).
+ * - 'generate' — ≥2 generators: every generator raises, the union is dedup-merged
+ *                and cross-confirmed (recall).
  */
 export type FusionMode = 'verify' | 'generate'
 
-/** One participant in the configurable model ensemble (Plan N). */
-export interface EnsembleParticipant {
+/** A participant role in the unified model panel (Plan P). */
+export type ParticipantRole = 'generator' | 'verifier'
+
+/** One participant in the unified model panel (Plan P). */
+export interface PanelParticipant {
   provider: AiProvider
   /** Model id within that provider's lineup (providers.ts). */
   model: string
+  /** Whether this participant GENERATES findings or only VERIFIES them. */
+  role: ParticipantRole
 }
 
 /**
- * A user-configured ensemble (Plan N): one generator participant and a list of
- * verifier participants. Verifiers MAY repeat a provider with different models
- * (e.g. anthropic claude-opus-4-8 generator + claude-sonnet-4-6 +
- * claude-haiku-4-5 verifiers, all on one Anthropic key).
+ * The unified model panel (Plan P) — REPLACES both `aiEnsemble` and `fusionMode`.
+ * A single list of participants, each tagged generator or verifier. The
+ * verify-vs-generate MODE is emergent: exactly 1 generator behaves like the old
+ * 'verify', ≥2 generators like the old 'generate', a mix runs both roles.
+ * Participants MAY repeat a provider with different models (single-key
+ * cross-verify). Invariant: at least one generator (enforced in coercion).
+ * null/absent → the default panel is synthesized at resolution time.
  */
-export interface AiEnsemble {
-  generator: EnsembleParticipant
-  verifiers: EnsembleParticipant[]
+export interface AiPanel {
+  participants: PanelParticipant[]
+}
+
+/** Legacy ensemble participant (Plan N) — read only for migration. */
+interface LegacyEnsembleParticipant {
+  provider: AiProvider
+  model: string
+}
+/** Legacy ensemble shape (Plan N) — read only for migration into AiPanel. */
+interface LegacyAiEnsemble {
+  generator: LegacyEnsembleParticipant
+  verifiers: LegacyEnsembleParticipant[]
 }
 
 /**
@@ -185,21 +201,16 @@ export interface Settings {
    */
   crossModelVerify: boolean
   /**
-   * Configurable model ensemble (Plan N). When null/absent, the default ensemble
-   * is synthesized from the active provider+model (generator) plus the other
-   * keyed providers' default models (verifiers) — byte-identical to #128. When
-   * set, the user has hand-picked the generator + verifier participants, which
-   * MAY include multiple models of the SAME provider (single-key cross-verify).
+   * Unified model panel (Plan P) — REPLACES aiEnsemble + fusionMode. A single
+   * participant list with per-row roles (generator/verifier). When null/absent,
+   * the default panel is synthesized from the active provider+model (sole
+   * generator) plus the other keyed providers' default models (verifiers) —
+   * byte-identical to #128/#130. When set, the user has hand-picked the
+   * participants and their roles; the verify-vs-generate mode is emergent from
+   * the generator count. Participants MAY repeat a provider with different models
+   * (single-key cross-verify). Migrated once from legacy aiEnsemble + fusionMode.
    */
-  aiEnsemble: AiEnsemble | null
-  /**
-   * Fusion mode (Plan O). Default 'verify' (byte-identical to #130): the active
-   * model generates, the others verify (precision). 'generate' makes EVERY
-   * ensemble model an independent generator and dedup-merges the union, so a real
-   * issue only one model caught can still surface (recall) — costs more tokens and
-   * is EFFECTIVE only with ≥2 keyed models (else it falls back to verify behavior).
-   */
-  fusionMode: FusionMode
+  aiPanel: AiPanel | null
   diffMode: DiffMode
   /** Hide whitespace-only changes in diffs (like GitHub's ?w=1). */
   hideWhitespace: boolean
@@ -259,8 +270,7 @@ const DEFAULTS: Settings = {
   aiTaskModes: defaultTaskModes(),
   storyMode: true,
   crossModelVerify: true,
-  aiEnsemble: null,
-  fusionMode: 'verify',
+  aiPanel: null,
   diffMode: 'unified',
   hideWhitespace: false,
   githubAuth: null,
@@ -282,8 +292,8 @@ const DEFAULTS: Settings = {
 
 const AI_PROVIDER_IDS = new Set<string>(['deepseek', 'openai', 'anthropic', 'gemini'])
 
-/** Coerce one ensemble participant; returns null if provider/model invalid. */
-function coerceParticipant(raw: unknown): EnsembleParticipant | null {
+/** Coerce a provider+model pair; returns null if either is invalid. */
+function coerceProviderModel(raw: unknown): { provider: AiProvider; model: string } | null {
   if (typeof raw !== 'object' || raw === null) return null
   const obj = raw as Record<string, unknown>
   const provider = obj['provider']
@@ -295,20 +305,81 @@ function coerceParticipant(raw: unknown): EnsembleParticipant | null {
   return { provider: provider as AiProvider, model }
 }
 
+/** Coerce one panel participant (provider+model+role); null when invalid. */
+function coercePanelParticipant(raw: unknown): PanelParticipant | null {
+  const pm = coerceProviderModel(raw)
+  if (!pm) return null
+  const role = (raw as Record<string, unknown>)['role']
+  if (role !== 'generator' && role !== 'verifier') return null
+  return { provider: pm.provider, model: pm.model, role }
+}
+
+/** Coerce one legacy ensemble participant (provider+model only). */
+function coerceLegacyParticipant(raw: unknown): LegacyEnsembleParticipant | null {
+  return coerceProviderModel(raw)
+}
+
 /**
- * Coerce a stored ensemble (Plan N). Returns null when absent/invalid (→ default
- * ensemble synthesized at resolution time). Drops verifier entries with unknown
- * provider/model; an invalid generator invalidates the whole stored ensemble.
+ * Coerce a stored unified panel (Plan P). Drops invalid participants. Enforces
+ * the ≥1-generator invariant: if no participant is a generator, the FIRST one is
+ * promoted to generator. Returns null when absent/empty (→ default panel
+ * synthesized at resolution time).
  */
-function coerceEnsemble(raw: unknown): AiEnsemble | null {
+function coercePanel(raw: unknown): AiPanel | null {
   if (typeof raw !== 'object' || raw === null) return null
   const obj = raw as Record<string, unknown>
-  const generator = coerceParticipant(obj['generator'])
+  const rawList = obj['participants']
+  if (!Array.isArray(rawList)) return null
+  const participants = rawList
+    .map(coercePanelParticipant)
+    .filter((p): p is PanelParticipant => p !== null)
+  if (participants.length === 0) return null
+  // Invariant: at least one generator. Promote the first row if none qualifies.
+  if (!participants.some((p) => p.role === 'generator')) {
+    participants[0] = { ...participants[0], role: 'generator' }
+  }
+  return { participants }
+}
+
+/**
+ * Coerce a stored LEGACY aiEnsemble (Plan N) for one-time migration into a panel.
+ * Returns null when absent/invalid; an invalid generator invalidates the whole.
+ */
+function coerceLegacyEnsemble(raw: unknown): LegacyAiEnsemble | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const obj = raw as Record<string, unknown>
+  const generator = coerceLegacyParticipant(obj['generator'])
   if (!generator) return null
   const verifiers = Array.isArray(obj['verifiers'])
-    ? obj['verifiers'].map(coerceParticipant).filter((p): p is EnsembleParticipant => p !== null)
+    ? obj['verifiers'].map(coerceLegacyParticipant).filter((p): p is LegacyEnsembleParticipant => p !== null)
     : []
   return { generator, verifiers }
+}
+
+/**
+ * Resolve the unified panel from stored settings, MIGRATING the legacy
+ * aiEnsemble + fusionMode once when no aiPanel is stored (Plan P):
+ * - explicit aiPanel wins (coerced).
+ * - else legacy aiEnsemble present → generator → {role:'generator'}, verifiers →
+ *   {role:'verifier'}; if legacy fusionMode==='generate', ALL roles become
+ *   'generator' (every model generated).
+ * - else (default/unset) → null (default panel synthesized at resolution time).
+ */
+function coercePanelWithMigration(obj: Record<string, unknown>): AiPanel | null {
+  if ('aiPanel' in obj) return coercePanel(obj['aiPanel'])
+  // No aiPanel — migrate legacy ensemble + fusionMode if present.
+  const legacy = coerceLegacyEnsemble(obj['aiEnsemble'])
+  if (!legacy) return null // default/unset → default panel synthesized later
+  const generateMode = obj['fusionMode'] === 'generate'
+  const participants: PanelParticipant[] = [
+    { provider: legacy.generator.provider, model: legacy.generator.model, role: 'generator' },
+    ...legacy.verifiers.map((v): PanelParticipant => ({
+      provider: v.provider,
+      model: v.model,
+      role: generateMode ? 'generator' : 'verifier',
+    })),
+  ]
+  return { participants }
 }
 
 function coerceGithubAuth(raw: unknown): GithubAuth | null {
@@ -421,10 +492,14 @@ function coerce(raw: unknown): Partial<Settings> {
   const crossModelVerify = obj['crossModelVerify']
   if (typeof crossModelVerify === 'boolean') result.crossModelVerify = crossModelVerify
 
-  if ('aiEnsemble' in obj) result.aiEnsemble = coerceEnsemble(obj['aiEnsemble'])
-
-  const fusionMode = obj['fusionMode']
-  if (fusionMode === 'verify' || fusionMode === 'generate') result.fusionMode = fusionMode
+  // Unified model panel (Plan P) — explicit aiPanel, or one-time migration from
+  // legacy aiEnsemble + fusionMode. Only assign when there is something to store
+  // (a non-null panel); default/unset stays null so the default panel is
+  // synthesized at resolution time.
+  if ('aiPanel' in obj || 'aiEnsemble' in obj) {
+    const panel = coercePanelWithMigration(obj)
+    if (panel) result.aiPanel = panel
+  }
 
   const gitlabToken = obj['gitlabToken']
   if (typeof gitlabToken === 'string') result.gitlabToken = gitlabToken
@@ -658,8 +733,47 @@ export function setOffAllExtras(): void {
 }
 export const setStoryMode = (v: boolean) => save({ storyMode: v })
 export const setCrossModelVerify = (v: boolean) => save({ crossModelVerify: v })
-export const setAiEnsemble = (v: AiEnsemble | null) => save({ aiEnsemble: v })
-export const setFusionMode = (v: FusionMode) => save({ fusionMode: v })
+
+/**
+ * Save the unified model panel (Plan P). Pass null to reset to the synthesized
+ * default. Enforces the ≥1-generator invariant before writing: if the supplied
+ * list has no generator, the first participant is promoted (defensive — the UI
+ * also guards this).
+ */
+export function setAiPanel(panel: AiPanel | null): void {
+  if (panel === null) {
+    save({ aiPanel: null })
+    return
+  }
+  const participants = panel.participants.map((p) => ({ ...p }))
+  if (participants.length > 0 && !participants.some((p) => p.role === 'generator')) {
+    participants[0] = { ...participants[0], role: 'generator' }
+  }
+  save({ aiPanel: { participants } })
+}
+
+/**
+ * Preset "One generator" (Plan P): the FIRST participant becomes the sole
+ * generator, every other participant a verifier (= old 'verify' mode). Operates
+ * on the supplied participant list (the editor passes its current/synthesized
+ * panel so it works even before the user has stored a custom panel).
+ */
+export function setPanelOneGenerator(participants: PanelParticipant[]): void {
+  if (participants.length === 0) return
+  const next = participants.map((p, i) => ({ ...p, role: (i === 0 ? 'generator' : 'verifier') as ParticipantRole }))
+  save({ aiPanel: { participants: next } })
+}
+
+/**
+ * Preset "All generate" (Plan P): every participant becomes a generator — they
+ * cross-confirm each other (= old 'generate' mode). Operates on the supplied
+ * participant list (see setPanelOneGenerator).
+ */
+export function setPanelAllGenerate(participants: PanelParticipant[]): void {
+  if (participants.length === 0) return
+  const next = participants.map((p) => ({ ...p, role: 'generator' as ParticipantRole }))
+  save({ aiPanel: { participants: next } })
+}
 export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
 export const setHideWhitespace = (hide: boolean) => save({ hideWhitespace: hide })
 export const setRailCollapsed = (collapsed: boolean) => save({ railCollapsed: collapsed })

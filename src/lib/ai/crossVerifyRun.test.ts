@@ -15,7 +15,7 @@ import {
   setAnthropicKey,
   setOpenaiKey,
   setAiProvider,
-  setAiEnsemble,
+  setAiPanel,
 } from '../settings/settings'
 import { djb2 } from '../viewed/viewed.svelte'
 
@@ -161,10 +161,10 @@ describe('cross-model verification in runSkillReviews', () => {
     // → cross-verify is effective and the verifier model is called.
     setAiProvider('anthropic')
     setAnthropicKey('a')
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [{ provider: 'anthropic', model: 'claude-haiku-4-5' }],
-    })
+    setAiPanel({ participants: [
+      { provider: 'anthropic', model: 'claude-opus-4-8', role: 'generator' },
+      { provider: 'anthropic', model: 'claude-haiku-4-5', role: 'verifier' },
+    ] })
 
     const { addSkill } = await import('../skills/skills')
     addSkill('My Reviewer', 'find bugs')
@@ -209,17 +209,19 @@ describe('cross-model verification in runSkillReviews', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Plan O — multi-generator fusion ('generate' mode) inside the run
+// Plan P — multi-generator fusion (emergent 'generate' mode) inside the run
 // ---------------------------------------------------------------------------
 
-import { setFusionMode } from '../settings/settings'
-
-describe('multi-generator fusion in runSkillReviews (Plan O)', () => {
+describe('multi-generator fusion in runSkillReviews (Plan P)', () => {
   it('model B raises a finding A missed and both confirm → it surfaces with raisedBy', async () => {
     setAiProvider('deepseek')
     setDeepseekKey('k')
     setAnthropicKey('a')
-    setFusionMode('generate')
+    // Two generators (emergent 'generate' mode).
+    setAiPanel({ participants: [
+      { provider: 'deepseek', model: 'deepseek-v4-flash', role: 'generator' },
+      { provider: 'anthropic', model: 'claude-opus-4-8', role: 'generator' },
+    ] })
 
     const { addSkill } = await import('../skills/skills')
     addSkill('My Reviewer', 'find bugs')
@@ -265,11 +267,11 @@ describe('multi-generator fusion in runSkillReviews (Plan O)', () => {
     expect(result.findings.every((f) => Array.isArray(f.raisedBy) && f.raisedBy!.length >= 1)).toBe(true)
   })
 
-  it("'verify' mode (default) does NOT multi-generate — single generator path", async () => {
+  it("'verify' mode (default, 1 generator) does NOT multi-generate — single generator path", async () => {
     setAiProvider('deepseek')
     setDeepseekKey('k')
     setAnthropicKey('a')
-    // fusionMode left at default 'verify'.
+    // Default panel = 1 generator → emergent 'verify' mode.
 
     const { addSkill } = await import('../skills/skills')
     addSkill('My Reviewer', 'find bugs')

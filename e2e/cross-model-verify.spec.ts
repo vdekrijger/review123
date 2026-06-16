@@ -330,9 +330,18 @@ test('fusion generate: a finding only one model raised surfaces with "raised by"
   await setupGithub(page)
   await setupDeepseekGenerate(page)
   await setupAnthropicGenerate(page)
-  // Two keys + fusionMode 'generate' → both models generate; the union surfaces
-  // findings only one caught.
-  await seedAll(page, seedSettings({ anthropicKey: 'sk-ant-test-key', fusionMode: 'generate' }))
+  // Two keys + an all-generate panel (both providers role 'generator') → both
+  // models generate; the union surfaces findings only one caught. The mode is
+  // now emergent from the ≥2-generator panel (Plan P).
+  await seedAll(page, seedSettings({
+    anthropicKey: 'sk-ant-test-key',
+    aiPanel: {
+      participants: [
+        { provider: 'deepseek', model: 'deepseek-v4-flash', role: 'generator' },
+        { provider: 'anthropic', model: 'claude-sonnet-4-6', role: 'generator' },
+      ],
+    },
+  }))
 
   await page.goto(APP_REVIEW_PATH)
   await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })

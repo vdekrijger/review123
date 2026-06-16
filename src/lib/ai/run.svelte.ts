@@ -9,7 +9,7 @@
  * stub any combination without module-level mocking.
  */
 
-import { activeLlmConfig, activeProviderHasKey, crossModelVerifyEffective, verifierProviderConfigs, resolveEnsemble, fusionGenerateEffective, fusionParticipants, type FusionParticipant } from '../llm/config'
+import { activeLlmConfig, activeProviderHasKey, crossModelVerifyEffective, verifierProviderConfigs, resolveEnsemble, fusionGenerateEffective, fusionParticipants, fusionGenerators, type FusionParticipant } from '../llm/config'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import {
@@ -471,7 +471,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
     const generatorName = activeLlmConfig().provider.displayName
     try {
-      const outcome = await crossVerify(verifiable, generatorName, verifiers, realVerify)
+      // Plan P: verifiers judge through diverse lenses in EVERY config (folds the
+      // lenses-in-verify followup) — decorrelating verifier errors here too, not
+      // just in the multi-generator fusion path. PROMPT_VERSION bumped for this.
+      const lenses = assignLenses(verifiers.length)
+      const outcome = await crossVerify(verifiable, generatorName, verifiers, realVerify, lenses)
       return {
         byId: outcome.byId,
         usage: outcome.usage,
@@ -562,12 +566,15 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   /**
-   * Build the per-model breakdown for a fusion run (Plan O): one GENERATOR row
-   * per participant (its generation usage + surfaced + uniqueCatch), each also
-   * carrying its assigned verify lens (every participant verifies in fusion).
+   * Build the per-model breakdown for a fusion run (Plan P): one row per
+   * participant. The first `generatorCount` rows are GENERATORS (their generation
+   * usage + surfaced + uniqueCatch); the rest are VERIFIERS (verify usage only).
+   * Every participant verifies findings it didn't raise, so each carries its
+   * assigned verify lens.
    */
   function buildFusionModels(
     participants: FusionParticipant[],
+    generatorCount: number,
     genUsageByModel: Map<string, LlmUsage>,
     fusionPerModelUsage: ParticipantUsage[],
     generatorImpact: import('./crossVerify').GeneratorImpact[],
@@ -577,15 +584,19 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const impactByGen = new Map(generatorImpact.map((g) => [g.generator, g]))
     return participants.map((p, i) => {
       const key = `${p.cfg.providerId}:${p.cfg.model.id}`
-      const usage = addUsage(genUsageByModel.get(key), verifyUsage.get(key))
+      const isGenerator = i < generatorCount
+      const usage = isGenerator
+        ? addUsage(genUsageByModel.get(key), verifyUsage.get(key))
+        : verifyUsage.get(key)
       const imp = impactByGen.get(p.generator)
       return {
         providerId: p.cfg.providerId,
         modelId: p.cfg.model.id,
-        role: 'generator' as const,
+        role: (isGenerator ? 'generator' : 'verifier') as 'generator' | 'verifier',
         ...(usage ? { usage } : {}),
-        surfaced: imp?.surfaced ?? 0,
-        uniqueCatch: imp?.uniqueCatch ?? 0,
+        ...(isGenerator
+          ? { surfaced: imp?.surfaced ?? 0, uniqueCatch: imp?.uniqueCatch ?? 0 }
+          : {}),
         ...(lenses[i] ? { lens: lenses[i] } : {}),
       }
     })
@@ -606,18 +617,21 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     onUpdate?: () => void,
   ): Promise<{ result: SkillReviewResult; usage: LlmUsage | undefined; models: VerdictModelBreakdown[] } | null> {
     try {
+      // Plan P: generators GENERATE; ALL participants (generators + verifiers)
+      // verify findings they didn't raise. Multi-gen requires ≥2 generators.
       const participants = fusionParticipants()
-      if (participants.length < 2) return null
+      const generators = fusionGenerators()
+      if (generators.length < 2) return null
       const note = (line: string): void => {
         const entry = skillReviewsState[idx]
         entry.state = { ...entry.state, activity: [...(entry.state.activity ?? []), line] }
         onUpdate?.()
       }
-      note(`Generating with ${participants.length} models (fusion)…`)
+      note(`Generating with ${generators.length} models (fusion)…`)
 
-      // 1. Each participant generates independently (parallel, own provider cfg).
+      // 1. Each GENERATOR generates independently (parallel, own provider cfg).
       const { perGenerator, usage: genUsage, usageByModel: genUsageByModel } = await generateMultiGen(
-        participants,
+        generators,
         async (cfg) => {
           const { result, usage } = await llmJsonWithRepairFor<SkillReviewResult>(
             cfg,
@@ -659,6 +673,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       const totalUsage = addUsage(genUsage, outcome.usage)
       const models = buildFusionModels(
         participants,
+        generators.length,
         genUsageByModel,
         outcome.perModelUsage,
         outcome.generatorImpact,

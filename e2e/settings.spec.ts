@@ -738,3 +738,60 @@ test('scrollspy: Appearance is active at the top, the last section at the bottom
   await expect(appearanceLink).toHaveAttribute('aria-current', 'true', { timeout: 5_000 })
   await expect(providersLink).not.toHaveAttribute('aria-current', 'true')
 })
+
+// ---------------------------------------------------------------------------
+// Plan P — unified model panel: ONE section, per-row role toggles, presets,
+// and NO separate verify/generate radio.
+// ---------------------------------------------------------------------------
+test('model panel: ONE section with role toggles + presets, no verify/generate radio', async ({
+  page,
+}) => {
+  await blockExternal(page)
+
+  // Seed two Anthropic models on one key so the panel has 2 participants.
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({
+        aiProvider: 'anthropic',
+        anthropicKey: 'sk-ant-test-key',
+        aiPanel: {
+          participants: [
+            { provider: 'anthropic', model: 'claude-opus-4-8', role: 'generator' },
+            { provider: 'anthropic', model: 'claude-haiku-4-5', role: 'verifier' },
+          ],
+        },
+      }),
+    )
+  })
+
+  await page.goto('/settings')
+  await expect(page.getByRole('heading', { name: /^settings$/i })).toBeVisible({ timeout: 5_000 })
+
+  // ONE unified panel section.
+  const panel = page.getByTestId('model-panel')
+  await expect(panel).toBeVisible()
+  await expect(panel.getByText(/^Model panel$/)).toBeVisible()
+
+  // No old separate verify/generate "How models combine" radio.
+  await expect(page.getByText(/How models combine/i)).toHaveCount(0)
+  await expect(page.getByText(/Ensemble \/ verification panel/i)).toHaveCount(0)
+
+  // Per-row role toggles present + the two presets.
+  await expect(panel.getByRole('button', { name: /One generator/i })).toBeVisible()
+  await expect(panel.getByRole('button', { name: /All generate/i })).toBeVisible()
+
+  // "All generate" flips both rows to generator.
+  await panel.getByRole('button', { name: /All generate/i }).click()
+  const roles = await page.evaluate(
+    () => (JSON.parse(localStorage.getItem('review123:settings') ?? '{}').aiPanel?.participants ?? []).map((p: { role: string }) => p.role),
+  )
+  expect(roles).toEqual(['generator', 'generator'])
+
+  // "One generator" flips back to a single generator.
+  await panel.getByRole('button', { name: /One generator/i }).click()
+  const roles2 = await page.evaluate(
+    () => (JSON.parse(localStorage.getItem('review123:settings') ?? '{}').aiPanel?.participants ?? []).map((p: { role: string }) => p.role),
+  )
+  expect(roles2).toEqual(['generator', 'verifier'])
+})
