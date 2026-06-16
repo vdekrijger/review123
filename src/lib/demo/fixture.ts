@@ -20,6 +20,7 @@ import type {
   TestInsight,
   SkillReviewResult,
   StoryOrderResult,
+  GraphResult,
 } from '../ai/schemas'
 
 /** Stable local-storage key for the demo's draft / viewed / decision stores. */
@@ -657,3 +658,109 @@ export const demoTotalUsage: LlmUsage = usage(
   35_600 + 26_100 + 18_900 + 17_400,
   5_100 + 3_800 + 2_100 + 1_600,
 )
+
+// ---------------------------------------------------------------------------
+// Flow-of-execution diagram (Plan L) — the demo's sample diagram
+// ---------------------------------------------------------------------------
+
+/**
+ * Pre-generated flow-of-execution diagram for the demo PR — the flowchart the
+ * Understand step (and ContextRail) shows in normal mode. It traces the
+ * debounce/abort EXECUTION PATH across the demo's six files, top to bottom:
+ *
+ *   entry  SearchBox onChange          (src/search/SearchBox.tsx, unchanged)
+ *   call   useSearch(query) effect     (src/search/useSearch.ts, changed)
+ *   branch query === ''?               (src/search/useSearch.ts)
+ *   effect setTimeout(DEBOUNCE_MS)     (src/search/useSearch.ts, added)
+ *   call   controller.abort() prev     (src/search/useSearch.ts, added)
+ *   call   fetchResults(query, signal) (src/search/api.ts, changed)
+ *   return setResults(rows)            (src/search/useSearch.ts)
+ *
+ * It uses the real FlowStepKind (entry|call|branch|effect|return) and FlowChange
+ * (added|changed|unchanged|removed) enums. `kind: 'flow'` with EMPTY before/after
+ * graphs is valid — the panel prefers `flow` when present. Conceptually valid
+ * against validateFlow / validateGraphResult: every transition's from/to
+ * references an existing step id, so flowToMermaid wires cleanly.
+ */
+export const demoGraph: GraphResult = {
+  kind: 'flow',
+  before: { nodes: [], edges: [] },
+  after: { nodes: [], edges: [] },
+  flow: {
+    steps: [
+      {
+        id: 'onChange',
+        label: 'SearchBox onChange',
+        file: 'src/search/SearchBox.tsx',
+        symbol: 'SearchBox',
+        kind: 'entry',
+        change: 'unchanged',
+      },
+      {
+        id: 'useSearch',
+        label: 'useSearch(query) effect',
+        file: 'src/search/useSearch.ts',
+        symbol: 'useSearch',
+        kind: 'call',
+        change: 'changed',
+      },
+      {
+        id: 'emptyQuery',
+        label: "query === ''?",
+        file: 'src/search/useSearch.ts',
+        symbol: 'useSearch',
+        kind: 'branch',
+        change: 'changed',
+      },
+      {
+        id: 'clear',
+        label: 'setResults([])',
+        file: 'src/search/useSearch.ts',
+        symbol: 'useSearch',
+        kind: 'return',
+        change: 'unchanged',
+      },
+      {
+        id: 'debounce',
+        label: 'setTimeout(DEBOUNCE_MS)',
+        file: 'src/search/useSearch.ts',
+        symbol: 'useSearch',
+        kind: 'effect',
+        change: 'added',
+      },
+      {
+        id: 'abort',
+        label: 'controller.abort() prev',
+        file: 'src/search/useSearch.ts',
+        symbol: 'useSearch',
+        kind: 'call',
+        change: 'added',
+      },
+      {
+        id: 'fetch',
+        label: 'fetchResults(query, signal)',
+        file: 'src/search/api.ts',
+        symbol: 'fetchResults',
+        kind: 'call',
+        change: 'changed',
+      },
+      {
+        id: 'setResults',
+        label: 'setResults(rows)',
+        file: 'src/search/useSearch.ts',
+        symbol: 'useSearch',
+        kind: 'return',
+        change: 'unchanged',
+      },
+    ],
+    transitions: [
+      { from: 'onChange', to: 'useSearch' },
+      { from: 'useSearch', to: 'emptyQuery' },
+      { from: 'emptyQuery', to: 'clear', condition: 'empty' },
+      { from: 'emptyQuery', to: 'debounce', condition: 'non-empty' },
+      { from: 'debounce', to: 'abort', label: 'after 250ms' },
+      { from: 'abort', to: 'fetch' },
+      { from: 'fetch', to: 'setResults' },
+    ],
+  },
+}

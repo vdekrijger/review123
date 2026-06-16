@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
 import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import Demo from './Demo.svelte'
 import { navigate } from '../lib/router/router.svelte'
+import { saveGithubAuth } from '../lib/settings/settings'
+import { _resetAuthStateForTest } from '../lib/auth/authState.svelte'
 
 // Mock navigate so the banner CTA can be asserted without touching the router.
 vi.mock('../lib/router/router.svelte', () => ({
@@ -28,6 +30,10 @@ describe('Demo route', () => {
 
   beforeEach(() => {
     vi.mocked(navigate).mockClear()
+    // Start every test signed OUT with a clean settings/auth slate so the
+    // standalone cost-panel gating is deterministic (signed-out by default).
+    localStorage.clear()
+    _resetAuthStateForTest()
     // Install a fetch spy. If the demo ever tries to fetch an external host the
     // test fails; we still return a never-resolving promise so nothing throws.
     fetchSpy = vi.fn(() => new Promise(() => {})) as unknown as ReturnType<typeof vi.fn>
@@ -36,7 +42,27 @@ describe('Demo route', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    localStorage.clear()
+    _resetAuthStateForTest()
   })
+
+  /**
+   * Count the "Review cost & model performance" panels currently rendered. The
+   * panel is a <section role="region" aria-label="Review cost and model
+   * performance">; on the verdict step there must be EXACTLY ONE regardless of
+   * auth state (VerdictStep renders its own when signed in; Demo renders the
+   * standalone one when signed out).
+   */
+  function countCostPanels(): number {
+    return screen.queryAllByRole('region', {
+      name: /review cost and model performance/i,
+    }).length
+  }
+
+  async function gotoVerdictStep(): Promise<void> {
+    await fireEvent.click(screen.getByRole('button', { name: /next step/i }))
+    await fireEvent.click(screen.getByRole('button', { name: /next step/i }))
+  }
 
   function externalFetchCalls(): string[] {
     return fetchSpy.mock.calls
@@ -192,6 +218,57 @@ describe('Demo route', () => {
     // Generator impact (surfaced findings + unique catch) reads through (both
     // generators caught one unique finding → match all occurrences).
     expect(screen.getAllByText(/caught 1 the others missed/i).length).toBeGreaterThan(0)
+
+    expect(externalFetchCalls()).toEqual([])
+  })
+
+  it('renders EXACTLY ONE cost panel on the verdict step when SIGNED OUT', async () => {
+    // Default beforeEach state is signed out — the standalone ReviewCostPanel
+    // shows (VerdictStep itself only shows a sign-in prompt, no cost panel).
+    render(Demo)
+    await gotoVerdictStep()
+
+    expect(
+      await screen.findByRole('region', { name: /review cost and model performance/i }),
+    ).toBeInTheDocument()
+    expect(countCostPanels()).toBe(1)
+
+    expect(externalFetchCalls()).toEqual([])
+  })
+
+  it('renders EXACTLY ONE cost panel on the verdict step when SIGNED IN (no duplicate)', async () => {
+    // Sign in BEFORE rendering: VerdictStep now renders its OWN cost panel in
+    // the signed-in form branch, so Demo must NOT also render the standalone one
+    // — exactly one panel, no duplicate (the bug being fixed).
+    saveGithubAuth({ token: 'gho_demo_signedin', method: 'oauth', scopes: ['public_repo'] })
+    _resetAuthStateForTest()
+
+    render(Demo)
+    await gotoVerdictStep()
+
+    expect(
+      await screen.findByRole('region', { name: /review cost and model performance/i }),
+    ).toBeInTheDocument()
+    expect(countCostPanels()).toBe(1)
+
+    expect(externalFetchCalls()).toEqual([])
+  })
+
+  it('renders the flow-of-execution diagram on the Understand step (done, not "enable in settings")', async () => {
+    render(Demo)
+
+    // The diagrams section reaches the rendered/done state: DiagramPanel's
+    // static "Execution flow" heading renders (Plan L flow view) — the flow
+    // diagram's own steps render into an async Mermaid SVG (not asserted here as
+    // jsdom has no real SVG layout).
+    // (Appears on the page section AND in the ContextRail → match all.)
+    expect((await screen.findAllByText(/Execution flow/i)).length).toBeGreaterThan(0)
+
+    // The diagrams panel is NOT the muted "Disabled — enable in AI settings"
+    // state (that copy lives inside .diagrams-panel when status==='disabled').
+    const diagramsPanel = document.querySelector('.diagrams-panel')
+    expect(diagramsPanel).not.toBeNull()
+    expect(diagramsPanel?.querySelector('.ai-panel-disabled')).toBeNull()
 
     expect(externalFetchCalls()).toEqual([])
   })
