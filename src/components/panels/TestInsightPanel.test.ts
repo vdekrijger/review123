@@ -25,6 +25,7 @@ function makeRun(overrides: Partial<AiRun>): AiRun {
     totalUsage: undefined,
     verdictModels: [],
     modelPerformance: [],
+    modelCostBreakdown: [],
     start: async () => {},
     retry: async () => {},
     coach: async () => ({ error: 'no-key' }),

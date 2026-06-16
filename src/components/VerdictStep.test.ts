@@ -1706,57 +1706,90 @@ describe('VerdictStep — consolidated review cost panel', () => {
     setShowTokenCost(false)
   })
 
-  const modelPerformance = [
+  // Reconciling breakdown: the generator row's total (3.0k) covers BOTH the
+  // verdict generation AND a single-pass task (Summary), so the rows now sum to
+  // the aggregate total. Each row carries a per-task drilldown (byTask).
+  const modelCostBreakdown = [
     {
       providerId: 'anthropic',
       modelId: 'claude-opus-4-8',
       role: 'generator' as const,
-      usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 },
+      total: { prompt_tokens: 2000, completion_tokens: 1000, total_tokens: 3000 },
       surfaced: 4,
+      uniqueCatch: 0,
+      byTask: [
+        { task: 'Verdict', usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 } },
+        { task: 'Summary', usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 } },
+      ],
     },
     {
       providerId: 'anthropic',
       modelId: 'claude-haiku-4-5',
       role: 'verifier' as const,
-      usage: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 },
+      total: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 },
       impact: { confirms: 1, refutes: 1, uncertains: 0, decisive: 1 },
+      byTask: [
+        { task: 'Verdict', usage: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 } },
+      ],
     },
   ]
 
-  const totalUsage = { prompt_tokens: 1800, completion_tokens: 700, total_tokens: 2500 }
+  const totalUsage = { prompt_tokens: 2800, completion_tokens: 1200, total_tokens: 4000 }
 
   it('shows the per-model impact readout (NOT gated on showTokenCost)', () => {
     setShowTokenCost(false)
     render(VerdictStep, {
-      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, modelPerformance, totalUsage },
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, modelCostBreakdown, totalUsage },
     })
     expect(screen.getByText('Model performance')).toBeInTheDocument()
     // Generator impact
     expect(screen.getByText('4 surfaced findings')).toBeInTheDocument()
     // Verifier decisive impact
     expect(screen.getByText(/1 decisive refute \(removed a finding\)/)).toBeInTheDocument()
-    // Cost column + aggregate total hidden when showTokenCost off
-    expect(screen.queryByRole('columnheader', { name: /cost/i })).not.toBeInTheDocument()
+    // Cost + aggregate total hidden when showTokenCost off
     expect(screen.queryByText(/This review used/)).not.toBeInTheDocument()
   })
 
-  it('adds the aggregate total + per-model cost column when showTokenCost is on', () => {
+  it('adds the aggregate total + per-model cost when showTokenCost is on', () => {
     setShowTokenCost(true)
     render(VerdictStep, {
-      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, modelPerformance, totalUsage },
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, modelCostBreakdown, totalUsage },
     })
-    // Aggregate headline from totalUsage (2.5k tokens). The label is interpolated
+    // Aggregate headline from totalUsage (4.0k tokens). The label is interpolated
     // into separate text nodes, so match on the labelled element's text content.
     const total = screen.getByLabelText('Total token usage for this review')
-    expect(total.textContent).toMatch(/This review used .*2\.5k tokens.* total/)
-    expect(screen.getByRole('columnheader', { name: /cost/i })).toBeInTheDocument()
-    // claude-opus-4-8 has no pricing in providers.ts → tokens only
-    expect(screen.getByText('1.5k tokens')).toBeInTheDocument()
+    expect(total.textContent).toMatch(/This review used .*4\.0k tokens.* total/)
+    // claude-opus-4-8 has no pricing in providers.ts → tokens only; its TOTAL row
+    // covers verdict + summary = 3.0k (proving single-pass spend is now folded in).
+    expect(screen.getByText('3.0k tokens')).toBeInTheDocument()
+  })
+
+  it('expands a model row to its per-task drilldown', async () => {
+    setShowTokenCost(true)
+    const user = userEvent.setup()
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, modelCostBreakdown, totalUsage },
+    })
+    // The generator row's toggle is collapsed by default — no per-task entries yet.
+    const toggle = screen.getAllByRole('button', { name: /claude-opus-4-8/ })[0]
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('Summary')).not.toBeInTheDocument()
+    await user.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    // Drilldown shows which task spent what, dollar-first (tokens only here — no
+    // price). Scope to the task-name nodes (the word "Verdict" also appears in the
+    // assessment heading; the drilldown entries use the .task-name class).
+    const taskNames = document.querySelectorAll('.task-name')
+    const taskLabels = Array.from(taskNames).map((n) => n.textContent)
+    expect(taskLabels).toContain('Verdict')
+    expect(taskLabels).toContain('Summary')
+    // Each Verdict + Summary slice is 1.5k tokens.
+    expect(screen.getAllByText('1.5k tokens').length).toBeGreaterThanOrEqual(2)
   })
 
   it('renders nothing when no models ran and no usage to show', () => {
     render(VerdictStep, {
-      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, modelPerformance: [], totalUsage: undefined },
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, modelCostBreakdown: [], totalUsage: undefined },
     })
     expect(screen.queryByText('Model performance')).not.toBeInTheDocument()
     expect(screen.queryByText(/This review used/)).not.toBeInTheDocument()
