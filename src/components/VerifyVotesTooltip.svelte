@@ -16,8 +16,13 @@
    *     <div class="skill-verify-tip" aria-hidden>…rows…</div>
    *   </span>
    *
-   * The tooltip shows on hover OR keyboard focus of the chip (CSS :hover /
-   * :focus-within — no JS), capped width + wrapping so it never overflows.
+   * The tooltip shows on hover OR keyboard focus of the chip. It renders in the
+   * browser TOP LAYER via the Popover API (popover="manual" + showPopover/
+   * hidePopover) so it escapes every overflow:hidden / clip ancestor (the old
+   * position:absolute version was cropped by .detail-panel and the ContextRail).
+   * It's positioned with position:fixed from the chip's rect — below by default,
+   * flipping above near the viewport bottom and clamping horizontally near the
+   * left/right edges — capped width + wrapping so it never overflows.
    */
 
   import type { FindingVerification } from '../lib/ai/schemas'
@@ -37,6 +42,81 @@
   }
 
   let { verification, heading = undefined, children }: Props = $props()
+
+  // ---- Top-layer popover positioning (escapes overflow:hidden clip ancestors) -
+  // The tooltip is a `popover="manual"` element: the browser promotes it to the
+  // top layer, so NO ancestor's `overflow:hidden` / `border-radius` / clip can
+  // crop it (the old position:absolute tooltip was clipped by .detail-panel and
+  // the ContextRail). We anchor it to the chip with position:fixed from the
+  // chip's getBoundingClientRect(): below by default, FLIPPED above when it would
+  // overflow the viewport bottom, and CLAMPED horizontally so it never runs off
+  // the left/right edge. Hover OR keyboard focus shows it; mouseleave/blur/Esc
+  // hides it — so it stays keyboard-reachable.
+  let anchorEl = $state<HTMLSpanElement | null>(null)
+  let tipEl = $state<HTMLDivElement | null>(null)
+  const GAP = 6 // px between chip and tooltip
+  const MARGIN = 8 // px min distance from any viewport edge
+
+  // Does this build support the Popover API? (jsdom / very old browsers don't.)
+  const supportsPopover = (): boolean =>
+    typeof HTMLElement !== 'undefined' &&
+    typeof (HTMLElement.prototype as { showPopover?: unknown }).showPopover === 'function'
+
+  function position(): void {
+    const chip = anchorEl
+    const tip = tipEl
+    if (!chip || !tip) return
+    const r = chip.getBoundingClientRect()
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    // Measure the tooltip's natural size (it's already in the top layer when
+    // visible). max-width caps width at min(22rem, 90vw) via CSS.
+    const tw = tip.offsetWidth
+    const th = tip.offsetHeight
+
+    // Vertical: below by default, flip above if it would overflow the bottom and
+    // there's more room above.
+    const spaceBelow = vh - r.bottom
+    const spaceAbove = r.top
+    const placeAbove = spaceBelow < th + GAP + MARGIN && spaceAbove > spaceBelow
+    const top = placeAbove
+      ? Math.max(MARGIN, r.top - GAP - th)
+      : Math.min(vh - th - MARGIN, r.bottom + GAP)
+
+    // Horizontal: left-align to the chip, then clamp into the viewport.
+    let left = r.left
+    left = Math.min(left, vw - tw - MARGIN)
+    left = Math.max(MARGIN, left)
+
+    tip.style.left = `${Math.round(left)}px`
+    tip.style.top = `${Math.round(top)}px`
+  }
+
+  function show(): void {
+    const tip = tipEl
+    if (!tip) return
+    if (supportsPopover()) {
+      try {
+        ;(tip as unknown as { showPopover: () => void }).showPopover()
+      } catch {
+        // Already-open popovers throw — ignore.
+      }
+    }
+    // Position after it's in the top layer so offsetWidth/Height are real.
+    position()
+  }
+
+  function hide(): void {
+    const tip = tipEl
+    if (!tip) return
+    if (supportsPopover()) {
+      try {
+        ;(tip as unknown as { hidePopover: () => void }).hidePopover()
+      } catch {
+        // Not-open popovers throw — ignore.
+      }
+    }
+  }
 
   // Verdict indicator glyphs (color comes from the verdict-* class).
   const VERDICT_GLYPH = { confirm: '✓', refute: '✗', uncertain: '?' } as const
@@ -62,13 +142,35 @@
   )
 </script>
 
-<span class="skill-verify-tip-anchor">
+<!-- The anchor is a passive hover/focus REGION wrapping the caller's focusable
+     chip (the chip carries role+tabindex and is keyboard-reachable); these
+     handlers only show/hide the descriptive tooltip, so the static-element rule
+     doesn't apply. -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<span
+  class="skill-verify-tip-anchor"
+  bind:this={anchorEl}
+  onmouseenter={show}
+  onmouseleave={hide}
+  onfocusin={show}
+  onfocusout={hide}
+  onkeydown={(e) => { if (e.key === 'Escape') hide() }}
+>
   {@render children()}
-  <!-- Styled hover/focus tooltip: one scannable row per polled model. Hidden
-       until the sibling chip is hovered or focused (CSS :hover/:focus-within),
-       and removed from the a11y tree (aria-hidden) since the chip's aria-label
-       already summarizes it for screen readers. -->
-  <div class="skill-verify-tip" role="presentation" aria-hidden="true">
+  <!-- Styled hover/focus tooltip: one scannable row per polled model. Rendered
+       in the browser TOP LAYER via the Popover API (popover="manual") so no
+       ancestor's overflow:hidden / clip can crop it; positioned with
+       position:fixed from the chip's rect (below by default, flipping above /
+       clamping horizontally near viewport edges). Shown on hover OR keyboard
+       focus, hidden on leave/blur/Esc. Removed from the a11y tree (aria-hidden)
+       since the chip's aria-label already summarizes it for screen readers. -->
+  <div
+    class="skill-verify-tip"
+    role="presentation"
+    aria-hidden="true"
+    popover="manual"
+    bind:this={tipEl}
+  >
     <div class="skill-verify-tip-heading">{resolvedHeading}</div>
     <ul class="skill-verify-tip-list">
       {#each rows as row}
@@ -90,18 +192,26 @@
 <style>
   /* ---- Styled verify tooltip (Plan M verify-tooltip) ----
      Replaces the cramped native `title`: a readable, scannable popover with one
-     row per polled model (verdict indicator + model + "raised it" tag + reason). Shown
-     on hover OR keyboard focus of the sibling chip; capped width + wrapping so it
-     never overflows the viewport. CSS-only (:hover / :focus-within) — no JS. */
+     row per polled model (verdict indicator + model + "raised it" tag + reason).
+     Rendered in the browser TOP LAYER via the Popover API so it escapes every
+     overflow:hidden / clip ancestor (the old absolute version was cropped by
+     .detail-panel and the ContextRail). Shown on hover OR keyboard focus of the
+     sibling chip (JS toggles showPopover/hidePopover); position:fixed coords are
+     set in JS (flip above / clamp horizontally near the viewport edges). Capped
+     width + wrapping so it never overflows. */
   .skill-verify-tip-anchor {
     position: relative;
     display: inline-flex;
   }
 
+  /* Base box for the popover. As a popover it's display:none until open; we
+     reset margin/inset so our JS-set fixed left/top fully control placement. */
   .skill-verify-tip {
-    position: absolute;
-    top: calc(100% + 0.35rem);
+    position: fixed;
+    margin: 0;
+    inset: auto;
     left: 0;
+    top: 0;
     z-index: 20;
     width: max-content;
     max-width: min(22rem, 90vw);
@@ -113,25 +223,19 @@
     font-size: 0.72rem;
     line-height: 1.35;
     color: var(--text, inherit);
-    /* Hidden until the chip is hovered/focused; pointer-events off when hidden so
-       it never blocks clicks on what's behind it. */
-    opacity: 0;
-    visibility: hidden;
+    /* Never blocks clicks on what's behind it. */
     pointer-events: none;
-    transition: opacity 0.1s ease-out;
+    overflow: visible;
   }
 
-  /* Right-align the tooltip when the chip sits near the right edge of the row so
-     it doesn't push past the card / viewport. */
-  .skill-verify-tip-anchor:last-of-type .skill-verify-tip {
-    left: auto;
-    right: 0;
+  /* When the Popover API is unsupported (jsdom / very old browsers) the element
+     keeps `display:none` from the popover UA style only when supported; here we
+     guarantee it stays hidden unless open, then reveal it once open. */
+  .skill-verify-tip:not(:popover-open) {
+    display: none;
   }
-
-  .skill-verify-tip-anchor:hover .skill-verify-tip,
-  .skill-verify-tip-anchor:focus-within .skill-verify-tip {
-    opacity: 1;
-    visibility: visible;
+  .skill-verify-tip:popover-open {
+    display: block;
   }
 
   .skill-verify-tip-heading {

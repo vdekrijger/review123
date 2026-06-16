@@ -55,6 +55,16 @@ test('landing CTA opens the demo with banner, summary, verdict, finding — no e
   await page.getByText('Why this verdict', { exact: true }).click()
   await expect(page.getByText(/Adds a 250ms debounce in useSearch/i)).toBeVisible()
 
+  // Diagrams: the demo ships a pre-generated flow-of-execution diagram (Plan L),
+  // so the Understand step shows the real flowchart — NOT the muted "enable in
+  // AI settings" disabled state. Expand the diagrams panel (its summary title is
+  // "Execution flow") and confirm the flow view renders with a Mermaid SVG.
+  const diagramsPanel = page.locator('.diagrams-panel')
+  await diagramsPanel.locator('summary.detail-summary').click()
+  await expect(diagramsPanel.locator('.changemap-title', { hasText: 'Execution flow' })).toBeVisible()
+  await expect(diagramsPanel.locator('.diagram-container svg').first()).toBeVisible()
+  await expect(diagramsPanel.locator('.ai-panel-disabled')).toHaveCount(0)
+
   // Inspect step: MULTIPLE reviewer personas render, and the cross-model
   // verification chips (confirmed + demoted) + the multi-generator "raised by"
   // provenance show — the demo's differentiator showcase.
@@ -102,4 +112,51 @@ test('landing CTA opens the demo with banner, summary, verdict, finding — no e
   await expect(page).toHaveURL(/\/settings\/providers$/)
 
   expect(externalHits, `unexpected external requests: ${externalHits.join(', ')}`).toEqual([])
+})
+
+test('cross-model verify tooltip escapes clipping ancestors (top layer, fully on-screen) on hover AND focus', async ({
+  page,
+}) => {
+  await blockAnalytics(page)
+  await page.goto('/demo')
+  await expect(page).toHaveURL(/\/demo$/)
+
+  // Inspect step hosts the DEMOTED "flagged by 1/5 · lower confidence" finding
+  // chip (Performance reviewer) whose tooltip previously got clipped by the
+  // panel's overflow:hidden. It now renders in the browser top layer (Popover
+  // API) so it can't be cropped.
+  await page.getByRole('button', { name: /next step/i }).click()
+  const demotedChip = page.getByText(/flagged by 1\/5 · lower confidence/i).first()
+  await expect(demotedChip).toBeVisible()
+
+  // The tooltip is a popover sibling inside the same .skill-verify-tip-anchor.
+  const anchor = page.locator('.skill-verify-tip-anchor', { has: demotedChip })
+  const tip = anchor.locator('.skill-verify-tip')
+
+  async function assertFullyOnScreenAndTopLayer() {
+    await expect(tip).toBeVisible()
+    // It must be promoted to the top layer (popover is open) — not a plain
+    // in-flow absolutely-positioned element that an ancestor can clip.
+    expect(await tip.evaluate((el) => (el as HTMLElement).matches(':popover-open'))).toBe(true)
+    // Fully within the viewport on every edge (no left/bottom/right/top clip).
+    const box = await tip.boundingBox()
+    const vp = page.viewportSize()!
+    expect(box).not.toBeNull()
+    expect(box!.x).toBeGreaterThanOrEqual(0)
+    expect(box!.y).toBeGreaterThanOrEqual(0)
+    expect(box!.x + box!.width).toBeLessThanOrEqual(vp.width)
+    expect(box!.y + box!.height).toBeLessThanOrEqual(vp.height)
+  }
+
+  // 1) HOVER shows it, fully visible.
+  await demotedChip.hover()
+  await assertFullyOnScreenAndTopLayer()
+
+  // Move away → it hides again.
+  await page.mouse.move(0, 0)
+  await expect(tip).toBeHidden()
+
+  // 2) Keyboard FOCUS shows it too (keyboard-reachable), fully visible.
+  await demotedChip.focus()
+  await assertFullyOnScreenAndTopLayer()
 })

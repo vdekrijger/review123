@@ -26,6 +26,7 @@
   import { parseReadingOrder } from '../lib/ai/tasks'
   import { jumpToFileDiff } from '../lib/diff/jumpToFile'
   import { createDemoRun } from '../lib/demo/demoRun'
+  import { authState } from '../lib/auth/authState.svelte'
   import {
     demoMeta,
     demoFiles,
@@ -77,6 +78,13 @@
   let bannerDismissed = $state(false)
 
   const readingOrder = $derived(parseReadingOrder(run.summary.value as string))
+
+  // Mirror VerdictStep's signed-in derivation (the demo PR is GitHub, so the
+  // simple github-auth check is correct). VerdictStep renders its OWN cost panel
+  // only inside the signed-IN form branch; signed-OUT it shows just a sign-in
+  // prompt. So render the standalone ReviewCostPanel ONLY when signed out — that
+  // way exactly ONE cost panel shows on the verdict step in BOTH auth states.
+  const isSignedIn = $derived(authState.auth !== null)
 
   // Jump to a file when a hotspot chip is clicked — reuse the product's shared
   // file-jump helper so the demo behaves exactly like a live review.
@@ -165,16 +173,18 @@
     />
   {:else}
     <!--
-      The demo visitor is signed out, so VerdictStep renders its sign-in prompt
-      (and its OWN copy of the cost panel never shows). Render ReviewCostPanel
-      here too — with the SAME props Review.svelte feeds VerdictStep — so the
-      Step-3 "Review cost & model performance" panel showcases the per-model
-      cost + cross-verify impact regardless of auth. Offline: display-only.
+      Cost & model-performance panel. VerdictStep renders its OWN copy of this
+      panel inside its signed-IN form branch; signed-OUT it shows only a sign-in
+      prompt. So render the standalone panel ONLY when signed out — that keeps
+      EXACTLY ONE "Review cost & model performance" panel on the verdict step in
+      BOTH auth states (no duplicate when signed in). Offline: display-only.
     -->
-    <ReviewCostPanel
-      modelCostBreakdown={run.modelCostBreakdown}
-      totalUsage={run.totalUsage}
-    />
+    {#if !isSignedIn}
+      <ReviewCostPanel
+        modelCostBreakdown={run.modelCostBreakdown}
+        totalUsage={run.totalUsage}
+      />
+    {/if}
     <VerdictStep
       prRef={{ owner: 'acme', repo: 'web-app', number: 42 }}
       commitId={demoMeta.headSha}
