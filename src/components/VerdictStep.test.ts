@@ -1695,7 +1695,7 @@ describe('VerdictStep — Copy as LLM prompt', () => {
   })
 })
 
-describe('VerdictStep — per-model cost + impact (Plan N)', () => {
+describe('VerdictStep — consolidated review cost panel', () => {
   beforeEach(() => {
     signOut()
     signIn()
@@ -1706,7 +1706,7 @@ describe('VerdictStep — per-model cost + impact (Plan N)', () => {
     setShowTokenCost(false)
   })
 
-  const verdictModels = [
+  const modelPerformance = [
     {
       providerId: 'anthropic',
       modelId: 'claude-opus-4-8',
@@ -1723,34 +1723,42 @@ describe('VerdictStep — per-model cost + impact (Plan N)', () => {
     },
   ]
 
-  it('shows the impact readout whenever cross-verify ran (NOT gated on showTokenCost)', () => {
+  const totalUsage = { prompt_tokens: 1800, completion_tokens: 700, total_tokens: 2500 }
+
+  it('shows the per-model impact readout (NOT gated on showTokenCost)', () => {
     setShowTokenCost(false)
     render(VerdictStep, {
-      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, verdictModels },
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, modelPerformance, totalUsage },
     })
-    expect(screen.getByText('Models used')).toBeInTheDocument()
+    expect(screen.getByText('Model performance')).toBeInTheDocument()
     // Generator impact
     expect(screen.getByText('4 surfaced findings')).toBeInTheDocument()
     // Verifier decisive impact
     expect(screen.getByText(/1 decisive refute \(removed a finding\)/)).toBeInTheDocument()
-    // Cost column hidden when showTokenCost off
+    // Cost column + aggregate total hidden when showTokenCost off
     expect(screen.queryByRole('columnheader', { name: /cost/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/This review used/)).not.toBeInTheDocument()
   })
 
-  it('adds the per-model cost column when showTokenCost is on', () => {
+  it('adds the aggregate total + per-model cost column when showTokenCost is on', () => {
     setShowTokenCost(true)
     render(VerdictStep, {
-      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, verdictModels },
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, modelPerformance, totalUsage },
     })
+    // Aggregate headline from totalUsage (2.5k tokens). The label is interpolated
+    // into separate text nodes, so match on the labelled element's text content.
+    const total = screen.getByLabelText('Total token usage for this review')
+    expect(total.textContent).toMatch(/This review used .*2\.5k tokens.* total/)
     expect(screen.getByRole('columnheader', { name: /cost/i })).toBeInTheDocument()
     // claude-opus-4-8 has no pricing in providers.ts → tokens only
     expect(screen.getByText('1.5k tokens')).toBeInTheDocument()
   })
 
-  it('renders nothing when no models ran (empty breakdown)', () => {
+  it('renders nothing when no models ran and no usage to show', () => {
     render(VerdictStep, {
-      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, verdictModels: [] },
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, modelPerformance: [], totalUsage: undefined },
     })
-    expect(screen.queryByText('Models used')).not.toBeInTheDocument()
+    expect(screen.queryByText('Model performance')).not.toBeInTheDocument()
+    expect(screen.queryByText(/This review used/)).not.toBeInTheDocument()
   })
 })

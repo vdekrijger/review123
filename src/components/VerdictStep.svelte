@@ -36,7 +36,7 @@
   import type { LlmUsage } from '../lib/llm/llm'
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import { formatUsageLabel } from '../lib/ai/tokenCost'
-  import ModelBreakdownTable from './ModelBreakdownTable.svelte'
+  import ReviewCostPanel from './ReviewCostPanel.svelte'
   import type { VerdictModelBreakdown } from '../lib/ai/run.svelte'
   import { buildReviewPrompt } from '../lib/ai/reviewPrompt'
   import type { PrFile } from '../lib/github/types'
@@ -75,11 +75,14 @@
      */
     coachFn?: (drafts: Draft[], prComments?: string[], verdict?: Verdict) => Promise<(CoachResult & { usage?: LlmUsage; notCoached?: { indices: number[]; message: string } }) | { error: string }>
     /**
-     * Per-model cost + impact breakdown for the verdict's cross-verify pass
-     * (Plan N). Empty unless cross-verify actually ran. The cost column is gated
+     * Consolidated per-model cost + performance for the WHOLE review (verdict
+     * generator/verifiers + every reviewer's models, aggregated). Drives the
+     * Step-3 "Review cost & model performance" panel. The cost column is gated
      * on showTokenCost; the impact readout shows whenever this is non-empty.
      */
-    verdictModels?: VerdictModelBreakdown[]
+    modelPerformance?: VerdictModelBreakdown[]
+    /** Sum of every task's captured usage for this review — the aggregate total. */
+    totalUsage?: LlmUsage
     /**
      * Existing PR review comments — passed through to coachFn for duplicate detection.
      * Capped at 30, truncated at 200ch inside coachPrompt.
@@ -114,7 +117,8 @@
     copyFn = (text: string) => navigator.clipboard.writeText(text),
     submitFn = submitReview,
     coachFn,
-    verdictModels = [],
+    modelPerformance = [],
+    totalUsage,
     prComments = [],
     provider,
     authorLogin = null,
@@ -183,9 +187,6 @@
   let coachNotCoached = $state<{ indices: number[]; message: string } | null>(null)
   // Token usage from the last coach run (display-only, behind showTokenCost).
   let coachUsage = $state<LlmUsage | undefined>(undefined)
-  // Per-model cost column is gated on showTokenCost; the impact readout always
-  // shows when cross-verify ran (verdictModels non-empty). Plan N.
-  const showModelCost = $derived(settingsState.current.showTokenCost)
   const coachUsageLabel = $derived(
     settingsState.current.showTokenCost ? formatUsageLabel(coachUsage) : null,
   )
@@ -570,11 +571,12 @@
       </div>
     {/if}
 
-    <!-- Plan N: per-model cost + impact for the cross-verify ensemble. Shows
-         whenever cross-verify ran this review; the $/token column is gated on
-         showTokenCost, the impact readout is always shown. Shared table (also
-         used on skill-reviewer cards). -->
-    <ModelBreakdownTable models={verdictModels} showCost={showModelCost} title="Models used" />
+    <!-- Consolidated "Review cost & model performance": the WHOLE review's
+         aggregate token total + per-model breakdown (verdict generator/verifiers
+         AND every reviewer's models). The $/token parts are gated on
+         showTokenCost; the impact readout always shows. Single place on Step 3
+         for "what did this review cost / which models earned their keep". -->
+    <ReviewCostPanel {modelPerformance} {totalUsage} />
 
     <!-- Verdict radio group -->
     <fieldset class="verdict-group">

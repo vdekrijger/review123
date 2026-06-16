@@ -4,8 +4,9 @@
  *
  * A SINGLE Anthropic key with a TWO-MODEL ensemble (claude-opus-4-8 generator +
  * claude-haiku-4-5 verifier). This is the Plan N unlock: cross-verify runs with
- * one provider key. In step 3 (Verdict) the "Models used" table shows a per-model
- * IMPACT readout (always) and, with showTokenCost on, a per-model COST column.
+ * one provider key. In step 3 (Verdict) the consolidated "Review cost & model
+ * performance" panel shows a per-model IMPACT readout (always) and, with
+ * showTokenCost on, an aggregate token total + a per-model COST column.
  *
  * All Anthropic traffic hits api.anthropic.com; the route handler branches on the
  * request body to serve generation (summary/verdict) vs adversarial verification.
@@ -150,10 +151,10 @@ test('single-key 2-model ensemble: step-3 shows per-model cost + impact readout'
   await page.getByRole('button', { name: 'Next step' }).click()
   await page.getByRole('button', { name: 'Next step' }).click()
 
-  // The "Models used" table appears (cross-verify ran).
+  // The consolidated per-model breakdown appears (cross-verify ran).
   const breakdown = page.locator('.model-breakdown')
   await expect(breakdown).toBeVisible({ timeout: 15_000 })
-  await expect(breakdown.getByText('Models used')).toBeVisible()
+  await expect(breakdown.getByText('Model performance')).toBeVisible()
 
   // Generator row: impact = surfaced findings count. With a SINGLE verifier,
   // a tie surfaces, so both evidence rows surface → "2 surfaced findings".

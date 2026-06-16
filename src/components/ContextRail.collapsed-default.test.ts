@@ -60,6 +60,7 @@ function makeRun(attn?: AttentionResult): AiRun {
     skillReviews: [],
     totalUsage: undefined,
     verdictModels: [],
+    modelPerformance: [],
     start: async () => {},
     retry: async () => {},
     coach: async () => ({ error: 'no-key' }),
