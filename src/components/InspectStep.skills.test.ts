@@ -274,6 +274,9 @@ describe('InspectStep — skill suggestion annotations', () => {
         skillReviews: [review],
       },
     })
+    // A null-line (file-level) finding now lives ONLY in the reviewer-chip
+    // popover (no separate "bottom" card). Open it, then Add as draft.
+    await userEvent.click(screen.getByRole('button', { name: /Show 1 finding from Security Reviewer/i }))
     const addBtn = screen.getByRole('button', { name: /add as draft/i })
     await userEvent.click(addBtn)
     expect(draftStore.upsert).toHaveBeenCalledOnce()
