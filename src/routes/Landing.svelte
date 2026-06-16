@@ -534,7 +534,9 @@
   .landing {
     max-width: 40rem;
     margin: 12vh auto 0;
-    padding: 0 1.5rem;
+    /* Bottom padding so a long recent-reviews list doesn't butt up against the
+       global build footer (which lives outside .landing, in App.svelte). */
+    padding: 0 1.5rem 3rem;
     text-align: center;
   }
 
