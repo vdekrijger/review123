@@ -705,13 +705,20 @@
     navigate('/settings')
   }
 
-  // Running state: true when any skill entry is in loading status
-  const isRunning = $derived(skillReviews.some(e => e.state.status === 'loading'))
+  // Run "in progress": a batch is still working if ANY reviewer is actively
+  // running (loading) OR still waiting for a concurrency slot (queued). Both
+  // keep the "Run my reviewers" button disabled/busy.
+  const isRunning = $derived(skillReviews.some(e => e.state.status === 'loading' || e.state.status === 'queued'))
 
   // How many reviewers are in flight — drives the single global "Running… (N)"
   // indicator and the aria-live announcement (announces the count, not each
-  // per-reviewer activity line, so screen readers aren't spammed).
+  // per-reviewer activity line, so screen readers aren't spammed). Only the
+  // loading reviewers count as "running"; queued ones are counted separately.
   const runningCount = $derived(skillReviews.filter(e => e.state.status === 'loading').length)
+
+  // How many reviewers are waiting for a concurrency slot (queued) — drives the
+  // muted "Waiting (N)" region and its own aria-live count.
+  const queuedCount = $derived(skillReviews.filter(e => e.state.status === 'queued').length)
 
   // Latest activity line for a running reviewer (deep mode). We show ONLY the
   // most recent line per row — truncated with ellipsis via CSS — rather than the
@@ -853,7 +860,8 @@
 
 {#if skillReviews.length > 0}
   {@const runningEntries = skillReviews.filter(e => e.state.status === 'loading')}
-  {@const settledEntries = skillReviews.filter(e => e.state.status !== 'loading')}
+  {@const queuedEntries = skillReviews.filter(e => e.state.status === 'queued')}
+  {@const settledEntries = skillReviews.filter(e => e.state.status === 'done' || e.state.status === 'error')}
 
   <!-- RUNNING region: a BOUNDED, ALIGNED list of compact one-line rows. Each row
        is a small spinner + the reviewer NAME + (deep mode) ONLY its latest
@@ -890,6 +898,27 @@
                 onclick={() => toggleExpandRun(entry.skillId)}
               >{expanded ? '⌃' : '⌄'}</button>
             {/if}
+          </li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
+
+  <!-- WAITING region: reviewers queued behind the concurrency cap. These have
+       NOT started their LLM call yet, so they get a muted, spinner-free row —
+       visually distinct from "Running…". As each running reviewer finishes a
+       slot frees and one of these flips to the Running region (live). A single
+       "Waiting (N)" head announces the count, not each transition. -->
+  {#if queuedEntries.length > 0}
+    <div class="skill-waiting-region" aria-live="polite" aria-label="Reviewers waiting">
+      <p class="skill-waiting-head">
+        ⏳ Waiting ({queuedCount})
+      </p>
+      <ul class="skill-waiting-list">
+        {#each queuedEntries as entry (entry.skillId)}
+          <li class="skill-waiting-row">
+            <span class="skill-waiting-name">{entry.name}</span>
+            <span class="skill-status-chip chip-queued" aria-label="Waiting for a slot">queued</span>
           </li>
         {/each}
       </ul>
@@ -960,18 +989,23 @@
               {/if}
             {/if}
           {:else if entry.state.status === 'error'}
+            {@const errText = entry.state.error?.trim() ? entry.state.error.trim() : ''}
             {#if onRetrySkill}
               <button
                 type="button"
                 class="skill-status-chip chip-error"
-                aria-label="Retry {entry.name}"
-                title="Click to retry"
+                aria-label={errText ? `${entry.name} failed: ${errText} — click to retry` : `Retry ${entry.name}`}
+                title={errText ? `${errText} — click to retry` : 'Click to retry'}
                 onclick={() => retryReviewer(entry.skillId)}
               >
                 ↻ error
               </button>
             {:else}
-              <span class="skill-status-chip chip-error" aria-label="Error">
+              <span
+                class="skill-status-chip chip-error"
+                aria-label={errText ? `${entry.name} failed: ${errText}` : 'Error'}
+                title={errText || undefined}
+              >
                 ↻ error
               </span>
             {/if}
@@ -1563,6 +1597,41 @@
      many reviewers run concurrently — NOT N stacked full activity logs. */
   .skill-running-region {
     padding: 0.4rem 0;
+  }
+
+  /* WAITING region — queued reviewers that have NOT started their LLM call.
+     Muted and spinner-free, visually distinct from the active "Running…" rows. */
+  .skill-waiting-region {
+    padding: 0.2rem 0 0.4rem;
+  }
+
+  .skill-waiting-head {
+    margin: 0 0 0.3rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    opacity: 0.85;
+  }
+
+  .skill-waiting-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.75rem;
+  }
+
+  .skill-waiting-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.8rem;
+  }
+
+  .skill-waiting-name {
+    color: var(--text-muted);
+    font-weight: 500;
   }
 
   .skill-running-head {

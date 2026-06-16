@@ -50,6 +50,10 @@ function errorEntry(id: string, name: string): SkillReviewEntry {
   return { skillId: id, name, state: { status: 'error', error: 'Rate limited.' } }
 }
 
+function queuedEntry(id: string, name: string): SkillReviewEntry {
+  return { skillId: id, name, state: { status: 'queued' } }
+}
+
 function doneEntry(id: string, name: string, findings: Array<{ path: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string }>): SkillReviewEntry {
   return {
     skillId: id,
@@ -149,6 +153,67 @@ describe('InspectStep — compact reviewer loading layout', () => {
 })
 
 // ---------------------------------------------------------------------------
+// FEATURE A — queued reviewers render in a Waiting region (not settled)
+// ---------------------------------------------------------------------------
+
+describe('InspectStep — queued reviewers (Waiting region)', () => {
+  it('renders queued entries in a "Waiting (N)" region, not the results bar', () => {
+    render(InspectStep, {
+      props: baseProps({
+        skillReviews: [
+          loadingEntry('a', 'Reviewer A'),
+          loadingEntry('b', 'Reviewer B'),
+          queuedEntry('c', 'Reviewer C'),
+          queuedEntry('d', 'Reviewer D'),
+        ],
+      }),
+    })
+    const waiting = screen.getByLabelText('Reviewers waiting')
+    expect(within(waiting).getByText(/Waiting\s*\(2\)/)).toBeInTheDocument()
+    // Queued reviewer names live in the waiting region.
+    expect(within(waiting).getByText('Reviewer C')).toBeInTheDocument()
+    expect(within(waiting).getByText('Reviewer D')).toBeInTheDocument()
+    // The running region shows only the 2 in-flight reviewers.
+    expect(screen.getByText(/Running…\s*\(2\)/)).toBeInTheDocument()
+    // No settled results bar yet (nothing is done/error).
+    expect(screen.queryByLabelText('Reviewer run results')).not.toBeInTheDocument()
+  })
+
+  it('a queued entry shows a spinner-free "queued" chip (it has not started)', () => {
+    const { container } = render(InspectStep, {
+      props: baseProps({
+        skillReviews: [queuedEntry('a', 'Reviewer A')],
+      }),
+    })
+    const waiting = screen.getByLabelText('Reviewers waiting')
+    expect(within(waiting).getByText('queued')).toBeInTheDocument()
+    // No spinner inside the waiting region (queued ≠ running).
+    expect(waiting.querySelector('.spinner, [class*="spinner"]')).toBeNull()
+    expect(container.querySelector('.chip-queued')).not.toBeNull()
+  })
+
+  it('a reviewer moves from Waiting to Running when it flips queued → loading', async () => {
+    const { rerender } = render(InspectStep, {
+      props: baseProps({
+        skillReviews: [loadingEntry('a', 'Reviewer A'), queuedEntry('b', 'Reviewer B')],
+      }),
+    })
+    // Initially B is waiting.
+    expect(within(screen.getByLabelText('Reviewers waiting')).getByText('Reviewer B')).toBeInTheDocument()
+
+    // A slot frees: B flips to loading.
+    await rerender(baseProps({
+      skillReviews: [loadingEntry('a', 'Reviewer A'), loadingEntry('b', 'Reviewer B')],
+    }))
+
+    // No more waiting region; B is now in the running region.
+    expect(screen.queryByLabelText('Reviewers waiting')).not.toBeInTheDocument()
+    expect(within(screen.getByLabelText('Reviewers running')).getByText('Reviewer B')).toBeInTheDocument()
+    expect(screen.getByText(/Running…\s*\(2\)/)).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // PROBLEM 2 — error chip is a Retry button
 // ---------------------------------------------------------------------------
 
@@ -160,9 +225,12 @@ describe('InspectStep — per-reviewer retry', () => {
         onRetrySkill: vi.fn(),
       }),
     })
-    const btn = screen.getByRole('button', { name: 'Retry Security Reviewer' })
+    // The error chip surfaces the humanized failure reason on hover/focus: its
+    // title is "{error} — click to retry" and the aria-label includes the error
+    // so keyboard/screen-reader users reach it too.
+    const btn = screen.getByRole('button', { name: /Security Reviewer failed: Rate limited\. — click to retry/i })
     expect(btn).toBeInTheDocument()
-    expect(btn).toHaveAttribute('title', 'Click to retry')
+    expect(btn).toHaveAttribute('title', 'Rate limited. — click to retry')
   })
 
   it('clicking the error chip calls onRetrySkill with that reviewer\'s skillId', async () => {
@@ -173,7 +241,7 @@ describe('InspectStep — per-reviewer retry', () => {
         onRetrySkill,
       }),
     })
-    await userEvent.click(screen.getByRole('button', { name: 'Retry Security Reviewer' }))
+    await userEvent.click(screen.getByRole('button', { name: /Security Reviewer failed:.*click to retry/i }))
     expect(onRetrySkill).toHaveBeenCalledExactlyOnceWith('skill-77')
   })
 
@@ -188,9 +256,38 @@ describe('InspectStep — per-reviewer retry', () => {
       }),
     })
     // Only the errored reviewer is rendered as a retry button.
-    expect(screen.getAllByRole('button', { name: /^Retry / })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: /click to retry/i })).toHaveLength(1)
     // The done sibling still shows its result chip.
     expect(screen.getByText(/no significant issues/i)).toBeInTheDocument()
+  })
+
+  it('surfaces the failure reason on hover (title) and in the accessible name, and still retries on click', async () => {
+    const onRetrySkill = vi.fn()
+    render(InspectStep, {
+      props: baseProps({
+        skillReviews: [errorEntry('skill-9', 'Security Reviewer')],
+        onRetrySkill,
+      }),
+    })
+    const btn = screen.getByRole('button', { name: /Security Reviewer failed: Rate limited\./i })
+    // Hover tooltip surfaces the error + the retry affordance.
+    expect(btn).toHaveAttribute('title', 'Rate limited. — click to retry')
+    // The error text is also reachable by keyboard/screen reader (aria-label).
+    expect(btn.getAttribute('aria-label')).toContain('Rate limited.')
+    // Clicking still retries this reviewer.
+    await userEvent.click(btn)
+    expect(onRetrySkill).toHaveBeenCalledExactlyOnceWith('skill-9')
+  })
+
+  it('falls back to "Click to retry" when the error reason is empty', () => {
+    render(InspectStep, {
+      props: baseProps({
+        skillReviews: [{ skillId: 'a', name: 'Security Reviewer', state: { status: 'error' } }],
+        onRetrySkill: vi.fn(),
+      }),
+    })
+    const btn = screen.getByRole('button', { name: 'Retry Security Reviewer' })
+    expect(btn).toHaveAttribute('title', 'Click to retry')
   })
 
   it('without onRetrySkill the error chip is a non-interactive span (no button)', () => {

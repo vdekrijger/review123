@@ -27,6 +27,14 @@ export const COACH_CHUNK_SIZE = 7
 export const COACH_CHUNK_CONCURRENCY = 2
 
 /**
+ * How many skill reviewers may have an LLM call in flight at once. Launching
+ * every enabled reviewer at once trips provider rate limits (some reviewers
+ * fail; a manual single-reviewer retry then succeeds because only one call is
+ * in flight). Capping at 2 queues the rest behind a real concurrency gate.
+ */
+export const REVIEWER_CONCURRENCY = 2
+
+/**
  * Split an array into fixed-size chunks (last chunk may be smaller). The
  * elements keep their identity — callers rely on each draft still carrying its
  * own `index` so the merge maps reviews back regardless of chunk boundaries.

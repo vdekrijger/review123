@@ -77,6 +77,7 @@ import {
   mapWithConcurrency,
   COACH_CHUNK_SIZE,
   COACH_CHUNK_CONCURRENCY,
+  REVIEWER_CONCURRENCY,
   type ChunkOutcome,
 } from './coachBatch'
 import { listSkills } from '../skills/skills'
@@ -91,6 +92,12 @@ export type PanelStatus =
   | 'idle'
   | 'no-key'
   | 'declined'
+  /**
+   * Reviewer queue: waiting for a concurrency slot before the LLM call starts.
+   * Reviewers are dispatched at most REVIEWER_CONCURRENCY at a time; the rest
+   * sit in this state until a slot frees, then flip to 'loading'.
+   */
+  | 'queued'
   | 'loading'
   | 'streaming'
   | 'done'
@@ -1989,18 +1996,29 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // by the 'skills' task mode (deep / standard) resolved above.
     const deep = { enabled: skillsMode.deep, note: skillsMode.note }
 
-    // Initialize entries (loading state)
+    // Initialize every entry as 'queued' — none has a slot yet. Six concurrent
+    // LLM calls trip provider rate limits, so we cap in-flight reviewers at
+    // REVIEWER_CONCURRENCY and let the rest wait visibly in the queue.
     skillReviewsState = skills.map((skill) => ({
       skillId: skill.id,
       name: skill.name,
-      state: { status: 'loading' as const, ...(deep.note ? { note: deep.note } : {}) },
+      state: { status: 'queued' as const, ...(deep.note ? { note: deep.note } : {}) },
     }))
     onUpdate?.()
 
-    // Run each skill in parallel, isolated
-    await Promise.all(
-      skills.map((skill, idx) => executeSkillReview(ctx, skill, idx, deep, onUpdate, existingComments)),
-    )
+    // Dispatch through a bounded concurrency gate. The worker flips its entry
+    // from 'queued' → 'loading' (firing onUpdate) the moment a slot frees, so
+    // the chip moves from "waiting" to "running" exactly when its call starts.
+    // executeSkillReview then overwrites the entry to done/error as before.
+    await mapWithConcurrency(skills, REVIEWER_CONCURRENCY, async (skill, idx) => {
+      skillReviewsState[idx] = {
+        skillId: skill.id,
+        name: skill.name,
+        state: { status: 'loading', ...(deep.note ? { note: deep.note } : {}) },
+      }
+      onUpdate?.()
+      await executeSkillReview(ctx, skill, idx, deep, onUpdate, existingComments)
+    })
   }
 
   // ---------------------------------------------------------------------------
