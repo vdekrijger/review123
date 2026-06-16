@@ -1331,6 +1331,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const deep = { enabled: mode.deep, note: mode.note }
     if (deep.note) verdictState.note = deep.note
     const key = cacheKey(prKey, deep.enabled ? 'verdict|deep' : 'verdict', PROMPT_VERSION)
+    // Companion entry holding the per-model breakdown (Plan N), keyed off the
+    // SAME content hash with a '|models' discriminant so it never collides with
+    // the result entry. Persisted alongside the verdict result and restored on a
+    // cache hit so the Step-3 cost+performance table survives a re-opened PR.
+    const verdictModelsKey = cacheKey(prKey, (deep.enabled ? 'verdict|deep' : 'verdict') + '|models', PROMPT_VERSION)
 
     const t0 = performance.now()
     if (deep.enabled) {
@@ -1340,6 +1345,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         verdictState.value = hit.result
         verdictState.toolCallsUsed = hit.toolCallsUsed
         verdictState.usage = hit.usage
+        verdictModelsState = (await getCached<VerdictModelBreakdown[]>(verdictModelsKey)) ?? []
         track('ai_task_completed', { task: 'verdict', duration_ms: Math.round(performance.now() - t0), cached: true, deep: true })
         return
       }
@@ -1348,6 +1354,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       if (hit !== null) {
         verdictState.status = 'done'
         verdictState.value = hit
+        verdictModelsState = (await getCached<VerdictModelBreakdown[]>(verdictModelsKey)) ?? []
         track('ai_task_completed', { task: 'verdict', duration_ms: Math.round(performance.now() - t0), cached: true })
         return
       }
@@ -1436,6 +1443,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       } else {
         await setCached<VerdictResult>(key, finalResult)
       }
+      // Persist the per-model breakdown so a future cache hit can repopulate the
+      // Step-3 cost+performance table (verdictModelsState is already built above).
+      await setCached<VerdictModelBreakdown[]>(verdictModelsKey, verdictModelsState)
       verdictState.status = 'done'
       verdictState.value = finalResult
       verdictState.activity = undefined
@@ -1807,6 +1817,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // Deep runs carry a '|deep' marker so they never collide with
     // single-pass results for the same skill content.
     const key = cacheKey(prKey, 'skill:' + djb2(skill.content) + (deep.enabled ? '|deep' : ''), PROMPT_VERSION)
+    // Companion entry holding this reviewer's per-model breakdown (Plan N),
+    // keyed off the SAME content hash with a '|models' discriminant. Persisted
+    // alongside the skill result and restored on a cache hit so the Step-3 cost+
+    // performance table is repopulated for a previously-reviewed PR.
+    const skillModelsKey = cacheKey(prKey, 'skill:' + djb2(skill.content) + (deep.enabled ? '|deep' : '') + '|models', PROMPT_VERSION)
 
     const t0 = performance.now()
 
@@ -1814,10 +1829,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     if (deep.enabled) {
       const hit = await getCached<DeepCached<SkillReviewResult>>(key)
       if (hit !== null) {
+        const models = await getCached<VerdictModelBreakdown[]>(skillModelsKey)
         skillReviewsState[idx] = {
           skillId: skill.id,
           name: skill.name,
-          state: { status: 'done', value: hit.result, toolCallsUsed: hit.toolCallsUsed, ...(hit.usage ? { usage: hit.usage } : {}) },
+          state: { status: 'done', value: hit.result, toolCallsUsed: hit.toolCallsUsed, ...(hit.usage ? { usage: hit.usage } : {}), ...(models && models.length ? { models } : {}) },
         }
         track('ai_task_completed', {
           task: 'skill-review',
@@ -1831,10 +1847,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     } else {
       const hit = await getCached<SkillReviewResult>(key)
       if (hit !== null) {
+        const models = await getCached<VerdictModelBreakdown[]>(skillModelsKey)
         skillReviewsState[idx] = {
           skillId: skill.id,
           name: skill.name,
-          state: { status: 'done', value: hit, ...(deep.note ? { note: deep.note } : {}) },
+          state: { status: 'done', value: hit, ...(deep.note ? { note: deep.note } : {}), ...(models && models.length ? { models } : {}) },
         }
         track('ai_task_completed', {
           task: 'skill-review',
@@ -1951,6 +1968,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       } else {
         await setCached<SkillReviewResult>(key, skillResult)
       }
+      // Persist this reviewer's per-model breakdown so a future cache hit can
+      // repopulate the Step-3 cost+performance table.
+      await setCached<VerdictModelBreakdown[]>(skillModelsKey, skillModels ?? [])
       skillReviewsState[idx] = {
         skillId: skill.id,
         name: skill.name,

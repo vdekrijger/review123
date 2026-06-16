@@ -1919,3 +1919,139 @@ describe('totalUsage — per-review accumulation', () => {
     expect(run.totalUsage).toEqual({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Per-model breakdown survives a cache hit (companion '|models' cache entry)
+//
+// The Step-3 cost+performance table is fed by modelPerformance, which reads
+// verdictModelsState + each skill reviewer's .models — RUN-STATE that used to
+// vanish on a cache hit. A sibling cache entry keyed '...|models' now persists
+// and restores the breakdown so a re-opened PR repopulates the table.
+// ---------------------------------------------------------------------------
+
+/** makeDeps variant backed by a SHARED in-memory cache so a second run's
+ *  getCached sees what the first run's setCached wrote (round-trip). */
+function makeDepsWithCache(store = new Map<string, unknown>(), opts = {}) {
+  const deps = makeDeps(opts)
+  deps.getCached.mockImplementation(async (key: string) =>
+    store.has(key) ? store.get(key) : null,
+  )
+  deps.setCached.mockImplementation(async (key: string, value: unknown) => {
+    store.set(key, value)
+  })
+  return { deps, store }
+}
+
+describe('per-model breakdown survives a cache hit (companion |models entry)', () => {
+  it('verdict: a cache-hit re-run repopulates verdictModels / modelPerformance and skips generation', async () => {
+    const evidenceFreeVerdict: VerdictResult = { level: 'behavior-preserved', evidence: [], notAnalyzed: [] }
+    const verdictUsage = { prompt_tokens: 30, completion_tokens: 12, total_tokens: 42 }
+
+    const store = new Map<string, unknown>()
+
+    // First (fresh) run: writes the verdict result AND its '|models' companion.
+    const first = makeDepsWithCache(store).deps
+    first.llmJsonWithRepairWithUsage.mockImplementation(async (opts: unknown, validate: ValidateFn) => {
+      if (validate(evidenceFreeVerdict) !== null) return { result: evidenceFreeVerdict, usage: verdictUsage }
+      return { result: await first.llmJsonWithRepair(opts, validate), usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }
+    })
+    const run1 = createAiRun(makeInput(), first)
+    await run1.start()
+    expect(run1.verdictModels.length).toBeGreaterThanOrEqual(1)
+    // The companion entry was persisted.
+    const modelsKeyWritten = [...store.keys()].some((k) => k.includes('verdict') && k.includes('|models'))
+    expect(modelsKeyWritten).toBe(true)
+
+    // Second run on the SAME cache: verdict result hits cache → no new
+    // generation call for the verdict, yet the breakdown is restored.
+    const { deps: second } = makeDepsWithCache(store)
+    let verdictGenerated = false
+    second.llmJsonWithRepairWithUsage.mockImplementation(async (opts: unknown, validate: ValidateFn) => {
+      if (validate(evidenceFreeVerdict) !== null) {
+        verdictGenerated = true
+        return { result: evidenceFreeVerdict, usage: verdictUsage }
+      }
+      return { result: await second.llmJsonWithRepair(opts, validate), usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }
+    })
+    const run2 = createAiRun(makeInput(), second)
+    await run2.start()
+
+    // Cache hit: verdict 'done', no fresh verdict generation.
+    expect(run2.verdict.status).toBe('done')
+    expect(verdictGenerated).toBe(false)
+    const verdictTrack = second.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_completed' && (c[1] as Record<string, unknown>)['task'] === 'verdict',
+    )
+    expect((verdictTrack![1] as Record<string, unknown>)['cached']).toBe(true)
+
+    // The per-model table is repopulated from the companion entry.
+    expect(run2.verdictModels.length).toBeGreaterThanOrEqual(1)
+    const gen = run2.modelPerformance.find((m) => m.role === 'generator')
+    expect(gen).toBeDefined()
+    expect(gen!.usage!.total_tokens).toBe(42)
+  })
+
+  it('skill review: a cache-hit re-run restores .models so the reviewer contributes to modelPerformance', async () => {
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'focus on security')
+
+    const skillUsage = { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
+    const store = new Map<string, unknown>()
+
+    // Fresh run — record a per-model breakdown directly in the '|models' entry.
+    // (The breakdown is only built when an ensemble verifier responds; here we
+    // seed it so the round-trip restore is exercised without a full ensemble.)
+    const { deps: first } = makeDepsWithCache(store)
+    const run1 = createAiRun(makeInput(), first)
+    await run1.runSkillReviews()
+    expect(run1.skillReviews[0].state.status).toBe('done')
+    // A companion '|models' entry was written for the skill (empty breakdown for
+    // a single-model run, but the KEY exists so the round-trip path is covered).
+    const skillModelsKey = [...store.keys()].find((k) => k.includes('skill:') && k.includes('|models'))
+    expect(skillModelsKey).toBeDefined()
+
+    // Seed a non-empty breakdown into the companion entry, simulating a prior
+    // ensemble run, then re-run so the SKILL result hits cache and restores it.
+    const seededRows: import('./run.svelte').VerdictModelBreakdown[] = [
+      { providerId: 'deepseek', modelId: 'deepseek-chat', role: 'generator', usage: skillUsage, surfaced: 1, uniqueCatch: 0 },
+    ]
+    store.set(skillModelsKey!, seededRows)
+
+    const { deps: second } = makeDepsWithCache(store)
+    const run2 = createAiRun(makeInput(), second)
+    await run2.runSkillReviews()
+
+    // Skill result came from cache and the breakdown was restored onto .models.
+    expect(run2.skillReviews[0].state.status).toBe('done')
+    expect(run2.skillReviews[0].state.models).toEqual(seededRows)
+    const skillTrack = second.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_completed' && (c[1] as Record<string, unknown>)['task'] === 'skill-review',
+    )
+    expect((skillTrack![1] as Record<string, unknown>)['cached']).toBe(true)
+    // And it flows into the consolidated aggregate.
+    const gen = run2.modelPerformance.find((m) => m.role === 'generator' && m.modelId === 'deepseek-chat')
+    expect(gen).toBeDefined()
+    expect(gen!.usage!.total_tokens).toBe(15)
+  })
+
+  it('backward-compat: a result cache hit with NO companion entry → empty breakdown, no throw, usage unaffected', async () => {
+    // Pre-existing cache (predates the companion entry): only the verdict result
+    // is present, no '...|models' sibling. Restoring must degrade gracefully.
+    const store = new Map<string, unknown>()
+    const { deps } = makeDepsWithCache(store)
+    // Seed ONLY the verdict result entries (deep + non-deep) — no |models siblings.
+    deps.getCached.mockImplementation(async (key: string) => {
+      if (key.includes('|models')) return null // companion missing
+      if (key.includes('verdict')) return VERDICT_RESULT
+      return null
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.verdict.status).toBe('done')
+    // No companion entry → empty breakdown for the verdict, nothing thrown.
+    expect(run.verdictModels).toEqual([])
+    expect(run.modelPerformance.find((m) => m.role === 'generator')).toBeUndefined()
+  })
+})
