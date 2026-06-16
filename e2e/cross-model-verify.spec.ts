@@ -177,7 +177,7 @@ async function seedAll(page: import('@playwright/test').Page, settings: Record<s
   await page.addInitScript(() => { localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false })) })
 }
 
-test('cross-model verify: confirmed finding shows chip, refuted finding goes to lower-confidence group', async ({ page }) => {
+test('cross-model verify: confirmed finding shows chip, refuted finding renders inline as lower-confidence', async ({ page }) => {
   await setupGithub(page)
   await setupDeepseek(page)
   await setupAnthropicVerifier(page)
@@ -199,16 +199,16 @@ test('cross-model verify: confirmed finding shows chip, refuted finding goes to 
   await expect(confirmedCard.locator('.skill-verify-chip')).toBeVisible({ timeout: 10_000 })
   await expect(confirmedCard.locator('.skill-verify-chip')).toContainText(/confirmed by \d+\/\d+ models/i)
 
-  // The refuted finding lives in the collapsed lower-confidence group.
-  const group = page.locator('.lower-confidence-group')
-  await expect(group).toBeVisible({ timeout: 10_000 })
-  await expect(group.locator('summary')).toContainText(/Lower confidence/i)
-  // Expand it and confirm the refuted finding is inside (not silently dropped).
-  await group.locator('summary').click()
-  await expect(group.getByText(/Refuted style nit/i)).toBeVisible()
-
-  // The refuted finding is NOT in the inline diff flow — only in the group.
-  await expect(page.locator('.line-findings .skill-finding', { hasText: 'Refuted style nit' })).toHaveCount(0)
+  // The refuted (demoted) finding is NO LONGER hidden in a collapsed group — it
+  // renders inline at its line (line 4 is in the visible diff), dimmed, with a
+  // lower-confidence badge. Nothing is hidden.
+  await expect(page.locator('.lower-confidence-group')).toHaveCount(0)
+  const refutedCard = page.locator('.skill-finding', { hasText: 'Refuted style nit' })
+  await expect(refutedCard).toBeVisible({ timeout: 10_000 })
+  await expect(refutedCard).toHaveClass(/lower-confidence/)
+  await expect(refutedCard.locator('.skill-lower-confidence-chip')).toContainText(/flagged by \d+\/\d+ · lower confidence/i)
+  // It renders in the inline diff flow (an extend row), exactly once.
+  await expect(page.locator('.line-findings .skill-finding', { hasText: 'Refuted style nit' })).toHaveCount(1)
   await expect(page.locator('.skill-finding', { hasText: 'Refuted style nit' })).toHaveCount(1)
 })
 
@@ -380,4 +380,83 @@ test('single-key control: no cross-verify UI (no chip, no lower-confidence group
   // No verify chip, no lower-confidence group.
   await expect(page.locator('.skill-verify-chip')).toHaveCount(0)
   await expect(page.locator('.lower-confidence-group')).toHaveCount(0)
+})
+
+// ---------------------------------------------------------------------------
+// Story mode: a DEMOTED reviewer finding still renders a visible, clickable card
+// and chip navigation lands on it. Regression for the bug where demoted (and
+// null-line) findings rendered nowhere in Story mode, so the reviewer chip said
+// "N findings" but clicking a finding was a silent no-op (no jump target in DOM).
+// ---------------------------------------------------------------------------
+
+// A story whose single step covers src/feature.ts, so the reviewer's findings on
+// that file render in the story slide.
+const STORY_FOR_FEATURE = {
+  steps: [
+    { index: 0, files: ['src/feature.ts'], caption: 'The feature is added.', layer: 'logic', relatedTests: [] },
+  ],
+}
+
+// DeepSeek in story mode: streams the summary, returns the story for the
+// storyOrder task, the skill findings for the reviewer prompt, a verdict
+// otherwise. Distinguished by the system prompt content.
+async function setupDeepseekStory(page: import('@playwright/test').Page) {
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string }> } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* non-JSON */ }
+    if (body?.stream === true) {
+      return route.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }, body: makeDeepSeekStreamResponse(SUMMARY_TEXT) })
+    }
+    const system = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
+    if (/guided narrative walkthrough/i.test(system)) {
+      return route.fulfill({ status: 200, json: { choices: [{ message: { role: 'assistant', content: JSON.stringify(STORY_FOR_FEATURE) }, finish_reason: 'stop', index: 0 }] } })
+    }
+    if (system.includes('reviewer persona') || system.includes('security reviewer')) {
+      return route.fulfill({ status: 200, json: { choices: [{ message: { role: 'assistant', content: JSON.stringify(SKILL_REVIEW_RESULT) }, finish_reason: 'stop', index: 0 }] } })
+    }
+    return route.fulfill({ status: 200, json: { choices: [{ message: { role: 'assistant', content: JSON.stringify({ level: 'minor-changes', evidence: ['src/feature.ts modified'], notAnalyzed: [] }) }, finish_reason: 'stop', index: 0 }] } })
+  })
+}
+
+test('story mode: a demoted finding renders a visible, clickable card and chip navigation lands on it', async ({ page }) => {
+  await setupGithub(page)
+  await setupDeepseekStory(page)
+  await setupAnthropicVerifier(page)
+  await setupOpenAiVerifier(page)
+  // storyMode on + three keys → the line-4 finding is demoted by the two verifiers.
+  await seedAll(page, seedSettings({ anthropicKey: 'sk-ant-test-key', openaiKey: 'sk-openai-test-key', storyMode: true }))
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+
+  // Story is the active flow.
+  const storyBtn = page.getByRole('button', { name: 'Story' })
+  await expect(storyBtn).toBeVisible({ timeout: 15_000 })
+  await expect(storyBtn).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.story')).toBeVisible({ timeout: 15_000 })
+
+  await page.getByRole('button', { name: /run my reviewers/i }).click()
+
+  // The demoted finding renders INLINE in the story slide (not hidden / nowhere),
+  // dimmed with the lower-confidence badge — a real, visible card.
+  const demotedCard = page.locator('.story .skill-finding', { hasText: 'Refuted style nit' })
+  await expect(demotedCard).toBeVisible({ timeout: 15_000 })
+  await expect(demotedCard).toHaveClass(/lower-confidence/)
+  await expect(demotedCard.locator('.skill-lower-confidence-chip')).toContainText(/lower confidence/i)
+
+  // The reviewer chip counts BOTH findings; clicking the chip opens the popover.
+  const chip = page.getByRole('button', { name: /Show 2 findings from Security Reviewer/i })
+  await expect(chip).toBeVisible({ timeout: 10_000 })
+  await chip.click()
+  const menu = page.locator('.findings-popover[role="menu"]')
+  await expect(menu).toBeVisible()
+
+  // Click the demoted finding's entry → navigation lands on the real card (it's
+  // scrolled into view + flashes), proving the jump target exists in story mode.
+  const entry = menu.locator('[role="menuitem"]', { hasText: 'Refuted style nit' })
+  await expect(entry).toHaveCount(1)
+  await entry.click()
+  await expect(page.locator('.findings-popover')).toHaveCount(0)
+  await expect(demotedCard).toBeInViewport()
 })

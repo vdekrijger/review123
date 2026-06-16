@@ -21,6 +21,8 @@
    */
   import FileDiff from './FileDiff.svelte'
   import type { SkillFinding } from './FileDiff.svelte'
+  import SkillFindingCard from './SkillFindingCard.svelte'
+  import type { FindingVerification } from '../lib/ai/schemas'
   import DiagramPanel from './DiagramPanel.svelte'
   import SymbolTestPairing from './SymbolTestPairing.svelte'
   import { pairStepTests } from '../lib/diff/symbolTests'
@@ -40,6 +42,20 @@
   import { renderInlineMarkdown } from '../lib/markdown/render'
   import { scrollToFileCard } from '../lib/diff/jumpToFile'
 
+  // File-level (null-line) finding shape — mirrors InspectStep's SuggestionEntry
+  // for the fields the card needs. Carried into Story mode so null-line findings
+  // render here too (Files-mode parity).
+  type FileLevelSuggestion = {
+    skillName: string
+    findingPath: string
+    line: number | null
+    severity: 'high' | 'medium' | 'low'
+    body: string
+    key: string
+    verification?: FindingVerification
+    raisedBy?: string[]
+  }
+
   let {
     story,
     files,
@@ -50,11 +66,16 @@
     resolvedCommentIds = new Set(),
     contentsMap = null,
     lineSkillFindingsByPath = new Map(),
+    fileLevelSuggestionsByPath = new Map(),
+    dismissedKeys = new Set(),
+    addedDraftKeys = new Set(),
     whitespaceByPath = new Map(),
     onAddDraft,
     onRemoveDraft,
     onAddSkillFindingDraft,
     onDismissSkillFinding = undefined,
+    onAddFileLevelDraft = undefined,
+    onDismissFileLevelFinding = undefined,
     askFn = null,
     askDisabledReason = null,
     replyFn = null,
@@ -69,12 +90,28 @@
     resolvedCommentIds?: Set<number>
     contentsMap?: Map<string, { before: string | null; after: string | null }> | null
     lineSkillFindingsByPath?: Map<string, SkillFinding[]>
+    /**
+     * File-level (null-line) reviewer findings per path — rendered as cards above
+     * each file's diff (parity with Files mode), so a reviewer chip that counts a
+     * null-line finding always has a visible jump target here too. Demoted findings
+     * are included (carrying `verification`) and render with the lower-confidence
+     * treatment, not hidden.
+     */
+    fileLevelSuggestionsByPath?: Map<string, FileLevelSuggestion[]>
+    /** Keys the user has dismissed — file-level cards for these are skipped. */
+    dismissedKeys?: Set<string>
+    /** Keys already added as drafts — drives the card's "✓ added" state. */
+    addedDraftKeys?: Set<string>
     whitespaceByPath?: Map<string, WhitespaceDisplay>
     onAddDraft: (path: string, line: number, side: 'LEFT' | 'RIGHT', body: string) => void
     onRemoveDraft: (path: string, line: number, side: 'LEFT' | 'RIGHT') => void
     onAddSkillFindingDraft: (path: string, finding: { body: string; line: number; key: string }) => Promise<void>
     /** Records a dismiss decision for the accept/dismiss telemetry loop. */
     onDismissSkillFinding?: (key: string) => void
+    /** Add a file-level (null-line) finding as a draft comment. */
+    onAddFileLevelDraft?: (suggestion: FileLevelSuggestion) => void
+    /** Dismiss a file-level (null-line) finding. */
+    onDismissFileLevelFinding?: (key: string) => void
     askFn?: ((q: string, onDelta: (t: string) => void, focus?: AskFocus) => Promise<{ ok: true; answer: string } | { ok: false; error: string }>) | null
     askDisabledReason?: string | null
     replyFn?: ((root: PrComment, body: string) => Promise<ReplyOutcome>) | null
@@ -416,6 +453,27 @@
         {@const file = fileByPath.get(path)}
         {#if file}
           <div id="file-{slugify(path)}" class="story-file">
+            {#if fileLevelSuggestionsByPath.has(path)}
+              {#each (fileLevelSuggestionsByPath.get(path) ?? []) as suggestion (suggestion.key)}
+                {#if !dismissedKeys.has(suggestion.key)}
+                  <div class="file-level-finding">
+                    <SkillFindingCard
+                      skillName={suggestion.skillName}
+                      severity={suggestion.severity}
+                      body={suggestion.body}
+                      verification={suggestion.verification}
+                      raisedBy={suggestion.raisedBy}
+                      line={suggestion.line}
+                      anchored={false}
+                      findingKey={suggestion.key}
+                      added={addedDraftKeys.has(suggestion.key)}
+                      onAdd={() => onAddFileLevelDraft?.(suggestion)}
+                      onDismiss={() => onDismissFileLevelFinding?.(suggestion.key)}
+                    />
+                  </div>
+                {/if}
+              {/each}
+            {/if}
             <FileDiff
               {file}
               {mode}
@@ -713,6 +771,12 @@
 
   .story-related-test {
     position: relative;
+  }
+
+  /* File-level (null-line) finding cards stack above the FileDiff (parity with
+     Files mode). */
+  .file-level-finding {
+    margin-bottom: 0.4rem;
   }
 
   .related-test-tag {
