@@ -69,6 +69,13 @@ export interface LlmProviderDef {
   transport: LlmTransport
   /** Base URL for direct API calls. For OpenAI this points to the local proxy. */
   baseUrl: string
+  /**
+   * Body field for the output-token cap on openai-compat requests. OpenAI's
+   * GPT-5 family rejects the legacy `max_tokens` with a 400 ("Use
+   * 'max_completion_tokens' instead"); DeepSeek still uses `max_tokens`.
+   * Defaults to 'max_tokens' when omitted.
+   */
+  maxTokensParam?: 'max_tokens' | 'max_completion_tokens'
 }
 
 // Token budget formula: budgetTokens = contextWindowTokens - maxOutputTokens - promptOverhead
@@ -115,6 +122,8 @@ export const PROVIDERS: LlmProviderDef[] = [
     transport: 'openai-compat',
     // Routed through our serverless proxy (no browser CORS on api.openai.com)
     baseUrl: '/api/llm/openai',
+    // GPT-5 family requires max_completion_tokens; max_tokens → 400.
+    maxTokensParam: 'max_completion_tokens',
     // Default: GPT-5.4 — strong coding model at half the flagship's price
     // ($2.50/$15 vs GPT-5.5's $5/$30 per MTok).
     defaultModel: 'gpt-5.4',
