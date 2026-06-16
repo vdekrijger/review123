@@ -419,22 +419,8 @@
     return map
   })
 
-  // Summary per persona: { name, count }
-  const skillPersonaSummaries = $derived.by(() => {
-    const counts = new Map<string, number>()
-    for (const review of skillReviews) {
-      if (review.state.status !== 'done' || !review.state.value) continue
-      const result = review.state.value as SkillReviewResult
-      const validFindings = result.findings.filter((f: SkillReviewResult['findings'][number]) => prPathSet.has(f.path))
-      if (validFindings.length > 0) {
-        counts.set(review.name, (counts.get(review.name) ?? 0) + validFindings.length)
-      }
-    }
-    return [...counts.entries()].map(([name, count]) => ({ name, count }))
-  })
-
   // ---------------------------------------------------------------------------
-  // Chip → finding navigation (reveal/jump from the result + suggestion chips)
+  // Chip → finding navigation (reveal/jump from the reviewer result chip)
   // ---------------------------------------------------------------------------
   // A flat, navigable list of a reviewer's findings: each entry carries the
   // finding's path, line, a one-line title (first line of the body) and the SAME
@@ -470,12 +456,12 @@
   })
 
   // Open popover state — a compound `{surface}:{skillId}` token identifying WHICH
-  // chip's finding list is currently disclosed, or null when none is open. The
-  // surface prefix ('result' | 'summary') keeps the result chip and the
-  // suggestion summary chip for the SAME reviewer from opening together (they
-  // share a skillId). EVERY chip with ≥1 finding opens a popover (uniform) — a
-  // single-finding chip shows a one-row popover instead of yanking to the diff.
-  type ChipSurface = 'result' | 'summary'
+  // chip's finding list is currently disclosed, or null when none is open. Only
+  // the reviewer result chip carries a popover now (the gray suggestion-summary
+  // chips were removed — single source of truth). EVERY chip with ≥1 finding
+  // opens a popover (uniform) — a single-finding chip shows a one-row popover
+  // instead of yanking to the diff.
+  type ChipSurface = 'result'
   let openFindingsToken = $state<string | null>(null)
 
   function popoverToken(surface: ChipSurface, skillId: string): string {
@@ -564,16 +550,6 @@
     }
     void items
   }
-
-  // Map persona display-name → skillId so the suggestion summary chips (which
-  // are keyed by name) can reuse the SAME jump/popover behavior as result chips.
-  const skillIdByName = $derived.by(() => {
-    const m = new Map<string, string>()
-    for (const review of skillReviews) {
-      if (!m.has(review.name)) m.set(review.name, review.skillId)
-    }
-    return m
-  })
 
   // ---------------------------------------------------------------------------
   // Accept/dismiss telemetry loop (analytics + local decision store)
@@ -1048,49 +1024,6 @@
   {/if}
 {/if}
 
-{#if skillPersonaSummaries.length > 0}
-  <div class="skill-summaries">
-    {#each skillPersonaSummaries as s (s.name)}
-      {@const sId = skillIdByName.get(s.name)}
-      {#if sId && navFindingsFor(sId).length > 0}
-        <span class="skill-chip-nav">
-          <button
-            type="button"
-            class="skill-summary-line summary-nav"
-            data-reviewer-chip="summary:{sId}"
-            aria-label="Show {s.count} {s.count === 1 ? 'suggestion' : 'suggestions'} from {s.name}"
-            aria-haspopup="menu"
-            aria-expanded={isPopoverOpen('summary', sId)}
-            onclick={() => activateReviewerChip('summary', sId)}
-          >{s.name}: {s.count} {s.count === 1 ? 'suggestion' : 'suggestions'}</button>
-          {#if isPopoverOpen('summary', sId)}
-            <div
-              class="findings-popover"
-              role="menu"
-              tabindex="-1"
-              aria-label="{s.name} suggestions"
-              onkeydown={(e) => handlePopoverKeydown(e, 'summary', sId)}
-            >
-              {#each navFindingsFor(sId) as nav (nav.key)}
-                <button
-                  type="button"
-                  role="menuitem"
-                  class="findings-popover-item"
-                  onclick={() => jumpToNavFinding(nav)}
-                >
-                  <span class="findings-popover-loc">{nav.path}{nav.line !== null ? `:${nav.line}` : ''}</span>
-                  <span class="findings-popover-title">{nav.title}</span>
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </span>
-      {:else}
-        <span class="skill-summary-line">{s.name}: {s.count} {s.count === 1 ? 'suggestion' : 'suggestions'}</span>
-      {/if}
-    {/each}
-  </div>
-{/if}
 {#if files.length < changedFiles}
   <p role="alert">Showing {files.length} of {changedFiles} changed files — the list was truncated.</p>
 {/if}
@@ -1846,23 +1779,6 @@
     outline-offset: 2px;
   }
 
-  /* Suggestion summary chip turned button — keep the pill look, add affordance. */
-  button.skill-summary-line.summary-nav {
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.82rem;
-    color: inherit;
-    transition: background 0.12s;
-  }
-  button.skill-summary-line.summary-nav:hover {
-    background: var(--surface-hover, color-mix(in srgb, var(--surface-raised) 80%, var(--text) 12%));
-    text-decoration: underline;
-    text-underline-offset: 2px;
-  }
-  button.skill-summary-line.summary-nav:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
 
   /* Disclosure popover listing a reviewer's findings (multi-finding chips). */
   .findings-popover {
@@ -1933,23 +1849,6 @@
   button.chip-error:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
-  }
-
-  /* ---- Skill persona summaries ---- */
-  .skill-summaries {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    padding: 0.4rem 0;
-    font-size: 0.82rem;
-    opacity: 0.8;
-  }
-
-  .skill-summary-line {
-    background: var(--surface-raised);
-    border: 1px solid var(--border-subtle);
-    border-radius: 999px;
-    padding: 0.15rem 0.6rem;
   }
 
   /* File-level (null-line) finding cards stack above the FileDiff */
