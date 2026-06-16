@@ -9,7 +9,7 @@
   import { getSettings, setTreeOpen, setFocusMode, type FocusMode } from '../lib/settings/settings'
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import { formatUsageLabel } from '../lib/ai/tokenCost'
-  import { activeProviderHasKey } from '../lib/llm/config'
+  import { activeProviderHasKey, panelMode } from '../lib/llm/config'
   import type { DiffWidth } from '../lib/settings/settings'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
   import { draftKey } from '../lib/drafts/drafts.svelte'
@@ -605,7 +605,9 @@
 
   // Run-level verification context shared by every finding this run.
   const runDeep = $derived(settingsState.current.aiTaskModes.skills === 'deep')
-  const runFusionMode = $derived(settingsState.current.fusionMode)
+  // Plan P: mode is emergent — derive the analytics label from the panel's
+  // generator count (≥2 generators = 'generate', else 'verify').
+  const runFusionMode = $derived((settingsState.current, panelMode()))
 
   const decisionMetaByKey = $derived.by(() => {
     const map = new Map<string, DecisionMeta>()

@@ -7,7 +7,8 @@ import {
   setAiDeepReview, setStoryMode, setFocusMode, setShowTokenCost,
   findInvalidKeyChar, invalidKeyCharMessage,
   setAiTaskMode, setAiTaskModes, setAllTasksDeep, setAllTasksStandard, setOffAllExtras,
-  defaultTaskModes, allDeepTaskModes, setAiEnsemble,
+  defaultTaskModes, allDeepTaskModes, setAiPanel, setPanelOneGenerator, setPanelAllGenerate,
+  type PanelParticipant,
 } from './settings'
 
 describe('settings', () => {
@@ -34,8 +35,7 @@ describe('settings', () => {
       },
       storyMode: true,
       crossModelVerify: true,
-      aiEnsemble: null,
-      fusionMode: 'verify',
+      aiPanel: null,
       diffMode: 'unified',
       hideWhitespace: false,
       githubAuth: null,
@@ -116,8 +116,7 @@ describe('settings', () => {
       },
       storyMode: true,
       crossModelVerify: true,
-      aiEnsemble: null,
-      fusionMode: 'verify',
+      aiPanel: null,
       diffMode: 'unified',
       hideWhitespace: false,
       githubAuth: null,
@@ -743,61 +742,160 @@ describe('storyMode setting', () => {
   })
 })
 
-describe('aiEnsemble setting (Plan N — configurable ensemble)', () => {
+describe('aiPanel setting (Plan P — unified model panel)', () => {
   beforeEach(() => localStorage.clear())
 
-  it('defaults to null (synthesize the default ensemble)', () => {
-    expect(getSettings().aiEnsemble).toBeNull()
+  const gen = (provider: string, model: string): PanelParticipant =>
+    ({ provider: provider as PanelParticipant['provider'], model, role: 'generator' })
+  const ver = (provider: string, model: string): PanelParticipant =>
+    ({ provider: provider as PanelParticipant['provider'], model, role: 'verifier' })
+
+  it('defaults to null (synthesize the default panel)', () => {
+    expect(getSettings().aiPanel).toBeNull()
   })
 
-  it('persists a valid ensemble (multi-model, same provider)', () => {
-    setAiEnsemble({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [
-        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
-        { provider: 'anthropic', model: 'claude-haiku-4-5' },
-      ],
-    })
-    expect(getSettings().aiEnsemble).toEqual({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [
-        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
-        { provider: 'anthropic', model: 'claude-haiku-4-5' },
-      ],
-    })
+  it('persists a valid panel (multi-model, same provider, per-row roles)', () => {
+    const participants: PanelParticipant[] = [
+      gen('anthropic', 'claude-opus-4-8'),
+      ver('anthropic', 'claude-sonnet-4-6'),
+      ver('anthropic', 'claude-haiku-4-5'),
+    ]
+    setAiPanel({ participants })
+    expect(getSettings().aiPanel).toEqual({ participants })
   })
 
-  it('drops verifier entries with unknown provider or model', () => {
+  it('drops participants with unknown provider or model', () => {
     localStorage.setItem('review123:settings', JSON.stringify({
-      aiEnsemble: {
-        generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-        verifiers: [
-          { provider: 'nope', model: 'x' },
-          { provider: 'anthropic', model: 'not-a-model' },
-          { provider: 'openai', model: 'gpt-5.4' },
+      aiPanel: {
+        participants: [
+          gen('anthropic', 'claude-opus-4-8'),
+          { provider: 'nope', model: 'x', role: 'verifier' },
+          { provider: 'anthropic', model: 'not-a-model', role: 'verifier' },
+          ver('openai', 'gpt-5.4'),
         ],
       },
     }))
-    expect(getSettings().aiEnsemble).toEqual({
-      generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
-      verifiers: [{ provider: 'openai', model: 'gpt-5.4' }],
+    expect(getSettings().aiPanel).toEqual({
+      participants: [gen('anthropic', 'claude-opus-4-8'), ver('openai', 'gpt-5.4')],
     })
   })
 
-  it('invalidates the whole ensemble when the generator is invalid', () => {
+  it('drops a participant with an invalid role', () => {
     localStorage.setItem('review123:settings', JSON.stringify({
-      aiEnsemble: {
-        generator: { provider: 'bogus', model: 'x' },
-        verifiers: [{ provider: 'openai', model: 'gpt-5.4' }],
+      aiPanel: {
+        participants: [
+          gen('anthropic', 'claude-opus-4-8'),
+          { provider: 'openai', model: 'gpt-5.4', role: 'judge' },
+        ],
       },
     }))
-    expect(getSettings().aiEnsemble).toBeNull()
+    expect(getSettings().aiPanel).toEqual({
+      participants: [gen('anthropic', 'claude-opus-4-8')],
+    })
+  })
+
+  it('enforces ≥1 generator — promotes the first row when all are verifiers', () => {
+    setAiPanel({ participants: [ver('openai', 'gpt-5.4'), ver('anthropic', 'claude-opus-4-8')] })
+    const panel = getSettings().aiPanel!
+    expect(panel.participants[0].role).toBe('generator')
+    expect(panel.participants[1].role).toBe('verifier')
+  })
+
+  it('returns null when no valid participant survives coercion', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      aiPanel: { participants: [{ provider: 'bogus', model: 'x', role: 'generator' }] },
+    }))
+    expect(getSettings().aiPanel).toBeNull()
   })
 
   it('clears back to null', () => {
-    setAiEnsemble({ generator: { provider: 'openai', model: 'gpt-5.4' }, verifiers: [] })
-    setAiEnsemble(null)
-    expect(getSettings().aiEnsemble).toBeNull()
+    setAiPanel({ participants: [gen('openai', 'gpt-5.4')] })
+    setAiPanel(null)
+    expect(getSettings().aiPanel).toBeNull()
+  })
+
+  it('preset "One generator": first sole generator, rest verifiers', () => {
+    setPanelOneGenerator([
+      gen('anthropic', 'claude-opus-4-8'),
+      gen('openai', 'gpt-5.4'),
+      gen('deepseek', 'deepseek-chat'),
+    ])
+    const roles = getSettings().aiPanel!.participants.map((p) => p.role)
+    expect(roles).toEqual(['generator', 'verifier', 'verifier'])
+  })
+
+  it('preset "All generate": every participant a generator', () => {
+    setPanelAllGenerate([
+      gen('anthropic', 'claude-opus-4-8'),
+      ver('openai', 'gpt-5.4'),
+      ver('deepseek', 'deepseek-chat'),
+    ])
+    const roles = getSettings().aiPanel!.participants.map((p) => p.role)
+    expect(roles).toEqual(['generator', 'generator', 'generator'])
+  })
+})
+
+describe('aiPanel migration (Plan P — from legacy aiEnsemble + fusionMode)', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('migrates legacy verify: generator → generator, verifiers → verifiers', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      fusionMode: 'verify',
+      aiEnsemble: {
+        generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+        verifiers: [
+          { provider: 'openai', model: 'gpt-5.4' },
+          { provider: 'deepseek', model: 'deepseek-chat' },
+        ],
+      },
+    }))
+    expect(getSettings().aiPanel).toEqual({
+      participants: [
+        { provider: 'anthropic', model: 'claude-opus-4-8', role: 'generator' },
+        { provider: 'openai', model: 'gpt-5.4', role: 'verifier' },
+        { provider: 'deepseek', model: 'deepseek-chat', role: 'verifier' },
+      ],
+    })
+  })
+
+  it('migrates legacy generate: ALL participants become generators', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      fusionMode: 'generate',
+      aiEnsemble: {
+        generator: { provider: 'anthropic', model: 'claude-opus-4-8' },
+        verifiers: [{ provider: 'openai', model: 'gpt-5.4' }],
+      },
+    }))
+    expect(getSettings().aiPanel).toEqual({
+      participants: [
+        { provider: 'anthropic', model: 'claude-opus-4-8', role: 'generator' },
+        { provider: 'openai', model: 'gpt-5.4', role: 'generator' },
+      ],
+    })
+  })
+
+  it('default/unset legacy ensemble → null (default panel synthesized later)', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ fusionMode: 'verify' }))
+    expect(getSettings().aiPanel).toBeNull()
+  })
+
+  it('preserves crossModelVerify across migration', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      crossModelVerify: false,
+      aiEnsemble: { generator: { provider: 'openai', model: 'gpt-5.4' }, verifiers: [] },
+    }))
+    expect(getSettings().crossModelVerify).toBe(false)
+    expect(getSettings().aiPanel?.participants[0].role).toBe('generator')
+  })
+
+  it('explicit aiPanel wins over legacy fields', () => {
+    const onlyGen: PanelParticipant = { provider: 'anthropic', model: 'claude-opus-4-8', role: 'generator' }
+    localStorage.setItem('review123:settings', JSON.stringify({
+      fusionMode: 'generate',
+      aiEnsemble: { generator: { provider: 'openai', model: 'gpt-5.4' }, verifiers: [] },
+      aiPanel: { participants: [onlyGen] },
+    }))
+    expect(getSettings().aiPanel).toEqual({ participants: [onlyGen] })
   })
 })
 

@@ -14,6 +14,12 @@ import type { CiSummary } from '../github/checks'
 import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
 
+// PROMPT_VERSION 20 (Plan P): unified model panel — verifiers now judge through
+// diverse LENSES in the 'verify' path too (previously lenses applied only in the
+// multi-generator 'generate' fusion path). The lensed verifier prompt differs from
+// the plain adversarial prompt, so cached verify-mode results must re-run under the
+// new framing. Behavior shift: single-generator + verifiers reviews now get lensed
+// cross-verification. Bump invalidates Plan O cached skill/verdict verify results.
 // PROMPT_VERSION 19 (Plan O): fusion v2 — multi-generator union + diverse verifier
 // lenses. In 'generate' mode every ensemble model generates findings, the union
 // is dedup-merged (findings carry `raisedBy`), and cross-confirm uses per-verifier
@@ -28,7 +34,7 @@ import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
 // module-dependency change-map to a flow-of-execution (GraphResult.flow). The
 // bump invalidates cached diagram results so old change-maps don't render under
 // the new "Execution flow" label.
-export const PROMPT_VERSION = 19
+export const PROMPT_VERSION = 20
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)

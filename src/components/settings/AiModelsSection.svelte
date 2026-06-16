@@ -1,16 +1,16 @@
 <script lang="ts">
   import {
     getSettings, saveTokens, setAiProvider, setAiModel, setStoryMode, setCrossModelVerify,
-    setAiTaskMode, setAllTasksDeep, setAllTasksStandard, setOffAllExtras, setAiEnsemble,
-    setFusionMode,
+    setAiTaskMode, setAllTasksDeep, setAllTasksStandard, setOffAllExtras, setAiPanel,
+    setPanelOneGenerator, setPanelAllGenerate,
     AI_TASK_IDS, taskSupportsDeep,
     type AiProvider, type AiTaskId, type AiTaskMode,
-    type AiEnsemble, type EnsembleParticipant, type FusionMode,
+    type AiPanel, type PanelParticipant, type ParticipantRole,
   } from '../../lib/settings/settings'
   import { settingsState } from '../../lib/settings/settingsState.svelte'
   import { PROVIDERS, getProvider, getModelDef, type LlmProviderId } from '../../lib/llm/providers'
   import { llmTestConnection, LlmError } from '../../lib/llm/llm'
-  import { activeProviderHasKey, resolveEnsemble } from '../../lib/llm/config'
+  import { activeProviderHasKey, resolvePanel } from '../../lib/llm/config'
   import { track } from '../../lib/analytics/analytics'
   import SecretInput from './SecretInput.svelte'
   import Spinner from '../Spinner.svelte'
@@ -78,21 +78,13 @@
     setCrossModelVerify(checked)
   }
 
-  // Fusion mode (Plan O). 'verify' = active model generates, others verify
-  // (precision). 'generate' = every model generates; the union is dedup-merged
-  // and cross-confirmed (recall) — more tokens. Only EFFECTIVE with ≥2 keyed
-  // models AND cross-verify on; disabled with an honest cost hint otherwise.
-  let fusionMode = $state<FusionMode>(current.fusionMode)
-  function onFusionModeChange(mode: FusionMode) {
-    fusionMode = mode
-    setFusionMode(mode)
-  }
-
   // -------------------------------------------------------------------------
-  // Configurable ensemble (Plan N). A participant list with one generator. The
-  // current ensemble is the stored aiEnsemble, or the synthesized default
-  // (generator = active provider+model; verifiers = other keyed defaults). The
-  // editor writes aiEnsemble on every change so it becomes authoritative.
+  // Unified model panel (Plan P). A single participant list with per-row ROLES
+  // (generator | verifier). The verify-vs-generate mode is EMERGENT from the
+  // generator count, so there is no separate mode radio. The current panel is the
+  // stored aiPanel, or the synthesized default (active provider+model as the sole
+  // generator; verifiers = other keyed defaults). Every edit writes aiPanel so it
+  // becomes authoritative.
   // -------------------------------------------------------------------------
 
   /** Whether a provider has a key saved (drives row disabling + hints). */
@@ -102,89 +94,87 @@
   }
 
   /**
-   * The ensemble shown in the editor: the stored one, or the synthesized
-   * default (so a user who never customized sees today's effective ensemble and
-   * can edit from there). Reactive to settingsState.
+   * The panel shown in the editor: the stored one, or the synthesized default
+   * (so a user who never customized sees today's effective panel and can edit
+   * from there). Reactive to settingsState.
    */
-  const editorEnsemble = $derived.by<AiEnsemble>(() => {
+  const panelParticipants = $derived.by<PanelParticipant[]>(() => {
     void settingsState.current
-    const stored = settingsState.current.aiEnsemble
-    if (stored) return stored
-    const resolved = resolveEnsemble()
+    const stored = settingsState.current.aiPanel
+    if (stored) return stored.participants
+    const resolved = resolvePanel()
     const active = settingsState.current
-    const generator: EnsembleParticipant = {
-      provider: active.aiProvider,
-      model: resolved.generator?.model.id ?? (getProvider(active.aiProvider)?.defaultModel ?? ''),
-    }
-    return {
-      generator,
-      verifiers: resolved.verifiers.map((v) => ({ provider: v.providerId as AiProvider, model: v.model.id })),
-    }
-  })
-
-  /** Flatten generator + verifiers into rows with a generator flag, for the UI. */
-  const ensembleRows = $derived.by<{ participant: EnsembleParticipant; isGenerator: boolean }[]>(() => {
-    const e = editorEnsemble
-    return [
-      { participant: e.generator, isGenerator: true },
-      ...e.verifiers.map((v) => ({ participant: v, isGenerator: false })),
-    ]
+    const generators: PanelParticipant[] = resolved.generators.length
+      ? resolved.generators.map((g) => ({ provider: g.providerId as AiProvider, model: g.model.id, role: 'generator' as ParticipantRole }))
+      : [{ provider: active.aiProvider, model: getProvider(active.aiProvider)?.defaultModel ?? '', role: 'generator' as ParticipantRole }]
+    const verifiers: PanelParticipant[] = resolved.verifiers.map((v) => ({ provider: v.providerId as AiProvider, model: v.model.id, role: 'verifier' as ParticipantRole }))
+    return [...generators, ...verifiers]
   })
 
   /** Count of rows whose provider has a key (usable models). */
-  const usableEnsembleCount = $derived(ensembleRows.filter((r) => providerKeyed(r.participant.provider)).length)
+  const usablePanelCount = $derived(panelParticipants.filter((p) => providerKeyed(p.provider)).length)
   /** Cross-verify possible when ≥2 usable models (single-key multi-model counts). */
-  const crossVerifyAvailable = $derived(usableEnsembleCount >= 2)
+  const crossVerifyAvailable = $derived(usablePanelCount >= 2)
+  /** Count of generator rows (drives the ≥1-generator constraint on the role toggle). */
+  const generatorCount = $derived(panelParticipants.filter((p) => p.role === 'generator').length)
 
-  /** Persist a rows list (index 0 = generator) back to aiEnsemble. */
-  function commitRows(rows: { participant: EnsembleParticipant; isGenerator: boolean }[]) {
-    const genIdx = rows.findIndex((r) => r.isGenerator)
-    const generator = (genIdx >= 0 ? rows[genIdx] : rows[0]).participant
-    const verifiers = rows.filter((_, i) => i !== (genIdx >= 0 ? genIdx : 0)).map((r) => r.participant)
-    setAiEnsemble({ generator, verifiers })
+  /** Persist a participant list back to aiPanel. */
+  function commitPanel(participants: PanelParticipant[]) {
+    setAiPanel({ participants })
   }
 
   function onRowProvider(i: number, providerId: AiProvider) {
-    const rows = ensembleRows.map((r) => ({ ...r, participant: { ...r.participant } }))
+    const rows = panelParticipants.map((p) => ({ ...p }))
     const prov = getProvider(providerId)
-    rows[i].participant = { provider: providerId, model: prov?.defaultModel ?? rows[i].participant.model }
-    commitRows(rows)
+    rows[i] = { ...rows[i], provider: providerId, model: prov?.defaultModel ?? rows[i].model }
+    commitPanel(rows)
   }
 
   function onRowModel(i: number, modelId: string) {
-    const rows = ensembleRows.map((r) => ({ ...r, participant: { ...r.participant } }))
-    rows[i].participant.model = modelId
-    commitRows(rows)
+    const rows = panelParticipants.map((p) => ({ ...p }))
+    rows[i].model = modelId
+    commitPanel(rows)
   }
 
-  function setGeneratorRow(i: number) {
-    const rows = ensembleRows.map((r, idx) => ({ ...r, participant: { ...r.participant }, isGenerator: idx === i }))
-    commitRows(rows)
+  /** Toggle a row's role. Refuses to drop the LAST generator (≥1 constraint). */
+  function setRowRole(i: number, role: ParticipantRole) {
+    if (role === 'verifier' && panelParticipants[i].role === 'generator' && generatorCount <= 1) return
+    const rows = panelParticipants.map((p) => ({ ...p }))
+    rows[i].role = role
+    commitPanel(rows)
   }
 
   function addParticipant() {
     // Default the new verifier to the active provider's default model.
     const p = settingsState.current.aiProvider
     const prov = getProvider(p)
-    const rows = [
-      ...ensembleRows.map((r) => ({ ...r, participant: { ...r.participant } })),
-      { participant: { provider: p, model: prov?.defaultModel ?? '' }, isGenerator: false },
+    const rows: PanelParticipant[] = [
+      ...panelParticipants.map((r) => ({ ...r })),
+      { provider: p, model: prov?.defaultModel ?? '', role: 'verifier' as ParticipantRole },
     ]
-    commitRows(rows)
+    commitPanel(rows)
   }
 
   function removeParticipant(i: number) {
-    if (ensembleRows.length <= 1) return
-    const wasGenerator = ensembleRows[i].isGenerator
-    const rows = ensembleRows.filter((_, idx) => idx !== i).map((r) => ({ ...r, participant: { ...r.participant } }))
-    // Removing the generator → first remaining row becomes the generator.
-    if (wasGenerator && rows.length > 0) rows[0].isGenerator = true
-    commitRows(rows)
+    if (panelParticipants.length <= 1) return
+    const rows = panelParticipants.filter((_, idx) => idx !== i).map((r) => ({ ...r }))
+    // If removal left no generator, promote the first remaining row.
+    if (!rows.some((r) => r.role === 'generator') && rows.length > 0) rows[0] = { ...rows[0], role: 'generator' }
+    commitPanel(rows)
   }
 
-  /** Reset back to the synthesized default ensemble (clears the custom one). */
-  function resetEnsemble() {
-    setAiEnsemble(null)
+  /** Reset back to the synthesized default panel (clears the custom one). */
+  function resetPanel() {
+    setAiPanel(null)
+  }
+
+  /** Preset: first model the sole generator, the rest verifiers (old 'verify'). */
+  function presetOneGenerator() {
+    setPanelOneGenerator(panelParticipants.map((p) => ({ ...p })))
+  }
+  /** Preset: every model a generator — they cross-confirm (old 'generate'). */
+  function presetAllGenerate() {
+    setPanelAllGenerate(panelParticipants.map((p) => ({ ...p })))
   }
 
   // Per-provider model selection. Empty string means "use the provider default".
@@ -447,71 +437,63 @@
     </p>
   </div>
 
-  <!-- Plan O — fusion mode (Verify vs Generate) -->
-  <div class="deep-review-row" class:disabled={!crossVerifyAvailable || !crossModelVerify}>
-    <span class="deep-review-label">How models combine</span>
-    <div class="fusion-mode-options" role="radiogroup" aria-label="Fusion mode">
-      <label class="fusion-mode-opt">
-        <input
-          type="radio"
-          name="fusionMode"
-          value="verify"
-          checked={fusionMode === 'verify'}
-          disabled={!crossVerifyAvailable || !crossModelVerify}
-          onchange={() => onFusionModeChange('verify')}
-        />
-        <span>Verify <small>(your active model finds, the others check — precision)</small></span>
-      </label>
-      <label class="fusion-mode-opt">
-        <input
-          type="radio"
-          name="fusionMode"
-          value="generate"
-          checked={fusionMode === 'generate'}
-          disabled={!crossVerifyAvailable || !crossModelVerify}
-          onchange={() => onFusionModeChange('generate')}
-        />
-        <span>Generate <small>(every model finds independently — catches more, costs more)</small></span>
-      </label>
-    </div>
-    <p class="deep-review-hint">
-      <strong>Generate</strong> runs the review with each model in your ensemble, then merges and
-      cross-confirms the union — so a real issue only one model spots can still surface (recall).
-      It costs noticeably more tokens (every model generates <em>and</em> verifies); with many
-      models that adds up fast. <strong>Verify</strong> is the cheaper default.
-      {#if !crossVerifyAvailable}<strong> Needs ≥2 models.</strong>{/if}
-    </p>
-  </div>
-
-  <!-- Plan N — configurable ensemble editor -->
-  <div class="ensemble-editor" class:disabled={!crossModelVerify}>
+  <!-- Plan P — unified model panel (merges "How models combine" + the ensemble) -->
+  <div class="ensemble-editor" class:disabled={!crossModelVerify} data-testid="model-panel">
     <div class="ensemble-head">
-      <span class="ensemble-title">Ensemble / verification panel</span>
-      <button type="button" class="ensemble-reset" onclick={resetEnsemble}>Reset to default</button>
+      <span class="ensemble-title">Model panel</span>
+      <button type="button" class="ensemble-reset" onclick={resetPanel}>Reset to default</button>
     </div>
     <p class="deep-review-hint">
-      Pick which model GENERATES findings and which VERIFY them. You can use several models of the
-      same provider (one key) — e.g. Opus generates, Sonnet + Haiku verify.
-      <strong> Each model you add verifies every finding — more accuracy, more tokens.</strong>
+      Add the models you want and give each a role. <strong>Generators</strong> find issues;
+      <strong>Verifiers</strong> check them. The mode is automatic: one generator = the others
+      verify (precision); two or more generators = every generator finds independently and the
+      union is merged + cross-confirmed (recall — catches more, costs more). You can use several
+      models of the same provider on one key (e.g. Opus generates, Sonnet + Haiku verify).
     </p>
+
+    <div class="panel-presets" role="group" aria-label="Role presets">
+      <span class="quick-set-label">Quick set:</span>
+      <button type="button" class="quick-set-btn" onclick={presetOneGenerator}>One generator</button>
+      <button type="button" class="quick-set-btn" onclick={presetAllGenerate}>All generate</button>
+    </div>
+
     <ul class="ensemble-rows">
-      {#each ensembleRows as row, i (i)}
-        {@const keyed = providerKeyed(row.participant.provider)}
+      {#each panelParticipants as row, i (i)}
+        {@const keyed = providerKeyed(row.provider)}
+        {@const lockGenerator = row.role === 'generator' && generatorCount <= 1}
         <li class="ensemble-row" class:row-disabled={!keyed}>
-          <label class="gen-radio" title="Designate the generator">
-            <input
-              type="radio"
-              name="ensemble-generator"
-              checked={row.isGenerator}
-              disabled={!keyed}
-              onchange={() => setGeneratorRow(i)}
-            />
-            <span class="gen-label">{row.isGenerator ? 'Generator' : 'Verifier'}</span>
-          </label>
+          <div
+            class="role-segmented"
+            role="radiogroup"
+            aria-label="Role for {getProvider(row.provider)?.displayName} {row.model}"
+          >
+            <label class="role-option" class:selected={row.role === 'generator'}>
+              <input
+                type="radio"
+                name="panel-role-{i}"
+                value="generator"
+                checked={row.role === 'generator'}
+                disabled={!keyed}
+                onchange={() => setRowRole(i, 'generator')}
+              />
+              <span>Generator</span>
+            </label>
+            <label class="role-option" class:selected={row.role === 'verifier'} class:locked={lockGenerator}>
+              <input
+                type="radio"
+                name="panel-role-{i}"
+                value="verifier"
+                checked={row.role === 'verifier'}
+                disabled={!keyed || lockGenerator}
+                onchange={() => setRowRole(i, 'verifier')}
+              />
+              <span>Verifier</span>
+            </label>
+          </div>
           <select
             class="ensemble-provider"
             aria-label="Provider"
-            value={row.participant.provider}
+            value={row.provider}
             onchange={(e) => onRowProvider(i, (e.currentTarget as HTMLSelectElement).value as AiProvider)}
           >
             {#each PROVIDERS as p (p.id)}
@@ -521,14 +503,14 @@
           <select
             class="ensemble-model"
             aria-label="Model"
-            value={row.participant.model}
+            value={row.model}
             onchange={(e) => onRowModel(i, (e.currentTarget as HTMLSelectElement).value)}
           >
-            {#each (getProvider(row.participant.provider)?.models ?? []) as m (m.id)}
+            {#each (getProvider(row.provider)?.models ?? []) as m (m.id)}
               <option value={m.id}>{m.label}</option>
             {/each}
           </select>
-          {#if ensembleRows.length > 1}
+          {#if panelParticipants.length > 1}
             <button
               type="button"
               class="ensemble-remove"
@@ -537,12 +519,12 @@
             >✕</button>
           {/if}
           {#if !keyed}
-            <span class="ensemble-nokey">No {getProvider(row.participant.provider)?.displayName} key — add it above</span>
+            <span class="ensemble-nokey">No {getProvider(row.provider)?.displayName} key — add it above</span>
           {/if}
         </li>
       {/each}
     </ul>
-    {#if ensembleRows.length >= 4}
+    {#if panelParticipants.length >= 4}
       <p class="ensemble-scale-note" data-testid="ensemble-scale-note">
         Each model verifies every finding — more models means more tokens and higher
         rate-limit risk, with diminishing returns. Watch the per-model impact to see
@@ -845,27 +827,6 @@
     margin: 0.3rem 0 0;
   }
 
-  /* Plan O — fusion mode radio group */
-  .fusion-mode-options {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    margin: 0.4rem 0 0;
-  }
-  .fusion-mode-opt {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.45rem;
-    font-size: 0.85em;
-    cursor: pointer;
-  }
-  .fusion-mode-opt small {
-    color: var(--text-muted);
-  }
-  .deep-review-row.disabled .fusion-mode-options {
-    opacity: 0.5;
-  }
-
   .hint {
     font-size: 0.8em;
     color: var(--text-muted);
@@ -923,16 +884,47 @@
   .ensemble-row.row-disabled {
     opacity: 0.6;
   }
-  .gen-radio {
+  /* Plan P — per-row role segmented toggle (Generator | Verifier) */
+  .panel-presets {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin: 0.6rem 0 0.2rem;
+  }
+  .role-segmented {
+    display: inline-flex;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .role-option {
     display: inline-flex;
     align-items: center;
-    gap: 0.3rem;
-    min-width: 6.2rem;
-    font-size: 0.8em;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.78em;
     cursor: pointer;
-  }
-  .gen-label {
     color: var(--text-muted);
+    border-left: 1px solid var(--hairline);
+  }
+  .role-option:first-child {
+    border-left: none;
+  }
+  .role-option.selected {
+    background: var(--accent);
+    color: var(--on-accent, #fff);
+    font-weight: 600;
+  }
+  .role-option.locked {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+  .role-option input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    margin: -1px;
   }
   .ensemble-provider,
   .ensemble-model {
