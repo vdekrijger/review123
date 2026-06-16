@@ -10,7 +10,7 @@ import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import Landing from './Landing.svelte'
 import { navigate } from '../lib/router/router.svelte'
 import * as queueModule from '../lib/provider/queue'
-import { createDraftStore, listDraftSummaries } from '../lib/drafts/drafts.svelte'
+import { listDraftSummaries } from '../lib/drafts/drafts.svelte'
 import { addToHistory } from '../lib/history/history'
 
 vi.mock('../lib/router/router.svelte', () => ({ navigate: vi.fn() }))
@@ -29,10 +29,27 @@ vi.mock('../lib/provider/registry', () => ({
   parseAnyUrl: vi.fn().mockReturnValue(null),
 }))
 
+// Seed a draft DIRECTLY into IndexedDB under the given prKey. Drafts are now
+// keyed by stable PR identity, but legacy `@sha`-keyed records can still exist
+// on disk; Landing enumerates them raw (via listDraftSummaries) and groups by
+// identity. Writing directly (not via the store, whose load() runs the re-key
+// migration) lets these tests exercise that raw-summary grouping faithfully.
 async function seedDraft(prKey: string, path: string, line: number, body: string) {
-  const store = createDraftStore(prKey) // default DB — what the section reads
-  await store.load()
-  await store.upsert({ path, line, side: 'RIGHT', body })
+  await new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open('review123-drafts', 1)
+    open.onupgradeneeded = () => {
+      const db = open.result
+      if (!db.objectStoreNames.contains('drafts')) db.createObjectStore('drafts')
+    }
+    open.onsuccess = () => {
+      const db = open.result
+      const tx = db.transaction('drafts', 'readwrite')
+      tx.objectStore('drafts').put({ prKey, path, line, side: 'RIGHT', body, n: 0, updatedAt: Date.now() }, `${prKey}|${path}|${line}|RIGHT|0`)
+      tx.oncomplete = () => { db.close(); resolve() }
+      tx.onerror = () => reject(tx.error)
+    }
+    open.onerror = () => reject(open.error)
+  })
 }
 
 async function clearAllDrafts() {

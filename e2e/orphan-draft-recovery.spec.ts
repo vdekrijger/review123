@@ -1,16 +1,16 @@
 /**
- * e2e/orphan-draft-recovery.spec.ts — recover drafts orphaned by a new commit.
+ * e2e/orphan-draft-recovery.spec.ts — old-commit drafts stay visible after re-key.
  *
  * Scenario: a reviewer drafted comments on an EARLIER commit of a PR. The PR
- * then received a new commit, so the current session's prKey carries a NEW
- * head-sha. The old-sha draft store is invisible to it — without recovery the
- * Inspect step would show no drafts and the verdict recap "No line comments
- * drafted yet".
+ * then received a new commit. Drafts are now keyed by STABLE PR IDENTITY (no
+ * head-sha), so they can never orphan: load() migrates the legacy `@sha`-keyed
+ * drafts into the identity key, tagging each with its source commit.
  *
- * Here we seed two drafts under an OLD-sha prKey, open the PR (the fixture meta
+ * Here we seed two legacy `@oldsha`-keyed drafts, open the PR (the fixture meta
  * serves the NEW head-sha), and assert:
- *   - the "restored from an earlier commit" note appears (step 2)
- *   - the drafts are adopted and show up in the step-3 recap
+ *   - the drafts are LOADED + visible (no "restored" note — migration is silent)
+ *   - they carry a "from commit …" note (made on an older commit)
+ *   - they show up in the step-3 recap (lossless)
  *
  * Network for api.github.com is intercepted (no real calls). PostHog / DeepSeek
  * are blocked.
@@ -118,7 +118,7 @@ async function setupRoutes(page: import('@playwright/test').Page) {
   })
 }
 
-test('orphaned drafts from an earlier commit are restored on resume (note + recap)', async ({ page }) => {
+test('old-commit drafts stay visible after re-key migration (from-commit note + recap)', async ({ page }) => {
   await setupRoutes(page)
   await page.addInitScript((settings) => {
     localStorage.setItem('review123:settings', JSON.stringify(settings))
@@ -131,16 +131,20 @@ test('orphaned drafts from an earlier commit are restored on resume (note + reca
     page.getByRole('heading', { name: /Test PR: add feature/i }),
   ).toBeVisible({ timeout: 10_000 })
 
-  // Step 2: the "restored from an earlier commit" note appears.
+  // Step 2: the legacy @oldsha drafts are migrated into the identity key and
+  // loaded (no "Restored …" banner — migration is silent now).
   await page.getByRole('button', { name: 'Next step' }).click()
-  const restoredNote = page.getByText(/Restored 2 draft comments from an earlier commit of this PR/i)
-  await expect(restoredNote).toBeVisible({ timeout: 8_000 })
 
-  // The sticky draft bar reflects the adopted count.
+  // The sticky draft bar reflects the migrated count.
   const draftStatus = page.locator('.draft-bar').getByRole('status')
-  await expect(draftStatus).toContainText(/2 comments drafted/i, { timeout: 5_000 })
+  await expect(draftStatus).toContainText(/2 comments drafted/i, { timeout: 8_000 })
 
-  // Step 3: the adopted drafts appear in the recap (not "No line comments drafted yet").
+  // Each draft made on an older commit carries a "from commit …" note.
+  const fromCommitNotes = page.getByTestId('draft-from-commit')
+  await expect(fromCommitNotes.first()).toBeVisible({ timeout: 5_000 })
+  await expect(fromCommitNotes).toHaveCount(2)
+
+  // Step 3: the drafts appear in the recap (lossless — none dropped).
   await page.getByRole('button', { name: 'Next step' }).click()
   const recapSection = page.locator('[aria-label="Drafted comments"]')
   await expect(recapSection.getByText(/Orphaned draft on line 3/i)).toBeVisible({ timeout: 5_000 })

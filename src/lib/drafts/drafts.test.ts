@@ -26,6 +26,31 @@ async function freshStore(prKey: string, dbSuffix?: string) {
   return createDraftStore(prKey, dbSuffix)
 }
 
+/**
+ * Put a draft DIRECTLY into IndexedDB under a given (possibly legacy @sha) prKey,
+ * WITHOUT going through the store (whose load() now runs the re-key migration).
+ * Use this to seed raw on-disk legacy data when the test must observe it before
+ * any identity-store load migrates it.
+ */
+async function rawSeed(prKey: string, db: string, path: string, line: number, side: 'LEFT' | 'RIGHT', body: string) {
+  const idb = (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB
+  await new Promise<void>((resolve, reject) => {
+    const open = idb.open(db, 1)
+    open.onupgradeneeded = () => {
+      const dbh = open.result
+      if (!dbh.objectStoreNames.contains('drafts')) dbh.createObjectStore('drafts')
+    }
+    open.onsuccess = () => {
+      const dbh = open.result
+      const tx = dbh.transaction('drafts', 'readwrite')
+      tx.objectStore('drafts').put({ prKey, path, line, side, body, n: 0, updatedAt: Date.now() }, `${prKey}|${path}|${line}|${side}|0`)
+      tx.oncomplete = () => { dbh.close(); resolve() }
+      tx.onerror = () => reject(tx.error)
+    }
+    open.onerror = () => reject(open.error)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Round-trip across store instances (EC-07f: simulates tab close)
 // ---------------------------------------------------------------------------
@@ -465,21 +490,16 @@ describe('listDraftSummaries', () => {
     )
   })
 
-  it('surfaces multiple sha variants of one PR as separate summaries', async () => {
+  it('surfaces multiple sha variants of one PR as separate summaries (raw legacy data)', async () => {
     const db = `test-db-summaries-sha-${++testIndex}`
-    const { createDraftStore, listDraftSummaries } = await import('./drafts.svelte')
+    const { listDraftSummaries } = await import('./drafts.svelte')
 
-    const old = 'github:acme/widgets#5@oldsha'
-    const fresh = 'github:acme/widgets#5@newsha'
-
-    const s1 = createDraftStore(old, db)
-    await s1.load()
-    await s1.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'on old commit' })
-
-    const s2 = createDraftStore(fresh, db)
-    await s2.load()
-    await s2.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'on new commit' })
-    await s2.upsert({ path: 'a.ts', line: 2, side: 'RIGHT', body: 'second on new' })
+    // Seed raw legacy @sha keys directly (no store load → no re-key migration),
+    // mirroring on-disk data the Landing page enumerates before any identity
+    // store loads. listDraftSummaries must still report each sha variant.
+    await rawSeed('github:acme/widgets#5@oldsha', db, 'a.ts', 1, 'RIGHT', 'on old commit')
+    await rawSeed('github:acme/widgets#5@newsha', db, 'a.ts', 1, 'RIGHT', 'on new commit')
+    await rawSeed('github:acme/widgets#5@newsha', db, 'a.ts', 2, 'RIGHT', 'second on new')
 
     const summaries = await listDraftSummaries(db)
     const variants = summaries.filter((s) => s.owner === 'acme' && s.repo === 'widgets' && s.number === 5)
@@ -534,133 +554,161 @@ describe('clearDraftsForPr', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Orphan-draft recovery — getOrphanDraftsForPr + migrateOrphanDrafts
+// Re-key migration — legacy `@sha` prKeys → stable PR identity prKey
+//
+// Drafts used to be keyed by `provider:owner/repo#number@headSha`, so a new
+// commit orphaned them under the old sha. They are now keyed by PR IDENTITY
+// (`provider:owner/repo#number`, no sha); load() migrates any legacy sha-keyed
+// drafts into the identity key, tagging each with its source commit. Must be
+// LOSSLESS (never drop/overwrite a draft) and IDEMPOTENT (second run = no-op).
 // ---------------------------------------------------------------------------
-describe('getOrphanDraftsForPr', () => {
-  it('finds drafts under a different sha of the same PR identity', async () => {
-    const db = `test-db-orphan-find-${++testIndex}`
-    const { createDraftStore, getOrphanDraftsForPr } = await import('./drafts.svelte')
+describe('re-key migration (legacy @sha → identity)', () => {
+  const IDENTITY = 'github:acme/widgets#5'
 
-    const oldKey = 'github:acme/widgets#5@oldsha'
-    const currentKey = 'github:acme/widgets#5@newsha'
+  /**
+   * Seed a draft DIRECTLY into IndexedDB under a legacy sha-bearing prKey,
+   * bypassing the store (which would itself run the migration). This faithfully
+   * simulates pre-existing on-disk legacy data laid down before the re-key.
+   */
+  async function seedLegacy(prKey: string, db: string, path: string, line: number, side: 'LEFT' | 'RIGHT', body: string, startLine?: number) {
+    const idb = (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB
+    await new Promise<void>((resolve, reject) => {
+      const open = idb.open(db, 1)
+      open.onupgradeneeded = () => {
+        const dbh = open.result
+        if (!dbh.objectStoreNames.contains('drafts')) dbh.createObjectStore('drafts')
+      }
+      open.onsuccess = () => {
+        const dbh = open.result
+        const tx = dbh.transaction('drafts', 'readwrite')
+        const record: Record<string, unknown> = { prKey, path, line, side, body, n: 0, updatedAt: Date.now() }
+        if (startLine != null) record.startLine = startLine
+        tx.objectStore('drafts').put(record, `${prKey}|${path}|${line}|${side}|0`)
+        tx.oncomplete = () => { dbh.close(); resolve() }
+        tx.onerror = () => reject(tx.error)
+      }
+      open.onerror = () => reject(open.error)
+    })
+  }
+  // (seedLegacy mirrors module-level rawSeed but additionally carries startLine.)
 
-    const s = createDraftStore(oldKey, db)
-    await s.load()
-    await s.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'on old commit' })
-    await s.upsert({ path: 'b.ts', line: 2, side: 'LEFT', body: 'another old' })
+  it('adopts legacy @sha1 + @sha2 drafts into the identity key with per-draft headSha; none lost', async () => {
+    const db = `test-db-rekey-multi-${++testIndex}`
+    const { createDraftStore, listDraftSummaries } = await import('./drafts.svelte')
 
-    const orphans = await getOrphanDraftsForPr(currentKey, db)
-    expect(orphans).toHaveLength(2)
-    expect(orphans.every((o) => o.sourcePrKey === oldKey)).toBe(true)
-    expect(orphans.map((o) => o.draft.body).sort()).toEqual(['another old', 'on old commit'])
+    await seedLegacy(`${IDENTITY}@sha1`, db, 'a.ts', 1, 'RIGHT', 'on commit one')
+    await seedLegacy(`${IDENTITY}@sha2`, db, 'b.ts', 9, 'LEFT', 'on commit two', 7)
+
+    // Loading the identity store runs the migration.
+    const store = createDraftStore(IDENTITY, db)
+    await store.load()
+
+    expect(store.count).toBe(2)
+    expect(store.drafts.every((d) => d.prKey === IDENTITY)).toBe(true)
+    const a = store.drafts.find((d) => d.path === 'a.ts')
+    const b = store.drafts.find((d) => d.path === 'b.ts')
+    expect(a?.body).toBe('on commit one')
+    expect(a?.headSha).toBe('sha1')
+    expect(b?.body).toBe('on commit two')
+    expect(b?.headSha).toBe('sha2')
+    expect(b?.startLine).toBe(7) // ranged metadata preserved
+
+    // No @sha-keyed variants remain on disk for this PR — only the identity key.
+    const keys = (await listDraftSummaries(db)).map((x) => x.prKey)
+    expect(keys).toEqual([IDENTITY])
   })
 
-  it('excludes the current prKey itself (live drafts are not orphans)', async () => {
-    const db = `test-db-orphan-excl-current-${++testIndex}`
-    const { createDraftStore, getOrphanDraftsForPr } = await import('./drafts.svelte')
+  it('is idempotent — a second load makes no change', async () => {
+    const db = `test-db-rekey-idem-${++testIndex}`
+    const { createDraftStore } = await import('./drafts.svelte')
 
-    const currentKey = 'github:acme/widgets#5@newsha'
-    const s = createDraftStore(currentKey, db)
-    await s.load()
-    await s.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'current live draft' })
+    await seedLegacy(`${IDENTITY}@sha1`, db, 'a.ts', 1, 'RIGHT', 'first')
+    await seedLegacy(`${IDENTITY}@sha2`, db, 'b.ts', 2, 'LEFT', 'second')
 
-    const orphans = await getOrphanDraftsForPr(currentKey, db)
-    expect(orphans).toEqual([])
+    const store1 = createDraftStore(IDENTITY, db)
+    await store1.load()
+    expect(store1.count).toBe(2)
+    const bodies1 = store1.drafts.map((d) => d.body).sort()
+
+    // Second run, fresh store — must be a no-op (no duplicates, no loss).
+    const store2 = createDraftStore(IDENTITY, db)
+    await store2.load()
+    expect(store2.count).toBe(2)
+    expect(store2.drafts.map((d) => d.body).sort()).toEqual(bodies1)
   })
 
-  it('excludes drafts from a different PR (strict identity match)', async () => {
-    const db = `test-db-orphan-excl-otherpr-${++testIndex}`
-    const { createDraftStore, getOrphanDraftsForPr } = await import('./drafts.svelte')
+  it('keeps BOTH on an anchor collision with different bodies (never overwrite)', async () => {
+    const db = `test-db-rekey-collide-${++testIndex}`
+    const { createDraftStore } = await import('./drafts.svelte')
 
-    const otherPr = 'github:acme/widgets#6@somesha'
-    const otherRepo = 'github:acme/gadgets#5@somesha'
-    const otherProvider = 'gitlab:acme/widgets#5@somesha'
-    const currentKey = 'github:acme/widgets#5@newsha'
+    // Same anchor (a.ts|1|RIGHT|0) under two shas, DIFFERENT bodies.
+    await seedLegacy(`${IDENTITY}@shaA`, db, 'a.ts', 1, 'RIGHT', 'body A')
+    await seedLegacy(`${IDENTITY}@shaB`, db, 'a.ts', 1, 'RIGHT', 'body B')
 
-    for (const k of [otherPr, otherRepo, otherProvider]) {
-      const s = createDraftStore(k, db)
-      await s.load()
-      await s.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: `draft in ${k}` })
-    }
+    const store = createDraftStore(IDENTITY, db)
+    await store.load()
 
-    const orphans = await getOrphanDraftsForPr(currentKey, db)
-    expect(orphans).toEqual([])
+    expect(store.count).toBe(2) // both survived (one appended at next n)
+    expect(store.drafts.map((d) => d.body).sort()).toEqual(['body A', 'body B'])
   })
 
-  it('returns [] when IndexedDB is unavailable', async () => {
-    vi.stubGlobal('indexedDB', undefined)
-    const { getOrphanDraftsForPr } = await import('./drafts.svelte')
-    expect(await getOrphanDraftsForPr('github:acme/widgets#5@newsha', 'whatever')).toEqual([])
+  it('de-dups identical bodies at the same anchor across shas', async () => {
+    const db = `test-db-rekey-dupe-${++testIndex}`
+    const { createDraftStore } = await import('./drafts.svelte')
+
+    await seedLegacy(`${IDENTITY}@shaA`, db, 'a.ts', 1, 'RIGHT', 'identical')
+    await seedLegacy(`${IDENTITY}@shaB`, db, 'a.ts', 1, 'RIGHT', 'identical')
+
+    const store = createDraftStore(IDENTITY, db)
+    await store.load()
+
+    expect(store.count).toBe(1)
+    expect(store.drafts[0].body).toBe('identical')
+  })
+
+  it('leaves drafts from a DIFFERENT PR untouched (strict identity match)', async () => {
+    const db = `test-db-rekey-otherpr-${++testIndex}`
+    const { createDraftStore, listDraftSummaries } = await import('./drafts.svelte')
+
+    await seedLegacy(`${IDENTITY}@sha1`, db, 'a.ts', 1, 'RIGHT', 'mine')
+    await seedLegacy('github:acme/widgets#6@sha1', db, 'a.ts', 1, 'RIGHT', 'other PR')
+    await seedLegacy('gitlab:acme/widgets#5@sha1', db, 'a.ts', 1, 'RIGHT', 'other provider')
+
+    const store = createDraftStore(IDENTITY, db)
+    await store.load()
+    expect(store.count).toBe(1)
+
+    const keys = (await listDraftSummaries(db)).map((x) => x.prKey).sort()
+    expect(keys).toEqual([IDENTITY, 'github:acme/widgets#6@sha1', 'gitlab:acme/widgets#5@sha1'].sort())
   })
 })
 
-describe('migrateOrphanDrafts', () => {
-  it('moves drafts to the target key and deletes the source keys', async () => {
-    const db = `test-db-migrate-move-${++testIndex}`
-    const { createDraftStore, getOrphanDraftsForPr, migrateOrphanDrafts, listDraftSummaries } =
-      await import('./drafts.svelte')
+describe('maker-sha stamping', () => {
+  it('stamps the makerSha onto newly upserted drafts as headSha', async () => {
+    const db = `test-db-makersha-${++testIndex}`
+    const { createDraftStore } = await import('./drafts.svelte')
 
-    const oldKey = 'github:acme/widgets#5@oldsha'
-    const currentKey = 'github:acme/widgets#5@newsha'
+    const store = createDraftStore('github:acme/widgets#5', db, 'abc1234')
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'new draft' })
 
-    const s = createDraftStore(oldKey, db)
-    await s.load()
-    await s.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'on old commit', startLine: undefined })
-    await s.upsert({ path: 'b.ts', line: 9, side: 'LEFT', body: 'ranged', startLine: 7 })
+    expect(store.drafts[0].headSha).toBe('abc1234')
 
-    const orphans = await getOrphanDraftsForPr(currentKey, db)
-    const moved = await migrateOrphanDrafts(currentKey, orphans, db)
-    expect(moved).toBe(2)
-
-    // Source sha variant is gone; target now holds the drafts.
-    const summaries = await listDraftSummaries(db)
-    const keys = summaries.map((x) => x.prKey)
-    expect(keys).toContain(currentKey)
-    expect(keys).not.toContain(oldKey)
-
-    const reload = createDraftStore(currentKey, db)
+    // Round-trips through reload.
+    const reload = createDraftStore('github:acme/widgets#5', db)
     await reload.load()
-    expect(reload.count).toBe(2)
-    const ranged = reload.drafts.find((d) => d.path === 'b.ts')
-    expect(ranged?.startLine).toBe(7)
-    expect(reload.drafts.every((d) => d.prKey === currentKey)).toBe(true)
+    expect(reload.drafts[0].headSha).toBe('abc1234')
   })
 
-  it('de-dups across shas by anchor, keeping the most-recently-updated', async () => {
-    const db = `test-db-migrate-dedup-${++testIndex}`
-    const { createDraftStore, getOrphanDraftsForPr, migrateOrphanDrafts } = await import('./drafts.svelte')
+  it('omits headSha when no makerSha is provided', async () => {
+    const db = `test-db-no-makersha-${++testIndex}`
+    const { createDraftStore } = await import('./drafts.svelte')
 
-    const shaA = 'github:acme/widgets#5@shaA'
-    const shaB = 'github:acme/widgets#5@shaB'
-    const currentKey = 'github:acme/widgets#5@newsha'
+    const store = createDraftStore('github:acme/widgets#5', db)
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'new draft' })
 
-    // Same anchor (a.ts|1|RIGHT|0) under two old shas; shaB written later.
-    const sA = createDraftStore(shaA, db)
-    await sA.load()
-    await sA.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'older body' })
-
-    await new Promise((r) => setTimeout(r, 5))
-
-    const sB = createDraftStore(shaB, db)
-    await sB.load()
-    await sB.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'newer body' })
-
-    const orphans = await getOrphanDraftsForPr(currentKey, db)
-    expect(orphans).toHaveLength(2) // both pre-merge
-
-    const moved = await migrateOrphanDrafts(currentKey, orphans, db)
-    expect(moved).toBe(1) // de-duped to one
-
-    const reload = createDraftStore(currentKey, db)
-    await reload.load()
-    expect(reload.count).toBe(1)
-    expect(reload.drafts[0].body).toBe('newer body')
-  })
-
-  it('is a no-op when there are no orphans', async () => {
-    const db = `test-db-migrate-noop-${++testIndex}`
-    const { migrateOrphanDrafts } = await import('./drafts.svelte')
-    expect(await migrateOrphanDrafts('github:acme/widgets#5@newsha', [], db)).toBe(0)
+    expect(store.drafts[0].headSha).toBeUndefined()
   })
 })
 
