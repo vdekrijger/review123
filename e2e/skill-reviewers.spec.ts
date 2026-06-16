@@ -328,11 +328,10 @@ test('skill-reviewers: anchored finding inline at line, unanchored in per-file b
   // Draft count should increment to 1
   await expect(draftStatus).toContainText('1 comment', { timeout: 5_000 })
 
-  // The card shows the labeled "added as draft" state chip (the ONE state treatment)
-  await expect(inlineCard.locator('.skill-state-chip')).toContainText('added as draft')
-
-  // The finding card should still be visible (not dismissed)
-  await expect(inlineCard.locator('.skill-finding-body')).toBeVisible()
+  // Adding auto-hides the now-redundant finding card (the draft in the diff is
+  // the confirmation). This is a visual cleanup — the decision is still recorded
+  // as 'accepted', NOT a dismiss.
+  await expect(inlineCard).toHaveCount(0)
 })
 
 // ---------------------------------------------------------------------------
