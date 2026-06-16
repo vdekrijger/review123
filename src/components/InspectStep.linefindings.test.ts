@@ -206,12 +206,15 @@ describe('Finding actions — Add as draft / Dismiss', () => {
     expect(arg.side).toBe('RIGHT')
   })
 
-  it('Add-as-draft shows the labeled "added as draft" state chip', async () => {
+  it('Add-as-draft auto-hides the finding card (cleanup — the draft now lives in the diff)', async () => {
     const draftStore = makeDraftStore()
-    renderInspect([makeLineReview(2, 'Chip after add')], { draftStore })
+    renderInspect([makeLineReview(2, 'Auto-hide after add')], { draftStore })
+    expect(screen.getByText('Auto-hide after add')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /add as draft/i }))
+    // Adding records an ACCEPT and creates the draft; the now-redundant finding
+    // card is hidden so the reviewer surface stays clean (NOT a dismiss).
     await waitFor(() => {
-      expect(screen.getByText(/added as draft/i)).toBeInTheDocument()
+      expect(screen.queryByText('Auto-hide after add')).not.toBeInTheDocument()
     })
   })
 

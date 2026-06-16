@@ -385,11 +385,13 @@
   // and per-file in Story mode. Cross-model demoted findings (Plan M) are NO
   // LONGER pulled out into a separate collapsed group: they render alongside the
   // rest, carrying their `verification` so the card shows the lower-confidence
-  // treatment. Nothing is hidden — every counted finding has a visible card.
+  // treatment. Only findings the reviewer has DISMISSED or ADDED-as-draft are
+  // hidden — adding auto-cleans up the card (its draft now lives in the diff);
+  // this is a visual hide, the decision is still recorded as 'accepted'.
   const fileLevelSuggestionsByPath = $derived.by(() => {
     const map = new Map<string, SuggestionEntry[]>()
     for (const [path, suggestions] of skillSuggestionsByPath) {
-      const fileLevelOnly = suggestions.filter(s => s.line === null && !dismissedKeys.has(s.key))
+      const fileLevelOnly = suggestions.filter(s => s.line === null && !dismissedKeys.has(s.key) && !addedDraftKeys.has(s.key))
       if (fileLevelOnly.length > 0) map.set(path, fileLevelOnly)
     }
     return map
@@ -402,7 +404,7 @@
     const map = new Map<string, SkillFinding[]>()
     for (const [path, suggestions] of skillSuggestionsByPath) {
       const lineOnly = suggestions
-        .filter(s => s.line !== null && !dismissedKeys.has(s.key))
+        .filter(s => s.line !== null && !dismissedKeys.has(s.key) && !addedDraftKeys.has(s.key))
         .map(s => ({
           skillName: s.skillName,
           line: s.line as number,
@@ -1160,7 +1162,7 @@
           {/if}
           {#if fileLevelSuggestionsByPath.has(file.filename)}
             {#each (fileLevelSuggestionsByPath.get(file.filename) ?? []) as suggestion (suggestion.key)}
-              {#if !dismissedKeys.has(suggestion.key)}
+              {#if !dismissedKeys.has(suggestion.key) && !addedDraftKeys.has(suggestion.key)}
                 <div class="file-level-finding">
                 <SkillFindingCard
                   skillName={suggestion.skillName}
