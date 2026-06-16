@@ -385,15 +385,16 @@ describe('multi-generator fusion in runVerdictTask (Plan P)', () => {
 
     // The single-generator verdict is produced by the active model via the
     // WithUsage stub; make it a real verdict so the verify path runs over it.
-    const deps = makeDeps()
+    // Verifier (anthropic) confirms via llmJsonWithRepairFor — pass it through
+    // makeDeps (the supported override) so the deps type carries the property.
+    const llmJsonWithRepairFor = vi.fn().mockImplementation(async (_cfg: unknown, _opts: unknown, validate: (x: unknown) => unknown) => {
+      return { result: validate({ verdicts: [] }), usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }
+    })
+    const deps = makeDeps({ llmJsonWithRepairFor })
     deps.llmJsonWithRepairWithUsage.mockImplementation(async (_opts: unknown, validate: (x: unknown) => unknown) => {
       const v = VERDICT_BY_PROVIDER.deepseek
       if (validate(v) !== null) return { result: v, usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }
       return { result: validate({ skillName: 'x', findings: [] }), usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }
-    })
-    // Verifier (anthropic) confirms via llmJsonWithRepairFor.
-    deps.llmJsonWithRepairFor = vi.fn().mockImplementation(async (_cfg: unknown, _opts: unknown, validate: (x: unknown) => unknown) => {
-      return { result: validate({ verdicts: [] }), usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }
     })
 
     const run = createAiRun(makeInput(), deps)
