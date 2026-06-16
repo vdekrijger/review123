@@ -36,7 +36,21 @@ export interface OpenRouterModel {
   id: string
   context_length?: number | null
   pricing?: { prompt?: string | null; completion?: string | null } | null
+  /** Unix SECONDS the model was added upstream — gates auto-additions. */
+  created?: number | null
 }
+
+/**
+ * Auto-add window. OpenRouter lists EVERY historical model (gpt-3.5, claude-2,
+ * …), so "add everything we don't already list" would bulk-import ~100 obsolete
+ * models. We keep a CURATED lineup: only models CREATED within this window are
+ * auto-added — that captures genuinely-new releases fast (so we don't wait to
+ * support them) without dragging in the back-catalog. Older upstream models we
+ * don't list are deliberately skipped (curation is a human call). Pricing
+ * updates and removal-flagging are independent of this window.
+ */
+export const ADD_RECENCY_DAYS = 60
+const ADD_RECENCY_MS = ADD_RECENCY_DAYS * 24 * 60 * 60 * 1000
 
 /** Our provider id → the OpenRouter model-id prefix that namespaces it. */
 export const PROVIDER_PREFIX: Record<ProviderId, string> = {
@@ -154,7 +168,12 @@ const PROVIDER_IDS: ProviderId[] = ['deepseek', 'openai', 'anthropic', 'gemini']
  * models keep their position, additions append in upstream order) and empty
  * `changes` when nothing drifted.
  */
-export function computeCatalogSync(openrouterModels: OpenRouterModel[], currentCatalog: Catalog): SyncResult {
+export function computeCatalogSync(
+  openrouterModels: OpenRouterModel[],
+  currentCatalog: Catalog,
+  nowMs: number,
+): SyncResult {
+  const addCutoffSec = (nowMs - ADD_RECENCY_MS) / 1000
   const added: AddedModel[] = []
   const pricingUpdated: PricingUpdate[] = []
   const maybeRemoved: MaybeRemoved[] = []
@@ -193,10 +212,14 @@ export function computeCatalogSync(openrouterModels: OpenRouterModel[], currentC
       }
     }
 
-    // 2) New upstream models we don't list → ADD (upstream order is stable).
+    // 2) New upstream models we don't list → ADD, but ONLY when recently
+    //    created (see ADD_RECENCY_DAYS). This avoids importing OpenRouter's
+    //    entire historical back-catalog while still picking up fresh releases.
     for (const m of openrouterModels) {
       const bare = upstreamSuffixFor(prefix, m.id)
       if (bare == null || seenIds.has(bare)) continue
+      // Skip models with no created timestamp or older than the window.
+      if (m.created == null || m.created < addCutoffSec) continue
       seenIds.add(bare)
       const newModel: ModelDef = {
         id: bare,
@@ -335,7 +358,7 @@ async function main(): Promise<void> {
   const upstream = Array.isArray(body.data) ? body.data : []
   console.log(`Received ${upstream.length} upstream models.`)
 
-  const { nextCatalog, changes } = computeCatalogSync(upstream, currentCatalog)
+  const { nextCatalog, changes } = computeCatalogSync(upstream, currentCatalog, Date.now())
 
   if (isEmptyChanges(changes)) {
     console.log(`${NO_CHANGES_MARKER}: catalog already current — no drift.`)
