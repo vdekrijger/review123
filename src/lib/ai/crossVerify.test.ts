@@ -181,6 +181,34 @@ describe('crossVerify — orchestration', () => {
     expect(v.surfaced).toBe(true)
     expect(v.perModel[1].verdict).toBe('uncertain')
   })
+
+  it('perModel carries MODEL + LENS per verifier; the generator row carries model and NO lens', async () => {
+    const verify: VerifyFn = async () => ({
+      result: { verdicts: [{ id: 'f1', verdict: 'confirm', reason: 'real' }] },
+    })
+    const out = await crossVerify(
+      [finding('f1')],
+      'deepseek',
+      [modelCfg('anthropic', 'claude-sonnet-4-6'), modelCfg('anthropic', 'claude-haiku-4-5')],
+      verify,
+      ['correctness', 'security'],
+      'deepseek-v4-flash',
+    )
+    const v = out.byId.get('f1')!
+    // Generator/raiser row: model present, lens absent.
+    expect(v.perModel[0]).toEqual({
+      provider: 'deepseek',
+      verdict: 'confirm',
+      reason: '',
+      model: 'deepseek-v4-flash',
+    })
+    expect(v.perModel[0].lens).toBeUndefined()
+    // Verifier rows: each carries its model id + assigned lens.
+    expect(v.perModel[1].model).toBe('claude-sonnet-4-6')
+    expect(v.perModel[1].lens).toBe('correctness')
+    expect(v.perModel[2].model).toBe('claude-haiku-4-5')
+    expect(v.perModel[2].lens).toBe('security')
+  })
 })
 
 describe('isDecisiveVote — Plan N decisiveness', () => {
@@ -397,6 +425,30 @@ describe('fuseConfirm — recall + unique catch', () => {
     expect(impB.uniqueCatch).toBe(1)
     const impA = out.generatorImpact.find((g) => g.generator === 'A')!
     expect(impA.uniqueCatch).toBe(0)
+  })
+
+  it('fuseConfirm perModel carries raiser model (no lens) + verifier model + lens', async () => {
+    const merged = mergeGeneratorFindings([
+      { generator: 'A', cfg: cfgA, findings: [vf('a1', 'src/x.ts', 5, 'B did not catch this one')] },
+    ])
+    const verify: VerifyFn = async () => ({
+      result: { verdicts: [{ id: 'a1', verdict: 'refute' as const, reason: 'noise' }] },
+    })
+    const out = await fuseConfirm(
+      merged,
+      [{ generator: 'A', cfg: cfgA }, { generator: 'B', cfg: cfgB }],
+      verify,
+      ['correctness', 'security'],
+    )
+    const v = out.merged[0].verification
+    // Raiser row: provider is the generator NAME ('A'); model = A's config model, no lens.
+    const raiser = v.perModel.find((p) => p.provider === 'A')!
+    expect(raiser.model).toBe(cfgA.model.id)
+    expect(raiser.lens).toBeUndefined()
+    // Verifier row (B / anthropic): provider is the providerId; model + its lens (index 1 → security).
+    const verifier = v.perModel.find((p) => p.provider === 'anthropic')!
+    expect(verifier.model).toBe(cfgB.model.id)
+    expect(verifier.lens).toBe('security')
   })
 
   it("a finding one model raised alone that others REFUTE demotes", async () => {

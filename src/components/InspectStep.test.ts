@@ -5,6 +5,7 @@ import type { AttentionResult } from '../lib/ai/schemas'
 import type { PrFile } from '../lib/github/types'
 import type { SkillReviewEntry } from '../lib/ai/run.svelte'
 import { createViewedStore } from '../lib/viewed/viewed.svelte'
+import { createDraftStore } from '../lib/drafts/drafts.svelte'
 import { setShowTokenCost, setAiProvider, setAiModel } from '../lib/settings/settings'
 import { _resetSettingsStateForTest } from '../lib/settings/settingsState.svelte'
 
@@ -241,101 +242,6 @@ describe('InspectStep — skill-reviewer token-usage footer', () => {
 })
 
 // ---------------------------------------------------------------------------
-// InspectStep — per-model cost + impact breakdown on skill-reviewer cards (Plan N)
-// When a reviewer's cross-verify ran with an ensemble of >1 model, render a
-// compact per-model table (model · impact, cost gated on showTokenCost) reusing
-// the verdict step's ModelBreakdownTable. A single-model reviewer keeps ONLY the
-// plain aggregate token footer.
-// ---------------------------------------------------------------------------
-
-describe('InspectStep — per-model skill breakdown (Plan N)', () => {
-  const USAGE = { prompt_tokens: 8000, completion_tokens: 200, total_tokens: 8200 }
-
-  const ensembleModels = [
-    {
-      providerId: 'anthropic',
-      modelId: 'claude-opus-4-8',
-      role: 'generator' as const,
-      usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 },
-      surfaced: 3,
-    },
-    {
-      providerId: 'anthropic',
-      modelId: 'claude-haiku-4-5',
-      role: 'verifier' as const,
-      usage: { prompt_tokens: 800, completion_tokens: 200, total_tokens: 1000 },
-      impact: { confirms: 1, refutes: 1, uncertains: 0, decisive: 1 },
-    },
-  ]
-
-  const ensembleEntry = (): SkillReviewEntry => ({
-    skillId: 'reviewer-1',
-    name: 'My Reviewer',
-    state: { status: 'done', value: { skillName: 'My Reviewer', findings: [] }, usage: USAGE, models: ensembleModels },
-  })
-
-  const singleEntry = (): SkillReviewEntry => ({
-    skillId: 'reviewer-2',
-    name: 'Solo Reviewer',
-    state: { status: 'done', value: { skillName: 'Solo Reviewer', findings: [] }, usage: USAGE },
-  })
-
-  beforeEach(() => {
-    _resetSettingsStateForTest()
-  })
-
-  it('renders the per-model table when the ensemble has >1 model', async () => {
-    const files = makeFiles(['a.ts'])
-    const { container } = render(InspectStep, {
-      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [ensembleEntry()] },
-    })
-    // Collapsible summary present
-    expect(container.querySelector('[data-skill-models="reviewer-1"]')).not.toBeNull()
-    expect(screen.getByText(/My Reviewer — 2 models/)).toBeInTheDocument()
-    // Generator + verifier impact readout (always shown, not gated on cost)
-    expect(screen.getByText('3 surfaced findings')).toBeInTheDocument()
-    expect(screen.getByText(/1 decisive refute \(removed a finding\)/)).toBeInTheDocument()
-    // Model ids rendered
-    expect(screen.getByText('claude-opus-4-8')).toBeInTheDocument()
-    expect(screen.getByText('claude-haiku-4-5')).toBeInTheDocument()
-  })
-
-  it('gates the cost column on showTokenCost', () => {
-    const files = makeFiles(['a.ts'])
-    // Off → no cost column
-    const off = render(InspectStep, {
-      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [ensembleEntry()] },
-    })
-    expect(off.container.querySelector('.skill-model-breakdowns .cost-col')).toBeNull()
-    off.unmount()
-
-    setShowTokenCost(true)
-    _resetSettingsStateForTest()
-    const on = render(InspectStep, {
-      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [ensembleEntry()] },
-    })
-    expect(on.container.querySelector('.skill-model-breakdowns .cost-col')).not.toBeNull()
-  })
-
-  it('shows ONLY the plain aggregate footer for a single-model reviewer (no per-model table)', () => {
-    setShowTokenCost(true)
-    setAiProvider('anthropic')
-    setAiModel('claude-sonnet-4-6')
-    _resetSettingsStateForTest()
-    const files = makeFiles(['a.ts'])
-    const { container } = render(InspectStep, {
-      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [singleEntry()] },
-    })
-    // Plain aggregate footer present, byte-identical behaviour
-    const footer = container.querySelector('.skill-usage-footer')
-    expect(footer).not.toBeNull()
-    expect(footer!.textContent).toContain('8.2k tokens')
-    // No per-model breakdown block
-    expect(container.querySelector('.skill-model-breakdowns')).toBeNull()
-  })
-})
-
-// ---------------------------------------------------------------------------
 // InspectStep — reviewer chip → finding navigation (uniform popover)
 // Clicking a reviewer's done result chip (or its suggestion summary chip):
 //   • ANY finding count (1 or N) → opens a popover listing each finding
@@ -491,34 +397,66 @@ describe('InspectStep — reviewer chip → finding navigation', () => {
     expect(spy).not.toHaveBeenCalled()
   })
 
-  it('suggestion summary chip mirrors result chip — single finding opens a popover (uniform)', async () => {
+  it('null-line finding lives in the popover (no separate bottom card) and jumps to its key', async () => {
     const spy = vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
-    const files = makeFiles(['a.ts'])
-    const body = 'a suggestion'
-    const skillReviews = [reviewEntry([{ path: 'a.ts', line: 7, body }])]
-    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews } })
-
-    const summary = screen.getByRole('button', { name: `Show 1 suggestion from ${reviewerName}` })
-    await fireEvent.click(summary)
-    // Uniform: a single-suggestion summary chip opens a popover, it does NOT jump.
-    expect(spy).not.toHaveBeenCalled()
-    const menu = container.querySelector('.findings-popover[role="menu"]')
-    expect(menu).not.toBeNull()
-    const items = menu!.querySelectorAll('[role="menuitem"]')
-    expect(items).toHaveLength(1)
-    await fireEvent.click(items[0] as HTMLElement)
-    expect(spy).toHaveBeenCalledWith('a.ts', keyOf('a.ts', 7, body))
-  })
-
-  it('rendered finding card carries the matching data-finding-key (jump target exists)', () => {
-    vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
     const files = makeFiles(['a.ts'])
     const body = 'a finding on a null line'
     const skillReviews = [reviewEntry([{ path: 'a.ts', line: null, body }])]
     const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews } })
-    // File-level (null-line) finding renders above the file with the key.
-    const card = container.querySelector(`[data-finding-key="${keyOf('a.ts', null, body)}"]`)
-    expect(card).not.toBeNull()
+    // The "bottom" file-level card is gone — the finding lives in the chip popover.
+    expect(container.querySelector('.file-level-finding')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: `Show 1 finding from ${reviewerName}` }))
+    const item = container.querySelector('.findings-popover [role="menuitem"]') as HTMLElement
+    expect(item).not.toBeNull()
+    expect(item.textContent).toContain('a finding on a null line')
+    await fireEvent.click(item)
+    expect(spy).toHaveBeenCalledWith('a.ts', keyOf('a.ts', null, body))
+  })
+
+  it('renders the full finding body as markdown in the popover (code spans, not truncated)', async () => {
+    vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
+    const files = makeFiles(['a.ts'])
+    // Backticked token + a long body that the old 120-char title would have cut.
+    const body = 'Guard `triggered_metadata.breaching_rows` before indexing — ' +
+      'this is a deliberately long finding body that exceeds one hundred and twenty characters so truncation would be visible if it happened.'
+    const skillReviews = [reviewEntry([{ path: 'a.ts', line: 4, body }])]
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews } })
+    await fireEvent.click(screen.getByRole('button', { name: `Show 1 finding from ${reviewerName}` }))
+    const bodyEl = container.querySelector('.findings-popover-body')!
+    expect(bodyEl).not.toBeNull()
+    // Backticked token rendered as <code>, NOT literal backticks.
+    const code = bodyEl.querySelector('code')
+    expect(code).not.toBeNull()
+    expect(code!.textContent).toBe('triggered_metadata.breaching_rows')
+    expect(bodyEl.innerHTML).not.toContain('`')
+    // Full body shown — the tail past 120 chars is present (not truncated).
+    expect(bodyEl.textContent).toContain('if it happened.')
+  })
+
+  it('Add-as-draft from a popover entry upserts a draft and hides the finding', async () => {
+    vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
+    const store = createDraftStore('testorg/testrepo#1@sha-popover', `review123-popover-add-${Date.now()}`)
+    const upsert = vi.spyOn(store, 'upsert')
+    const files = makeFiles(['a.ts'])
+    const body = 'Add me as a draft'
+    const skillReviews = [reviewEntry([{ path: 'a.ts', line: null, body }])]
+    render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: store, skillReviews } })
+    await fireEvent.click(screen.getByRole('button', { name: `Show 1 finding from ${reviewerName}` }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Add as draft comment' }))
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ path: 'a.ts', body }))
+    // Added-as-draft hides the finding → the chip no longer reports it.
+    expect(screen.queryByRole('button', { name: `Show 1 finding from ${reviewerName}` })).toBeNull()
+  })
+
+  it('Dismiss from a popover entry hides the finding (records the decision)', async () => {
+    vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
+    const files = makeFiles(['a.ts'])
+    const body = 'Dismiss me'
+    const skillReviews = [reviewEntry([{ path: 'a.ts', line: null, body }])]
+    render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews } })
+    await fireEvent.click(screen.getByRole('button', { name: `Show 1 finding from ${reviewerName}` }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Dismiss finding' }))
+    expect(screen.queryByRole('button', { name: `Show 1 finding from ${reviewerName}` })).toBeNull()
   })
 })
 
@@ -586,16 +524,19 @@ describe('InspectStep — demoted + file-level findings visible in both modes', 
     expect(card!.querySelector('.skill-lower-confidence-chip')?.textContent).toContain('flagged by 1/3')
   })
 
-  it('a demoted null-line finding renders as a file-level card (visible jump target)', () => {
+  it('a demoted null-line finding is reachable via the chip popover (no bottom card)', async () => {
+    vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
     const files = makeFiles(['a.ts'])
     const body = 'Whole-file concern (demoted)'
     const skillReviews = [reviewEntry([{ path: 'a.ts', line: null, body, verification: demotedVerification(1, 2) }])]
     const { container } = render(InspectStep, {
       props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews },
     })
-    const card = container.querySelector(`[data-finding-key="${keyOf('a.ts', null, body)}"]`)
-    expect(card).not.toBeNull()
-    expect(card!.classList.contains('lower-confidence')).toBe(true)
+    // No separate bottom card — the (demoted, null-line) finding lives in the popover.
+    expect(container.querySelector('.file-level-finding')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: `Show 1 finding from ${reviewerName}` }))
+    const item = container.querySelector('.findings-popover [role="menuitem"]')!
+    expect(item.textContent).toContain('Whole-file concern (demoted)')
   })
 
   it('Story mode renders file-level (null-line) findings with their jump-target key', () => {

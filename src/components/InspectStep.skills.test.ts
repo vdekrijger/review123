@@ -8,7 +8,6 @@
  *   - "Add as draft" action calls draftStore.upsert
  *   - "Dismiss" hides the finding (session-only)
  *   - Findings for unknown paths are ignored
- *   - Compact summary line per persona: "{persona}: {n} suggestions"
  *   - No button shown when no skills or no key
  */
 
@@ -161,19 +160,6 @@ describe('InspectStep — "Run my reviewers" button', () => {
 // ---------------------------------------------------------------------------
 
 describe('InspectStep — skill suggestion annotations', () => {
-  it('renders a summary line for a persona', () => {
-    const files = makeFiles(['src/foo.ts'])
-    const review = makeSkillReview()
-    render(InspectStep, {
-      props: {
-        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null,
-        skillReviews: [review],
-      },
-    })
-    // Summary: "Security Reviewer: 1 suggestion"
-    expect(screen.getByText(/Security Reviewer.*1 suggestion/i)).toBeInTheDocument()
-  })
-
   it('renders skill finding body text', () => {
     const files = makeFiles(['src/foo.ts'])
     const review = makeSkillReview()
@@ -274,6 +260,9 @@ describe('InspectStep — skill suggestion annotations', () => {
         skillReviews: [review],
       },
     })
+    // A null-line (file-level) finding now lives ONLY in the reviewer-chip
+    // popover (no separate "bottom" card). Open it, then Add as draft.
+    await userEvent.click(screen.getByRole('button', { name: /Show 1 finding from Security Reviewer/i }))
     const addBtn = screen.getByRole('button', { name: /add as draft/i })
     await userEvent.click(addBtn)
     expect(draftStore.upsert).toHaveBeenCalledOnce()
@@ -351,7 +340,7 @@ describe('InspectStep — no-findings all-clear state (v10)', () => {
     expect(screen.queryByText(/0 findings/i)).not.toBeInTheDocument()
   })
 
-  it('renders no finding cards, action buttons, or persona summary lines', () => {
+  it('renders no finding cards or action buttons for a clean run', () => {
     const files = makeFiles(['src/foo.ts'])
     render(InspectStep, {
       props: {
@@ -362,7 +351,7 @@ describe('InspectStep — no-findings all-clear state (v10)', () => {
     expect(screen.queryByRole('note')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /add as draft/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /dismiss/i })).not.toBeInTheDocument()
-    // No "{persona}: N suggestions" summary line for a clean run
+    // Guard: the removed gray "{persona}: N suggestions" summary chip stays gone.
     expect(screen.queryByText(/suggestion/i)).not.toBeInTheDocument()
   })
 

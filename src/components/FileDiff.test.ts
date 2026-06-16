@@ -145,6 +145,47 @@ describe('FileDiff — viewed state', () => {
     expect(container.querySelector('article.file-diff')!.classList.contains('is-collapsed')).toBe(true)
   })
 
+  // Story Mode manual view: ticking the Viewed checkbox is a DELIBERATE user
+  // action and should collapse the diff even though forceExpanded keeps the
+  // narrated/auto-marked diff expanded by default. The parent (slideshow store)
+  // flips `viewed` true in response to onToggleViewed — simulated here via
+  // rerender — and the diff then collapses to header-only.
+  it('forceExpanded=true: a MANUAL checkbox view collapses (and unviewing re-expands)', async () => {
+    const result = render(FileDiff, { props: { file: modified, mode: 'unified', viewed: false, forceExpanded: true } })
+    const { container } = result
+    const article = container.querySelector('article.file-diff')!
+    expect(article.classList.contains('is-collapsed')).toBe(false)
+
+    // User ticks the checkbox → onToggleViewed fires; the parent flips viewed=true.
+    const checkbox = screen.getByRole('checkbox', { name: /mark src\/a\.ts as viewed/i })
+    await fireEvent.change(checkbox, { target: { checked: true } })
+    await result.rerender({ file: modified, mode: 'unified', viewed: true, forceExpanded: true })
+    await tick()
+    // Collapses despite forceExpanded — the user deliberately marked it viewed.
+    expect(container.querySelector('article.file-diff')!.classList.contains('is-collapsed')).toBe(true)
+
+    // User unticks → the parent flips viewed=false → re-expands.
+    const checkbox2 = screen.getByRole('checkbox', { name: /mark src\/a\.ts as viewed/i })
+    await fireEvent.change(checkbox2, { target: { checked: false } })
+    await result.rerender({ file: modified, mode: 'unified', viewed: false, forceExpanded: true })
+    await tick()
+    expect(container.querySelector('article.file-diff')!.classList.contains('is-collapsed')).toBe(false)
+  })
+
+  // Narrated-diff regression guard: under forceExpanded, a viewed state set
+  // EXTERNALLY (auto-mark on slide advance) WITHOUT a checkbox click must stay
+  // expanded — the diff being narrated keeps its body + syntax highlighting.
+  it('forceExpanded=true: an externally-set viewed (no user click) stays expanded', async () => {
+    const result = render(FileDiff, { props: { file: modified, mode: 'unified', viewed: false, forceExpanded: true } })
+    // Parent auto-marks the file viewed (coverage tracking) — no checkbox click.
+    await result.rerender({ file: modified, mode: 'unified', viewed: true, forceExpanded: true })
+    await tick()
+    expect(result.container.querySelector('article.file-diff')!.classList.contains('is-collapsed')).toBe(false)
+    // Checkbox still reflects the viewed bookkeeping.
+    const checkbox = screen.getByRole('checkbox', { name: /mark src\/a\.ts as viewed/i })
+    expect((checkbox as HTMLInputElement).checked).toBe(true)
+  })
+
   it('changedSinceViewed=true: amber badge is shown', () => {
     render(FileDiff, { props: { file: modified, mode: 'unified', changedSinceViewed: true } })
     expect(screen.getByText(/changed since you viewed it/i)).toBeInTheDocument()

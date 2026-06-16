@@ -75,13 +75,31 @@
       : '',
   )
 
-  // Tooltip: one line per model's verdict, e.g. "DeepSeek: confirm — raised it".
-  const verifyTooltip = $derived(
+  // Verdict indicator glyphs for the readable tooltip (color comes from the
+  // verdict class). confirm → ✓, refute → ✗, uncertain → ?.
+  const VERDICT_GLYPH = { confirm: '✓', refute: '✗', uncertain: '?' } as const
+
+  // Structured per-vote rows for the styled hover/focus tooltip. Each row shows a
+  // color-coded verdict indicator, the specific MODEL (falling back to provider
+  // for old cached findings that predate model/lens), the LENS as a muted tag
+  // (the generator/raiser row has no lens → shows "raised it"), and the reason.
+  const verifyRows = $derived(
+    (verification?.perModel ?? []).map((m) => ({
+      verdict: m.verdict,
+      glyph: VERDICT_GLYPH[m.verdict],
+      model: m.model ?? m.provider,
+      lens: m.lens,
+      reason: m.reason,
+    })),
+  )
+
+  // Tooltip heading mirrors the chip but in sentence case.
+  const verifyHeading = $derived(
     verification
-      ? verification.perModel
-          .map((m) => `${m.provider}: ${m.verdict}${m.reason ? ` — ${m.reason}` : ''}`)
-          .join('\n')
-      : ''
+      ? verification.surfaced
+        ? `Confirmed by ${verification.confirmedBy}/${verification.polledModels} models`
+        : lowerConfidenceLabel.charAt(0).toUpperCase() + lowerConfidenceLabel.slice(1)
+      : '',
   )
 </script>
 
@@ -98,20 +116,54 @@
       <span class="skill-raised-chip" aria-label={raisedByLabel}>{raisedByLabel}</span>
     {/if}
     {#if verification && verification.surfaced}
-      <span
-        class="skill-verify-chip"
-        title={verifyTooltip}
-        aria-label="Confirmed by {verification.confirmedBy} of {verification.polledModels} models"
-      >✓ confirmed by {verification.confirmedBy}/{verification.polledModels} models</span>
+      <span class="skill-verify-tip-anchor">
+        <span
+          class="skill-verify-chip"
+          tabindex="0"
+          role="button"
+          aria-label="Confirmed by {verification.confirmedBy} of {verification.polledModels} models"
+        >✓ confirmed by {verification.confirmedBy}/{verification.polledModels} models</span>
+        {@render verifyTip()}
+      </span>
     {:else if isLowerConfidence}
-      <span
-        class="skill-lower-confidence-chip"
-        title={verifyTooltip}
-        aria-label={lowerConfidenceLabel}
-      >{lowerConfidenceLabel}</span>
+      <span class="skill-verify-tip-anchor">
+        <span
+          class="skill-lower-confidence-chip"
+          tabindex="0"
+          role="button"
+          aria-label={lowerConfidenceLabel}
+        >{lowerConfidenceLabel}</span>
+        {@render verifyTip()}
+      </span>
     {/if}
     <span class="skill-severity-chip severity-chip-{severity}">{severity}</span>
   </div>
+
+  {#snippet verifyTip()}
+    <!-- Styled hover/focus tooltip: one scannable row per polled model. Hidden
+         until the sibling chip is hovered or focused (CSS :hover/:focus-within),
+         and removed from the a11y tree (aria-hidden) since the chip's aria-label
+         already summarizes it for screen readers. -->
+    <div class="skill-verify-tip" role="presentation" aria-hidden="true">
+      <div class="skill-verify-tip-heading">{verifyHeading}</div>
+      <ul class="skill-verify-tip-list">
+        {#each verifyRows as row}
+          <li class="skill-verify-tip-row">
+            <span class="skill-verify-tip-glyph verdict-{row.verdict}" aria-hidden="true">{row.glyph}</span>
+            <span class="skill-verify-tip-model">{row.model}</span>
+            {#if row.lens}
+              <span class="skill-verify-tip-lens">{row.lens}</span>
+            {:else}
+              <span class="skill-verify-tip-lens skill-verify-tip-lens-raised">raised it</span>
+            {/if}
+            {#if row.reason}
+              <span class="skill-verify-tip-reason">{row.reason}</span>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    </div>
+  {/snippet}
   <!-- Full block markdown (paragraphs, fenced code, lists, inline code/bold/links).
        MarkdownView enforces the sanitization boundary (marked → DOMPurify). -->
   <div class="skill-finding-body">
@@ -283,6 +335,131 @@
     border: 1px dashed var(--border-subtle);
     white-space: nowrap;
     cursor: help;
+  }
+
+  .skill-verify-chip:focus-visible,
+  .skill-lower-confidence-chip:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  /* ---- Styled verify tooltip (Plan M verify-tooltip) ----
+     Replaces the cramped native `title`: a readable, scannable popover with one
+     row per polled model (verdict indicator + model + lens tag + reason). Shown
+     on hover OR keyboard focus of the sibling chip; capped width + wrapping so it
+     never overflows the viewport. CSS-only (:hover / :focus-within) — no JS. */
+  .skill-verify-tip-anchor {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .skill-verify-tip {
+    position: absolute;
+    top: calc(100% + 0.35rem);
+    left: 0;
+    z-index: 20;
+    width: max-content;
+    max-width: min(22rem, 90vw);
+    padding: 0.5rem 0.6rem;
+    border-radius: 6px;
+    background: var(--surface-raised, var(--bg));
+    border: 1px solid var(--border-subtle);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+    font-size: 0.72rem;
+    line-height: 1.35;
+    color: var(--text, inherit);
+    /* Hidden until the chip is hovered/focused; pointer-events off when hidden so
+       it never blocks clicks on what's behind it. */
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.1s ease-out;
+  }
+
+  /* Right-align the tooltip when the chip sits near the right edge of the row so
+     it doesn't push past the card / viewport. */
+  .skill-verify-tip-anchor:last-of-type .skill-verify-tip {
+    left: auto;
+    right: 0;
+  }
+
+  .skill-verify-tip-anchor:hover .skill-verify-tip,
+  .skill-verify-tip-anchor:focus-within .skill-verify-tip {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .skill-verify-tip-heading {
+    font-weight: 700;
+    font-size: 0.72rem;
+    margin-bottom: 0.35rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .skill-verify-tip-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .skill-verify-tip-row {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    align-items: baseline;
+    column-gap: 0.35rem;
+    row-gap: 0.1rem;
+  }
+
+  .skill-verify-tip-glyph {
+    font-weight: 700;
+    text-align: center;
+    width: 1em;
+  }
+
+  .skill-verify-tip-glyph.verdict-confirm {
+    color: var(--legend-added-color, green);
+  }
+
+  .skill-verify-tip-glyph.verdict-refute {
+    color: var(--legend-removed-color, var(--danger, crimson));
+  }
+
+  .skill-verify-tip-glyph.verdict-uncertain {
+    color: var(--legend-changed-color, var(--text-muted));
+  }
+
+  .skill-verify-tip-model {
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .skill-verify-tip-lens {
+    font-size: 0.64rem;
+    font-weight: 600;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
+    padding: 0.02rem 0.3rem;
+    border-radius: 999px;
+    background: var(--surface-sunken, var(--bg));
+    color: var(--text-muted);
+    border: 1px solid var(--border-subtle);
+    white-space: nowrap;
+    justify-self: start;
+  }
+
+  .skill-verify-tip-lens-raised {
+    border-style: dashed;
+    background: transparent;
+  }
+
+  .skill-verify-tip-reason {
+    grid-column: 2 / -1;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
   }
 
   /* ---- Unresolvable-anchor note: muted, labeled, mono ---- */

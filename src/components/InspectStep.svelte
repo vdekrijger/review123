@@ -1,8 +1,6 @@
 <script lang="ts">
   import FileDiff from './FileDiff.svelte'
   import type { SkillFinding } from './FileDiff.svelte'
-  import SkillFindingCard from './SkillFindingCard.svelte'
-  import ModelBreakdownTable from './ModelBreakdownTable.svelte'
   import FileTree from './FileTree.svelte'
   import type { PrFile } from '../lib/github/types'
   import type { DiffMode } from '../lib/settings/settings'
@@ -21,6 +19,7 @@
   import type { PrComment } from '../lib/github/comments'
   import type { ReplyOutcome } from '../lib/github/replies'
   import { slugify } from '../lib/slug'
+  import { renderInlineMarkdown } from '../lib/markdown/render'
   import { scrollToFileCard, jumpToFinding } from '../lib/diff/jumpToFile'
   import { observeDiffColHeight } from '../lib/tree/diffColHeight'
   import type { SkillReviewEntry, AskFocus } from '../lib/ai/run.svelte'
@@ -423,16 +422,14 @@
   // Chip → finding navigation (reveal/jump from the reviewer result chip)
   // ---------------------------------------------------------------------------
   // A flat, navigable list of a reviewer's findings: each entry carries the
-  // finding's path, line, a one-line title (first line of the body) and the SAME
+  // finding's path, line, the FULL body (rendered as inline markdown in the
+  // popover — so backticked code reads as <code>, never truncated) and the SAME
   // key the rendered SkillFindingCard emits as data-finding-key — so clicking an
-  // entry scrolls+flashes the exact card (jumpToFinding). Keyed by skillId.
-  type NavFinding = { key: string; path: string; line: number | null; title: string }
-
-  function findingTitle(body: string): string {
-    // First non-empty line, markdown stripped of leading list/heading markers.
-    const firstLine = body.split('\n').map(l => l.trim()).find(l => l.length > 0) ?? body.trim()
-    return firstLine.replace(/^[-*#>\s]+/, '').slice(0, 120)
-  }
+  // entry scrolls+flashes the exact card (jumpToFinding). The popover is now the
+  // home for findings that aren't anchored in the visible diff (the old "bottom"
+  // file-level cards were removed), so each entry also carries what
+  // addFindingAsDraft / dismissFinding need to act on the finding.
+  type NavFinding = { key: string; path: string; line: number | null; body: string }
 
   const navFindingsBySkill = $derived.by(() => {
     const map = new Map<string, NavFinding[]>()
@@ -442,12 +439,16 @@
       const entries: NavFinding[] = []
       for (const finding of result.findings) {
         if (!prPathSet.has(finding.path)) continue
+        const key = `${review.skillId}:${finding.path}:${finding.line}:${finding.body.slice(0, 30)}`
+        // Hide a finding once it's been dismissed or added as a draft — same
+        // visual-hide rule the inline/file-level cards used (decision still recorded).
+        if (dismissedKeys.has(key) || addedDraftKeys.has(key)) continue
         entries.push({
           // MUST match SkillFindingCard's data-finding-key (see skillSuggestionsByPath).
-          key: `${review.skillId}:${finding.path}:${finding.line}:${finding.body.slice(0, 30)}`,
+          key,
           path: finding.path,
           line: finding.line,
-          title: findingTitle(finding.body),
+          body: finding.body,
         })
       }
       if (entries.length > 0) map.set(review.skillId, entries)
@@ -762,6 +763,40 @@
   }
 </script>
 
+<!-- Popover entry: the full finding body rendered as inline markdown (backticked
+     code reads as <code>, never truncated). The body is the navigable menuitem
+     (click → jump+flash the inline card / fallback). Add-as-draft + Dismiss live
+     here too, because the popover is now the home for findings that aren't
+     anchored in the visible diff (the old "bottom" file-level cards were removed). -->
+{#snippet findingEntry(nav: NavFinding)}
+  <div class="findings-popover-entry">
+    <button
+      type="button"
+      role="menuitem"
+      class="findings-popover-item"
+      onclick={() => jumpToNavFinding(nav)}
+    >
+      <span class="findings-popover-loc">{nav.path}{nav.line !== null ? `:${nav.line}` : ''}</span>
+      <!-- eslint-disable-next-line svelte/no-at-html-tags — renderInlineMarkdown sanitizes via DOMPurify -->
+      <span class="findings-popover-body">{@html renderInlineMarkdown(nav.body)}</span>
+    </button>
+    <div class="findings-popover-actions">
+      <button
+        type="button"
+        class="findings-popover-action"
+        aria-label="Add as draft comment"
+        onclick={(e) => { e.stopPropagation(); addFindingAsDraft({ findingPath: nav.path, line: nav.line, body: nav.body, key: nav.key }) }}
+      >Add as draft</button>
+      <button
+        type="button"
+        class="findings-popover-action"
+        aria-label="Dismiss finding"
+        onclick={(e) => { e.stopPropagation(); dismissFinding(nav.key) }}
+      >Dismiss</button>
+    </div>
+  </div>
+{/snippet}
+
 {#if storyAvailable}
   <div class="flow-switch" role="group" aria-label="Inspect flow">
     <button
@@ -911,10 +946,10 @@
         <span class="skill-run-entry">
           <span class="skill-run-name">{entry.name}</span>
           {#if entry.state.status === 'done'}
-            {@const findingCount = (entry.state.value as { findings?: unknown[] } | undefined)?.findings?.filter((f: unknown) => {
-              const finding = f as { path?: string }
-              return prPathSet.has(finding.path ?? '')
-            }).length ?? 0}
+            <!-- Chip count mirrors the popover (navFindingsFor already drops
+                 dismissed / added-as-draft findings) — so dismissing the last
+                 finding from the popover flips the chip to "no significant issues". -->
+            {@const findingCount = navFindingsFor(entry.skillId).length}
             {#if findingCount === 0}
               <span class="skill-status-chip chip-done" aria-label="Done, no significant issues">
                 ✓ no significant issues
@@ -941,15 +976,7 @@
                     onkeydown={(e) => handlePopoverKeydown(e, 'result', entry.skillId)}
                   >
                     {#each navFindingsFor(entry.skillId) as nav (nav.key)}
-                      <button
-                        type="button"
-                        role="menuitem"
-                        class="findings-popover-item"
-                        onclick={() => jumpToNavFinding(nav)}
-                      >
-                        <span class="findings-popover-loc">{nav.path}{nav.line !== null ? `:${nav.line}` : ''}</span>
-                        <span class="findings-popover-title">{nav.title}</span>
-                      </button>
+                      {@render findingEntry(nav)}
                     {/each}
                   </div>
                 {/if}
@@ -997,31 +1024,6 @@
     </div>
   {/if}
 
-  <!-- Plan N: per-model cost + impact per reviewer, shown ONLY when that
-       reviewer's cross-verify ran with an ensemble of >1 model. Single-model
-       reviewers keep their plain aggregate token footer above (byte-identical).
-       Collapsible to stay tidy when several reviewers each list many models;
-       reuses the SAME ModelBreakdownTable the verdict step uses. -->
-  {@const ensembleEntries = settledEntries.filter(
-    (e) => (e.state.models?.length ?? 0) > 1
-  )}
-  {#if ensembleEntries.length > 0}
-    <div class="skill-model-breakdowns" aria-label="Reviewer ensemble breakdown">
-      {#each ensembleEntries as entry (entry.skillId)}
-        <details class="skill-model-details" data-skill-models={entry.skillId}>
-          <summary class="skill-model-summary">
-            {entry.name} — {entry.state.models!.length} models
-          </summary>
-          <ModelBreakdownTable
-            models={entry.state.models ?? []}
-            showCost={settingsState.current.showTokenCost}
-            title="{entry.name} — models used"
-            compact
-          />
-        </details>
-      {/each}
-    </div>
-  {/if}
 {/if}
 
 {#if files.length < changedFiles}
@@ -1061,7 +1063,7 @@
     onAddFileLevelDraft={(suggestion) => addFindingAsDraft(suggestion)}
     onDismissFileLevelFinding={(key) => dismissFinding(key)}
     onAddSkillFindingDraft={(path, finding) => addFindingAsDraft({ findingPath: path, line: finding.line, body: finding.body, key: finding.key })}
-    onDismissSkillFinding={(key) => recordDecision(key, 'dismissed')}
+    onDismissSkillFinding={(key) => dismissFinding(key)}
     {askFn}
     {askDisabledReason}
     replyFn={replyFn}
@@ -1127,27 +1129,11 @@
               AI-inferred — not measured coverage
             </div>
           {/if}
-          {#if fileLevelSuggestionsByPath.has(file.filename)}
-            {#each (fileLevelSuggestionsByPath.get(file.filename) ?? []) as suggestion (suggestion.key)}
-              {#if !dismissedKeys.has(suggestion.key) && !addedDraftKeys.has(suggestion.key)}
-                <div class="file-level-finding">
-                <SkillFindingCard
-                  skillName={suggestion.skillName}
-                  severity={suggestion.severity}
-                  body={suggestion.body}
-                  verification={suggestion.verification}
-                  raisedBy={suggestion.raisedBy}
-                  line={suggestion.line}
-                  anchored={false}
-                  findingKey={suggestion.key}
-                  added={addedDraftKeys.has(suggestion.key)}
-                  onAdd={() => addFindingAsDraft(suggestion)}
-                  onDismiss={() => dismissFinding(suggestion.key)}
-                />
-                </div>
-              {/if}
-            {/each}
-          {/if}
+          <!-- File-level (null-line) finding cards used to render here as a
+               separate "bottom" block, duplicating what the reviewer-chip popover
+               now shows in full (markdown body + Add as draft / Dismiss). The
+               redundant block was removed; null-line findings live in the popover.
+               Anchored, in-diff SkillFindingCards still render inline via FileDiff. -->
           <FileDiff
             {file}
             {mode}
@@ -1165,7 +1151,7 @@
             onReply={replyFn}
             skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
             onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key })}
-            onDismissSkillFinding={(key) => recordDecision(key, 'dismissed')}
+            onDismissSkillFinding={(key) => dismissFinding(key)}
             whitespace={whitespaceByPath.get(file.filename) ?? null}
           />
         </div>
@@ -1716,23 +1702,6 @@
     opacity: 0.7;
   }
 
-  /* Plan N — per-reviewer ensemble cost+impact breakdown (collapsible). */
-  .skill-model-breakdowns {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    margin: 0.3rem 0 0.6rem;
-  }
-  .skill-model-summary {
-    cursor: pointer;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    list-style-position: inside;
-  }
-  .skill-model-summary:hover {
-    color: var(--text);
-  }
-
   .chip-queued {
     background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
@@ -1780,18 +1749,20 @@
   }
 
 
-  /* Disclosure popover listing a reviewer's findings (multi-finding chips). */
+  /* Disclosure popover listing a reviewer's findings. Wide enough to read a full
+     finding body comfortably (Fix B) — no truncation; entries carry actions. */
   .findings-popover {
     position: absolute;
     top: calc(100% + 0.3rem);
     left: 0;
     z-index: 30;
-    min-width: 18rem;
-    max-width: min(32rem, 90vw);
-    max-height: 16rem;
+    min-width: 22rem;
+    max-width: min(40rem, 90vw);
+    max-height: 28rem;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
+    gap: 0.15rem;
     padding: 0.25rem;
     background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
@@ -1800,23 +1771,33 @@
     scrollbar-width: thin;
   }
 
+  /* Each entry = the navigable (jump) body + its Add/Dismiss action row. */
+  .findings-popover-entry {
+    display: flex;
+    flex-direction: column;
+    border-radius: 4px;
+  }
+  .findings-popover-entry:hover {
+    background: var(--surface-hover, color-mix(in srgb, var(--surface-raised) 80%, var(--text) 12%));
+  }
+  .findings-popover-entry + .findings-popover-entry {
+    border-top: 1px solid var(--border-subtle);
+  }
+
   .findings-popover-item {
     display: flex;
     flex-direction: column;
-    gap: 0.1rem;
+    gap: 0.2rem;
     align-items: flex-start;
     text-align: left;
     width: 100%;
-    padding: 0.3rem 0.5rem;
+    padding: 0.4rem 0.5rem 0.2rem;
     border: none;
-    border-radius: 4px;
+    border-radius: 4px 4px 0 0;
     background: transparent;
     color: inherit;
     cursor: pointer;
     font: inherit;
-  }
-  .findings-popover-item:hover {
-    background: var(--surface-hover, color-mix(in srgb, var(--surface-raised) 80%, var(--text) 12%));
   }
   .findings-popover-item:focus-visible {
     outline: 2px solid var(--accent);
@@ -1830,9 +1811,47 @@
     word-break: break-all;
   }
 
-  .findings-popover-title {
-    font-size: 0.8rem;
-    line-height: 1.3;
+  /* Full finding body, rendered as inline markdown (code spans / emphasis / links). */
+  .findings-popover-body {
+    font-size: 0.82rem;
+    line-height: 1.45;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .findings-popover-body :global(code) {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    padding: 0.05em 0.3em;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+  .findings-popover-body :global(a) {
+    color: var(--accent);
+  }
+
+  .findings-popover-actions {
+    display: flex;
+    gap: 0.4rem;
+    padding: 0 0.5rem 0.4rem;
+  }
+  .findings-popover-action {
+    font: inherit;
+    font-size: 0.72rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+    background: var(--surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s;
+  }
+  .findings-popover-action:hover {
+    color: var(--text);
+    border-color: var(--text-muted);
+  }
+  .findings-popover-action:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   /* The error chip is a real Retry button — reset button defaults so it matches

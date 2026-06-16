@@ -4,11 +4,13 @@
  * - A finding WITH a resolvable line anchor (line present in the patch hunks)
  *   renders INLINE at that line, inside the DiffView extend row
  *   (.diff-line-extend → .line-findings), in both unified and split modes.
- * - A finding with NO anchor (line=null) renders above the file (file-level).
+ * - A finding with NO anchor (line=null) renders ONLY in the reviewer-chip
+ *   popover — the redundant "bottom" .file-level-finding card was removed.
  * - A finding whose anchor is NOT present in the current diff falls back to
- *   the per-file block (.skill-findings-annotations) with a labeled line note.
- * - A finding NEVER renders in both places.
- * - Add-as-draft / Dismiss work from every placement.
+ *   the per-file block (.skill-findings-annotations, inside FileDiff) with a
+ *   labeled line note.
+ * - An anchored / off-diff finding NEVER renders in both places.
+ * - Add-as-draft / Dismiss work from every placement (inline, fallback, popover).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -148,17 +150,18 @@ describe('Finding placement — unanchored findings fall back to the per-file bl
     expect(screen.getByText(/line 999 — not in this diff/i)).toBeInTheDocument()
   })
 
-  it('file-level (null-line) finding renders above the FileDiff', () => {
+  it('file-level (null-line) finding no longer renders above the FileDiff — it lives in the chip popover', () => {
     const { container } = renderInspect([makeLineReview(null, 'File-level concern stays above')])
-    const above = container.querySelector('.file-level-finding .skill-finding')
-    expect(above).toBeTruthy()
-    expect(above?.textContent).toContain('File-level concern stays above')
-    // ...and nowhere else
-    const cards = [...container.querySelectorAll('.skill-finding')]
-    expect(cards.length).toBe(1)
+    // The redundant "bottom" file-level card was removed; null-line findings are
+    // shown (in full, markdown, with actions) only in the reviewer-chip popover.
+    expect(container.querySelector('.file-level-finding')).toBeNull()
+    // No SkillFindingCard renders for the null-line finding in InspectStep itself.
+    expect(container.querySelector('.skill-finding')).toBeNull()
+    // The finding is reachable via the chip popover.
+    expect(screen.getByRole('button', { name: /Show 1 finding from Security/ })).toBeInTheDocument()
   })
 
-  it('mixed findings split placements: anchored inline, null-line above, off-diff in block', () => {
+  it('mixed findings: anchored inline + off-diff in FileDiff block; null-line only in popover', () => {
     const review: SkillReviewEntry = {
       skillId: 'multi',
       name: 'Reviewer',
@@ -175,11 +178,16 @@ describe('Finding placement — unanchored findings fall back to the per-file bl
       },
     }
     const { container } = renderInspect([review])
+    // Anchored renders inline (FileDiff); off-diff (line not in patch) renders in
+    // the FileDiff fallback block; null-line is NOT a bottom card anymore.
     expect(container.querySelector('[data-line-findings="3"]')?.textContent).toContain('Line 3 finding')
-    expect(container.querySelector('.file-level-finding')?.textContent).toContain('File level concern')
     expect(container.querySelector('.skill-findings-annotations')?.textContent).toContain('Off-diff finding')
-    // each rendered exactly once
-    for (const body of ['Line 3 finding', 'File level concern', 'Off-diff finding']) {
+    expect(container.querySelector('.file-level-finding')).toBeNull()
+    // The null-line finding renders nowhere as a card — only in the popover (3 findings).
+    expect([...container.querySelectorAll('.skill-finding')].some(el => el.textContent?.includes('File level concern'))).toBe(false)
+    expect(screen.getByRole('button', { name: /Show 3 findings from Reviewer/ })).toBeInTheDocument()
+    // The two card-rendered findings each appear exactly once.
+    for (const body of ['Line 3 finding', 'Off-diff finding']) {
       const cards = [...container.querySelectorAll('.skill-finding')].filter(
         el => el.textContent?.includes(body),
       )

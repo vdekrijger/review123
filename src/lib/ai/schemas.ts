@@ -816,6 +816,18 @@ export interface FindingVerdict {
   verdict: 'confirm' | 'refute' | 'uncertain'
   /** ≤1-sentence reason. Empty for the implicit generator confirm. */
   reason: string
+  /**
+   * Specific model that cast this vote (display name or id) — distinguishes
+   * same-provider models. Optional for backward-compat with old cached findings
+   * (which lack it); the UI falls back to `provider` when absent.
+   */
+  model?: string
+  /**
+   * The lens this verifier judged the finding through (Plan O Part B). ABSENT on
+   * the generator/raiser row (it raised the finding, it didn't verify through a
+   * lens). Optional for backward-compat with old cached findings.
+   */
+  lens?: import('./lenses').Lens
 }
 
 /**

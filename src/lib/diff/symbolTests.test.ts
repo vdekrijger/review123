@@ -329,4 +329,32 @@ describe('pairStepTests — story-step orchestrator', () => {
     })
     expect([...out.keys()]).toEqual(['src/keys.ts'])
   })
+
+  it('de-duplicates multiple changed symbols that share the SAME lead test file into one block', () => {
+    // Two changed functions in one impl file (two hunks naming each), both
+    // tested in the same file → previously TWO identical "Tested by" blocks.
+    const twoSymbolPatch =
+      '@@ -1,2 +1,3 @@ function buildKey(x) {\n   const a = 1\n+  return x + 1\n }\n' +
+      '@@ -10,2 +11,3 @@ function buildHash(y) {\n   const b = 2\n+  return y * 2\n }'
+    const twoTestContent =
+      "describe('keys', () => {\n" +
+      "  it('buildKey works', () => { expect(buildKey(1)).toBe(2) })\n" +
+      "  it('buildHash works', () => { expect(buildHash(2)).toBe(4) })\n" +
+      '})'
+    const contentsMap = new Map([
+      ['src/keys.test.ts', { before: null, after: twoTestContent }],
+    ])
+    const out = pairStepTests({
+      stepFiles: [prFile('src/keys.ts', twoSymbolPatch)],
+      testFiles: [prFile('src/keys.test.ts')],
+      contentsMap,
+    })
+    const pairings = out.get('src/keys.ts')!
+    expect(pairings).toBeDefined()
+    // Both symbols share src/keys.test.ts as lead → ONE merged block, not two.
+    expect(pairings).toHaveLength(1)
+    expect(pairings[0].tests.every((t) => t.testFile === 'src/keys.test.ts')).toBe(true)
+    // The single block still unions both symbols' covering tests.
+    expect(pairings[0].tests.length).toBeGreaterThanOrEqual(2)
+  })
 })

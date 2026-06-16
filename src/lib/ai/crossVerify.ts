@@ -187,6 +187,19 @@ export function validateVerifierResponse(x: unknown): VerifierResponse | null {
 // Aggregation
 // ---------------------------------------------------------------------------
 
+/**
+ * A collected verifier vote, carrying the model + lens for the tooltip (Plan M
+ * verify-tooltip). `model`/`lens` are optional so old call shapes still compile;
+ * the assembly sites populate them from the verifier participant config.
+ */
+type VerifierVote = {
+  provider: string
+  verdict: 'confirm' | 'refute' | 'uncertain'
+  reason: string
+  model?: string
+  lens?: Lens
+}
+
 /** Numeric weight of a vote: confirm = 1, uncertain = 0.5 (neutral), refute = 0. */
 function voteWeight(verdict: 'confirm' | 'refute' | 'uncertain'): number {
   if (verdict === 'confirm') return 1
@@ -205,15 +218,23 @@ function voteWeight(verdict: 'confirm' | 'refute' | 'uncertain'): number {
  */
 export function aggregateFinding(
   generatorProvider: string,
-  verifierVotes: { provider: string; verdict: 'confirm' | 'refute' | 'uncertain'; reason: string }[],
+  verifierVotes: VerifierVote[],
+  generatorModel?: string,
 ): FindingVerification {
   const perModel: FindingVerdict[] = [
-    { provider: generatorProvider, verdict: 'confirm', reason: '' },
+    // Generator/raiser row: carries its model (no lens — it raised, not verified).
+    { provider: generatorProvider, verdict: 'confirm', reason: '', ...(generatorModel ? { model: generatorModel } : {}) },
   ]
   let score = 1 // generator's implicit confirm
   let confirmedBy = 1
   for (const v of verifierVotes) {
-    perModel.push({ provider: v.provider, verdict: v.verdict, reason: v.reason })
+    perModel.push({
+      provider: v.provider,
+      verdict: v.verdict,
+      reason: v.reason,
+      ...(v.model ? { model: v.model } : {}),
+      ...(v.lens ? { lens: v.lens } : {}),
+    })
     score += voteWeight(v.verdict)
     if (v.verdict === 'confirm') confirmedBy += 1
   }
@@ -241,18 +262,27 @@ export function aggregateFinding(
  */
 export function aggregateMultiRaiser(
   raisers: string[],
-  verifierVotes: { provider: string; verdict: 'confirm' | 'refute' | 'uncertain'; reason: string }[],
+  verifierVotes: VerifierVote[],
   totalParticipants: number,
+  raiserModels?: string[],
 ): FindingVerification {
-  const perModel: FindingVerdict[] = raisers.map((provider) => ({
+  const perModel: FindingVerdict[] = raisers.map((provider, i) => ({
     provider,
     verdict: 'confirm' as const,
     reason: '',
+    // Raiser row carries its model (no lens — it raised, didn't verify).
+    ...(raiserModels?.[i] ? { model: raiserModels[i] } : {}),
   }))
   let score = raisers.length
   let confirmedBy = raisers.length
   for (const v of verifierVotes) {
-    perModel.push({ provider: v.provider, verdict: v.verdict, reason: v.reason })
+    perModel.push({
+      provider: v.provider,
+      verdict: v.verdict,
+      reason: v.reason,
+      ...(v.model ? { model: v.model } : {}),
+      ...(v.lens ? { lens: v.lens } : {}),
+    })
     score += voteWeight(v.verdict)
     if (v.verdict === 'confirm') confirmedBy += 1
   }
@@ -326,6 +356,7 @@ export async function crossVerify(
   verifiers: ProviderConfig[],
   verify: VerifyFn,
   lenses?: Lens[],
+  generatorModel?: string,
 ): Promise<CrossVerifyOutcome> {
   const empty: CrossVerifyOutcome = {
     byId: new Map(),
@@ -343,10 +374,7 @@ export async function crossVerify(
   // Collect per-finding verifier votes; track usage + responders. Votes are
   // pushed in RESPONDER order (matching `responders` below) so the vote index
   // lines up with the responder for decisiveness attribution.
-  const votesByFinding = new Map<
-    string,
-    { provider: string; verdict: 'confirm' | 'refute' | 'uncertain'; reason: string }[]
-  >()
+  const votesByFinding = new Map<string, VerifierVote[]>()
   for (const f of findings) votesByFinding.set(f.id, [])
 
   let usage: LlmUsage | undefined
@@ -373,7 +401,13 @@ export async function crossVerify(
       // so a sloppy verifier neither buries nor inflates a finding.
       const verdict = v?.verdict ?? 'uncertain'
       const reason = v?.reason ?? 'no verdict returned'
-      votesByFinding.get(f.id)!.push({ provider: cfg.providerId, verdict, reason })
+      votesByFinding.get(f.id)!.push({
+        provider: cfg.providerId,
+        verdict,
+        reason,
+        model: cfg.model.id,
+        ...(lenses?.[i] ? { lens: lenses[i] } : {}),
+      })
     }
   })
 
@@ -382,7 +416,7 @@ export async function crossVerify(
 
   const out = new Map<string, FindingVerification>()
   for (const f of findings) {
-    out.set(f.id, aggregateFinding(generatorProvider, votesByFinding.get(f.id)!))
+    out.set(f.id, aggregateFinding(generatorProvider, votesByFinding.get(f.id)!, generatorModel))
   }
 
   // Per-verifier impact (Plan N): confirms/refutes/uncertains + decisive votes.
@@ -587,7 +621,7 @@ export async function fuseConfirm(
   )
 
   // votesByFinding[mergedId] = verifier votes from NON-raisers that responded.
-  const votesByFinding = new Map<string, { provider: string; verdict: 'confirm' | 'refute' | 'uncertain'; reason: string }[]>()
+  const votesByFinding = new Map<string, VerifierVote[]>()
   for (const m of merged) votesByFinding.set(m.id, [])
 
   let usage: LlmUsage | undefined
@@ -609,7 +643,13 @@ export async function fuseConfirm(
       const v = byId.get(m.id)
       const verdict = v?.verdict ?? 'uncertain'
       const reason = v?.reason ?? 'no verdict returned'
-      votesByFinding.get(m.id)!.push({ provider: p.cfg.providerId, verdict, reason })
+      votesByFinding.get(m.id)!.push({
+        provider: p.cfg.providerId,
+        verdict,
+        reason,
+        model: p.cfg.model.id,
+        ...(lenses?.[i] ? { lens: lenses[i] } : {}),
+      })
     }
   })
 
@@ -617,7 +657,12 @@ export async function fuseConfirm(
 
   const scored = merged.map((m) => ({
     merged: m,
-    verification: aggregateMultiRaiser(m.raisedBy, votesByFinding.get(m.id)!, totalParticipants),
+    verification: aggregateMultiRaiser(
+      m.raisedBy,
+      votesByFinding.get(m.id)!,
+      totalParticipants,
+      m.raiserCfgs.map((c) => c.model.id),
+    ),
   }))
 
   // Per-generator impact: surfaced (raised + survived), uniqueCatch (raised ALONE + survived).

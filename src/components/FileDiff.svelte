@@ -338,9 +338,18 @@
   // When viewed → collapse diff body; user can re-expand by clicking header or unchecking
   // dim mode reduces opacity only — it does NOT collapse the file
   let manuallyExpanded = $state(false)
-  // forceExpanded (Story Mode primary diff) overrides the viewed-collapse so the
-  // narrated diff body — and its syntax highlighting — always renders.
-  const collapsed = $derived(!forceExpanded && viewed && !manuallyExpanded)
+  // True once the USER ticks the Viewed checkbox in THIS session (vs. an
+  // auto/external mark from the parent). In Story Mode the slideshow auto-marks
+  // the narrated file viewed for coverage tracking; that must NOT collapse the
+  // diff being narrated (forceExpanded keeps it open). But a DELIBERATE user tick
+  // should still collapse even under forceExpanded — this flag distinguishes the
+  // two so a manual view collapses while the auto/narrated view stays expanded.
+  let userMarkedViewed = $state(false)
+  // forceExpanded (Story Mode primary diff) keeps the narrated diff body — and its
+  // syntax highlighting — expanded BY DEFAULT, but a manual user view (the checkbox)
+  // overrides it and collapses. In Files mode forceExpanded is false, so this is
+  // byte-identical to `viewed && !manuallyExpanded`.
+  const collapsed = $derived(viewed && !manuallyExpanded && (!forceExpanded || userMarkedViewed))
 
   function handleHeaderClick() {
     if (collapsed) {
@@ -351,15 +360,21 @@
   }
 
   function handleViewedChange(e: Event) {
-    // Uncheck → expand + notify parent
     const checked = (e.target as HTMLInputElement).checked
-    if (!checked) manuallyExpanded = true
+    // Check → record a DELIBERATE user view so it collapses even under
+    // forceExpanded (Story Mode). Uncheck → expand + notify parent.
+    if (checked) userMarkedViewed = true
+    else manuallyExpanded = true
     onToggleViewed?.()
   }
 
-  // Reset manual expansion when viewed state changes (e.g. re-toggled from outside)
+  // Reset manual expansion + the user-mark flag when viewed clears (e.g. unchecked,
+  // or re-toggled from outside) so a later view starts from the default state.
   $effect(() => {
-    if (!viewed) manuallyExpanded = false
+    if (!viewed) {
+      manuallyExpanded = false
+      userMarkedViewed = false
+    }
   })
 
   const filename = $derived(
