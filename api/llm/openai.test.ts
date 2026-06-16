@@ -13,7 +13,30 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { openaiProxyHandler } from './openai'
+import { getProvider } from '../../src/lib/llm/providers'
+
+// ---------------------------------------------------------------------------
+// Route contract: the openai-compat transport calls <baseUrl>/chat/completions,
+// but the proxy function lives at <baseUrl> with no path segment of its own.
+// Vercel does NOT auto-map the extra sub-path to the function, so vercel.json
+// MUST rewrite that exact path to the function — otherwise every OpenAI call
+// 404s (the bug this guards against).
+// ---------------------------------------------------------------------------
+describe('OpenAI proxy route contract (vercel.json)', () => {
+  it('rewrites the transport sub-path to the proxy function', () => {
+    const vercel = JSON.parse(readFileSync(resolve(process.cwd(), 'vercel.json'), 'utf8')) as {
+      rewrites: { source: string; destination: string }[]
+    }
+    const baseUrl = getProvider('openai')!.baseUrl // '/api/llm/openai'
+    const clientPath = `${baseUrl}/chat/completions`
+    const rule = vercel.rewrites.find((r) => r.source === clientPath)
+    expect(rule, `vercel.json must rewrite ${clientPath} to the proxy function`).toBeTruthy()
+    expect(rule!.destination).toBe(baseUrl)
+  })
+})
 
 // ---------------------------------------------------------------------------
 // Helpers
