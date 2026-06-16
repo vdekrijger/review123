@@ -31,7 +31,7 @@ describe('formatVerifierImpact — leads with decisiveness', () => {
   })
 })
 
-describe('Plan O — unique catch + lens', () => {
+describe('Plan O — unique catch', () => {
   it('generator impact appends the recall headline when it caught uniques', () => {
     expect(formatGeneratorImpact(4, 2)).toBe('4 surfaced findings · caught 2 the others missed')
   })
@@ -40,13 +40,13 @@ describe('Plan O — unique catch + lens', () => {
     expect(formatGeneratorImpact(3, 0)).toBe('3 surfaced findings')
   })
 
-  it('verifier impact prefixes its lens', () => {
-    expect(formatVerifierImpact({ confirms: 1, refutes: 1, uncertains: 0, decisive: 1, lens: 'security' }))
-      .toBe('security lens · 1 decisive refute (removed a finding) · 1c/1r')
+  it('verifier impact has no lens prefix (comprehensive verifier)', () => {
+    expect(formatVerifierImpact({ confirms: 1, refutes: 1, uncertains: 0, decisive: 1 }))
+      .toBe('1 decisive refute (removed a finding) · 1c/1r')
   })
 
-  it('verifier impact prefixes lens even with no findings', () => {
-    expect(formatVerifierImpact({ confirms: 0, refutes: 0, uncertains: 0, decisive: 0, lens: 'performance' }))
-      .toBe('performance lens · no findings')
+  it('verifier impact with no findings reads plainly (no lens prefix)', () => {
+    expect(formatVerifierImpact({ confirms: 0, refutes: 0, uncertains: 0, decisive: 0 }))
+      .toBe('no findings')
   })
 })

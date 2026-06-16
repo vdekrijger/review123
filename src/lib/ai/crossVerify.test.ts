@@ -35,7 +35,7 @@ describe('aggregateFinding — threshold', () => {
     expect(v.surfaced).toBe(true)
     expect(v.confirmedBy).toBe(3)
     expect(v.polledModels).toBe(3)
-    expect(v.perModel[0]).toEqual({ provider: 'deepseek', verdict: 'confirm', reason: '' })
+    expect(v.perModel[0]).toEqual({ provider: 'deepseek', verdict: 'confirm', reason: '', raised: true })
   })
 
   it('single verifier refutes a generator-only finding → tie at half → still surfaced', () => {
@@ -182,7 +182,7 @@ describe('crossVerify — orchestration', () => {
     expect(v.perModel[1].verdict).toBe('uncertain')
   })
 
-  it('perModel carries MODEL + LENS per verifier; the generator row carries model and NO lens', async () => {
+  it('perModel carries MODEL per verifier and NO lens; the generator row is marked raised', async () => {
     const verify: VerifyFn = async () => ({
       result: { verdicts: [{ id: 'f1', verdict: 'confirm', reason: 'real' }] },
     })
@@ -191,23 +191,24 @@ describe('crossVerify — orchestration', () => {
       'deepseek',
       [modelCfg('anthropic', 'claude-sonnet-4-6'), modelCfg('anthropic', 'claude-haiku-4-5')],
       verify,
-      ['correctness', 'security'],
       'deepseek-v4-flash',
     )
     const v = out.byId.get('f1')!
-    // Generator/raiser row: model present, lens absent.
+    // Generator/raiser row: model present, marked raised, no lens.
     expect(v.perModel[0]).toEqual({
       provider: 'deepseek',
       verdict: 'confirm',
       reason: '',
+      raised: true,
       model: 'deepseek-v4-flash',
     })
-    expect(v.perModel[0].lens).toBeUndefined()
-    // Verifier rows: each carries its model id + assigned lens.
+    expect(v.perModel[0]).not.toHaveProperty('lens')
+    // Verifier rows: each carries its model id, no lens, not marked raised.
     expect(v.perModel[1].model).toBe('claude-sonnet-4-6')
-    expect(v.perModel[1].lens).toBe('correctness')
+    expect(v.perModel[1]).not.toHaveProperty('lens')
+    expect(v.perModel[1].raised).toBeUndefined()
     expect(v.perModel[2].model).toBe('claude-haiku-4-5')
-    expect(v.perModel[2].lens).toBe('security')
+    expect(v.perModel[2]).not.toHaveProperty('lens')
   })
 })
 
@@ -427,7 +428,7 @@ describe('fuseConfirm — recall + unique catch', () => {
     expect(impA.uniqueCatch).toBe(0)
   })
 
-  it('fuseConfirm perModel carries raiser model (no lens) + verifier model + lens', async () => {
+  it('fuseConfirm perModel carries raiser model (marked raised) + verifier model, no lens', async () => {
     const merged = mergeGeneratorFindings([
       { generator: 'A', cfg: cfgA, findings: [vf('a1', 'src/x.ts', 5, 'B did not catch this one')] },
     ])
@@ -438,17 +439,18 @@ describe('fuseConfirm — recall + unique catch', () => {
       merged,
       [{ generator: 'A', cfg: cfgA }, { generator: 'B', cfg: cfgB }],
       verify,
-      ['correctness', 'security'],
     )
     const v = out.merged[0].verification
-    // Raiser row: provider is the generator NAME ('A'); model = A's config model, no lens.
+    // Raiser row: provider is the generator NAME ('A'); model = A's config model, marked raised, no lens.
     const raiser = v.perModel.find((p) => p.provider === 'A')!
     expect(raiser.model).toBe(cfgA.model.id)
-    expect(raiser.lens).toBeUndefined()
-    // Verifier row (B / anthropic): provider is the providerId; model + its lens (index 1 → security).
+    expect(raiser.raised).toBe(true)
+    expect(raiser).not.toHaveProperty('lens')
+    // Verifier row (B / anthropic): provider is the providerId; model present, no lens, not raised.
     const verifier = v.perModel.find((p) => p.provider === 'anthropic')!
     expect(verifier.model).toBe(cfgB.model.id)
-    expect(verifier.lens).toBe('security')
+    expect(verifier).not.toHaveProperty('lens')
+    expect(verifier.raised).toBeUndefined()
   })
 
   it("a finding one model raised alone that others REFUTE demotes", async () => {
@@ -478,22 +480,28 @@ describe('fuseConfirm — recall + unique catch', () => {
   })
 })
 
-describe('buildVerifyPrompt — lens framing (Plan O Part B)', () => {
-  it('no lens → plain adversarial prompt (no lens text)', () => {
+describe('buildVerifyPrompt — comprehensive framing', () => {
+  it('does not vary by lens — one prompt for all verifiers', () => {
+    // Single-arg signature (no lens param) — calling twice yields identical bytes.
+    const a = buildVerifyPrompt([finding('f1')])
+    const b = buildVerifyPrompt([finding('f1')])
+    expect(a.system).toBe(b.system)
+  })
+
+  it('the single prompt weighs ALL review dimensions at once', () => {
     const { system } = buildVerifyPrompt([finding('f1')])
-    expect(system).not.toContain('SECURITY lens')
-    expect(system).not.toContain('PERFORMANCE lens')
+    // One comprehensive prompt references every dimension — no per-lens narrowing.
+    expect(system).toContain('CORRECTNESS')
+    expect(system).toContain('SECURITY')
+    expect(system).toContain('PERFORMANCE')
+    expect(system).toContain('REPRODUCIBILITY')
+    expect(system).toContain('MAINTAINABILITY')
   })
 
-  it('lens → prompt carries that lens framing', () => {
-    const { system } = buildVerifyPrompt([finding('f1')], 'security')
-    expect(system).toContain('SECURITY lens')
-  })
-
-  it('crossVerify threads per-verifier lenses into the verify call + impact', async () => {
-    const seen: (string | undefined)[] = []
-    const verify: VerifyFn = async (_cfg, _findings, lens) => {
-      seen.push(lens)
+  it('crossVerify runs every verifier through the same prompt (no lens threading)', async () => {
+    const seenFindingCounts: number[] = []
+    const verify: VerifyFn = async (_cfg, findings) => {
+      seenFindingCounts.push(findings.length)
       return { result: { verdicts: [{ id: 'f1', verdict: 'confirm', reason: 'ok' }] } }
     }
     const out = await crossVerify(
@@ -501,10 +509,10 @@ describe('buildVerifyPrompt — lens framing (Plan O Part B)', () => {
       'deepseek',
       [modelCfg('anthropic', 'claude-sonnet-4-6'), modelCfg('anthropic', 'claude-haiku-4-5')],
       verify,
-      ['correctness', 'security'],
     )
-    expect(seen).toEqual(['correctness', 'security'])
-    expect(out.verifierImpact[0].lens).toBe('correctness')
-    expect(out.verifierImpact[1].lens).toBe('security')
+    // Both verifiers were invoked with the same finding set; no per-verifier lens.
+    expect(seenFindingCounts).toEqual([1, 1])
+    expect(out.verifierImpact[0]).not.toHaveProperty('lens')
+    expect(out.verifierImpact[1]).not.toHaveProperty('lens')
   })
 })

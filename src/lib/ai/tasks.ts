@@ -14,6 +14,12 @@ import type { CiSummary } from '../github/checks'
 import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
 
+// PROMPT_VERSION 21 (comprehensive verifier): per-lens verification is RETIRED.
+// Every verifier now runs ONE comprehensive adversarial prompt weighing ALL five
+// dimensions (correctness/security/performance/reproducibility/maintainability) at
+// once, so a real defect under ANY dimension is caught instead of being judged
+// through one narrow lens. Decorrelation comes from MODEL/PROVIDER diversity. The
+// verify-prompt bytes change, so bump to re-run cached lens-based verifications.
 // PROMPT_VERSION 20 (Plan P): unified model panel — verifiers now judge through
 // diverse LENSES in the 'verify' path too (previously lenses applied only in the
 // multi-generator 'generate' fusion path). The lensed verifier prompt differs from
@@ -34,7 +40,7 @@ import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
 // module-dependency change-map to a flow-of-execution (GraphResult.flow). The
 // bump invalidates cached diagram results so old change-maps don't render under
 // the new "Execution flow" label.
-export const PROMPT_VERSION = 20
+export const PROMPT_VERSION = 21
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)

@@ -1904,7 +1904,7 @@ describe('storyOrderPrompt', () => {
 })
 
 describe('PROMPT_VERSION', () => {
-  it('is bumped to 20 (Plan P: unified panel — lenses in the verify path too)', () => {
-    expect(PROMPT_VERSION).toBe(20)
+  it('is bumped to 21 (comprehensive verifier — per-lens verification retired)', () => {
+    expect(PROMPT_VERSION).toBe(21)
   })
 })

@@ -79,14 +79,6 @@ describe('aggregateModelPerformance', () => {
     ])
   })
 
-  it('omits lens in the aggregate (it varies per task)', () => {
-    const rows: VerdictModelBreakdown[] = [
-      { providerId: 'anthropic', modelId: 'haiku', role: 'verifier', impact: { confirms: 1, refutes: 0, uncertains: 0, decisive: 0 }, lens: 'security' },
-    ]
-    const out = aggregateModelPerformance([rows])
-    expect(out[0].lens).toBeUndefined()
-  })
-
   it('does not mutate the caller source rows', () => {
     const a: VerdictModelBreakdown[] = [
       { providerId: 'anthropic', modelId: 'opus', role: 'generator', usage: usage(100), surfaced: 3 },

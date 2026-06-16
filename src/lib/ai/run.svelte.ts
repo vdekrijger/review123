@@ -33,7 +33,6 @@ import {
   type VerifierImpact,
   type GeneratorFindings,
 } from './crossVerify'
-import { assignLenses } from './lenses'
 import { getProvider } from '../llm/providers'
 import { llmToolLoop as defaultLlmToolLoop } from '../llm/llmToolLoop'
 import {
@@ -161,8 +160,6 @@ export interface VerdictModelBreakdown {
   uniqueCatch?: number
   /** Verifier impact (confirms/refutes/uncertains/decisive). */
   impact?: { confirms: number; refutes: number; uncertains: number; decisive: number }
-  /** Verifier lens (Plan O Part B), e.g. 'security'. Absent in 'verify' mode. */
-  lens?: import('./lenses').Lens
 }
 
 // ---------------------------------------------------------------------------
@@ -412,9 +409,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     side: 'LEFT' | 'RIGHT'
   }
 
-  /** Real per-verifier call: adversarial (optionally lensed) JSON judgement. */
-  const realVerify: VerifyFn = async (cfg: ProviderConfig, findings: VerifiableFinding[], lens) => {
-    const prompts = buildVerifyPrompt(findings, lens)
+  /** Real per-verifier call: comprehensive adversarial JSON judgement. */
+  const realVerify: VerifyFn = async (cfg: ProviderConfig, findings: VerifiableFinding[]) => {
+    const prompts = buildVerifyPrompt(findings)
     const { result, usage } = await llmJsonWithRepairFor(
       cfg,
       { system: prompts.system, user: prompts.user },
@@ -498,11 +495,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const generatorName = activeLlmConfig().provider.displayName
     const generatorModelId = activeLlmConfig().model.id
     try {
-      // Plan P: verifiers judge through diverse lenses in EVERY config (folds the
-      // lenses-in-verify followup) — decorrelating verifier errors here too, not
-      // just in the multi-generator fusion path. PROMPT_VERSION bumped for this.
-      const lenses = assignLenses(verifiers.length)
-      const outcome = await crossVerify(verifiable, generatorName, verifiers, realVerify, lenses, generatorModelId)
+      // Every verifier runs the SAME comprehensive adversarial prompt; error
+      // decorrelation comes from MODEL/PROVIDER diversity, not per-judge framing.
+      const outcome = await crossVerify(verifiable, generatorName, verifiers, realVerify, generatorModelId)
       return {
         byId: outcome.byId,
         usage: outcome.usage,
@@ -554,7 +549,6 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           uncertains: imp.uncertains,
           decisive: imp.decisive,
         },
-        ...(imp.lens ? { lens: imp.lens } : {}),
       })
     }
     return rows
@@ -596,8 +590,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
    * Build the per-model breakdown for a fusion run (Plan P): one row per
    * participant. The first `generatorCount` rows are GENERATORS (their generation
    * usage + surfaced + uniqueCatch); the rest are VERIFIERS (verify usage only).
-   * Every participant verifies findings it didn't raise, so each carries its
-   * assigned verify lens.
+   * Every participant verifies findings it didn't raise via the comprehensive
+   * adversarial prompt.
    */
   function buildFusionModels(
     participants: FusionParticipant[],
@@ -605,7 +599,6 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     genUsageByModel: Map<string, LlmUsage>,
     fusionPerModelUsage: ParticipantUsage[],
     generatorImpact: import('./crossVerify').GeneratorImpact[],
-    lenses: import('./lenses').Lens[],
   ): VerdictModelBreakdown[] {
     const verifyUsage = new Map(fusionPerModelUsage.map((p) => [`${p.providerId}:${p.modelId}`, p.usage]))
     const impactByGen = new Map(generatorImpact.map((g) => [g.generator, g]))
@@ -624,7 +617,6 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         ...(isGenerator
           ? { surfaced: imp?.surfaced ?? 0, uniqueCatch: imp?.uniqueCatch ?? 0 }
           : {}),
-        ...(lenses[i] ? { lens: lenses[i] } : {}),
       }
     })
   }
@@ -632,7 +624,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   /**
    * Plan O 'generate' mode for a skill review: run the skill prompt with EVERY
    * ensemble participant as an independent generator, dedup-merge the union,
-   * cross-confirm (lensed), and rebuild a SkillReviewResult whose findings carry
+   * cross-confirm (comprehensive prompt), and rebuild a SkillReviewResult whose findings carry
    * `raisedBy` + `verification`, surfaced-first. Returns null when fewer than 2
    * generators produced findings (caller falls back to single-generator). Never
    * throws — any failure returns null.
@@ -684,9 +676,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         return { result: { skillName, findings: [] }, usage: genUsage, models: [] }
       }
 
-      // 3. Cross-confirm (each participant verifies findings it didn't raise), lensed.
-      const lenses = assignLenses(participants.length)
-      const outcome = await fuseConfirm(merged, participants, realVerify, lenses)
+      // 3. Cross-confirm (each participant verifies findings it didn't raise).
+      const outcome = await fuseConfirm(merged, participants, realVerify)
 
       // 4. Rebuild findings, surfaced-first, carrying raisedBy + verification.
       const findings = outcome.merged.map((m) => ({
@@ -704,7 +695,6 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         genUsageByModel,
         outcome.perModelUsage,
         outcome.generatorImpact,
-        lenses,
       )
       return { result: { skillName, findings }, usage: totalUsage, models }
     } catch {
@@ -777,12 +767,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       const merged = mergeGeneratorFindings(perGenerator)
       if (merged.length === 0) {
         const result: VerdictResult = { level: primary.level, evidence: [], notAnalyzed: mergedNotAnalyzed }
-        return { result, usage: genUsage, models: buildFusionModels(participants, generators.length, genUsageByModel, [], [], assignLenses(participants.length)) }
+        return { result, usage: genUsage, models: buildFusionModels(participants, generators.length, genUsageByModel, [], []) }
       }
 
-      // 3. Cross-confirm (each participant verifies evidence it didn't raise), lensed.
-      const lenses = assignLenses(participants.length)
-      const outcome = await fuseConfirm(merged, participants, realVerify, lenses)
+      // 3. Cross-confirm (each participant verifies evidence it didn't raise).
+      const outcome = await fuseConfirm(merged, participants, realVerify)
 
       // 4. Rebuild the verdict: surfaced-first evidence + per-row verification +
       //    raisedBy provenance. Primary `level` + unioned notAnalyzed.
@@ -808,7 +797,6 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         genUsageByModel,
         outcome.perModelUsage,
         outcome.generatorImpact,
-        lenses,
       )
       return { result, usage: totalUsage, models }
     } catch {

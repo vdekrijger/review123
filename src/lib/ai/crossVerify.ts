@@ -16,7 +16,6 @@
 import type { LlmUsage } from '../llm/llm'
 import type { ProviderConfig } from '../llm/llm'
 import type { FindingVerdict, FindingVerification } from './schemas'
-import { type Lens, lensFraming } from './lenses'
 import { findingsMatch, type AnchoredFinding } from './findingMatch'
 
 // ---------------------------------------------------------------------------
@@ -52,14 +51,13 @@ export interface VerifierResponse {
 
 /**
  * The injected per-verifier call. Returns the verifier's verdicts + usage, or
- * throws (a failing verifier is skipped — its vote omitted, never blocks). The
- * optional `lens` (Plan O Part B) specializes the prompt framing for this
- * verifier; the real impl threads it into buildVerifyPrompt.
+ * throws (a failing verifier is skipped — its vote omitted, never blocks). Every
+ * verifier runs the SAME comprehensive adversarial prompt; decorrelation comes
+ * from MODEL/PROVIDER diversity, not from per-judge framing.
  */
 export type VerifyFn = (
   cfg: ProviderConfig,
   findings: VerifiableFinding[],
-  lens?: Lens,
 ) => Promise<{ result: VerifierResponse; usage?: LlmUsage }>
 
 /** A finding with its aggregated verification attached. */
@@ -89,8 +87,6 @@ export interface VerifierImpact {
   refutes: number
   uncertains: number
   decisive: number
-  /** Lens this verifier judged through (Plan O Part B). Absent in 'verify' mode. */
-  lens?: Lens
 }
 
 export interface CrossVerifyOutcome {
@@ -110,23 +106,39 @@ export interface CrossVerifyOutcome {
 // Adversarial verify prompt
 // ---------------------------------------------------------------------------
 
-export function buildVerifyPrompt(
-  findings: VerifiableFinding[],
-  lens?: Lens,
-): {
+/**
+ * The COMPREHENSIVE adversarial framing every verifier reads. It weighs ALL five
+ * review dimensions at once (so a real defect under ANY one is caught) — folding
+ * the concrete per-dimension wording that used to live in per-lens framings into
+ * a single strong prompt. Decorrelation comes from MODEL/PROVIDER diversity, not
+ * from blinkering each judge through one narrow lens.
+ */
+export const COMPREHENSIVE_VERIFY_FRAMING = `Judge each finding skeptically across ALL of these \
+dimensions — confirm when the code clearly shows a real defect under ANY of them:
+- CORRECTNESS: logic errors, off-by-one and boundary mistakes, null/undefined handling, wrong \
+conditionals, broken control flow, incorrect edge-case behavior.
+- SECURITY: injection (SQL/command/XSS), missing authentication/authorization, leaked or \
+hard-coded secrets, unsafe deserialization, path traversal, SSRF — a real, exploitable risk.
+- PERFORMANCE: N+1 queries, unbounded loops or allocations, work inside hot paths, blocking I/O, \
+resource leaks, missing pagination or limits — a real problem that matters at scale.
+- REPRODUCIBILITY: would this issue ACTUALLY trigger? Is the claim grounded in the provided \
+diff/code, or speculative? Trace the conditions needed to hit it.
+- MAINTAINABILITY: confusing or duplicated logic, leaky abstractions, missing error handling at \
+real boundaries, names that mislead, structure that will break under change — issues that would \
+genuinely cost a future maintainer, not mere style preference.`
+
+export function buildVerifyPrompt(findings: VerifiableFinding[]): {
   system: string
   user: string
 } {
-  // Plan O Part B: when a lens is assigned, the verifier judges findings THROUGH
-  // that lens (decorrelating verifier errors). Without a lens the prompt is the
-  // Plan M adversarial prompt verbatim (byte-identical for 'verify' mode).
-  const lensLine = lens ? `\n\n${lensFraming(lens)}` : ''
   const system = `You are an ADVERSARIAL verifier auditing another AI reviewer's findings on a \
 pull request. For EACH finding, decide whether it is a REAL, code-grounded issue worth \
-surfacing to a human reviewer — or noise.${lensLine}
+surfacing to a human reviewer — or noise.
+
+${COMPREHENSIVE_VERIFY_FRAMING}
 
 Default to "refute" or "uncertain". Only "confirm" when the provided code clearly shows the \
-issue is real and matters. A finding is NOT confirmable when:
+issue is real and matters under at least one of those dimensions. A finding is NOT confirmable when:
 - the claim is not supported by the provided code (excerpt / fileWindow), or contradicts it;
 - it is a nitpick, style preference, or moot/unchanged-code observation;
 - it is speculative ("could", "might") with no concrete evidence in the code;
@@ -188,16 +200,15 @@ export function validateVerifierResponse(x: unknown): VerifierResponse | null {
 // ---------------------------------------------------------------------------
 
 /**
- * A collected verifier vote, carrying the model + lens for the tooltip (Plan M
- * verify-tooltip). `model`/`lens` are optional so old call shapes still compile;
- * the assembly sites populate them from the verifier participant config.
+ * A collected verifier vote, carrying the model for the tooltip (Plan M
+ * verify-tooltip). `model` is optional so old call shapes still compile; the
+ * assembly sites populate it from the verifier participant config.
  */
 type VerifierVote = {
   provider: string
   verdict: 'confirm' | 'refute' | 'uncertain'
   reason: string
   model?: string
-  lens?: Lens
 }
 
 /** Numeric weight of a vote: confirm = 1, uncertain = 0.5 (neutral), refute = 0. */
@@ -222,8 +233,8 @@ export function aggregateFinding(
   generatorModel?: string,
 ): FindingVerification {
   const perModel: FindingVerdict[] = [
-    // Generator/raiser row: carries its model (no lens — it raised, not verified).
-    { provider: generatorProvider, verdict: 'confirm', reason: '', ...(generatorModel ? { model: generatorModel } : {}) },
+    // Generator/raiser row: carries its model + `raised` (it raised, not verified).
+    { provider: generatorProvider, verdict: 'confirm', reason: '', raised: true, ...(generatorModel ? { model: generatorModel } : {}) },
   ]
   let score = 1 // generator's implicit confirm
   let confirmedBy = 1
@@ -233,7 +244,6 @@ export function aggregateFinding(
       verdict: v.verdict,
       reason: v.reason,
       ...(v.model ? { model: v.model } : {}),
-      ...(v.lens ? { lens: v.lens } : {}),
     })
     score += voteWeight(v.verdict)
     if (v.verdict === 'confirm') confirmedBy += 1
@@ -270,7 +280,8 @@ export function aggregateMultiRaiser(
     provider,
     verdict: 'confirm' as const,
     reason: '',
-    // Raiser row carries its model (no lens — it raised, didn't verify).
+    raised: true,
+    // Raiser row carries its model (it raised, didn't verify).
     ...(raiserModels?.[i] ? { model: raiserModels[i] } : {}),
   }))
   let score = raisers.length
@@ -281,7 +292,6 @@ export function aggregateMultiRaiser(
       verdict: v.verdict,
       reason: v.reason,
       ...(v.model ? { model: v.model } : {}),
-      ...(v.lens ? { lens: v.lens } : {}),
     })
     score += voteWeight(v.verdict)
     if (v.verdict === 'confirm') confirmedBy += 1
@@ -341,9 +351,6 @@ function sumUsage(a: LlmUsage | undefined, b: LlmUsage | undefined): LlmUsage | 
  *   implicit confirm).
  * @param verifiers  verifier provider configs (already excludes the generator).
  * @param verify  injected per-verifier call.
- * @param lenses  optional per-verifier lens assignment (Plan O Part B), index-
- *   aligned with `verifiers`. When omitted, verifiers run the plain adversarial
- *   prompt (byte-identical to Plan M 'verify' mode).
  * @returns per-finding verification, summed usage, and which verifiers responded.
  *
  * Graceful: a verifier that throws is skipped (its votes omitted, polledModels
@@ -355,7 +362,6 @@ export async function crossVerify(
   generatorProvider: string,
   verifiers: ProviderConfig[],
   verify: VerifyFn,
-  lenses?: Lens[],
   generatorModel?: string,
 ): Promise<CrossVerifyOutcome> {
   const empty: CrossVerifyOutcome = {
@@ -368,7 +374,7 @@ export async function crossVerify(
   if (findings.length === 0 || verifiers.length === 0) return empty
 
   const results = await Promise.allSettled(
-    verifiers.map((cfg, i) => verify(cfg, findings, lenses?.[i])),
+    verifiers.map((cfg) => verify(cfg, findings)),
   )
 
   // Collect per-finding verifier votes; track usage + responders. Votes are
@@ -380,7 +386,6 @@ export async function crossVerify(
   let usage: LlmUsage | undefined
   const respondedProviders: string[] = []
   const responders: ProviderConfig[] = []
-  const responderLenses: (Lens | undefined)[] = []
   const perModelUsage: ParticipantUsage[] = []
 
   results.forEach((res, i) => {
@@ -388,7 +393,6 @@ export async function crossVerify(
     const cfg = verifiers[i]
     respondedProviders.push(cfg.providerId)
     responders.push(cfg)
-    responderLenses.push(lenses?.[i])
     usage = sumUsage(usage, res.value.usage)
     if (res.value.usage) {
       perModelUsage.push({ providerId: cfg.providerId, modelId: cfg.model.id, usage: res.value.usage })
@@ -406,7 +410,6 @@ export async function crossVerify(
         verdict,
         reason,
         model: cfg.model.id,
-        ...(lenses?.[i] ? { lens: lenses[i] } : {}),
       })
     }
   })
@@ -427,7 +430,6 @@ export async function crossVerify(
     refutes: 0,
     uncertains: 0,
     decisive: 0,
-    ...(responderLenses[idx] ? { lens: responderLenses[idx] } : {}),
     _idx: idx,
   })).map((row) => {
     for (const f of findings) {
@@ -454,9 +456,9 @@ export async function crossVerify(
 // dedup-merged (findings referring to the same issue collapse, attributed to
 // all raisers via `raisedBy`). Each merged finding is then cross-confirmed by
 // the participants that did NOT raise it (the raisers are implicit confirms),
-// using the same lensed verify fan-out as crossVerify. A finding only one model
-// raised but others CONFIRM now surfaces (the recall win); one others refute
-// demotes.
+// using the same comprehensive verify fan-out as crossVerify. A finding only one
+// model raised but others CONFIRM now surfaces (the recall win); one others
+// refute demotes.
 // ---------------------------------------------------------------------------
 
 /** One generator's produced findings, tagged with that generator's identity. */
@@ -577,21 +579,19 @@ export function mergeGeneratorFindings(generators: GeneratorFindings[]): MergedF
 
 /**
  * Cross-confirm a merged union (Plan O Part A). For each merged finding, the
- * participants that did NOT raise it verify it (lensed); raisers are implicit
- * confirms. Surfaces via aggregateMultiRaiser. Returns merged findings with
- * verification + per-generator impact (surfaced, uniqueCatch).
+ * participants that did NOT raise it verify it (comprehensive prompt); raisers
+ * are implicit confirms. Surfaces via aggregateMultiRaiser. Returns merged
+ * findings with verification + per-generator impact (surfaced, uniqueCatch).
  *
  * @param merged  the deduped union from mergeGeneratorFindings.
  * @param participants  ALL ensemble participants (each can verify findings it
  *   didn't raise). The total poll size per finding is the participant count.
  * @param verify  injected per-participant verify call (same VerifyFn shape).
- * @param lensFor  optional lens per participant id (index-aligned with participants).
  */
 export async function fuseConfirm(
   merged: MergedFinding[],
   participants: { generator: string; cfg: ProviderConfig }[],
   verify: VerifyFn,
-  lenses?: Lens[],
 ): Promise<FusionOutcome> {
   const empty: FusionOutcome = {
     merged: [],
@@ -611,13 +611,7 @@ export async function fuseConfirm(
   // full union and ignore verdicts on findings the participant raised (it's an
   // implicit confirm there).
   const results = await Promise.allSettled(
-    participants.map((p, i) =>
-      verify(
-        p.cfg,
-        merged.map((m) => m.finding),
-        lenses?.[i],
-      ),
-    ),
+    participants.map((p) => verify(p.cfg, merged.map((m) => m.finding))),
   )
 
   // votesByFinding[mergedId] = verifier votes from NON-raisers that responded.
@@ -648,7 +642,6 @@ export async function fuseConfirm(
         verdict,
         reason,
         model: p.cfg.model.id,
-        ...(lenses?.[i] ? { lens: lenses[i] } : {}),
       })
     }
   })

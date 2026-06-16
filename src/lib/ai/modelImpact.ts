@@ -5,15 +5,11 @@
  * even with many confirms. Display-only, no network, no analytics.
  */
 
-import type { Lens } from './lenses'
-
 export interface VerifierImpactRow {
   confirms: number
   refutes: number
   uncertains: number
   decisive: number
-  /** Lens this verifier judged through (Plan O Part B). */
-  lens?: Lens
 }
 
 /** Pluralize: "1 finding" / "2 findings". */
@@ -33,11 +29,6 @@ export function formatGeneratorImpact(surfaced: number, uniqueCatch = 0): string
   return base
 }
 
-/** Capitalized "<lens> lens" label, e.g. "security lens". Empty when no lens. */
-export function formatLensLabel(lens: Lens | undefined): string {
-  return lens ? `${lens} lens` : ''
-}
-
 /**
  * Impact phrase for a VERIFIER, leading with decisiveness. Examples:
  *   "1 decisive refute (removed a finding)"
@@ -46,16 +37,15 @@ export function formatLensLabel(lens: Lens | undefined): string {
  *   "no findings"              (nothing to verify)
  */
 export function formatVerifierImpact(row: VerifierImpactRow): string {
-  const lensPrefix = row.lens ? `${row.lens} lens · ` : ''
   const total = row.confirms + row.refutes + row.uncertains
-  if (total === 0) return `${lensPrefix}no findings`
+  if (total === 0) return 'no findings'
   const tally = `${row.confirms}c/${row.refutes}r`
   if (row.decisive === 0) {
-    return `${lensPrefix}rubber-stamped · ${tally}`
+    return `rubber-stamped · ${tally}`
   }
   // A single decisive refute is the highest-signal case: it removed a finding.
   if (row.decisive === 1 && row.refutes >= 1) {
-    return `${lensPrefix}1 decisive refute (removed a finding) · ${tally}`
+    return `1 decisive refute (removed a finding) · ${tally}`
   }
-  return `${lensPrefix}${plural(row.decisive, 'decisive vote')} · ${tally}`
+  return `${plural(row.decisive, 'decisive vote')} · ${tally}`
 }

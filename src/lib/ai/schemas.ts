@@ -823,11 +823,11 @@ export interface FindingVerdict {
    */
   model?: string
   /**
-   * The lens this verifier judged the finding through (Plan O Part B). ABSENT on
-   * the generator/raiser row (it raised the finding, it didn't verify through a
-   * lens). Optional for backward-compat with old cached findings.
+   * True for the generator/raiser row(s) — the model RAISED this finding rather
+   * than verifying it (an implicit confirm). Drives the tooltip's "raised it"
+   * indicator. Optional/absent for verifier rows and old cached findings.
    */
-  lens?: import('./lenses').Lens
+  raised?: boolean
 }
 
 /**

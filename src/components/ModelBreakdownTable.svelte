@@ -50,7 +50,7 @@
               {#if m.role === 'generator'}
                 {formatGeneratorImpact(m.surfaced ?? 0, m.uniqueCatch ?? 0)}
               {:else if m.impact}
-                {formatVerifierImpact({ ...m.impact, lens: m.lens })}
+                {formatVerifierImpact(m.impact)}
               {:else}
                 —
               {/if}
