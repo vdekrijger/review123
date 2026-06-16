@@ -38,7 +38,7 @@ describe('llmTestConnection', () => {
     await expect(llmTestConnection('deepseek')).rejects.toMatchObject({ kind: 'no-key' })
   })
 
-  it('deepseek: posts a max_tokens:1 ping to api.deepseek.com/chat/completions with Bearer auth', async () => {
+  it('deepseek: posts a capped ping to api.deepseek.com/chat/completions with Bearer auth', async () => {
     setDeepseekKey('sk-ds-test')
     const fetchMock = vi.fn().mockResolvedValue(
       makeJsonResponse({ choices: [{ message: { content: 'ok' } }] }),
@@ -52,7 +52,7 @@ describe('llmTestConnection', () => {
     expect(url).toBe('https://api.deepseek.com/chat/completions')
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-ds-test')
     const body = JSON.parse(init.body as string)
-    expect(body.max_tokens).toBe(1)
+    expect(body.max_tokens).toBe(1024)
     expect(body.model).toBe('deepseek-v4-flash')
   })
 
@@ -70,7 +70,7 @@ describe('llmTestConnection', () => {
     expect(url).toBe('https://api.anthropic.com/v1/messages')
     expect((init.headers as Record<string, string>)['x-api-key']).toBe('sk-ant-test')
     const body = JSON.parse(init.body as string)
-    expect(body.max_tokens).toBe(1)
+    expect(body.max_tokens).toBe(1024)
     expect(body.model).toBe('claude-sonnet-4-6')
   })
 
