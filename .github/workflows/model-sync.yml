@@ -1,0 +1,128 @@
+# Daily model-lineup sync.
+#
+# Runs scripts/sync-models.mts against OpenRouter's PUBLIC models API (no auth)
+# to keep src/lib/llm/modelCatalog.ts current, then opens/refreshes a PR on the
+# branch `chore/model-sync`.
+#
+# AUTO-MERGE / required-checks note:
+#   The default GITHUB_TOKEN does NOT trigger other workflows (e.g. CI's
+#   `ci`/`e2e`), so a PR opened with it cannot satisfy required status checks and
+#   will never auto-merge. To get fully hands-off automation, add a repo secret
+#   `MODEL_SYNC_TOKEN` — a PAT (classic: `repo` + `workflow`; or fine-grained:
+#   Contents RW, Pull requests RW, Workflows RW). When that secret is present we
+#   create the PR with it (so CI fires) and enable `gh pr merge --auto --merge`.
+#   When it is absent we still open the PR with GITHUB_TOKEN for a 1-click manual
+#   merge and log how to enable full automation.
+#
+#   If the inline sanity gate (check+test+build) FAILS, the upstream data is
+#   suspect, so we open the PR WITHOUT auto-merge — a human must look.
+
+name: Model sync
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # daily 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # matches CI's baseline node
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Sync model catalog against OpenRouter
+        run: node scripts/sync-models.mts
+
+      - name: Detect catalog drift
+        id: drift
+        run: |
+          if git diff --quiet -- src/lib/llm/modelCatalog.ts; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No catalog drift — nothing to do."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Catalog drifted — will validate and open a PR."
+          fi
+
+      # Sanity gate (NOT e2e — the PR's own CI runs ci+e2e). If it fails the
+      # upstream data is bad; we still open a PR but WITHOUT auto-merge.
+      - name: Sanity gate (check + test + build)
+        id: gate
+        if: steps.drift.outputs.changed == 'true'
+        run: |
+          set +e
+          pnpm check && pnpm test && pnpm build
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Sanity gate failed — opening PR without auto-merge for human review."
+          fi
+
+      - name: Commit and open / refresh PR
+        if: steps.drift.outputs.changed == 'true'
+        env:
+          # Prefer the PAT (fires required checks + enables auto-merge); fall
+          # back to GITHUB_TOKEN for a 1-click manual merge.
+          MODEL_SYNC_TOKEN: ${{ secrets.MODEL_SYNC_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GATE_PASSED: ${{ steps.gate.outputs.passed }}
+        run: |
+          set -euo pipefail
+
+          BRANCH="chore/model-sync"
+          BASE="${GITHUB_REF_NAME:-main}"
+
+          # Choose the token: PAT enables full automation, else GITHUB_TOKEN.
+          if [ -n "${MODEL_SYNC_TOKEN}" ]; then
+            export GH_TOKEN="${MODEL_SYNC_TOKEN}"
+            AUTO_MERGE=true
+            echo "MODEL_SYNC_TOKEN present — PR will trigger CI and can auto-merge."
+          else
+            export GH_TOKEN="${GITHUB_TOKEN}"
+            AUTO_MERGE=false
+            echo "::notice::MODEL_SYNC_TOKEN not set — opening PR with GITHUB_TOKEN for a 1-click manual merge. Add the MODEL_SYNC_TOKEN PAT secret to enable hands-off auto-merge."
+          fi
+
+          # Push the catalog change to a force-updatable branch.
+          git config user.name 'akatchi'
+          git config user.email 'akatchi@codekrijger.io'
+          git checkout -B "$BRANCH"
+          git add src/lib/llm/modelCatalog.ts
+          git commit -m "chore: sync model catalog against OpenRouter"
+          # Use the chosen token for the push so the PR author/checks line up.
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${BRANCH}"
+
+          # Open the PR if one doesn't already exist for this branch.
+          if ! gh pr view "$BRANCH" >/dev/null 2>&1; then
+            gh pr create \
+              --base "$BASE" \
+              --head "$BRANCH" \
+              --title "chore: model catalog sync" \
+              --body-file model-sync-changes.md
+          else
+            echo "PR for $BRANCH already exists — refreshed by the force-push above."
+          fi
+
+          # Auto-merge only when the PAT is present AND the sanity gate passed.
+          if [ "$AUTO_MERGE" = "true" ] && [ "${GATE_PASSED}" = "true" ]; then
+            gh pr merge "$BRANCH" --auto --merge
+            echo "Auto-merge enabled — PR will merge once required checks pass."
+          else
+            echo "Auto-merge NOT enabled (no PAT or sanity gate failed) — human merge required."
+          fi
