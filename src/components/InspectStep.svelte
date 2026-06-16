@@ -632,6 +632,33 @@
   // Add-as-draft confirmation: track which finding keys have been "added" (session-only)
   let addedDraftKeys = $state<Set<string>>(new Set())
 
+  // Seed the suppression sets from the durable decision store on mount, so a
+  // finding the user DISMISSED (or ADDED-as-draft → 'accepted') stays hidden
+  // across a FULL PAGE RELOAD — not just across slide-nav. The store is bound to
+  // the current prKey (PR-scoped read), so this only re-surfaces THIS PR's
+  // decisions. We MERGE into the live sets (never clobber a session dismissal),
+  // and seed once per store instance so a later retry's clearSuppressionForSkill
+  // (which un-suppresses a reviewer for a deliberate re-run) isn't re-seeded over.
+  let seededStore: ReturnType<typeof createDecisionStore> | null = null
+  $effect(() => {
+    const store = decisionStore
+    if (!store || store === seededStore) return
+    seededStore = store
+    void (async () => {
+      await store.load()
+      // Guard: the effect may have re-run with a new store before this resolved.
+      if (store !== seededStore) return
+      const loadedDismissed: string[] = []
+      const loadedAccepted: string[] = []
+      for (const rec of store.list()) {
+        if (rec.decision === 'dismissed') loadedDismissed.push(rec.findingKey)
+        else if (rec.decision === 'accepted') loadedAccepted.push(rec.findingKey)
+      }
+      if (loadedDismissed.length) dismissedKeys = new Set([...dismissedKeys, ...loadedDismissed])
+      if (loadedAccepted.length) addedDraftKeys = new Set([...addedDraftKeys, ...loadedAccepted])
+    })()
+  })
+
   // Retry (#108) re-runs ONE reviewer → a fresh run whose findings should ALL
   // show. Finding keys are skillId-prefixed (`${skillId}:${path}:${line}:…`), so
   // a re-run that re-surfaces a previously DISMISSED (or added-as-draft) finding

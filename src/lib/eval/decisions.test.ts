@@ -91,6 +91,33 @@ describe('decision store record + read', () => {
   })
 })
 
+describe('list (PR-scoped read used to seed reload suppression)', () => {
+  it('returns this PR\'s recorded decisions after a fresh load, and not another PR\'s', async () => {
+    const prA = nextPrKey()
+    const prB = nextPrKey()
+    const db = `dec-list-${idx}`
+    // PR A: one dismissed + one accepted decision.
+    const a = createDecisionStore(prA, db)
+    await a.load()
+    await a.record({ findingKey: 'rev:src/a.ts:1:dismissed-one', decision: 'dismissed', severity: 'low', verificationContext: ctx })
+    await a.record({ findingKey: 'rev:src/a.ts:2:accepted-one', decision: 'accepted', severity: 'high', verificationContext: ctx })
+    // PR B: a decision that must NOT leak into PR A's read.
+    const b = createDecisionStore(prB, db)
+    await b.load()
+    await b.record({ findingKey: 'rev:src/b.ts:9:other-pr', decision: 'dismissed', severity: 'low', verificationContext: ctx })
+
+    // A FRESH PR-A store instance (simulating a reload) loads then reads.
+    const reloaded = createDecisionStore(prA, db)
+    await reloaded.load()
+    const list = reloaded.list()
+    const byKey = new Map(list.map((r) => [r.findingKey, r.decision]))
+    expect(byKey.get('rev:src/a.ts:1:dismissed-one')).toBe('dismissed')
+    expect(byKey.get('rev:src/a.ts:2:accepted-one')).toBe('accepted')
+    expect(byKey.has('rev:src/b.ts:9:other-pr')).toBe(false)
+    expect(list).toHaveLength(2)
+  })
+})
+
 describe('readDecisionsForPr (capture-flow read)', () => {
   it('returns only the requested PR\'s decisions', async () => {
     const prA = nextPrKey()
