@@ -121,7 +121,7 @@ describe('AiPanel — token usage footer (opt-in: settings.showTokenCost)', () =
     expect(container.querySelector('.ai-usage-footer')).toBeNull()
   })
 
-  it('renders tokens + $ when on and the active model has pricing', () => {
+  it('renders the $ then tokens (dollar-first) when on and the model has pricing', () => {
     setShowTokenCost(true)
     setAiProvider('anthropic')
     setAiModel('claude-sonnet-4-6') // $3/$15 per MTok → 8000*3/1e6 + 200*15/1e6 ≈ $0.027
@@ -133,20 +133,27 @@ describe('AiPanel — token usage footer (opt-in: settings.showTokenCost)', () =
     expect(footer).not.toBeNull()
     expect(footer!.textContent).toContain('8.2k tokens')
     expect(footer!.textContent).toContain('$0.03')
+    // Dollar-first: the $ value appears BEFORE the token count in the footer.
+    const text = footer!.textContent!
+    expect(text.indexOf('$0.03')).toBeLessThan(text.indexOf('8.2k tokens'))
   })
 
-  it('renders tokens ONLY when on but the active model has no pricing', () => {
+  it('still leads with the $ for a model with multi-cent cost (dollar-first)', () => {
     setShowTokenCost(true)
     setAiProvider('anthropic')
-    setAiModel('claude-opus-4-8') // no pricing populated
+    // claude-opus-4-8 is priced ($5/$25 per MTok after the 2026-06-16 backfill):
+    // 8000*5/1e6 + 200*25/1e6 = 0.04 + 0.005 = $0.045 → "$0.04".
+    setAiModel('claude-opus-4-8')
     _resetSettingsStateForTest()
     const { container } = render(AiPanel, {
       props: { title: 'Summary', task: 'summary', state: doneWithUsage, onretry: vi.fn() },
     })
     const footer = container.querySelector('.ai-usage-footer')
     expect(footer).not.toBeNull()
-    expect(footer!.textContent).toContain('8.2k tokens')
-    expect(footer!.textContent).not.toContain('$')
+    const text = footer!.textContent!
+    expect(text).toContain('8.2k tokens')
+    expect(text).toContain('$0.04')
+    expect(text.indexOf('$0.04')).toBeLessThan(text.indexOf('8.2k tokens'))
   })
 
   it('renders NOTHING for a cached task with no captured usage (graceful)', () => {
