@@ -487,6 +487,102 @@ describe('InspectStep — reviewer chip → finding navigation', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// InspectStep — demoted + file-level findings visible in BOTH modes
+// Regression for: a reviewer chip counts N findings, but demoted (cross-model)
+// and file-level (null-line) findings render nowhere in Story mode and hide in
+// a collapsed group in Files mode — so chip navigation lands on nothing. The fix
+// renders EVERY counted finding as a visible card in both modes.
+// ---------------------------------------------------------------------------
+
+describe('InspectStep — demoted + file-level findings visible in both modes', () => {
+  const skillId = 'rev-demoted'
+  const reviewerName = 'Pragmatic Reviewer'
+
+  const demotedVerification = (confirmedBy: number, polledModels: number) => ({
+    confirmedBy,
+    polledModels,
+    surfaced: false,
+    perModel: [],
+  })
+
+  const keyOf = (path: string, line: number | null, body: string) => `${skillId}:${path}:${line}:${body.slice(0, 30)}`
+
+  const reviewEntry = (
+    findings: { path: string; line: number | null; body: string; severity?: 'high' | 'medium' | 'low'; verification?: ReturnType<typeof demotedVerification> }[],
+  ): SkillReviewEntry => ({
+    skillId,
+    name: reviewerName,
+    state: {
+      status: 'done',
+      value: {
+        skillName: reviewerName,
+        findings: findings.map(f => ({
+          path: f.path,
+          line: f.line,
+          body: f.body,
+          severity: f.severity ?? 'medium',
+          ...(f.verification ? { verification: f.verification } : {}),
+        })),
+      },
+    },
+  })
+
+  beforeEach(() => {
+    _resetSettingsStateForTest()
+  })
+
+  it('a demoted line-anchored finding renders inline (no collapsed lower-confidence group)', () => {
+    const files = makeFiles(['a.ts'])
+    const body = 'Possible race condition here'
+    const skillReviews = [reviewEntry([{ path: 'a.ts', line: 1, body, verification: demotedVerification(1, 3) }])]
+    const { container } = render(InspectStep, {
+      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews },
+    })
+
+    // The retired collapsed group must be gone.
+    expect(container.querySelector('.lower-confidence-group')).toBeNull()
+
+    // The finding renders as a visible card with the matching jump-target key,
+    // dimmed with the lower-confidence badge.
+    const card = container.querySelector(`[data-finding-key="${keyOf('a.ts', 1, body)}"]`)
+    expect(card).not.toBeNull()
+    expect(card!.classList.contains('lower-confidence')).toBe(true)
+    expect(card!.querySelector('.skill-lower-confidence-chip')?.textContent).toContain('flagged by 1/3')
+  })
+
+  it('a demoted null-line finding renders as a file-level card (visible jump target)', () => {
+    const files = makeFiles(['a.ts'])
+    const body = 'Whole-file concern (demoted)'
+    const skillReviews = [reviewEntry([{ path: 'a.ts', line: null, body, verification: demotedVerification(1, 2) }])]
+    const { container } = render(InspectStep, {
+      props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews },
+    })
+    const card = container.querySelector(`[data-finding-key="${keyOf('a.ts', null, body)}"]`)
+    expect(card).not.toBeNull()
+    expect(card!.classList.contains('lower-confidence')).toBe(true)
+  })
+
+  it('Story mode renders file-level (null-line) findings with their jump-target key', () => {
+    const files = makeFiles(['a.ts'])
+    const body = 'A whole-file note shown in story mode'
+    const skillReviews = [reviewEntry([{ path: 'a.ts', line: null, body }])]
+    const story = { steps: [{ index: 0, files: ['a.ts'], caption: 'The file', layer: 'logic' as const, relatedTests: [] }] }
+    const { container } = render(InspectStep, {
+      props: {
+        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews,
+        storyAvailable: true, storyMode: true, story, storyStatus: 'done' as const,
+      },
+    })
+    // We're in story mode (the slideshow rendered, not the files layout).
+    expect(container.querySelector('.story')).not.toBeNull()
+    // The file-level finding has a visible card carrying the jump-target key.
+    const card = container.querySelector(`[data-finding-key="${keyOf('a.ts', null, body)}"]`)
+    expect(card).not.toBeNull()
+    expect(card!.textContent).toContain('A whole-file note shown in story mode')
+  })
+})
+
 describe('InspectStep — sticky drawer structure', () => {
   it('file-tree-drawer has data-open attribute (CSS keys the inline width off it)', () => {
     const files = makeFiles(['a.ts'])

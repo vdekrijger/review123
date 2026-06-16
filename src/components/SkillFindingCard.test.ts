@@ -166,11 +166,62 @@ describe('SkillFindingCard — cross-model verification chip (Plan M)', () => {
     expect(container.querySelector('.skill-verify-chip')).toBeNull()
   })
 
-  it('no chip when the finding was demoted (surfaced=false)', () => {
+  it('no GREEN confirmed chip when the finding was demoted (surfaced=false)', () => {
     const { container } = renderCard({
       verification: { ...surfaced, surfaced: false, confirmedBy: 1 },
     })
     expect(container.querySelector('.skill-verify-chip')).toBeNull()
+  })
+})
+
+describe('SkillFindingCard — lower-confidence (cross-model demoted, Plan M)', () => {
+  const demoted = {
+    confirmedBy: 1,
+    polledModels: 3,
+    surfaced: false,
+    perModel: [
+      { provider: 'DeepSeek', verdict: 'confirm' as const, reason: 'raised it' },
+      { provider: 'OpenAI', verdict: 'refute' as const, reason: 'not a real issue' },
+      { provider: 'Anthropic', verdict: 'uncertain' as const, reason: '' },
+    ],
+  }
+
+  it('renders the card DIMMED with a lower-confidence badge when surfaced=false', () => {
+    const { container } = renderCard({ verification: demoted })
+    const card = container.querySelector('.skill-finding')
+    expect(card?.classList.contains('lower-confidence')).toBe(true)
+    const chip = container.querySelector('.skill-lower-confidence-chip')
+    expect(chip).toBeTruthy()
+    expect(chip?.textContent).toContain('flagged by 1/3')
+    expect(chip?.textContent).toContain('lower confidence')
+  })
+
+  it('the lower-confidence chip still carries the per-model tooltip', () => {
+    const { container } = renderCard({ verification: demoted })
+    const chip = container.querySelector('.skill-lower-confidence-chip')
+    const title = chip?.getAttribute('title') ?? ''
+    expect(title).toContain('DeepSeek: confirm — raised it')
+    expect(title).toContain('OpenAI: refute — not a real issue')
+  })
+
+  it('a surfaced finding is NOT dimmed and shows no lower-confidence chip', () => {
+    const { container } = renderCard({
+      verification: { ...demoted, surfaced: true, confirmedBy: 2 },
+    })
+    expect(container.querySelector('.skill-finding.lower-confidence')).toBeNull()
+    expect(container.querySelector('.skill-lower-confidence-chip')).toBeNull()
+  })
+
+  it('no verification → no lower-confidence treatment at all', () => {
+    const { container } = renderCard({})
+    expect(container.querySelector('.skill-finding.lower-confidence')).toBeNull()
+    expect(container.querySelector('.skill-lower-confidence-chip')).toBeNull()
+  })
+
+  it('the demoted card still renders inline (anchored) with the badge', () => {
+    const { container } = renderCard({ verification: demoted, line: 12, anchored: true, compact: true })
+    expect(container.querySelector('.skill-finding.lower-confidence.compact')).toBeTruthy()
+    expect(container.querySelector('.skill-lower-confidence-chip')).toBeTruthy()
   })
 })
 
