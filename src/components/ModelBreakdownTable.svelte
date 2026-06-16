@@ -11,7 +11,7 @@
    * Reuse: both call sites pass the same VerdictModelBreakdown[] shape that
    * run.svelte's buildVerdictModels() produces from the crossVerify outcome.
    */
-  import { formatModelUsageLabel } from '../lib/ai/tokenCost'
+  import { formatModelUsageLabel, NO_PRICING_MARKER } from '../lib/ai/tokenCost'
   import { formatGeneratorImpact, formatVerifierImpact } from '../lib/ai/modelImpact'
   import type { VerdictModelBreakdown } from '../lib/ai/run.svelte'
 
@@ -56,8 +56,15 @@
               {/if}
             </td>
             {#if showCost}
-              <td class="model-cost cost-col">
-                {formatModelUsageLabel(m.providerId, m.modelId, m.usage) ?? '—'}
+              {@const costLabel = formatModelUsageLabel(m.providerId, m.modelId, m.usage)}
+              <td
+                class="model-cost cost-col"
+                class:unpriced={costLabel?.startsWith(NO_PRICING_MARKER)}
+                title={costLabel?.startsWith(NO_PRICING_MARKER)
+                  ? `no pricing on file for ${m.modelId}`
+                  : undefined}
+              >
+                {costLabel ?? NO_PRICING_MARKER}
               </td>
             {/if}
           </tr>
@@ -116,7 +123,14 @@
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
+  /* Dollar-first: the $ leads at normal text weight (primary); the token count
+     reads secondary via the muted "· Nk tokens" tail in the same string. */
   .model-cost {
+    color: var(--text);
+  }
+  /* Unpriced row: the "$—" marker stays muted (it's an honest placeholder, not
+     a real amount) but the column is never blank. */
+  .model-cost.unpriced {
     color: var(--text-muted);
   }
 

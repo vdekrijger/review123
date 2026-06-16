@@ -1745,13 +1745,19 @@ describe('VerdictStep — consolidated review cost panel', () => {
     render(VerdictStep, {
       props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, modelPerformance, totalUsage },
     })
-    // Aggregate headline from totalUsage (2.5k tokens). The label is interpolated
-    // into separate text nodes, so match on the labelled element's text content.
+    // Aggregate headline from totalUsage (2.5k tokens), now DOLLAR-FIRST. The
+    // label is interpolated into separate text nodes, so match on the labelled
+    // element's text content.
     const total = screen.getByLabelText('Total token usage for this review')
     expect(total.textContent).toMatch(/This review used .*2\.5k tokens.* total/)
     expect(screen.getByRole('columnheader', { name: /cost/i })).toBeInTheDocument()
-    // claude-opus-4-8 has no pricing in providers.ts → tokens only
-    expect(screen.getByText('1.5k tokens')).toBeInTheDocument()
+    // Per-model cost cell leads with the $ (dollar-first), then the token count.
+    // claude-opus-4-8 (generator) is priced ($5/$25 per MTok): 1000 in + 500 out
+    // = $0.0175 → "$0.02"; cell reads "$0.02 · 1.5k tokens".
+    expect(screen.getByText('$0.02 · 1.5k tokens')).toBeInTheDocument()
+    // claude-haiku-4-5 (verifier, $1/$5 per MTok): 800 in + 200 out = $0.0018,
+    // sub-cent → "<$0.01 · 1.0k tokens".
+    expect(screen.getByText('<$0.01 · 1.0k tokens')).toBeInTheDocument()
   })
 
   it('renders nothing when no models ran and no usage to show', () => {
