@@ -1,6 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
+    { "source": "/api/llm/openai/chat/completions", "destination": "/api/llm/openai" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }
