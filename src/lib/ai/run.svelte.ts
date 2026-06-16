@@ -496,12 +496,13 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     })
 
     const generatorName = activeLlmConfig().provider.displayName
+    const generatorModelId = activeLlmConfig().model.id
     try {
       // Plan P: verifiers judge through diverse lenses in EVERY config (folds the
       // lenses-in-verify followup) — decorrelating verifier errors here too, not
       // just in the multi-generator fusion path. PROMPT_VERSION bumped for this.
       const lenses = assignLenses(verifiers.length)
-      const outcome = await crossVerify(verifiable, generatorName, verifiers, realVerify, lenses)
+      const outcome = await crossVerify(verifiable, generatorName, verifiers, realVerify, lenses, generatorModelId)
       return {
         byId: outcome.byId,
         usage: outcome.usage,

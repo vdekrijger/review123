@@ -134,14 +134,16 @@ describe('SkillFindingCard — state chips (the only state styling)', () => {
 })
 
 describe('SkillFindingCard — cross-model verification chip (Plan M)', () => {
+  // Per-vote rows now carry the specific MODEL + the verifier's LENS (verify-
+  // tooltip enrichment). The generator/raiser row has a model but NO lens.
   const surfaced = {
     confirmedBy: 2,
     polledModels: 3,
     surfaced: true,
     perModel: [
-      { provider: 'DeepSeek', verdict: 'confirm' as const, reason: '' },
-      { provider: 'OpenAI', verdict: 'confirm' as const, reason: 'real off-by-one' },
-      { provider: 'Anthropic', verdict: 'refute' as const, reason: 'looks moot' },
+      { provider: 'DeepSeek', model: 'deepseek-v4-flash', verdict: 'confirm' as const, reason: '' },
+      { provider: 'OpenAI', model: 'gpt-5-mini', lens: 'correctness' as const, verdict: 'confirm' as const, reason: 'real off-by-one' },
+      { provider: 'Anthropic', model: 'claude-sonnet-4-6', lens: 'security' as const, verdict: 'refute' as const, reason: 'looks moot' },
     ],
   }
 
@@ -152,13 +154,63 @@ describe('SkillFindingCard — cross-model verification chip (Plan M)', () => {
     expect(chip?.textContent).toContain('confirmed by 2/3 models')
   })
 
-  it('the chip tooltip lists each model verdict', () => {
+  it('the chip is keyboard-focusable (tabindex + role)', () => {
     const { container } = renderCard({ verification: surfaced })
     const chip = container.querySelector('.skill-verify-chip')
-    const title = chip?.getAttribute('title') ?? ''
-    expect(title).toContain('DeepSeek: confirm')
-    expect(title).toContain('OpenAI: confirm — real off-by-one')
-    expect(title).toContain('Anthropic: refute — looks moot')
+    expect(chip?.getAttribute('tabindex')).toBe('0')
+    expect(chip?.getAttribute('role')).toBe('button')
+  })
+
+  it('the styled tooltip lists per-vote MODEL + LENS + verdict indicator', () => {
+    const { container } = renderCard({ verification: surfaced })
+    const tip = container.querySelector('.skill-verify-tip')
+    expect(tip).toBeTruthy()
+    // Heading mirrors the chip.
+    expect(tip?.querySelector('.skill-verify-tip-heading')?.textContent).toContain('Confirmed by 2/3 models')
+    const rows = container.querySelectorAll('.skill-verify-tip-row')
+    expect(rows.length).toBe(3)
+    // Generator/raiser row: shows its MODEL and a "raised it" lens slot (no lens).
+    expect(rows[0].querySelector('.skill-verify-tip-model')?.textContent).toBe('deepseek-v4-flash')
+    expect(rows[0].querySelector('.skill-verify-tip-lens')?.textContent).toContain('raised it')
+    // Verifier row: model + lens TAG + reason.
+    expect(rows[1].querySelector('.skill-verify-tip-model')?.textContent).toBe('gpt-5-mini')
+    expect(rows[1].querySelector('.skill-verify-tip-lens')?.textContent).toBe('correctness')
+    expect(rows[1].querySelector('.skill-verify-tip-reason')?.textContent).toContain('real off-by-one')
+    // A REFUTE vote gets the refute indicator class.
+    expect(rows[2].querySelector('.skill-verify-tip-glyph.verdict-refute')).toBeTruthy()
+    expect(rows[2].querySelector('.skill-verify-tip-lens')?.textContent).toBe('security')
+  })
+
+  it('falls back to the provider name when a vote has no model (old cached data)', () => {
+    const { container } = renderCard({
+      verification: {
+        confirmedBy: 1,
+        polledModels: 2,
+        surfaced: true,
+        perModel: [
+          { provider: 'DeepSeek', verdict: 'confirm' as const, reason: '' },
+          { provider: 'OpenAI', verdict: 'confirm' as const, reason: 'agree' },
+        ],
+      },
+    })
+    const models = [...container.querySelectorAll('.skill-verify-tip-model')].map((m) => m.textContent)
+    expect(models).toEqual(['DeepSeek', 'OpenAI'])
+  })
+
+  it('an UNCERTAIN vote shows the uncertain indicator', () => {
+    const { container } = renderCard({
+      verification: {
+        confirmedBy: 1,
+        polledModels: 2,
+        surfaced: true,
+        perModel: [
+          { provider: 'DeepSeek', model: 'deepseek-v4-flash', verdict: 'confirm' as const, reason: '' },
+          { provider: 'OpenAI', model: 'gpt-5-mini', lens: 'security' as const, verdict: 'uncertain' as const, reason: 'cannot tell' },
+        ],
+      },
+    })
+    const rows = container.querySelectorAll('.skill-verify-tip-row')
+    expect(rows[1].querySelector('.skill-verify-tip-glyph.verdict-uncertain')).toBeTruthy()
   })
 
   it('no chip when there is no verification (single-key / off)', () => {
@@ -180,9 +232,9 @@ describe('SkillFindingCard — lower-confidence (cross-model demoted, Plan M)', 
     polledModels: 3,
     surfaced: false,
     perModel: [
-      { provider: 'DeepSeek', verdict: 'confirm' as const, reason: 'raised it' },
-      { provider: 'OpenAI', verdict: 'refute' as const, reason: 'not a real issue' },
-      { provider: 'Anthropic', verdict: 'uncertain' as const, reason: '' },
+      { provider: 'DeepSeek', model: 'deepseek-v4-flash', verdict: 'confirm' as const, reason: '' },
+      { provider: 'OpenAI', model: 'gpt-5-mini', lens: 'correctness' as const, verdict: 'refute' as const, reason: 'not a real issue' },
+      { provider: 'Anthropic', model: 'claude-sonnet-4-6', lens: 'security' as const, verdict: 'uncertain' as const, reason: '' },
     ],
   }
 
@@ -196,12 +248,21 @@ describe('SkillFindingCard — lower-confidence (cross-model demoted, Plan M)', 
     expect(chip?.textContent).toContain('lower confidence')
   })
 
-  it('the lower-confidence chip still carries the per-model tooltip', () => {
+  it('the lower-confidence chip still carries the per-model styled tooltip', () => {
     const { container } = renderCard({ verification: demoted })
     const chip = container.querySelector('.skill-lower-confidence-chip')
-    const title = chip?.getAttribute('title') ?? ''
-    expect(title).toContain('DeepSeek: confirm — raised it')
-    expect(title).toContain('OpenAI: refute — not a real issue')
+    expect(chip?.getAttribute('tabindex')).toBe('0')
+    const tip = container.querySelector('.skill-verify-tip')
+    expect(tip?.querySelector('.skill-verify-tip-heading')?.textContent).toContain('Flagged by 1/3')
+    const rows = container.querySelectorAll('.skill-verify-tip-row')
+    // Generator row: model + "raised it" (no lens).
+    expect(rows[0].querySelector('.skill-verify-tip-model')?.textContent).toBe('deepseek-v4-flash')
+    expect(rows[0].querySelector('.skill-verify-tip-lens')?.textContent).toContain('raised it')
+    // Refuting verifier: model + lens + refute indicator + reason.
+    expect(rows[1].querySelector('.skill-verify-tip-model')?.textContent).toBe('gpt-5-mini')
+    expect(rows[1].querySelector('.skill-verify-tip-lens')?.textContent).toBe('correctness')
+    expect(rows[1].querySelector('.skill-verify-tip-glyph.verdict-refute')).toBeTruthy()
+    expect(rows[1].querySelector('.skill-verify-tip-reason')?.textContent).toContain('not a real issue')
   })
 
   it('a surfaced finding is NOT dimmed and shows no lower-confidence chip', () => {
