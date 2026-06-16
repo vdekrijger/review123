@@ -154,6 +154,42 @@ export function mapHttpStatus(status: number): never {
   throw new LlmError('server', `Server error (${status})`)
 }
 
+/**
+ * Like mapHttpStatus, but reads the upstream error BODY and surfaces its
+ * message, so the user sees the REAL reason (e.g. an OpenAI
+ * invalid_request_error explaining a rejected parameter) instead of a bare
+ * "Server error (NNN)". Best-effort: provider error envelopes are
+ * `{ error: { message } }` or `{ error: "<string>" }` (our OpenAI proxy uses
+ * the string form); non-JSON bodies are included verbatim (capped). The detail
+ * never carries the API key — neither provider error bodies nor the proxy's
+ * `{ error }` envelope include it (OpenAI redacts keys in its 401 text itself).
+ */
+export async function mapHttpError(res: Response): Promise<never> {
+  let detail = ''
+  try {
+    const text = await res.text()
+    if (text) {
+      try {
+        const j = JSON.parse(text) as { error?: unknown; message?: unknown }
+        const e = j.error
+        if (typeof e === 'string') detail = e
+        else if (e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string') {
+          detail = (e as { message: string }).message
+        } else if (typeof j.message === 'string') detail = j.message
+      } catch {
+        detail = text // non-JSON (e.g. an HTML error page) — show it verbatim
+      }
+    }
+  } catch {
+    // Body unreadable — fall through to the status-only message.
+  }
+  detail = detail.replace(/\s+/g, ' ').trim().slice(0, 300)
+  const suffix = detail ? `: ${detail}` : ''
+  if (res.status === 401) throw new LlmError('auth', `Unauthorized (401)${suffix}`)
+  if (res.status === 429) throw new LlmError('rate-limited', `Rate limited (429)${suffix}`)
+  throw new LlmError('server', `Server error (${res.status})${suffix}`)
+}
+
 /** Parse an SSE line's data payload into the raw string. Returns null to skip. */
 function parseSseLine(line: string): string | null {
   const trimmed = line.trimEnd()
@@ -229,7 +265,7 @@ async function openaiCompatComplete(
     mapFetchError(err)
   }
 
-  if (!res!.ok) mapHttpStatus(res!.status)
+  if (!res!.ok) await mapHttpError(res!)
 
   const data = (await res!.json()) as {
     choices?: { message?: { content?: string | null } }[]
@@ -287,7 +323,7 @@ async function openaiCompatStream(
     mapFetchError(err)
   }
 
-  if (!res!.ok) mapHttpStatus(res!.status)
+  if (!res!.ok) await mapHttpError(res!)
 
   const bodyStream = res!.body
   if (!bodyStream) throw new LlmError('network', 'No response body for streaming request')
@@ -410,7 +446,7 @@ async function anthropicComplete(
     mapFetchError(err)
   }
 
-  if (!res!.ok) mapHttpStatus(res!.status)
+  if (!res!.ok) await mapHttpError(res!)
 
   const data = (await res!.json()) as {
     content?: { type: string; text?: string }[]
@@ -467,7 +503,7 @@ async function anthropicStream(
     mapFetchError(err)
   }
 
-  if (!res!.ok) mapHttpStatus(res!.status)
+  if (!res!.ok) await mapHttpError(res!)
 
   const bodyStream = res!.body
   if (!bodyStream) throw new LlmError('network', 'No response body for streaming request')
@@ -616,7 +652,7 @@ async function geminiComplete(
     mapFetchError(err)
   }
 
-  if (!res!.ok) mapHttpStatus(res!.status)
+  if (!res!.ok) await mapHttpError(res!)
 
   const data = (await res!.json()) as {
     candidates?: { content?: { parts?: { text?: string }[] } }[]
@@ -668,7 +704,7 @@ async function geminiStream(
     mapFetchError(err)
   }
 
-  if (!res!.ok) mapHttpStatus(res!.status)
+  if (!res!.ok) await mapHttpError(res!)
 
   const bodyStream = res!.body
   if (!bodyStream) throw new LlmError('network', 'No response body for Gemini streaming request')
