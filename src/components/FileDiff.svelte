@@ -120,9 +120,15 @@
      * collapse-on-view behaviour is unchanged.
      */
     forceExpanded?: boolean
+    /**
+     * The PR's CURRENT head sha. When a draft's own `headSha` differs (it was
+     * made on an older commit), DraftThread shows a "from commit …" note so the
+     * reviewer understands why a draft sits in the unanchored fallback block.
+     */
+    currentHeadSha?: string
   }
 
-  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onDismissSkillFinding, onReply = null, whitespace = null, sticky = true, forceExpanded = false }: Props = $props()
+  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onDismissSkillFinding, onReply = null, whitespace = null, sticky = true, forceExpanded = false, currentHeadSha = undefined }: Props = $props()
 
   // Test-file display (must be declared before collapsed)
   const testFileDisplay = $derived<TestFileDisplay>(settingsState.current.testFileDisplay)
@@ -736,6 +742,7 @@
               oncancel={() => {}}
               {askFn}
               {askDisabledReason}
+              {currentHeadSha}
               excerpt={file.patch ? excerptAround(file.patch, lineNumber, splitSideToSide(side), 6) : ''}
             />
           </div>
@@ -789,6 +796,7 @@
               oncancel={() => {}}
               {askFn}
               {askDisabledReason}
+              {currentHeadSha}
               excerpt={file.patch ? excerptAround(file.patch, draft.line, draft.side, 6) : ''}
             />
           </div>

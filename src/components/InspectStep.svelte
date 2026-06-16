@@ -42,6 +42,7 @@
     mode,
     onmode,
     draftStore,
+    currentHeadSha = undefined,
     decisionStore = null,
     attention = null,
     readingOrder = [],
@@ -73,6 +74,11 @@
     mode: DiffMode
     onmode: (m: DiffMode) => void
     draftStore: ReturnType<typeof createDraftStore> | null
+    /**
+     * The PR's CURRENT head sha. Passed to FileDiff → DraftThread so a draft made
+     * on an OLDER commit (draft.headSha !== current) shows a "from commit …" note.
+     */
+    currentHeadSha?: string
     /** Records accept/dismiss outcomes for the eval telemetry loop. null → disabled. */
     decisionStore?: ReturnType<typeof createDecisionStore> | null
     attention?: AttentionResult | null
@@ -1164,6 +1170,7 @@
           <FileDiff
             {file}
             {mode}
+            {currentHeadSha}
             drafts={draftsForFile(file.filename)}
             comments={commentsForFile(file.filename)}
             {resolvedCommentIds}

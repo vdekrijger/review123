@@ -12,7 +12,7 @@
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import ReviewProgress from '../components/ReviewProgress.svelte'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
-  import { createDraftStore, getOrphanDraftsForPr, migrateOrphanDrafts } from '../lib/drafts/drafts.svelte'
+  import { createDraftStore } from '../lib/drafts/drafts.svelte'
   import { createDecisionStore } from '../lib/eval/decisions'
   import VerdictStep from '../components/VerdictStep.svelte'
   import { createAiRun } from '../lib/ai/run.svelte'
@@ -139,10 +139,6 @@
   // flow can pre-label a golden case. Created alongside the draft store, same PR key.
   let decisionStore: ReturnType<typeof createDecisionStore> | null = $state(null)
   let storeInitialized = false
-  // Count of drafts restored from an earlier commit of this PR (head-sha changed
-  // after they were drafted). >0 surfaces a dismissible "restored" note; 0 = silent.
-  let restoredDraftCount = $state(0)
-  let restoredNoteDismissed = $state(false)
 
   // ---- Since-last-visit interdiff state ----
   // The headSha from the PREVIOUS visit (null = first visit or same sha)
@@ -174,31 +170,21 @@
     if (load.state.status === 'ready' && !storeInitialized) {
       storeInitialized = true
       const meta = load.state.meta
-      const prKey = `${providerId}:${owner}/${repo}#${number}@${meta.headSha}`
-      const store = createDraftStore(prKey)
+      // Drafts are keyed by stable PR IDENTITY (no head sha), so a new commit
+      // never orphans them. The current head sha is passed as the maker-sha so
+      // newly created drafts record the commit they were made on; load() also
+      // migrates any legacy `@sha`-keyed drafts into this identity key.
+      const prKey = prId
+      const store = createDraftStore(prKey, undefined, meta.headSha)
       draftStore = store
-      const decisions = createDecisionStore(prKey)
+      // Decision store keeps its head-sha-scoped key (unrelated to draft re-key).
+      const decisions = createDecisionStore(`${providerId}:${owner}/${repo}#${number}@${meta.headSha}`)
       decisionStore = decisions
       void decisions.load()
       // Un-awaited intentionally: causes a cosmetic 0-count flash on mount
-      // but avoids blocking render. Load completes asynchronously.
-      //
-      // Orphan recovery: when this PR got a new commit after comments were
-      // drafted, the drafts live under an OLD-sha prKey and the current-sha
-      // store loads empty. If so, adopt those orphans into the current prKey so
-      // they render + submit against the current diff (and stop re-surfacing in
-      // the in-flight list). Silent when the current sha already has drafts.
-      void (async () => {
-        await store.load()
-        if (store.count > 0) return // live drafts exist — never migrate over them
-        const orphans = await getOrphanDraftsForPr(prKey)
-        if (orphans.length === 0) return
-        const moved = await migrateOrphanDrafts(prKey, orphans)
-        if (moved > 0) {
-          await store.load()
-          restoredDraftCount = moved
-        }
-      })()
+      // but avoids blocking render. Load completes asynchronously (and absorbs
+      // any legacy sha-keyed drafts via the re-key migration in load()).
+      void store.load()
 
       // Record this PR in the recent-reviews history. The full file stats are
       // already loaded here, so persist the diff size too — the landing page
@@ -746,16 +732,6 @@
         {/if}
       {/if}
 
-      {#if restoredDraftCount > 0 && !restoredNoteDismissed}
-        <div class="restored-drafts-note" role="status">
-          Restored {restoredDraftCount} draft comment{restoredDraftCount === 1 ? '' : 's'} from an earlier commit of this PR.
-          <button
-            class="restored-dismiss-btn"
-            aria-label="Dismiss restored drafts note"
-            onclick={() => { restoredNoteDismissed = true }}
-          >×</button>
-        </div>
-      {/if}
       {#if commentsError && !commentsDismissed}
         <div class="comments-error-note" role="alert">
           Couldn't load existing comments.
@@ -775,6 +751,7 @@
         onhidewhitespace={setHideWs}
         whitespaceDisabledReason={isCompareActive ? 'Hide whitespace is unavailable in compare view — file contents are fetched for the PR base/head, not the compared revisions' : null}
         {draftStore}
+        currentHeadSha={load.state.meta.headSha}
         {decisionStore}
         attention={isCompareActive ? null : (aiRun?.attention.status === 'done' ? aiRun.attention.value as AttentionResult : null)}
         readingOrder={isCompareActive ? [] : readingOrder}
@@ -948,35 +925,6 @@
   }
 
   .comments-dismiss-btn:hover {
-    color: #90a8b8;
-  }
-
-  .restored-drafts-note {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: var(--surface-banner, #1a3050);
-    border: 1px solid var(--border-banner, #2a5080);
-    border-left: 3px solid var(--border-banner-accent, #4a90d0);
-    border-radius: 4px;
-    padding: 0.4rem 0.75rem;
-    font-size: 0.85rem;
-    color: var(--text-banner, #c8dff0);
-    margin-bottom: 0.5rem;
-  }
-
-  .restored-dismiss-btn {
-    background: none;
-    border: none;
-    color: #6a8090;
-    cursor: pointer;
-    font-size: 1rem;
-    line-height: 1;
-    padding: 0 0.25rem;
-    margin-left: auto;
-  }
-
-  .restored-dismiss-btn:hover {
     color: #90a8b8;
   }
 

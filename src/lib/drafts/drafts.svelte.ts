@@ -19,6 +19,11 @@
 // ---------------------------------------------------------------------------
 
 export interface Draft {
+  /**
+   * The PR IDENTITY key: `provider:owner/repo#number` (NO head sha). All of a
+   * PR's drafts — across every commit they were made on — live under this one
+   * key; the commit each draft was made on is carried in `headSha` below.
+   */
   prKey: string
   path: string
   line: number
@@ -28,6 +33,13 @@ export interface Draft {
   body: string
   /** Thread ordinal — 0 for first comment, 1+ for replies. Default 0. */
   n?: number
+  /**
+   * The PR head commit SHA this draft was made on. Undefined for drafts created
+   * before this field existed (and for the demo route). Used to (a) show a
+   * "from commit abc1234" note when the draft was made on an older commit, and
+   * (b) preserve provenance when migrating legacy `@sha`-keyed drafts.
+   */
+  headSha?: string
   updatedAt: number
 }
 
@@ -205,13 +217,6 @@ async function idbDelete(db: IDBDatabase, key: string): Promise<void> {
   await idbRequest(store.delete(key))
 }
 
-async function idbDeleteLegacy(db: IDBDatabase, legacyKey: string): Promise<void> {
-  // Delete the legacy 4-part key from IDB and re-store under the 5-part key
-  const tx = db.transaction(STORE_NAME, 'readwrite')
-  const store = tx.objectStore(STORE_NAME)
-  await idbRequest(store.delete(legacyKey))
-}
-
 async function idbClearRange(db: IDBDatabase, prKey: string): Promise<void> {
   const lower = `${prKey}|`
   const upper = `${prKey}|￿`
@@ -235,16 +240,154 @@ async function idbClearRange(db: IDBDatabase, prKey: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Re-key migration — legacy `@sha` prKeys → stable PR identity prKey
+// ---------------------------------------------------------------------------
+
+/**
+ * Adopt every draft stored under a LEGACY `@sha`-keyed prKey belonging to the
+ * SAME PR identity (`provider:owner/repo#number`) into the identity prKey,
+ * tagging each migrated draft with the source commit's sha (`headSha`).
+ *
+ * This is the re-keying that makes drafts immune to head-sha churn: once a PR's
+ * drafts all live under one identity key, pushing a new commit can no longer
+ * orphan them. It SUPERSEDES the old orphan-recovery dance.
+ *
+ * Guarantees:
+ *   - Lossless: a source is deleted ONLY after its content exists under the
+ *     identity key (adopt-then-delete). On an anchor COLLISION with an existing
+ *     identity draft, the source is appended at the next free `n` (never
+ *     overwrites) — unless the bodies are identical, in which case it is a
+ *     duplicate already present and is simply dropped.
+ *   - Idempotent: a second run finds no non-identity keys for this PR → no-op.
+ *
+ * No-op when `identityPrKey` is unparseable (e.g. the demo key) or when there
+ * are no legacy sha-keyed variants for this identity.
+ */
+async function migrateLegacyShaKeysToIdentity(db: IDBDatabase, identityPrKey: string): Promise<void> {
+  const target = parsePrKey(identityPrKey)
+  if (!target) return
+
+  // Collect every record whose prKey segment is a DIFFERENT (sha-bearing)
+  // variant of this same PR identity.
+  type Source = { sourceKey: string; sourcePrKey: string; sourceSha: string; value: Draft }
+  const sources: Source[] = []
+
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly')
+    const store = tx.objectStore(STORE_NAME)
+    const req = store.openCursor()
+    req.onsuccess = () => {
+      const cursor = req.result
+      if (cursor) {
+        const rawKey = cursor.key as string
+        const pipeIdx = rawKey.indexOf('|')
+        const sourcePrKey = pipeIdx === -1 ? rawKey : rawKey.slice(0, pipeIdx)
+        if (sourcePrKey !== identityPrKey) {
+          const parsed = parsePrKey(sourcePrKey)
+          if (
+            parsed &&
+            parsed.provider === target.provider &&
+            parsed.owner === target.owner &&
+            parsed.repo === target.repo &&
+            parsed.number === target.number
+          ) {
+            sources.push({
+              sourceKey: rawKey,
+              sourcePrKey,
+              sourceSha: parsed.headSha,
+              value: cursor.value as Draft,
+            })
+          }
+        }
+        cursor.continue()
+      } else {
+        resolve()
+      }
+    }
+    req.onerror = () => reject(req.error)
+  })
+
+  if (sources.length === 0) return
+
+  // Track per-anchor occupancy under the identity key so collisions can append
+  // at a fresh `n`. Seed from the identity records already on disk.
+  const identityEntries = await idbGetAllForPr(db, identityPrKey)
+  // anchor "path|line|side" -> Map<n, body> of identity drafts present there
+  const occupied = new Map<string, Map<number, string>>()
+  for (const { value } of identityEntries) {
+    const n = value.n ?? 0
+    const anchor = `${value.path}|${value.line}|${value.side}`
+    let slots = occupied.get(anchor)
+    if (!slots) { slots = new Map(); occupied.set(anchor, slots) }
+    slots.set(n, value.body)
+  }
+
+  // Oldest-first so de-dup keeps deterministic ordering.
+  sources.sort((a, b) => (a.value.updatedAt ?? 0) - (b.value.updatedAt ?? 0))
+
+  for (const src of sources) {
+    const path = src.value.path
+    const line = src.value.line
+    const side = src.value.side
+    const body = src.value.body
+    const startLine = (src.value.startLine != null && src.value.startLine < line) ? src.value.startLine : undefined
+    const anchor = `${path}|${line}|${side}`
+    let slots = occupied.get(anchor)
+    if (!slots) { slots = new Map(); occupied.set(anchor, slots) }
+
+    // Identical-body short-circuit (idempotency / duplicate across shas):
+    // if any occupied slot at this anchor already holds this exact body, the
+    // draft is already represented — just delete the source.
+    let alreadyPresent = false
+    for (const existingBody of slots.values()) {
+      if (existingBody === body) { alreadyPresent = true; break }
+    }
+    if (alreadyPresent) {
+      await idbDelete(db, src.sourceKey)
+      continue
+    }
+
+    // Choose n: prefer the source's own n if that slot is free; else append.
+    const srcN = src.value.n ?? 0
+    let n = srcN
+    if (slots.has(n)) {
+      let next = 0
+      while (slots.has(next)) next++
+      n = next
+    }
+
+    const record: Draft = {
+      path,
+      line,
+      side,
+      body,
+      prKey: identityPrKey,
+      n,
+      updatedAt: src.value.updatedAt ?? Date.now(),
+      ...(startLine != null ? { startLine } : {}),
+      ...(src.sourceSha ? { headSha: src.sourceSha } : {}),
+    }
+    const targetKey = draftKey({ prKey: identityPrKey, path, line, side, n })
+    await idbPut(db, targetKey, record) // adopt
+    slots.set(n, body)
+    await idbDelete(db, src.sourceKey) // ...then delete source (lossless)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // createDraftStore
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a reactive draft store bound to a single PR key.
+ * Creates a reactive draft store bound to a single PR IDENTITY key.
  *
- * @param prKey    - e.g. "owner/repo#42@sha"
+ * @param prKey    - the PR identity: "provider:owner/repo#number" (NO head sha)
  * @param dbName   - override the DB name (useful in tests for isolation)
+ * @param makerSha - the CURRENT head sha; stamped onto newly upserted drafts as
+ *                   `headSha` so each draft records the commit it was made on.
+ *                   Optional (undefined for the demo route / older callers).
  */
-export function createDraftStore(prKey: string, dbName = 'review123-drafts') {
+export function createDraftStore(prKey: string, dbName = 'review123-drafts', makerSha?: string) {
   // $state-backed reactive array
   let drafts = $state<Draft[]>([])
   let persistent = $state(true)
@@ -291,6 +434,15 @@ export function createDraftStore(prKey: string, dbName = 'review123-drafts') {
     async load(): Promise<void> {
       const db = await getDb()
       if (!db) return // fallback: nothing to load from disk
+
+      // Re-key migration (lossless + idempotent): adopt any drafts stored under a
+      // LEGACY `@sha`-keyed prKey for THIS PR identity into the identity key,
+      // tagging each with the source commit's sha. Runs before reading so the
+      // store loads every commit's drafts under one identity. See plan doc
+      // 2026-06-16-review123-draft-rekey.md.
+      await migrateLegacyShaKeysToIdentity(db, prKey)
+
+      // Read the identity range (plus legacy 4-part key fixing, as before).
       const entries = await idbGetAllForPr(db, prKey)
       const migrated: Draft[] = []
       for (const { key, value } of entries) {
@@ -364,7 +516,7 @@ export function createDraftStore(prKey: string, dbName = 'review123-drafts') {
       const key = draftKey({ prKey, path: d.path, line: d.line, side: d.side, n })
       // Only store startLine when it forms a real range (< line)
       const startLine = (d.startLine != null && d.startLine < d.line) ? d.startLine : undefined
-      const record: Draft = { path: d.path, line: d.line, side: d.side, body: d.body, prKey, n, updatedAt: Date.now(), ...(startLine != null ? { startLine } : {}) }
+      const record: Draft = { path: d.path, line: d.line, side: d.side, body: d.body, prKey, n, updatedAt: Date.now(), ...(startLine != null ? { startLine } : {}), ...(makerSha ? { headSha: makerSha } : {}) }
 
       // Update in-memory state (last-write-wins: replace existing if same key)
       const idx = drafts.findIndex((x) => draftKey(x) === key)
@@ -480,140 +632,4 @@ export async function clearDraftsForPr(prKey: string, dbName = 'review123-drafts
   const db = await openSharedDb(dbName)
   if (!db) return
   await idbClearRange(db, prKey)
-}
-
-// ---------------------------------------------------------------------------
-// Orphan-draft recovery — adopt drafts left under an OLDER head-sha prKey
-// ---------------------------------------------------------------------------
-
-/**
- * A draft recovered from another sha variant of the same PR, paired with the
- * raw IDB key it was stored under (so the caller can delete the source once it
- * has been migrated to the current prKey).
- */
-export interface OrphanDraft {
-  /** The full source prKey (a DIFFERENT @sha than the current session's). */
-  sourcePrKey: string
-  /** The raw IDB key the draft lives under, e.g. "prKey|path|line|side|n". */
-  sourceKey: string
-  draft: Draft
-}
-
-/**
- * Find drafts that belong to the SAME PR identity (provider + owner/repo#number)
- * but live under a DIFFERENT head-sha prKey than the current session.
- *
- * This recovers drafts orphaned when a PR receives a new commit after they were
- * drafted: the new session's prKey carries the new @sha, so the old-sha draft
- * store is invisible to it. We surface those here so the caller can adopt them.
- *
- * Strict identity match: only same provider+owner+repo+number qualifies; other
- * PRs and the current prKey itself are excluded. Returns [] when IndexedDB is
- * unavailable or nothing matches.
- */
-export async function getOrphanDraftsForPr(
-  currentPrKey: string,
-  dbName = 'review123-drafts',
-): Promise<OrphanDraft[]> {
-  const target = parsePrKey(currentPrKey)
-  if (!target) return []
-
-  const db = await openSharedDb(dbName)
-  if (!db) return []
-
-  const orphans: OrphanDraft[] = []
-
-  const tx = db.transaction(STORE_NAME, 'readonly')
-  const store = tx.objectStore(STORE_NAME)
-  await new Promise<void>((resolve, reject) => {
-    const req = store.openCursor()
-    req.onsuccess = () => {
-      const cursor = req.result
-      if (cursor) {
-        const rawKey = cursor.key as string
-        const pipeIdx = rawKey.indexOf('|')
-        const sourcePrKey = pipeIdx === -1 ? rawKey : rawKey.slice(0, pipeIdx)
-        // Skip the current session's own prKey — those are the live drafts.
-        if (sourcePrKey !== currentPrKey) {
-          const parsed = parsePrKey(sourcePrKey)
-          if (
-            parsed &&
-            parsed.provider === target.provider &&
-            parsed.owner === target.owner &&
-            parsed.repo === target.repo &&
-            parsed.number === target.number
-          ) {
-            const value = cursor.value as Draft
-            orphans.push({ sourcePrKey, sourceKey: rawKey, draft: value })
-          }
-        }
-        cursor.continue()
-      } else {
-        resolve()
-      }
-    }
-    req.onerror = () => reject(req.error)
-  })
-
-  return orphans
-}
-
-/**
- * Adopt orphaned drafts into the current prKey.
- *
- * Each source draft is re-stored under `targetPrKey` (preserving
- * path/line/side/body/n/startLine; rewriting prKey + bumping updatedAt) and the
- * original source key is deleted — so the migrated drafts no longer re-surface
- * in the in-flight list as a separate sha variant.
- *
- * When multiple source shas hold a draft at the SAME anchor (path|line|side|n),
- * they are de-duped: the most-recently-updated one wins.
- *
- * Returns the number of drafts written under the target key. No-op (returns 0)
- * when there are no orphans or IndexedDB is unavailable.
- */
-export async function migrateOrphanDrafts(
-  targetPrKey: string,
-  orphans: OrphanDraft[],
-  dbName = 'review123-drafts',
-): Promise<number> {
-  if (orphans.length === 0) return 0
-  const db = await openSharedDb(dbName)
-  if (!db) return 0
-
-  // De-dupe by anchor (path|line|side|n), keeping the newest by updatedAt.
-  const byAnchor = new Map<string, Draft>()
-  for (const { draft } of orphans) {
-    const n = draft.n ?? 0
-    const anchor = `${draft.path}|${draft.line}|${draft.side}|${n}`
-    const prev = byAnchor.get(anchor)
-    if (!prev || (draft.updatedAt ?? 0) > (prev.updatedAt ?? 0)) {
-      byAnchor.set(anchor, draft)
-    }
-  }
-
-  const now = Date.now()
-  for (const draft of byAnchor.values()) {
-    const n = draft.n ?? 0
-    const startLine = (draft.startLine != null && draft.startLine < draft.line) ? draft.startLine : undefined
-    const record: Draft = {
-      path: draft.path,
-      line: draft.line,
-      side: draft.side,
-      body: draft.body,
-      prKey: targetPrKey,
-      n,
-      updatedAt: now,
-      ...(startLine != null ? { startLine } : {}),
-    }
-    const key = draftKey({ prKey: targetPrKey, path: record.path, line: record.line, side: record.side, n })
-    await idbPut(db, key, record)
-  }
-
-  // Delete the source records (migrated — avoid leaving duplicate sha variants).
-  for (const { sourceKey } of orphans) {
-    await idbDelete(db, sourceKey)
-  }
-
-  return byAnchor.size
 }

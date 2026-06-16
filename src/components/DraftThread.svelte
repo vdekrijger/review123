@@ -47,6 +47,13 @@
      */
     askDisabledReason?: string | null
     /**
+     * The PR's CURRENT head sha. When the draft was made on a DIFFERENT commit
+     * (`draft.headSha` set and ≠ this), a small "from commit abc1234" note is
+     * shown so the reviewer understands a draft carried over from an earlier
+     * commit (it may sit in the unanchored fallback block if its line moved).
+     */
+    currentHeadSha?: string
+    /**
      * Pre-computed excerpt (±6 lines of the hunk) around this line.
      * Passed as focus.excerpt to askFn.
      */
@@ -70,7 +77,19 @@
     askDisabledReason = null,
     excerpt = '',
     startLine,
+    currentHeadSha = undefined,
   }: Props = $props()
+
+  /**
+   * Short source-commit label when this draft was made on a commit OTHER than
+   * the PR's current head (e.g. it was carried over after the author pushed).
+   * null when same-commit, unknown, or composing a new draft.
+   */
+  const fromCommit = $derived(
+    draft?.headSha && currentHeadSha && draft.headSha !== currentHeadSha
+      ? draft.headSha.slice(0, 7)
+      : null
+  )
 
   /**
    * The effective start line — either from the draft (when viewing a saved draft)
@@ -191,6 +210,9 @@
     {:else}
       <span class="thread-label">Comment at line {line}</span>
     {/if}
+    {#if fromCommit}
+      <span class="thread-from-commit" data-testid="draft-from-commit" title="This draft was made on an earlier commit of this PR">from commit {fromCommit}</span>
+    {/if}
   </div>
 
   {#if editing}
@@ -284,6 +306,19 @@
     font-size: 0.8rem;
     opacity: 0.7;
     font-weight: 500;
+  }
+
+  .thread-from-commit {
+    font-size: 0.72rem;
+    font-weight: 500;
+    opacity: 0.75;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-draft, #f0b44488);
+    color: var(--text-muted, #b8862a);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    margin-left: auto;
   }
 
   .draft-body {
