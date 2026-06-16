@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/svelte'
+import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import Demo from './Demo.svelte'
 import { navigate } from '../lib/router/router.svelte'
 
@@ -130,6 +130,44 @@ describe('Demo route', () => {
     // The Performance reviewer's inline finding was flagged by only one model and
     // refuted by the rest → the dimmed "flagged by 1/5 · lower confidence" chip.
     expect((await screen.findAllByText(/flagged by 1\/5 · lower confidence/i)).length).toBeGreaterThan(0)
+
+    expect(externalFetchCalls()).toEqual([])
+  })
+
+  it('shows the Story|Files toggle on the Inspect step and renders the walkthrough when Story is chosen', async () => {
+    render(Demo)
+    await fireEvent.click(screen.getByRole('button', { name: /next step/i }))
+
+    // The Story|Files flow toggle is present (story panel is pre-'done').
+    const storyBtn = await screen.findByRole('button', { name: /^Story$/ })
+    const filesBtn = screen.getByRole('button', { name: /^Files$/ })
+    expect(storyBtn).toBeInTheDocument()
+    expect(filesBtn).toBeInTheDocument()
+
+    // Defaults to Files: the canned walkthrough's first caption is NOT shown yet
+    // (captions render markdown, so match a plain-text fragment that isn't split
+    // across `code`/`strong` spans).
+    expect(screen.queryByText(/so a request can be aborted mid-flight/i)).toBeNull()
+
+    // Switch to Story → the walkthrough renders: the data-layer first step's
+    // caption (plain-text fragment) + its layer chip + the "1 of 6" step counter.
+    await fireEvent.click(storyBtn)
+    expect(
+      await screen.findByText(/so a request can be aborted mid-flight/i),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Data model')).toBeInTheDocument()
+    expect(document.querySelector('.story-counter')?.textContent).toMatch(/1 of 6/)
+
+    // Walking forward reveals the next layer's caption (the API step). Two
+    // "Next step" buttons now exist (the slideshow nav + the demo draft-bar);
+    // the slideshow's lives inside the .story region — click that one.
+    const controls = document.querySelector('.story-controls') as HTMLElement
+    const slideNext = within(controls).getByRole('button', { name: /next step/i })
+    await fireEvent.click(slideNext)
+    expect(
+      await screen.findByText(/so cancelling a request actually reaches the network/i),
+    ).toBeInTheDocument()
+    expect(screen.getByText('API / service')).toBeInTheDocument()
 
     expect(externalFetchCalls()).toEqual([])
   })

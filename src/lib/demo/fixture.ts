@@ -19,6 +19,7 @@ import type {
   VerdictResult,
   TestInsight,
   SkillReviewResult,
+  StoryOrderResult,
 } from '../ai/schemas'
 
 /** Stable local-storage key for the demo's draft / viewed / decision stores. */
@@ -37,7 +38,7 @@ export const demoMeta: PrMeta = {
   baseSha: 'a1b2c3d0000000000000000000000000000base',
   headSha: 'd4e5f6a0000000000000000000000000000head',
   private: false,
-  changedFiles: 2,
+  changedFiles: 6,
   authorLogin: 'demo-dev',
 }
 
@@ -55,39 +56,97 @@ export const demoCi: CiSummary = {
 }
 
 /**
- * Two changed files with believable unified-diff patches. The first is the
- * fix; the second is its test. Patch line counts match the additions/deletions.
+ * Six changed files with believable unified-diff patches, hand-written so each
+ * one lands in a DIFFERENT Story-mode layer (data → api → config → logic →
+ * tests → ui). That gives the demo's Story walkthrough one step per layer and
+ * tells the debounce-and-cancel change as a narrative: the query shape gains a
+ * signal (data) → fetchResults honours it (api) → the debounce constant is
+ * extracted (config) → the hook wires it together (logic) → tests pin it
+ * (tests) → the search box consumes the hook (ui). Patch line counts match each
+ * file's additions/deletions and every `@@` header is internally consistent.
  */
 export const demoFiles: PrFile[] = [
   {
+    // ── data ── the query/result shapes gain the optional AbortSignal field.
+    filename: 'src/search/types.ts',
+    status: 'added',
+    additions: 12,
+    deletions: 0,
+    patch: `@@ -0,0 +1,12 @@
++export interface Result {
++  id: string
++  title: string
++  url: string
++}
++
++export interface SearchQuery {
++  text: string
++  /** Optional signal so a stale request can be aborted mid-flight. */
++  signal?: AbortSignal
++}
++`,
+  },
+  {
+    // ── api ── fetchResults now accepts and FORWARDS the AbortSignal to fetch.
+    // This is the file the old verdict flagged as "not shown in this diff"; it
+    // is now in the diff, so the cancellation actually reaches the network.
+    filename: 'src/search/api.ts',
+    status: 'modified',
+    additions: 5,
+    deletions: 2,
+    patch: `@@ -1,7 +1,10 @@
+ import type { Result } from './types'
+
+-export async function fetchResults(query: string): Promise<Result[]> {
+-  const res = await fetch(\`/api/search?q=\${encodeURIComponent(query)}\`)
++export async function fetchResults(
++  query: string,
++  signal?: AbortSignal,
++): Promise<Result[]> {
++  const res = await fetch(\`/api/search?q=\${encodeURIComponent(query)}\`, { signal })
+   if (!res.ok) throw new Error(\`search failed: \${res.status}\`)
+   return (await res.json()) as Result[]
+ }`,
+  },
+  {
+    // ── config ── the magic 250ms debounce becomes a shared constant.
+    filename: 'src/search/config.ts',
+    status: 'added',
+    additions: 6,
+    deletions: 0,
+    patch: `@@ -0,0 +1,6 @@
++/** Debounce window (ms) for the search box — shared by the hook and its test. */
++export const DEBOUNCE_MS = 250
++
++/** Max results rendered before the list virtualizes. */
++export const MAX_RESULTS = 50
++`,
+  },
+  {
+    // ── logic ── the hook wires debounce + abort together, importing the
+    // shared constant and forwarding the signal into fetchResults.
     filename: 'src/search/useSearch.ts',
     status: 'modified',
-    additions: 18,
-    deletions: 5,
-    patch: `@@ -1,14 +1,27 @@
+    additions: 15,
+    deletions: 2,
+    patch: `@@ -1,16 +1,29 @@
  import { useState, useEffect, useRef } from 'react'
- import { fetchResults, type Result } from './api'
+-import { fetchResults, type Result } from './api'
++import { fetchResults } from './api'
++import type { Result } from './types'
++import { DEBOUNCE_MS } from './config'
 
-+const DEBOUNCE_MS = 250
-+
  export function useSearch(query: string): Result[] {
    const [results, setResults] = useState<Result[]>([])
 +  const controllerRef = useRef<AbortController | null>(null)
 
    useEffect(() => {
--    if (query === '') {
--      setResults([])
--      return
--    }
+     if (query === '') {
+       setResults([])
+       return
+     }
 -    fetchResults(query).then(setResults)
--  }, [query])
-+    if (query === '') {
-+      setResults([])
-+      return
-+    }
 +    const handle = setTimeout(() => {
-+      // Cancel any in-flight request so a slow earlier response can't
-+      // overwrite the results for the query the user is actually looking at.
 +      controllerRef.current?.abort()
 +      const controller = new AbortController()
 +      controllerRef.current = controller
@@ -98,12 +157,13 @@ export const demoFiles: PrFile[] = [
 +        })
 +    }, DEBOUNCE_MS)
 +    return () => clearTimeout(handle)
-+  }, [query])
+   }, [query])
 
    return results
  }`,
   },
   {
+    // ── tests ── two focused tests pin the debounce + abort semantics.
     filename: 'src/search/useSearch.test.ts',
     status: 'modified',
     additions: 22,
@@ -142,7 +202,93 @@ export const demoFiles: PrFile[] = [
      const { result } = renderHook(() => useSearch(''))
      expect(result.current).toEqual([])`,
   },
+  {
+    // ── ui ── a small component consumes the hook and renders the results.
+    filename: 'src/search/SearchBox.tsx',
+    status: 'added',
+    additions: 17,
+    deletions: 0,
+    patch: `@@ -0,0 +1,17 @@
++import { useState } from 'react'
++import { useSearch } from './useSearch'
++
++export function SearchBox() {
++  const [query, setQuery] = useState('')
++  const results = useSearch(query)
++  return (
++    <div className="search-box">
++      <input value={query} onChange={(e) => setQuery(e.target.value)} />
++      <ul>
++        {results.map((r) => (
++          <li key={r.id}>{r.title}</li>
++        ))}
++      </ul>
++    </div>
++  )
++}`,
+  },
 ]
+
+/**
+ * Canned Story-mode walkthrough (StoryOrderResult). The steps are already in
+ * canonical reading order (0-based index), one per layer, each referencing the
+ * real `demoFiles` paths above. Captions tell the change as a story; the logic
+ * step links the test file as a related test. Conceptually valid against
+ * validateStoryOrder: every step has a non-empty files array, an integer index,
+ * and a valid StoryLayer.
+ */
+export const demoStory: StoryOrderResult = {
+  steps: [
+    {
+      index: 0,
+      files: ['src/search/types.ts'],
+      caption:
+        'Start with the **data shape**: `SearchQuery` gains an optional `signal` so a request can be aborted mid-flight, and `Result` is the row the UI renders.',
+      layer: 'data',
+      relatedTests: [],
+    },
+    {
+      index: 1,
+      files: ['src/search/api.ts'],
+      caption:
+        'The **API** honours it: `fetchResults` now takes an `AbortSignal` and forwards it to `fetch`, so cancelling a request actually reaches the network.',
+      layer: 'api',
+      relatedTests: [],
+    },
+    {
+      index: 2,
+      files: ['src/search/config.ts'],
+      caption:
+        'The magic number moves to **config**: `DEBOUNCE_MS = 250` is extracted so the hook and its test share one source of truth.',
+      layer: 'config',
+      relatedTests: [],
+    },
+    {
+      index: 3,
+      files: ['src/search/useSearch.ts'],
+      caption:
+        'The **hook** wires it together — debounce the input by `DEBOUNCE_MS`, abort the previous controller before each new request, and swallow only `AbortError`.',
+      layer: 'logic',
+      relatedTests: ['src/search/useSearch.test.ts'],
+    },
+    {
+      index: 4,
+      files: ['src/search/useSearch.test.ts'],
+      caption:
+        'Two **tests** pin the behaviour: rapid keystrokes collapse to a single call for the latest query, and the prior request is aborted when the query changes.',
+      layer: 'tests',
+      relatedTests: [],
+    },
+    {
+      index: 5,
+      files: ['src/search/SearchBox.tsx'],
+      caption:
+        'Finally the **UI**: `SearchBox` consumes `useSearch(query)` and renders the result list — the user-facing payoff of the whole change.',
+      layer: 'ui',
+      relatedTests: [],
+    },
+  ],
+}
 
 /**
  * Pre-generated summary. The ===READING-ORDER=== sentinel block is parsed by
@@ -151,24 +297,41 @@ export const demoFiles: PrFile[] = [
  */
 export const demoSummary = `This PR fixes a race condition in the search box. Previously \`useSearch\` fired a request on every keystroke and rendered whichever response resolved last, so a slow early request could clobber the results for a newer query.
 
-The fix introduces a **250ms debounce** so rapid typing collapses into a single request, and an **AbortController** so the previous in-flight request is cancelled before a new one starts. \`AbortError\` is swallowed; any other error still propagates. The effect's cleanup clears the pending timeout, so unmounting mid-type can't fire a stray request.
+The fix spans the search feature end to end: \`SearchQuery\` gains an optional \`AbortSignal\` (\`src/search/types.ts\`), \`fetchResults\` now accepts that signal and forwards it to \`fetch\` (\`src/search/api.ts\`), the \`DEBOUNCE_MS = 250\` constant is extracted (\`src/search/config.ts\`), and \`useSearch\` wires the two together: a **250ms debounce** so rapid typing collapses into a single request, and an **AbortController** so the previous in-flight request is cancelled before a new one starts. \`AbortError\` is swallowed; any other error still propagates. The effect's cleanup clears the pending timeout, so unmounting mid-type can't fire a stray request.
 
-Two focused tests cover the new behaviour: one asserts rapid keystrokes debounce to a single call with the latest query, the other asserts the prior request is aborted when the query changes.
+Two focused tests cover the new behaviour: one asserts rapid keystrokes debounce to a single call with the latest query, the other asserts the prior request is aborted when the query changes. The \`SearchBox\` component consumes the hook and renders the result list.
 
 ===READING-ORDER===
+src/search/types.ts
+src/search/api.ts
+src/search/config.ts
 src/search/useSearch.ts
 src/search/useSearch.test.ts
+src/search/SearchBox.tsx
 ===END===`
 
 /** Pre-generated hotspots + test flags (AttentionResult schema). */
 export const demoAttention: AttentionResult = {
-  readingOrder: ['src/search/useSearch.ts', 'src/search/useSearch.test.ts'],
+  readingOrder: [
+    'src/search/types.ts',
+    'src/search/api.ts',
+    'src/search/config.ts',
+    'src/search/useSearch.ts',
+    'src/search/useSearch.test.ts',
+    'src/search/SearchBox.tsx',
+  ],
   hotspots: [
     {
       path: 'src/search/useSearch.ts',
       reason:
         'Core of the change — debounce timer + AbortController lifecycle. Check the cleanup clears the timeout and the abort runs before the next fetch.',
       level: 'high',
+    },
+    {
+      path: 'src/search/api.ts',
+      reason:
+        'fetchResults now forwards the AbortSignal to fetch — confirm the signal is actually threaded through so abort() cancels the network request.',
+      level: 'medium',
     },
     {
       path: 'src/search/useSearch.test.ts',
@@ -200,10 +363,12 @@ export const demoVerdict: VerdictResult = {
     'Aborts the previous in-flight request via AbortController before starting a new one, fixing the stale-response overwrite.',
     'Swallows AbortError but re-throws other errors, so cancellation is silent while real failures still surface.',
     'Effect cleanup clears the pending timeout, preventing a stray request after unmount or a fast follow-up keystroke.',
+    'fetchResults now accepts an AbortSignal and forwards it to fetch (src/search/api.ts), so abort() actually cancels the network request.',
   ],
-  notAnalyzed: [
-    'src/search/api.ts — fetchResults must accept and honour the AbortSignal; not shown in this diff.',
-  ],
+  // src/search/api.ts is now IN the diff (it forwards the signal to fetch), so
+  // the previous "not shown in this diff" caveat no longer applies. Nothing
+  // material is left unanalyzed.
+  notAnalyzed: [],
   // Cross-model verification per evidence row (Plan M). Row 1 (the abort claim)
   // is CONFIRMED by 3/4 models; row 2 (the re-throw claim) is DEMOTED — only one
   // model surfaced it and the others pushed back.
@@ -230,12 +395,27 @@ export const demoVerdict: VerdictResult = {
         { provider: 'Gemini', model: 'Gemini 3.5 Flash', verdict: 'uncertain', reason: 'Behaviour depends on the host’s unhandledrejection handling.' },
       ],
     },
+    // Row 4 (the signal-forwarding claim) is CONFIRMED unanimously now that
+    // src/search/api.ts is in the diff and visibly forwards the signal to fetch.
+    4: {
+      confirmedBy: 4,
+      polledModels: 4,
+      surfaced: true,
+      perModel: [
+        { provider: 'OpenAI', model: 'GPT-5.5', verdict: 'confirm', reason: 'fetchResults takes signal and passes { signal } to fetch — verifiable in api.ts.', raised: true },
+        { provider: 'DeepSeek', model: 'DeepSeek V4 Pro', verdict: 'confirm', reason: 'The signal reaches fetch, so abort() cancels the request.', raised: true },
+        { provider: 'Anthropic', model: 'Claude Opus 4.8', verdict: 'confirm', reason: 'Confirmed: the AbortSignal is threaded end-to-end now.' },
+        { provider: 'Gemini', model: 'Gemini 3.5 Flash', verdict: 'confirm', reason: 'fetch receives the signal in its options object.' },
+      ],
+    },
   },
   // Multi-generator provenance (Plan O 'generate' mode): row 1 was independently
-  // raised by BOTH generators (high recall agreement); row 2 only by one.
+  // raised by BOTH generators (high recall agreement); row 2 only by one; row 4
+  // (the now-confirmable signal-forwarding claim) by both.
   evidenceRaisedBy: {
     1: ['GPT-5.5', 'DeepSeek V4 Pro'],
     2: ['GPT-5.5'],
+    4: ['GPT-5.5', 'DeepSeek V4 Pro'],
   },
 }
 
@@ -269,14 +449,14 @@ export const demoSkillFindings: SkillReviewResult = {
   skillName: 'Correctness & race conditions',
   findings: [
     {
-      path: 'src/search/useSearch.ts',
-      line: 22,
+      path: 'src/search/api.ts',
+      line: 7,
       severity: 'medium',
-      body: 'fetchResults is called with the AbortSignal, but this diff does not show src/search/api.ts honouring it. If fetchResults ignores the signal, abort() will not actually cancel the network request — verify the signal is forwarded to fetch().',
+      body: 'fetchResults now forwards the AbortSignal to fetch via the `{ signal }` option — good. Confirm every call site passes the controller signal so abort() truly cancels the in-flight network request.',
     },
     {
       path: 'src/search/useSearch.ts',
-      line: 27,
+      line: 22,
       severity: 'low',
       body: 'Re-throwing non-AbortError inside a .catch() rejects the promise with no handler, surfacing as an unhandled rejection. Consider surfacing the error to component state instead so the user sees a failure message.',
     },
@@ -284,7 +464,7 @@ export const demoSkillFindings: SkillReviewResult = {
       path: 'src/search/useSearch.test.ts',
       line: 52,
       severity: 'low',
-      body: 'The debounce test hard-codes 250ms. Import DEBOUNCE_MS from the module so the test and implementation can never drift apart.',
+      body: 'The debounce test hard-codes 250ms. Import DEBOUNCE_MS from src/search/config.ts so the test and implementation can never drift apart.',
     },
   ],
 }
@@ -307,8 +487,8 @@ export const demoSkillFindings: SkillReviewResult = {
  *      state renders too.
  *
  * Every verdict carries a real `model` + a one-line `reason` so the tooltip reads
- * cleanly. Line numbers stay inside the demo diff's `+1,27` hunk for useSearch.ts
- * so the inline cards actually anchor.
+ * cleanly. Line numbers stay inside the demo diff's `+1,29` hunk for useSearch.ts
+ * (and api.ts's `+1,10` / config.ts's `+1,6` hunks) so the inline cards anchor.
  */
 export const demoReviewers: SkillReviewResult[] = [
   {
@@ -317,7 +497,7 @@ export const demoReviewers: SkillReviewResult[] = [
       {
         // CONFIRMED + inline + multi-generator provenance.
         path: 'src/search/useSearch.ts',
-        line: 19,
+        line: 22,
         severity: 'high',
         body: 'The `AbortError` is swallowed, but a non-abort failure from `fetchResults` is re-thrown into a `.catch()` with no further handler — an attacker probing the search endpoint can drive a stream of unhandled rejections (potential DoS on error-logging sinks). Route failures to component state and surface a bounded error instead.',
         raisedBy: ['GPT-5.5', 'DeepSeek V4 Pro'],
@@ -339,9 +519,9 @@ export const demoReviewers: SkillReviewResult[] = [
     skillName: 'Performance Reviewer',
     findings: [
       {
-        // DEMOTED / lower-confidence + inline.
-        path: 'src/search/useSearch.ts',
-        line: 5,
+        // DEMOTED / lower-confidence + inline (anchored on the config constant).
+        path: 'src/search/config.ts',
+        line: 2,
         severity: 'low',
         body: 'A fixed 250ms debounce may feel sluggish for short queries. Consider a shorter leading-edge debounce so the first keystroke fires immediately.',
         verification: {
@@ -416,11 +596,14 @@ export const demoModelCostBreakdown: ModelCostRow[] = [
     providerId: 'deepseek',
     modelId: 'deepseek-v4-pro',
     role: 'generator',
-    total: usage(28_400, 4_200),
+    // Story now "ran" too — its byTask line is included, so this row's total
+    // and demoTotalUsage both account for it (the panel reconciles exactly).
+    total: usage(35_600, 5_100),
     surfaced: 3,
     uniqueCatch: 1,
     byTask: [
       { task: 'Verdict', usage: usage(9_800, 1_300) },
+      { task: 'Story', usage: usage(7_200, 900) },
       { task: 'Reviewer: Security Reviewer (OWASP-minded)', usage: usage(8_900, 1_500) },
       { task: 'Reviewer: Pragmatic Senior Reviewer', usage: usage(9_700, 1_400) },
     ],
@@ -466,10 +649,11 @@ export const demoModelCostBreakdown: ModelCostRow[] = [
 
 /**
  * Aggregate token usage for the demo review — the SUM of every cost row's total
- * (28_400+4_200 + 26_100+3_800 + 18_900+2_100 + 17_400+1_600). Drives the
- * "This review used … total" headline; prices against the active model.
+ * (35_600+5_100 + 26_100+3_800 + 18_900+2_100 + 17_400+1_600). The deepseek row
+ * now includes the Story task, so its total (and this aggregate) account for it.
+ * Drives the "This review used … total" headline; prices against the active model.
  */
 export const demoTotalUsage: LlmUsage = usage(
-  28_400 + 26_100 + 18_900 + 17_400,
-  4_200 + 3_800 + 2_100 + 1_600,
+  35_600 + 26_100 + 18_900 + 17_400,
+  5_100 + 3_800 + 2_100 + 1_600,
 )

@@ -68,9 +68,28 @@ test('landing CTA opens the demo with banner, summary, verdict, finding — no e
   // DEMOTED / lower-confidence cross-model finding chip.
   await expect(page.getByText(/flagged by 1\/5 · lower confidence/i).first()).toBeVisible()
 
+  // Story mode: the Inspect step exposes a Story|Files flow toggle (the demo
+  // ships a canned multi-layer walkthrough). Switching to Story renders the
+  // step captions/layer chips; Files is the default (diff-first).
+  const storyToggle = page.getByRole('button', { name: /^Story$/ })
+  await expect(storyToggle).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Files$/ })).toBeVisible()
+  await storyToggle.click()
+  // First step is the data layer: caption + layer chip + step counter.
+  await expect(page.getByText('Data model')).toBeVisible()
+  await expect(page.getByText(/so a request can be aborted mid-flight/i)).toBeVisible()
+  await expect(page.locator('.story-counter').first()).toContainText('1 of 6')
+  // Advance one step (the slideshow's own Next, inside the .story controls) to
+  // the API layer — the walkthrough is navigable.
+  await page.locator('.story-controls').first().getByRole('button', { name: /next step/i }).click()
+  await expect(page.getByText('API / service')).toBeVisible()
+  await expect(page.getByText(/so cancelling a request actually reaches the network/i)).toBeVisible()
+
   // Verdict step: the "Review cost & model performance" panel renders with the
-  // aggregate $ total + per-model rows (the demo turns showTokenCost on).
-  await page.getByRole('button', { name: /next step/i }).click()
+  // aggregate $ total + per-model rows (the demo turns showTokenCost on). With
+  // Story mode active there are two "Next step" buttons (slideshow + draft-bar);
+  // use the draft-bar's step nav to advance the demo route to step 3.
+  await page.locator('.draft-bar').getByRole('button', { name: /next step/i }).click()
   await expect(
     page.getByRole('region', { name: /review cost and model performance/i }),
   ).toBeVisible()
