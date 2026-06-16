@@ -536,8 +536,12 @@ test('skill-reviewers: errored reviewer chip retries and resolves to findings', 
   // Click retry → the reviewer re-runs and resolves to findings.
   await retryBtn.click()
 
-  // The finding now appears and the error chip is gone.
-  await expect(page.getByText(/Potential XSS vulnerability/i)).toBeVisible({ timeout: 15_000 })
+  // FIX 2: the retried reviewer's anchored finding (line 2) renders INLINE in the
+  // diff (the regression: restarted-reviewer findings never appeared inline).
+  const inlineCard = page.locator('.diff-line-extend .line-findings .skill-finding', {
+    hasText: 'Potential XSS vulnerability',
+  })
+  await expect(inlineCard).toBeVisible({ timeout: 15_000 })
   await expect(page.getByRole('button', { name: /retry security reviewer/i })).toHaveCount(0)
   // It re-hit the LLM (cache never served the error): two skill-review calls.
   expect(skillCalls).toBeGreaterThanOrEqual(2)
