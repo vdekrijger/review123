@@ -80,7 +80,7 @@ export default defineConfig(({ mode }) => ({
     // vitest's default empty-module CSS stub.
     css: true,
     setupFiles: ['./src/test-setup.ts'],
-    include: ['src/**/*.{test,spec}.ts', 'api/**/*.{test,spec}.ts'],
+    include: ['src/**/*.{test,spec}.ts', 'api/**/*.{test,spec}.ts', 'scripts/**/*.{test,spec}.ts'],
     env: {
       VITE_GITHUB_CLIENT_ID: 'test_client_id',
       VITE_GITLAB_CLIENT_ID: 'test_gitlab_client_id',
