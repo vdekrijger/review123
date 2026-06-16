@@ -1759,9 +1759,10 @@ describe('VerdictStep — consolidated review cost panel', () => {
     // into separate text nodes, so match on the labelled element's text content.
     const total = screen.getByLabelText('Total token usage for this review')
     expect(total.textContent).toMatch(/This review used .*4\.0k tokens.* total/)
-    // claude-opus-4-8 has no pricing in providers.ts → tokens only; its TOTAL row
-    // covers verdict + summary = 3.0k (proving single-pass spend is now folded in).
-    expect(screen.getByText('3.0k tokens')).toBeInTheDocument()
+    // claude-opus-4-8's TOTAL row covers verdict + summary = 3.0k (proving
+    // single-pass spend is now folded in). Match on the token portion only — the
+    // cost cell is dollar-first ("$… · 3.0k tokens") after the #155 pricing backfill.
+    expect(screen.getByText(/3\.0k tokens/)).toBeInTheDocument()
   })
 
   it('expands a model row to its per-task drilldown', async () => {
@@ -1776,15 +1777,14 @@ describe('VerdictStep — consolidated review cost panel', () => {
     expect(screen.queryByText('Summary')).not.toBeInTheDocument()
     await user.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    // Drilldown shows which task spent what, dollar-first (tokens only here — no
-    // price). Scope to the task-name nodes (the word "Verdict" also appears in the
-    // assessment heading; the drilldown entries use the .task-name class).
+    // Drilldown shows which task spent what. Scope to the task-name nodes (the word
+    // "Verdict" also appears in the assessment heading; entries use .task-name).
     const taskNames = document.querySelectorAll('.task-name')
     const taskLabels = Array.from(taskNames).map((n) => n.textContent)
     expect(taskLabels).toContain('Verdict')
     expect(taskLabels).toContain('Summary')
-    // Each Verdict + Summary slice is 1.5k tokens.
-    expect(screen.getAllByText('1.5k tokens').length).toBeGreaterThanOrEqual(2)
+    // Each Verdict + Summary slice is 1.5k tokens (token portion of the cell).
+    expect(screen.getAllByText(/1\.5k tokens/).length).toBeGreaterThanOrEqual(2)
   })
 
   it('renders nothing when no models ran and no usage to show', () => {

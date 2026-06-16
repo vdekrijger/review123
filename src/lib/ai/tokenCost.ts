@@ -36,13 +36,24 @@ export function formatCostUsd(usd: number): string {
 }
 
 /**
- * Build the muted footer label for one task's usage, e.g.
- *   "8.2k tokens · $0.01"  (pricing known)
- *   "8.2k tokens"          (no pricing for active model)
+ * Marker prefix the per-model cost cell renders when a model carries no pricing.
+ * Dollar-FIRST display means the column is never blank — an unpriced row shows
+ * "$— · <tokens>" with the cell adding a "no pricing on file" tooltip.
+ */
+export const NO_PRICING_MARKER = '$—'
+
+/**
+ * Build the muted footer label for one task's usage. DOLLAR-FIRST: the $ is the
+ * primary value, the token count is secondary, e.g.
+ *   "$0.13 · 14.0k tokens"  (pricing known)
+ *   "<$0.01 · 8.2k tokens"  (sub-cent, pricing known)
+ *   "8.2k tokens"           (no pricing for active model — no fake $)
  * Returns null when there's no usage to show (don't fabricate).
  *
  * The active model is resolved from settings so the $ estimate tracks the
- * provider/model the user actually ran with.
+ * provider/model the user actually ran with. This drives the aggregate "This
+ * review used … total" headline; the active model is priced after the catalog
+ * backfill, so the token-only fallback is now rare.
  */
 export function formatUsageLabel(usage: LlmUsage | undefined): string | null {
   if (!usage) return null
@@ -51,14 +62,19 @@ export function formatUsageLabel(usage: LlmUsage | undefined): string | null {
   const { model } = activeLlmConfig()
   const cost = estimateCostUsd(model, usage.prompt_tokens, usage.completion_tokens)
   const tokensPart = `${formatTokens(total)} tokens`
-  return cost === null ? tokensPart : `${tokensPart} · ${formatCostUsd(cost)}`
+  return cost === null ? tokensPart : `${formatCostUsd(cost)} · ${tokensPart}`
 }
 
 /**
  * Human label for a SPECIFIC provider+model's usage (Plan N per-model cost).
  * Unlike formatUsageLabel (which prices against the active model), this prices
  * against the named model so a verifier on a different model gets the right $.
- * Returns null when there's no usage to show (never fabricated).
+ * DOLLAR-FIRST so the column leads with the $ value, e.g. "$0.13 · 14.0k tokens".
+ *
+ * When the model has NO pricing the dollar value is still PRIMARY but honest:
+ * "$— · 14.0k tokens" — the table cell adds a "no pricing on file" tooltip so
+ * the cost column is never empty. Returns null only when there's no usage to
+ * show (never fabricated).
  */
 export function formatModelUsageLabel(
   providerId: string,
@@ -72,7 +88,8 @@ export function formatModelUsageLabel(
   const model = provider ? getModelDef(provider, modelId) : undefined
   const cost = model ? estimateCostUsd(model, usage.prompt_tokens, usage.completion_tokens) : null
   const tokensPart = `${formatTokens(total)} tokens`
-  return cost === null ? tokensPart : `${tokensPart} · ${formatCostUsd(cost)}`
+  const costPart = cost === null ? NO_PRICING_MARKER : formatCostUsd(cost)
+  return `${costPart} · ${tokensPart}`
 }
 
 /** Add two optional usage records; undefined acts as the zero element. */

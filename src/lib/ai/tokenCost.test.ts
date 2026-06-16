@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { formatTokens, formatCostUsd, formatUsageLabel, addUsage } from './tokenCost'
+import { formatTokens, formatCostUsd, formatUsageLabel, formatModelUsageLabel, addUsage, NO_PRICING_MARKER } from './tokenCost'
 import { estimateCostUsd } from '../llm/providers'
 import { setAiProvider, setAiModel } from '../settings/settings'
 import type { LlmUsage } from '../llm/llm'
@@ -76,21 +76,43 @@ describe('formatUsageLabel (active model resolution)', () => {
     expect(formatUsageLabel(usage(0, 0))).toBeNull()
   })
 
-  it('shows tokens + $ when the active model has pricing', () => {
+  it('leads with $ then tokens when the active model has pricing (dollar-first)', () => {
     setAiProvider('anthropic')
     setAiModel('claude-sonnet-4-6') // $3/$15 per MTok
-    // 1M in, 1M out → $18.00; total 2M tokens → "2000k"... use smaller numbers
     const label = formatUsageLabel(usage(1_000, 500))
-    // 1000/1e6*3 + 500/1e6*15 = 0.003 + 0.0075 = 0.0105 → "$0.01"
-    expect(label).toBe('1.5k tokens · $0.01')
+    // 1000/1e6*3 + 500/1e6*15 = 0.003 + 0.0075 = 0.0105 → "$0.01"; $ comes FIRST.
+    expect(label).toBe('$0.01 · 1.5k tokens')
   })
 
-  it('shows tokens ONLY when the active model has no pricing', () => {
-    setAiProvider('anthropic')
-    setAiModel('claude-opus-4-8') // intentionally left without pricing
-    const label = formatUsageLabel(usage(8_000, 200))
-    expect(label).toBe('8.2k tokens')
-    expect(label).not.toContain('$')
+  // NOTE: every catalog model now carries pricing (2026-06-16 backfill) and
+  // activeLlmConfig() falls back to the provider's (priced) defaultModel for any
+  // unknown saved id, so formatUsageLabel's token-only branch is no longer
+  // reachable through settings. The no-pricing path is covered directly via
+  // formatModelUsageLabel below (which prices a NAMED model, not the active one).
+})
+
+describe('formatModelUsageLabel (per-model, dollar-first)', () => {
+  it('returns null for undefined / empty usage (never fabricated)', () => {
+    expect(formatModelUsageLabel('anthropic', 'claude-sonnet-4-6', undefined)).toBeNull()
+    expect(formatModelUsageLabel('anthropic', 'claude-sonnet-4-6', usage(0, 0))).toBeNull()
+  })
+
+  it('leads with the $ then the token count when the model has pricing', () => {
+    // claude-sonnet-4-6 = $3/$15 per MTok; 1000 in + 500 out = $0.0105 → "$0.01".
+    const label = formatModelUsageLabel('anthropic', 'claude-sonnet-4-6', usage(1_000, 500))
+    expect(label).toBe('$0.01 · 1.5k tokens')
+  })
+
+  it('collapses a sub-cent priced row to "<$0.01" (still dollar-first)', () => {
+    // deepseek-v4-flash = $0.098/$0.196; tiny usage → far below a cent.
+    const label = formatModelUsageLabel('deepseek', 'deepseek-v4-flash', usage(100, 50))
+    expect(label).toBe('<$0.01 · 150 tokens')
+  })
+
+  it('shows the "$—" marker (never blank) when the model has no pricing', () => {
+    const label = formatModelUsageLabel('anthropic', 'no-such-model', usage(8_000, 200))
+    expect(label).toBe(`${NO_PRICING_MARKER} · 8.2k tokens`)
+    expect(label!.startsWith(NO_PRICING_MARKER)).toBe(true)
   })
 })
 
