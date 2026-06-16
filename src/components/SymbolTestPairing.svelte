@@ -1,17 +1,27 @@
 <script lang="ts">
   /**
-   * SymbolTestPairing (Plan I) — inline, collapsible "Tested by <test>" affordance
-   * shown beneath a changed function's diff in Story mode.
+   * SymbolTestPairing (Plan I + Plan P) — inline, collapsible "Tested by <test>"
+   * affordance shown beneath a changed function's diff in Story mode.
    *
    * Collapsed by default: shows the changed symbol, the leading test's title (or
    * file when untitled), a confidence label ("likely" for referenced-only pairs),
-   * and a count when >1 test. Expanding reveals a read-only snippet of THAT test
-   * block, sliced from the already-fetched test-file content (no re-fetch, no
-   * FileDiff per snippet). Renders nothing when there is no paired test.
+   * and a count when >1 test.
+   *
+   * Plan P — expanding reveals a SCANNABLE LIST of the test file's structure
+   * (parsed by testStructure.ts) instead of a single capped code slice:
+   *   - A pinned "Setup & teardown" row (shared scaffolding) when present.
+   *   - Every test TITLE in the file (never truncated), grouped under
+   *     describe/class, each expandable to its own highlighted body.
+   *   - The test(s) that reference the CHANGED symbol are marked "covers this
+   *     change", sorted first, and expanded by default.
+   * Imports are excluded. When the file is unparseable / content is missing, we
+   * fall back to the legacy single-snippet behavior. Renders nothing when there
+   * is no paired test.
    */
   import type { SymbolTestPairing } from '../lib/diff/symbolTests'
   import { track } from '../lib/analytics/analytics'
   import { snippetLangForFilename, highlightSnippet } from '../lib/diff/highlightSnippet'
+  import { parseTestStructure, type LineRange } from '../lib/diff/testStructure'
 
   let {
     pairing,
@@ -29,6 +39,9 @@
   } = $props()
 
   let expanded = $state(false)
+  // Per-test-row expansion state, keyed by "file:start".
+  let rowOpen = $state<Record<string, boolean>>({})
+  let setupOpen = $state(false)
 
   /** Whether a paired test file is part of THIS PR's changed files. */
   function inThisPr(testFile: string): boolean {
@@ -42,19 +55,71 @@
 
   const label = $derived(lead.title ? `\`${lead.title}\`` : lead.testFile)
 
-  function snippetFor(testFile: string, range: { start: number; end: number }): string {
-    const content = testContents.get(testFile)
-    if (!content) return ''
-    const lines = content.split('\n')
+  // The single test file we render the structure of (the lead pairing's file).
+  const testFile = $derived(lead.testFile)
+  const content = $derived(testContents.get(testFile) ?? '')
+
+  // Parse the lead test file into its structure (memoized by content+file).
+  const structure = $derived(parseTestStructure(content, testFile))
+
+  /**
+   * Whether a parsed test's body OVERLAPS one of the pairing's referenced line
+   * ranges → it "covers this change". The pairing tests carry the line of the
+   * symbol reference; an overlap means this is the covering test.
+   */
+  const coveringRanges = $derived(
+    pairing.tests.filter((t) => t.testFile === testFile).map((t) => t.lineRange),
+  )
+  function coversChange(range: LineRange): boolean {
+    return coveringRanges.some((c) => c.start <= range.end && c.end >= range.start)
+  }
+
+  /** Flat, display-ordered rows: covering tests first, then file order. */
+  const rows = $derived.by(() => {
+    const flat: Array<{ group?: string; test: import('../lib/diff/testStructure').ParsedTestCase; covers: boolean }> = []
+    for (const g of structure.groups) {
+      for (const t of g.tests) flat.push({ group: g.title, test: t, covers: coversChange(t.lineRange) })
+    }
+    // Stable sort: covering tests lead, otherwise preserve file order.
+    return flat
+      .map((r, i) => ({ r, i }))
+      .sort((a, b) => (a.r.covers === b.r.covers ? a.i - b.i : a.r.covers ? -1 : 1))
+      .map(({ r }) => r)
+  })
+
+  function rowKey(range: LineRange): string {
+    return testFile + ':' + range.start
+  }
+
+  function snippetFor(file: string, range: { start: number; end: number }): string {
+    const c = testContents.get(file)
+    if (!c) return ''
+    const lines = c.split('\n')
     const start = Math.max(1, range.start)
     const end = Math.min(lines.length, range.end)
     if (end < start) return ''
     return lines.slice(start - 1, end).join('\n')
   }
 
+  /** Merged scaffolding snippet for the pinned setup row. */
+  const setupSnippet = $derived.by(() => {
+    if (structure.fallback || structure.setup.length === 0) return ''
+    return structure.setup.map((r) => snippetFor(testFile, r)).join('\n\n')
+  })
+
   function toggle(): void {
     expanded = !expanded
-    if (expanded) track('symbol_test_expanded', { confidence: lead.confidence })
+    if (expanded) {
+      track('symbol_test_expanded', { confidence: lead.confidence })
+      // Auto-open the covering test row(s) on first expand.
+      for (const r of rows) {
+        if (r.covers) rowOpen[rowKey(r.test.lineRange)] = true
+      }
+    }
+  }
+
+  function toggleRow(key: string): void {
+    rowOpen[key] = !rowOpen[key]
   }
 </script>
 
@@ -75,36 +140,95 @@
 
   {#if expanded}
     <div class="sym-test-body">
-      {#each pairing.tests as t (t.testFile + ':' + t.lineRange.start)}
-        {@const snippet = snippetFor(t.testFile, t.lineRange)}
-        {@const isInPr = inThisPr(t.testFile)}
-        <div class="sym-test-snippet">
-          <div class="sym-test-snippet-head">
-            {#if isInPr && onJumpToFile}
-              <!-- In the PR diff → clickable path that jumps to its story step. -->
+      <!-- File header: path + in-this-PR / existing chip. -->
+      <div class="sym-test-snippet-head">
+        {#if inThisPr(testFile) && onJumpToFile}
+          <button
+            type="button"
+            class="sym-test-file sym-test-jump"
+            onclick={() => onJumpToFile?.(testFile)}
+          >{testFile}</button>
+          <span class="sym-test-chip sym-test-chip-pr">in this PR</span>
+        {:else}
+          <span class="sym-test-file">{testFile}</span>
+          <span class="sym-test-chip sym-test-chip-existing">existing test</span>
+        {/if}
+        {#if lead.confidence !== 'named'}<span class="sym-test-likely">likely</span>{/if}
+      </div>
+
+      {#if structure.fallback}
+        <!-- Fallback: framework unparseable / content missing → legacy single snippet. -->
+        {@const snippet = snippetFor(lead.testFile, lead.lineRange)}
+        {#if snippet}
+          {#await highlightSnippet(snippet, snippetLangForFilename(lead.testFile))}
+            <pre class="sym-test-pre"><code>{snippet}{#if lead.truncated}{'\n… (truncated)'}{/if}</code></pre>
+          {:then highlighted}
+            <pre class="sym-test-pre"><code>{@html highlighted}{#if lead.truncated}{'\n… (truncated)'}{/if}</code></pre>
+          {/await}
+        {:else}
+          <p class="sym-test-empty">Test content unavailable for inline preview.</p>
+        {/if}
+      {:else}
+        <!-- Setup & teardown: pinned, collapsed by default. -->
+        {#if setupSnippet}
+          <div class="sym-test-setup">
+            <button
+              type="button"
+              class="sym-test-row-toggle sym-test-setup-toggle"
+              aria-expanded={setupOpen}
+              onclick={() => (setupOpen = !setupOpen)}
+            >
+              <span class="sym-test-caret" aria-hidden="true">{setupOpen ? '▾' : '▸'}</span>
+              <span class="sym-test-row-title">Setup &amp; teardown</span>
+              <span class="sym-test-chip sym-test-chip-existing">shared</span>
+            </button>
+            {#if setupOpen}
+              {#await highlightSnippet(setupSnippet, snippetLangForFilename(testFile))}
+                <pre class="sym-test-pre"><code>{setupSnippet}</code></pre>
+              {:then highlighted}
+                <pre class="sym-test-pre"><code>{@html highlighted}</code></pre>
+              {/await}
+            {/if}
+          </div>
+        {/if}
+
+        {#if structure.conftestNote}
+          <p class="sym-test-note">Some fixtures may live in <code>conftest.py</code> (out of file — not shown).</p>
+        {/if}
+
+        <!-- Test-case list: every title, never truncated. -->
+        <ul class="sym-test-list">
+          {#each rows as row (rowKey(row.test.lineRange))}
+            {@const key = rowKey(row.test.lineRange)}
+            {@const open = rowOpen[key] ?? false}
+            <li class="sym-test-item" class:sym-test-item-covers={row.covers}>
               <button
                 type="button"
-                class="sym-test-file sym-test-jump"
-                onclick={() => onJumpToFile?.(t.testFile)}
-              >{t.testFile}</button>
-              <span class="sym-test-chip sym-test-chip-pr">in this PR</span>
-            {:else}
-              <span class="sym-test-file">{t.testFile}</span>
-              <span class="sym-test-chip sym-test-chip-existing">existing test</span>
-            {/if}
-            {#if t.confidence !== 'named'}<span class="sym-test-likely">likely</span>{/if}
-          </div>
-          {#if snippet}
-            {#await highlightSnippet(snippet, snippetLangForFilename(t.testFile))}
-              <pre class="sym-test-pre"><code>{snippet}{#if t.truncated}{'\n… (truncated)'}{/if}</code></pre>
-            {:then highlighted}
-              <pre class="sym-test-pre"><code>{@html highlighted}{#if t.truncated}{'\n… (truncated)'}{/if}</code></pre>
-            {/await}
-          {:else}
-            <p class="sym-test-empty">Test content unavailable for inline preview.</p>
-          {/if}
-        </div>
-      {/each}
+                class="sym-test-row-toggle"
+                aria-expanded={open}
+                onclick={() => toggleRow(key)}
+              >
+                <span class="sym-test-caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
+                {#if row.group}<span class="sym-test-group">{row.group}</span>{/if}
+                <span class="sym-test-row-title">{row.test.title}</span>
+                {#if row.covers}<span class="sym-test-chip sym-test-chip-pr">covers this change</span>{/if}
+              </button>
+              {#if open}
+                {@const snippet = snippetFor(testFile, row.test.lineRange)}
+                {#if snippet}
+                  {#await highlightSnippet(snippet, snippetLangForFilename(testFile))}
+                    <pre class="sym-test-pre"><code>{snippet}{#if row.test.truncated}{'\n… (truncated)'}{/if}</code></pre>
+                  {:then highlighted}
+                    <pre class="sym-test-pre"><code>{@html highlighted}{#if row.test.truncated}{'\n… (truncated)'}{/if}</code></pre>
+                  {/await}
+                {:else}
+                  <p class="sym-test-empty">Test content unavailable for inline preview.</p>
+                {/if}
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </div>
   {/if}
 </div>
@@ -217,6 +341,66 @@
   .sym-test-chip-existing {
     color: var(--text-muted);
     background: var(--surface-raised);
+  }
+
+  /* Plan P — test-case list + setup row. */
+  .sym-test-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .sym-test-item {
+    border: 1px solid transparent;
+    border-radius: 4px;
+  }
+  .sym-test-item-covers {
+    border-color: var(--accent);
+    background: var(--accent-subtle);
+  }
+
+  .sym-test-setup {
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    margin-bottom: 0.15rem;
+  }
+
+  .sym-test-row-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    padding: 0.28rem 0.4rem;
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-size: 0.76rem;
+    cursor: pointer;
+    text-align: left;
+  }
+  .sym-test-row-toggle:hover { background: var(--surface-hover, rgba(127, 127, 127, 0.08)); }
+  .sym-test-setup-toggle { font-weight: 600; }
+
+  .sym-test-group {
+    font-family: var(--mono, ui-monospace, monospace);
+    color: var(--text-muted);
+    font-size: 0.7rem;
+  }
+  .sym-test-group::after { content: '›'; margin-left: 0.3rem; color: var(--text-muted); }
+
+  .sym-test-row-title { flex: 1; }
+
+  .sym-test-note {
+    margin: 0;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+  .sym-test-note code {
+    font-family: var(--mono, ui-monospace, monospace);
+    font-style: normal;
   }
 
   .sym-test-pre {

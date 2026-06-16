@@ -105,7 +105,7 @@ const RE_RB_REQUIRE = /^\s*require(?:_relative)?\s+['"]/
 // CSS: `@import …`
 const RE_CSS_IMPORT = /^\s*@import\b/
 
-function isImportLine(text: string, lang: CodeLang): boolean {
+export function isImportLine(text: string, lang: CodeLang): boolean {
   switch (lang) {
     case 'js':
       return RE_JS_IMPORT.test(text) || RE_JS_EXPORT_FROM.test(text) || RE_JS_REQUIRE.test(text)
