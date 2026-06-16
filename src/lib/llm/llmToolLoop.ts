@@ -47,7 +47,7 @@ import {
   buildAnthropicHeaders,
   buildGeminiHeaders,
   mapFetchError,
-  mapHttpStatus,
+  mapHttpError,
 } from './llm'
 import type { LlmUsage } from './llm'
 
@@ -157,7 +157,7 @@ async function postJson(
   } catch (err) {
     mapFetchError(err)
   }
-  if (!res!.ok) mapHttpStatus(res!.status)
+  if (!res!.ok) await mapHttpError(res!)
   return res!.json() as Promise<unknown>
 }
 

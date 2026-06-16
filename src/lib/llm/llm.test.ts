@@ -155,6 +155,31 @@ describe('llmComplete — status mappings', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse({ choices: [{ message: { content: null } }] })))
     await expect(llmComplete({ system: 's', user: 'u' })).rejects.toMatchObject({ kind: 'server' })
   })
+
+  it('surfaces the provider error message on a non-2xx (not a bare status)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      makeJsonResponse({ error: { message: "Unsupported parameter: 'max_tokens' is not supported with this model." } }, 400),
+    ))
+    await expect(llmComplete({ system: 's', user: 'u' })).rejects.toMatchObject({
+      kind: 'server',
+      message: expect.stringContaining("Unsupported parameter: 'max_tokens'"),
+    })
+  })
+
+  it('surfaces a string error envelope (our proxy returns { error: "invalid-body" })', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse({ error: 'invalid-body' }, 400)))
+    await expect(llmComplete({ system: 's', user: 'u' })).rejects.toMatchObject({
+      message: expect.stringContaining('invalid-body'),
+    })
+  })
+
+  it('appends the provider message to a 401 (still kind=auth)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse({ error: { message: 'Incorrect API key provided.' } }, 401)))
+    await expect(llmComplete({ system: 's', user: 'u' })).rejects.toMatchObject({
+      kind: 'auth',
+      message: expect.stringContaining('Incorrect API key provided.'),
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------
