@@ -32,7 +32,7 @@
     demoCi,
     DEMO_PR_KEY,
   } from '../lib/demo/fixture'
-  import type { AttentionResult } from '../lib/ai/schemas'
+  import type { AttentionResult, StoryOrderResult } from '../lib/ai/schemas'
 
   const run = createDemoRun()
 
@@ -58,6 +58,19 @@
   function setMode(m: DiffMode) {
     mode = m
     setDiffMode(m)
+  }
+
+  // Story|Files flow choice for the Inspect step. Local state (not the global
+  // setting) so the demo's toggle never leaks into a real review's persisted
+  // preference; it defaults to Files so the diff is the first thing a visitor
+  // sees, and the Story|Files toggle flips to the canned walkthrough on demand.
+  // The demo's story panel is pre-'done' (demoStory) with storyAvailable={true},
+  // so the walkthrough renders immediately when Story is chosen. Kept purely
+  // local (no setStoryMode write) so the demo never mutates the visitor's real
+  // persisted preference.
+  let storyMode = $state<boolean>(false)
+  function setStory(on: boolean) {
+    storyMode = on
   }
 
   let railCollapsed = $state(true)
@@ -143,6 +156,12 @@
       {readingOrder}
       {viewedStore}
       skillReviews={run.skillReviews}
+      storyAvailable={true}
+      {storyMode}
+      onstorymode={setStory}
+      story={run.story.status === 'done' ? (run.story.value as StoryOrderResult) : null}
+      storyStatus={run.story.status}
+      diagrams={null}
     />
   {:else}
     <!--

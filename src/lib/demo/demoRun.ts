@@ -18,6 +18,7 @@ import {
   demoReviewers,
   demoModelCostBreakdown,
   demoTotalUsage,
+  demoStory,
 } from './fixture'
 
 function done<T>(value: T): PanelState<T> {
@@ -62,15 +63,17 @@ export function createDemoRun(): AiRun {
   return {
     summary: done<string>(demoSummary),
     attention: done(demoAttention),
-    // Diagrams/alternatives/story aren't part of the bundled demo fixture. Mark
-    // them 'disabled' (NOT 'idle') so their panels render the compact muted
-    // "enable in settings" state — never a skeleton/spinner (the demo must show
-    // zero pending UI: every panel is settled).
+    // Diagrams/alternatives aren't part of the bundled demo fixture. Mark them
+    // 'disabled' (NOT 'idle') so their panels render the compact muted "enable
+    // in settings" state — never a skeleton/spinner (the demo must show zero
+    // pending UI: every panel is settled). Story, by contrast, IS bundled now:
+    // it's pre-'done' with the canned demoStory so the Inspect step's
+    // Story|Files toggle has a real walkthrough to render.
     diagrams: { status: 'disabled' },
     verdict: done(demoVerdict),
     tests: done(demoTests),
     alternatives: { status: 'disabled' },
-    story: { status: 'disabled' },
+    story: done(demoStory),
     skillReviews,
     totalUsage: demoTotalUsage,
     verdictModels: demoModelPerformance,
