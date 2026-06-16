@@ -415,6 +415,34 @@
   // Session-only "added as draft" state keys (persist for the session — state chip)
   let addedSkillKeys = $state<Set<string>>(new Set())
 
+  // Retry (#108) re-runs a reviewer → a fresh `skillFindings` array arrives from
+  // the parent. Without clearing the local suppression, a re-surfaced finding
+  // that shares a key with a previously DISMISSED (or added-as-draft) one stays
+  // hidden — the user "restarts a reviewer and its findings never appear".
+  //
+  // The distinguishing signal for a fresh run (vs the parent merely re-deriving
+  // the same findings array) is a key transitioning ABSENT → PRESENT: a dismissed
+  // finding leaves the set when dismissed at the source / on error, then a retry
+  // re-introduces it. On that transition we un-suppress the re-emitted key so the
+  // fresh finding shows; an in-session dismiss (key stays present) is untouched.
+  let prevSkillKeys = new Set<string>()
+  $effect(() => {
+    const incomingKeys = new Set(skillFindings.map(f => f.key))
+    const reEmerged = [...incomingKeys].filter(k => !prevSkillKeys.has(k))
+    prevSkillKeys = incomingKeys
+    if (reEmerged.length === 0) return
+    // A reviewer re-emitted these keys → clear any stale per-key suppression for
+    // EXACTLY those keys so the fresh findings render (and reset their "added as
+    // draft" state chip). Other suppressed keys are left untouched.
+    const reEmergedSet = new Set(reEmerged)
+    if (reEmerged.some(k => dismissedSkillKeys.has(k))) {
+      dismissedSkillKeys = new Set([...dismissedSkillKeys].filter(k => !reEmergedSet.has(k)))
+    }
+    if (reEmerged.some(k => addedSkillKeys.has(k))) {
+      addedSkillKeys = new Set([...addedSkillKeys].filter(k => !reEmergedSet.has(k)))
+    }
+  })
+
   function dismissSkillFinding(key: string) {
     dismissedSkillKeys = new Set([...dismissedSkillKeys, key])
     onDismissSkillFinding?.(key)

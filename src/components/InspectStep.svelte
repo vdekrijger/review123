@@ -484,7 +484,8 @@
   // chip's finding list is currently disclosed, or null when none is open. The
   // surface prefix ('result' | 'summary') keeps the result chip and the
   // suggestion summary chip for the SAME reviewer from opening together (they
-  // share a skillId). Single-finding chips never open a popover (jump straight).
+  // share a skillId). EVERY chip with ≥1 finding opens a popover (uniform) — a
+  // single-finding chip shows a one-row popover instead of yanking to the diff.
   type ChipSurface = 'result' | 'summary'
   let openFindingsToken = $state<string | null>(null)
 
@@ -500,16 +501,12 @@
     return navFindingsBySkill.get(skillId) ?? []
   }
 
-  /** Activate a reviewer chip: jump (1 finding) or toggle its popover (N). */
+  /** Activate a reviewer chip: ALWAYS toggle its popover (uniform — even for a
+   *  single finding, so the reviewer can scan it without being yanked to the
+   *  diff). Zero-finding chips stay inert. Jumping happens on entry click. */
   function activateReviewerChip(surface: ChipSurface, skillId: string): void {
     const findings = navFindingsFor(skillId)
     if (findings.length === 0) return
-    if (findings.length === 1) {
-      openFindingsToken = null
-      const f = findings[0]
-      jumpToFinding(f.path, f.key)
-      return
-    }
     const token = popoverToken(surface, skillId)
     openFindingsToken = openFindingsToken === token ? null : token
   }
@@ -668,6 +665,24 @@
 
   // Add-as-draft confirmation: track which finding keys have been "added" (session-only)
   let addedDraftKeys = $state<Set<string>>(new Set())
+
+  // Retry (#108) re-runs ONE reviewer → a fresh run whose findings should ALL
+  // show. Finding keys are skillId-prefixed (`${skillId}:${path}:${line}:…`), so
+  // a re-run that re-surfaces a previously DISMISSED (or added-as-draft) finding
+  // shares its key and would be silently pre-suppressed. Clear this reviewer's
+  // suppressed keys before retrying so the fresh findings aren't filtered out.
+  function clearSuppressionForSkill(skillId: string): void {
+    const prefix = `${skillId}:`
+    dismissedKeys = new Set([...dismissedKeys].filter(k => !k.startsWith(prefix)))
+    addedDraftKeys = new Set([...addedDraftKeys].filter(k => !k.startsWith(prefix)))
+  }
+
+  // Wrap the parent retry callback so the suppressed-key reset happens in lockstep
+  // with the re-run (keeps the error-chip's #108 behavior, just unsuppresses first).
+  function retryReviewer(skillId: string): void {
+    clearSuppressionForSkill(skillId)
+    onRetrySkill?.(skillId)
+  }
 
   async function addFindingAsDraft(finding: { findingPath: string; line: number | null; body: string; key: string }) {
     if (!draftStore) return
@@ -917,13 +932,13 @@
                   class="skill-status-chip chip-done chip-nav"
                   data-reviewer-chip="result:{entry.skillId}"
                   aria-label="Show {findingCount} finding{findingCount !== 1 ? 's' : ''} from {entry.name}"
-                  aria-haspopup={findingCount > 1 ? 'menu' : undefined}
-                  aria-expanded={findingCount > 1 ? isPopoverOpen('result', entry.skillId) : undefined}
+                  aria-haspopup="menu"
+                  aria-expanded={isPopoverOpen('result', entry.skillId)}
                   onclick={() => activateReviewerChip('result', entry.skillId)}
                 >
                   ✓ {findingCount} finding{findingCount !== 1 ? 's' : ''}
                 </button>
-                {#if findingCount > 1 && isPopoverOpen('result', entry.skillId)}
+                {#if isPopoverOpen('result', entry.skillId)}
                   <div
                     class="findings-popover"
                     role="menu"
@@ -964,7 +979,7 @@
                 class="skill-status-chip chip-error"
                 aria-label="Retry {entry.name}"
                 title="Click to retry"
-                onclick={() => onRetrySkill?.(entry.skillId)}
+                onclick={() => retryReviewer(entry.skillId)}
               >
                 ↻ error
               </button>
@@ -1021,11 +1036,11 @@
             class="skill-summary-line summary-nav"
             data-reviewer-chip="summary:{sId}"
             aria-label="Show {s.count} {s.count === 1 ? 'suggestion' : 'suggestions'} from {s.name}"
-            aria-haspopup={s.count > 1 ? 'menu' : undefined}
-            aria-expanded={s.count > 1 ? isPopoverOpen('summary', sId) : undefined}
+            aria-haspopup="menu"
+            aria-expanded={isPopoverOpen('summary', sId)}
             onclick={() => activateReviewerChip('summary', sId)}
           >{s.name}: {s.count} {s.count === 1 ? 'suggestion' : 'suggestions'}</button>
-          {#if s.count > 1 && isPopoverOpen('summary', sId)}
+          {#if isPopoverOpen('summary', sId)}
             <div
               class="findings-popover"
               role="menu"
