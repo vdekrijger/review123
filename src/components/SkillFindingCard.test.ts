@@ -134,16 +134,17 @@ describe('SkillFindingCard — state chips (the only state styling)', () => {
 })
 
 describe('SkillFindingCard — cross-model verification chip (Plan M)', () => {
-  // Per-vote rows now carry the specific MODEL + the verifier's LENS (verify-
-  // tooltip enrichment). The generator/raiser row has a model but NO lens.
+  // Per-vote rows carry the specific MODEL. Every verifier runs the same
+  // comprehensive adversarial check (no lens). The generator/raiser row is marked
+  // `raised` and shows a "raised it" tag; verifier rows carry no tag.
   const surfaced = {
     confirmedBy: 2,
     polledModels: 3,
     surfaced: true,
     perModel: [
-      { provider: 'DeepSeek', model: 'deepseek-v4-flash', verdict: 'confirm' as const, reason: '' },
-      { provider: 'OpenAI', model: 'gpt-5-mini', lens: 'correctness' as const, verdict: 'confirm' as const, reason: 'real off-by-one' },
-      { provider: 'Anthropic', model: 'claude-sonnet-4-6', lens: 'security' as const, verdict: 'refute' as const, reason: 'looks moot' },
+      { provider: 'DeepSeek', model: 'deepseek-v4-flash', raised: true, verdict: 'confirm' as const, reason: '' },
+      { provider: 'OpenAI', model: 'gpt-5-mini', verdict: 'confirm' as const, reason: 'real off-by-one' },
+      { provider: 'Anthropic', model: 'claude-sonnet-4-6', verdict: 'refute' as const, reason: 'looks moot' },
     ],
   }
 
@@ -161,7 +162,7 @@ describe('SkillFindingCard — cross-model verification chip (Plan M)', () => {
     expect(chip?.getAttribute('role')).toBe('button')
   })
 
-  it('the styled tooltip lists per-vote MODEL + LENS + verdict indicator', () => {
+  it('the styled tooltip lists per-vote MODEL + verdict indicator + reason (no lens tag)', () => {
     const { container } = renderCard({ verification: surfaced })
     const tip = container.querySelector('.skill-verify-tip')
     expect(tip).toBeTruthy()
@@ -169,16 +170,18 @@ describe('SkillFindingCard — cross-model verification chip (Plan M)', () => {
     expect(tip?.querySelector('.skill-verify-tip-heading')?.textContent).toContain('Confirmed by 2/3 models')
     const rows = container.querySelectorAll('.skill-verify-tip-row')
     expect(rows.length).toBe(3)
-    // Generator/raiser row: shows its MODEL and a "raised it" lens slot (no lens).
+    // No lens tag anywhere — per-lens verification is retired.
+    expect(container.querySelector('.skill-verify-tip-lens')).toBeNull()
+    // Generator/raiser row: shows its MODEL and a "raised it" tag.
     expect(rows[0].querySelector('.skill-verify-tip-model')?.textContent).toBe('deepseek-v4-flash')
-    expect(rows[0].querySelector('.skill-verify-tip-lens')?.textContent).toContain('raised it')
-    // Verifier row: model + lens TAG + reason.
+    expect(rows[0].querySelector('.skill-verify-tip-raised')?.textContent).toContain('raised it')
+    // Verifier row: model + reason, and NO "raised it" tag.
     expect(rows[1].querySelector('.skill-verify-tip-model')?.textContent).toBe('gpt-5-mini')
-    expect(rows[1].querySelector('.skill-verify-tip-lens')?.textContent).toBe('correctness')
+    expect(rows[1].querySelector('.skill-verify-tip-raised')).toBeNull()
     expect(rows[1].querySelector('.skill-verify-tip-reason')?.textContent).toContain('real off-by-one')
-    // A REFUTE vote gets the refute indicator class.
+    // A REFUTE vote gets the refute indicator class, still no tag.
     expect(rows[2].querySelector('.skill-verify-tip-glyph.verdict-refute')).toBeTruthy()
-    expect(rows[2].querySelector('.skill-verify-tip-lens')?.textContent).toBe('security')
+    expect(rows[2].querySelector('.skill-verify-tip-raised')).toBeNull()
   })
 
   it('falls back to the provider name when a vote has no model (old cached data)', () => {
@@ -204,8 +207,8 @@ describe('SkillFindingCard — cross-model verification chip (Plan M)', () => {
         polledModels: 2,
         surfaced: true,
         perModel: [
-          { provider: 'DeepSeek', model: 'deepseek-v4-flash', verdict: 'confirm' as const, reason: '' },
-          { provider: 'OpenAI', model: 'gpt-5-mini', lens: 'security' as const, verdict: 'uncertain' as const, reason: 'cannot tell' },
+          { provider: 'DeepSeek', model: 'deepseek-v4-flash', raised: true, verdict: 'confirm' as const, reason: '' },
+          { provider: 'OpenAI', model: 'gpt-5-mini', verdict: 'uncertain' as const, reason: 'cannot tell' },
         ],
       },
     })
@@ -232,9 +235,9 @@ describe('SkillFindingCard — lower-confidence (cross-model demoted, Plan M)', 
     polledModels: 3,
     surfaced: false,
     perModel: [
-      { provider: 'DeepSeek', model: 'deepseek-v4-flash', verdict: 'confirm' as const, reason: '' },
-      { provider: 'OpenAI', model: 'gpt-5-mini', lens: 'correctness' as const, verdict: 'refute' as const, reason: 'not a real issue' },
-      { provider: 'Anthropic', model: 'claude-sonnet-4-6', lens: 'security' as const, verdict: 'uncertain' as const, reason: '' },
+      { provider: 'DeepSeek', model: 'deepseek-v4-flash', raised: true, verdict: 'confirm' as const, reason: '' },
+      { provider: 'OpenAI', model: 'gpt-5-mini', verdict: 'refute' as const, reason: 'not a real issue' },
+      { provider: 'Anthropic', model: 'claude-sonnet-4-6', verdict: 'uncertain' as const, reason: '' },
     ],
   }
 
@@ -255,12 +258,14 @@ describe('SkillFindingCard — lower-confidence (cross-model demoted, Plan M)', 
     const tip = container.querySelector('.skill-verify-tip')
     expect(tip?.querySelector('.skill-verify-tip-heading')?.textContent).toContain('Flagged by 1/3')
     const rows = container.querySelectorAll('.skill-verify-tip-row')
-    // Generator row: model + "raised it" (no lens).
+    // No lens tag anywhere.
+    expect(container.querySelector('.skill-verify-tip-lens')).toBeNull()
+    // Generator row: model + "raised it" tag.
     expect(rows[0].querySelector('.skill-verify-tip-model')?.textContent).toBe('deepseek-v4-flash')
-    expect(rows[0].querySelector('.skill-verify-tip-lens')?.textContent).toContain('raised it')
-    // Refuting verifier: model + lens + refute indicator + reason.
+    expect(rows[0].querySelector('.skill-verify-tip-raised')?.textContent).toContain('raised it')
+    // Refuting verifier: model + refute indicator + reason, no "raised it" tag.
     expect(rows[1].querySelector('.skill-verify-tip-model')?.textContent).toBe('gpt-5-mini')
-    expect(rows[1].querySelector('.skill-verify-tip-lens')?.textContent).toBe('correctness')
+    expect(rows[1].querySelector('.skill-verify-tip-raised')).toBeNull()
     expect(rows[1].querySelector('.skill-verify-tip-glyph.verdict-refute')).toBeTruthy()
     expect(rows[1].querySelector('.skill-verify-tip-reason')?.textContent).toContain('not a real issue')
   })

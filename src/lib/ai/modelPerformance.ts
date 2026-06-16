@@ -22,7 +22,6 @@ import type { VerdictModelBreakdown } from './run.svelte'
  *   - generators: `surfaced`, `uniqueCatch`
  *   - verifiers: `impact.{confirms,refutes,uncertains,decisive}`
  *
- * `lens` is OMITTED in the aggregate (it varies per task / per assignment).
  * Stable order: all generators first then verifiers, each sorted by providerId
  * then modelId. Empty input → empty output.
  */
@@ -36,7 +35,7 @@ export function aggregateModelPerformance(
       const key = `${row.providerId}:${row.modelId}:${row.role}`
       const existing = byKey.get(key)
       if (!existing) {
-        // Clone so we never mutate the caller's source rows; drop lens.
+        // Clone so we never mutate the caller's source rows.
         byKey.set(key, {
           providerId: row.providerId,
           modelId: row.modelId,

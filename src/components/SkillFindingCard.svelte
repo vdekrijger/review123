@@ -81,14 +81,15 @@
 
   // Structured per-vote rows for the styled hover/focus tooltip. Each row shows a
   // color-coded verdict indicator, the specific MODEL (falling back to provider
-  // for old cached findings that predate model/lens), the LENS as a muted tag
-  // (the generator/raiser row has no lens → shows "raised it"), and the reason.
+  // for old cached findings that predate model), and the reason. The generator/
+  // raiser row gets a muted "raised it" tag; verifier rows carry no tag (every
+  // verifier now runs the same comprehensive adversarial check — no lens).
   const verifyRows = $derived(
     (verification?.perModel ?? []).map((m) => ({
       verdict: m.verdict,
       glyph: VERDICT_GLYPH[m.verdict],
       model: m.model ?? m.provider,
-      lens: m.lens,
+      raised: m.raised ?? false,
       reason: m.reason,
     })),
   )
@@ -151,10 +152,8 @@
           <li class="skill-verify-tip-row">
             <span class="skill-verify-tip-glyph verdict-{row.verdict}" aria-hidden="true">{row.glyph}</span>
             <span class="skill-verify-tip-model">{row.model}</span>
-            {#if row.lens}
-              <span class="skill-verify-tip-lens">{row.lens}</span>
-            {:else}
-              <span class="skill-verify-tip-lens skill-verify-tip-lens-raised">raised it</span>
+            {#if row.raised}
+              <span class="skill-verify-tip-raised">raised it</span>
             {/if}
             {#if row.reason}
               <span class="skill-verify-tip-reason">{row.reason}</span>
@@ -345,7 +344,7 @@
 
   /* ---- Styled verify tooltip (Plan M verify-tooltip) ----
      Replaces the cramped native `title`: a readable, scannable popover with one
-     row per polled model (verdict indicator + model + lens tag + reason). Shown
+     row per polled model (verdict indicator + model + "raised it" tag + reason). Shown
      on hover OR keyboard focus of the sibling chip; capped width + wrapping so it
      never overflows the viewport. CSS-only (:hover / :focus-within) — no JS. */
   .skill-verify-tip-anchor {
@@ -437,23 +436,18 @@
     white-space: nowrap;
   }
 
-  .skill-verify-tip-lens {
+  .skill-verify-tip-raised {
     font-size: 0.64rem;
     font-weight: 600;
     text-transform: lowercase;
     letter-spacing: 0.02em;
     padding: 0.02rem 0.3rem;
     border-radius: 999px;
-    background: var(--surface-sunken, var(--bg));
+    background: transparent;
     color: var(--text-muted);
-    border: 1px solid var(--border-subtle);
+    border: 1px dashed var(--border-subtle);
     white-space: nowrap;
     justify-self: start;
-  }
-
-  .skill-verify-tip-lens-raised {
-    border-style: dashed;
-    background: transparent;
   }
 
   .skill-verify-tip-reason {
