@@ -99,6 +99,9 @@ const EVENTS = {
   // the "View on <Provider>" header link. Carries only 'provider' (the provider
   // id: 'github' | 'gitlab' | 'bitbucket') — never a URL, owner, repo, or number.
   original_pr_opened: ['provider'],
+  // Fired when the user opens the bundled "Try a live demo" onboarding path from
+  // the landing page. No props — it's a pure navigation signal.
+  demo_opened: [],
 } as const
 
 export type EventName = keyof typeof EVENTS
