@@ -92,10 +92,12 @@ export interface LlmCompleteOpts {
   json?: boolean
   signal?: AbortSignal
   /**
-   * Optional output-token cap. Used by llmTestConnection's minimal ping.
-   * openai-compat → body.max_tokens; anthropic → body.max_tokens (else 4096).
-   * Gemini intentionally IGNORES this: 2.5 thinking models can exhaust a
-   * 1-token cap before emitting any text part, which would read as an error.
+   * Optional output-token cap. Used by llmTestConnection's ping. Routed to the
+   * provider's field: openai-compat → `provider.maxTokensParam` (OpenAI's GPT-5
+   * family needs `max_completion_tokens`; DeepSeek uses `max_tokens`); anthropic
+   * → `max_tokens` (else 4096). Gemini IGNORES it. Keep it GENEROUS: reasoning
+   * models spend hidden reasoning tokens, so too-small a cap fails the request
+   * ("could not finish … reached max_tokens") rather than truncating.
    */
   maxTokens?: number
 }
@@ -1059,9 +1061,13 @@ export async function llmTestConnection(
   const opts: LlmCompleteOpts = {
     system: 'Connection test.',
     user: 'Reply with the single word: ok',
-    // 1-token-style minimal request. Gemini ignores maxTokens by design
-    // (see LlmCompleteOpts.maxTokens) — its ping stays tiny via the prompt.
-    maxTokens: 1,
+    // Output budget for the ping. Must be GENEROUS, not 1: reasoning models
+    // (OpenAI GPT-5, DeepSeek V4, Gemini 2.5 thinking) spend hidden reasoning
+    // tokens before any visible output, so a tiny cap is exhausted before "ok"
+    // is emitted — OpenAI 400s with "Could not finish the message … reached
+    // max_tokens". The prompt keeps the real reply to one word, so the actual
+    // spend stays ~tens of tokens despite this ceiling.
+    maxTokens: 1024,
     signal: signal ?? AbortSignal.timeout(15_000),
   }
 

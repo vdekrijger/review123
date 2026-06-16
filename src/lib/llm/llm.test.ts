@@ -646,7 +646,8 @@ describe('llmTestConnection — output-token cap field', () => {
     vi.stubGlobal('fetch', f)
     await llmTestConnection('openai')
     const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
-    expect(body.max_completion_tokens).toBe(1)
+    // Generous cap so reasoning models can finish (1-token caps 400 on GPT-5).
+    expect(body.max_completion_tokens).toBe(1024)
     expect(body.max_tokens).toBeUndefined()
   })
 
@@ -656,7 +657,7 @@ describe('llmTestConnection — output-token cap field', () => {
     vi.stubGlobal('fetch', f)
     await llmTestConnection('deepseek')
     const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
-    expect(body.max_tokens).toBe(1)
+    expect(body.max_tokens).toBe(1024)
     expect(body.max_completion_tokens).toBeUndefined()
   })
 })
