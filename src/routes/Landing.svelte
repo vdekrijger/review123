@@ -123,6 +123,17 @@
   // Discard-with-confirm: a themed <dialog> (mirrors ConsentDialog) guards the
   // destructive clear of unsubmitted comments.
   let pendingDiscard = $state<InflightRow | null>(null)
+  let discardDialogEl = $state<HTMLDialogElement | null>(null)
+
+  // Open as a true modal once the dialog mounts (when pendingDiscard is set).
+  // The bare `open` attribute renders a NON-modal dialog with no top layer or
+  // backdrop — it appears as an unstyled box in normal flow, so the X looked
+  // inert. showModal() gives the centered, backdropped modal (mirrors
+  // ConsentDialog, whose base styles live in app.css).
+  $effect(() => {
+    if (!discardDialogEl) return
+    if (!discardDialogEl.open) discardDialogEl.showModal()
+  })
 
   function requestDiscard(row: InflightRow) {
     pendingDiscard = row
@@ -511,10 +522,10 @@
 
 {#if pendingDiscard}
   <dialog
+    bind:this={discardDialogEl}
     class="discard-dialog"
     aria-label="Discard drafts"
     aria-modal="true"
-    open
     oncancel={(e) => { e.preventDefault(); cancelDiscard() }}
     onclick={(e) => { if (e.target === e.currentTarget) cancelDiscard() }}
   >
