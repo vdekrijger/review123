@@ -101,10 +101,25 @@
     return lines.slice(start - 1, end).join('\n')
   }
 
-  /** Merged scaffolding snippet for the pinned setup row. */
+  /**
+   * Merged scaffolding snippet for the pinned setup row. Dedups byte-identical
+   * blocks: a file with several `class Test*` (or describe blocks) that each
+   * repeat the same setUp / helper boilerplate would otherwise render that
+   * scaffolding once per class — the "duplicated setup & teardown" the parser
+   * faithfully collects from every class. Distinct setup blocks still all show.
+   */
   const setupSnippet = $derived.by(() => {
     if (structure.fallback || structure.setup.length === 0) return ''
-    return structure.setup.map((r) => snippetFor(testFile, r)).join('\n\n')
+    const seen = new Set<string>()
+    const blocks: string[] = []
+    for (const r of structure.setup) {
+      const snip = snippetFor(testFile, r)
+      const key = snip.trim()
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      blocks.push(snip)
+    }
+    return blocks.join('\n\n')
   })
 
   function toggle(): void {

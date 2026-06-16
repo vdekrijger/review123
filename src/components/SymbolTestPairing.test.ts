@@ -72,6 +72,62 @@ describe('SymbolTestPairing — test-case list', () => {
     })
   })
 
+  it('dedups byte-identical setup/teardown repeated across several test classes', async () => {
+    // Two unittest-style classes each repeating the SAME setUp + _integration
+    // helper — the parser faithfully collects scaffolding from every class, so
+    // without dedup the pinned row would render the boilerplate twice.
+    const PY_TEST_CONTENT = [
+      'import pytest',
+      'from app import bot_is_ready',
+      '',
+      'class TestBotIsReady:',
+      '    def setUp(self):',
+      '        self.org = Org.objects.create(name="Org")',
+      '',
+      '    def _integration(self, scopes):',
+      '        return Integration.objects.create(team=self.team)',
+      '',
+      '    def test_bot_is_ready(self):',
+      '        assert bot_is_ready(self._integration({"chat"})) is True',
+      '',
+      'class TestBuildExploreHint:',
+      '    def setUp(self):',
+      '        self.org = Org.objects.create(name="Org")',
+      '',
+      '    def _integration(self, scopes):',
+      '        return Integration.objects.create(team=self.team)',
+      '',
+      '    def test_build_explore_hint(self):',
+      '        assert build_explore_hint(self._integration({"chat"})) is None',
+    ].join('\n')
+    const pairing: Pairing = {
+      symbol: 'bot_is_ready',
+      implFile: 'app/bot.py',
+      implLineRange: { start: 1, end: 3 },
+      tests: [
+        { testFile: 'tests/test_bot.py', lineRange: { start: 11, end: 12 }, title: 'bot is ready', confidence: 'named' },
+      ],
+    }
+    render(SymbolTestPairing, {
+      props: {
+        pairing,
+        testContents: new Map([['tests/test_bot.py', PY_TEST_CONTENT]]),
+        prPathSet: new Set<string>(['tests/test_bot.py']),
+        onJumpToFile: vi.fn(),
+      },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: /Tested by/i }))
+    await fireEvent.click(await screen.findByRole('button', { name: /Setup & teardown/i }))
+    await waitFor(() => {
+      const pre = document.querySelector('.sym-test-setup .sym-test-pre')
+      expect(pre).toBeTruthy()
+      const text = pre!.textContent ?? ''
+      // Each scaffolding block appears exactly ONCE despite living in two classes.
+      expect(text.match(/def setUp/g)?.length ?? 0).toBe(1)
+      expect(text.match(/def _integration/g)?.length ?? 0).toBe(1)
+    })
+  })
+
   it('expanding a test row reveals its highlighted body', async () => {
     render(SymbolTestPairing, { props: baseProps() })
     await fireEvent.click(screen.getByRole('button', { name: /Tested by/i }))
