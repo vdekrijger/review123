@@ -700,6 +700,110 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
   }
 
+  /**
+   * Plan P 'generate' mode for the VERDICT: run the verdict prompt with EVERY
+   * ensemble generator independently, then UNION their evidence (treating each
+   * evidence bullet like a finding — same dedup/cross-confirm as reviewer fusion)
+   * so a real claim only one generator raised can still surface, carrying
+   * raisedBy. The verdict's SINGLE HOLISTIC judgment (`level`) is NOT merged —
+   * holistic calls can't be union-fused — so we take the PRIMARY generator's
+   * `level` (and primary `notAnalyzed`, unioned with packed context). The user's
+   * 'generate' intent is the EVIDENCE recall, with one recommendation.
+   *
+   * Returns null when fewer than 2 generators produced a verdict (caller falls
+   * back to the single-generator verify path). Never throws.
+   */
+  async function fuseVerdict(
+    prompts: { system: string; user: string },
+    ctx: PackedContext,
+    onActivity?: (line: string) => void,
+  ): Promise<{ result: VerdictResult; usage: LlmUsage | undefined; models: VerdictModelBreakdown[] } | null> {
+    try {
+      const participants = fusionParticipants()
+      const generators = fusionGenerators()
+      if (generators.length < 2) return null
+      onActivity?.(`Generating verdict with ${generators.length} models (fusion)…`)
+
+      // 1. Each GENERATOR generates a verdict independently (parallel, own cfg).
+      //    Evidence bullets become VerifiableFindings (no real line — anchored by
+      //    best-effort path token + description, exactly like the verify path).
+      const perVerdict = new Map<string, VerdictResult>()
+      const { perGenerator, usage: genUsage, usageByModel: genUsageByModel } = await generateMultiGen(
+        generators,
+        async (cfg) => {
+          const { result, usage } = await llmJsonWithRepairFor<VerdictResult>(
+            cfg,
+            { system: prompts.system, user: prompts.user },
+            validateVerdict,
+          )
+          perVerdict.set(`${cfg.providerId}:${cfg.model.id}`, result)
+          const findings: VerifiableFinding[] = result.evidence.map((bullet, i) => ({
+            id: `${cfg.providerId}:${cfg.model.id}:${i}:${djb2(bullet)}`,
+            path: extractEvidencePath(bullet) ?? '(no file)',
+            line: null,
+            severity: 'medium' as const,
+            body: bullet,
+          }))
+          return { findings, usage }
+        },
+      )
+
+      if (perGenerator.length < 2) return null
+
+      // The PRIMARY generator's holistic verdict supplies `level` + `notAnalyzed`.
+      const gen = resolveEnsemble().generator
+      const primaryKey = gen ? `${gen.providerId}:${gen.model.id}` : undefined
+      const primary =
+        (primaryKey ? perVerdict.get(primaryKey) : undefined) ??
+        perVerdict.get(`${perGenerator[0].cfg.providerId}:${perGenerator[0].cfg.model.id}`)
+      if (!primary) return null
+
+      // notAnalyzed: union of packed context + the primary generator's own list.
+      const mergedNotAnalyzed = [...new Set([...ctx.notAnalyzed, ...primary.notAnalyzed])]
+
+      // 2. Merge/dedup the union of evidence bullets across generators.
+      const merged = mergeGeneratorFindings(perGenerator)
+      if (merged.length === 0) {
+        const result: VerdictResult = { level: primary.level, evidence: [], notAnalyzed: mergedNotAnalyzed }
+        return { result, usage: genUsage, models: buildFusionModels(participants, generators.length, genUsageByModel, [], [], assignLenses(participants.length)) }
+      }
+
+      // 3. Cross-confirm (each participant verifies evidence it didn't raise), lensed.
+      const lenses = assignLenses(participants.length)
+      const outcome = await fuseConfirm(merged, participants, realVerify, lenses)
+
+      // 4. Rebuild the verdict: surfaced-first evidence + per-row verification +
+      //    raisedBy provenance. Primary `level` + unioned notAnalyzed.
+      const evidence: string[] = []
+      const evidenceVerification: Record<number, import('./schemas').FindingVerification> = {}
+      const evidenceRaisedBy: Record<number, string[]> = {}
+      outcome.merged.forEach((m, i) => {
+        evidence.push(m.merged.finding.body)
+        evidenceVerification[i] = m.verification
+        evidenceRaisedBy[i] = m.merged.raisedBy
+      })
+      const result: VerdictResult = {
+        level: primary.level,
+        evidence,
+        notAnalyzed: mergedNotAnalyzed,
+        evidenceVerification,
+        evidenceRaisedBy,
+      }
+      const totalUsage = addUsage(genUsage, outcome.usage)
+      const models = buildFusionModels(
+        participants,
+        generators.length,
+        genUsageByModel,
+        outcome.perModelUsage,
+        outcome.generatorImpact,
+        lenses,
+      )
+      return { result, usage: totalUsage, models }
+    } catch {
+      return null
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Internal: run a single task (summary streams; others use llmJsonWithRepair)
   // ---------------------------------------------------------------------------
@@ -1369,7 +1473,29 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       let verdictResult: VerdictResult
       let verdictUsage: LlmUsage | undefined
       let toolCallsUsed: number | undefined
+      // Assigned in EITHER the fusion branch OR the !fusionHandled block below
+      // (the two are mutually exclusive and exhaustive); the definite-assignment
+      // assertion tells TS that, since it can't prove it across the two blocks.
+      let finalResult!: VerdictResult
+      let fusionHandled = false
 
+      // Plan P 'generate' mode: every configured generator produces a verdict
+      // independently; their EVIDENCE is unioned + cross-confirmed (recall) and
+      // each generator gets a generator row. The holistic `level` is the primary
+      // generator's. Single-pass per generator — deep stays on the verify path.
+      if (fusionGenerateEffective() && !deep.enabled) {
+        const fused = await fuseVerdict(prompts, ctx, (line) => {
+          verdictState.activity = [...(verdictState.activity ?? []), line]
+        })
+        if (fused) {
+          finalResult = fused.result
+          verdictUsage = fused.usage
+          verdictModelsState = fused.models
+          fusionHandled = true
+        }
+      }
+
+      if (!fusionHandled) {
       if (deep.enabled) {
         const deepOutcome = await runDeepJson<VerdictResult>(prompts, validateVerdict, (line) => {
           verdictState.activity = [...(verdictState.activity ?? []), line]
@@ -1394,7 +1520,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
       // Merge notAnalyzed: union of packed context's notAnalyzed + model's own list (EC-15c)
       const merged = [...new Set([...ctx.notAnalyzed, ...verdictResult.notAnalyzed])]
-      let finalResult: VerdictResult = { ...verdictResult, notAnalyzed: merged }
+      finalResult = { ...verdictResult, notAnalyzed: merged }
 
       // Generator usage captured BEFORE folding in verifier usage (Plan N
       // per-model cost attributes generation tokens to the generator model).
@@ -1437,6 +1563,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         verdictModelsState = buildVerdictModels(generatorUsage, surfacedCount, verdictVerify.perModelUsage, verdictVerify.verifierImpact)
       }
       }
+      } // end if (!fusionHandled)
 
       if (deep.enabled) {
         await setCached<DeepCached<VerdictResult>>(key, { deep: true, result: finalResult, toolCallsUsed: toolCallsUsed ?? 0, usage: verdictUsage })
