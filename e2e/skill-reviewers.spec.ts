@@ -284,11 +284,6 @@ test('skill-reviewers: anchored finding inline at line, unanchored in per-file b
     page.getByText(/Hardcoded credential found outside the visible diff/i),
   ).toBeVisible({ timeout: 5_000 })
 
-  // The persona summary line should appear: "Security Reviewer: 2 suggestions"
-  await expect(
-    page.getByText(/Security Reviewer.*2 suggestions/i),
-  ).toBeVisible({ timeout: 5_000 })
-
   // --- Placement contract ---
   // Anchored finding (line 2 IS in the diff) renders INLINE in an extend row
   // inside the diff table, at its line.

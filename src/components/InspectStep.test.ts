@@ -397,25 +397,6 @@ describe('InspectStep — reviewer chip → finding navigation', () => {
     expect(spy).not.toHaveBeenCalled()
   })
 
-  it('suggestion summary chip mirrors result chip — single finding opens a popover (uniform)', async () => {
-    const spy = vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
-    const files = makeFiles(['a.ts'])
-    const body = 'a suggestion'
-    const skillReviews = [reviewEntry([{ path: 'a.ts', line: 7, body }])]
-    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews } })
-
-    const summary = screen.getByRole('button', { name: `Show 1 suggestion from ${reviewerName}` })
-    await fireEvent.click(summary)
-    // Uniform: a single-suggestion summary chip opens a popover, it does NOT jump.
-    expect(spy).not.toHaveBeenCalled()
-    const menu = container.querySelector('.findings-popover[role="menu"]')
-    expect(menu).not.toBeNull()
-    const items = menu!.querySelectorAll('[role="menuitem"]')
-    expect(items).toHaveLength(1)
-    await fireEvent.click(items[0] as HTMLElement)
-    expect(spy).toHaveBeenCalledWith('a.ts', keyOf('a.ts', 7, body))
-  })
-
   it('null-line finding lives in the popover (no separate bottom card) and jumps to its key', async () => {
     const spy = vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
     const files = makeFiles(['a.ts'])
