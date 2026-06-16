@@ -12,6 +12,8 @@
 
 import type { PrMeta, PrFile } from '../github/types'
 import type { CiSummary } from '../github/checks'
+import type { LlmUsage } from '../llm/llm'
+import type { ModelCostRow } from '../ai/modelCostBreakdown'
 import type {
   AttentionResult,
   VerdictResult,
@@ -183,7 +185,14 @@ export const demoAttention: AttentionResult = {
   ],
 }
 
-/** Pre-generated verdict (VerdictResult schema). */
+/**
+ * Pre-generated verdict (VerdictResult schema) — now carrying cross-model
+ * verification (`evidenceVerification`) and multi-generator provenance
+ * (`evidenceRaisedBy`) on a couple of evidence rows, so the verdict's evidence
+ * chips show the SAME confirmed / flagged / "raised by" treatment the finding
+ * cards do. Keyed by evidence array index (Plan M / Plan O), exactly as the live
+ * fusion path attaches them.
+ */
 export const demoVerdict: VerdictResult = {
   level: 'minor-changes',
   evidence: [
@@ -195,6 +204,39 @@ export const demoVerdict: VerdictResult = {
   notAnalyzed: [
     'src/search/api.ts — fetchResults must accept and honour the AbortSignal; not shown in this diff.',
   ],
+  // Cross-model verification per evidence row (Plan M). Row 1 (the abort claim)
+  // is CONFIRMED by 3/4 models; row 2 (the re-throw claim) is DEMOTED — only one
+  // model surfaced it and the others pushed back.
+  evidenceVerification: {
+    1: {
+      confirmedBy: 3,
+      polledModels: 4,
+      surfaced: true,
+      perModel: [
+        { provider: 'OpenAI', model: 'GPT-5.5', verdict: 'confirm', reason: 'AbortController is created and stored before the fetch; the prior controller is aborted first.', raised: true },
+        { provider: 'DeepSeek', model: 'DeepSeek V4 Pro', verdict: 'confirm', reason: 'controllerRef is aborted on every re-run, so only the latest request can resolve into state.' },
+        { provider: 'Anthropic', model: 'Claude Opus 4.8', verdict: 'confirm', reason: 'Cancellation ordering is correct: abort precedes the new request.' },
+        { provider: 'Gemini', model: 'Gemini 3.5 Flash', verdict: 'uncertain', reason: 'Depends on fetchResults honouring the signal, which is outside this diff.' },
+      ],
+    },
+    2: {
+      confirmedBy: 1,
+      polledModels: 4,
+      surfaced: false,
+      perModel: [
+        { provider: 'OpenAI', model: 'GPT-5.5', verdict: 'confirm', reason: 'The catch re-throws when err.name !== "AbortError".', raised: true },
+        { provider: 'Anthropic', model: 'Claude Opus 4.8', verdict: 'refute', reason: 'A re-thrown rejection inside .then().catch() has no handler — it surfaces as an unhandled rejection, not to the user.' },
+        { provider: 'DeepSeek', model: 'DeepSeek V4 Pro', verdict: 'refute', reason: '"Real failures still surface" overstates it — nothing routes the error to component state.' },
+        { provider: 'Gemini', model: 'Gemini 3.5 Flash', verdict: 'uncertain', reason: 'Behaviour depends on the host’s unhandledrejection handling.' },
+      ],
+    },
+  },
+  // Multi-generator provenance (Plan O 'generate' mode): row 1 was independently
+  // raised by BOTH generators (high recall agreement); row 2 only by one.
+  evidenceRaisedBy: {
+    1: ['GPT-5.5', 'DeepSeek V4 Pro'],
+    2: ['GPT-5.5'],
+  },
 }
 
 /** Pre-generated test insight (TestInsight schema). */
@@ -217,7 +259,12 @@ export const demoTests: TestInsight = {
   ],
 }
 
-/** Pre-generated skill-reviewer findings — varied severity (SkillReviewResult schema). */
+/**
+ * Pre-generated skill-reviewer findings — the ORIGINAL single reviewer, kept so
+ * existing consumers/tests that import it still resolve. The demo run now drives
+ * its reviewer column from `demoReviewers` below (several personas), of which
+ * this is the first.
+ */
 export const demoSkillFindings: SkillReviewResult = {
   skillName: 'Correctness & race conditions',
   findings: [
@@ -241,3 +288,188 @@ export const demoSkillFindings: SkillReviewResult = {
     },
   ],
 }
+
+/**
+ * The DEMO'S DIFFERENTIATOR SHOWCASE — several fake reviewer PERSONAS, each a
+ * pre-generated SkillReviewResult, exercising the key finding/verification UI
+ * states offline:
+ *
+ *   1. Security Reviewer — a CONFIRMED finding (cross-model verification
+ *      surfaced=true, confirmed by 3/4) anchored INLINE in the diff, carrying
+ *      multi-generator provenance (`raisedBy` → "raised by GPT-5.5, DeepSeek V4
+ *      Pro"). Drives the "✓ confirmed by 3/4 models" chip + per-vote tooltip.
+ *   2. Performance Reviewer — a DEMOTED / lower-confidence finding (surfaced=false,
+ *      flagged by 1/5) anchored INLINE, showing the dimmed treatment + the
+ *      adversarial-disagreement tooltip.
+ *   3. Pragmatic Senior Reviewer — a confirmed FILE-LEVEL (null-line) finding so
+ *      the popover/fallback placement renders, plus a plain low inline note.
+ *   4. Resiliency & SRE Reviewer — NO findings, so the "✓ no significant issues"
+ *      state renders too.
+ *
+ * Every verdict carries a real `model` + a one-line `reason` so the tooltip reads
+ * cleanly. Line numbers stay inside the demo diff's `+1,27` hunk for useSearch.ts
+ * so the inline cards actually anchor.
+ */
+export const demoReviewers: SkillReviewResult[] = [
+  {
+    skillName: 'Security Reviewer (OWASP-minded)',
+    findings: [
+      {
+        // CONFIRMED + inline + multi-generator provenance.
+        path: 'src/search/useSearch.ts',
+        line: 19,
+        severity: 'high',
+        body: 'The `AbortError` is swallowed, but a non-abort failure from `fetchResults` is re-thrown into a `.catch()` with no further handler — an attacker probing the search endpoint can drive a stream of unhandled rejections (potential DoS on error-logging sinks). Route failures to component state and surface a bounded error instead.',
+        raisedBy: ['GPT-5.5', 'DeepSeek V4 Pro'],
+        verification: {
+          confirmedBy: 3,
+          polledModels: 4,
+          surfaced: true,
+          perModel: [
+            { provider: 'OpenAI', model: 'GPT-5.5', verdict: 'confirm', reason: 'Re-thrown rejection has no downstream handler — unhandled rejection.', raised: true },
+            { provider: 'DeepSeek', model: 'DeepSeek V4 Pro', verdict: 'confirm', reason: 'Confirmed: the .catch() re-throws and nothing catches it.', raised: true },
+            { provider: 'Anthropic', model: 'Claude Opus 4.8', verdict: 'confirm', reason: 'Agreed; an error path should set component error state, not re-throw.' },
+            { provider: 'Gemini', model: 'Gemini 3.5 Flash', verdict: 'uncertain', reason: 'Severity depends on whether a global handler exists.' },
+          ],
+        },
+      },
+    ],
+  },
+  {
+    skillName: 'Performance Reviewer',
+    findings: [
+      {
+        // DEMOTED / lower-confidence + inline.
+        path: 'src/search/useSearch.ts',
+        line: 5,
+        severity: 'low',
+        body: 'A fixed 250ms debounce may feel sluggish for short queries. Consider a shorter leading-edge debounce so the first keystroke fires immediately.',
+        verification: {
+          confirmedBy: 1,
+          polledModels: 5,
+          surfaced: false,
+          perModel: [
+            { provider: 'OpenAI', model: 'GPT-5.5', verdict: 'confirm', reason: 'A leading-edge debounce would feel snappier.', raised: true },
+            { provider: 'DeepSeek', model: 'DeepSeek V4 Pro', verdict: 'refute', reason: '250ms is a standard, well-justified search debounce — not a real issue.' },
+            { provider: 'Anthropic', model: 'Claude Opus 4.8', verdict: 'refute', reason: 'This is a UX preference, not a defect in the PR.' },
+            { provider: 'Gemini', model: 'Gemini 3.5 Flash', verdict: 'uncertain', reason: 'No latency budget is stated, so impact is unclear.' },
+            { provider: 'DeepSeek', model: 'DeepSeek V4 Flash', verdict: 'refute', reason: 'Debounce constant is reasonable; no change needed.' },
+          ],
+        },
+      },
+    ],
+  },
+  {
+    skillName: 'Pragmatic Senior Reviewer',
+    findings: [
+      {
+        // FILE-LEVEL (null line) → renders in the reviewer-chip popover / fallback.
+        path: 'src/search/useSearch.ts',
+        line: null,
+        severity: 'medium',
+        body: 'The effect now owns three concerns (debounce timer, abort lifecycle, error handling). Consider extracting a small `useDebouncedSearch` hook so this stays testable as it grows.',
+        verification: {
+          confirmedBy: 2,
+          polledModels: 3,
+          surfaced: true,
+          perModel: [
+            { provider: 'DeepSeek', model: 'DeepSeek V4 Pro', verdict: 'confirm', reason: 'The effect is doing a lot; extraction would help.', raised: true },
+            { provider: 'Anthropic', model: 'Claude Opus 4.8', verdict: 'confirm', reason: 'Agreed — separable concerns.' },
+            { provider: 'Gemini', model: 'Gemini 3.5 Flash', verdict: 'uncertain', reason: 'Fine for now at this size.' },
+          ],
+        },
+      },
+      {
+        // Plain inline low-severity note (no verification) in the test file.
+        path: 'src/search/useSearch.test.ts',
+        line: 52,
+        severity: 'low',
+        body: 'The debounce test hard-codes 250ms. Import `DEBOUNCE_MS` from the module so the test and implementation can never drift apart.',
+      },
+    ],
+  },
+  {
+    // Empty findings → "✓ no significant issues" chip state.
+    skillName: 'Resiliency & SRE Reviewer',
+    findings: [],
+  },
+]
+
+// ---------------------------------------------------------------------------
+// Step-3 "Review cost & model performance" — per-model breakdown (Plan N/P)
+// ---------------------------------------------------------------------------
+
+/**
+ * Pre-generated per-model cost + performance for the WHOLE demo review: TWO
+ * generators (DeepSeek V4 Pro + GPT-5.5) and a couple of verifiers (Claude Opus
+ * 4.8 + Gemini 3.5 Flash). Every model id is in `modelCatalog.ts` so the panel
+ * prices the $ column. Each row's `total` equals the sum of its `byTask` usage,
+ * and the four rows' totals sum to `demoTotalUsage` — so the panel reconciles
+ * exactly as a live review would. Plausible token counts; display-only, offline.
+ */
+function usage(prompt: number, completion: number): LlmUsage {
+  return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion }
+}
+
+export const demoModelCostBreakdown: ModelCostRow[] = [
+  {
+    providerId: 'deepseek',
+    modelId: 'deepseek-v4-pro',
+    role: 'generator',
+    total: usage(28_400, 4_200),
+    surfaced: 3,
+    uniqueCatch: 1,
+    byTask: [
+      { task: 'Verdict', usage: usage(9_800, 1_300) },
+      { task: 'Reviewer: Security Reviewer (OWASP-minded)', usage: usage(8_900, 1_500) },
+      { task: 'Reviewer: Pragmatic Senior Reviewer', usage: usage(9_700, 1_400) },
+    ],
+  },
+  {
+    providerId: 'openai',
+    modelId: 'gpt-5.5',
+    role: 'generator',
+    total: usage(26_100, 3_800),
+    surfaced: 2,
+    uniqueCatch: 1,
+    byTask: [
+      { task: 'Verdict', usage: usage(9_500, 1_200) },
+      { task: 'Reviewer: Security Reviewer (OWASP-minded)', usage: usage(8_400, 1_300) },
+      { task: 'Reviewer: Performance Reviewer', usage: usage(8_200, 1_300) },
+    ],
+  },
+  {
+    providerId: 'anthropic',
+    modelId: 'claude-opus-4-8',
+    role: 'verifier',
+    total: usage(18_900, 2_100),
+    impact: { confirms: 3, refutes: 2, uncertains: 0, decisive: 2 },
+    byTask: [
+      { task: 'Verdict', usage: usage(6_400, 700) },
+      { task: 'Reviewer: Security Reviewer (OWASP-minded)', usage: usage(6_300, 700) },
+      { task: 'Reviewer: Performance Reviewer', usage: usage(6_200, 700) },
+    ],
+  },
+  {
+    providerId: 'gemini',
+    modelId: 'gemini-3.5-flash',
+    role: 'verifier',
+    total: usage(17_400, 1_600),
+    impact: { confirms: 0, refutes: 0, uncertains: 4, decisive: 0 },
+    byTask: [
+      { task: 'Verdict', usage: usage(5_900, 550) },
+      { task: 'Reviewer: Security Reviewer (OWASP-minded)', usage: usage(5_800, 550) },
+      { task: 'Reviewer: Performance Reviewer', usage: usage(5_700, 500) },
+    ],
+  },
+]
+
+/**
+ * Aggregate token usage for the demo review — the SUM of every cost row's total
+ * (28_400+4_200 + 26_100+3_800 + 18_900+2_100 + 17_400+1_600). Drives the
+ * "This review used … total" headline; prices against the active model.
+ */
+export const demoTotalUsage: LlmUsage = usage(
+  28_400 + 26_100 + 18_900 + 17_400,
+  4_200 + 3_800 + 2_100 + 1_600,
+)

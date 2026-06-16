@@ -18,9 +18,10 @@
   import UnderstandStep from '../components/UnderstandStep.svelte'
   import InspectStep from '../components/InspectStep.svelte'
   import VerdictStep from '../components/VerdictStep.svelte'
+  import ReviewCostPanel from '../components/ReviewCostPanel.svelte'
   import { createDraftStore } from '../lib/drafts/drafts.svelte'
   import { createViewedStore } from '../lib/viewed/viewed.svelte'
-  import { getSettings, setDiffMode, type DiffMode } from '../lib/settings/settings'
+  import { getSettings, setDiffMode, setShowTokenCost, type DiffMode } from '../lib/settings/settings'
   import { navigate } from '../lib/router/router.svelte'
   import { parseReadingOrder } from '../lib/ai/tasks'
   import { jumpToFileDiff } from '../lib/diff/jumpToFile'
@@ -34,6 +35,13 @@
   import type { AttentionResult } from '../lib/ai/schemas'
 
   const run = createDemoRun()
+
+  // The demo SHOWCASES the cost & model-performance panel — turn on the
+  // power-user token/$ display so the Step-3 "Review cost & model performance"
+  // panel shows its $ column (the impact readout shows regardless). This is the
+  // documented way the demo "enables showTokenCost"; it's a local setting write,
+  // no network. A real visitor can still toggle it back off in Settings.
+  setShowTokenCost(true)
 
   // Local stores keyed to the demo PR — IndexedDB/localStorage only, no network.
   const draftStore = createDraftStore(DEMO_PR_KEY)
@@ -137,6 +145,17 @@
       skillReviews={run.skillReviews}
     />
   {:else}
+    <!--
+      The demo visitor is signed out, so VerdictStep renders its sign-in prompt
+      (and its OWN copy of the cost panel never shows). Render ReviewCostPanel
+      here too — with the SAME props Review.svelte feeds VerdictStep — so the
+      Step-3 "Review cost & model performance" panel showcases the per-model
+      cost + cross-verify impact regardless of auth. Offline: display-only.
+    -->
+    <ReviewCostPanel
+      modelCostBreakdown={run.modelCostBreakdown}
+      totalUsage={run.totalUsage}
+    />
     <VerdictStep
       prRef={{ owner: 'acme', repo: 'web-app', number: 42 }}
       commitId={demoMeta.headSha}
@@ -146,6 +165,9 @@
       files={demoFiles}
       submitFn={demoSubmit}
       authorLogin={demoMeta.authorLogin}
+      modelPerformance={run.modelPerformance}
+      modelCostBreakdown={run.modelCostBreakdown}
+      totalUsage={run.totalUsage}
     />
   {/if}
 </section>
