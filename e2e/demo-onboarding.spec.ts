@@ -55,9 +55,28 @@ test('landing CTA opens the demo with banner, summary, verdict, finding — no e
   await page.getByText('Why this verdict', { exact: true }).click()
   await expect(page.getByText(/Adds a 250ms debounce in useSearch/i)).toBeVisible()
 
-  // Inspect step: a skill-reviewer finding renders.
+  // Inspect step: MULTIPLE reviewer personas render, and the cross-model
+  // verification chips (confirmed + demoted) + the multi-generator "raised by"
+  // provenance show — the demo's differentiator showcase.
   await page.getByRole('button', { name: /next step/i }).click()
-  await expect(page.getByText(/does not show src\/search\/api\.ts honouring it/i)).toBeVisible()
+  await expect(page.getByText(/Security Reviewer \(OWASP-minded\)/i).first()).toBeVisible()
+  await expect(page.getByText(/Performance Reviewer/i).first()).toBeVisible()
+  await expect(page.getByText(/Resiliency & SRE Reviewer/i).first()).toBeVisible()
+  // CONFIRMED cross-model finding chip + multi-generator provenance.
+  await expect(page.getByText(/confirmed by 3\/4 models/i).first()).toBeVisible()
+  await expect(page.getByText(/raised by GPT-5\.5, DeepSeek V4 Pro/i).first()).toBeVisible()
+  // DEMOTED / lower-confidence cross-model finding chip.
+  await expect(page.getByText(/flagged by 1\/5 · lower confidence/i).first()).toBeVisible()
+
+  // Verdict step: the "Review cost & model performance" panel renders with the
+  // aggregate $ total + per-model rows (the demo turns showTokenCost on).
+  await page.getByRole('button', { name: /next step/i }).click()
+  await expect(
+    page.getByRole('region', { name: /review cost and model performance/i }),
+  ).toBeVisible()
+  await expect(page.getByText(/this review used .* total/i)).toBeVisible()
+  await expect(page.getByText('deepseek-v4-pro')).toBeVisible()
+  await expect(page.getByText('gpt-5.5')).toBeVisible()
 
   // The banner's set-up CTA goes to settings.
   await page.getByRole('link', { name: /add your api key or sign in/i }).click()

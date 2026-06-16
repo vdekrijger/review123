@@ -84,11 +84,76 @@ describe('Demo route', () => {
   it('renders a skill reviewer finding on the Inspect step without network', async () => {
     render(Demo)
 
-    // Step 2 (Inspect) — the skill reviewer finding body appears.
+    // Step 2 (Inspect) — a skill reviewer finding body appears inline in the diff.
     await fireEvent.click(screen.getByRole('button', { name: /next step/i }))
     expect(
-      await screen.findByText(/does not show src\/search\/api\.ts honouring it/i),
-    ).toBeInTheDocument()
+      (await screen.findAllByText(/an attacker probing the search endpoint/i)).length,
+    ).toBeGreaterThan(0)
+
+    expect(externalFetchCalls()).toEqual([])
+  })
+
+  it('shows MULTIPLE reviewer personas on the Inspect step', async () => {
+    render(Demo)
+    await fireEvent.click(screen.getByRole('button', { name: /next step/i }))
+
+    // Several distinct reviewer personas render (names appear in the settled
+    // result bar AND inline on each finding card → match all occurrences).
+    expect((await screen.findAllByText(/Security Reviewer \(OWASP-minded\)/i)).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Performance Reviewer/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Pragmatic Senior Reviewer/i).length).toBeGreaterThan(0)
+    expect(screen.getByText(/Resiliency & SRE Reviewer/i)).toBeInTheDocument()
+
+    // The empty reviewer shows the "no significant issues" state.
+    expect(screen.getByText(/no significant issues/i)).toBeInTheDocument()
+
+    expect(externalFetchCalls()).toEqual([])
+  })
+
+  it('shows a CONFIRMED cross-model finding with a "raised by" provenance chip', async () => {
+    render(Demo)
+    await fireEvent.click(screen.getByRole('button', { name: /next step/i }))
+
+    // The Security reviewer's inline finding carries cross-model verification:
+    // a "✓ confirmed by 3/4 models" chip + the multi-generator provenance chip.
+    // (Inline + side-by-side rendering can repeat it → match all occurrences.)
+    expect((await screen.findAllByText(/confirmed by 3\/4 models/i)).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/raised by GPT-5\.5, DeepSeek V4 Pro/i).length).toBeGreaterThan(0)
+
+    expect(externalFetchCalls()).toEqual([])
+  })
+
+  it('shows a DEMOTED / lower-confidence cross-model finding', async () => {
+    render(Demo)
+    await fireEvent.click(screen.getByRole('button', { name: /next step/i }))
+
+    // The Performance reviewer's inline finding was flagged by only one model and
+    // refuted by the rest → the dimmed "flagged by 1/5 · lower confidence" chip.
+    expect((await screen.findAllByText(/flagged by 1\/5 · lower confidence/i)).length).toBeGreaterThan(0)
+
+    expect(externalFetchCalls()).toEqual([])
+  })
+
+  it('shows the Step-3 cost & model-performance panel with $ and per-model rows', async () => {
+    render(Demo)
+    // Jump to step 3 (Verdict).
+    await fireEvent.click(screen.getByRole('button', { name: /next step/i }))
+    await fireEvent.click(screen.getByRole('button', { name: /next step/i }))
+
+    // The consolidated cost panel renders with the aggregate $ headline (demo
+    // turns showTokenCost on) and the per-model performance breakdown.
+    const panel = await screen.findByRole('region', {
+      name: /review cost and model performance/i,
+    })
+    expect(panel).toBeInTheDocument()
+    expect(screen.getByText(/this review used .* total/i)).toBeInTheDocument()
+    // Both generators and a verifier model id appear as rows.
+    expect(screen.getByText('deepseek-v4-pro')).toBeInTheDocument()
+    expect(screen.getByText('gpt-5.5')).toBeInTheDocument()
+    expect(screen.getByText('claude-opus-4-8')).toBeInTheDocument()
+    // Generator impact (surfaced findings + unique catch) reads through (both
+    // generators caught one unique finding → match all occurrences).
+    expect(screen.getAllByText(/caught 1 the others missed/i).length).toBeGreaterThan(0)
 
     expect(externalFetchCalls()).toEqual([])
   })

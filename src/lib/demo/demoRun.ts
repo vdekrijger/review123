@@ -9,31 +9,55 @@
  * so no UI path can reach a real request.
  */
 
-import type { AiRun, PanelState, SkillReviewEntry } from '../ai/run.svelte'
+import type { AiRun, PanelState, SkillReviewEntry, VerdictModelBreakdown } from '../ai/run.svelte'
 import {
   demoSummary,
   demoAttention,
   demoVerdict,
   demoTests,
-  demoSkillFindings,
+  demoReviewers,
+  demoModelCostBreakdown,
+  demoTotalUsage,
 } from './fixture'
 
 function done<T>(value: T): PanelState<T> {
   return { status: 'done', value }
 }
 
+/** Slugify a reviewer name into a stable skillId for the demo run. */
+function reviewerId(name: string): string {
+  return 'demo-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+}
+
+/**
+ * Per-model performance rows for Step 3 — the SAME (model, role) identities as
+ * the cost breakdown, carrying the impact readout (always shown when cross-verify
+ * ran). Derived from the cost rows so the two never drift.
+ */
+const demoModelPerformance: VerdictModelBreakdown[] = demoModelCostBreakdown.map((row) => ({
+  providerId: row.providerId,
+  modelId: row.modelId,
+  role: row.role,
+  ...(row.total ? { usage: row.total } : {}),
+  ...(row.role === 'generator'
+    ? { surfaced: row.surfaced ?? 0, uniqueCatch: row.uniqueCatch ?? 0 }
+    : { impact: row.impact }),
+}))
+
 /**
  * Construct the demo AiRun. Not reactive (the values never change), but it
  * structurally satisfies AiRun so the real display components render it.
  */
 export function createDemoRun(): AiRun {
-  const skillReviews: SkillReviewEntry[] = [
-    {
-      skillId: 'demo-correctness',
-      name: demoSkillFindings.skillName,
-      state: done(demoSkillFindings),
-    },
-  ]
+  // Several reviewer PERSONAS (Security / Performance / Pragmatic Senior /
+  // Resiliency), each an already-'done' entry. This is the demo's differentiator
+  // showcase: a mix of confirmed / demoted cross-verified findings, a multi-
+  // generator "raised by" provenance, and one "✓ no significant issues" reviewer.
+  const skillReviews: SkillReviewEntry[] = demoReviewers.map((result) => ({
+    skillId: reviewerId(result.skillName),
+    name: result.skillName,
+    state: done(result),
+  }))
 
   return {
     summary: done<string>(demoSummary),
@@ -48,10 +72,10 @@ export function createDemoRun(): AiRun {
     alternatives: { status: 'disabled' },
     story: { status: 'disabled' },
     skillReviews,
-    totalUsage: undefined,
-    verdictModels: [],
-    modelPerformance: [],
-    modelCostBreakdown: [],
+    totalUsage: demoTotalUsage,
+    verdictModels: demoModelPerformance,
+    modelPerformance: demoModelPerformance,
+    modelCostBreakdown: demoModelCostBreakdown,
     // Inert: the demo is fully pre-generated. These never touch the network.
     start: async () => {},
     retry: async () => {},
