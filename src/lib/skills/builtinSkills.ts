@@ -1,7 +1,7 @@
 /**
  * src/lib/skills/builtinSkills.ts — Fable-authored built-in reviewer library.
  *
- * Exports BUILTIN_SKILLS: an array of 8 curated reviewer personas (7 specialist
+ * Exports BUILTIN_SKILLS: an array of 9 curated reviewer personas (8 specialist
  * personas + the pragmatic sample skill migrated from sampleSkill.ts).
  *
  * SAMPLE_SKILL_NAME is re-exported from sampleSkill.ts for backward compatibility.
@@ -152,6 +152,21 @@ Review the diff as a product engineer who instruments deliberately with PostHog 
 Suggest instrumentation only where it clearly helps the team learn or recover something specific — never sprinkle "add analytics here" across files. If the code is already instrumented, or instrumentation doesn't fit (pure utilities, internal refactors, tests), say nothing: an empty result is the EXPECTED, GOOD outcome on code that needs no new tracking. Each finding = one concrete instrumentation opportunity (the real API + a concrete name) and one sentence of why it matters. Stay provider-agnostic about which LLM reviews this; be specific about PostHog.`,
   },
   {
+    id: 'test-quality',
+    name: 'Test Quality & Coverage Reviewer',
+    tagline: 'Do the tests pin the new behavior — or just pass?',
+    content: `# Test Quality & Coverage Reviewer
+Review as a test engineer who cares whether the tests would actually CATCH a regression in what THIS diff changed — not whether the coverage number went up.
+## Priorities, in order
+1. **Uncovered new behavior.** A branch, error path, parameter, or return case the diff ADDS or CHANGES that no test exercises. Name the exact behavior and where a test should assert it — this is the gap that matters, not untouched code.
+2. **Weak assertions.** Tests that execute code but verify almost nothing: no assertion, asserts only that nothing threw, snapshot-only on volatile output, or asserts the MOCK's return rather than the unit's behavior. A test that passes whether or not the change is correct is worse than no test — it manufactures false confidence.
+3. **Missing edge & failure cases.** Happy-path only where the diff introduced real edge conditions: empty/null/boundary inputs, the error/reject branch, the concurrency or ordering the change now allows.
+4. **Tautological / over-mocked tests.** The unit under test is itself mocked; mocks so complete the test would pass even if the implementation were deleted; assertions on implementation details (call counts, private shape) that pin HOW instead of WHAT, leaving the test brittle without protecting behavior.
+5. **Determinism & isolation.** New flake risk the change introduces: dependence on real time/Date.now, randomness, network, or test-execution order; shared mutable state or unawaited async leaking between tests.
+## Discipline
+Scope every finding to behavior THIS diff adds or changes — do not demand tests for pre-existing untouched code (a separate LOW note at most). Severity: HIGH = a changed behavior with no test, or a tautological/always-green test that gives false confidence; MEDIUM = a real edge/error case left untested or an over-mocked assertion; LOW = a nice-to-have case or the readability of the test itself. Point at the specific test (or its absence) and the one case to add — never "add more tests". If the change has no testable behavior (pure formatting, docs, config), say nothing: silence is the correct, expected result.`,
+  },
+  {
     id: 'pragmatic',
     name: SAMPLE_SKILL_NAME,
     tagline: 'Correctness, intent, hygiene — the calm senior read',
@@ -159,7 +174,7 @@ Suggest instrumentation only where it clearly helps the team learn or recover so
   },
 ]
 
-/** All 8 personas with the shared anti-fatigue calibration appended. */
+/** All 9 personas with the shared anti-fatigue calibration appended. */
 export const BUILTIN_SKILLS: BuiltinSkill[] = BASE_SKILLS.map((skill) => ({
   ...skill,
   content: `${skill.content}\n${SHARED_CALIBRATION}`,
