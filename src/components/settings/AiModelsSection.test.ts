@@ -82,20 +82,23 @@ describe('AiModelsSection — provider context cards (layout)', () => {
     }
   })
 
-  it('renders an OpenRouter card whose model picker is the searchable combobox (not a flat select)', () => {
+  it('renders an OpenRouter card whose model picker is the two-column combobox (not a flat select)', () => {
     render(AiModelsSection)
     const card = within(providerCard('OpenRouter'))
     expect(card.getByRole('radio', { name: 'OpenRouter' })).toBeInTheDocument()
     expect(card.getByLabelText(/openrouter api key/i)).toBeInTheDocument()
-    // The OpenRouter model control is a role=combobox text input, NOT a <select>.
-    const combobox = card.getByRole('combobox', { name: /openrouter model/i }) as HTMLInputElement
-    expect(combobox.tagName).toBe('INPUT')
-    // Its placeholder reflects the current (default) selection — a namespaced slug's label.
+    // The OpenRouter model control is a <button> trigger, NOT a <select> or text input.
+    const trigger = card.getByRole('button', { name: /openrouter model/i }) as HTMLButtonElement
+    expect(trigger.tagName).toBe('BUTTON')
+    expect(trigger).toHaveAttribute('aria-haspopup', 'listbox')
+    // Its label reflects the current (default) selection — once, no overlay duplication.
     const or = getProvider('openrouter')!
     const def = or.models.find((m) => m.id === or.defaultModel)!
-    expect(combobox.placeholder).toBe(def.label)
-    // The flat <select> is gone for this card.
-    expect(card.queryByRole('listbox')).toBeNull() // closed by default
+    expect(trigger).toHaveTextContent(def.label)
+    expect(card.getAllByText(def.label)).toHaveLength(1)
+    // The panel is closed by default — no listbox or search field on screen.
+    expect(card.queryByRole('listbox')).toBeNull()
+    expect(card.queryByRole('searchbox')).toBeNull()
   })
 
   it('the ACTIVE provider card is emphasized (data-active) and inactive cards are not', () => {
@@ -118,12 +121,18 @@ describe('AiModelsSection — OpenRouter searchable combobox (adaptive picker)',
   it('selecting an OpenRouter model via the combobox persists aiModel when OpenRouter is active', async () => {
     setAiProvider('openrouter')
     render(AiModelsSection)
-    const combobox = within(providerCard('OpenRouter')).getByRole('combobox', { name: /openrouter model/i })
-    await userEvent.click(combobox)
-    // Empty query → featured options are listed; pick a featured flagship.
+    const trigger = within(providerCard('OpenRouter')).getByRole('button', { name: /openrouter model/i })
+    await userEvent.click(trigger)
+    // Reach a specific featured model by searching its slug (works regardless of
+    // the default lab). Pick one whose label isn't a prefix of another model's
+    // label (e.g. "…Opus 4.8" is a prefix of "…Opus 4.8 (Fast)") so the search
+    // yields exactly one option.
     const or = getProvider('openrouter')!
-    const featured = or.models.find((m) => m.featured)!
-    const option = await screen.findByRole('option', { name: new RegExp(featured.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })
+    const featured = or.models.find(
+      (m) => m.featured && !or.models.some((o) => o.id !== m.id && o.label.startsWith(m.label)),
+    )!
+    await userEvent.type(screen.getByRole('searchbox', { name: /search all/i }), featured.id)
+    const option = await screen.findByRole('option', { name: new RegExp(featured.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) })
     await userEvent.click(option)
     expect(getSettings().aiModel).toBe(featured.id)
   })
@@ -131,14 +140,17 @@ describe('AiModelsSection — OpenRouter searchable combobox (adaptive picker)',
   it('typing filters the OpenRouter list and selecting the match updates aiModel', async () => {
     setAiProvider('openrouter')
     render(AiModelsSection)
-    const combobox = within(providerCard('OpenRouter')).getByRole('combobox', { name: /openrouter model/i })
+    const trigger = within(providerCard('OpenRouter')).getByRole('button', { name: /openrouter model/i })
     const or = getProvider('openrouter')!
-    // Find any model whose slug contains a distinctive token.
-    const target = or.models.find((m) => m.id.includes('gpt-5'))
+    // Find a model whose slug contains a distinctive token AND whose label isn't
+    // a prefix of a sibling's (so searching it yields exactly one option).
+    const target = or.models.find(
+      (m) => m.id.includes('gpt-5') && !or.models.some((o) => o.id !== m.id && o.label.startsWith(m.label)),
+    )
     if (target) {
-      await userEvent.click(combobox)
-      await userEvent.type(combobox, 'gpt-5')
-      const option = await screen.findByRole('option', { name: new RegExp(target.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })
+      await userEvent.click(trigger)
+      await userEvent.type(screen.getByRole('searchbox', { name: /search all/i }), target.id)
+      const option = await screen.findByRole('option', { name: new RegExp(target.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) })
       await userEvent.click(option)
       expect(getSettings().aiModel).toBe(target.id)
     }
