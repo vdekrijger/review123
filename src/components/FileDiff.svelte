@@ -357,11 +357,20 @@
   // byte-identical to `viewed && !manuallyExpanded`.
   const collapsed = $derived(viewed && !manuallyExpanded && (!forceExpanded || userMarkedViewed))
 
+  // A viewed file in Files mode (not Story's forceExpanded) can be collapsed AND
+  // re-expanded by clicking its header — the click toggles both ways. Story mode
+  // owns expansion of the narrated diff, so we don't hijack its header clicks.
+  const canToggleCollapse = $derived(viewed && !forceExpanded)
+
   function handleHeaderClick() {
     if (collapsed) {
       manuallyExpanded = true
       // viewed-collapsed is the only collapse origin that also hides the diff body
       track('file_expanded', { origin: 'viewed' })
+    } else if (canToggleCollapse) {
+      // Expanded-after-viewing → clicking the header re-collapses it (previously
+      // a one-way toggle left a viewed file stuck open with no way back).
+      manuallyExpanded = false
     }
   }
 
@@ -634,7 +643,7 @@
 <article class="file-diff" class:is-collapsed={collapsed} class:test-dim={isTest && testFileDisplay === 'dim'} class:test-highlight={isTest && testFileDisplay === 'highlight'}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <header onclick={handleHeaderClick} class:clickable={collapsed} class:sticky-header={sticky} class:test-highlight={isTest && testFileDisplay === 'highlight'}>
+  <header onclick={handleHeaderClick} class:clickable={collapsed || canToggleCollapse} class:sticky-header={sticky} class:test-highlight={isTest && testFileDisplay === 'highlight'}>
     <code>{filename}</code>
     <div class="header-right">
       {#if changedSinceViewed}
