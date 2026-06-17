@@ -226,6 +226,25 @@ describe('BUILTIN_SKILLS — shared calibration (v10)', () => {
     expect(SHARED_CALIBRATION).toMatch(/never inflate/i)
   })
 
+  it('encodes the absence-claim fail-closed rule (v23)', async () => {
+    const { SHARED_CALIBRATION } = await import('./builtinSkills')
+    expect(SHARED_CALIBRATION).toMatch(/Absence\/existence claims/i)
+    expect(SHARED_CALIBRATION).toMatch(/no test verifies/i)
+    expect(SHARED_CALIBRATION).toMatch(/not called anywhere/i)
+    expect(SHARED_CALIBRATION).toMatch(/Never ASSERT an absence as a defect/i)
+    // The concrete failure mode + the question/couldn't-verify escape hatch.
+    expect(SHARED_CALIBRATION).toMatch(/makes the finding WRONG/i)
+    expect(SHARED_CALIBRATION).toMatch(/not evidence it is absent/i)
+  })
+
+  it('the absence-claim rule flows to every built-in persona (appended at build time)', () => {
+    for (const skill of BUILTIN_SKILLS) {
+      expect(skill.content, `skill "${skill.name}" missing absence rule`).toMatch(
+        /Absence\/existence claims/i,
+      )
+    }
+  })
+
   it('per-persona priorities remain intact after the append (not rewrites)', () => {
     const security = BUILTIN_SKILLS.find((s) => s.id === 'security')
     expect(security?.content).toContain('Injection surfaces')

@@ -5,7 +5,10 @@ import {
   isDecisiveVote,
   validateVerifierResponse,
   buildVerifyPrompt,
+  classifyClaim,
+  COMPREHENSIVE_VERIFY_FRAMING,
   type VerifyFn,
+  type ToolCheckFn,
   type VerifiableFinding,
 } from './crossVerify'
 import type { ProviderConfig } from '../llm/llm'
@@ -75,6 +78,24 @@ describe('aggregateFinding — threshold', () => {
     ])
     expect(v.surfaced).toBe(true)
     expect(v.confirmedBy).toBe(2)
+  })
+
+  it('absence floor: a needs-external finding that votes would surface is DEMOTED unless tool-confirmed', () => {
+    const votes = [{ provider: 'openai', verdict: 'confirm' as const, reason: 'yes' }]
+    // Vote threshold alone surfaces (generator + confirm).
+    expect(aggregateFinding('deepseek', votes).surfaced).toBe(true)
+    // needs-external + NOT tool-confirmed → demoted.
+    expect(
+      aggregateFinding('deepseek', votes, undefined, { claimType: 'needs-external', toolConfirmed: false }).surfaced,
+    ).toBe(false)
+    // needs-external + tool-confirmed → surfaces (absence positively verified).
+    expect(
+      aggregateFinding('deepseek', votes, undefined, { claimType: 'needs-external', toolConfirmed: true }).surfaced,
+    ).toBe(true)
+    // in-diff claimType is a pure no-op (votes decide).
+    expect(
+      aggregateFinding('deepseek', votes, undefined, { claimType: 'in-diff', toolConfirmed: false }).surfaced,
+    ).toBe(true)
   })
 })
 
@@ -514,5 +535,160 @@ describe('buildVerifyPrompt — comprehensive framing', () => {
     expect(seenFindingCounts).toEqual([1, 1])
     expect(out.verifierImpact[0]).not.toHaveProperty('lens')
     expect(out.verifierImpact[1]).not.toHaveProperty('lens')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Part A — absence/external-evidence verifier framing (refute-by-default)
+// ---------------------------------------------------------------------------
+
+describe('buildVerifyPrompt — absence-claim refute-by-default (Part A)', () => {
+  it('the comprehensive framing makes absence/external-evidence claims refute-by-default', () => {
+    expect(COMPREHENSIVE_VERIFY_FRAMING).toMatch(/ABSENCE \/ EXTERNAL-EVIDENCE CLAIMS/i)
+    expect(COMPREHENSIVE_VERIFY_FRAMING).toMatch(/REFUTE-BY-DEFAULT/i)
+    expect(COMPREHENSIVE_VERIFY_FRAMING).toMatch(/burden of proof is on the finding/i)
+    expect(COMPREHENSIVE_VERIFY_FRAMING).toMatch(/NEVER "confirm"/i)
+  })
+
+  it('the verify system prompt lists the absence case as NOT confirmable', () => {
+    const { system } = buildVerifyPrompt([finding('f1')])
+    expect(system).toMatch(/asserts an ABSENCE/i)
+    expect(system).toMatch(/no test, not called, not handled\/validated/i)
+    expect(system).toMatch(/never "confirm"/i)
+  })
+
+  it('an unverifiable absence claim with no supporting context yields refute (mocked verifier)', async () => {
+    // A verifier that READS the framing returns refute for an absence claim with
+    // no supporting context — modelled by the mock honouring the refute-by-default
+    // instruction. Two refutes demote the finding.
+    const absence: VerifiableFinding = {
+      id: 'a1',
+      path: 'src/foo.ts',
+      line: 10,
+      severity: 'high',
+      body: 'no test verifies fooBar — coverage is missing',
+    }
+    const verify: VerifyFn = async () => ({
+      result: { verdicts: [{ id: 'a1', verdict: 'refute', reason: 'cannot confirm absence from the diff' }] },
+    })
+    const out = await crossVerify([absence], 'deepseek', [cfg('openai'), cfg('anthropic')], verify)
+    expect(out.byId.get('a1')!.surfaced).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Part B — claim classification
+// ---------------------------------------------------------------------------
+
+describe('classifyClaim — needs-external vs in-diff', () => {
+  it.each([
+    'no test verifies fooBar',
+    'fooBar is not tested anywhere',
+    'this branch is untested',
+    'missing a unit test for the error path',
+    'no test covers the rejection case',
+    'helper() is not called anywhere',
+    'this export is never used',
+    'the unused parameter foo',
+    'no callers of this function remain',
+    'the error is not handled',
+    'input is not validated before use',
+    'missing a guard for the null case',
+    'missing an index on user_id',
+    'the assertion will fail unless a custom exception handler not visible in the diff rewrites it',
+  ])('classifies %j as needs-external', (body) => {
+    expect(classifyClaim(body)).toBe('needs-external')
+  })
+
+  it.each([
+    'off-by-one: reads items[length] which is undefined',
+    'this validates the input and handles null correctly',
+    'the test asserts the returned value',
+    'renames the variable for clarity',
+    'this handler processes the request body',
+  ])('classifies ordinary diff-local finding %j as in-diff', (body) => {
+    expect(classifyClaim(body)).toBe('in-diff')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Part B — tool-backed verification + demotion in crossVerify
+// ---------------------------------------------------------------------------
+
+describe('crossVerify — tool-backed absence verification + demotion', () => {
+  const generator = 'deepseek'
+  const confirmAll: VerifyFn = async () => ({
+    result: { verdicts: [{ id: 'a1', verdict: 'confirm', reason: 'looks real' }] },
+  })
+
+  function absenceFinding(): VerifiableFinding {
+    return { id: 'a1', path: 'src/foo.ts', line: 10, severity: 'high', body: 'no test covers fooBar' }
+  }
+
+  it('needs-external finding NOT tool-confirmed is DEMOTED even when verifiers confirm', async () => {
+    // No toolCheck → the absence is never positively verified → demoted (Part A floor).
+    const out = await crossVerify([absenceFinding()], generator, [cfg('openai'), cfg('anthropic')], confirmAll)
+    expect(out.byId.get('a1')!.surfaced).toBe(false)
+  })
+
+  it('tool check that FINDS a matching test → REFUTED/demoted', async () => {
+    const toolCheck: ToolCheckFn = vi.fn(async (): Promise<'refute'> => 'refute')
+    const out = await crossVerify(
+      [absenceFinding()],
+      generator,
+      [cfg('openai'), cfg('anthropic')],
+      confirmAll,
+      undefined,
+      toolCheck,
+    )
+    expect(toolCheck).toHaveBeenCalledTimes(1)
+    expect(out.byId.get('a1')!.surfaced).toBe(false)
+  })
+
+  it('tool check that finds NOTHING (confirm) → absence verified → surfaces', async () => {
+    const toolCheck: ToolCheckFn = vi.fn(async (): Promise<'confirm'> => 'confirm')
+    const out = await crossVerify(
+      [absenceFinding()],
+      generator,
+      [cfg('openai'), cfg('anthropic')],
+      confirmAll,
+      undefined,
+      toolCheck,
+    )
+    expect(out.byId.get('a1')!.surfaced).toBe(true)
+  })
+
+  it('a throwing tool check is treated as uncertain → demoted (never blocks)', async () => {
+    const toolCheck: ToolCheckFn = vi.fn(async () => {
+      throw new Error('budget gone')
+    })
+    const out = await crossVerify(
+      [absenceFinding()],
+      generator,
+      [cfg('openai'), cfg('anthropic')],
+      confirmAll,
+      undefined,
+      toolCheck,
+    )
+    expect(out.byId.get('a1')!.surfaced).toBe(false)
+  })
+
+  it('an in-diff finding never invokes the tool check and still surfaces when confirmed', async () => {
+    const inDiff: VerifiableFinding = { id: 'a1', path: 'src/foo.ts', line: 10, severity: 'high', body: 'off-by-one reads items[length]' }
+    const toolCheck: ToolCheckFn = vi.fn(async (): Promise<'refute'> => 'refute')
+    const out = await crossVerify([inDiff], generator, [cfg('openai'), cfg('anthropic')], confirmAll, undefined, toolCheck)
+    expect(toolCheck).not.toHaveBeenCalled()
+    expect(out.byId.get('a1')!.surfaced).toBe(true)
+  })
+
+  it('honours an explicit claimType tag over body heuristics', async () => {
+    // Body looks in-diff, but the generator (or caller) tagged it needs-external.
+    const tagged: VerifiableFinding = {
+      id: 'a1', path: 'src/foo.ts', line: 10, severity: 'high',
+      body: 'this looks ordinary', claimType: 'needs-external',
+    }
+    const out = await crossVerify([tagged], generator, [cfg('openai'), cfg('anthropic')], confirmAll)
+    // needs-external + no tool confirm → demoted.
+    expect(out.byId.get('a1')!.surfaced).toBe(false)
   })
 })
