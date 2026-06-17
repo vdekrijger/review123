@@ -92,6 +92,39 @@ export function formatModelUsageLabel(
   return `${costPart} · ${tokensPart}`
 }
 
+/**
+ * Aggregate "This review used … total" label that RECONCILES with the per-model
+ * rows. The plain formatUsageLabel prices ALL tokens at the ACTIVE model's rate,
+ * which is WRONG when the review ran multiple models (a cheap active model made
+ * the headline read far below the sum of the rows). This prices each row by ITS
+ * OWN model and sums them, so the headline $ equals what you get adding the
+ * table up. Token count comes from totalUsage (the reconciled total). Rows with
+ * no pricing on file contribute 0 to the $ (the row itself shows "$—"), so the
+ * sum is a lower bound in that rare case — honest, never fabricated.
+ */
+export function formatBreakdownTotalLabel(
+  rows: { providerId: string; modelId: string; total?: LlmUsage }[],
+  totalUsage: LlmUsage | undefined,
+): string | null {
+  const totalTokens = totalUsage?.total_tokens
+  if (!Number.isFinite(totalTokens) || (totalTokens ?? 0) <= 0) return null
+  let costSum = 0
+  let anyPriced = false
+  for (const r of rows) {
+    if (!r.total) continue
+    const provider = getProvider(r.providerId as never)
+    const model = provider ? getModelDef(provider, r.modelId) : undefined
+    const cost = model
+      ? estimateCostUsd(model, r.total.prompt_tokens, r.total.completion_tokens)
+      : null
+    if (cost === null) continue
+    costSum += cost
+    anyPriced = true
+  }
+  const tokensPart = `${formatTokens(totalTokens as number)} tokens`
+  return anyPriced ? `${formatCostUsd(costSum)} · ${tokensPart}` : tokensPart
+}
+
 /** Add two optional usage records; undefined acts as the zero element. */
 export function addUsage(
   a: LlmUsage | undefined,
