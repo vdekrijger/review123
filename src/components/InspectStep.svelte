@@ -220,6 +220,21 @@
     }
   }
 
+  // Mark viewed + auto-advance (Files mode). When the user CHECKS a file viewed
+  // it collapses, shifting everything below up and leaving them lost in the list.
+  // So on a CHECK (not an uncheck) we scroll the NEXT file's card into view to
+  // keep their place. scrollToFileCard rAF-retries until the post-collapse layout
+  // settles, so no explicit tick() is needed. No next file (last one) → no-op.
+  function handleToggleViewed(file: PrFile): void {
+    const wasViewed = viewedStore?.isViewed(file.filename, file.patch) ?? false
+    viewedStore?.toggle(file.filename, file.patch)
+    if (!wasViewed) {
+      const idx = orderedFiles.findIndex((f) => f.filename === file.filename)
+      const next = orderedFiles[idx + 1]
+      if (next) scrollToFileCard(next.filename)
+    }
+  }
+
   // Generated-file predicate (path + loaded contents). Reused for ordering and
   // for the per-file `generated` chip / focus-mode dimming inside FileDiff.
   function fileIsGenerated(f: PrFile): boolean {
@@ -1202,7 +1217,7 @@
             onRemoveDraft={(line, side) => handleRemoveDraft(file.filename, line, side)}
             viewed={viewedStore?.isViewed(file.filename, file.patch) ?? false}
             changedSinceViewed={viewedStore?.changedSinceViewed(file.filename, file.patch) ?? false}
-            onToggleViewed={() => viewedStore?.toggle(file.filename, file.patch)}
+            onToggleViewed={() => handleToggleViewed(file)}
             contents={contentsMap?.get(file.filename)}
             {askFn}
             {askDisabledReason}
