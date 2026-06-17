@@ -39,6 +39,7 @@
  */
 
 import { activeLlmConfig } from './config'
+import { llmConcurrencyGate } from './concurrencyGate'
 import type { LlmProviderDef, LlmModelDef } from './providers'
 import {
   LlmError,
@@ -145,20 +146,26 @@ async function postJson(
   body: Record<string, unknown>,
   signal: AbortSignal | undefined,
 ): Promise<unknown> {
-  const effectiveSignal = signal ?? AbortSignal.timeout(60_000)
-  let res: Response
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: effectiveSignal,
-    })
-  } catch (err) {
-    mapFetchError(err)
-  }
-  if (!res!.ok) await mapHttpError(res!)
-  return res!.json() as Promise<unknown>
+  // Each deep-mode tool-loop round is a separate non-streaming HTTP call, so it
+  // acquires/releases a global gate slot individually (the loop's rounds are
+  // sequential, but they coexist with all the OTHER concurrent task/reviewer/
+  // verifier calls — the gate caps the union of them).
+  return llmConcurrencyGate.run(async () => {
+    const effectiveSignal = signal ?? AbortSignal.timeout(60_000)
+    let res: Response
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: effectiveSignal,
+      })
+    } catch (err) {
+      mapFetchError(err)
+    }
+    if (!res!.ok) await mapHttpError(res!)
+    return res!.json() as Promise<unknown>
+  })
 }
 
 /**
