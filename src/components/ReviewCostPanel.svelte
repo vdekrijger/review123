@@ -19,7 +19,7 @@
    * per-reviewer tables). Display-only — no network, no analytics.
    */
   import { settingsState } from '../lib/settings/settingsState.svelte'
-  import { formatUsageLabel, formatModelUsageLabel } from '../lib/ai/tokenCost'
+  import { formatUsageLabel, formatModelUsageLabel, formatBreakdownTotalLabel } from '../lib/ai/tokenCost'
   import { formatGeneratorImpact, formatVerifierImpact } from '../lib/ai/modelImpact'
   import type { ModelCostRow } from '../lib/ai/modelCostBreakdown'
   import type { LlmUsage } from '../lib/llm/llm'
@@ -35,8 +35,18 @@
 
   const showCost = $derived(settingsState.current.showTokenCost)
   // Total token label, only when the opt-in cost toggle is on (mirrors
-  // UnderstandStep). Null → no headline (don't fabricate).
-  const totalUsageLabel = $derived(showCost ? formatUsageLabel(totalUsage) : null)
+  // UnderstandStep). Null → no headline (don't fabricate). When a per-model
+  // breakdown exists, price the headline by SUMMING each row's own-model cost so
+  // it RECONCILES with the table — otherwise a cheap active model made the
+  // headline read far below the rows. With no breakdown, fall back to the
+  // active-model estimate (single-model reviews price correctly that way).
+  const totalUsageLabel = $derived(
+    !showCost
+      ? null
+      : modelCostBreakdown.length > 0
+        ? formatBreakdownTotalLabel(modelCostBreakdown, totalUsage)
+        : formatUsageLabel(totalUsage),
+  )
 
   // Session-only expand state, keyed by row identity. Collapsed by default.
   let expanded = $state<Record<string, boolean>>({})
@@ -98,6 +108,11 @@
           </li>
         {/each}
       </ul>
+      <p class="review-cost-legend">
+        <strong>c</strong> = confirms · <strong>r</strong> = refutes ·
+        <em>decisive</em> = the vote changed whether a finding surfaced ·
+        <em>surfaced</em> = findings kept after cross-checking
+      </p>
     {/if}
   </section>
 {/if}
@@ -123,6 +138,14 @@
     letter-spacing: 0.04em;
     color: var(--text-muted);
   }
+  .review-cost-legend {
+    margin: 0.5rem 0 0;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text-muted);
+  }
+  .review-cost-legend strong { color: var(--text); font-weight: 600; }
+  .review-cost-legend em { font-style: normal; color: var(--text); }
   .model-rows {
     list-style: none;
     margin: 0;

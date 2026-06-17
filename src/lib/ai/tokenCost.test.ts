@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { formatTokens, formatCostUsd, formatUsageLabel, formatModelUsageLabel, addUsage, NO_PRICING_MARKER } from './tokenCost'
-import { estimateCostUsd } from '../llm/providers'
+import { formatTokens, formatCostUsd, formatUsageLabel, formatModelUsageLabel, formatBreakdownTotalLabel, addUsage, NO_PRICING_MARKER } from './tokenCost'
+import { estimateCostUsd, getProvider, getModelDef } from '../llm/providers'
 import { setAiProvider, setAiModel } from '../settings/settings'
 import type { LlmUsage } from '../llm/llm'
 
@@ -134,5 +134,37 @@ describe('addUsage (per-review accumulation)', () => {
     let total: LlmUsage | undefined
     for (const t of tasks) total = addUsage(total, t)
     expect(total).toEqual({ prompt_tokens: 3500, completion_tokens: 700, total_tokens: 4200 })
+  })
+})
+
+describe('formatBreakdownTotalLabel (reconciles by summing per-model cost)', () => {
+  function modelCost(providerId: string, modelId: string, p: number, c: number): number {
+    const prov = getProvider(providerId as never)!
+    const m = getModelDef(prov, modelId)!
+    return estimateCostUsd(m, p, c)!
+  }
+
+  it('sums each row priced by ITS OWN model (not the active model)', () => {
+    const rows = [
+      { providerId: 'deepseek', modelId: 'deepseek-v4-pro', total: usage(1_000_000, 500_000) },
+      { providerId: 'deepseek', modelId: 'deepseek-v4-flash', total: usage(800_000, 200_000) },
+    ]
+    const total = usage(1_800_000, 700_000)
+    const expected =
+      modelCost('deepseek', 'deepseek-v4-pro', 1_000_000, 500_000) +
+      modelCost('deepseek', 'deepseek-v4-flash', 800_000, 200_000)
+    expect(formatBreakdownTotalLabel(rows, total)).toBe(
+      `${formatCostUsd(expected)} · ${formatTokens(2_500_000)} tokens`,
+    )
+  })
+
+  it('returns null when there is no total usage', () => {
+    expect(formatBreakdownTotalLabel([], undefined)).toBeNull()
+    expect(formatBreakdownTotalLabel([], usage(0, 0))).toBeNull()
+  })
+
+  it('falls back to tokens-only when no row has pricing', () => {
+    const rows = [{ providerId: 'nope', modelId: 'unknown-model', total: usage(1000, 500) }]
+    expect(formatBreakdownTotalLabel(rows, usage(1000, 500))).toBe(`${formatTokens(1500)} tokens`)
   })
 })
