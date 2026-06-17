@@ -11,6 +11,7 @@
   import { PROVIDERS, getProvider, getModelDef, type LlmProviderId } from '../../lib/llm/providers'
   import { llmTestConnection, LlmError } from '../../lib/llm/llm'
   import { activeProviderHasKey, resolvePanel } from '../../lib/llm/config'
+  import { providerSupportsBalance, fetchProviderBalance, formatBalance, type ProviderBalance } from '../../lib/llm/balance'
   import { track } from '../../lib/analytics/analytics'
   import SecretInput from './SecretInput.svelte'
   import Spinner from '../Spinner.svelte'
@@ -277,6 +278,9 @@
       testStates[id] = { status: 'error', message: (e as Error).message }
       return
     }
+    // Refresh the credits readout after a save (capability-gated; no-op for
+    // providers without a balance endpoint, or when the key was cleared).
+    void refreshBalance(id)
     try {
       // Only pass the selected model when testing the active provider;
       // otherwise the provider's default model is pinged.
@@ -288,6 +292,46 @@
       testStates[id] = { status: 'error', message }
     }
   }
+
+  // -------------------------------------------------------------------------
+  // Credits remaining (capability-gated). Shown ONLY for providers that expose
+  // a key-level balance endpoint (DeepSeek today) AND have a key configured.
+  // Fetched DIRECT from the provider (no proxy — same permissive CORS as the
+  // chat endpoint) and degrades to nothing on any failure. Keystroke-safe:
+  // fetched on mount and after a save/refresh-click, NEVER on every keypress.
+  // -------------------------------------------------------------------------
+  type BalanceState = { status: 'idle' | 'loading' | 'ok' | 'empty'; balance?: ProviderBalance }
+  let balanceStates = $state<Record<LlmProviderId, BalanceState>>({
+    deepseek: { status: 'idle' },
+    openai: { status: 'idle' },
+    anthropic: { status: 'idle' },
+    gemini: { status: 'idle' },
+  })
+
+  /** The provider's saved key (the source of truth for whether to fetch). */
+  function savedKey(id: LlmProviderId): string {
+    return getSettings()[KEY_FIELD[id]] ?? ''
+  }
+
+  /** Re-fetch one provider's balance. No-op for unsupported / key-less providers. */
+  async function refreshBalance(id: LlmProviderId): Promise<void> {
+    const key = savedKey(id).trim()
+    if (!providerSupportsBalance(id) || !key) {
+      balanceStates[id] = { status: 'idle' }
+      return
+    }
+    balanceStates[id] = { status: 'loading' }
+    const balance = await fetchProviderBalance(id, key)
+    balanceStates[id] = balance ? { status: 'ok', balance } : { status: 'empty' }
+  }
+
+  // Initial load: fetch the balance once per supported, keyed provider on mount
+  // (not reactive to keystrokes — only the saved key matters here).
+  $effect(() => {
+    for (const p of PROVIDERS) {
+      if (providerSupportsBalance(p.id) && savedKey(p.id).trim()) void refreshBalance(p.id)
+    }
+  })
 </script>
 
 <section id="ai-models" aria-label="AI models">
@@ -344,6 +388,25 @@
             <span class="test-error" role="alert">{testStates[p.id].message}</span>
           {/if}
         </div>
+
+        {#if providerSupportsBalance(p.id) && balanceStates[p.id].status !== 'idle'}
+          <div class="balance-row" data-testid="balance-{p.id}">
+            {#if balanceStates[p.id].status === 'loading'}
+              <span class="balance-loading">Credits: loading…</span>
+            {:else if balanceStates[p.id].status === 'ok' && balanceStates[p.id].balance}
+              <span class="balance-amount">Credits: {formatBalance(balanceStates[p.id].balance!)}</span>
+            {:else}
+              <span class="balance-empty" title="Couldn't load the balance — your key still works for reviews.">Credits: —</span>
+            {/if}
+            <button
+              type="button"
+              class="balance-refresh"
+              aria-label="Refresh {p.displayName} credits"
+              disabled={balanceStates[p.id].status === 'loading'}
+              onclick={() => refreshBalance(p.id)}
+            >Refresh</button>
+          </div>
+        {/if}
 
         <p class="privacy-line">
           {#if p.id === 'openai'}
@@ -675,6 +738,35 @@
   .test-error {
     font-size: 0.85em;
     color: #cf222e;
+  }
+
+  /* Capability-gated "credits remaining" readout — muted, unobtrusive. */
+  .balance-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.4rem;
+    font-size: 0.82em;
+    color: var(--text-muted);
+  }
+
+  .balance-amount {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .balance-refresh {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 0.95em;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .balance-refresh:disabled {
+    color: var(--text-muted);
+    cursor: default;
   }
 
   .privacy-line {

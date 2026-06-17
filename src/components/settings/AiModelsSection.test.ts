@@ -22,19 +22,29 @@ import { getSettings, saveTokens, setAiProvider, setAiModel, setAiPanel, type Pa
 import { _resetSettingsStateForTest } from '../../lib/settings/settingsState.svelte'
 import { PROVIDERS, getProvider } from '../../lib/llm/providers'
 import { llmTestConnection, LlmError } from '../../lib/llm/llm'
+import { fetchProviderBalance } from '../../lib/llm/balance'
 
 vi.mock('../../lib/llm/llm', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/llm/llm')>()
   return { ...actual, llmTestConnection: vi.fn() }
 })
 
+// Mock only the network fetch; keep the real capability gate + formatter so the
+// "only DeepSeek shows the line" behaviour is exercised end-to-end.
+vi.mock('../../lib/llm/balance', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/llm/balance')>()
+  return { ...actual, fetchProviderBalance: vi.fn() }
+})
+
 const llmTestConnectionMock = vi.mocked(llmTestConnection)
+const fetchProviderBalanceMock = vi.mocked(fetchProviderBalance)
 
 beforeEach(() => {
   localStorage.clear()
   _resetSettingsStateForTest()
   vi.clearAllMocks()
   llmTestConnectionMock.mockResolvedValue(undefined)
+  fetchProviderBalanceMock.mockResolvedValue(null)
 })
 
 /** The provider's context card (closest .provider-card around its radio). */
@@ -686,5 +696,73 @@ describe('AiModelsSection — unified model panel (Plan P)', () => {
     expect(note).toBeInTheDocument()
     expect(note.textContent).toMatch(/more models means more tokens/i)
     expect(note.textContent).toMatch(/per-model impact/i)
+  })
+})
+
+describe('AiModelsSection — credits remaining (capability-gated balance)', () => {
+  /** The credits row inside a provider's card, or null when absent. */
+  function balanceRow(displayName: string): HTMLElement | null {
+    return providerCard(displayName).querySelector('.balance-row')
+  }
+
+  it('renders the credits line for DeepSeek when a key is set', async () => {
+    saveTokens({ deepseekKey: 'sk-deepseek-test' })
+    _resetSettingsStateForTest()
+    fetchProviderBalanceMock.mockResolvedValue({ currency: 'USD', total: 110, granted: 10, toppedUp: 100 })
+    render(AiModelsSection)
+    await waitFor(() => expect(screen.getByText(/credits:\s*\$110\.00/i)).toBeInTheDocument())
+    expect(fetchProviderBalanceMock).toHaveBeenCalledWith('deepseek', 'sk-deepseek-test')
+  })
+
+  it('does NOT render a credits line for OpenAI / Anthropic / Gemini even with keys set', async () => {
+    saveTokens({ openaiKey: 'sk-o', anthropicKey: 'sk-ant', geminiKey: 'AIza-g' })
+    _resetSettingsStateForTest()
+    fetchProviderBalanceMock.mockResolvedValue({ currency: 'USD', total: 50 })
+    render(AiModelsSection)
+    // The unsupported providers are never even queried…
+    expect(fetchProviderBalanceMock).not.toHaveBeenCalledWith('openai', expect.anything())
+    expect(fetchProviderBalanceMock).not.toHaveBeenCalledWith('anthropic', expect.anything())
+    expect(fetchProviderBalanceMock).not.toHaveBeenCalledWith('gemini', expect.anything())
+    // …and their cards carry no credits row.
+    expect(balanceRow('OpenAI')).toBeNull()
+    expect(balanceRow('Anthropic')).toBeNull()
+    expect(balanceRow('Gemini')).toBeNull()
+  })
+
+  it('does NOT render the DeepSeek credits line when no DeepSeek key is set', async () => {
+    render(AiModelsSection)
+    expect(fetchProviderBalanceMock).not.toHaveBeenCalled()
+    expect(balanceRow('DeepSeek')).toBeNull()
+  })
+
+  it('shows an unobtrusive "—" (not an error) when the balance fetch yields nothing', async () => {
+    saveTokens({ deepseekKey: 'sk-deepseek-test' })
+    _resetSettingsStateForTest()
+    fetchProviderBalanceMock.mockResolvedValue(null)
+    render(AiModelsSection)
+    await waitFor(() => expect(screen.getByText(/credits:\s*—/i)).toBeInTheDocument())
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('the Refresh control re-invokes the fetch and shows the in-flight state', async () => {
+    saveTokens({ deepseekKey: 'sk-deepseek-test' })
+    _resetSettingsStateForTest()
+    fetchProviderBalanceMock.mockResolvedValue({ currency: 'USD', total: 110 })
+    render(AiModelsSection)
+    await waitFor(() => expect(screen.getByText(/credits:\s*\$110\.00/i)).toBeInTheDocument())
+    const initialCalls = fetchProviderBalanceMock.mock.calls.length
+
+    // Gate the next fetch so the loading state is observable.
+    let resolveFetch: (v: { currency: string; total: number } | null) => void = () => {}
+    fetchProviderBalanceMock.mockImplementationOnce(
+      () => new Promise((r) => { resolveFetch = r }),
+    )
+    await userEvent.click(screen.getByRole('button', { name: /refresh deepseek credits/i }))
+    expect(fetchProviderBalanceMock.mock.calls.length).toBe(initialCalls + 1)
+    expect(screen.getByText(/credits:\s*loading…/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /refresh deepseek credits/i })).toBeDisabled()
+
+    resolveFetch({ currency: 'USD', total: 95 })
+    await waitFor(() => expect(screen.getByText(/credits:\s*\$95\.00/i)).toBeInTheDocument())
   })
 })
