@@ -229,6 +229,12 @@ export function buildOpenAICompatHeaders(key: string, providerId: string): Recor
   if (providerId === 'openai') {
     headers['x-user-openai-key'] = key
   }
+  // OpenRouter's recommended attribution headers — harmless, improve their
+  // dashboard attribution. Both are ASCII so they never break header encoding.
+  if (providerId === 'openrouter') {
+    headers['HTTP-Referer'] = 'https://review123.dev'
+    headers['X-Title'] = 'Review 1-2-3'
+  }
   return headers
 }
 

@@ -282,7 +282,7 @@ test('ai models: switch to OpenAI card → per-card model dropdown → key saves
 
   // One context card per provider; DeepSeek's card is active by default
   const aiSection = page.locator('#ai-models')
-  await expect(aiSection.locator('.provider-card')).toHaveCount(4)
+  await expect(aiSection.locator('.provider-card')).toHaveCount(5)
   await expect(aiSection.locator('.provider-card[data-active="true"]')).toHaveCount(1)
 
   // Provider radio (in the card header): switch DeepSeek → OpenAI

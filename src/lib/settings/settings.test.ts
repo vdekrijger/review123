@@ -3,7 +3,7 @@ import {
   getSettings, setGithubPat, setDeepseekKey, setDiffMode, setHideWhitespace, saveTokens, saveGithubAuth,
   setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay, setGitlabToken,
   saveBitbucketAuth, setGitlabHost,
-  setOpenaiKey, setAnthropicKey, setGeminiKey, setAiProvider, setAiModel,
+  setOpenaiKey, setAnthropicKey, setGeminiKey, setOpenrouterKey, setAiProvider, setAiModel,
   setAiDeepReview, setStoryMode, setAutoRunReviewers, setFocusMode, setShowTokenCost,
   findInvalidKeyChar, invalidKeyCharMessage,
   setAiTaskMode, setAiTaskModes, setAllTasksDeep, setAllTasksStandard, setOffAllExtras,
@@ -23,6 +23,7 @@ describe('settings', () => {
       openaiKey: null,
       anthropicKey: null,
       geminiKey: null,
+      openrouterKey: null,
       aiDeepReview: false,
       aiTaskModes: {
         summary: 'standard',
@@ -105,6 +106,7 @@ describe('settings', () => {
       openaiKey: null,
       anthropicKey: null,
       geminiKey: null,
+      openrouterKey: null,
       aiDeepReview: false,
       aiTaskModes: {
         summary: 'standard',
@@ -686,6 +688,25 @@ describe('settings', () => {
       const s = getSettings()
       expect(s.anthropicKey).toBe('sk-ant-x')
       expect(s.geminiKey).toBe('AIza-y')
+    })
+
+    it('openrouterKey defaults to null', () => {
+      expect(getSettings().openrouterKey).toBeNull()
+    })
+
+    it('setOpenrouterKey stores, trims, clears, rejects empty, and persists', () => {
+      setOpenrouterKey('  sk-or-abc  ')
+      expect(getSettings().openrouterKey).toBe('sk-or-abc')
+      // Survives a re-read from storage (persistence).
+      expect(JSON.parse(localStorage.getItem('review123:settings')!).openrouterKey).toBe('sk-or-abc')
+      setOpenrouterKey(null)
+      expect(getSettings().openrouterKey).toBeNull()
+      expect(() => setOpenrouterKey('')).toThrow('empty')
+    })
+
+    it('openrouter is a valid stored aiProvider', () => {
+      setAiProvider('openrouter')
+      expect(getSettings().aiProvider).toBe('openrouter')
     })
 
     it('saveTokens throws and leaves storage unchanged when openaiKey is whitespace', () => {

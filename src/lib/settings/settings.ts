@@ -57,7 +57,7 @@ export interface GitlabOAuth {
   expiresAt: number
 }
 
-export type AiProvider = 'deepseek' | 'openai' | 'anthropic' | 'gemini'
+export type AiProvider = 'deepseek' | 'openai' | 'anthropic' | 'gemini' | 'openrouter'
 
 /**
  * Emergent fusion mode (Plan P). Derived from the panel's generator count — it
@@ -171,6 +171,8 @@ export interface Settings {
   anthropicKey: string | null
   /** Google Gemini API key. */
   geminiKey: string | null
+  /** OpenRouter API key (direct browser access — OpenRouter supports CORS). */
+  openrouterKey: string | null
   /**
    * Deep review (agentic) — lets the AI read extra files / search the repo
    * before flagging findings. Opt-in: slower and uses more tokens (Plan G).
@@ -274,6 +276,7 @@ const DEFAULTS: Settings = {
   openaiKey: null,
   anthropicKey: null,
   geminiKey: null,
+  openrouterKey: null,
   aiDeepReview: false,
   aiTaskModes: defaultTaskModes(),
   storyMode: true,
@@ -299,7 +302,7 @@ const DEFAULTS: Settings = {
   showTokenCost: false,
 }
 
-const AI_PROVIDER_IDS = new Set<string>(['deepseek', 'openai', 'anthropic', 'gemini'])
+const AI_PROVIDER_IDS = new Set<string>(['deepseek', 'openai', 'anthropic', 'gemini', 'openrouter'])
 
 /** Coerce a provider+model pair; returns null if either is invalid. */
 function coerceProviderModel(raw: unknown): { provider: AiProvider; model: string } | null {
@@ -473,7 +476,7 @@ function coerce(raw: unknown): Partial<Settings> {
   if (typeof deepseekKey === 'string' || deepseekKey === null) result.deepseekKey = deepseekKey
 
   const aiProvider = obj['aiProvider']
-  if (aiProvider === 'deepseek' || aiProvider === 'openai' || aiProvider === 'anthropic' || aiProvider === 'gemini') {
+  if (aiProvider === 'deepseek' || aiProvider === 'openai' || aiProvider === 'anthropic' || aiProvider === 'gemini' || aiProvider === 'openrouter') {
     result.aiProvider = aiProvider
   }
 
@@ -488,6 +491,9 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const geminiKey = obj['geminiKey']
   if (typeof geminiKey === 'string' || geminiKey === null) result.geminiKey = geminiKey as string | null
+
+  const openrouterKey = obj['openrouterKey']
+  if (typeof openrouterKey === 'string' || openrouterKey === null) result.openrouterKey = openrouterKey as string | null
 
   const aiDeepReview = obj['aiDeepReview']
   if (typeof aiDeepReview === 'boolean') result.aiDeepReview = aiDeepReview
@@ -645,7 +651,7 @@ function validateKeyValue(value: string, emptyMessage: string): string {
   return trimmed
 }
 
-function validateToken(field: 'githubPat' | 'deepseekKey' | 'openaiKey' | 'anthropicKey' | 'geminiKey', value: string | null): string | null {
+function validateToken(field: 'githubPat' | 'deepseekKey' | 'openaiKey' | 'anthropicKey' | 'geminiKey' | 'openrouterKey', value: string | null): string | null {
   if (value === null) return null
   return validateKeyValue(value, `${field} must not be empty`)
 }
@@ -656,6 +662,7 @@ export function saveTokens(patch: {
   openaiKey?: string | null
   anthropicKey?: string | null
   geminiKey?: string | null
+  openrouterKey?: string | null
 }): void {
   // Validate all first (atomic — throw before writing anything)
   const update: Partial<Settings> = {}
@@ -664,6 +671,7 @@ export function saveTokens(patch: {
   if ('openaiKey' in patch) update.openaiKey = validateToken('openaiKey', patch.openaiKey ?? null)
   if ('anthropicKey' in patch) update.anthropicKey = validateToken('anthropicKey', patch.anthropicKey ?? null)
   if ('geminiKey' in patch) update.geminiKey = validateToken('geminiKey', patch.geminiKey ?? null)
+  if ('openrouterKey' in patch) update.openrouterKey = validateToken('openrouterKey', patch.openrouterKey ?? null)
 
   // Sync githubAuth with githubPat changes — but preserve OAuth tokens:
   // clearing the PAT field while signed in via OAuth must not wipe the OAuth token.
@@ -705,6 +713,7 @@ export const setDeepseekKey = (v: string | null) => saveTokens({ deepseekKey: v 
 export const setOpenaiKey = (v: string | null) => saveTokens({ openaiKey: v })
 export const setAnthropicKey = (v: string | null) => saveTokens({ anthropicKey: v })
 export const setGeminiKey = (v: string | null) => saveTokens({ geminiKey: v })
+export const setOpenrouterKey = (v: string | null) => saveTokens({ openrouterKey: v })
 export const setAiProvider = (v: AiProvider) => save({ aiProvider: v })
 export const setAiModel = (v: string) => save({ aiModel: v })
 export const setAiDeepReview = (v: boolean) => save({ aiDeepReview: v })

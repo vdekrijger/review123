@@ -43,11 +43,55 @@ afterEach(() => {
 })
 
 describe('providerSupportsBalance — capability gate', () => {
-  it('is true only for deepseek', () => {
+  it('is true for deepseek and openrouter only', () => {
     expect(providerSupportsBalance('deepseek')).toBe(true)
+    expect(providerSupportsBalance('openrouter')).toBe(true)
     expect(providerSupportsBalance('openai')).toBe(false)
     expect(providerSupportsBalance('anthropic')).toBe(false)
     expect(providerSupportsBalance('gemini')).toBe(false)
+  })
+})
+
+describe('fetchProviderBalance — OpenRouter /credits', () => {
+  it('returns remaining = total_credits - total_usage in USD', async () => {
+    const f = vi.fn().mockResolvedValue(
+      makeJsonResponse({ data: { total_credits: 50, total_usage: 12.5 } }),
+    )
+    vi.stubGlobal('fetch', f)
+
+    const balance = await fetchProviderBalance('openrouter', 'sk-or-test')
+    expect(balance).toEqual({ currency: 'USD', total: 37.5 })
+    expect(f).toHaveBeenCalledTimes(1)
+    const [url, init] = f.mock.calls[0]
+    expect(url).toBe('https://openrouter.ai/api/v1/credits')
+    expect((init as RequestInit).headers).toMatchObject({ Authorization: 'Bearer sk-or-test' })
+  })
+
+  it('returns null without fetching when the key is missing/blank', async () => {
+    const f = vi.fn()
+    vi.stubGlobal('fetch', f)
+    expect(await fetchProviderBalance('openrouter', '')).toBeNull()
+    expect(await fetchProviderBalance('openrouter', '  ')).toBeNull()
+    expect(f).not.toHaveBeenCalled()
+  })
+
+  it('returns null on an HTTP error — never throws', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse({}, 401)))
+    await expect(fetchProviderBalance('openrouter', 'sk-or-test')).resolves.toBeNull()
+  })
+
+  it('returns null on a network error — never throws', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    await expect(fetchProviderBalance('openrouter', 'sk-or-test')).resolves.toBeNull()
+  })
+
+  it('returns null on garbage / missing-field bodies — never throws', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>', { status: 200 })))
+    await expect(fetchProviderBalance('openrouter', 'sk-or-test')).resolves.toBeNull()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse({ data: { total_credits: 'n/a' } })))
+    await expect(fetchProviderBalance('openrouter', 'sk-or-test')).resolves.toBeNull()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse({})))
+    await expect(fetchProviderBalance('openrouter', 'sk-or-test')).resolves.toBeNull()
   })
 })
 

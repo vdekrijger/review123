@@ -31,6 +31,7 @@ import {
   setOpenaiKey,
   setAnthropicKey,
   setGeminiKey,
+  setOpenrouterKey,
   setAiProvider,
   setAiModel,
 } from '../settings/settings'
@@ -73,9 +74,22 @@ beforeEach(() => {
 // ===========================================================================
 
 describe('PROVIDERS — structure', () => {
-  it('exports exactly 4 providers: deepseek, openai, anthropic, gemini', () => {
+  it('exports exactly 5 providers: deepseek, openai, anthropic, gemini, openrouter', () => {
     const ids = PROVIDERS.map((p) => p.id)
-    expect(ids).toEqual(['deepseek', 'openai', 'anthropic', 'gemini'])
+    expect(ids).toEqual(['deepseek', 'openai', 'anthropic', 'gemini', 'openrouter'])
+  })
+
+  it('openrouter has transport openai-compat, a direct baseUrl, and a curated default', () => {
+    const p = getProvider('openrouter')!
+    expect(p.transport).toBe('openai-compat')
+    expect(p.baseUrl).toBe('https://openrouter.ai/api/v1')
+    expect(p.maxTokensParam).toBe('max_tokens')
+    expect(p.defaultModel).toBe('deepseek/deepseek-chat-v3.1')
+    // The default resolves to a real catalog entry with pricing.
+    const def = getModelDef(p, p.defaultModel)!
+    expect(def).toBeDefined()
+    expect(def.pricing).toBeDefined()
+    expect(p.models.length).toBeGreaterThanOrEqual(1)
   })
 
   it('deepseek has transport openai-compat and default model deepseek-v4-flash', () => {
@@ -128,10 +142,13 @@ describe('PROVIDERS — structure', () => {
     expect(getModelDef(getProvider('gemini')!, 'gemini-2.5-flash')).toBeDefined()
   })
 
-  it('every provider ships 2-4 models', () => {
+  it('every provider ships a curated lineup (single-vendor 2-4; the OpenRouter gateway more)', () => {
     for (const p of PROVIDERS) {
       expect(p.models.length).toBeGreaterThanOrEqual(2)
-      expect(p.models.length).toBeLessThanOrEqual(4)
+      // The OpenRouter gateway fronts many labs, so it carries a wider curated
+      // set (~10-15); the single-vendor providers stay tight (2-4).
+      const upperBound = p.id === 'openrouter' ? 20 : 4
+      expect(p.models.length).toBeLessThanOrEqual(upperBound)
     }
   })
 
@@ -338,6 +355,34 @@ describe('openai-compat — deepseek default path (regression)', () => {
     const result = await llmStreamWithUsage({ system: 's', user: 'u' }, () => {})
     expect(result.content).toBe('hi')
     expect(result.usage).toEqual({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 })
+  })
+})
+
+describe('openai-compat — openrouter path (direct, with attribution headers)', () => {
+  beforeEach(() => {
+    setAiProvider('openrouter')
+    setOpenrouterKey('sk-or-test')
+  })
+
+  it('posts DIRECT to openrouter.ai/api/v1/chat/completions with Bearer + attribution headers', async () => {
+    const f = vi.fn().mockResolvedValue(makeJsonResponse({ choices: [{ message: { content: 'hi' } }] }))
+    vi.stubGlobal('fetch', f)
+    const result = await llmComplete({ system: 'sys', user: 'usr' })
+    expect(result).toBe('hi')
+    const [url, init] = f.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://openrouter.ai/api/v1/chat/completions')
+    const headers = init.headers as Record<string, string>
+    expect(headers['Authorization']).toBe('Bearer sk-or-test')
+    expect(headers['HTTP-Referer']).toBe('https://review123.dev')
+    expect(headers['X-Title']).toBe('Review 1-2-3')
+  })
+
+  it('sends the openrouter default model (namespaced slug) in the body', async () => {
+    const f = vi.fn().mockResolvedValue(makeJsonResponse({ choices: [{ message: { content: 'ok' } }] }))
+    vi.stubGlobal('fetch', f)
+    await llmComplete({ system: 's', user: 'u' })
+    const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
+    expect(body.model).toBe('deepseek/deepseek-chat-v3.1')
   })
 })
 
