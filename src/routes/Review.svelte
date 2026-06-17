@@ -628,9 +628,12 @@
   const inspectFiles = $derived(isCompareActive ? compareMode!.files : (load.state.status === 'ready' ? load.state.files : []))
   const inspectChangedFiles = $derived(isCompareActive ? compareMode!.files.length : (load.state.status === 'ready' ? load.state.meta.changedFiles : 0))
 
-  // ---- Scroll-based inspect progress (step 2 only) ----
-  // Tracks vertical scroll progress through the inspect content container.
-  // 0% = container top at/above viewport top; 100% = scrolled to container bottom.
+  // ---- Inspect progress (step 2 only) ----
+  // The bar is max(scroll, viewed): scroll position is the live signal that
+  // lines up with the scrollbar while reading, and the fraction of files marked
+  // viewed is a BASELINE/floor — so once you've reviewed 30% of files the bar
+  // never drops below 30%, even scrolled back to the top. They combine cleanly
+  // because both are 0–100 "how far through the review" measures.
   let scrollPercent = $state(0)
 
   $effect(() => {
@@ -645,7 +648,6 @@
     function updateScroll() {
       const container = document.querySelector('.review') as HTMLElement | null
       if (!container) return
-      const rect = container.getBoundingClientRect()
       const scrollable = container.scrollHeight - window.innerHeight
       if (scrollable <= 0) {
         scrollPercent = 100
@@ -670,6 +672,16 @@
       cancelAnimationFrame(rafId)
     }
   })
+
+  // Viewed-file fraction — the baseline floor. Denominator MUST match the
+  // fileCount the bar displays (load.state.files.length) so the bar and its
+  // "{viewed}/{total}" label never disagree.
+  const reviewFileCount = $derived(load.state.status === 'ready' ? load.state.files.length : 0)
+  const viewedPercent = $derived(
+    reviewFileCount > 0 ? Math.round((viewedCountDerived / reviewFileCount) * 100) : 0,
+  )
+  // Combined progress: scroll position, floored by how many files are viewed.
+  const inspectPercent = $derived(Math.max(scrollPercent, viewedPercent))
 </script>
 
 {#if consentDialogVisible}
@@ -882,7 +894,7 @@
           viewedCount={viewedCountDerived}
           fileCount={load.state.files.length}
           {step}
-          percent={scrollPercent}
+          percent={inspectPercent}
           inline
         />
       {/if}
