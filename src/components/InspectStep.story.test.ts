@@ -118,6 +118,45 @@ describe('InspectStep — story fallback', () => {
     expect(screen.queryByText(/showing all files/)).not.toBeInTheDocument()
   })
 
+  it('renders the structural fallback walkthrough + a muted note (NOT the hard-error state)', () => {
+    render(InspectStep, {
+      props: base({
+        storyAvailable: true,
+        storyMode: true,
+        story: STORY,
+        storyStatus: 'done',
+        storyFallback: true,
+        storyFallbackReason: 'AI returned an unexpected response format — maximum context length exceeded',
+        onRetryStory: () => {},
+      }),
+    })
+    // The walkthrough still renders (the structural story is the graceful degrade).
+    expect(screen.getByText('Data layer changes.')).toBeInTheDocument()
+    // A subtle structural note names the reason + offers Retry.
+    expect(screen.getByText(/Structural walkthrough — AI ordering unavailable/)).toBeInTheDocument()
+    expect(screen.getByText(/maximum context length exceeded/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    // The OLD hard-error "Showing all files" state is NOT shown.
+    expect(screen.queryByText(/Couldn't build the walkthrough/)).not.toBeInTheDocument()
+  })
+
+  it('structural fallback Retry re-invokes onRetryStory (re-runs just the AI story task)', async () => {
+    let retried = 0
+    render(InspectStep, {
+      props: base({
+        storyAvailable: true,
+        storyMode: true,
+        story: STORY,
+        storyStatus: 'done',
+        storyFallback: true,
+        storyFallbackReason: 'Rate limited.',
+        onRetryStory: () => { retried++ },
+      }),
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(retried).toBe(1)
+  })
+
   it('renders only the mappable steps when SOME paths are unmappable (no fallback)', () => {
     const story: StoryOrderResult = {
       steps: [

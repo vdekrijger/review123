@@ -14,6 +14,14 @@ import type { CiSummary } from '../github/checks'
 import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
 
+// PROMPT_VERSION 22 (robust big-PR story): the story task's user payload is now
+// a COMPACT structural representation — changed-file paths + per-file add/del
+// stats + hunk HEADERS (the `@@ … @@` enclosing-symbol lines) + the import graph
+// — instead of the full packed diff (`ctx.text`). Ordering never needed the
+// line-level diff bodies, and the full diff overflowed the context window on big
+// PRs (the failure this fixes). The story prompt CONTENT changes, so bump to
+// recompute old cached story results under the compact input. Only the story
+// task's user text changes; all other tasks are byte-identical.
 // PROMPT_VERSION 21 (comprehensive verifier): per-lens verification is RETIRED.
 // Every verifier now runs ONE comprehensive adversarial prompt weighing ALL five
 // dimensions (correctness/security/performance/reproducibility/maintainability) at
@@ -40,7 +48,7 @@ import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
 // module-dependency change-map to a flow-of-execution (GraphResult.flow). The
 // bump invalidates cached diagram results so old change-maps don't render under
 // the new "Execution flow" label.
-export const PROMPT_VERSION = 21
+export const PROMPT_VERSION = 22
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)
@@ -805,7 +813,55 @@ Do not include any text outside the JSON object.`
  * VERIFIES ordering/test-pairing by reading dependencies/imports with the tools
  * before committing to the sequence. withDeepReviewGuidance() adds the generic
  * tool-loop discipline; this section adds the story-specific verification.
+ *
+ * COMPACT input (PROMPT_VERSION 22): the user payload is a structural summary —
+ * changed-file paths + per-file add/del stats + hunk HEADERS + the import graph
+ * — NOT the full diff (`ctx.text`). Ordering doesn't need the line-level bodies,
+ * and the full diff overflowed big-PR context windows. See buildCompactStoryInput.
  */
+
+// Byte budget for the compact story input. The structural summary is tiny per
+// file, but a 5k-file PR could still be large; cap so the story prompt always
+// fits. When truncated we keep the FIRST files (input order) + note the cut so
+// the model knows coverage is partial (the deterministic fallback still covers
+// 100% from the full prFilenames list).
+const COMPACT_STORY_BYTE_BUDGET = 60_000
+const COMPACT_STORY_MAX_FILES = 600
+
+function buildCompactStoryInput(ctx: PackedContext): string {
+  const summaries = ctx.storyFiles
+  // Backward-compat: if a caller supplies a PackedContext without storyFiles
+  // (older pack), fall back to the full text so the task still runs.
+  if (!summaries) return ctx.text
+
+  const lines: string[] = ['## Changed files (path · +adds/-dels · hunk headers)']
+  let truncated = false
+  let used = 0
+  let shown = 0
+  for (const f of summaries) {
+    if (shown >= COMPACT_STORY_MAX_FILES) {
+      truncated = true
+      break
+    }
+    const headers = f.hunkHeaders.length > 0 ? ` :: ${f.hunkHeaders.join(' ')}` : ''
+    const line = `- ${f.path} · +${f.additions}/-${f.deletions}${headers}`
+    if (used + line.length > COMPACT_STORY_BYTE_BUDGET) {
+      truncated = true
+      break
+    }
+    lines.push(line)
+    used += line.length + 1
+    shown++
+  }
+  if (truncated) {
+    lines.push(
+      `- … (${summaries.length - shown} more changed files omitted to fit; ` +
+        `group the shown layers and the remaining files will be swept into the walkthrough)`,
+    )
+  }
+  return lines.join('\n')
+}
+
 export function storyOrderPrompt(
   ctx: PackedContext,
   options?: { deep?: boolean },
@@ -896,7 +952,9 @@ ${importGraphSection}${deepStorySection}
 
 Do not include any text outside the JSON object.`
 
-  return { system, user: ctx.text }
+  // Compact structural input (paths + stats + hunk headers) — NOT the full diff.
+  // The import graph is woven into the system prompt above (importGraphSection).
+  return { system, user: buildCompactStoryInput(ctx) }
 }
 
 // ---------------------------------------------------------------------------

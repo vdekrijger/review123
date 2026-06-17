@@ -67,6 +67,8 @@ import {
 } from './tasks'
 export type { AskFocus }
 import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, sinkGeneratedSteps, STORY_MAX_STEPS } from './schemas'
+import { buildDeterministicStory } from './storyFallback'
+import { matchStoryPath } from './schemas'
 import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, SkillReviewResult } from './schemas'
 import type { Draft } from '../drafts/drafts.svelte'
 import type { CoachCodeContext } from './coachContext'
@@ -133,6 +135,17 @@ export interface PanelState<T> {
    * runs (the plain aggregate usage footer is shown instead). Display-only.
    */
   models?: VerdictModelBreakdown[]
+  /**
+   * Story task only (robust big-PR story): true when `value` is the DETERMINISTIC
+   * structural walkthrough built without an LLM — the graceful degrade used when
+   * the AI story call failed OR returned an unusable result. The status is still
+   * 'done' (the fallback IS a usable story) so Story mode renders rather than
+   * showing the old hard-error state. `fallbackReason` carries the concrete cause
+   * for the UI's muted note. Absent on a successful AI story result.
+   */
+  fallback?: boolean
+  /** Story fallback only: the specific reason the AI ordering was unavailable. */
+  fallbackReason?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -1209,6 +1222,43 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     return capped
   }
 
+  // True when at least one step maps to a real PR file — mirrors InspectStep's
+  // `storyHasUsableSteps` gate. A shaped story whose paths the model hallucinated
+  // (none resolve to PR files) is NOT usable and triggers the structural fallback
+  // exactly as an outright failure does. When prFilenames is empty (older pack
+  // without storyFiles) we can't check mapping, so any shaped story counts.
+  function storyHasUsableSteps(story: StoryOrderResult, prFilenames: readonly string[]): boolean {
+    if (story.steps.length === 0) return false
+    if (prFilenames.length === 0) return true
+    return story.steps.some((s) => s.files.some((p) => matchStoryPath(p, prFilenames) !== null))
+  }
+
+  // PR filenames for the story task — the changed-file list from the compact
+  // story summaries (all changed files, independent of the prompt budget).
+  function storyPrFilenames(ctx: PackedContext): string[] {
+    return (ctx.storyFiles ?? []).map((f) => f.path)
+  }
+
+  /**
+   * Switch the story panel to the deterministic structural walkthrough (the
+   * graceful degrade). Status becomes 'done' with a usable story + the fallback
+   * flag/reason so the UI labels it. NEVER cached as an AI result (the cache only
+   * stores successful AI ordering). No-op-safe: an empty PR yields empty steps,
+   * which the consumer renders as "no walkthrough" rather than the hard error.
+   */
+  function applyStoryFallback(ctx: PackedContext, reason: string, trackReason: string): void {
+    const prFilenames = storyPrFilenames(ctx)
+    const story = buildDeterministicStory(prFilenames)
+    storyState.status = 'done'
+    storyState.value = story
+    storyState.error = undefined
+    storyState.activity = undefined
+    storyState.fallback = true
+    storyState.fallbackReason = reason
+    // Track only the coarse kind (not the full upstream detail) for privacy.
+    track('ai_task_fallback', { task: 'story', reason: trackReason })
+  }
+
   async function runStoryOrderTask(ctx: PackedContext): Promise<void> {
     // Story mode (Plan H): classify changed files into layers and emit an
     // ORDERED narrative sequence. Runs through the deep harness when the
@@ -1262,7 +1312,6 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         storyResult = deepOutcome.result
         storyUsage = deepOutcome.usage
         toolCallsUsed = deepOutcome.toolCallsUsed
-        await setCached<DeepCached<StoryOrderResult>>(key, { deep: true, result: storyResult, toolCallsUsed, usage: storyUsage })
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<StoryOrderResult>(
           { system: prompts.system, user: prompts.user },
@@ -1270,12 +1319,31 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         )
         storyResult = singlePass.result
         storyUsage = singlePass.usage
+      }
+
+      // "Unusable result" path: the AI returned a shaped story, but none of its
+      // steps map to a real PR file (hallucinated paths). Degrade to the
+      // deterministic structural walkthrough rather than rendering an empty
+      // story — and do NOT cache it as an AI result.
+      if (!storyHasUsableSteps(storyResult, storyPrFilenames(ctx))) {
+        applyStoryFallback(ctx, 'AI ordering produced no usable steps', 'unusable-result')
+        return
+      }
+
+      // Cache ONLY a usable AI result (never the deterministic fallback).
+      if (deep.enabled) {
+        await setCached<DeepCached<StoryOrderResult>>(key, { deep: true, result: storyResult, toolCallsUsed: toolCallsUsed ?? 0, usage: storyUsage })
+      } else {
         await setCached<StoryOrderResult>(key, storyResult)
       }
       storyState.status = 'done'
       storyState.value = storyResult
       storyState.activity = undefined
       storyState.usage = storyUsage
+      // Clear any stale fallback flag from a prior failed run (retry success).
+      storyState.fallback = undefined
+      storyState.fallbackReason = undefined
+      storyState.error = undefined
       if (toolCallsUsed !== undefined) storyState.toolCallsUsed = toolCallsUsed
       track('ai_task_completed', {
         task: 'story',
@@ -1285,11 +1353,23 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
     } catch (err) {
+      // Surface the SPECIFIC reason (mirrors #148): the friendly kind message as
+      // the lead, plus the concrete LlmError.message (e.g. "maximum context
+      // length exceeded …", "LLM produced invalid JSON after repair retry") when
+      // it adds information. This reason is shown by the fallback note.
       const kind = err instanceof LlmError ? err.kind : 'unknown'
-      storyState.status = 'error'
-      storyState.error = humanMessage(kind)
-      storyState.activity = undefined
+      const lead = humanMessage(kind)
+      // Append the concrete LlmError.message only when it adds information — not
+      // the bare `llm: <kind>` default the constructor sets, and not a repeat of
+      // the friendly lead.
+      const raw = err instanceof LlmError ? err.message : ''
+      const detail = raw && raw !== lead && raw !== `llm: ${kind}` ? raw : ''
+      const reason = detail ? `${lead} — ${detail}` : lead
       track('ai_task_failed', { task: 'story', reason: kind })
+      // Robustness win: instead of the generic 'error' state, ALWAYS degrade to
+      // the deterministic structural walkthrough so Story mode renders. The
+      // specific reason rides along as fallbackReason for the muted UI note.
+      applyStoryFallback(ctx, reason, kind)
     }
   }
 
