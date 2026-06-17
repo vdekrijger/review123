@@ -18,6 +18,7 @@
  */
 
 import { getSettings } from '../settings/settings'
+import { llmConcurrencyGate } from './concurrencyGate'
 import { activeLlmConfig, PROVIDER_KEY_FIELDS } from './config'
 import { getProvider, getModelDef } from './providers'
 import type { LlmProviderDef, LlmModelDef, LlmProviderId } from './providers'
@@ -784,15 +785,20 @@ function getActiveConfig(): { provider: LlmProviderDef; model: LlmModelDef } {
 }
 
 async function dispatchComplete(opts: LlmCompleteOpts, includeUsage: boolean): Promise<LlmCompleteResult> {
-  const { provider, model } = getActiveConfig()
-  switch (provider.transport) {
-    case 'openai-compat':
-      return openaiCompatComplete(provider, model, opts, includeUsage)
-    case 'anthropic':
-      return anthropicComplete(provider, model, opts)
-    case 'gemini':
-      return geminiComplete(provider, model, opts)
-  }
+  // Global backpressure: every real (non-cached) completion holds one of the
+  // MAX_INFLIGHT_LLM_CALLS slots for the duration of the request, released on
+  // success or error. Cache HITs never reach here, so they never consume a slot.
+  return llmConcurrencyGate.run(() => {
+    const { provider, model } = getActiveConfig()
+    switch (provider.transport) {
+      case 'openai-compat':
+        return openaiCompatComplete(provider, model, opts, includeUsage)
+      case 'anthropic':
+        return anthropicComplete(provider, model, opts)
+      case 'gemini':
+        return geminiComplete(provider, model, opts)
+    }
+  })
 }
 
 /**
@@ -810,14 +816,18 @@ async function dispatchCompleteFor(
   const provider = getProvider(cfg.providerId)
   if (!provider) throw new LlmError('server', `Unknown provider: ${cfg.providerId}`)
   if (!cfg.key) throw new LlmError('no-key', `No key for provider ${cfg.providerId}`)
-  switch (provider.transport) {
-    case 'openai-compat':
-      return openaiCompatComplete(provider, cfg.model, opts, includeUsage, cfg.key)
-    case 'anthropic':
-      return anthropicComplete(provider, cfg.model, opts, cfg.key)
-    case 'gemini':
-      return geminiComplete(provider, cfg.model, opts, cfg.key)
-  }
+  // Cross-model verifier calls share the SAME global gate as the active path —
+  // verifier fan-out across providers is exactly what trips rate limits at scale.
+  return llmConcurrencyGate.run(() => {
+    switch (provider.transport) {
+      case 'openai-compat':
+        return openaiCompatComplete(provider, cfg.model, opts, includeUsage, cfg.key)
+      case 'anthropic':
+        return anthropicComplete(provider, cfg.model, opts, cfg.key)
+      case 'gemini':
+        return geminiComplete(provider, cfg.model, opts, cfg.key)
+    }
+  })
 }
 
 async function dispatchStream(
@@ -825,15 +835,22 @@ async function dispatchStream(
   onDelta: (text: string) => void,
   includeUsage: boolean,
 ): Promise<LlmStreamResult> {
-  const { provider, model } = getActiveConfig()
-  switch (provider.transport) {
-    case 'openai-compat':
-      return openaiCompatStream(provider, model, opts, onDelta, includeUsage)
-    case 'anthropic':
-      return anthropicStream(provider, model, opts, onDelta)
-    case 'gemini':
-      return geminiStream(provider, model, opts, onDelta)
-  }
+  // Streaming holds its slot for the WHOLE stream lifetime: the transport
+  // functions await the full read loop (and throw on upstream error / abort /
+  // missing terminator) BEFORE their promise settles, so gate.run() acquires
+  // before the first chunk and releases (in its finally) exactly when the
+  // stream finishes, errors, or is aborted — never leaking a slot.
+  return llmConcurrencyGate.run(() => {
+    const { provider, model } = getActiveConfig()
+    switch (provider.transport) {
+      case 'openai-compat':
+        return openaiCompatStream(provider, model, opts, onDelta, includeUsage)
+      case 'anthropic':
+        return anthropicStream(provider, model, opts, onDelta)
+      case 'gemini':
+        return geminiStream(provider, model, opts, onDelta)
+    }
+  })
 }
 
 // ===========================================================================
