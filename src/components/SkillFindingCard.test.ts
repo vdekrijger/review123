@@ -337,3 +337,130 @@ describe('SkillFindingCard — raised-by chip (Plan O)', () => {
     expect(container.querySelector('.skill-raised-chip')).toBeNull()
   })
 })
+
+describe('SkillFindingCard — Ask AI (grounded follow-up)', () => {
+  // An askFn that streams two deltas then resolves with the final answer.
+  function streamingAskFn(answer = 'Break-even is ~1k rows.') {
+    return vi.fn(async (_q: string, onDelta: (t: string) => void) => {
+      onDelta('Break-even ')
+      onDelta('is ~1k rows.')
+      return { ok: true as const, answer }
+    })
+  }
+
+  it('no Ask AI button when askFn is not provided', () => {
+    renderCard({})
+    expect(screen.queryByRole('button', { name: /ask ai/i })).not.toBeInTheDocument()
+  })
+
+  it('shows the Ask AI button when askFn is provided', () => {
+    renderCard({ askFn: streamingAskFn() })
+    expect(screen.getByRole('button', { name: /ask ai/i })).toBeInTheDocument()
+  })
+
+  it('clicking Ask AI opens the inline ask box', async () => {
+    renderCard({ askFn: streamingAskFn() })
+    expect(screen.queryByTestId('ask-box')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /ask ai/i }))
+    expect(screen.getByTestId('ask-box')).toBeInTheDocument()
+    expect(screen.getByTestId('ask-box-input')).toBeInTheDocument()
+  })
+
+  it('submitting a question calls askFn with a focus whose finding equals the card body (+ path/excerpt)', async () => {
+    const askFn = streamingAskFn()
+    const body = "the migration doesn't add db_index=True — full table scan"
+    renderCard({ askFn, body, askPath: 'm/0003.py', askExcerpt: '+ field = CharField()', line: 12, anchored: true })
+
+    await userEvent.click(screen.getByRole('button', { name: /ask ai/i }))
+    await userEvent.type(screen.getByTestId('ask-box-input'), 'what is the break-even?')
+    await userEvent.click(screen.getByTestId('ask-box-send'))
+
+    expect(askFn).toHaveBeenCalledOnce()
+    const [q, , focus] = askFn.mock.calls[0]
+    expect(q).toBe('what is the break-even?')
+    expect(focus).toMatchObject({
+      path: 'm/0003.py',
+      line: 12,
+      excerpt: '+ field = CharField()',
+      finding: body,
+    })
+  })
+
+  it('file-level (null line): focus.line falls back to 1 and finding is the body', async () => {
+    const askFn = streamingAskFn()
+    renderCard({ askFn, body: 'File-level concern', line: null, askPath: 'src/big.py' })
+    await userEvent.click(screen.getByRole('button', { name: /ask ai/i }))
+    await userEvent.type(screen.getByTestId('ask-box-input'), 'why?')
+    await userEvent.click(screen.getByTestId('ask-box-send'))
+    const [, , focus] = askFn.mock.calls[0]
+    expect(focus).toMatchObject({ path: 'src/big.py', line: 1, finding: 'File-level concern' })
+  })
+
+  it('renders the streamed answer as markdown', async () => {
+    const askFn = vi.fn(async (_q: string, onDelta: (t: string) => void) => {
+      onDelta('answer')
+      return { ok: true as const, answer: 'Use a **partial index** here.' }
+    })
+    const { container } = renderCard({ askFn })
+    await userEvent.click(screen.getByRole('button', { name: /ask ai/i }))
+    await userEvent.type(screen.getByTestId('ask-box-input'), 'how to fix?')
+    await userEvent.click(screen.getByTestId('ask-box-send'))
+
+    const answer = await screen.findByTestId('ask-box-answer')
+    expect(answer.querySelector('strong')?.textContent).toBe('partial index')
+    void container
+  })
+
+  it('renders the error state when askFn resolves not-ok', async () => {
+    const askFn = vi.fn(async () => ({ ok: false as const, error: 'No API key configured.' }))
+    renderCard({ askFn })
+    await userEvent.click(screen.getByRole('button', { name: /ask ai/i }))
+    await userEvent.type(screen.getByTestId('ask-box-input'), 'q?')
+    await userEvent.click(screen.getByTestId('ask-box-send'))
+    const err = await screen.findByTestId('ask-box-error')
+    expect(err.textContent).toContain('No API key configured.')
+  })
+
+  it('an empty question does not submit', async () => {
+    const askFn = streamingAskFn()
+    renderCard({ askFn })
+    await userEvent.click(screen.getByRole('button', { name: /ask ai/i }))
+    // Send button is disabled with no text; clicking it is a no-op.
+    const send = screen.getByTestId('ask-box-send')
+    expect(send).toBeDisabled()
+    await userEvent.click(send)
+    expect(askFn).not.toHaveBeenCalled()
+    // Whitespace-only also does not submit.
+    await userEvent.type(screen.getByTestId('ask-box-input'), '   ')
+    expect(screen.getByTestId('ask-box-send')).toBeDisabled()
+  })
+
+  it('Enter sends the question (no Shift)', async () => {
+    const askFn = streamingAskFn()
+    renderCard({ askFn })
+    await userEvent.click(screen.getByRole('button', { name: /ask ai/i }))
+    const input = screen.getByTestId('ask-box-input')
+    await userEvent.type(input, 'why?{Enter}')
+    expect(askFn).toHaveBeenCalledOnce()
+    expect(askFn.mock.calls[0][0]).toBe('why?')
+  })
+
+  it('Escape closes the ask box', async () => {
+    renderCard({ askFn: streamingAskFn() })
+    await userEvent.click(screen.getByRole('button', { name: /ask ai/i }))
+    const input = screen.getByTestId('ask-box-input')
+    await userEvent.type(input, '{Escape}')
+    expect(screen.queryByTestId('ask-box')).not.toBeInTheDocument()
+  })
+
+  it('the answer is ephemeral — it does not call onAdd (not saved as a draft)', async () => {
+    const onAdd = vi.fn()
+    const askFn = streamingAskFn()
+    renderCard({ askFn, onAdd })
+    await userEvent.click(screen.getByRole('button', { name: /ask ai/i }))
+    await userEvent.type(screen.getByTestId('ask-box-input'), 'q?')
+    await userEvent.click(screen.getByTestId('ask-box-send'))
+    await screen.findByTestId('ask-box-answer')
+    expect(onAdd).not.toHaveBeenCalled()
+  })
+})

@@ -314,6 +314,35 @@ describe('FileDiff — skillFindings prop placement', () => {
       expect(screen.queryByText('Dismiss me in FileDiff')).not.toBeInTheDocument()
     })
   })
+
+  it('no Ask AI button on the inline finding card when askFn is absent', () => {
+    render(FileDiff, {
+      props: { file, mode: 'unified', skillFindings: [finding(2, 'No ask here')] },
+    })
+    expect(screen.queryByTestId('skill-ask-btn')).not.toBeInTheDocument()
+  })
+
+  it('inline finding card shows Ask AI when askFn is provided and submits a focus grounded with the finding body + path + excerpt', async () => {
+    const askFn = vi.fn(async (_q: string, onDelta: (t: string) => void) => {
+      onDelta('a')
+      return { ok: true as const, answer: 'Inline grounded answer.' }
+    })
+    render(FileDiff, {
+      props: { file, mode: 'unified', askFn, skillFindings: [finding(2, 'Full table scan risk')] },
+    })
+    await userEvent.click(screen.getByTestId('skill-ask-btn'))
+    await userEvent.type(screen.getByTestId('ask-box-input'), "what's the break-even?")
+    await userEvent.click(screen.getByTestId('ask-box-send'))
+
+    expect(askFn).toHaveBeenCalledOnce()
+    const [q, , focus] = askFn.mock.calls[0]
+    expect(q).toBe("what's the break-even?")
+    expect(focus.path).toBe('src/foo.ts')
+    expect(focus.line).toBe(2)
+    expect(focus.finding).toBe('Full table scan risk')
+    // Excerpt is the hunk window around line 2 (the new-side change).
+    expect(focus.excerpt).toContain('line2new')
+  })
 })
 
 // ---------------------------------------------------------------------------

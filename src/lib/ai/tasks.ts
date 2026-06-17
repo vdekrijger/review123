@@ -973,6 +973,13 @@ export interface AskFocus {
   path: string
   line: number
   excerpt: string
+  /**
+   * Optional reviewer finding text the question is a follow-up about (Ask AI on
+   * a finding card). When present, askPrompt adds a clause directing the model
+   * to engage THIS finding's reasoning/tradeoffs directly, grounded in the
+   * excerpt. Absent for the plain line-comment Ask AI (no behavior change).
+   */
+  finding?: string
 }
 
 /**
@@ -1011,6 +1018,13 @@ Be VERY concise: 2-4 sentences, unless code is needed to illustrate the answer.`
   if (focus) {
     system += `\n\nThe question concerns the specific change at ${focus.path}:${focus.line}. \
 Address THIS location first, then broader context only if relevant.`
+  }
+
+  if (focus?.finding) {
+    system += `\n\nA reviewer left this finding about the focused code: "${focus.finding}". \
+The user's question is a follow-up about that finding — engage its reasoning and tradeoffs \
+directly (e.g. when it does/doesn't matter, rough thresholds), grounded in the excerpt; say \
+so if the excerpt doesn't contain enough to answer.`
   }
 
   // Take last ≤3 Q/A pairs
