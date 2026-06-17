@@ -36,15 +36,19 @@ function reviewerId(name: string): string {
  * the cost breakdown, carrying the impact readout (always shown when cross-verify
  * ran). Derived from the cost rows so the two never drift.
  */
-const demoModelPerformance: VerdictModelBreakdown[] = demoModelCostBreakdown.map((row) => ({
-  providerId: row.providerId,
-  modelId: row.modelId,
-  role: row.role,
-  ...(row.total ? { usage: row.total } : {}),
-  ...(row.role === 'generator'
-    ? { surfaced: row.surfaced ?? 0, uniqueCatch: row.uniqueCatch ?? 0 }
-    : { impact: row.impact }),
-}))
+const demoModelPerformance: VerdictModelBreakdown[] = demoModelCostBreakdown
+  // Narration rows (active model running only descriptive tasks) carry no
+  // finding-generation impact, so they don't appear in the performance readout.
+  .filter((row): row is typeof row & { role: 'generator' | 'verifier' } => row.role !== 'narrator')
+  .map((row) => ({
+    providerId: row.providerId,
+    modelId: row.modelId,
+    role: row.role,
+    ...(row.total ? { usage: row.total } : {}),
+    ...(row.role === 'generator'
+      ? { surfaced: row.surfaced ?? 0, uniqueCatch: row.uniqueCatch ?? 0 }
+      : { impact: row.impact }),
+  }))
 
 /**
  * Construct the demo AiRun. Not reactive (the values never change), but it

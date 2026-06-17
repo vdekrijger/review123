@@ -14,6 +14,7 @@ import {
   setDeepseekKey,
   setAnthropicKey,
   setOpenaiKey,
+  setGeminiKey,
   setAiProvider,
   setAiPanel,
 } from '../settings/settings'
@@ -555,5 +556,285 @@ describe('tool-backed absence verification in runSkillReviews (Part B)', () => {
     const result = run.skillReviews[0].state.value as SkillReviewResult
     // No verification ran → finding shown unverified (never dropped).
     expect(result.findings[0].verification).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Honoring configured roles — NO silent demotion (the user's complaint)
+//
+// A configured Generator must ALWAYS be attributed as a generator, even when it
+// (and its peers) surface ZERO findings. Before the fix, the run bailed to the
+// single-generator path whenever fewer than 2 generators PRODUCED findings — so
+// a 0-finding review demoted the second generator to a verifier. These tests
+// pin that down.
+// ---------------------------------------------------------------------------
+
+describe('generators always generate (no silent demotion) — skill reviews', () => {
+  const TWO_GENERATORS = [
+    { provider: 'deepseek' as const, model: 'deepseek-v4-flash', role: 'generator' as const },
+    { provider: 'anthropic' as const, model: 'claude-opus-4-8', role: 'generator' as const },
+  ]
+
+  it('2 generators producing ZERO findings → BOTH still generator rows (not verifiers)', async () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+    setAiPanel({ participants: TWO_GENERATORS })
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    // Every generator returns an EMPTY finding set (a valid generated result).
+    const llmJsonWithRepairFor = vi.fn().mockImplementation(async (cfg, _opts, validate) => {
+      const empty = { skillName: 'My Reviewer', findings: [] }
+      if (validate(empty) !== null) {
+        return { result: empty, usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 } }
+      }
+      // A verify call (shouldn't happen with 0 merged findings) — neutral.
+      return { result: validate({ verdicts: [] }), usage: undefined }
+    })
+
+    const run = createAiRun(makeInput(), makeDeps({ llmJsonWithRepairFor }))
+    await run.runSkillReviews()
+
+    const models = run.skillReviews[0].state.models ?? []
+    const generatorProviders = models.filter((m) => m.role === 'generator').map((m) => m.providerId).sort()
+    // BOTH configured generators are generator rows — NEITHER demoted to verifier.
+    expect(generatorProviders).toEqual(['anthropic', 'deepseek'])
+    expect(models.some((m) => m.role === 'verifier')).toBe(false)
+    // The result is a (valid) empty finding set.
+    const result = run.skillReviews[0].state.value as SkillReviewResult
+    expect(result.findings).toEqual([])
+  })
+
+  it('the breakdown generator set EXACTLY matches the configured generators (role match)', async () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+    setOpenaiKey('o')
+    // 2 generators + 1 verifier — the panel the user configured.
+    setAiPanel({ participants: [
+      { provider: 'deepseek', model: 'deepseek-v4-flash', role: 'generator' },
+      { provider: 'anthropic', model: 'claude-opus-4-8', role: 'generator' },
+      { provider: 'openai', model: 'gpt-5.5', role: 'verifier' },
+    ] })
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    const GEN: Record<string, SkillReviewResult> = {
+      deepseek: { skillName: 'My Reviewer', findings: [{ path: 'src/foo.ts', line: 10, severity: 'high', body: 'deepseek bug' }] },
+      anthropic: { skillName: 'My Reviewer', findings: [{ path: 'src/foo.ts', line: 50, severity: 'high', body: 'anthropic bug' }] },
+    }
+    const llmJsonWithRepairFor = vi.fn().mockImplementation(async (cfg, _opts, validate) => {
+      const gen = GEN[cfg.providerId]
+      if (gen && validate(gen) !== null) {
+        return { result: gen, usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 } }
+      }
+      return { result: { verdicts: [] }, usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }
+    })
+
+    const run = createAiRun(makeInput(), makeDeps({ llmJsonWithRepairFor }))
+    await run.runSkillReviews()
+
+    const models = run.skillReviews[0].state.models ?? []
+    const generatorSet = models.filter((m) => m.role === 'generator').map((m) => m.providerId).sort()
+    const verifierSet = models.filter((m) => m.role === 'verifier').map((m) => m.providerId).sort()
+    // generator set === configured generators; verifier set === configured verifiers.
+    expect(generatorSet).toEqual(['anthropic', 'deepseek'])
+    expect(verifierSet).toEqual(['openai'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Deep multi-generator — each generator runs its OWN deep pass (Plan P deep)
+//
+// With deep ON + ≥2 generators, every generator GENERATES through its own
+// runDeepJson tool loop (provider override), sharing the per-review deep cache
+// so a file read once is reused across generators. Usage is captured per
+// generator; both are generator rows (no demotion).
+// ---------------------------------------------------------------------------
+
+describe('deep multi-generator fusion in runSkillReviews (Plan P deep)', () => {
+  /** A deep source whose getFileAtHead is a spy so we can count fetches. */
+  function makeDeepSource(overrides: Record<string, unknown> = {}) {
+    return {
+      getFileAtHead: vi.fn(async () => 'the file contents'),
+      getFileAtBase: vi.fn(async () => null),
+      searchCode: vi.fn(async () => ''),
+      findReferences: vi.fn(async () => ''),
+      ...overrides,
+    }
+  }
+
+  it('each generator runs a deep pass with its OWN provider override; shared cache reused; usage captured; both generator rows', async () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+    setAiPanel({ participants: [
+      { provider: 'deepseek', model: 'deepseek-v4-flash', role: 'generator' },
+      { provider: 'anthropic', model: 'claude-opus-4-8', role: 'generator' },
+    ] })
+    // Deep mode on (legacy all-deep matrix).
+    localStorage.setItem('review123:settings', JSON.stringify({
+      deepseekKey: 'k', anthropicKey: 'a', aiProvider: 'deepseek', aiModel: 'deepseek-v4-flash',
+      aiDeepReview: true,
+      aiPanel: { participants: [
+        { provider: 'deepseek', model: 'deepseek-v4-flash', role: 'generator' },
+        { provider: 'anthropic', model: 'claude-opus-4-8', role: 'generator' },
+      ] },
+    }))
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    const source = makeDeepSource()
+    const overridesSeen: (string | undefined)[] = []
+
+    // Each generator's deep loop reads the SAME file (src/foo.ts) and returns a
+    // unique finding. The loop calls executeTool so the shared cache is exercised.
+    // Distinct lines so the two findings don't dedup-merge into one.
+    const GEN_FINDING: Record<string, { line: number; body: string }> = {
+      deepseek: { line: 10, body: 'deepseek deep bug' },
+      anthropic: { line: 99, body: 'anthropic deep bug' },
+    }
+    const llmToolLoop = vi.fn().mockImplementation(
+      async (opts: {
+        override?: { provider: { id: string } }
+        executeTool: (name: string, args: Record<string, unknown>) => Promise<unknown>
+      }) => {
+        const providerId = opts.override?.provider.id
+        overridesSeen.push(providerId)
+        // Read the same file in both generators' loops — exercises the cache.
+        await opts.executeTool('read_file', { path: 'src/foo.ts' })
+        const f = providerId ? GEN_FINDING[providerId] ?? { line: 1, body: 'unknown' } : { line: 1, body: 'no-override' }
+        return {
+          content: JSON.stringify({ skillName: 'My Reviewer', findings: [{ path: 'src/foo.ts', line: f.line, severity: 'high', body: f.body }] }),
+          usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
+          toolCallsUsed: 1,
+        }
+      },
+    )
+
+    // Cross-confirm verify calls go through llmJsonWithRepairFor — neutral.
+    const llmJsonWithRepairFor = vi.fn().mockImplementation(async (_cfg, _opts, validate) => {
+      return { result: validate({ verdicts: [] }) ?? { verdicts: [] }, usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }
+    })
+
+    const run = createAiRun(
+      { ...makeInput(), deepReview: source },
+      makeDeps({ llmToolLoop, llmJsonWithRepairFor }),
+    )
+    await run.runSkillReviews()
+
+    // Each generator's deep loop ran with ITS OWN provider override.
+    expect(overridesSeen.filter(Boolean).sort()).toEqual(['anthropic', 'deepseek'])
+
+    // The shared deep cache means src/foo.ts was fetched ONCE across both
+    // generators (a file read once is not refetched per generator).
+    expect(source.getFileAtHead).toHaveBeenCalledTimes(1)
+
+    // Both configured generators are generator rows carrying usage.
+    const models = run.skillReviews[0].state.models ?? []
+    const genRows = models.filter((m) => m.role === 'generator')
+    expect(genRows.map((m) => m.providerId).sort()).toEqual(['anthropic', 'deepseek'])
+    expect(genRows.every((m) => m.usage !== undefined)).toBe(true)
+
+    // The union carries BOTH generators' deep findings (recall).
+    const result = run.skillReviews[0].state.value as SkillReviewResult
+    const bodies = result.findings.map((f) => f.body)
+    expect(bodies).toContain('deepseek deep bug')
+    expect(bodies).toContain('anthropic deep bug')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Narration label — the active model that ONLY ran descriptive single-pass
+// tasks is labelled "active · narration", NOT "Generator".
+// ---------------------------------------------------------------------------
+
+describe('active/narration model labelling in modelCostBreakdown', () => {
+  it('default panel: the active model that generated the verdict stays a Generator row (narration folds in)', async () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k') // single key → single-generator default path
+
+    const llmJsonWithRepairFor = vi.fn()
+    // The active model produces a real verdict (a finding-generation task) so it
+    // earns a generator row; narration tasks then fold into it.
+    const llmJsonWithRepairWithUsage = vi.fn().mockImplementation(async (_opts: unknown, validate: (x: unknown) => unknown) => {
+      const v: VerdictResult = { level: 'minor-changes', evidence: ['src/foo.ts ev'], notAnalyzed: [] }
+      if (validate(v) !== null) return { result: v, usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }
+      // Other single-pass (narration) tasks.
+      return { result: validate({ skillName: 'x', findings: [] }) ?? null, usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 } }
+    })
+    const run = createAiRun(makeInput(), makeDeps({ llmJsonWithRepairFor, llmJsonWithRepairWithUsage }))
+    await run.start()
+
+    const rows = run.modelCostBreakdown
+    // The active model (deepseek) has ONE row, and it's a Generator (it produced
+    // the verdict/findings) — its narration tasks (Summary/Hotspots/…) fold in.
+    const deepseekRows = rows.filter((r) => r.providerId === 'deepseek')
+    expect(deepseekRows).toHaveLength(1)
+    expect(deepseekRows[0].role).toBe('generator')
+    // Narration tasks appear in the generator row's drilldown, not as a separate
+    // narrator row.
+    const taskNames = deepseekRows[0].byTask.map((t) => t.task)
+    // The verdict (generation) AND a narration task (Hotspots) share the row.
+    expect(taskNames).toContain('Verdict')
+    expect(taskNames).toContain('Hotspots')
+    // No standalone narrator row in the default single-model path.
+    expect(rows.some((r) => r.role === 'narrator')).toBe(false)
+  })
+
+  it('active model that ONLY narrated (not a configured generator) → standalone "narrator" row, not Generator', async () => {
+    // Active = gemini (runs the descriptive tasks); the configured GENERATORS are
+    // deepseek + anthropic. gemini never generates findings → pure narrator.
+    setAiProvider('gemini')
+    setGeminiKey('g')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+    setAiPanel({ participants: [
+      { provider: 'deepseek', model: 'deepseek-v4-flash', role: 'generator' },
+      { provider: 'anthropic', model: 'claude-opus-4-8', role: 'generator' },
+    ] })
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    const VERDICT: Record<string, VerdictResult> = {
+      deepseek: { level: 'minor-changes', evidence: ['src/foo.ts ev'], notAnalyzed: [] },
+      anthropic: { level: 'minor-changes', evidence: ['src/bar.ts ev'], notAnalyzed: [] },
+    }
+    const SKILL: Record<string, SkillReviewResult> = {
+      deepseek: { skillName: 'My Reviewer', findings: [{ path: 'src/foo.ts', line: 1, severity: 'low', body: 'd' }] },
+      anthropic: { skillName: 'My Reviewer', findings: [{ path: 'src/bar.ts', line: 1, severity: 'low', body: 'a' }] },
+    }
+    const llmJsonWithRepairFor = vi.fn().mockImplementation(async (cfg, _opts, validate) => {
+      const v = VERDICT[cfg.providerId]
+      if (v && validate(v) !== null) return { result: v, usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 } }
+      const s = SKILL[cfg.providerId]
+      if (s && validate(s) !== null) return { result: s, usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 } }
+      return { result: { verdicts: [] }, usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }
+    })
+    // The descriptive tasks (summary/hotspots/…) run on gemini via the WithUsage stub.
+    const llmJsonWithRepairWithUsage = vi.fn().mockImplementation(async (_opts: unknown, validate: (x: unknown) => unknown) => {
+      // gemini single-pass narration tasks — return a benign valid shape per task.
+      return { result: validate({ skillName: 'x', findings: [] }) ?? null, usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 } }
+    })
+
+    const deps = makeDeps({ llmJsonWithRepairFor, llmJsonWithRepairWithUsage })
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+    await run.runSkillReviews()
+
+    const rows = run.modelCostBreakdown
+    const geminiRows = rows.filter((r) => r.providerId === 'gemini')
+    // gemini appears ONLY as a narrator (it never generated findings).
+    expect(geminiRows.every((r) => r.role === 'narrator')).toBe(true)
+    expect(geminiRows.some((r) => r.role === 'generator')).toBe(false)
+    expect(rows.some((r) => r.role === 'narrator' && r.providerId === 'gemini')).toBe(true)
+    // The configured generators (deepseek, anthropic) are the generator rows.
+    const genProviders = rows.filter((r) => r.role === 'generator').map((r) => r.providerId).sort()
+    expect(genProviders).toEqual(['anthropic', 'deepseek'])
   })
 })

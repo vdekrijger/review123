@@ -107,4 +107,71 @@ describe('buildModelCostBreakdown', () => {
     expect(out[0].total).toBeUndefined()
     expect(out[0].byTask).toEqual([{ task: 'Summary' }])
   })
+
+  // -------------------------------------------------------------------------
+  // Narration role (active model running only descriptive single-pass tasks)
+  // -------------------------------------------------------------------------
+
+  it('a model that ONLY narrated keeps a standalone narrator row (not generator)', () => {
+    const cs: CostContribution[] = [
+      { providerId: 'deepseek', modelId: 'v4', role: 'narrator', task: 'Summary', usage: usage(50) },
+      { providerId: 'deepseek', modelId: 'v4', role: 'narrator', task: 'Hotspots', usage: usage(30) },
+      // A DIFFERENT model is the configured generator.
+      { providerId: 'anthropic', modelId: 'opus', role: 'generator', task: 'Verdict', usage: usage(100), surfaced: 2 },
+    ]
+    const out = buildModelCostBreakdown(cs)
+    const narrator = out.find((r) => r.role === 'narrator')
+    expect(narrator).toBeDefined()
+    expect(narrator!.providerId).toBe('deepseek')
+    expect(narrator!.total).toEqual(usage(80))
+    expect(narrator!.byTask.map((t) => t.task)).toEqual(['Summary', 'Hotspots'])
+    // Narrator carries no finding-generation impact fields.
+    expect(narrator!.surfaced).toBeUndefined()
+    expect(narrator!.impact).toBeUndefined()
+    // It is NOT relabelled as a generator.
+    expect(out.filter((r) => r.role === 'generator').map((r) => r.providerId)).toEqual(['anthropic'])
+  })
+
+  it('folds narration INTO the generator row when the active model is ALSO a configured generator', () => {
+    const cs: CostContribution[] = [
+      // Same model both generates findings AND ran the descriptive tasks.
+      { providerId: 'deepseek', modelId: 'v4', role: 'generator', task: 'Verdict', usage: usage(100), surfaced: 3, uniqueCatch: 1 },
+      { providerId: 'deepseek', modelId: 'v4', role: 'narrator', task: 'Summary', usage: usage(40) },
+      { providerId: 'deepseek', modelId: 'v4', role: 'narrator', task: 'Hotspots', usage: usage(20) },
+    ]
+    const out = buildModelCostBreakdown(cs)
+    // ONE row, and it stays a Generator (it generated findings).
+    expect(out).toHaveLength(1)
+    expect(out[0].role).toBe('generator')
+    // Narration tasks fold into the generator row's byTask + total.
+    expect(out[0].total).toEqual(usage(160))
+    expect(out[0].byTask.map((t) => t.task)).toEqual(['Verdict', 'Summary', 'Hotspots'])
+    expect(out[0].surfaced).toBe(3)
+    // No standalone narrator row remains.
+    expect(out.some((r) => r.role === 'narrator')).toBe(false)
+  })
+
+  it('orders generators, then verifiers, then narrators', () => {
+    const cs: CostContribution[] = [
+      { providerId: 'x', modelId: 'narr', role: 'narrator', task: 'Summary' },
+      { providerId: 'a', modelId: 'ver', role: 'verifier', task: 'Verdict' },
+      { providerId: 'a', modelId: 'gen', role: 'generator', task: 'Verdict' },
+    ]
+    const out = buildModelCostBreakdown(cs)
+    expect(out.map((r) => r.role)).toEqual(['generator', 'verifier', 'narrator'])
+  })
+
+  it('RECONCILES with narration folded: Σ row totals === Σ input usage', () => {
+    const cs: CostContribution[] = [
+      { providerId: 'deepseek', modelId: 'v4', role: 'generator', task: 'Verdict', usage: usage(100) },
+      { providerId: 'deepseek', modelId: 'v4', role: 'narrator', task: 'Summary', usage: usage(60) },
+      { providerId: 'anthropic', modelId: 'opus', role: 'narrator', task: 'Story', usage: usage(20) },
+      { providerId: 'anthropic', modelId: 'opus', role: 'verifier', task: 'Verdict', usage: usage(30) },
+    ]
+    const out = buildModelCostBreakdown(cs)
+    // anthropic narrator stays standalone (anthropic has no generator row);
+    // deepseek narration folds into its generator row. Total is invariant.
+    expect(sumTotals(out)).toBe(sumInputs(cs))
+    expect(sumTotals(out)).toBe(210)
+  })
 })

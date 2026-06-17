@@ -724,22 +724,36 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   /**
-   * Plan O 'generate' mode for a skill review: run the skill prompt with EVERY
-   * ensemble participant as an independent generator, dedup-merge the union,
-   * cross-confirm (comprehensive prompt), and rebuild a SkillReviewResult whose findings carry
-   * `raisedBy` + `verification`, surfaced-first. Returns null when fewer than 2
-   * generators produced findings (caller falls back to single-generator). Never
-   * throws — any failure returns null.
+   * Plan O/P 'generate' mode for a skill review: run the skill prompt with EVERY
+   * configured GENERATOR independently, dedup-merge the union, cross-confirm
+   * (comprehensive prompt), and rebuild a SkillReviewResult whose findings carry
+   * `raisedBy` + `verification`, surfaced-first.
+   *
+   * Honoring configured roles (no silent demotion): this runs whenever there are
+   * ≥2 usable GENERATORS (keys present) — checked by the caller's
+   * `fusionGenerateEffective()`. It NEVER bails based on how many generators
+   * actually PRODUCED findings: a generator that finds nothing (or whose call
+   * fails) still gets a GENERATOR row (0 findings is a valid generated result),
+   * so a model the user marked Generator is never demoted to a verifier. Only the
+   * caller's <2-generator gate falls back to the single-generator path. Never
+   * throws — any unexpected failure returns null (caller falls back).
+   *
+   * When `deep` is true each generator GENERATES through its own DEEP pass
+   * (runDeepJson with the generator's provider override), sharing the per-review
+   * deep cache so file reads are reused across generators. Otherwise each
+   * generator runs a single-pass llmJsonWithRepairFor (unchanged).
    */
   async function fuseSkillReview(
     prompts: { system: string; user: string },
     skillName: string,
     idx: number,
+    deep: boolean,
     onUpdate?: () => void,
   ): Promise<{ result: SkillReviewResult; usage: LlmUsage | undefined; models: VerdictModelBreakdown[] } | null> {
     try {
       // Plan P: generators GENERATE; ALL participants (generators + verifiers)
-      // verify findings they didn't raise. Multi-gen requires ≥2 generators.
+      // verify findings they didn't raise. Multi-gen requires ≥2 generators
+      // (the caller already gated on fusionGenerateEffective()).
       const participants = fusionParticipants()
       const generators = fusionGenerators()
       if (generators.length < 2) return null
@@ -748,17 +762,31 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         entry.state = { ...entry.state, activity: [...(entry.state.activity ?? []), line] }
         onUpdate?.()
       }
-      note(`Generating with ${generators.length} models (fusion)…`)
+      note(deep
+        ? `Deep-generating with ${generators.length} models (fusion)…`
+        : `Generating with ${generators.length} models (fusion)…`)
 
       // 1. Each GENERATOR generates independently (parallel, own provider cfg).
+      //    Deep: its own runDeepJson tool loop (shared cache); else single-pass.
       const { perGenerator, usage: genUsage, usageByModel: genUsageByModel } = await generateMultiGen(
         generators,
         async (cfg) => {
-          const { result, usage } = await llmJsonWithRepairFor<SkillReviewResult>(
-            cfg,
-            { system: prompts.system, user: prompts.user },
-            validateSkillReviewResult,
-          )
+          const { result, usage } = deep
+            ? await runDeepJson<SkillReviewResult>(
+                { system: prompts.system, user: prompts.user },
+                validateSkillReviewResult,
+                note,
+                {
+                  nonTrivial: false,
+                  outputClaimsCode: (r) => r.findings.length > 0,
+                },
+                cfg,
+              )
+            : await llmJsonWithRepairFor<SkillReviewResult>(
+                cfg,
+                { system: prompts.system, user: prompts.user },
+                validateSkillReviewResult,
+              )
           const findings: VerifiableFinding[] = result.findings.map((f, i) => ({
             id: `${cfg.providerId}:${cfg.model.id}:${i}:${djb2(f.body)}`,
             path: f.path,
@@ -770,12 +798,20 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         },
       )
 
-      if (perGenerator.length < 2) return null
+      // NO silent demotion: we do NOT bail when fewer than 2 generators PRODUCED
+      // findings. Every configured generator stays a generator row (built from
+      // `participants` in buildFusionModels), even when the union is empty.
 
       // 2. Merge/dedup the union.
       const merged = mergeGeneratorFindings(perGenerator)
       if (merged.length === 0) {
-        return { result: { skillName, findings: [] }, usage: genUsage, models: [] }
+        // 0 findings is a VALID generated result — still emit generator rows so
+        // the panel matches the configured roles (no demotion to verifier).
+        return {
+          result: { skillName, findings: [] },
+          usage: genUsage,
+          models: buildFusionModels(participants, generators.length, genUsageByModel, [], []),
+        }
       }
 
       // 3. Cross-confirm (each participant verifies findings it didn't raise).
@@ -815,32 +851,56 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
    * `level` (and primary `notAnalyzed`, unioned with packed context). The user's
    * 'generate' intent is the EVIDENCE recall, with one recommendation.
    *
-   * Returns null when fewer than 2 generators produced a verdict (caller falls
-   * back to the single-generator verify path). Never throws.
+   * Honoring configured roles (no silent demotion): runs whenever there are ≥2
+   * usable GENERATORS (the caller gates on fusionGenerateEffective()). It NEVER
+   * bails based on how many generators actually produced evidence — every
+   * configured generator stays a GENERATOR row even when the union is empty, so a
+   * verdict that finds no evidence does not silently demote a configured
+   * generator to a verifier. Returns null only when there are <2 usable
+   * generators (caller's gate) or no primary verdict was produced. Never throws.
+   *
+   * When `deep` is true each generator generates its verdict through its own DEEP
+   * pass (runDeepJson with the generator's provider override), sharing the
+   * per-review deep cache. Otherwise each generator runs a single-pass call.
    */
   async function fuseVerdict(
     prompts: { system: string; user: string },
     ctx: PackedContext,
+    deep: boolean,
     onActivity?: (line: string) => void,
   ): Promise<{ result: VerdictResult; usage: LlmUsage | undefined; models: VerdictModelBreakdown[] } | null> {
     try {
       const participants = fusionParticipants()
       const generators = fusionGenerators()
       if (generators.length < 2) return null
-      onActivity?.(`Generating verdict with ${generators.length} models (fusion)…`)
+      onActivity?.(deep
+        ? `Deep-generating verdict with ${generators.length} models (fusion)…`
+        : `Generating verdict with ${generators.length} models (fusion)…`)
 
       // 1. Each GENERATOR generates a verdict independently (parallel, own cfg).
       //    Evidence bullets become VerifiableFindings (no real line — anchored by
       //    best-effort path token + description, exactly like the verify path).
+      //    Deep: each generator runs its own runDeepJson tool loop (shared cache).
       const perVerdict = new Map<string, VerdictResult>()
       const { perGenerator, usage: genUsage, usageByModel: genUsageByModel } = await generateMultiGen(
         generators,
         async (cfg) => {
-          const { result, usage } = await llmJsonWithRepairFor<VerdictResult>(
-            cfg,
-            { system: prompts.system, user: prompts.user },
-            validateVerdict,
-          )
+          const { result, usage } = deep
+            ? await runDeepJson<VerdictResult>(
+                { system: prompts.system, user: prompts.user },
+                validateVerdict,
+                (line) => onActivity?.(line),
+                {
+                  nonTrivial: ctx.includedFiles.length > 1,
+                  outputClaimsCode: (r) => r.evidence.length > 0,
+                },
+                cfg,
+              )
+            : await llmJsonWithRepairFor<VerdictResult>(
+                cfg,
+                { system: prompts.system, user: prompts.user },
+                validateVerdict,
+              )
           perVerdict.set(`${cfg.providerId}:${cfg.model.id}`, result)
           const findings: VerifiableFinding[] = result.evidence.map((bullet, i) => ({
             id: `${cfg.providerId}:${cfg.model.id}:${i}:${djb2(bullet)}`,
@@ -853,7 +913,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         },
       )
 
-      if (perGenerator.length < 2) return null
+      // NO silent demotion: do NOT bail on how many generators produced evidence.
 
       // The PRIMARY generator's holistic verdict supplies `level` + `notAnalyzed`.
       const gen = resolveEnsemble().generator
@@ -1531,9 +1591,23 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     validate: (x: unknown) => T | null,
     onActivity: (line: string) => void,
     completeness?: CompletenessGuard<T>,
+    cfg?: ProviderConfig,
   ): Promise<{ result: T; usage?: LlmUsage; toolCallsUsed: number }> {
+    // The toolkit shares the per-review deepCache, so file reads/searches are
+    // reused across tasks AND across deep-multigen generators (each generator
+    // creates its own toolkit but they hit the same cache — a file read once is
+    // not refetched per generator).
     const toolkit = createDeepReviewToolkit(deepReview!, deepCache)
     const system = withDeepReviewGuidance(prompts.system, toolkit.tools.map((t) => t.name))
+    // Deep multi-gen: route each generator's deep loop to its OWN provider/model
+    // via the override. Omitted (undefined) → the loop runs on the active config
+    // (byte-identical to every existing single-generator deep task).
+    const override = cfg
+      ? (() => {
+          const provider = getProvider(cfg.providerId)
+          return provider ? { provider, model: cfg.model } : undefined
+        })()
+      : undefined
     const baseOpts = {
       system,
       tools: toolkit.tools,
@@ -1541,6 +1615,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       humanize: toolkit.humanize,
       maxToolCalls: DEEP_REVIEW_MAX_TOOL_CALLS,
       onToolEvent: (ev: { detail: string }) => onActivity(ev.detail),
+      ...(override ? { override } : {}),
     }
 
     let loop = await llmToolLoop({ ...baseOpts, user: prompts.user })
@@ -1578,18 +1653,21 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // fall through to the repair pass
     }
 
-    // Repair: reformat the already-verified answer — no tools needed.
-    const repaired = await llmJsonWithRepairWithUsage<T>(
-      {
-        system: prompts.system,
-        user:
-          `${prompts.user}\n\nYou already analyzed this PR (with verification tools) and answered:\n` +
-          `${loop.content}\n` +
-          'Reformat that answer as valid JSON exactly matching the required shape. ' +
-          'Do not change the verified content. Respond with the JSON only.',
-      },
-      validate,
-    )
+    // Repair: reformat the already-verified answer — no tools needed. When a
+    // provider override is in play (deep multi-gen) the repair runs on THAT
+    // generator's provider so the reformat tokens are attributed to it; the
+    // active-config path keeps using llmJsonWithRepairWithUsage (unchanged).
+    const repairPrompts = {
+      system: prompts.system,
+      user:
+        `${prompts.user}\n\nYou already analyzed this PR (with verification tools) and answered:\n` +
+        `${loop.content}\n` +
+        'Reformat that answer as valid JSON exactly matching the required shape. ' +
+        'Do not change the verified content. Respond with the JSON only.',
+    }
+    const repaired = cfg
+      ? await llmJsonWithRepairFor<T>(cfg, repairPrompts, validate)
+      : await llmJsonWithRepairWithUsage<T>(repairPrompts, validate)
     return {
       result: repaired.result,
       usage: sumUsage(usage, repaired.usage),
@@ -1653,9 +1731,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // Plan P 'generate' mode: every configured generator produces a verdict
       // independently; their EVIDENCE is unioned + cross-confirmed (recall) and
       // each generator gets a generator row. The holistic `level` is the primary
-      // generator's. Single-pass per generator — deep stays on the verify path.
-      if (fusionGenerateEffective() && !deep.enabled) {
-        const fused = await fuseVerdict(prompts, ctx, (line) => {
+      // generator's. Runs in BOTH shallow and DEEP mode (each generator deep-
+      // generates through its own tool loop) so a configured generator is NEVER
+      // silently demoted to a verifier — honoring the user's configured roles.
+      if (fusionGenerateEffective()) {
+        const fused = await fuseVerdict(prompts, ctx, deep.enabled, (line) => {
           verdictState.activity = [...(verdictState.activity ?? []), line]
         })
         if (fused) {
@@ -2169,13 +2249,15 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       let toolCallsUsed: number | undefined
       let skillModels: VerdictModelBreakdown[] | undefined
 
-      // Plan O 'generate' mode: every ensemble model generates this skill review
-      // independently; the union is dedup-merged and cross-confirmed so a real
-      // finding only one model caught can still surface (recall). Single-pass per
-      // participant — deep multi-gen stays on the verify path below.
+      // Plan O/P 'generate' mode: every configured GENERATOR generates this skill
+      // review independently; the union is dedup-merged and cross-confirmed so a
+      // real finding only one model caught can still surface (recall). Runs in
+      // BOTH shallow and DEEP mode (each generator deep-generates through its own
+      // tool loop) so a configured generator is NEVER silently demoted to a
+      // verifier — honoring the user's configured roles.
       let fusionHandled = false
-      if (fusionGenerateEffective() && !deep.enabled) {
-        const fused = await fuseSkillReview(prompts, skill.name, idx, onUpdate)
+      if (fusionGenerateEffective()) {
+        const fused = await fuseSkillReview(prompts, skill.name, idx, deep.enabled, onUpdate)
         if (fused) {
           skillResult = fused.result
           skillUsage = fused.usage
@@ -2497,10 +2579,29 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         }
       }
 
-      // Single-pass task: one active-model generator contribution carrying its
-      // captured usage. Emitted even with no usage so the task still appears
-      // (byTask shows it ran); an undefined usage contributes 0 to the total.
+      // Single-pass task: one active-model NARRATION contribution carrying its
+      // captured usage. The active model ran the DESCRIPTIVE tasks (summary/
+      // hotspots/diagrams/tests/alternatives/story/coach) — it did NOT generate
+      // review findings, so it's tagged 'narrator' (rendered "active · narration"),
+      // distinct from a finding-generating 'generator'. If this same model is ALSO
+      // a configured ensemble generator, buildModelCostBreakdown folds these
+      // narration tasks into its generator row (it stays a Generator). Emitted
+      // even with no usage so the task still appears (byTask shows it ran).
       const addSinglePass = (usage: LlmUsage | undefined, task: string): void => {
+        contributions.push({
+          providerId: activeProviderId,
+          modelId: activeModelId,
+          role: 'narrator',
+          task,
+          ...(usage ? { usage } : {}),
+        })
+      }
+
+      // Finding-GENERATION fallback on the active model (verdict / reviewer in the
+      // single-generator path): the active model GENERATED findings/evidence, so
+      // it's a 'generator' contribution (NOT narration). This is the default-panel
+      // path and stays byte-identical: one active-model generator row, unchanged.
+      const addActiveGenerator = (usage: LlmUsage | undefined, task: string): void => {
         contributions.push({
           providerId: activeProviderId,
           modelId: activeModelId,
@@ -2511,11 +2612,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       }
 
       // Verdict: per-model rows if it cross-verified; else attribute its usage to
-      // the active model (covers evidence-free / no-ensemble verdicts).
+      // the active model as a GENERATOR (it produced the verdict/evidence).
       if (verdictModelsState.length > 0) {
         addModelRows(verdictModelsState, 'Verdict')
       } else if (verdictState.usage) {
-        addSinglePass(verdictState.usage, 'Verdict')
+        addActiveGenerator(verdictState.usage, 'Verdict')
       }
 
       // Single-pass tasks that always run on the active model.
@@ -2528,14 +2629,15 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       if (coachUsage) addSinglePass(coachUsage, 'Coach')
 
       // Reviewers: per-model rows when an ensemble ran; else attribute the
-      // reviewer's total usage to the active model.
+      // reviewer's total usage to the active model as a GENERATOR (it produced
+      // the findings — a reviewer is finding-generation, not narration).
       for (const e of skillReviewsState) {
         const task = `Reviewer: ${e.name}`
         const models = e.state.models ?? []
         if (models.length > 0) {
           addModelRows(models, task)
         } else if (e.state.usage) {
-          addSinglePass(e.state.usage, task)
+          addActiveGenerator(e.state.usage, task)
         }
       }
 

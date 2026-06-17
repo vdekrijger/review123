@@ -30,6 +30,20 @@ export function formatGeneratorImpact(surfaced: number, uniqueCatch = 0): string
 }
 
 /**
+ * Label for the ACTIVE / NARRATION model row — the model that ran the
+ * descriptive single-pass tasks (summary/hotspots/diagrams/tests/alternatives/
+ * story/coach) but did NOT generate review findings. Rendered as its own muted
+ * "active · narration" entry so it is never conflated with a finding-generating
+ * Generator. A model that is BOTH the active narrator AND a configured generator
+ * is folded into its Generator row upstream, so this label only ever shows for a
+ * model that ONLY narrated.
+ */
+export const NARRATOR_ROLE_LABEL = 'active · narration'
+export function formatNarratorImpact(): string {
+  return 'ran descriptive tasks (summary, hotspots, diagrams…)'
+}
+
+/**
  * Impact phrase for a VERIFIER, leading with decisiveness. Examples:
  *   "1 decisive refute (removed a finding)"
  *   "2 decisive votes · 3c/2r"

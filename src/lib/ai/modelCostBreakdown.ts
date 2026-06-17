@@ -25,7 +25,15 @@ import type { LlmUsage } from '../llm/llm'
 export interface CostContribution {
   providerId: string
   modelId: string
-  role: 'generator' | 'verifier'
+  /**
+   * The model's role on this task. 'narrator' is the ACTIVE model running the
+   * descriptive single-pass tasks (summary/hotspots/diagrams/tests/alternatives/
+   * story/coach) — it did NOT generate review findings, so it is labelled
+   * distinctly from a finding-generating 'generator'. A model that is BOTH the
+   * active narrator AND a configured ensemble generator is folded into its
+   * generator row (it generated findings) — see buildModelCostBreakdown.
+   */
+  role: 'generator' | 'verifier' | 'narrator'
   /** Human task label, e.g. 'Summary', 'Verdict', 'Reviewer: Security'. */
   task: string
   /** Token usage this (model, role) spent on this task, when captured. */
@@ -51,7 +59,8 @@ export interface ModelCostTask {
 export interface ModelCostRow {
   providerId: string
   modelId: string
-  role: 'generator' | 'verifier'
+  /** 'narrator' = active model that ran only descriptive single-pass tasks. */
+  role: 'generator' | 'verifier' | 'narrator'
   /** Sum of this row's contributions' usage. undefined when none had usage. */
   total?: LlmUsage
   /** Generator: summed surfaced findings. */
@@ -94,9 +103,13 @@ export function buildModelCostBreakdown(
         modelId: c.modelId,
         role: c.role,
         byTask: [],
+        // Generators carry surfaced/uniqueCatch; verifiers carry impact;
+        // narrators carry neither (they ran descriptive tasks, not generation).
         ...(c.role === 'generator'
           ? { surfaced: 0, uniqueCatch: 0 }
-          : { impact: { confirms: 0, refutes: 0, uncertains: 0, decisive: 0 } }),
+          : c.role === 'verifier'
+            ? { impact: { confirms: 0, refutes: 0, uncertains: 0, decisive: 0 } }
+            : {}),
       }
       byKey.set(key, row)
       taskIndexByRow.set(key, new Map())
@@ -124,7 +137,33 @@ export function buildModelCostBreakdown(
     }
   }
 
-  const roleRank = (r: ModelCostRow['role']) => (r === 'generator' ? 0 : 1)
+  // Fold narration INTO generation for a model that is BOTH the active narrator
+  // AND a configured ensemble generator: it generated findings, so it stays a
+  // single GENERATOR row (its narration tasks appear in that row's byTask
+  // drilldown). A model that ONLY narrated keeps its standalone 'narrator' row.
+  for (const [key, narratorRow] of byKey) {
+    if (narratorRow.role !== 'narrator') continue
+    const genKey = `${narratorRow.providerId}:${narratorRow.modelId}:generator`
+    const genRow = byKey.get(genKey)
+    if (!genRow) continue // pure narrator — leave it as its own row
+    genRow.total = addUsage(genRow.total, narratorRow.total)
+    const genTaskIndex = taskIndexByRow.get(genKey)!
+    for (const t of narratorRow.byTask) {
+      const pos = genTaskIndex.get(t.task)
+      if (pos === undefined) {
+        genTaskIndex.set(t.task, genRow.byTask.length)
+        genRow.byTask.push({ task: t.task, ...(t.usage ? { usage: t.usage } : {}) })
+      } else {
+        const entry = genRow.byTask[pos]
+        entry.usage = addUsage(entry.usage, t.usage)
+      }
+    }
+    byKey.delete(key)
+  }
+
+  // Stable order: generators, then verifiers, then narrators (the active
+  // narration row sits last as a muted, distinct entry).
+  const roleRank = (r: ModelCostRow['role']) => (r === 'generator' ? 0 : r === 'verifier' ? 1 : 2)
   return [...byKey.values()].sort(
     (a, b) =>
       roleRank(a.role) - roleRank(b.role) ||

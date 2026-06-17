@@ -1,11 +1,23 @@
 import { describe, it, expect } from 'vitest'
-import { formatGeneratorImpact, formatVerifierImpact } from './modelImpact'
+import { formatGeneratorImpact, formatVerifierImpact, formatNarratorImpact, NARRATOR_ROLE_LABEL } from './modelImpact'
 
 describe('formatGeneratorImpact', () => {
   it('pluralizes surfaced findings', () => {
     expect(formatGeneratorImpact(0)).toBe('0 surfaced findings')
     expect(formatGeneratorImpact(1)).toBe('1 surfaced finding')
     expect(formatGeneratorImpact(4)).toBe('4 surfaced findings')
+  })
+})
+
+describe('narration label (active model that only ran descriptive tasks)', () => {
+  it('the role label is the muted "active · narration", not "Generator"', () => {
+    expect(NARRATOR_ROLE_LABEL).toBe('active · narration')
+    expect(NARRATOR_ROLE_LABEL).not.toMatch(/generator/i)
+  })
+
+  it('the impact phrase describes descriptive work, not surfaced findings', () => {
+    expect(formatNarratorImpact()).toMatch(/descriptive/i)
+    expect(formatNarratorImpact()).not.toMatch(/surfaced/i)
   })
 })
 
