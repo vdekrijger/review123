@@ -115,6 +115,36 @@ export function visibleModels(models: LlmModelDef[], query: string): LlmModelDef
   return featured.length ? featured : models
 }
 
+/** The models flagged `featured` (in catalog order). Empty if none are flagged. */
+export function featuredModels(models: LlmModelDef[]): LlmModelDef[] {
+  return models.filter((m) => m.featured)
+}
+
+/** The synthetic key the two-column picker uses for its "Featured" pseudo-lab. */
+export const FEATURED_LAB = 'Featured'
+
+export interface LabOption {
+  /** The lab name (or FEATURED_LAB for the leading "Featured" entry). */
+  lab: string
+  /** Models in this lab (the featured set for FEATURED_LAB). */
+  models: LlmModelDef[]
+  /** True for the synthetic "Featured" entry. */
+  featured: boolean
+}
+
+/**
+ * The left-column entries for the two-column browse view: a leading "Featured"
+ * entry (only when some models are flagged), then one entry per real lab in
+ * `groupByLab` order. Each carries its model count for the count badge.
+ */
+export function labOptions(models: LlmModelDef[]): LabOption[] {
+  const out: LabOption[] = []
+  const featured = featuredModels(models)
+  if (featured.length) out.push({ lab: FEATURED_LAB, models: featured, featured: true })
+  for (const g of groupByLab(models)) out.push({ lab: g.lab, models: g.models, featured: false })
+  return out
+}
+
 /** Compact muted hint for an option: context window + $in/$out per 1M. */
 export function modelHint(model: LlmModelDef): string {
   const parts: string[] = []

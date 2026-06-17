@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { labKey, labName, modelMatches, groupByLab, visibleModels, modelHint } from './modelLabs'
+import { labKey, labName, modelMatches, groupByLab, visibleModels, modelHint, featuredModels, labOptions, FEATURED_LAB } from './modelLabs'
 import type { LlmModelDef } from './providers'
 
 const m = (id: string, label: string, extra: Partial<LlmModelDef> = {}): LlmModelDef =>
@@ -73,6 +73,33 @@ describe('visibleModels', () => {
   it('falls back to all models when none are featured', () => {
     const none = [m('a/x', 'X'), m('a/y', 'Y')]
     expect(visibleModels(none, '')).toHaveLength(2)
+  })
+})
+
+describe('featuredModels / labOptions', () => {
+  const list = [
+    m('openai/gpt-5.5', 'GPT-5.5', { featured: true }),
+    m('openai/gpt-5-mini', 'Mini'),
+    m('anthropic/claude-opus-4.8', 'Opus', { featured: true }),
+    m('anthropic/claude-haiku-4.5', 'Haiku'),
+    m('google/gemini-3.5-flash', 'Gemini'),
+  ]
+  it('featuredModels returns only the flagged ones, in order', () => {
+    expect(featuredModels(list).map((x) => x.id)).toEqual(['openai/gpt-5.5', 'anthropic/claude-opus-4.8'])
+  })
+  it('labOptions leads with a Featured entry, then one per lab with counts', () => {
+    const opts = labOptions(list)
+    expect(opts[0]).toMatchObject({ lab: FEATURED_LAB, featured: true })
+    expect(opts[0].models).toHaveLength(2)
+    const byLab = Object.fromEntries(opts.map((o) => [o.lab, o.models.length]))
+    expect(byLab).toMatchObject({ OpenAI: 2, Anthropic: 2, Google: 1 })
+    expect(opts.filter((o) => o.featured)).toHaveLength(1)
+  })
+  it('omits the Featured entry when nothing is flagged', () => {
+    const none = [m('a/x', 'X'), m('a/y', 'Y')]
+    const opts = labOptions(none)
+    expect(opts.some((o) => o.featured)).toBe(false)
+    expect(opts[0].lab).not.toBe(FEATURED_LAB)
   })
 })
 
