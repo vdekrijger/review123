@@ -116,7 +116,7 @@ describe('skillReviews state transitions', () => {
     // none has a concurrency slot yet.
     expect(snapshots[0]).toEqual(['queued', 'queued'])
 
-    // The concurrency cap is 2, so with 2 skills BOTH get a slot and flip to
+    // The concurrency cap is 4, so with 2 skills BOTH get a slot and flip to
     // loading (the queue is observable, but here it drains immediately).
     const final = run.skillReviews.map(e => e.state.status)
     expect(final).toEqual(['loading', 'loading'])
