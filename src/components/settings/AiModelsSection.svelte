@@ -15,6 +15,12 @@
   import { track } from '../../lib/analytics/analytics'
   import SecretInput from './SecretInput.svelte'
   import Spinner from '../Spinner.svelte'
+  import ModelCombobox from './ModelCombobox.svelte'
+
+  // Above this model count a provider's plain <select> becomes the searchable,
+  // lab-grouped combobox (OpenRouter's ~300; the small lists keep the select).
+  const COMBOBOX_THRESHOLD = 25
+  const useCombobox = (count: number): boolean => count > COMBOBOX_THRESHOLD
 
   const current = getSettings()
 
@@ -361,16 +367,28 @@
           <span class="use-hint" aria-hidden="true">{provider === p.id ? 'Active provider' : 'Use this provider'}</span>
         </div>
 
-        <label class="model-label">{p.displayName} model
-          <select
-            value={modelSel[p.id] || p.defaultModel}
-            onchange={(e) => onModelChange(p.id, (e.currentTarget as HTMLSelectElement).value)}
-          >
-            {#each p.models as m (m.id)}
-              <option value={m.id}>{m.label}</option>
-            {/each}
-          </select>
-        </label>
+        {#if useCombobox(p.models.length)}
+          <div class="model-label" id="model-field-{p.id}">{p.displayName} model
+            <ModelCombobox
+              id="model-combobox-{p.id}"
+              label="{p.displayName} model"
+              models={p.models}
+              value={modelSel[p.id] || p.defaultModel}
+              onselect={(modelId) => onModelChange(p.id, modelId)}
+            />
+          </div>
+        {:else}
+          <label class="model-label">{p.displayName} model
+            <select
+              value={modelSel[p.id] || p.defaultModel}
+              onchange={(e) => onModelChange(p.id, (e.currentTarget as HTMLSelectElement).value)}
+            >
+              {#each p.models as m (m.id)}
+                <option value={m.id}>{m.label}</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
 
         <label class="key-label">{p.displayName} API key
           <SecretInput bind:value={keys[p.id]} placeholder={p.keyHint} />
@@ -569,16 +587,28 @@
               <option value={p.id}>{p.displayName}</option>
             {/each}
           </select>
-          <select
-            class="ensemble-model"
-            aria-label="Model"
-            value={row.model}
-            onchange={(e) => onRowModel(i, (e.currentTarget as HTMLSelectElement).value)}
-          >
-            {#each (getProvider(row.provider)?.models ?? []) as m (m.id)}
-              <option value={m.id}>{m.label}</option>
-            {/each}
-          </select>
+          {#if useCombobox((getProvider(row.provider)?.models ?? []).length)}
+            <div class="ensemble-model ensemble-model-combobox">
+              <ModelCombobox
+                id="ensemble-model-{i}"
+                label="Model"
+                models={getProvider(row.provider)?.models ?? []}
+                value={row.model}
+                onselect={(modelId) => onRowModel(i, modelId)}
+              />
+            </div>
+          {:else}
+            <select
+              class="ensemble-model"
+              aria-label="Model"
+              value={row.model}
+              onchange={(e) => onRowModel(i, (e.currentTarget as HTMLSelectElement).value)}
+            >
+              {#each (getProvider(row.provider)?.models ?? []) as m (m.id)}
+                <option value={m.id}>{m.label}</option>
+              {/each}
+            </select>
+          {/if}
           {#if panelParticipants.length > 1}
             <button
               type="button"
@@ -1032,6 +1062,14 @@
     background: var(--surface-raised);
     color: var(--text);
     font-size: 0.82em;
+  }
+  /* The combobox brings its own input border/background — don't double it. */
+  .ensemble-model-combobox {
+    padding: 0;
+    border: none;
+    background: none;
+    min-width: 12rem;
+    flex: 1 1 12rem;
   }
   .ensemble-remove {
     background: none;

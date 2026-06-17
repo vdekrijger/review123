@@ -40,6 +40,14 @@ export interface LlmModelDef {
    * Verified June 2026 against official pricing pages (see PROVIDERS below).
    */
   pricing?: { inputPer1M: number; outputPer1M: number }
+  /**
+   * Flagship marker for providers with a LARGE lineup (OpenRouter's ~300). The
+   * searchable model picker shows the featured set first on an empty query so the
+   * user isn't dumped into hundreds of options. Omitted = false. Set by the model
+   * sync from the stable OPENROUTER_FEATURED_IDS list; ignored for the small,
+   * fully-listed single-vendor providers.
+   */
+  featured?: boolean
 }
 
 /** True when a model supports tool use. Omitted flag = supported. */

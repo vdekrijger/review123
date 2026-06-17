@@ -4,6 +4,10 @@ import {
   isEmptyChanges,
   serializeModel,
   serializeCatalog,
+  serializeOpenrouterCatalog,
+  computeOpenrouterCatalog,
+  isChatModel,
+  supportsToolsFromUpstream,
   humanizeId,
   upstreamSuffixFor,
   type Catalog,
@@ -150,6 +154,151 @@ describe('computeCatalogSync — idempotence & scope', () => {
     const reasoner = nextCatalog.deepseek.find((m) => m.id === 'deepseek-reasoner')
     // Pricing was absent before; gets added. supportsTools:false survives.
     expect(reasoner?.supportsTools).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// OpenRouter FULL catalog generation (the searchable picker's data source).
+// ---------------------------------------------------------------------------
+
+/** An upstream chat entry (text in, text out) with explicit fields. */
+function orModel(id: string, opts: Partial<OpenRouterModel> & { in?: number; out?: number; tools?: boolean } = {}): OpenRouterModel {
+  const { in: inP = 1, out: outP = 2, tools = true, ...rest } = opts
+  return {
+    id,
+    name: rest.name ?? id,
+    context_length: rest.context_length ?? 128_000,
+    architecture: rest.architecture ?? { modality: 'text->text', input_modalities: ['text'], output_modalities: ['text'] },
+    supported_parameters: rest.supported_parameters ?? (tools ? ['tools', 'temperature'] : ['temperature']),
+    pricing: rest.pricing ?? { prompt: perToken(inP), completion: perToken(outP) },
+    ...rest,
+  }
+}
+
+describe('computeOpenrouterCatalog — full lineup', () => {
+  it('includes the FULL upstream chat lineup (NOT recency-gated)', () => {
+    // Even an ancient model (no created timestamp / old) is included — the
+    // recency gate is for the curated providers only.
+    const upstream = [
+      orModel('openai/gpt-5.5', { name: 'OpenAI: GPT-5.5' }),
+      orModel('anthropic/claude-opus-4.8', { name: 'Anthropic: Claude Opus 4.8' }),
+      orModel('meta-llama/llama-2-70b', { name: 'Meta: Llama 2 70B', created: 0 }),
+    ]
+    const { models } = computeOpenrouterCatalog(upstream, [])
+    expect(models.map((m) => m.id)).toEqual(['openai/gpt-5.5', 'anthropic/claude-opus-4.8', 'meta-llama/llama-2-70b'])
+  })
+
+  it('uses upstream name as the label and converts per-token pricing to per-1M', () => {
+    const upstream = [orModel('openai/gpt-5.5', { name: 'OpenAI: GPT-5.5', in: 5, out: 30, context_length: 400_000 })]
+    const { models } = computeOpenrouterCatalog(upstream, [])
+    expect(models[0]).toMatchObject({
+      id: 'openai/gpt-5.5',
+      label: 'OpenAI: GPT-5.5',
+      contextWindowTokens: 400_000,
+      pricing: { inputPer1M: 5, outputPer1M: 30 },
+    })
+  })
+
+  it('sets supportsTools from upstream supported_parameters', () => {
+    const upstream = [
+      orModel('a/with-tools', { tools: true }),
+      orModel('b/no-tools', { tools: false }),
+    ]
+    const { models } = computeOpenrouterCatalog(upstream, [])
+    expect(models.find((m) => m.id === 'a/with-tools')!.supportsTools).toBe(true)
+    expect(models.find((m) => m.id === 'b/no-tools')!.supportsTools).toBe(false)
+  })
+
+  it('preserves featured flags from the stable featured-id list', () => {
+    const upstream = [
+      orModel('openai/gpt-5.5'),
+      orModel('openai/gpt-5-mini'),
+      orModel('anthropic/claude-opus-4.8'),
+    ]
+    const { models, foundFeatured, missingFeatured } = computeOpenrouterCatalog(upstream, ['openai/gpt-5.5', 'anthropic/claude-opus-4.8'])
+    expect(models.find((m) => m.id === 'openai/gpt-5.5')!.featured).toBe(true)
+    expect(models.find((m) => m.id === 'anthropic/claude-opus-4.8')!.featured).toBe(true)
+    expect(models.find((m) => m.id === 'openai/gpt-5-mini')!.featured).toBeUndefined()
+    expect(foundFeatured).toEqual(['openai/gpt-5.5', 'anthropic/claude-opus-4.8'])
+    expect(missingFeatured).toEqual([])
+  })
+
+  it('featured survives a regen (idempotent re-application)', () => {
+    const upstream = [orModel('openai/gpt-5.5'), orModel('x/y')]
+    const featured = ['openai/gpt-5.5']
+    const first = computeOpenrouterCatalog(upstream, featured)
+    const second = computeOpenrouterCatalog(upstream, featured)
+    expect(first.models).toEqual(second.models)
+    expect(second.models.find((m) => m.id === 'openai/gpt-5.5')!.featured).toBe(true)
+  })
+
+  it('drops a featured slug that disappeared upstream and reports it', () => {
+    const upstream = [orModel('openai/gpt-5.5')]
+    const { foundFeatured, missingFeatured } = computeOpenrouterCatalog(upstream, ['openai/gpt-5.5', 'gone/model'])
+    expect(foundFeatured).toEqual(['openai/gpt-5.5'])
+    expect(missingFeatured).toEqual(['gone/model'])
+  })
+
+  it('skips non-chat models (image/audio output) and negative-priced router meta-models', () => {
+    const upstream = [
+      orModel('openai/gpt-5.5'),
+      orModel('media/image-gen', { architecture: { modality: 'text->image', input_modalities: ['text'], output_modalities: ['image'] } }),
+      orModel('embed/only', { architecture: { modality: 'text->embedding', input_modalities: ['text'], output_modalities: ['embedding'] } }),
+      orModel('openrouter/auto', { pricing: { prompt: '-1', completion: '-1' } }),
+    ]
+    const { models } = computeOpenrouterCatalog(upstream, [])
+    expect(models.map((m) => m.id)).toEqual(['openai/gpt-5.5'])
+  })
+
+  it('dedupes upstream duplicates (first occurrence wins)', () => {
+    const upstream = [orModel('openai/gpt-5.5', { in: 5 }), orModel('openai/gpt-5.5', { in: 99 })]
+    const { models } = computeOpenrouterCatalog(upstream, [])
+    expect(models).toHaveLength(1)
+    expect(models[0].pricing).toEqual({ inputPer1M: 5, outputPer1M: 2 })
+  })
+})
+
+describe('isChatModel / supportsToolsFromUpstream', () => {
+  it('keeps text->text and drops non-text-output models', () => {
+    expect(isChatModel(orModel('a/b'))).toBe(true)
+    expect(isChatModel(orModel('a/img', { architecture: { output_modalities: ['image'], input_modalities: ['text'] } }))).toBe(false)
+  })
+  it('treats missing architecture as chat', () => {
+    expect(isChatModel({ id: 'a/b', pricing: { prompt: '1', completion: '1' } })).toBe(true)
+  })
+  it('rejects negative (dynamic) pricing', () => {
+    expect(isChatModel(orModel('openrouter/auto', { pricing: { prompt: '-1', completion: '0' } }))).toBe(false)
+  })
+  it('reads tools from supported_parameters', () => {
+    expect(supportsToolsFromUpstream(orModel('a/b', { tools: true }))).toBe(true)
+    expect(supportsToolsFromUpstream(orModel('a/b', { tools: false }))).toBe(false)
+  })
+})
+
+describe('serializeOpenrouterCatalog', () => {
+  it('emits the AUTO-GENERATED header + OPENROUTER_MODELS export with featured flag', () => {
+    const { models } = computeOpenrouterCatalog([orModel('openai/gpt-5.5', { name: 'OpenAI: GPT-5.5' })], ['openai/gpt-5.5'])
+    const out = serializeOpenrouterCatalog(models)
+    expect(out).toContain('AUTO-GENERATED by scripts/sync-models.mts')
+    expect(out).toContain("import type { LlmModelDef } from './providers'")
+    expect(out).toContain('export const OPENROUTER_MODELS: LlmModelDef[] = [')
+    expect(out).toContain('id: "openai/gpt-5.5"')
+    expect(out).toContain('featured: true')
+  })
+})
+
+describe('serializeCatalog — openrouter reference', () => {
+  it('references the imported OPENROUTER_MODELS rather than inlining the lineup', () => {
+    const out = serializeCatalog(baseCatalog())
+    expect(out).toContain("import { OPENROUTER_MODELS } from './openrouterCatalog.generated'")
+    expect(out).toContain('openrouter: OPENROUTER_MODELS,')
+  })
+})
+
+describe('serializeModel — featured', () => {
+  it('emits featured: true only when set', () => {
+    expect(serializeModel({ id: 'a', label: 'A', contextWindowTokens: 1, featured: true })).toContain('featured: true')
+    expect(serializeModel({ id: 'a', label: 'A', contextWindowTokens: 1 })).not.toContain('featured')
   })
 })
 
