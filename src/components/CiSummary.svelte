@@ -4,13 +4,36 @@
   interface Props {
     ci: CiSummary | null
     error: boolean
+    /**
+     * Re-read CI status without a page reload. Covers BOTH the loaded states
+     * (the user re-ran CI on GitHub and wants the fresh result) and the error
+     * state (a Retry after "Couldn't load CI status"). The tool can only RE-READ
+     * status — it can't trigger GitHub to re-run a check (that needs the Actions
+     * re-run API + write scopes); the per-check GitHub links cover re-running.
+     */
+    onRefreshCi?: () => void
+    /** True while a refresh is in flight — disables the control + shows progress. */
+    refreshing?: boolean
   }
 
-  let { ci, error }: Props = $props()
+  let { ci, error, onRefreshCi, refreshing = false }: Props = $props()
 </script>
 
 {#if error}
-  <div class="ci-error" role="alert">Couldn't load CI status</div>
+  <div class="ci-error" role="alert">
+    <span>Couldn't load CI status</span>
+    {#if onRefreshCi}
+      <button
+        type="button"
+        class="ci-refresh-btn"
+        onclick={onRefreshCi}
+        disabled={refreshing}
+        aria-label="Retry loading CI status"
+      >
+        {refreshing ? 'Retrying…' : 'Retry'}
+      </button>
+    {/if}
+  </div>
 {:else if ci === null}
   <div class="ci-loading" aria-busy="true">
     <span class="skeleton"></span>
@@ -28,10 +51,12 @@
       · {ci.failed} failed
     {/if}
   </div>
+  {@render refreshControl()}
 {:else if ci.failed === 0}
   <div class="ci-pass">
     All {ci.passed} check{ci.passed === 1 ? '' : 's'} passed
   </div>
+  {@render refreshControl()}
 {:else}
   <div class="ci-failures">
     <p class="ci-failures-summary">
@@ -41,7 +66,16 @@
     <ul class="ci-failures-list">
       {#each ci.failures as failure (failure.name)}
         <li class="ci-failure-item">
-          <strong class="ci-failure-name">{failure.name}</strong>
+          {#if failure.url}
+            <a
+              class="ci-failure-name ci-failure-link"
+              href={failure.url}
+              target="_blank"
+              rel="noopener noreferrer"
+            >{failure.name}<span class="ci-failure-ext" aria-hidden="true"> ↗</span></a>
+          {:else}
+            <strong class="ci-failure-name">{failure.name}</strong>
+          {/if}
           {#if failure.annotations.length > 0}
             <ul class="ci-annotations">
               {#each failure.annotations as annotation}
@@ -53,7 +87,24 @@
       {/each}
     </ul>
   </div>
+  {@render refreshControl()}
 {/if}
+
+{#snippet refreshControl()}
+  {#if onRefreshCi}
+    <div class="ci-refresh-row">
+      <button
+        type="button"
+        class="ci-refresh-btn"
+        onclick={onRefreshCi}
+        disabled={refreshing}
+        aria-label="Refresh CI status"
+      >
+        {refreshing ? 'Refreshing…' : 'Refresh CI status'}
+      </button>
+    </div>
+  {/if}
+{/snippet}
 
 <style>
   .sr-only {
@@ -107,6 +158,57 @@
 
   .ci-failure-name {
     display: block;
+  }
+
+  .ci-failure-link {
+    color: var(--legend-removed-color);
+    text-decoration: underline;
+    font-weight: 600;
+    width: fit-content;
+  }
+
+  .ci-failure-link:hover {
+    text-decoration: none;
+  }
+
+  .ci-failure-ext {
+    font-size: 0.85em;
+    opacity: 0.7;
+  }
+
+  /* Error state: message + Retry on one row */
+  .ci-error {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    color: var(--legend-removed-color);
+  }
+
+  .ci-refresh-row {
+    margin-top: 0.6rem;
+  }
+
+  .ci-refresh-btn {
+    background: none;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    padding: 0.2rem 0.55rem;
+    transition: background 0.1s, color 0.1s;
+  }
+
+  .ci-refresh-btn:hover:not(:disabled) {
+    background: #8881;
+    color: var(--text);
+  }
+
+  .ci-refresh-btn:disabled {
+    cursor: default;
+    opacity: 0.6;
   }
 
   .ci-annotations {

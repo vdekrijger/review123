@@ -12,8 +12,9 @@
  * EC-10g: annotation containing "<script>" is rendered as plain text (auto-escaped
  * by Svelte), NOT as an actual script element.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
+import userEvent from '@testing-library/user-event'
 import CiSummary from './CiSummary.svelte'
 import type { CiSummary as CiSummaryType } from '../lib/github/checks'
 
@@ -232,5 +233,127 @@ describe('CiSummary — annotation XSS escaping (EC-10g)', () => {
     expect(container.textContent).toContain('<img src=x onerror=alert(1)>')
     // No injected img elements (the component itself has none)
     expect(container.querySelectorAll('img')).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Per-check GitHub links — failed check name links to its URL when present,
+// renders as plain text (no link) when absent.
+// ---------------------------------------------------------------------------
+
+describe('CiSummary — per-check GitHub links', () => {
+  const linkedCi: CiSummaryType = {
+    total: 2,
+    passed: 0,
+    failed: 2,
+    pending: 0,
+    failures: [
+      { name: 'e2e', annotations: ['boom'], url: 'https://github.com/acme/web/runs/2' },
+      { name: 'lint', annotations: [], url: null },
+    ],
+  }
+
+  it('renders a failed check with a URL as a link to that URL', () => {
+    const { container } = render(CiSummary, { props: { ci: linkedCi, error: false } })
+    const link = container.querySelector('a.ci-failure-link') as HTMLAnchorElement
+    expect(link).not.toBeNull()
+    expect(link.getAttribute('href')).toBe('https://github.com/acme/web/runs/2')
+    expect(link.textContent).toContain('e2e')
+  })
+
+  it('opens the link in a new tab with safe rel', () => {
+    const { container } = render(CiSummary, { props: { ci: linkedCi, error: false } })
+    const link = container.querySelector('a.ci-failure-link') as HTMLAnchorElement
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer')
+  })
+
+  it('renders a failed check WITHOUT a URL as plain text (no link)', () => {
+    const { container } = render(CiSummary, { props: { ci: linkedCi, error: false } })
+    // lint has url null → no anchor, but the name still shows
+    const links = Array.from(container.querySelectorAll('a.ci-failure-link'))
+    expect(links.some((a) => a.textContent?.includes('lint'))).toBe(false)
+    expect(screen.getByText('lint')).toBeInTheDocument()
+    // Exactly one link total (only e2e)
+    expect(container.querySelectorAll('a.ci-failure-link')).toHaveLength(1)
+  })
+
+  it('renders plain text when url field is entirely absent (back-compat)', () => {
+    const noUrlCi: CiSummaryType = {
+      total: 1,
+      passed: 0,
+      failed: 1,
+      pending: 0,
+      failures: [{ name: 'legacy-check', annotations: [] }],
+    }
+    const { container } = render(CiSummary, { props: { ci: noUrlCi, error: false } })
+    expect(container.querySelectorAll('a.ci-failure-link')).toHaveLength(0)
+    expect(screen.getByText('legacy-check')).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// No-reload refresh / retry control
+// ---------------------------------------------------------------------------
+
+describe('CiSummary — refresh / retry control', () => {
+  const failureCiForRefresh: CiSummaryType = {
+    total: 1,
+    passed: 0,
+    failed: 1,
+    pending: 0,
+    failures: [{ name: 'unit', annotations: [], url: null }],
+  }
+
+  it('shows a Retry button in the error state and invokes onRefreshCi', async () => {
+    const user = userEvent.setup()
+    const onRefreshCi = vi.fn()
+    render(CiSummary, { props: { ci: null, error: true, onRefreshCi } })
+    const btn = screen.getByRole('button', { name: /retry loading ci status/i })
+    expect(btn).toBeInTheDocument()
+    await user.click(btn)
+    expect(onRefreshCi).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not render a Retry button in the error state when no callback is provided', () => {
+    render(CiSummary, { props: { ci: null, error: true } })
+    expect(screen.queryByRole('button', { name: /retry/i })).toBeNull()
+  })
+
+  it('shows a "Refresh CI status" control on the failures state and invokes onRefreshCi', async () => {
+    const user = userEvent.setup()
+    const onRefreshCi = vi.fn()
+    render(CiSummary, { props: { ci: failureCiForRefresh, error: false, onRefreshCi } })
+    const btn = screen.getByRole('button', { name: /refresh ci status/i })
+    await user.click(btn)
+    expect(onRefreshCi).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a refresh control on the all-pass state', () => {
+    const passCi: CiSummaryType = { total: 2, passed: 2, failed: 0, pending: 0, failures: [] }
+    render(CiSummary, { props: { ci: passCi, error: false, onRefreshCi: vi.fn() } })
+    expect(screen.getByRole('button', { name: /refresh ci status/i })).toBeInTheDocument()
+  })
+
+  it('does NOT show a refresh control for the "No CI configured" (total 0) state', () => {
+    const zeroCiR: CiSummaryType = { total: 0, passed: 0, failed: 0, pending: 0, failures: [] }
+    render(CiSummary, { props: { ci: zeroCiR, error: false, onRefreshCi: vi.fn() } })
+    expect(screen.queryByRole('button', { name: /refresh ci status/i })).toBeNull()
+  })
+
+  it('disables the control and shows in-flight copy while refreshing', () => {
+    render(CiSummary, {
+      props: { ci: failureCiForRefresh, error: false, onRefreshCi: vi.fn(), refreshing: true },
+    })
+    const btn = screen.getByRole('button', { name: /refresh ci status/i }) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(btn.textContent).toMatch(/refreshing/i)
+  })
+
+  it('shows in-flight copy on the error Retry while refreshing', () => {
+    render(CiSummary, { props: { ci: null, error: true, onRefreshCi: vi.fn(), refreshing: true } })
+    const btn = screen.getByRole('button', { name: /retry loading ci status/i }) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(btn.textContent).toMatch(/retrying/i)
   })
 })

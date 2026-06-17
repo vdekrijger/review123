@@ -47,9 +47,13 @@
     ciError: boolean
     run: AiRun
     onhotspot?: (path: string) => void
+    /** Re-read CI status without a page reload (passed through to CiSummary). */
+    onRefreshCi?: () => void
+    /** True while a CI refresh is in flight. */
+    ciRefreshing?: boolean
   }
 
-  let { meta, files, ci, ciError, run, onhotspot }: Props = $props()
+  let { meta, files, ci, ciError, run, onhotspot, onRefreshCi, ciRefreshing = false }: Props = $props()
 
   // --- Section open state (lifted out of the <details> so Expand all / Collapse
   // all can set them en masse while individual toggles keep working). Seeded from
@@ -169,6 +173,35 @@
     return `✗ ${ci.failed} failed`
   })
 
+  // --- CI badge tooltip: which checks failed (first few names + "and N more").
+  // Revealed on hover/focus so the compact "✗ N failed" badge is legible without
+  // expanding the CI details. Null when there are no failures (no tooltip needed).
+  const ciFailureTooltip = $derived.by(() => {
+    if (!ci || ci.failed === 0 || ci.failures.length === 0) return null
+    const names = ci.failures.map((f) => f.name)
+    const shown = names.slice(0, 3)
+    const rest = names.length - shown.length
+    const list = shown.join(', ')
+    return rest > 0 ? `Failed: ${list} and ${rest} more` : `Failed: ${list}`
+  })
+
+  // The badge is actionable only when there's a real CI result to jump to (any
+  // settled, non-empty CI). Clicking expands the CI details section and scrolls
+  // it into view — no page reload, no hunting for the panel.
+  const ciBadgeActionable = $derived(!!ci && ci.total > 0)
+
+  let ciDetailsEl = $state<HTMLDetailsElement | null>(null)
+
+  function jumpToCiDetails() {
+    openSection('ci-details')
+    // Wait a tick so the section's bind:open flush + render settle before we
+    // scroll the now-open panel into view. Guard scrollIntoView — not every
+    // environment implements it (e.g. jsdom in tests).
+    queueMicrotask(() => {
+      ciDetailsEl?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
   // --- Per-review token TOTAL (opt-in: settings.showTokenCost, default OFF) ---
   // Sums every AI task's captured usage for this PR. Null = toggle off or no
   // usage captured yet → nothing renders (byte-identical to the prior UI).
@@ -220,14 +253,31 @@
       {/if}
 
       {#if ciBadge}
-        <span
-          class="ci-badge"
-          class:ci-pass={ci && ci.failed === 0 && ci.pending === 0 && ci.total > 0}
-          class:ci-fail={ci && ci.failed > 0}
-          class:ci-pending={ci && ci.pending > 0}
-        >
-          {ciBadge}
-        </span>
+        {#if ciBadgeActionable}
+          <button
+            type="button"
+            class="ci-badge ci-badge-btn"
+            class:ci-pass={ci && ci.failed === 0 && ci.pending === 0 && ci.total > 0}
+            class:ci-fail={ci && ci.failed > 0}
+            class:ci-pending={ci && ci.pending > 0}
+            onclick={jumpToCiDetails}
+            title={ciFailureTooltip ?? 'Open CI details'}
+            aria-label={ciFailureTooltip
+              ? `${ciFailureTooltip}. Open CI details`
+              : `${ciBadge}. Open CI details`}
+          >
+            {ciBadge}
+          </button>
+        {:else}
+          <span
+            class="ci-badge"
+            class:ci-pass={ci && ci.failed === 0 && ci.pending === 0 && ci.total > 0}
+            class:ci-fail={ci && ci.failed > 0}
+            class:ci-pending={ci && ci.pending > 0}
+          >
+            {ciBadge}
+          </span>
+        {/if}
       {/if}
 
       <span class="file-count">{files.length} file{files.length === 1 ? '' : 's'}</span>
@@ -430,12 +480,12 @@
       </details>
 
     {:else if section.id === 'ci-details'}
-      <details class="detail-panel ci-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
+      <details class="detail-panel ci-panel" bind:this={ciDetailsEl} bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
         <summary class="detail-summary">
           <span class="detail-summary-title">{section.title}</span>
         </summary>
         <div class="detail-body">
-          <CiSummary {ci} error={ciError} />
+          <CiSummary {ci} error={ciError} {onRefreshCi} refreshing={ciRefreshing} />
         </div>
       </details>
 
@@ -538,6 +588,17 @@
   .ci-badge.ci-pass { color: var(--legend-added-color); background: var(--legend-added-bg); }
   .ci-badge.ci-fail { color: var(--legend-removed-color); background: var(--legend-removed-bg); }
   .ci-badge.ci-pending { color: var(--legend-changed-color); background: var(--legend-changed-bg); }
+
+  /* Actionable badge: same pill, now a button that jumps to CI details. */
+  .ci-badge-btn {
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    transition: filter 0.1s;
+  }
+
+  .ci-badge-btn:hover { filter: brightness(0.95); }
+  .ci-badge-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
   .file-count {
     font-size: 0.85rem;

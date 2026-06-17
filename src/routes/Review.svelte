@@ -425,6 +425,31 @@
   // CI display state (for UnderstandStep)
   let ciData: CiSummary | null = $state(null)
   let ciError = $state(false)
+  let ciRefreshing = $state(false)
+
+  // Re-read CI status WITHOUT a page reload. Used by both the loaded states (the
+  // user re-ran CI on GitHub and wants the fresh result) and the ciError "Retry"
+  // (after "Couldn't load CI status"). Bypasses the memoized getCi() promise so
+  // it actually hits the provider again; updates ciData/ciError in place. The
+  // in-flight guard (ciRefreshing) keeps the control disabled and is always
+  // cleared in finally so it can never stick.
+  async function refreshCi() {
+    if (ciRefreshing) return
+    if (load.state.status !== 'ready') return
+    const headSha = load.state.meta.headSha
+    ciRefreshing = true
+    try {
+      const fresh = await activeProvider.getCiSummary(prRefX, headSha)
+      ciData = fresh
+      ciError = false
+      // Re-prime the memo so other consumers (AI pack/ci) see the fresh result.
+      ciPromise = Promise.resolve(fresh)
+    } catch {
+      ciError = true
+    } finally {
+      ciRefreshing = false
+    }
+  }
 
   // Initialize AI run when PR becomes ready
   let aiInitialized = false
@@ -707,6 +732,9 @@
         }}
         onbackdropclick={() => { railCollapsed = true }}
         ci={ciData}
+        {ciError}
+        onRefreshCi={refreshCi}
+        {ciRefreshing}
         meta={load.state.meta}
       />
     {/if}
@@ -717,6 +745,8 @@
         files={load.state.files}
         ci={ciData}
         {ciError}
+        onRefreshCi={refreshCi}
+        {ciRefreshing}
         run={aiRun ?? { summary: {status:'idle'}, attention: {status:'idle'}, diagrams: {status:'idle'}, verdict: {status:'idle'}, tests: {status:'idle'}, alternatives: {status:'idle'}, start: async()=>{}, retry: async()=>{}, coach: async()=>({error:'no-key'}) } as any}
         onhotspot={handleHotspot}
       />

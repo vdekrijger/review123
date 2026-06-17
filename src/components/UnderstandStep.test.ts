@@ -1295,3 +1295,97 @@ describe('UnderstandStep — per-section header status indicator', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// CI badge — legible failures: hover tooltip + click-to-expand/scroll
+// ---------------------------------------------------------------------------
+
+import type { CiSummary as CiSummaryType } from '../lib/github/checks'
+
+const failCi: CiSummaryType = {
+  total: 5,
+  passed: 1,
+  failed: 4,
+  pending: 0,
+  failures: [
+    { name: 'unit-tests', annotations: [], url: 'https://github.com/acme/web/runs/1' },
+    { name: 'lint', annotations: [], url: null },
+    { name: 'typecheck', annotations: [], url: null },
+    { name: 'e2e', annotations: [], url: null },
+  ],
+}
+
+describe('UnderstandStep — CI badge legibility', () => {
+  it('renders the compact fail badge as a button (actionable + keyboard reachable)', () => {
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: failCi, ciError: false, run: makeRun({}) },
+    })
+    const badge = container.querySelector('.ci-badge.ci-fail') as HTMLElement
+    expect(badge).not.toBeNull()
+    expect(badge.tagName).toBe('BUTTON')
+    expect(badge.textContent).toContain('4 failed')
+  })
+
+  it('badge title/tooltip names the failed checks (first few + "and N more")', () => {
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: failCi, ciError: false, run: makeRun({}) },
+    })
+    const badge = container.querySelector('.ci-badge.ci-fail') as HTMLElement
+    const title = badge.getAttribute('title') ?? ''
+    expect(title).toContain('unit-tests')
+    expect(title).toContain('lint')
+    expect(title).toContain('typecheck')
+    // 4 failures, 3 shown → "and 1 more"
+    expect(title).toMatch(/and 1 more/i)
+    // aria-label also carries the failure names for screen readers
+    expect(badge.getAttribute('aria-label')).toContain('unit-tests')
+  })
+
+  it('clicking the badge expands the CI details panel', async () => {
+    const user = userEvent.setup()
+    render(UnderstandStep, {
+      props: { meta, files, ci: failCi, ciError: false, run: makeRun({}) },
+    })
+    const ciPanel = document.querySelector('details.ci-panel') as HTMLDetailsElement
+    expect(ciPanel.open).toBe(false)
+    const badge = document.querySelector('.ci-badge.ci-fail') as HTMLButtonElement
+    await user.click(badge)
+    expect(ciPanel.open).toBe(true)
+  })
+
+  it('an all-pass badge is still an actionable button with an "Open CI details" affordance', () => {
+    const passCi: CiSummaryType = { total: 3, passed: 3, failed: 0, pending: 0, failures: [] }
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: passCi, ciError: false, run: makeRun({}) },
+    })
+    const badge = container.querySelector('.ci-badge.ci-pass') as HTMLElement
+    expect(badge.tagName).toBe('BUTTON')
+    expect(badge.getAttribute('title')).toMatch(/open ci details/i)
+  })
+
+  it('does not render a CI badge when there is no CI configured (total 0)', () => {
+    const zeroCi: CiSummaryType = { total: 0, passed: 0, failed: 0, pending: 0, failures: [] }
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: zeroCi, ciError: false, run: makeRun({}) },
+    })
+    expect(container.querySelector('.ci-badge')).toBeNull()
+  })
+
+  it('passes onRefreshCi + refreshing down so CiSummary shows a refresh control', () => {
+    const onRefreshCi = vi.fn()
+    render(UnderstandStep, {
+      props: { meta, files, ci: failCi, ciError: false, run: makeRun({}), onRefreshCi },
+    })
+    openAllDetails()
+    expect(screen.getByRole('button', { name: /refresh ci status/i })).toBeInTheDocument()
+  })
+
+  it('passes onRefreshCi into the CI error state (Retry button) for a no-reload retry', () => {
+    const onRefreshCi = vi.fn()
+    render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: true, run: makeRun({}), onRefreshCi },
+    })
+    openAllDetails()
+    expect(screen.getByRole('button', { name: /retry loading ci status/i })).toBeInTheDocument()
+  })
+})
