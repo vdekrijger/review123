@@ -125,6 +125,20 @@ describe('FileDiff — viewed state', () => {
     expect(container.querySelector('article.file-diff')!.classList.contains('is-collapsed')).toBe(false)
   })
 
+  it('viewed file: clicking the header expands AND re-collapses (two-way toggle)', async () => {
+    const { container } = render(FileDiff, { props: { file: modified, mode: 'unified', viewed: true } })
+    const article = container.querySelector('article.file-diff')!
+    const header = article.querySelector('header')!
+    // Starts collapsed (viewed default).
+    expect(article.classList.contains('is-collapsed')).toBe(true)
+    // First click → expands.
+    await fireEvent.click(header)
+    expect(article.classList.contains('is-collapsed')).toBe(false)
+    // Second click → re-collapses (the bug was that this did nothing).
+    await fireEvent.click(header)
+    expect(article.classList.contains('is-collapsed')).toBe(true)
+  })
+
   // Story Mode auto-marks a file viewed for coverage the instant its slide is
   // reached; without forceExpanded that would collapse the narrated diff
   // (header-only, no body → no syntax highlighting). forceExpanded keeps the
