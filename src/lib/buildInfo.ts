@@ -11,6 +11,9 @@ export const BUILD_TIME: string =
 
 const REPO = 'vdekrijger/review123'
 
+/** Canonical GitHub repository URL (for the footer "view source" link). */
+export const repoUrl = `https://github.com/${REPO}`
+
 // Sentinel shas that don't correspond to a real commit (local dev with no git,
 // or the vitest fallback). For those we render plain text instead of a link.
 const NON_COMMIT_SHAS = new Set(['dev', 'test'])
