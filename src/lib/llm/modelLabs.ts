@@ -86,9 +86,21 @@ export interface ModelGroup {
   models: LlmModelDef[]
 }
 
+// Numeric-aware collator: compares the version/size numbers embedded in a label
+// numerically ("3.10" > "3.9", "235B" > "27B"), not lexically. Used to sort each
+// lab's models newest-version-first.
+const versionCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' })
+
+/** Sort a lab's models newest-first: the shared lab prefix is equal, so a
+ * DESCENDING numeric-aware compare orders by version (then variant) — "Qwen3.7"
+ * before "Qwen3.6" before "Qwen2.5". Deterministic; a copy (never mutates input). */
+export function sortModelsByVersionDesc(models: LlmModelDef[]): LlmModelDef[] {
+  return models.slice().sort((a, b) => versionCollator.compare(b.label, a.label))
+}
+
 /**
- * Group models by lab, preserving each model's incoming order within its group
- * and ordering groups by first appearance. Stable + deterministic.
+ * Group models by lab, ordering groups by first appearance and each group's
+ * models NEWEST-VERSION-FIRST (descending numeric-aware). Stable + deterministic.
  */
 export function groupByLab(models: LlmModelDef[]): ModelGroup[] {
   const order: string[] = []
@@ -101,7 +113,7 @@ export function groupByLab(models: LlmModelDef[]): ModelGroup[] {
     }
     byLab.get(lab)!.push(m)
   }
-  return order.map((lab) => ({ lab, models: byLab.get(lab)! }))
+  return order.map((lab) => ({ lab, models: sortModelsByVersionDesc(byLab.get(lab)!) }))
 }
 
 /**

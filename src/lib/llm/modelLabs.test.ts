@@ -47,14 +47,32 @@ describe('modelMatches', () => {
 })
 
 describe('groupByLab', () => {
-  it('groups models by friendly lab, preserving first-appearance order', () => {
+  it('groups models by friendly lab, ordering groups by first appearance', () => {
     const groups = groupByLab([
-      m('openai/gpt-5.5', 'GPT-5.5'),
-      m('anthropic/claude-opus-4.8', 'Opus'),
-      m('openai/gpt-5-mini', 'Mini'),
+      m('openai/gpt-5', 'OpenAI: GPT-5'),
+      m('anthropic/claude-opus-4.8', 'Anthropic: Claude Opus 4.8'),
+      m('openai/gpt-5.5', 'OpenAI: GPT-5.5'),
     ])
+    // Group order = first appearance (OpenAI seen before Anthropic).
     expect(groups.map((g) => g.lab)).toEqual(['OpenAI', 'Anthropic'])
-    expect(groups[0].models.map((x) => x.id)).toEqual(['openai/gpt-5.5', 'openai/gpt-5-mini'])
+    // Within a lab: newest version first (5.5 before 5).
+    expect(groups[0].models.map((x) => x.id)).toEqual(['openai/gpt-5.5', 'openai/gpt-5'])
+  })
+
+  it('orders a lab newest-version-first, numerically (Qwen 3.7 > 3.6 > 2.5)', () => {
+    const groups = groupByLab([
+      m('qwen/qwen-2.5-72b', 'Qwen: Qwen2.5 72B'),
+      m('qwen/qwen3.7-plus', 'Qwen: Qwen3.7 Plus'),
+      m('qwen/qwen3.6', 'Qwen: Qwen3.6'),
+      m('qwen/qwen3.10', 'Qwen: Qwen3.10'),
+    ])
+    // 3.10 sorts above 3.7 numerically (not lexically), then 3.6, then 2.5.
+    expect(groups[0].models.map((x) => x.label)).toEqual([
+      'Qwen: Qwen3.10',
+      'Qwen: Qwen3.7 Plus',
+      'Qwen: Qwen3.6',
+      'Qwen: Qwen2.5 72B',
+    ])
   })
 })
 

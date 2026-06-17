@@ -429,9 +429,10 @@
     z-index: 30;
     top: calc(100% + 4px);
     left: 0;
-    width: 100%;
-    min-width: 22rem;
-    max-width: min(30rem, 92vw);
+    /* Wider than the (often narrow) provider card so full model titles +
+       pricing hints fit without truncating; capped to the viewport. */
+    width: min(44rem, 95vw);
+    min-width: min(22rem, 95vw);
     box-sizing: border-box;
     background: var(--surface-raised);
     border: 1px solid var(--hairline);
@@ -470,6 +471,10 @@
 
   .combobox-labs {
     overflow-y: auto;
+    /* min-height:0 lets this grid child shrink below its content height so its
+       own overflow-y can scroll (without it the grid row grows to content and
+       the panel clips it). */
+    min-height: 0;
     border-right: 1px solid var(--hairline);
     padding: 0.25rem;
     background: var(--surface);
@@ -526,6 +531,10 @@
 
   .combobox-models {
     overflow-y: auto;
+    /* min-height:0 — same grid-child scroll fix as .combobox-labs, so the long
+       model list (e.g. 49 Qwen models) scrolls inside the panel instead of
+       overflowing and being clipped. */
+    min-height: 0;
     padding: 0.25rem;
   }
 
