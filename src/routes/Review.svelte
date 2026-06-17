@@ -693,7 +693,14 @@
     return total > 0 ? Math.round((viewed / total) * 100) : 0
   })
   // Combined progress: scroll position, floored by the viewed-line fraction.
-  const inspectPercent = $derived(Math.max(scrollPercent, viewedPercent))
+  // EXCEPT in Story mode: each story step is a short page that scrolls to 100%
+  // almost immediately, so the scroll component is meaningless there (it made
+  // the bar read "100%" while only a few files were viewed). When story is the
+  // active inspect flow, track the viewed-line fraction ONLY.
+  const storyFlowActive = $derived(step === 2 && storyMode && storyAvailable)
+  const inspectPercent = $derived(
+    storyFlowActive ? viewedPercent : Math.max(scrollPercent, viewedPercent),
+  )
 </script>
 
 {#if consentDialogVisible}
