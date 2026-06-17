@@ -21,6 +21,12 @@ const PACKED_CTX: PackedContext = {
   text: 'some PR context',
   notAnalyzed: [],
   includedFiles: ['src/foo.ts'],
+  // Compact story summaries — the changed-file list the deterministic fallback
+  // classifies (and the compact prompt sends). Mirrors STORY_RESULT's paths.
+  storyFiles: [
+    { path: 'src/db/schema.ts', additions: 10, deletions: 2, hunkHeaders: ['@@ -1,3 +1,11 @@ class Schema'] },
+    { path: 'src/api/route.ts', additions: 5, deletions: 1, hunkHeaders: ['@@ -4,2 +4,7 @@ function route'] },
+  ],
 }
 
 const STORY_RESULT: StoryOrderResult = {
@@ -60,12 +66,24 @@ function makeDeps({ hasKey = true, deep = false } = {}) {
   return { gateAi, getCached, setCached, llmStream, llmStreamWithUsage, llmJsonWithRepair, llmJsonWithRepairWithUsage, llmToolLoop, track }
 }
 
-function makeInput(deepSource = true): Parameters<typeof createAiRun>[0] {
+// Build a PackedContext whose storyFiles match the given step paths, so the
+// usability gate (mirrors InspectStep.storyHasUsableSteps) recognises the AI
+// result's paths as real PR files. Defaults to PACKED_CTX's paths.
+function ctxWithPaths(paths: string[]): PackedContext {
+  return {
+    text: 'some PR context',
+    notAnalyzed: [],
+    includedFiles: paths,
+    storyFiles: paths.map((p) => ({ path: p, additions: 1, deletions: 0, hunkHeaders: [] })),
+  }
+}
+
+function makeInput(deepSource = true, ctx: PackedContext = PACKED_CTX): Parameters<typeof createAiRun>[0] {
   return {
     prKey: 'owner/repo#1@abc',
     repo: 'owner/repo',
     isPrivate: false,
-    pack: async () => PACKED_CTX,
+    pack: async () => ctx,
     ci: async () => null,
     ask: async () => true,
     ...(deepSource
@@ -112,7 +130,7 @@ describe('storyOrder task — single-pass', () => {
     expect(deps.track).toHaveBeenCalledWith('ai_task_completed', expect.objectContaining({ task: 'story', cached: true }))
   })
 
-  it('sets error status when the llm call fails', async () => {
+  it('degrades to the deterministic fallback when the llm call fails (never hard-errors)', async () => {
     const deps = makeDeps()
     deps.llmJsonWithRepairWithUsage.mockImplementation(async (_o: unknown, validate: ValidateFn) => {
       if (validate(STORY_RESULT) !== null) throw new LlmError('server', 'boom')
@@ -120,7 +138,40 @@ describe('storyOrder task — single-pass', () => {
     })
     const run = createAiRun(makeInput(), deps)
     await run.start()
-    expect(run.story.status).toBe('error')
+    // Robustness: status is 'done' with a usable structural story + fallback flag,
+    // NOT 'error'. Story mode renders rather than collapsing into the hard error.
+    expect(run.story.status).toBe('done')
+    expect(run.story.fallback).toBe(true)
+    const result = run.story.value as StoryOrderResult
+    expect(result.steps.length).toBeGreaterThan(0)
+    // Every changed file is covered exactly once by the deterministic story.
+    const placed = result.steps.flatMap((s) => s.files)
+    expect(placed.sort()).toEqual(['src/api/route.ts', 'src/db/schema.ts'])
+    // The fallback is NOT cached as an AI result.
+    expect(deps.setCached).not.toHaveBeenCalledWith(expect.stringContaining('|story|'), expect.anything())
+  })
+
+  it('surfaces the SPECIFIC LlmError message in the fallback reason (not just the generic kind)', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepairWithUsage.mockImplementation(async (_o: unknown, validate: ValidateFn) => {
+      if (validate(STORY_RESULT) !== null) throw new LlmError('invalid-output', 'context length exceeded')
+      return { result: { steps: [] }, usage: undefined }
+    })
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+    expect(run.story.status).toBe('done')
+    expect(run.story.fallback).toBe(true)
+    expect(run.story.fallbackReason).toContain('context length exceeded')
+  })
+
+  it('a successful AI story is cached and carries NO fallback flag', async () => {
+    const deps = makeDeps()
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+    expect(run.story.status).toBe('done')
+    expect(run.story.fallback).toBeFalsy()
+    expect(run.story.value).toEqual(STORY_RESULT)
+    expect(deps.setCached).toHaveBeenCalledWith(expect.stringContaining('|story|'), STORY_RESULT)
   })
 })
 
@@ -137,7 +188,7 @@ describe('storyOrder task — post-process (dedupe / cap / salvage)', () => {
       result: validate(dup), // validator IS shapeStoryOrder now → returns deduped
       usage: undefined,
     }))
-    const run = createAiRun(makeInput(), deps)
+    const run = createAiRun(makeInput(true, ctxWithPaths(['a.ts', 'b.ts', 'c.ts'])), deps)
     await run.start()
     expect(run.story.status).toBe('done')
     const result = run.story.value as StoryOrderResult
@@ -162,7 +213,10 @@ describe('storyOrder task — post-process (dedupe / cap / salvage)', () => {
       result: validate(many),
       usage: undefined,
     }))
-    const run = createAiRun(makeInput(), deps)
+    const run = createAiRun(
+      makeInput(true, ctxWithPaths(Array.from({ length: 20 }, (_, i) => `f${i}.ts`))),
+      deps,
+    )
     await run.start()
     const result = run.story.value as StoryOrderResult
     expect(result.steps).toHaveLength(12)
@@ -181,7 +235,7 @@ describe('storyOrder task — post-process (dedupe / cap / salvage)', () => {
       result: validate(partial), // strict validate fails → salvage keeps ok.ts
       usage: undefined,
     }))
-    const run = createAiRun(makeInput(), deps)
+    const run = createAiRun(makeInput(true, ctxWithPaths(['ok.ts', 'bad.ts'])), deps)
     await run.start()
     expect(run.story.status).toBe('done')
     const result = run.story.value as StoryOrderResult
@@ -189,7 +243,7 @@ describe('storyOrder task — post-process (dedupe / cap / salvage)', () => {
     expect(result.steps[0].files).toEqual(['ok.ts'])
   })
 
-  it('errors (never caches) when nothing usable survives the salvage', async () => {
+  it('degrades to the fallback (never caches) when nothing usable survives the salvage', async () => {
     const deps = makeDeps()
     // validate() returns null after shaping → llmJsonWithRepair throws invalid-output
     deps.llmJsonWithRepairWithUsage.mockImplementation(async (_o: unknown, validate: ValidateFn) => {
@@ -199,7 +253,10 @@ describe('storyOrder task — post-process (dedupe / cap / salvage)', () => {
     })
     const run = createAiRun(makeInput(), deps)
     await run.start()
-    expect(run.story.status).toBe('error')
+    // No hard error: the structural fallback renders instead.
+    expect(run.story.status).toBe('done')
+    expect(run.story.fallback).toBe(true)
+    expect((run.story.value as StoryOrderResult).steps.length).toBeGreaterThan(0)
     expect(deps.setCached).not.toHaveBeenCalledWith(expect.stringContaining('|story|'), expect.anything())
   })
 })

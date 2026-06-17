@@ -26,6 +26,24 @@ export interface CiInput {
 // Public contract
 // ---------------------------------------------------------------------------
 
+/**
+ * Compact per-file structural summary used by the Story task (and its
+ * deterministic fallback). Carries ONLY paths + change stats + hunk HEADERS —
+ * never the line-level diff body — so the story prompt fits even huge PRs and
+ * the fallback can classify every changed file by path. Covers ALL changed,
+ * non-binary files (independent of the prompt token budget that trims `text`).
+ */
+export interface StoryFileSummary {
+  /** Changed file path (as reported by the provider). */
+  path: string
+  /** Lines added in this file. */
+  additions: number
+  /** Lines removed in this file. */
+  deletions: number
+  /** The `@@ … @@` hunk header context lines (naming enclosing symbols). */
+  hunkHeaders: string[]
+}
+
 export interface PackedContext {
   /** The assembled prompt context text. Empty string when no content. */
   text: string
@@ -35,6 +53,13 @@ export interface PackedContext {
   includedFiles: string[]
   /** Compact import-graph text extracted from file contents. Empty string when unavailable. */
   importGraph?: string
+  /**
+   * Compact per-file structural summary for ALL changed non-binary files —
+   * paths + stats + hunk headers, no diff bodies. Drives the Story task's
+   * compact prompt and its deterministic structural fallback. Present whenever
+   * there are changed files (empty array when none).
+   */
+  storyFiles?: StoryFileSummary[]
 }
 
 export interface PackContextInput {
@@ -88,7 +113,7 @@ export function packContext(input: PackContextInput): PackedContext {
 
   // EC-16a: zero files is valid
   if (files.length === 0 && !ci) {
-    return { text: '', notAnalyzed: [], includedFiles: [], importGraph: '' }
+    return { text: '', notAnalyzed: [], includedFiles: [], importGraph: '', storyFiles: [] }
   }
 
   let remainingTokens = budgetTokens
@@ -199,7 +224,43 @@ export function packContext(input: PackContextInput): PackedContext {
     eligibleFiles.map(f => f.filename),
     contents,
   )
-  return { text, notAnalyzed, includedFiles, importGraph }
+  // Story-file summaries: ALL changed files (including generated — the story
+  // fallback sinks them; excluding them here would drop coverage), paths +
+  // stats + hunk headers only. Independent of the prompt token budget.
+  const storyFiles: StoryFileSummary[] = files.map((f) => ({
+    path: f.filename,
+    additions: f.additions,
+    deletions: f.deletions,
+    hunkHeaders: extractHunkHeaders(f.patch),
+  }))
+  return { text, notAnalyzed, includedFiles, importGraph, storyFiles }
+}
+
+// ---------------------------------------------------------------------------
+// extractHunkHeaders — pull `@@ … @@` context lines from a unified patch.
+// ---------------------------------------------------------------------------
+
+const HUNK_HEADER_RE = /^@@[^@]*@@(.*)$/
+// Cap per file so a pathological patch can't blow the compact prompt budget.
+const MAX_HUNK_HEADERS_PER_FILE = 20
+
+/**
+ * Extract the hunk header lines (`@@ -a,b +c,d @@ <enclosing symbol>`) from a
+ * unified-diff patch. The trailing text after the second `@@` names the
+ * enclosing function/class on most diffs — exactly the symbol-level signal the
+ * Story ordering needs without the line-level body. Returns [] when no patch.
+ */
+export function extractHunkHeaders(patch: string | undefined): string[] {
+  if (!patch) return []
+  const headers: string[] = []
+  for (const line of patch.split('\n')) {
+    if (!line.startsWith('@@')) continue
+    const m = HUNK_HEADER_RE.exec(line)
+    if (!m) continue
+    headers.push(line.trim())
+    if (headers.length >= MAX_HUNK_HEADERS_PER_FILE) break
+  }
+  return headers
 }
 
 // ---------------------------------------------------------------------------

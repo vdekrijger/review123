@@ -360,10 +360,13 @@ test('story mode: a story with an unmappable path still renders the mappable ste
   await expect(page.getByText('A step for a file not in this PR.')).toHaveCount(0)
 })
 
-// An errored story task → reason-specific note + Retry. The first story call
-// returns malformed JSON (errors); Retry re-invokes ONLY the story task, which
-// succeeds the second time and renders the walkthrough.
-test('story mode: an errored story shows the reason + Retry, and Retry re-runs just the story', async ({ page }) => {
+// A failed story task → deterministic structural fallback (robust big-PR story).
+// The first story call returns malformed JSON (the AI ordering fails); instead
+// of the old hard-error "Showing all files" state, Story mode degrades to the
+// structural walkthrough + a muted note naming the reason + Retry. Retry
+// re-invokes ONLY the story task, which succeeds the second time and renders the
+// AI-ordered walkthrough (no fallback note).
+test('story mode: a failed story falls back to the structural walkthrough + Retry re-runs just the story', async ({ page }) => {
   await setupGithub(page)
 
   let storyCalls = 0
@@ -393,16 +396,19 @@ test('story mode: an errored story shows the reason + Retry, and Retry re-runs j
   await expect(page.getByRole('heading', { name: /Story mode test PR/i })).toBeVisible({ timeout: 10_000 })
   await page.getByRole('button', { name: 'Next step' }).click()
 
-  // Error note with the reason + a Retry button; Files render underneath.
-  await expect(page.getByText(/Couldn't build the walkthrough/)).toBeVisible({ timeout: 15_000 })
+  // Structural-fallback note naming the reason + a Retry button; the structural
+  // walkthrough renders (NOT the old hard-error "Showing all files" state).
+  await expect(page.getByText(/Structural walkthrough — AI ordering unavailable/)).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText(/Couldn't build the walkthrough/)).toHaveCount(0)
   const retry = page.getByRole('button', { name: 'Retry' })
   await expect(retry).toBeVisible()
 
   await retry.click()
 
-  // Retry re-runs just the story task → the walkthrough now renders.
+  // Retry re-runs just the story task → the AI-ordered walkthrough now renders
+  // and the structural-fallback note disappears.
   await expect(page.getByText('The schema gains a provider column.')).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByText(/Couldn't build the walkthrough/)).toHaveCount(0)
+  await expect(page.getByText(/Structural walkthrough — AI ordering unavailable/)).toHaveCount(0)
 })
 
 test('story mode: no LLM key → unavailable, classic Files renders', async ({ page }) => {

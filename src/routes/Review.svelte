@@ -809,6 +809,8 @@
         storyStatus={aiRun?.story.status ?? 'idle'}
         storyActivity={aiRun?.story.activity}
         storyError={aiRun?.story.error ?? null}
+        storyFallback={isCompareActive ? false : (aiRun?.story.fallback ?? false)}
+        storyFallbackReason={aiRun?.story.fallbackReason ?? null}
         onRetryStory={aiRun != null ? (() => { void aiRun!.retry('story') }) : null}
         diagrams={isCompareActive ? null : (aiRun?.diagrams.status === 'done' ? aiRun.diagrams.value as GraphResult : null)}
       />

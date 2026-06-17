@@ -1851,13 +1851,37 @@ describe('attentionPrompt — deep mode verification (v13)', () => {
 
 describe('storyOrderPrompt', () => {
   it('asks for JSON-only output matching the StoryOrderResult shape', () => {
-    const { system, user } = storyOrderPrompt(makeCtx('story-context-123'))
+    const { system } = storyOrderPrompt(makeCtx('story-context-123'))
     expect(system).toMatch(/JSON ONLY/i)
     expect(system).toContain('"steps"')
     expect(system).toContain('"caption"')
     expect(system).toContain('"layer"')
     expect(system).toContain('"relatedTests"')
-    expect(user).toBe('story-context-123')
+  })
+
+  it('user payload is the COMPACT structural summary (paths + stats + hunk headers), NOT the full diff', () => {
+    const ctx: PackedContext = {
+      text: 'FULL-DIFF-BODY-should-not-appear ```diff +line -line```',
+      notAnalyzed: [],
+      includedFiles: [],
+      storyFiles: [
+        { path: 'src/db/schema.ts', additions: 12, deletions: 3, hunkHeaders: ['@@ -1,2 +1,14 @@ class Schema'] },
+        { path: 'src/ui/Button.svelte', additions: 4, deletions: 0, hunkHeaders: [] },
+      ],
+    }
+    const { user } = storyOrderPrompt(ctx)
+    // Paths + per-file stats + hunk headers present…
+    expect(user).toContain('src/db/schema.ts')
+    expect(user).toContain('+12/-3')
+    expect(user).toContain('class Schema')
+    expect(user).toContain('src/ui/Button.svelte')
+    // …but NOT the line-level diff body.
+    expect(user).not.toContain('FULL-DIFF-BODY-should-not-appear')
+  })
+
+  it('falls back to ctx.text when storyFiles is absent (older pack)', () => {
+    const { user } = storyOrderPrompt(makeCtx('legacy-context-123'))
+    expect(user).toBe('legacy-context-123')
   })
 
   it('names every layer in the taxonomy', () => {
@@ -1904,7 +1928,7 @@ describe('storyOrderPrompt', () => {
 })
 
 describe('PROMPT_VERSION', () => {
-  it('is bumped to 21 (comprehensive verifier — per-lens verification retired)', () => {
-    expect(PROMPT_VERSION).toBe(21)
+  it('is bumped to 22 (robust big-PR story — compact story input)', () => {
+    expect(PROMPT_VERSION).toBe(22)
   })
 })

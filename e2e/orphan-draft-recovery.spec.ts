@@ -67,6 +67,9 @@ function seedSettings(withGithubAuth: boolean) {
     deepseekKey: 'sk-test-deepseek-key',
     diffMode: 'unified',
     railCollapsed: false,
+    // Files flow at step 2 — story mode off so the deterministic structural
+    // fallback's slideshow nav doesn't shadow the step navigation here.
+    storyMode: false,
   }
   if (withGithubAuth) {
     settings.githubAuth = { token: 'ghp_test_token', method: 'pat', scopes: ['repo'] }

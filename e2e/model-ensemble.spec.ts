@@ -72,6 +72,9 @@ function seedSettings() {
     showTokenCost: true,
     diffMode: 'unified',
     railCollapsed: false,
+    // Files flow at step 2 — story mode off so the deterministic structural
+    // fallback's slideshow nav doesn't shadow the step navigation here.
+    storyMode: false,
     githubAuth: { token: 'gho_test', method: 'oauth', scopes: ['repo'] },
   }
 }

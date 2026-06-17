@@ -368,6 +368,12 @@ function seedSettings(withGithubAuth: boolean) {
     deepseekKey: 'sk-test-deepseek-key',
     diffMode: 'unified',
     railCollapsed: false,
+    // These tests exercise the classic FILES flow at step 2 (diff rows, viewed
+    // state, file tree, drafts). Story mode is OFF so the deterministic
+    // structural fallback (which now ALWAYS renders a walkthrough when story
+    // mode is on) doesn't surface its slideshow nav and shadow these tests.
+    // Story-mode behaviour has its own dedicated suite (story-mode.spec.ts).
+    storyMode: false,
   }
   if (withGithubAuth) {
     settings.githubAuth = {

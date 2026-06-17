@@ -66,6 +66,8 @@
     storyStatus = 'idle',
     storyActivity = undefined,
     storyError = null,
+    storyFallback = false,
+    storyFallbackReason = null,
     onRetryStory = null,
     diagrams = null,
   }: {
@@ -140,6 +142,14 @@
     storyActivity?: string[]
     /** Humanized reason the story task failed (shown in the error note + retry). */
     storyError?: string | null
+    /**
+     * True when `story` is the DETERMINISTIC structural walkthrough (AI ordering
+     * failed/unusable). The walkthrough still renders — we add a subtle muted
+     * note + Retry instead of the old hard-error "Showing all files" state.
+     */
+    storyFallback?: boolean
+    /** The specific reason AI ordering was unavailable (shown in the fallback note). */
+    storyFallbackReason?: string | null
     /** Re-invokes just the story task (used by the Retry button on an errored story). */
     onRetryStory?: (() => void) | null
     /** Change-map source for the story progress map; null/pending → no map (never blocks). */
@@ -171,6 +181,13 @@
   //  - errored: the task failed (invalid JSON / rate-limited / …) → show the
   //    reason + a Retry button that re-runs just the story task.
   //  - empty: the task finished but produced no usable walkthrough.
+  // The deterministic structural fallback: story mode chosen, the AI ordering
+  // was unavailable (flag set by the run), and the walkthrough still renders
+  // (the fallback story maps to PR files). This REPLACES the hard-error state —
+  // we show the walkthrough plus a muted note + Retry, never "Showing all files".
+  const storyStructuralFallback = $derived(
+    storyAvailable && storyMode && storyFallback && showStory && storyHasUsableSteps,
+  )
   const storyErrored = $derived(storyAvailable && storyMode && storyStatus === 'error')
   const storyEmpty = $derived(
     storyAvailable && storyMode && !storyPending && !storyErrored && !storyHasUsableSteps,
@@ -847,7 +864,14 @@
   </div>
 {/if}
 
-{#if storyErrored}
+{#if storyStructuralFallback}
+  <p class="story-fallback-note story-structural-note" role="note">
+    Structural walkthrough — AI ordering unavailable{storyFallbackReason ? ` (${storyFallbackReason})` : ''}.
+    {#if onRetryStory}
+      <button type="button" class="story-retry-btn" onclick={() => onRetryStory?.()}>Retry</button>
+    {/if}
+  </p>
+{:else if storyErrored}
   <p class="story-fallback-note" role="note">
     Couldn't build the walkthrough{storyError ? ` — ${storyError}` : ''} Showing all files.
     {#if onRetryStory}
@@ -1429,6 +1453,12 @@
     font-size: 0.82rem;
     color: var(--text-muted);
     margin: 0 0 0.5rem;
+  }
+  /* Structural-fallback note is even more understated — the walkthrough still
+     renders below it, so the note is informational, not an error. */
+  .story-structural-note {
+    opacity: 0.85;
+    font-size: 0.78rem;
   }
   .story-retry-btn {
     margin-left: 0.4rem;

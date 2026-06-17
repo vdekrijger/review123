@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { packContext, fetchContents, estimateTokens, extractImportGraph, type CiInput } from './pack'
+import { packContext, fetchContents, estimateTokens, extractImportGraph, extractHunkHeaders, type CiInput } from './pack'
 import type { PrFile, PrMeta } from '../github/types'
 
 // ---------------------------------------------------------------------------
@@ -685,5 +685,54 @@ describe('extractImportGraph', () => {
     // importGraph field should exist on the result
     expect('importGraph' in result).toBe(true)
     expect(typeof result.importGraph).toBe('string')
+  })
+})
+
+describe('extractHunkHeaders', () => {
+  it('returns [] for no patch', () => {
+    expect(extractHunkHeaders(undefined)).toEqual([])
+  })
+
+  it('pulls the @@ … @@ header lines (with enclosing symbol)', () => {
+    const patch = `@@ -1,3 +1,11 @@ class Schema\n-old\n+new\n@@ -20,2 +28,5 @@ function load()\n+x`
+    expect(extractHunkHeaders(patch)).toEqual([
+      '@@ -1,3 +1,11 @@ class Schema',
+      '@@ -20,2 +28,5 @@ function load()',
+    ])
+  })
+
+  it('ignores non-hunk lines (no false positives from body content)', () => {
+    const patch = `@@ -1 +1 @@\n-const x = '@@ not a header'\n+const y = 1`
+    expect(extractHunkHeaders(patch)).toEqual(['@@ -1 +1 @@'])
+  })
+})
+
+describe('packContext — storyFiles (compact story summary)', () => {
+  it('emits a per-file summary for ALL changed files (paths + stats + hunk headers)', () => {
+    const files = [
+      makeFile('src/db/schema.ts', { additions: 12, deletions: 3, patch: '@@ -1,2 +1,14 @@ class Schema\n+x' }),
+      makeFile('src/ui/Button.svelte', { additions: 4, deletions: 0, patch: '@@ -5,1 +5,5 @@\n+y' }),
+    ]
+    const result = packContext({ files, contents: new Map(), ci: null, budgetTokens: 10_000 })
+    expect(result.storyFiles).toEqual([
+      { path: 'src/db/schema.ts', additions: 12, deletions: 3, hunkHeaders: ['@@ -1,2 +1,14 @@ class Schema'] },
+      { path: 'src/ui/Button.svelte', additions: 4, deletions: 0, hunkHeaders: ['@@ -5,1 +5,5 @@'] },
+    ])
+  })
+
+  it('includes GENERATED files in storyFiles (the fallback sinks them, never drops them)', () => {
+    const files = [
+      makeFile('src/a.ts', { patch: '@@ -1 +1 @@\n+a' }),
+      makeFile('pnpm-lock.yaml', { patch: '@@ -1 +1 @@\n+lock' }),
+    ]
+    const result = packContext({ files, contents: new Map(), ci: null, budgetTokens: 10_000 })
+    const paths = (result.storyFiles ?? []).map((f) => f.path)
+    expect(paths).toContain('pnpm-lock.yaml')
+    expect(paths).toContain('src/a.ts')
+  })
+
+  it('zero files → empty storyFiles array', () => {
+    const result = packContext({ files: [], contents: new Map(), ci: null, budgetTokens: 1000 })
+    expect(result.storyFiles).toEqual([])
   })
 })

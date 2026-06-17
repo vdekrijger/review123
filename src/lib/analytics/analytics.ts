@@ -18,6 +18,12 @@ const EVENTS = {
   // content. Added for coach-robustness observability only.
   ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls', 'chunks', 'partial'],
   ai_task_failed: ['task', 'reason', 'partial'],
+  // PRIVACY DECISION (robust big-PR story): fired when the story task degrades
+  // to the deterministic structural walkthrough (AI ordering failed or returned
+  // an unusable result). Carries only 'task' ('story') and 'reason' — a
+  // humanized failure summary (LlmError kind/message), the SAME class of string
+  // already sent as ai_task_failed.reason. Never diff content, code, or paths.
+  ai_task_fallback: ['task', 'reason'],
   // PRIVACY DECISION (Plan J — per-task AI modes): fired when the user changes
   // a task's run mode in AI settings. Carries only 'task' (a stable task id like
   // 'diagrams') and 'mode' ('off' | 'standard' | 'deep') — both fixed enums,
