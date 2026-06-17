@@ -20,7 +20,7 @@
    */
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import { formatUsageLabel, formatModelUsageLabel, formatBreakdownTotalLabel } from '../lib/ai/tokenCost'
-  import { formatGeneratorImpact, formatVerifierImpact } from '../lib/ai/modelImpact'
+  import { formatGeneratorImpact, formatVerifierImpact, formatNarratorImpact, NARRATOR_ROLE_LABEL } from '../lib/ai/modelImpact'
   import type { ModelCostRow } from '../lib/ai/modelCostBreakdown'
   import type { LlmUsage } from '../lib/llm/llm'
 
@@ -79,10 +79,14 @@
             >
               <span class="model-caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
               <span class="model-id">{m.modelId}</span>
-              <span class="model-role">{m.role}</span>
+              <span class="model-role" class:model-role-narrator={m.role === 'narrator'}>
+                {m.role === 'narrator' ? NARRATOR_ROLE_LABEL : m.role}
+              </span>
               <span class="model-impact">
                 {#if m.role === 'generator'}
                   {formatGeneratorImpact(m.surfaced ?? 0, m.uniqueCatch ?? 0)}
+                {:else if m.role === 'narrator'}
+                  {formatNarratorImpact()}
                 {:else if m.impact}
                   {formatVerifierImpact(m.impact)}
                 {/if}
@@ -187,6 +191,12 @@
   .model-role {
     color: var(--text-muted);
     text-transform: capitalize;
+  }
+  /* The active/narration row reads as a muted, distinct label — never a Role. */
+  .model-role-narrator {
+    text-transform: none;
+    font-style: italic;
+    opacity: 0.85;
   }
   .model-impact {
     color: var(--text);

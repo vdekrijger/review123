@@ -98,6 +98,14 @@ export interface LlmToolLoopOpts {
   /** Hard cap on executed tool calls across the whole loop. Default 8. */
   maxToolCalls?: number
   signal?: AbortSignal
+  /**
+   * Provider+model OVERRIDE (Plan P deep multi-gen). When set, the loop runs on
+   * THIS provider/model instead of the active config — so each ensemble
+   * GENERATOR can run its own deep pass on its own provider. The key is resolved
+   * per-provider via getKeyForProvider (same as the active path). Omitted →
+   * byte-identical to the active-config behaviour.
+   */
+  override?: { provider: LlmProviderDef; model: LlmModelDef }
 }
 
 export interface LlmToolLoopResult {
@@ -460,7 +468,9 @@ function createGeminiTransport(
 // ---------------------------------------------------------------------------
 
 function createTransport(opts: LlmToolLoopOpts): ToolTransport {
-  const { provider, model } = activeLlmConfig()
+  // An explicit override (deep multi-gen) routes the loop to a specific
+  // provider/model; otherwise fall back to the active config (unchanged).
+  const { provider, model } = opts.override ?? activeLlmConfig()
   switch (provider.transport) {
     case 'openai-compat':
       return createOpenAICompatTransport(provider, model, opts)
