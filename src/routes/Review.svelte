@@ -673,14 +673,26 @@
     }
   })
 
-  // Viewed-file fraction — the baseline floor. Denominator MUST match the
-  // fileCount the bar displays (load.state.files.length) so the bar and its
-  // "{viewed}/{total}" label never disagree.
-  const reviewFileCount = $derived(load.state.status === 'ready' ? load.state.files.length : 0)
-  const viewedPercent = $derived(
-    reviewFileCount > 0 ? Math.round((viewedCountDerived / reviewFileCount) * 100) : 0,
-  )
-  // Combined progress: scroll position, floored by how many files are viewed.
+  // Viewed-LINE fraction — the baseline floor, WEIGHTED BY FILE SIZE so a big
+  // file counts more than a tiny one. We sum each file's changed lines
+  // (additions + deletions); the numerator sums only files currently marked
+  // viewed. Viewing two 2,000-line files in a 50,000-line PR floors the bar at
+  // 8% (4,000/50,000), regardless of scroll. Reads viewedStore.isViewed (which
+  // reads the entries $state) inside the derived, so it recomputes the instant a
+  // file is checked off. The "{viewed}/{total} viewed" label still counts FILES
+  // (a separate readout); the bar % is the size-weighted review progress.
+  const viewedPercent = $derived.by(() => {
+    if (load.state.status !== 'ready') return 0
+    let total = 0
+    let viewed = 0
+    for (const f of load.state.files) {
+      const lines = (f.additions ?? 0) + (f.deletions ?? 0)
+      total += lines
+      if (viewedStore.isViewed(f.filename, f.patch)) viewed += lines
+    }
+    return total > 0 ? Math.round((viewed / total) * 100) : 0
+  })
+  // Combined progress: scroll position, floored by the viewed-line fraction.
   const inspectPercent = $derived(Math.max(scrollPercent, viewedPercent))
 </script>
 
