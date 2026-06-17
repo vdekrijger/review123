@@ -552,7 +552,7 @@ test('skill-reviewers: errored reviewer chip retries and resolves to findings', 
 //       than 2 are "Running" at once.
 // ---------------------------------------------------------------------------
 
-test('skill-reviewers: queue caps running reviewers at 2, rest show in Waiting region', async ({
+test('skill-reviewers: queue caps running reviewers at 4, rest show in Waiting region', async ({
   page,
 }) => {
   // Block analytics
@@ -620,9 +620,9 @@ test('skill-reviewers: queue caps running reviewers at 2, rest show in Waiting r
   await page.addInitScript((settings) => {
     localStorage.setItem('review123:settings', JSON.stringify(settings))
   }, seedSettings())
-  // Seed FOUR enabled reviewers — more than the concurrency cap of 2.
+  // Seed SIX enabled reviewers — more than the concurrency cap of 4.
   await page.addInitScript(() => {
-    const skills = [1, 2, 3, 4].map((n) => ({
+    const skills = [1, 2, 3, 4, 5, 6].map((n) => ({
       id: `skill-e2e-${n}`,
       name: `Reviewer ${n}`,
       content: `## Reviewer ${n}\nCheck the diff.`,
@@ -640,20 +640,20 @@ test('skill-reviewers: queue caps running reviewers at 2, rest show in Waiting r
   await page.getByRole('button', { name: 'Next step' }).click()
   await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
 
-  // Run all four reviewers.
-  await page.getByRole('button', { name: /run my reviewers \(4\)/i }).click()
+  // Run all six reviewers.
+  await page.getByRole('button', { name: /run my reviewers \(6\)/i }).click()
 
   // While the run is in flight: the Waiting region appears (queued reviewers),
-  // and the global "Running… (N)" count never exceeds the cap of 2.
+  // and the global "Running… (N)" count never exceeds the cap of 4.
   const waiting = page.getByLabel('Reviewers waiting')
   await expect(waiting).toBeVisible({ timeout: 10_000 })
-  // The running header shows at most 2 in flight.
-  await expect(page.getByText(/Running…\s*\(1\)|Running…\s*\(2\)/)).toBeVisible()
-  await expect(page.getByText(/Running…\s*\([3-9]\)/)).toHaveCount(0)
+  // The running header shows at most 4 in flight.
+  await expect(page.getByText(/Running…\s*\([1-4]\)/)).toBeVisible()
+  await expect(page.getByText(/Running…\s*\([5-9]\)/)).toHaveCount(0)
   // At least one reviewer is queued in the waiting region.
   await expect(waiting.getByText('queued').first()).toBeVisible()
 
-  // Eventually all four settle (the queue drains) and no waiting region remains.
+  // Eventually all six settle (the queue drains) and no waiting region remains.
   await expect(page.getByLabel('Reviewers waiting')).toHaveCount(0, { timeout: 20_000 })
   await expect(page.getByLabel('Reviewer run results')).toBeVisible()
 })

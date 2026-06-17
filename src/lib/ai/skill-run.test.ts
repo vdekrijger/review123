@@ -311,7 +311,7 @@ describe('runSkillReviews — analytics', () => {
 // ---------------------------------------------------------------------------
 
 describe('runSkillReviews — concurrency cap', () => {
-  it('never runs more than REVIEWER_CONCURRENCY (2) LLM calls at once, yet completes all reviewers', async () => {
+  it('never runs more than REVIEWER_CONCURRENCY (4) LLM calls at once, yet completes all reviewers', async () => {
     const { REVIEWER_CONCURRENCY } = await import('./coachBatch')
     const deps = makeDeps()
 
@@ -335,28 +335,29 @@ describe('runSkillReviews — concurrency cap', () => {
       },
     )
 
-    // Five reviewers — more than the cap of 2, so the rest must queue.
+    // Six reviewers — more than the cap of 4, so the rest must queue.
     const skills = [
       addSkill('Reviewer 1', 'one'),
       addSkill('Reviewer 2', 'two'),
       addSkill('Reviewer 3', 'three'),
       addSkill('Reviewer 4', 'four'),
       addSkill('Reviewer 5', 'five'),
+      addSkill('Reviewer 6', 'six'),
     ]
 
     const run = createAiRun(makeInput(), deps)
     await run.runSkillReviews()
 
-    // The cap held: at most 2 calls were ever in flight at once.
+    // The cap held: at most REVIEWER_CONCURRENCY calls were ever in flight.
     expect(peak).toBeLessThanOrEqual(REVIEWER_CONCURRENCY)
-    // With 5 reviewers and a cap of 2, both slots are kept busy until the queue
-    // drains — the observed peak is exactly the cap.
-    expect(peak).toBe(2)
-    expect(REVIEWER_CONCURRENCY).toBe(2)
-    // …and all five still completed.
-    expect(run.skillReviews).toHaveLength(5)
+    // With 6 reviewers and a cap of 4, all four slots are kept busy until the
+    // queue drains — the observed peak is exactly the cap.
+    expect(peak).toBe(4)
+    expect(REVIEWER_CONCURRENCY).toBe(4)
+    // …and all six still completed.
+    expect(run.skillReviews).toHaveLength(6)
     expect(run.skillReviews.every((sr) => sr.state.status === 'done')).toBe(true)
-    expect(deps.llmJsonWithRepairWithUsage).toHaveBeenCalledTimes(5)
+    expect(deps.llmJsonWithRepairWithUsage).toHaveBeenCalledTimes(6)
 
     skills.forEach((s) => removeSkill(s.id))
   })

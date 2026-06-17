@@ -30,9 +30,13 @@ export const COACH_CHUNK_CONCURRENCY = 2
  * How many skill reviewers may have an LLM call in flight at once. Launching
  * every enabled reviewer at once trips provider rate limits (some reviewers
  * fail; a manual single-reviewer retry then succeeds because only one call is
- * in flight). Capping at 2 queues the rest behind a real concurrency gate.
+ * in flight). This queues the rest behind a real concurrency gate. Set to 4
+ * (was 2) for less waiting — the GLOBAL transport cap (MAX_INFLIGHT_LLM_CALLS=5
+ * in concurrencyGate.ts) sits underneath and still bounds total HTTP calls
+ * across reviewers + their cross-verify, so 4 reviewers can progress without
+ * actually firing more than 5 requests at once.
  */
-export const REVIEWER_CONCURRENCY = 2
+export const REVIEWER_CONCURRENCY = 4
 
 /**
  * Split an array into fixed-size chunks (last chunk may be smaller). The
