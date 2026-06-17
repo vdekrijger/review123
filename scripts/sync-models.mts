@@ -29,7 +29,14 @@ export interface ModelDef {
 }
 
 export type ProviderId = 'deepseek' | 'openai' | 'anthropic' | 'gemini'
-export type Catalog = Record<ProviderId, ModelDef[]>
+/**
+ * The synced catalog. The four per-vendor lineups are managed by the sync; the
+ * `openrouter` gateway lineup is HAND-CURATED (vendor-namespaced slugs across
+ * every lab) and is NOT synced — it's an optional passthrough block carried
+ * forward verbatim so a sync run never drops or rewrites it. It is required at
+ * runtime by LlmProviderId, so it must be PRESERVED in the emitted file.
+ */
+export type Catalog = Record<ProviderId, ModelDef[]> & { openrouter?: ModelDef[] }
 
 /** Raw shape of an OpenRouter /api/v1/models entry (only the fields we use). */
 export interface OpenRouterModel {
@@ -235,6 +242,11 @@ export function computeCatalogSync(
     nextCatalog[providerId] = nextModels
   }
 
+  // The hand-curated OpenRouter gateway lineup is NOT synced (its slugs are
+  // vendor-namespaced across every lab, curated by hand). Carry it forward
+  // verbatim so a sync run preserves it instead of dropping the required block.
+  if (currentCatalog.openrouter) nextCatalog.openrouter = currentCatalog.openrouter
+
   return { nextCatalog, changes: { added, pricingUpdated, maybeRemoved } }
 }
 
@@ -283,7 +295,9 @@ export function serializeModel(m: ModelDef): string {
   return `    { ${parts.join(', ')} },`
 }
 
-const CATALOG_PROVIDER_ORDER: ProviderId[] = ['deepseek', 'openai', 'anthropic', 'gemini']
+// Emission order. Includes the hand-curated `openrouter` passthrough block so
+// the rewritten file keeps every key LlmProviderId requires at runtime.
+const CATALOG_PROVIDER_ORDER: (keyof Catalog)[] = ['deepseek', 'openai', 'anthropic', 'gemini', 'openrouter']
 
 /** Render the full modelCatalog.ts source from a computed catalog. */
 export function serializeCatalog(catalog: Catalog): string {
@@ -311,7 +325,7 @@ import type { LlmModelDef, LlmProviderId } from './providers'
 
 export const MODEL_CATALOG: Record<LlmProviderId, LlmModelDef[]> = {`
 
-  const blocks = CATALOG_PROVIDER_ORDER.map((id) => {
+  const blocks = CATALOG_PROVIDER_ORDER.filter((id) => catalog[id] !== undefined).map((id) => {
     const rows = (catalog[id] ?? []).map(serializeModel).join('\n')
     return `  ${id}: [\n${rows}\n  ],`
   })

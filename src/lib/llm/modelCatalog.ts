@@ -53,4 +53,27 @@ export const MODEL_CATALOG: Record<LlmProviderId, LlmModelDef[]> = {
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', contextWindowTokens: 1_048_576, pricing: { inputPer1M: 0.3, outputPer1M: 2.5 } },
     { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', contextWindowTokens: 1_048_576, pricing: { inputPer1M: 1.25, outputPer1M: 10 } },
   ],
+  // OpenRouter — a single OpenAI-compatible gateway fronting many labs' models
+  // behind one key, so the slugs here are namespaced (vendor/model). Curated ~14
+  // representative models from the LIVE public list openrouter.ai/api/v1/models
+  // (fetched 2026-06-17; per-token decimals ×1e6 = per-1M USD, the same
+  // conversion scripts/sync-models.mts does). A spread of the current frontier
+  // from each major lab plus cheap workhorses. supportsTools reflects each
+  // model's `supported_parameters` containing "tools" upstream (all true here).
+  openrouter: [
+    { id: 'deepseek/deepseek-chat-v3.1', label: 'DeepSeek V3.1', contextWindowTokens: 163_840, pricing: { inputPer1M: 0.21, outputPer1M: 0.79 } },
+    { id: 'openai/gpt-5.1', label: 'OpenAI GPT-5.1', contextWindowTokens: 400_000, pricing: { inputPer1M: 1.25, outputPer1M: 10 } },
+    { id: 'openai/gpt-5', label: 'OpenAI GPT-5', contextWindowTokens: 400_000, pricing: { inputPer1M: 1.25, outputPer1M: 10 } },
+    { id: 'anthropic/claude-sonnet-4.5', label: 'Anthropic Claude Sonnet 4.5', contextWindowTokens: 1_000_000, pricing: { inputPer1M: 3, outputPer1M: 15 } },
+    { id: 'anthropic/claude-opus-4.1', label: 'Anthropic Claude Opus 4.1', contextWindowTokens: 200_000, pricing: { inputPer1M: 15, outputPer1M: 75 } },
+    { id: 'anthropic/claude-3.5-haiku', label: 'Anthropic Claude 3.5 Haiku', contextWindowTokens: 200_000, pricing: { inputPer1M: 0.8, outputPer1M: 4 } },
+    { id: 'google/gemini-2.5-pro', label: 'Google Gemini 2.5 Pro', contextWindowTokens: 1_048_576, pricing: { inputPer1M: 1.25, outputPer1M: 10 } },
+    { id: 'google/gemini-2.5-flash', label: 'Google Gemini 2.5 Flash', contextWindowTokens: 1_048_576, pricing: { inputPer1M: 0.3, outputPer1M: 2.5 } },
+    { id: 'x-ai/grok-4.20', label: 'xAI Grok 4.20', contextWindowTokens: 2_000_000, pricing: { inputPer1M: 1.25, outputPer1M: 2.5 } },
+    { id: 'x-ai/grok-4.3', label: 'xAI Grok 4.3', contextWindowTokens: 1_000_000, pricing: { inputPer1M: 1.25, outputPer1M: 2.5 } },
+    { id: 'meta-llama/llama-3.3-70b-instruct', label: 'Meta Llama 3.3 70B Instruct', contextWindowTokens: 131_072, pricing: { inputPer1M: 0.1, outputPer1M: 0.32 } },
+    { id: 'mistralai/mistral-large', label: 'Mistral Large', contextWindowTokens: 128_000, pricing: { inputPer1M: 2, outputPer1M: 6 } },
+    { id: 'qwen/qwen3-235b-a22b', label: 'Qwen3 235B A22B', contextWindowTokens: 131_072, pricing: { inputPer1M: 0.455, outputPer1M: 1.82 } },
+    { id: 'qwen/qwen-2.5-72b-instruct', label: 'Qwen2.5 72B Instruct', contextWindowTokens: 131_072, pricing: { inputPer1M: 0.36, outputPer1M: 0.4 } },
+  ],
 }

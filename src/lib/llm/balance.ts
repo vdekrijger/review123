@@ -43,7 +43,7 @@ export interface ProviderBalance {
  * extensible and cheap — add 'openrouter' here (and a branch below) when wired.
  * Documented as the single source of truth the UI consults.
  */
-const BALANCE_CAPABLE: ReadonlySet<LlmProviderId> = new Set<LlmProviderId>(['deepseek'])
+const BALANCE_CAPABLE: ReadonlySet<LlmProviderId> = new Set<LlmProviderId>(['deepseek', 'openrouter'])
 
 /**
  * True only for providers that expose a key-level balance endpoint. The UI gates
@@ -106,6 +106,24 @@ function parseDeepSeekBalance(data: unknown): ProviderBalance | null {
 }
 
 /**
+ * Parse OpenRouter's GET /api/v1/credits payload into a ProviderBalance, or null
+ * when unusable. Response shape:
+ *   { data: { total_credits: number, total_usage: number } }  (both USD)
+ * Remaining = total_credits - total_usage. Defensive on every field (untrusted
+ * at runtime), mirroring parseDeepSeekBalance.
+ */
+function parseOpenRouterBalance(data: unknown): ProviderBalance | null {
+  if (!data || typeof data !== 'object') return null
+  const inner = (data as { data?: unknown }).data
+  if (!inner || typeof inner !== 'object') return null
+  const obj = inner as { total_credits?: unknown; total_usage?: unknown }
+  const totalCredits = toAmount(obj.total_credits)
+  const totalUsage = toAmount(obj.total_usage)
+  if (totalCredits === null || totalUsage === null) return null
+  return { currency: 'USD', total: totalCredits - totalUsage }
+}
+
+/**
  * Fetch a provider's remaining balance. Returns null — never throws — when the
  * provider is unsupported, the key is missing/empty, the provider reports no
  * available balance, or ANY error occurs (network/CORS/auth/HTTP/parse). The
@@ -132,6 +150,22 @@ export async function fetchProviderBalance(
       if (!res.ok) return null
       const data: unknown = await res.json()
       return parseDeepSeekBalance(data)
+    } catch {
+      // network / CORS / abort / non-JSON body — degrade to "nothing".
+      return null
+    }
+  }
+
+  if (id === 'openrouter') {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/credits', {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (!res.ok) return null
+      const data: unknown = await res.json()
+      return parseOpenRouterBalance(data)
     } catch {
       // network / CORS / abort / non-JSON body — degrade to "nothing".
       return null

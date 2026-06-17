@@ -26,6 +26,7 @@
     openai: current.openaiKey ?? '',
     anthropic: current.anthropicKey ?? '',
     gemini: current.geminiKey ?? '',
+    openrouter: current.openrouterKey ?? '',
   })
   let error = $state<string | null>(null)
 
@@ -72,7 +73,7 @@
   let crossModelVerify = $state<boolean>(current.crossModelVerify)
   const keyedProviderCount = $derived.by(() => {
     const s = settingsState.current
-    return [s.deepseekKey, s.openaiKey, s.anthropicKey, s.geminiKey].filter(Boolean).length
+    return [s.deepseekKey, s.openaiKey, s.anthropicKey, s.geminiKey, s.openrouterKey].filter(Boolean).length
   })
   function onCrossModelVerifyChange(checked: boolean) {
     crossModelVerify = checked
@@ -91,7 +92,7 @@
   /** Whether a provider has a key saved (drives row disabling + hints). */
   function providerKeyed(p: AiProvider): boolean {
     const s = settingsState.current
-    return !!(p === 'deepseek' ? s.deepseekKey : p === 'openai' ? s.openaiKey : p === 'anthropic' ? s.anthropicKey : s.geminiKey)
+    return !!(p === 'deepseek' ? s.deepseekKey : p === 'openai' ? s.openaiKey : p === 'anthropic' ? s.anthropicKey : p === 'gemini' ? s.geminiKey : s.openrouterKey)
   }
 
   /**
@@ -187,6 +188,7 @@
     openai: '',
     anthropic: '',
     gemini: '',
+    openrouter: '',
   })
   {
     // Seed the active provider's card from a stored aiModel when it's valid.
@@ -209,11 +211,12 @@
     if (id === provider) setAiModel(value)
   }
 
-  const KEY_FIELD: Record<LlmProviderId, 'deepseekKey' | 'openaiKey' | 'anthropicKey' | 'geminiKey'> = {
+  const KEY_FIELD: Record<LlmProviderId, 'deepseekKey' | 'openaiKey' | 'anthropicKey' | 'geminiKey' | 'openrouterKey'> = {
     deepseek: 'deepseekKey',
     openai: 'openaiKey',
     anthropic: 'anthropicKey',
     gemini: 'geminiKey',
+    openrouter: 'openrouterKey',
   }
 
   function saveKey(id: LlmProviderId): void {
@@ -244,6 +247,7 @@
     openai: false,
     anthropic: false,
     gemini: false,
+    openrouter: false,
   })
   const savedTimers: Partial<Record<LlmProviderId, ReturnType<typeof setTimeout>>> = {}
   function showSaved(id: LlmProviderId) {
@@ -263,6 +267,7 @@
     openai: { status: 'idle' },
     anthropic: { status: 'idle' },
     gemini: { status: 'idle' },
+    openrouter: { status: 'idle' },
   })
 
   async function handleSaveAndTest(id: LlmProviderId) {
@@ -306,6 +311,7 @@
     openai: { status: 'idle' },
     anthropic: { status: 'idle' },
     gemini: { status: 'idle' },
+    openrouter: { status: 'idle' },
   })
 
   /** The provider's saved key (the source of truth for whether to fetch). */

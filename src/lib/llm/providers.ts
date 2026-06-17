@@ -16,7 +16,7 @@
 
 import { MODEL_CATALOG } from './modelCatalog'
 
-export type LlmProviderId = 'deepseek' | 'openai' | 'anthropic' | 'gemini'
+export type LlmProviderId = 'deepseek' | 'openai' | 'anthropic' | 'gemini' | 'openrouter'
 export type LlmTransport = 'openai-compat' | 'anthropic' | 'gemini'
 
 export interface LlmModelDef {
@@ -143,6 +143,23 @@ export const PROVIDERS: LlmProviderDef[] = [
     defaultModel: 'gemini-3.5-flash',
     keyHint: 'AIza...',
     models: MODEL_CATALOG.gemini,
+  },
+  {
+    id: 'openrouter',
+    displayName: 'OpenRouter',
+    // OpenAI-compatible gateway: same chat/completions wire format as DeepSeek,
+    // and built for client-side use (sends CORS headers), so we call it DIRECT
+    // from the browser — no serverless proxy. baseUrl/chat/completions is the
+    // endpoint; the openai-compat adapter adds OpenRouter's attribution headers.
+    transport: 'openai-compat',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    // OpenRouter is OpenAI-compatible and accepts max_tokens (not the GPT-5
+    // max_completion_tokens quirk — it normalizes the param per upstream model).
+    maxTokensParam: 'max_tokens',
+    // Default: DeepSeek V3.1 — a cheap-but-capable workhorse from the curated set.
+    defaultModel: 'deepseek/deepseek-chat-v3.1',
+    keyHint: 'sk-or-...',
+    models: MODEL_CATALOG.openrouter,
   },
 ]
 

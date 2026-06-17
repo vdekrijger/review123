@@ -79,6 +79,19 @@ describe('AiModelsSection — provider context cards (layout)', () => {
     }
   })
 
+  it('renders an OpenRouter card with key input + model select listing its curated slugs', () => {
+    render(AiModelsSection)
+    const card = within(providerCard('OpenRouter'))
+    expect(card.getByRole('radio', { name: 'OpenRouter' })).toBeInTheDocument()
+    expect(card.getByLabelText(/openrouter api key/i)).toBeInTheDocument()
+    const select = card.getByLabelText(/openrouter model/i) as HTMLSelectElement
+    const or = getProvider('openrouter')!
+    expect(select.value).toBe(or.defaultModel)
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(or.models.map((m) => m.id))
+    // Slugs are vendor-namespaced.
+    expect(select.value).toBe('deepseek/deepseek-chat-v3.1')
+  })
+
   it('the ACTIVE provider card is emphasized (data-active) and inactive cards are not', () => {
     setAiProvider('anthropic')
     render(AiModelsSection)
@@ -241,11 +254,11 @@ describe('AiModelsSection — key fields', () => {
     expect((screen.getByLabelText(/anthropic api key/i) as HTMLInputElement).value).toBe('sk-ant-prefilled')
   })
 
-  it('shows a per-card privacy line: direct-from-browser for DeepSeek/Anthropic/Gemini, proxy for OpenAI', () => {
+  it('shows a per-card privacy line: direct-from-browser for DeepSeek/Anthropic/Gemini/OpenRouter, proxy for OpenAI', () => {
     render(AiModelsSection)
-    // Three direct-from-browser cards…
-    expect(screen.getAllByText(/sent directly from your browser/i)).toHaveLength(3)
-    for (const name of ['DeepSeek', 'Anthropic', 'Gemini']) {
+    // Four direct-from-browser cards…
+    expect(screen.getAllByText(/sent directly from your browser/i)).toHaveLength(4)
+    for (const name of ['DeepSeek', 'Anthropic', 'Gemini', 'OpenRouter']) {
       expect(
         within(providerCard(name)).getByText(/sent directly from your browser/i),
       ).toBeInTheDocument()
@@ -712,6 +725,15 @@ describe('AiModelsSection — credits remaining (capability-gated balance)', () 
     render(AiModelsSection)
     await waitFor(() => expect(screen.getByText(/credits:\s*\$110\.00/i)).toBeInTheDocument())
     expect(fetchProviderBalanceMock).toHaveBeenCalledWith('deepseek', 'sk-deepseek-test')
+  })
+
+  it('renders the credits line for OpenRouter when a key is set', async () => {
+    saveTokens({ openrouterKey: 'sk-or-test' })
+    _resetSettingsStateForTest()
+    fetchProviderBalanceMock.mockResolvedValue({ currency: 'USD', total: 37.5 })
+    render(AiModelsSection)
+    await waitFor(() => expect(within(providerCard('OpenRouter')).getByText(/credits:\s*\$37\.50/i)).toBeInTheDocument())
+    expect(fetchProviderBalanceMock).toHaveBeenCalledWith('openrouter', 'sk-or-test')
   })
 
   it('does NOT render a credits line for OpenAI / Anthropic / Gemini even with keys set', async () => {

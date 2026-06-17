@@ -20,6 +20,7 @@ export const PROVIDER_KEY_FIELDS = {
   openai: 'openaiKey',
   anthropic: 'anthropicKey',
   gemini: 'geminiKey',
+  openrouter: 'openrouterKey',
 } as const satisfies Record<LlmProviderId, string>
 
 /**
