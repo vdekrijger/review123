@@ -27,9 +27,13 @@
     ci?: CiSummaryType | null
     ciError?: boolean
     meta?: PrMeta | null
+    /** Re-read CI status without a page reload (passed through to CiSummary). */
+    onRefreshCi?: () => void
+    /** True while a CI refresh is in flight. */
+    ciRefreshing?: boolean
   }
 
-  let { run, onhotspot, collapsed, oncollapse, onbackdropclick, ci = null, ciError = false, meta = null }: Props = $props()
+  let { run, onhotspot, collapsed, oncollapse, onbackdropclick, ci = null, ciError = false, meta = null, onRefreshCi, ciRefreshing = false }: Props = $props()
 
   // Plan J: link to settings from a disabled (off) section, preserving return-to.
   function goToSettings(e: MouseEvent) {
@@ -235,7 +239,7 @@
           <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
             <summary class="rail-section-summary">{section.title}</summary>
             <div class="rail-section-body">
-              <CiSummary {ci} error={ciError} />
+              <CiSummary {ci} error={ciError} {onRefreshCi} refreshing={ciRefreshing} />
             </div>
           </details>
 

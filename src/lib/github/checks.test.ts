@@ -24,8 +24,9 @@ function makeCheckRun(
   name: string,
   status: string,
   conclusion: string | null,
+  urls?: { html_url?: string | null; details_url?: string | null },
 ) {
-  return { id, name, status, conclusion }
+  return { id, name, status, conclusion, ...urls }
 }
 
 function checkRunsPage(
@@ -157,18 +158,22 @@ describe('getCiSummary — mixed conclusions (EC-10d)', () => {
     expect(result.failed).toBe(4) // failure + timed_out + cancelled + action_required
     expect(result.pending).toBe(1)
     expect(result.failures).toHaveLength(4)
+    // URL is null here because the fixture check-runs carry no html_url/details_url.
     expect(result.failures[0]).toEqual({
       name: 'e2e',
       annotations: ['Test foo failed at line 42'],
+      url: null,
     })
     expect(result.failures[1]).toEqual({
       name: 'perf',
       annotations: ['Timeout exceeded 60s'],
+      url: null,
     })
-    expect(result.failures[2]).toEqual({ name: 'security', annotations: [] })
+    expect(result.failures[2]).toEqual({ name: 'security', annotations: [], url: null })
     expect(result.failures[3]).toEqual({
       name: 'sign-off',
       annotations: ['Manual approval required'],
+      url: null,
     })
   })
 
@@ -295,5 +300,86 @@ describe('getCiSummary — annotation fetch failures are non-fatal', () => {
     const result = await getCiSummary(REF, SHA)
     expect(result.failures).toHaveLength(1)
     expect(result.failures[0].annotations).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Per-failure web URL: html_url preferred, details_url fallback, null when absent
+// ---------------------------------------------------------------------------
+
+describe('getCiSummary — per-failure web URL', () => {
+  it('populates url from html_url when present', async () => {
+    const runs = [
+      makeCheckRun(1, 'unit', 'completed', 'failure', {
+        html_url: 'https://github.com/acme/web/runs/1',
+        details_url: 'https://ci.example.com/build/1',
+      }),
+    ]
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(checkRunsPage(runs))
+      .mockResolvedValueOnce(annotationsResponse([]))
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await getCiSummary(REF, SHA)
+    // html_url is preferred over details_url
+    expect(result.failures[0].url).toBe('https://github.com/acme/web/runs/1')
+  })
+
+  it('falls back to details_url when html_url is absent', async () => {
+    const runs = [
+      makeCheckRun(2, 'e2e', 'completed', 'failure', {
+        details_url: 'https://ci.example.com/build/2',
+      }),
+    ]
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(checkRunsPage(runs))
+      .mockResolvedValueOnce(annotationsResponse([]))
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await getCiSummary(REF, SHA)
+    expect(result.failures[0].url).toBe('https://ci.example.com/build/2')
+  })
+
+  it('falls back to details_url when html_url is null', async () => {
+    const runs = [
+      makeCheckRun(3, 'lint', 'completed', 'failure', {
+        html_url: null,
+        details_url: 'https://ci.example.com/build/3',
+      }),
+    ]
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(checkRunsPage(runs))
+      .mockResolvedValueOnce(annotationsResponse([]))
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await getCiSummary(REF, SHA)
+    expect(result.failures[0].url).toBe('https://ci.example.com/build/3')
+  })
+
+  it('is null when neither html_url nor details_url is present', async () => {
+    const runs = [makeCheckRun(4, 'build', 'completed', 'failure')]
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(checkRunsPage(runs))
+      .mockResolvedValueOnce(annotationsResponse([]))
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await getCiSummary(REF, SHA)
+    expect(result.failures[0].url).toBeNull()
+  })
+
+  it('is null when html_url is null and details_url is absent', async () => {
+    const runs = [makeCheckRun(5, 'typecheck', 'completed', 'failure', { html_url: null })]
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(checkRunsPage(runs))
+      .mockResolvedValueOnce(annotationsResponse([]))
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await getCiSummary(REF, SHA)
+    expect(result.failures[0].url).toBeNull()
   })
 })

@@ -10,7 +10,7 @@ export interface CiSummary {
   passed: number
   failed: number
   pending: number
-  failures: { name: string; annotations: string[] }[]
+  failures: { name: string; annotations: string[]; url?: string | null }[]
 }
 
 // ---------------------------------------------------------------------------
@@ -35,6 +35,12 @@ interface CheckRun {
   name: string
   status: string
   conclusion: string | null
+  // The check's web page on GitHub. `html_url` is the canonical UI link;
+  // `details_url` is the integrator-provided fallback (e.g. an external CI). One
+  // or both may be absent. Captured so a failed check can deep-link to GitHub
+  // (where the user can view logs / re-run it).
+  html_url?: string | null
+  details_url?: string | null
 }
 
 interface CheckRunsPage {
@@ -90,11 +96,14 @@ export async function getCiSummary(ref: PrRef, headSha: string): Promise<CiSumma
     }
   }
 
-  // Fetch annotations for each failed run (one page, cap 50)
-  const failures: { name: string; annotations: string[] }[] = []
+  // Fetch annotations for each failed run (one page, cap 50). Capture the
+  // check's web URL too — prefer html_url (GitHub UI), fall back to details_url
+  // (integrator-provided), null when neither is present.
+  const failures: { name: string; annotations: string[]; url: string | null }[] = []
   for (const run of failedRuns) {
     const annotations = await fetchAnnotations(owner, repo, run.id)
-    failures.push({ name: run.name, annotations })
+    const url = run.html_url ?? run.details_url ?? null
+    failures.push({ name: run.name, annotations, url })
   }
 
   return {
