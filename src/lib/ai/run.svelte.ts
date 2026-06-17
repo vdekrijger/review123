@@ -27,13 +27,15 @@ import {
   validateVerifierResponse,
   mergeGeneratorFindings,
   fuseConfirm,
+  classifyClaim,
   type VerifiableFinding,
   type VerifyFn,
+  type ToolCheckFn,
   type ParticipantUsage,
   type VerifierImpact,
   type GeneratorFindings,
 } from './crossVerify'
-import { getProvider } from '../llm/providers'
+import { getProvider, modelSupportsTools } from '../llm/providers'
 import { llmToolLoop as defaultLlmToolLoop } from '../llm/llmToolLoop'
 import {
   createDeepReviewToolkit,
@@ -440,6 +442,78 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     return { result, usage }
   }
 
+  // ---------------------------------------------------------------------------
+  // Tool-backed absence verification (Part B)
+  //
+  // When the active config CAN use tools (deep-capable provider + key + a wired
+  // deepReview source), an absence/external-evidence finding ("no test verifies
+  // X", "not called", "missing handler") is CHECKED before it can surface: the
+  // verifier searches the repo for the referenced symbol/test and CONFIRMS the
+  // absence only if it genuinely finds nothing. The check shares the per-review
+  // deep cache and runs under its own per-task tool toolkit (so its calls/bytes
+  // respect the deep budgets). A hard cap on the NUMBER of absence checks per run
+  // keeps the extra cost bounded; once exhausted, later absence findings fall
+  // back to the Part A prompt floor (demoted unless positively confirmed).
+  // ---------------------------------------------------------------------------
+
+  /** Hard cap on tool-backed absence checks per review (cost bound). */
+  const MAX_ABSENCE_TOOL_CHECKS = 6
+  let absenceToolChecksUsed = 0
+
+  /** Whether tool-backed verification can run: deep source + tool-capable model. */
+  function toolBackedVerifyAvailable(): boolean {
+    return deepReview !== undefined && modelSupportsTools(activeLlmConfig().model)
+  }
+
+  /**
+   * Build the tool-backed absence check (Part B), or undefined when tools are
+   * unavailable (no-key / non-deep model / no source). Each call runs a small
+   * tool loop on the ACTIVE model asking it to SEARCH for the test/caller/handler
+   * the finding claims is missing and answer confirm (absence holds) / refute
+   * (found it) / uncertain. Reuses the shared deep cache + budgets; never throws.
+   */
+  function buildAbsenceToolCheck(onActivity?: (line: string) => void): ToolCheckFn | undefined {
+    if (!toolBackedVerifyAvailable()) return undefined
+    return async (finding: VerifiableFinding): Promise<'confirm' | 'refute' | 'uncertain'> => {
+      if (absenceToolChecksUsed >= MAX_ABSENCE_TOOL_CHECKS) return 'uncertain'
+      absenceToolChecksUsed += 1
+      onActivity?.(`Verifying claim against the repo: ${finding.body.slice(0, 60)}…`)
+      const toolkit = createDeepReviewToolkit(deepReview!, deepCache)
+      const system =
+        'You are verifying ONE claim that something is ABSENT from the codebase (e.g. "no test ' +
+        'covers X", "X is not called anywhere", "no handler for Y"). The claim is about code ' +
+        'OUTSIDE the provided diff. USE THE SEARCH TOOLS (search_code / find_references / ' +
+        'read_file) to look for the referenced test, caller, handler, or symbol across the repo. ' +
+        'Then answer with JSON ONLY: {"verdict":"confirm"|"refute"|"uncertain"}.\n' +
+        '- "refute": you FOUND the test/caller/handler the claim says is missing (the absence is ' +
+        'FALSE).\n' +
+        '- "confirm": you searched and genuinely found NOTHING — the absence holds.\n' +
+        '- "uncertain": you could not search effectively (no tool, budget gone) — do not guess.\n' +
+        'Default to "uncertain" or "refute"; only "confirm" an absence you actually verified. ' +
+        'Respond with the JSON object only.'
+      const user = `Finding: ${finding.body}\nFile: ${finding.path}${finding.line !== null ? `:${finding.line}` : ''}`
+      try {
+        const loop = await llmToolLoop({
+          system: withDeepReviewGuidance(system, toolkit.tools.map((t) => t.name)),
+          user,
+          tools: toolkit.tools,
+          executeTool: toolkit.executeTool,
+          humanize: toolkit.humanize,
+          maxToolCalls: DEEP_REVIEW_MAX_TOOL_CALLS,
+          onToolEvent: (ev) => onActivity?.(ev.detail),
+        })
+        const parsed = JSON.parse(loop.content) as { verdict?: unknown }
+        const v = parsed?.verdict
+        if (v === 'confirm' || v === 'refute' || v === 'uncertain') return v
+        return 'uncertain'
+      } catch {
+        // A failed/unparseable check is treated as "could not verify" → the
+        // absence is NOT positively confirmed, so the finding is demoted.
+        return 'uncertain'
+      }
+    }
+  }
+
   /** Best-effort path token from a verdict evidence bullet (for context lookup). */
   const EVIDENCE_PATH_RE = /[\w@.\-/]+\.[A-Za-z0-9]+/
   function extractEvidencePath(text: string): string | null {
@@ -507,6 +581,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         line: f.line,
         severity: f.severity,
         body: f.body,
+        // Classify in the verify step (Part B): an absence/external-evidence
+        // claim is demoted unless its absence is positively (tool-)confirmed.
+        claimType: classifyClaim(f.body),
         ...(cc?.excerpt ? { excerpt: cc.excerpt } : {}),
         ...(cc?.fileWindow ? { fileWindow: cc.fileWindow } : {}),
       }
@@ -514,10 +591,15 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
     const generatorName = activeLlmConfig().provider.displayName
     const generatorModelId = activeLlmConfig().model.id
+    // Tool-backed absence check (Part B) — undefined when tools are unavailable
+    // (no-key / non-deep model / no source), so the no-tools path is unchanged:
+    // crossVerify then leaves needs-external findings to the Part A floor (demoted
+    // unless positively confirmed, which without a tool they cannot be).
+    const toolCheck = buildAbsenceToolCheck(onActivity)
     try {
       // Every verifier runs the SAME comprehensive adversarial prompt; error
       // decorrelation comes from MODEL/PROVIDER diversity, not per-judge framing.
-      const outcome = await crossVerify(verifiable, generatorName, verifiers, realVerify, generatorModelId)
+      const outcome = await crossVerify(verifiable, generatorName, verifiers, realVerify, generatorModelId, toolCheck)
       return {
         byId: outcome.byId,
         usage: outcome.usage,
@@ -697,7 +779,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       }
 
       // 3. Cross-confirm (each participant verifies findings it didn't raise).
-      const outcome = await fuseConfirm(merged, participants, realVerify)
+      //    Tool-backed absence verification (Part B) gates needs-external findings.
+      const outcome = await fuseConfirm(merged, participants, realVerify, buildAbsenceToolCheck(note))
 
       // 4. Rebuild findings, surfaced-first, carrying raisedBy + verification.
       const findings = outcome.merged.map((m) => ({
@@ -791,7 +874,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       }
 
       // 3. Cross-confirm (each participant verifies evidence it didn't raise).
-      const outcome = await fuseConfirm(merged, participants, realVerify)
+      //    Tool-backed absence verification (Part B) gates needs-external evidence.
+      const outcome = await fuseConfirm(merged, participants, realVerify, buildAbsenceToolCheck(onActivity))
 
       // 4. Rebuild the verdict: surfaced-first evidence + per-row verification +
       //    raisedBy provenance. Primary `level` + unioned notAnalyzed.

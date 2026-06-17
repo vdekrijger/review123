@@ -18,6 +18,7 @@ import {
   alternativesPrompt,
   storyOrderPrompt,
   askPrompt,
+  skillReviewPrompt,
   parseReadingOrder,
   stripReadingOrder,
   FLOW_MAX_STEPS,
@@ -1969,7 +1970,42 @@ describe('storyOrderPrompt', () => {
 })
 
 describe('PROMPT_VERSION', () => {
-  it('is bumped to 22 (robust big-PR story — compact story input)', () => {
-    expect(PROMPT_VERSION).toBe(22)
+  it('is bumped to 23 (verify absence-claims — fail-closed floor)', () => {
+    expect(PROMPT_VERSION).toBe(23)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PROMPT_VERSION 23 — absence-claim fail-closed floor (generator side)
+// ---------------------------------------------------------------------------
+
+describe('PROMPT_VERSION v23 — absence-claim discipline in generator prompts', () => {
+  it('PROMPT_VERSION is at least 23', () => {
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(23)
+  })
+
+  it('the skill-review prompt forbids ASSERTING an absence about code outside the diff', () => {
+    const { system } = skillReviewPrompt(
+      { text: 'x', notAnalyzed: [], includedFiles: [], importGraph: '' },
+      { name: 'Persona', content: 'review' },
+    )
+    expect(system).toMatch(/Absence\/existence claims/i)
+    expect(system).toMatch(/no test verifies/i)
+    expect(system).toMatch(/not called/i)
+    expect(system).toMatch(/not handled\/validated/i)
+    // Must instruct a question / couldn't-verify, never an assertion.
+    expect(system).toMatch(/Never ASSERT an absence as a defect/i)
+    expect(system).toMatch(/QUESTION|couldn't verify/i)
+    // Concrete failure mode: a test/handler elsewhere makes the finding wrong.
+    expect(system).toMatch(/exists in another file makes/i)
+  })
+
+  it('the verdict prompt carries the absence-claim rule (shared ANTI_FATIGUE_RULES)', () => {
+    const { system } = verdictPrompt(
+      { text: 'x', notAnalyzed: [], includedFiles: [], importGraph: '' },
+      null,
+    )
+    expect(system).toMatch(/Absence\/existence claims/i)
+    expect(system).toMatch(/not evidence it is absent/i)
   })
 })

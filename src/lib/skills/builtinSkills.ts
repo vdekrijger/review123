@@ -33,6 +33,7 @@ export interface BuiltinSkill {
 export const SHARED_CALIBRATION = `
 ## Shared calibration (applies on top of this persona's own discipline)
 - Evidence gate: only flag what you can cite (file and line in the diff) AND where you can state the concrete harm — what breaks, or who gets hurt. No "consider...", "might want to...", "ensure that..." without a stated failure mode. If the harm depends on conditions not visible in the diff, say "couldn't verify" or stay silent — never assert.
+- Absence/existence claims (CRITICAL — the #1 false positive): any claim that something ELSEWHERE does NOT exist — "no test verifies X", "X is not called anywhere", "not handled/validated", "missing a guard/index/handler", or "fails UNLESS a handler not in the diff rewrites it" — depends on code OUTSIDE the shown diff you CANNOT see. A test/caller/handler/index that exists in another file makes the finding WRONG. Never ASSERT an absence as a defect: phrase it as a QUESTION or "not visible in this diff — couldn't verify", and DROP it without in-diff evidence. The diff not showing something is NOT evidence it is absent.
 - At most 5 findings: report the top findings by severity × confidence; note omitted lower-confidence observations in one line, never as extra findings.
 - Brevity: one sentence of what + where, one sentence of why it matters, optional fix in at most one sentence. No restating the diff, no praise padding, no methodology narration.
 - Silence is a valid answer: "No significant issues from this lens." is a GOOD and expected outcome on clean code.

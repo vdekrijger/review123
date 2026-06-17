@@ -14,6 +14,17 @@ import type { CiSummary } from '../github/checks'
 import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
 
+// PROMPT_VERSION 23 (verify absence-claims): fail-closed floor against the
+// absence/external-evidence false positive ("no test verifies X", "not called",
+// "not handled/validated", "missing guard/index", "fails UNLESS a handler not in
+// the diff rewrites it"). The shared generator calibration (ANTI_FATIGUE_RULES +
+// SHARED_CALIBRATION) now forbids ASSERTING an absence about code outside the
+// diff — it must be a question or "couldn't verify". The verifier framing
+// (COMPREHENSIVE_VERIFY_FRAMING + buildVerifyPrompt) makes such claims
+// REFUTE-by-default: the burden of proof is on the finding, and an absence the
+// verifier can't positively confirm from the provided context yields refute/
+// uncertain, never confirm. Both generator and verifier prompt bytes change, so
+// bump to re-run cached reviews/verifications under the stronger framing.
 // PROMPT_VERSION 22 (robust big-PR story): the story task's user payload is now
 // a COMPACT structural representation — changed-file paths + per-file add/del
 // stats + hunk HEADERS (the `@@ … @@` enclosing-symbol lines) + the import graph
@@ -48,7 +59,7 @@ import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
 // module-dependency change-map to a flow-of-execution (GraphResult.flow). The
 // bump invalidates cached diagram results so old change-maps don't render under
 // the new "Execution flow" label.
-export const PROMPT_VERSION = 22
+export const PROMPT_VERSION = 23
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)
@@ -63,6 +74,14 @@ const ANTI_FATIGUE_RULES = `Anti-fatigue calibration (IMPORTANT — the goal is 
 articulate the concrete harm — what breaks, or who gets hurt. Never write "consider...", \
 "might want to...", or "ensure that..." without a stated failure mode. If the harm depends \
 on conditions not visible in the diff, say "couldn't verify" or stay silent — never assert.
+- Absence/existence claims (CRITICAL — these are the #1 false-positive source): any claim that \
+something ELSEWHERE does NOT exist — "no test verifies X", "X is not called anywhere", "this is \
+not handled/validated", "missing a guard/index/handler", or "the assertion fails UNLESS some \
+handler not visible in the diff rewrites it" — depends on code OUTSIDE the shown diff that you \
+CANNOT see. A test, caller, handler, or index that exists in another file makes such a finding \
+flat WRONG. Never ASSERT an absence as a defect. Phrase it as a QUESTION ("Does a test exercise \
+fooBar?") or explicitly flag it "not visible in this diff — couldn't verify", and DROP it if you \
+have no in-diff evidence. The diff not showing something is NOT evidence it is absent.
 - Brevity format: each point is one sentence of WHAT + WHERE, one sentence of WHY IT MATTERS, \
 and optionally a fix suggestion in at most one sentence or a small code block. Do not restate \
 the diff, no praise padding, no methodology narration.

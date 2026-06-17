@@ -23,6 +23,16 @@ import { findingsMatch, type AnchoredFinding } from './findingMatch'
 // the aggregation changes, so cached verified results invalidate.
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether a finding is grounded in the diff or hinges on EXTERNAL evidence —
+ * an absence/existence claim about code OUTSIDE the shown diff (no test, not
+ * called, not handled/validated, missing guard/index/handler). 'needs-external'
+ * findings are the false-positive class this harness suppresses: they can only
+ * surface at full confidence when their absence is POSITIVELY verified (by a
+ * tool-backed check, when tools are available) — otherwise they are demoted.
+ */
+export type ClaimType = 'in-diff' | 'needs-external'
+
 /** A finding handed to verification — minimal, code-anchored. */
 export interface VerifiableFinding {
   /** Stable id used to correlate a verifier's verdict back to its finding. */
@@ -35,6 +45,66 @@ export interface VerifiableFinding {
   excerpt?: string
   /** Wider numbered file window around the line, when available. */
   fileWindow?: string
+  /**
+   * External-evidence classification (Part B). Optional — when omitted the
+   * caller may classify on the fly with classifyClaim(body). 'needs-external'
+   * findings are demoted unless their absence is positively verified.
+   */
+  claimType?: ClaimType
+}
+
+// ---------------------------------------------------------------------------
+// External-evidence (absence-claim) classification
+// ---------------------------------------------------------------------------
+
+/**
+ * Phrasings that mark a finding as an ABSENCE / EXTERNAL-EVIDENCE claim — one
+ * that asserts something OUTSIDE the shown diff does not exist (a test, a
+ * caller, a handler, a guard/index). Matched case-insensitively against the
+ * finding body. Deliberately broad but anchored on the verb so ordinary
+ * in-diff findings ("handles the null case", "validates input") do not trip it.
+ */
+const ABSENCE_CLAIM_PATTERNS: RegExp[] = [
+  // tests / coverage
+  /\bno\s+test\b/i,
+  /\bnot\s+tested\b/i,
+  /\buntested\b/i,
+  /\bno\s+(?:test\s+)?coverage\b/i,
+  /\b(?:test|tests)\s+(?:is|are)\s+missing\b/i,
+  /\bmissing\s+(?:an?\s+)?(?:unit\s+|integration\s+)?tests?\b/i,
+  /\bno\s+test\s+(?:verifies|covers|exercises|asserts)\b/i,
+  // callers / usage
+  /\bnot\s+called\b/i,
+  /\bnever\s+called\b/i,
+  /\bnot\s+used\b/i,
+  /\bnever\s+used\b/i,
+  /\bunused\b/i,
+  /\bno\s+(?:callers?|consumers?|references?)\b/i,
+  // handling / validation / guards
+  /\bnot\s+handled\b/i,
+  /\bunhandled\b/i,
+  /\bnot\s+validated\b/i,
+  /\bnot\s+sanitized\b/i,
+  /\bmissing\s+(?:an?\s+)?(?:guard|check|handler|validation|index|migration|null\s+check|error\s+handl)/i,
+  /\bno\s+(?:guard|handler|validation|index|migration|error\s+handling)\b/i,
+  // "unless … not visible in the diff" shape
+  /\bunless\b[^.]*\b(?:not\s+visible|not\s+shown|outside|elsewhere|custom\s+(?:exception\s+)?handler)\b/i,
+  /\bnot\s+visible\s+(?:in|from)\s+the\s+diff\b/i,
+]
+
+/**
+ * Classify a finding body as 'needs-external' (an absence/external-evidence
+ * claim that hinges on code outside the diff) or 'in-diff' (an ordinary
+ * diff-local finding). Detection lives in the VERIFY step (not a generator tag)
+ * because it is the simpler, robust path: it needs no generator-prompt change,
+ * works on cached/older findings, and applies uniformly to verdict evidence and
+ * skill findings alike. Pure + cheap (regex over the body).
+ */
+export function classifyClaim(body: string): ClaimType {
+  for (const re of ABSENCE_CLAIM_PATTERNS) {
+    if (re.test(body)) return 'needs-external'
+  }
+  return 'in-diff'
 }
 
 /** One verifier's judgement on a single finding. */
@@ -125,7 +195,17 @@ resource leaks, missing pagination or limits — a real problem that matters at 
 diff/code, or speculative? Trace the conditions needed to hit it.
 - MAINTAINABILITY: confusing or duplicated logic, leaky abstractions, missing error handling at \
 real boundaries, names that mislead, structure that will break under change — issues that would \
-genuinely cost a future maintainer, not mere style preference.`
+genuinely cost a future maintainer, not mere style preference.
+
+ABSENCE / EXTERNAL-EVIDENCE CLAIMS (REFUTE-BY-DEFAULT — the burden of proof is on the finding): \
+a claim that something ELSEWHERE does not exist — "no test verifies/covers X", "X is not called/\
+unused", "not handled/validated", "missing a guard/index/handler", or "the assertion fails UNLESS \
+some handler not visible in the diff rewrites it" — hinges on code that is NOT in the provided \
+context. The diff/excerpt NOT showing a test, caller, handler, or index is NOT proof it is absent \
+(it almost certainly lives in another file you were not given). For such a finding you MUST return \
+"refute" or "uncertain" UNLESS the provided context itself positively establishes the absence — \
+NEVER "confirm" a plausible-sounding absence you cannot actually verify. Suppressing an \
+unsubstantiated absence claim is the correct outcome.`
 
 export function buildVerifyPrompt(findings: VerifiableFinding[]): {
   system: string
@@ -142,6 +222,9 @@ issue is real and matters under at least one of those dimensions. A finding is N
 - the claim is not supported by the provided code (excerpt / fileWindow), or contradicts it;
 - it is a nitpick, style preference, or moot/unchanged-code observation;
 - it is speculative ("could", "might") with no concrete evidence in the code;
+- it asserts an ABSENCE of something elsewhere (no test, not called, not handled/validated, \
+missing guard/index/handler) that the provided context does NOT positively establish — the diff \
+not showing it is not proof; return "refute" or "uncertain", never "confirm";
 - you cannot tell from the provided context (then "uncertain", never "confirm").
 
 You are scoring whether a tired reviewer would thank you for surfacing it. Be strict: a false \
@@ -219,6 +302,30 @@ function voteWeight(verdict: 'confirm' | 'refute' | 'uncertain'): number {
 }
 
 /**
+ * Absence-claim demotion (Part B). A 'needs-external' finding must be DEMOTED
+ * (surfaced=false) unless its absence was POSITIVELY verified — i.e. a
+ * tool-backed check (search_code / find_references / read_file) actually
+ * confirmed the test/caller/handler is missing. Without that positive
+ * confirmation, the plausible-but-unverified absence is suppressed so the
+ * "✓ confirmed" chip only shows when the absence was really checked. For
+ * 'in-diff' findings (the default) this is a no-op — the normal vote threshold
+ * decides. When `absence` is omitted the function behaves exactly as before.
+ */
+export interface AbsenceOpts {
+  claimType: ClaimType
+  /** True iff a tool-backed check positively confirmed the absence. */
+  toolConfirmed: boolean
+}
+
+/** Apply the absence-claim floor to a vote-threshold surface decision. */
+function applyAbsenceFloor(surfaced: boolean, absence?: AbsenceOpts): boolean {
+  if (!absence || absence.claimType !== 'needs-external') return surfaced
+  // needs-external surfaces at full confidence ONLY when its absence was
+  // positively tool-confirmed; otherwise it is demoted regardless of votes.
+  return surfaced && absence.toolConfirmed
+}
+
+/**
  * Aggregate the generator's implicit confirm with each verifier's verdict for
  * one finding and decide surface vs demote.
  *
@@ -231,6 +338,7 @@ export function aggregateFinding(
   generatorProvider: string,
   verifierVotes: VerifierVote[],
   generatorModel?: string,
+  absence?: AbsenceOpts,
 ): FindingVerification {
   const perModel: FindingVerdict[] = [
     // Generator/raiser row: carries its model + `raised` (it raised, not verified).
@@ -249,7 +357,7 @@ export function aggregateFinding(
     if (v.verdict === 'confirm') confirmedBy += 1
   }
   const polledModels = 1 + verifierVotes.length
-  const surfaced = score >= polledModels / 2
+  const surfaced = applyAbsenceFloor(score >= polledModels / 2, absence)
   return { confirmedBy, polledModels, surfaced, perModel }
 }
 
@@ -275,6 +383,7 @@ export function aggregateMultiRaiser(
   verifierVotes: VerifierVote[],
   totalParticipants: number,
   raiserModels?: string[],
+  absence?: AbsenceOpts,
 ): FindingVerification {
   const perModel: FindingVerdict[] = raisers.map((provider, i) => ({
     provider,
@@ -297,7 +406,7 @@ export function aggregateMultiRaiser(
     if (v.verdict === 'confirm') confirmedBy += 1
   }
   const polledModels = Math.max(totalParticipants, raisers.length + verifierVotes.length)
-  const surfaced = score >= polledModels / 2
+  const surfaced = applyAbsenceFloor(score >= polledModels / 2, absence)
   return { confirmedBy, polledModels, surfaced, perModel }
 }
 
@@ -344,6 +453,22 @@ function sumUsage(a: LlmUsage | undefined, b: LlmUsage | undefined): LlmUsage | 
 }
 
 /**
+ * A tool-backed check of ONE absence/external-evidence finding (Part B). The
+ * caller wires this to the deep toolkit (search_code / find_references /
+ * read_file) — it should look for the referenced test/caller/handler and return:
+ *   - 'confirm'   the absence genuinely holds (no test/caller/handler found) →
+ *                 the finding may surface at full confidence;
+ *   - 'refute'    a test/caller/handler WAS found → the absence is false, demote;
+ *   - 'uncertain' could not tell (budget exhausted, tools unavailable) → demote.
+ * Only 'confirm' positively verifies the absence. The function is GATED and
+ * BUDGETED by the caller; crossVerify treats it as opaque and never calls it for
+ * 'in-diff' findings. Throwing is treated as 'uncertain' (never blocks).
+ */
+export type ToolCheckFn = (
+  finding: VerifiableFinding,
+) => Promise<'confirm' | 'refute' | 'uncertain'>
+
+/**
  * Run cross-model verification over a set of findings.
  *
  * @param findings  the generated findings to verify (already code-anchored).
@@ -351,6 +476,13 @@ function sumUsage(a: LlmUsage | undefined, b: LlmUsage | undefined): LlmUsage | 
  *   implicit confirm).
  * @param verifiers  verifier provider configs (already excludes the generator).
  * @param verify  injected per-verifier call.
+ * @param generatorModel  the generator's model id (for the raiser row).
+ * @param toolCheck  optional tool-backed absence check (Part B). When provided,
+ *   each finding classified 'needs-external' is checked: only a 'confirm' lets it
+ *   surface at full confidence; anything else demotes it. When omitted (no key /
+ *   tools unavailable) every needs-external finding falls back to the Part A
+ *   prompt floor — demoted unless its absence was positively confirmed, which it
+ *   cannot be without a tool, so it is demoted. 'in-diff' findings are unaffected.
  * @returns per-finding verification, summed usage, and which verifiers responded.
  *
  * Graceful: a verifier that throws is skipped (its votes omitted, polledModels
@@ -363,6 +495,7 @@ export async function crossVerify(
   verifiers: ProviderConfig[],
   verify: VerifyFn,
   generatorModel?: string,
+  toolCheck?: ToolCheckFn,
 ): Promise<CrossVerifyOutcome> {
   const empty: CrossVerifyOutcome = {
     byId: new Map(),
@@ -417,9 +550,35 @@ export async function crossVerify(
   // No verifier responded → leave everything unverified.
   if (respondedProviders.length === 0) return empty
 
+  // Tool-backed absence verification (Part B): for each finding classified as an
+  // absence/external-evidence claim, run the caller's tool check (gated/budgeted
+  // there). Only a 'confirm' positively verifies the absence and lets the finding
+  // surface; anything else (refute/uncertain/no-tool) demotes it. 'in-diff'
+  // findings skip the check entirely. Sequential so the caller's shared tool
+  // budget is consumed deterministically; a throw is treated as 'uncertain'.
+  const toolConfirmedById = new Map<string, boolean>()
+  if (toolCheck) {
+    for (const f of findings) {
+      const claimType = f.claimType ?? classifyClaim(f.body)
+      if (claimType !== 'needs-external') continue
+      let verdict: 'confirm' | 'refute' | 'uncertain'
+      try {
+        verdict = await toolCheck(f)
+      } catch {
+        verdict = 'uncertain'
+      }
+      toolConfirmedById.set(f.id, verdict === 'confirm')
+    }
+  }
+
   const out = new Map<string, FindingVerification>()
   for (const f of findings) {
-    out.set(f.id, aggregateFinding(generatorProvider, votesByFinding.get(f.id)!, generatorModel))
+    const claimType = f.claimType ?? classifyClaim(f.body)
+    const absence: AbsenceOpts | undefined =
+      claimType === 'needs-external'
+        ? { claimType, toolConfirmed: toolConfirmedById.get(f.id) ?? false }
+        : undefined
+    out.set(f.id, aggregateFinding(generatorProvider, votesByFinding.get(f.id)!, generatorModel, absence))
   }
 
   // Per-verifier impact (Plan N): confirms/refutes/uncertains + decisive votes.
@@ -587,11 +746,17 @@ export function mergeGeneratorFindings(generators: GeneratorFindings[]): MergedF
  * @param participants  ALL ensemble participants (each can verify findings it
  *   didn't raise). The total poll size per finding is the participant count.
  * @param verify  injected per-participant verify call (same VerifyFn shape).
+ * @param toolCheck  optional tool-backed absence check (Part B) — same gating/
+ *   budget contract as crossVerify: a 'needs-external' merged finding only
+ *   surfaces at full confidence when its absence is positively confirmed;
+ *   otherwise it is demoted. 'in-diff' findings are unaffected. Omitted (no key /
+ *   tools off) → needs-external findings fall back to the Part A prompt floor.
  */
 export async function fuseConfirm(
   merged: MergedFinding[],
   participants: { generator: string; cfg: ProviderConfig }[],
   verify: VerifyFn,
+  toolCheck?: ToolCheckFn,
 ): Promise<FusionOutcome> {
   const empty: FusionOutcome = {
     merged: [],
@@ -648,15 +813,39 @@ export async function fuseConfirm(
 
   if (respondedProviders.length === 0) return empty
 
-  const scored = merged.map((m) => ({
-    merged: m,
-    verification: aggregateMultiRaiser(
-      m.raisedBy,
-      votesByFinding.get(m.id)!,
-      totalParticipants,
-      m.raiserCfgs.map((c) => c.model.id),
-    ),
-  }))
+  // Tool-backed absence verification (Part B) for needs-external merged findings.
+  const toolConfirmedById = new Map<string, boolean>()
+  if (toolCheck) {
+    for (const m of merged) {
+      const claimType = m.finding.claimType ?? classifyClaim(m.finding.body)
+      if (claimType !== 'needs-external') continue
+      let verdict: 'confirm' | 'refute' | 'uncertain'
+      try {
+        verdict = await toolCheck(m.finding)
+      } catch {
+        verdict = 'uncertain'
+      }
+      toolConfirmedById.set(m.id, verdict === 'confirm')
+    }
+  }
+
+  const scored = merged.map((m) => {
+    const claimType = m.finding.claimType ?? classifyClaim(m.finding.body)
+    const absence: AbsenceOpts | undefined =
+      claimType === 'needs-external'
+        ? { claimType, toolConfirmed: toolConfirmedById.get(m.id) ?? false }
+        : undefined
+    return {
+      merged: m,
+      verification: aggregateMultiRaiser(
+        m.raisedBy,
+        votesByFinding.get(m.id)!,
+        totalParticipants,
+        m.raiserCfgs.map((c) => c.model.id),
+        absence,
+      ),
+    }
+  })
 
   // Per-generator impact: surfaced (raised + survived), uniqueCatch (raised ALONE + survived).
   const genImpact = new Map<string, GeneratorImpact>()

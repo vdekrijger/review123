@@ -407,3 +407,153 @@ describe('multi-generator fusion in runVerdictTask (Plan P)', () => {
     expect(generatorRows[0].providerId).toBe('deepseek')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Part B — tool-backed verification of absence/external-evidence findings
+// ---------------------------------------------------------------------------
+
+/** Skill review whose finding is an ABSENCE claim ("no test covers fooBar"). */
+const ABSENCE_SKILL_RESULT: SkillReviewResult = {
+  skillName: 'My Reviewer',
+  findings: [{ path: 'src/foo.ts', line: 10, severity: 'high', body: 'no test covers fooBar' }],
+}
+
+/** A deepReview source stub — search/read fns are driven by the test. */
+function makeDeepSource(overrides: Record<string, unknown> = {}) {
+  return {
+    getFileAtHead: vi.fn(async () => null),
+    getFileAtBase: vi.fn(async () => null),
+    searchCode: vi.fn(async () => ''),
+    findReferences: vi.fn(async () => ''),
+    ...overrides,
+  }
+}
+
+describe('tool-backed absence verification in runSkillReviews (Part B)', () => {
+  it('no deepReview source (tools unavailable) → absence finding DEMOTED by the prompt floor', async () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    // Generator (active model) returns the absence finding; verifier CONFIRMS it.
+    const llmJsonWithRepairWithUsage = vi.fn().mockResolvedValue({
+      result: ABSENCE_SKILL_RESULT,
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    })
+    const llmJsonWithRepairFor = vi.fn().mockImplementation(async (_cfg, _opts, validate) => {
+      const resp = { verdicts: [{ id: 'src/foo.ts:10:' + djb2('no test covers fooBar'), verdict: 'confirm', reason: 'plausible' }] }
+      return { result: validate(resp), usage: undefined }
+    })
+    const llmToolLoop = vi.fn() // must NOT be called (no source)
+
+    // No `deepReview` in input → tool-backed verification is gated off.
+    const run = createAiRun(makeInput(), makeDeps({ llmJsonWithRepairWithUsage, llmJsonWithRepairFor, llmToolLoop }))
+    await run.runSkillReviews()
+
+    expect(llmToolLoop).not.toHaveBeenCalled()
+    const result = run.skillReviews[0].state.value as SkillReviewResult
+    const f = result.findings[0]
+    // Even though the verifier confirmed, the unverified absence is demoted.
+    expect(f.verification!.surfaced).toBe(false)
+  })
+
+  it('tool check FINDS a matching test (search_code) → REFUTED/demoted', async () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    const llmJsonWithRepairWithUsage = vi.fn().mockResolvedValue({
+      result: ABSENCE_SKILL_RESULT,
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    })
+    const llmJsonWithRepairFor = vi.fn().mockImplementation(async (_cfg, _opts, validate) => {
+      const resp = { verdicts: [{ id: 'src/foo.ts:10:' + djb2('no test covers fooBar'), verdict: 'confirm', reason: 'plausible' }] }
+      return { result: validate(resp), usage: undefined }
+    })
+    // The tool loop searched and FOUND the test → refute.
+    const llmToolLoop = vi.fn().mockResolvedValue({
+      content: JSON.stringify({ verdict: 'refute' }),
+      usage: undefined,
+      toolCallsUsed: 1,
+    })
+
+    const source = makeDeepSource({ searchCode: vi.fn(async () => 'src/foo.test.ts: describe(fooBar)') })
+    const run = createAiRun(
+      { ...makeInput(), deepReview: source },
+      makeDeps({ llmJsonWithRepairWithUsage, llmJsonWithRepairFor, llmToolLoop }),
+    )
+    await run.runSkillReviews()
+
+    expect(llmToolLoop).toHaveBeenCalledTimes(1)
+    const result = run.skillReviews[0].state.value as SkillReviewResult
+    expect(result.findings[0].verification!.surfaced).toBe(false)
+  })
+
+  it('tool check finds NOTHING (confirm) → absence verified → SURFACES', async () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    const llmJsonWithRepairWithUsage = vi.fn().mockResolvedValue({
+      result: ABSENCE_SKILL_RESULT,
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    })
+    const llmJsonWithRepairFor = vi.fn().mockImplementation(async (_cfg, _opts, validate) => {
+      const resp = { verdicts: [{ id: 'src/foo.ts:10:' + djb2('no test covers fooBar'), verdict: 'confirm', reason: 'real gap' }] }
+      return { result: validate(resp), usage: undefined }
+    })
+    // The tool loop searched and found NOTHING → confirm the absence.
+    const llmToolLoop = vi.fn().mockResolvedValue({
+      content: JSON.stringify({ verdict: 'confirm' }),
+      usage: undefined,
+      toolCallsUsed: 2,
+    })
+
+    const run = createAiRun(
+      { ...makeInput(), deepReview: makeDeepSource() },
+      makeDeps({ llmJsonWithRepairWithUsage, llmJsonWithRepairFor, llmToolLoop }),
+    )
+    await run.runSkillReviews()
+
+    expect(llmToolLoop).toHaveBeenCalled()
+    const result = run.skillReviews[0].state.value as SkillReviewResult
+    // Absence positively verified + verifier confirmed → surfaces.
+    expect(result.findings[0].verification!.surfaced).toBe(true)
+  })
+
+  it('single key (cross-verify off) → no verifier call AND no tool loop (no-op path)', async () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k') // only one key → cross-verify not effective
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    const llmJsonWithRepairWithUsage = vi.fn().mockResolvedValue({
+      result: ABSENCE_SKILL_RESULT,
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    })
+    const llmJsonWithRepairFor = vi.fn()
+    const llmToolLoop = vi.fn()
+
+    const run = createAiRun(
+      { ...makeInput(), deepReview: makeDeepSource() },
+      makeDeps({ llmJsonWithRepairWithUsage, llmJsonWithRepairFor, llmToolLoop }),
+    )
+    await run.runSkillReviews()
+
+    expect(llmJsonWithRepairFor).not.toHaveBeenCalled()
+    expect(llmToolLoop).not.toHaveBeenCalled()
+    const result = run.skillReviews[0].state.value as SkillReviewResult
+    // No verification ran → finding shown unverified (never dropped).
+    expect(result.findings[0].verification).toBeUndefined()
+  })
+})

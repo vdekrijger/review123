@@ -75,6 +75,12 @@ export default defineConfig(({ mode }) => ({
   test: {
     globals: true,
     environment: 'jsdom',
+    // Heavy jsdom render tests (e.g. src/routes/Demo.test.ts mounts the full
+    // demo with DiffView) sit close to the 5s default and intermittently time
+    // out under full-suite CPU contention while passing comfortably in
+    // isolation. A 10s ceiling absorbs that scheduling jitter without changing
+    // any test's behaviour (fast tests are unaffected — only the cap moves).
+    testTimeout: 10_000,
     // Process CSS through the Vite pipeline so `?raw` imports of stylesheets
     // (design-system-primitives.test.ts) return real file contents instead of
     // vitest's default empty-module CSS stub.
