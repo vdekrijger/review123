@@ -100,6 +100,17 @@
   .markdown-view :global(code) { font-size: 0.85em; background: #8881; padding: 0.1em 0.3em; border-radius: 3px; }
   .markdown-view :global(pre code) { background: none; padding: 0; }
 
+  /* Embedded images (e.g. screenshots in a PR description) — constrain to the
+     container so a native-resolution screenshot doesn't overflow and get
+     clipped by an ancestor's `overflow: hidden` (which rendered as broken/blank
+     images). `height: auto` preserves aspect ratio even when the source carries
+     explicit width/height attributes. */
+  .markdown-view :global(img) {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+  }
+
   /* Mermaid SVG containers */
   .markdown-view :global([data-mermaid-container]) {
     overflow-x: auto;
