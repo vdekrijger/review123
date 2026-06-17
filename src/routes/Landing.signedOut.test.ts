@@ -133,16 +133,16 @@ describe('Landing — "Try a live demo" CTA', () => {
     expect(vi.mocked(navigate)).toHaveBeenCalledWith('/demo')
   })
 
-  it('demotes the demo CTA to a quiet link once auth is configured', async () => {
+  it('hides the demo CTA entirely once the user is signed in to a VCS', () => {
     saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
     render(Landing)
-    // No longer the primary button…
+    // The demo is an onboarding affordance for people still exploring, so once
+    // signed in it's gone completely — neither the primary button nor the link.
     expect(
       screen.queryByRole('button', { name: /try a live demo — no setup needed/i }),
     ).not.toBeInTheDocument()
-    // …but still available as a link to /demo.
-    const link = screen.getByRole('link', { name: /try a live demo — no setup needed/i })
-    await fireEvent.click(link)
-    expect(vi.mocked(navigate)).toHaveBeenCalledWith('/demo')
+    expect(
+      screen.queryByRole('link', { name: /try a live demo — no setup needed/i }),
+    ).not.toBeInTheDocument()
   })
 })

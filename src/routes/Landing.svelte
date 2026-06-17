@@ -350,18 +350,22 @@
 
   <!-- One-click demo path: shows the FULL review experience on a bundled example
        PR with pre-generated AI output — no setup, no key, no auth, no network.
-       Emphasized as the primary action for cold-start users; a quiet link once
-       the user has configured auth or an LLM key. -->
-  <div class="demo-cta" class:emphasized={nothingConfigured}>
-    {#if nothingConfigured}
-      <button type="button" class="demo-cta-btn" onclick={goToDemo}>
-        Try a live demo — no setup needed
-      </button>
-      <p class="demo-cta-sub">See a full review on an example PR. No API key or sign‑in required.</p>
-    {:else}
-      <a href="/demo" class="demo-cta-link" onclick={goToDemo}>Try a live demo — no setup needed</a>
-    {/if}
-  </div>
+       It's an ONBOARDING affordance for people still exploring, so it's HIDDEN
+       once the user is signed in to a VCS (anyAuthConfigured). For signed-out
+       visitors it's emphasized as the primary action at cold-start, and demotes
+       to a quiet link once they've added an LLM key (but still no sign-in). -->
+  {#if !anyAuthConfigured}
+    <div class="demo-cta" class:emphasized={nothingConfigured}>
+      {#if nothingConfigured}
+        <button type="button" class="demo-cta-btn" onclick={goToDemo}>
+          Try a live demo — no setup needed
+        </button>
+        <p class="demo-cta-sub">See a full review on an example PR. No API key or sign‑in required.</p>
+      {:else}
+        <a href="/demo" class="demo-cta-link" onclick={goToDemo}>Try a live demo — no setup needed</a>
+      {/if}
+    </div>
+  {/if}
 
   <!-- First-run footnote: a single muted line directly under the input — NOT a
        bordered card/section. Shown only before the first review (empty
