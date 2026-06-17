@@ -14,7 +14,7 @@ import { addSkill, listSkills, SKILLS_CAP, SKILL_CONTENT_CAP } from '../../lib/s
 import { BUILTIN_SKILLS } from '../../lib/skills/builtinSkills'
 import { SAMPLE_SKILL_NAME } from '../../lib/skills/sampleSkill'
 import { _resetAuthStateForTest } from '../../lib/auth/authState.svelte'
-import { saveTokens, saveGithubAuth, setGitlabToken, setAiProvider } from '../../lib/settings/settings'
+import { saveTokens, saveGithubAuth, setGitlabToken, setAiProvider, getSettings, setAutoRunReviewers } from '../../lib/settings/settings'
 import { _resetSettingsStateForTest } from '../../lib/settings/settingsState.svelte'
 
 function escapeRegex(s: string): string {
@@ -516,5 +516,37 @@ describe('SkillsSection — provider-aware mine gate copy', () => {
     saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
     render(SkillsSection)
     expect(screen.getByText(/your comments are sent to openai for analysis/i)).toBeInTheDocument()
+  })
+})
+
+describe('SkillsSection — auto-start reviewers toggle', () => {
+  function autoToggle(): HTMLInputElement {
+    return document.querySelector('input[name="autoRunReviewers"]') as HTMLInputElement
+  }
+
+  it('renders the toggle with its help line', () => {
+    render(SkillsSection)
+    expect(screen.getByText(/start reviewers automatically/i)).toBeInTheDocument()
+    expect(screen.getByText(/findings are ready by the inspect step/i)).toBeInTheDocument()
+  })
+
+  it('reflects the default-on setting (checked)', () => {
+    render(SkillsSection)
+    expect(autoToggle().checked).toBe(true)
+  })
+
+  it('reflects a stored opt-out (unchecked)', () => {
+    setAutoRunReviewers(false)
+    _resetSettingsStateForTest()
+    render(SkillsSection)
+    expect(autoToggle().checked).toBe(false)
+  })
+
+  it('unchecking it calls the setter and persists false', async () => {
+    const user = userEvent.setup()
+    render(SkillsSection)
+    await user.click(autoToggle())
+    expect(getSettings().autoRunReviewers).toBe(false)
+    await waitFor(() => expect(autoToggle().checked).toBe(false))
   })
 })

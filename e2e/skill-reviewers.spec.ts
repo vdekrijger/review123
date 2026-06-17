@@ -109,6 +109,10 @@ function seedSettings() {
     deepseekKey: 'sk-test-deepseek-key',
     diffMode: 'unified',
     railCollapsed: false,
+    // These tests exercise the MANUAL "Run my reviewers" button + retry flow, so
+    // opt out of the early auto-start (default ON) to keep them deterministic.
+    // The dedicated auto-start tests below re-enable it explicitly.
+    autoRunReviewers: false,
   }
 }
 
@@ -652,4 +656,78 @@ test('skill-reviewers: queue caps running reviewers at 2, rest show in Waiting r
   // Eventually all four settle (the queue drains) and no waiting region remains.
   await expect(page.getByLabel('Reviewers waiting')).toHaveCount(0, { timeout: 20_000 })
   await expect(page.getByLabel('Reviewer run results')).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// Test: with autoRunReviewers ON (default), the reviewers auto-start on step 1
+//       (Understand) so by the time the user reaches Inspect the findings are
+//       already there — NO manual "Run my reviewers" click needed.
+// ---------------------------------------------------------------------------
+
+test('skill-reviewers: auto-start on step 1 — findings ready at Inspect without clicking Run', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+
+  // Seed settings with auto-start explicitly ON (the product default).
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify({ ...settings, autoRunReviewers: true }))
+  }, seedSettings())
+  await page.addInitScript(seedSkillScript())
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+
+  // Land on step 1 (Understand) — we never click "Next step" before the reviewers
+  // run. The auto-start fires here, while we're still on Understand.
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Now go to Inspect. The findings should already be present (auto-started on
+  // step 1) WITHOUT us clicking the "Run my reviewers" button.
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  await expect(
+    page.getByText(/Potential XSS vulnerability/i),
+  ).toBeVisible({ timeout: 15_000 })
+  await expect(
+    page.getByText(/Hardcoded credential found outside the visible diff/i),
+  ).toBeVisible({ timeout: 5_000 })
+})
+
+// ---------------------------------------------------------------------------
+// Test: with autoRunReviewers OFF, reviewers do NOT auto-start — the manual
+//       "Run my reviewers" button is the only trigger (and still works).
+// ---------------------------------------------------------------------------
+
+test('skill-reviewers: opt-out — no auto-start, manual button still works', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify({ ...settings, autoRunReviewers: false }))
+  }, seedSettings())
+  await page.addInitScript(seedSkillScript())
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Reviewers did NOT auto-start: the Run button is present and no findings yet.
+  const runBtn = page.getByRole('button', { name: /run my reviewers \(1\)/i })
+  await expect(runBtn).toBeVisible({ timeout: 5_000 })
+  await expect(page.getByText(/Potential XSS vulnerability/i)).toHaveCount(0)
+
+  // The manual button still works.
+  await runBtn.click()
+  await expect(page.getByText(/Potential XSS vulnerability/i)).toBeVisible({ timeout: 15_000 })
 })

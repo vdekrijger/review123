@@ -247,7 +247,14 @@ export interface AiRun {
   retry(task: TaskName): Promise<void>
   coach(drafts: Draft[], prComments?: string[], verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'): Promise<CoachOutcome | { error: string }>
   ask(question: string, onDelta: (t: string) => void, focus?: AskFocus): Promise<{ ok: true; answer: string } | { ok: false; error: string }>
-  runSkillReviews(onUpdate?: () => void, existingComments?: string[]): Promise<void>
+  /**
+   * Run every enabled skill reviewer (batch). `opts.autoRetry` (default 0) adds
+   * up to N extra rounds that re-attempt only the reviewers still in 'error'
+   * after the initial pass — used by the early auto-start so transient failures
+   * settle without a manual retry click. Omitting opts is byte-identical to the
+   * prior behaviour.
+   */
+  runSkillReviews(onUpdate?: () => void, existingComments?: string[], opts?: { autoRetry?: number }): Promise<void>
   /**
    * Re-run exactly one reviewer by skill id (the error-chip retry). Sets only
    * that reviewer's entry to loading and re-invokes its review through the
@@ -2129,7 +2136,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     onUpdate?.()
   }
 
-  async function runSkillReviews(onUpdate?: () => void, existingComments?: string[]): Promise<void> {
+  async function runSkillReviews(onUpdate?: () => void, existingComments?: string[], opts?: { autoRetry?: number }): Promise<void> {
     // Plan J: skills 'off' → never offer/run reviewers (no entries, no tokens).
     const skillsMode = resolveTaskMode('skills', deepReview)
     if (!skillsMode.run) return
@@ -2180,6 +2187,34 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       onUpdate?.()
       await executeSkillReview(ctx, skill, idx, deep, onUpdate, existingComments)
     })
+
+    // Auto-retry (opt-in): re-attempt ONLY the reviewers still in 'error', for up
+    // to `autoRetry` extra rounds. Errors are never cached, so each retry genuinely
+    // re-hits the LLM; an entry that already settled 'done' is never reset/re-run.
+    // Bounded by `autoRetry` AND by an early exit once no entry is errored — a
+    // reviewer that always fails ends 'error' after the budget is spent (no loop).
+    const autoRetry = Math.max(0, Math.floor(opts?.autoRetry ?? 0))
+    for (let round = 0; round < autoRetry; round++) {
+      // Collect the still-errored reviewers paired with their array index so the
+      // worker writes the right entry. Map back to the live skill (content may
+      // have changed) — skip any reviewer that no longer exists.
+      const errored = skillReviewsState
+        .map((entry, idx) => ({ entry, idx }))
+        .filter(({ entry }) => entry.state.status === 'error')
+        .map(({ entry, idx }) => ({ idx, skill: skills.find((s) => s.id === entry.skillId) }))
+        .filter((x): x is { idx: number; skill: (typeof skills)[number] } => x.skill !== undefined)
+      if (errored.length === 0) break
+
+      await mapWithConcurrency(errored, REVIEWER_CONCURRENCY, async ({ idx, skill }) => {
+        skillReviewsState[idx] = {
+          skillId: skill.id,
+          name: skill.name,
+          state: { status: 'loading', ...(deep.note ? { note: deep.note } : {}) },
+        }
+        onUpdate?.()
+        await executeSkillReview(ctx, skill, idx, deep, onUpdate, existingComments)
+      })
+    }
   }
 
   // ---------------------------------------------------------------------------

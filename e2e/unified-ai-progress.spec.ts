@@ -162,7 +162,10 @@ test('unified AI progress: pending panels show status line + skeleton (no bare s
   await setupRoutes(page)
 
   await page.addInitScript(() => {
-    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test-deepseek-key', aiDeepReview: true, diffMode: 'unified' }))
+    // autoRunReviewers off so this test drives the reviewer via the MANUAL "Run
+    // my reviewers" button (it observes the running/activity state on demand);
+    // the default early auto-start would otherwise consume the run before step 2.
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test-deepseek-key', aiDeepReview: true, diffMode: 'unified', autoRunReviewers: false }))
     localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
   })
   await page.addInitScript(seedSkillScript())

@@ -192,6 +192,14 @@ export interface Settings {
    */
   storyMode: boolean
   /**
+   * Auto-start the skill reviewers early (opt-OUT, default ON). When true, the
+   * reviewers kick off as soon as a PR loads — while the user is still on the
+   * Understand step — so findings are ready by the Inspect step. Failed
+   * reviewers retry automatically (up to 3×). Flipping it off restores the
+   * manual "Run my reviewers" button as the only trigger.
+   */
+  autoRunReviewers: boolean
+  /**
    * Cross-model verification (Plan M): after the active model generates review
    * findings, the user's OTHER configured providers independently judge each
    * one; only findings that survive cross-model agreement are surfaced, the rest
@@ -269,6 +277,7 @@ const DEFAULTS: Settings = {
   aiDeepReview: false,
   aiTaskModes: defaultTaskModes(),
   storyMode: true,
+  autoRunReviewers: true,
   crossModelVerify: true,
   aiPanel: null,
   diffMode: 'unified',
@@ -488,6 +497,9 @@ function coerce(raw: unknown): Partial<Settings> {
 
   const storyMode = obj['storyMode']
   if (typeof storyMode === 'boolean') result.storyMode = storyMode
+
+  const autoRunReviewers = obj['autoRunReviewers']
+  if (typeof autoRunReviewers === 'boolean') result.autoRunReviewers = autoRunReviewers
 
   const crossModelVerify = obj['crossModelVerify']
   if (typeof crossModelVerify === 'boolean') result.crossModelVerify = crossModelVerify
@@ -732,6 +744,7 @@ export function setOffAllExtras(): void {
   save({ aiTaskModes: modes })
 }
 export const setStoryMode = (v: boolean) => save({ storyMode: v })
+export const setAutoRunReviewers = (v: boolean) => save({ autoRunReviewers: v })
 export const setCrossModelVerify = (v: boolean) => save({ crossModelVerify: v })
 
 /**

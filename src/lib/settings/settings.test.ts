@@ -4,7 +4,7 @@ import {
   setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay, setGitlabToken,
   saveBitbucketAuth, setGitlabHost,
   setOpenaiKey, setAnthropicKey, setGeminiKey, setAiProvider, setAiModel,
-  setAiDeepReview, setStoryMode, setFocusMode, setShowTokenCost,
+  setAiDeepReview, setStoryMode, setAutoRunReviewers, setFocusMode, setShowTokenCost,
   findInvalidKeyChar, invalidKeyCharMessage,
   setAiTaskMode, setAiTaskModes, setAllTasksDeep, setAllTasksStandard, setOffAllExtras,
   defaultTaskModes, allDeepTaskModes, setAiPanel, setPanelOneGenerator, setPanelAllGenerate,
@@ -34,6 +34,7 @@ describe('settings', () => {
         skills: 'standard',
       },
       storyMode: true,
+      autoRunReviewers: true,
       crossModelVerify: true,
       aiPanel: null,
       diffMode: 'unified',
@@ -115,6 +116,7 @@ describe('settings', () => {
         skills: 'standard',
       },
       storyMode: true,
+      autoRunReviewers: true,
       crossModelVerify: true,
       aiPanel: null,
       diffMode: 'unified',
@@ -739,6 +741,35 @@ describe('storyMode setting', () => {
   it('ignores a non-boolean stored value', () => {
     localStorage.setItem('review123:settings', JSON.stringify({ storyMode: 'yes' }))
     expect(getSettings().storyMode).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// autoRunReviewers (auto-start reviewers early — opt-out, defaults on)
+// ---------------------------------------------------------------------------
+
+describe('autoRunReviewers setting', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('defaults to true (auto-start reviewers on PR load)', () => {
+    expect(getSettings().autoRunReviewers).toBe(true)
+  })
+
+  it('persists a false choice (user opted out) and back to true', () => {
+    setAutoRunReviewers(false)
+    expect(getSettings().autoRunReviewers).toBe(false)
+    setAutoRunReviewers(true)
+    expect(getSettings().autoRunReviewers).toBe(true)
+  })
+
+  it('ignores a non-boolean stored value (coerces to default true)', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ autoRunReviewers: 'yes' }))
+    expect(getSettings().autoRunReviewers).toBe(true)
+  })
+
+  it('reads a stored boolean false', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ autoRunReviewers: false }))
+    expect(getSettings().autoRunReviewers).toBe(false)
   })
 })
 

@@ -11,8 +11,13 @@
   import { PROVIDER_KEY_FIELDS } from '../../lib/llm/config'
   import { getProvider } from '../../lib/llm/providers'
   import { settingsState } from '../../lib/settings/settingsState.svelte'
+  import { setAutoRunReviewers } from '../../lib/settings/settings'
   import Spinner from '../Spinner.svelte'
   import AiProgress from '../AiProgress.svelte'
+
+  // Auto-start reviewers (opt-out, default ON) — reactive via settingsState so
+  // the checkbox reflects the live setting and the toggle persists immediately.
+  const autoRunReviewers = $derived(settingsState.current.autoRunReviewers)
 
   // ---- Reviewer skills state ----
   let skills = $state<ReviewerSkill[]>(listSkills())
@@ -164,6 +169,17 @@
 
 <section id="skills" aria-label="Reviewer skills" class="skills-section">
   <p class="section-label">Reviewer skills</p>
+
+  <label class="auto-run-label">
+    <input
+      type="checkbox"
+      name="autoRunReviewers"
+      checked={autoRunReviewers}
+      onchange={(e) => setAutoRunReviewers((e.currentTarget as HTMLInputElement).checked)}
+    />
+    <span>Start reviewers automatically</span>
+  </label>
+  <p class="hint auto-run-hint">Runs your reviewers as soon as a PR loads — while you're still on Understand — so findings are ready by the Inspect step. Failed reviewers retry automatically.</p>
 
   {#if skills.length > 0}
     <ul class="skill-list">
@@ -559,6 +575,20 @@
     font-size: 0.8em;
     color: var(--text-muted);
     margin: 0.5rem 0;
+  }
+
+  .auto-run-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.9em;
+    cursor: pointer;
+    margin-bottom: 0.15rem;
+  }
+
+  .auto-run-hint {
+    margin-top: 0;
+    margin-bottom: 0.75rem;
   }
 
   /* ---- Mine-my-reviews section ---- */
