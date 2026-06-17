@@ -2,7 +2,7 @@
  * Tests for src/lib/skills/builtinSkills.ts
  *
  * Covers:
- *   - BUILTIN_SKILLS is an array of 8 entries
+ *   - BUILTIN_SKILLS is an array of 9 entries
  *   - Each entry has id, name, tagline, and content fields
  *   - Content sanity: < 20_000 chars, non-empty, contains 'Priorities' or 'Discipline'
  *   - Each entry has a unique id
@@ -15,9 +15,15 @@ import { BUILTIN_SKILLS } from './builtinSkills'
 import { SAMPLE_SKILL_NAME } from './sampleSkill'
 
 describe('BUILTIN_SKILLS', () => {
-  it('is an array of exactly 8 entries', () => {
+  it('is an array of exactly 9 entries', () => {
     expect(Array.isArray(BUILTIN_SKILLS)).toBe(true)
-    expect(BUILTIN_SKILLS).toHaveLength(8)
+    expect(BUILTIN_SKILLS).toHaveLength(9)
+  })
+
+  it('includes the Test Quality & Coverage Reviewer', () => {
+    const tq = BUILTIN_SKILLS.find((s) => s.id === 'test-quality')
+    expect(tq).toBeDefined()
+    expect(tq!.name).toMatch(/test quality/i)
   })
 
   it('each entry has id, name, tagline, and content fields as strings', () => {
