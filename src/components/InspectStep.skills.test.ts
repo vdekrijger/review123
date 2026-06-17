@@ -17,6 +17,7 @@ import userEvent from '@testing-library/user-event'
 import InspectStep from './InspectStep.svelte'
 import type { PrFile } from '../lib/github/types'
 import type { SkillReviewEntry } from '../lib/ai/run.svelte'
+import type { AskFocus } from '../lib/ai/tasks'
 import type { createDraftStore } from '../lib/drafts/drafts.svelte'
 import { addSkill, listSkills, removeSkill } from '../lib/skills/skills'
 
@@ -419,7 +420,7 @@ describe('InspectStep — Ask AI on popover findings', () => {
   })
 
   it('shows an Ask AI button in the popover when askFn is provided, and submits a focus grounded with the finding text', async () => {
-    const askFn = vi.fn(async (_q: string, onDelta: (t: string) => void) => {
+    const askFn = vi.fn(async (_q: string, onDelta: (t: string) => void, _focus?: AskFocus) => {
       onDelta('answer')
       return { ok: true as const, answer: 'Grounded answer.' }
     })

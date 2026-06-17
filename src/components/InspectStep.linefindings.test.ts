@@ -20,6 +20,7 @@ import InspectStep from './InspectStep.svelte'
 import FileDiff from './FileDiff.svelte'
 import type { PrFile } from '../lib/github/types'
 import type { SkillReviewEntry } from '../lib/ai/run.svelte'
+import type { AskFocus } from '../lib/ai/tasks'
 import type { createDraftStore } from '../lib/drafts/drafts.svelte'
 
 Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
@@ -323,7 +324,7 @@ describe('FileDiff — skillFindings prop placement', () => {
   })
 
   it('inline finding card shows Ask AI when askFn is provided and submits a focus grounded with the finding body + path + excerpt', async () => {
-    const askFn = vi.fn(async (_q: string, onDelta: (t: string) => void) => {
+    const askFn = vi.fn(async (_q: string, onDelta: (t: string) => void, _focus?: AskFocus) => {
       onDelta('a')
       return { ok: true as const, answer: 'Inline grounded answer.' }
     })
@@ -337,11 +338,11 @@ describe('FileDiff — skillFindings prop placement', () => {
     expect(askFn).toHaveBeenCalledOnce()
     const [q, , focus] = askFn.mock.calls[0]
     expect(q).toBe("what's the break-even?")
-    expect(focus.path).toBe('src/foo.ts')
-    expect(focus.line).toBe(2)
-    expect(focus.finding).toBe('Full table scan risk')
+    expect(focus!.path).toBe('src/foo.ts')
+    expect(focus!.line).toBe(2)
+    expect(focus!.finding).toBe('Full table scan risk')
     // Excerpt is the hunk window around line 2 (the new-side change).
-    expect(focus.excerpt).toContain('line2new')
+    expect(focus!.excerpt).toContain('line2new')
   })
 })
 

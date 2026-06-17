@@ -15,6 +15,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import SkillFindingCard from './SkillFindingCard.svelte'
+import type { AskFocus } from '../lib/ai/tasks'
 
 function renderCard(props: Partial<Parameters<typeof render>[1]> & Record<string, unknown> = {}) {
   return render(SkillFindingCard, {
@@ -341,7 +342,7 @@ describe('SkillFindingCard — raised-by chip (Plan O)', () => {
 describe('SkillFindingCard — Ask AI (grounded follow-up)', () => {
   // An askFn that streams two deltas then resolves with the final answer.
   function streamingAskFn(answer = 'Break-even is ~1k rows.') {
-    return vi.fn(async (_q: string, onDelta: (t: string) => void) => {
+    return vi.fn(async (_q: string, onDelta: (t: string) => void, _focus?: AskFocus) => {
       onDelta('Break-even ')
       onDelta('is ~1k rows.')
       return { ok: true as const, answer }
