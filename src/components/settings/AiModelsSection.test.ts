@@ -69,27 +69,33 @@ describe('AiModelsSection — provider context cards (layout)', () => {
     }
   })
 
-  it('each card dropdown lists ONLY that provider models with the provider default selected', () => {
+  it('each SMALL-list card dropdown is a <select> listing ONLY that provider models with the default selected', () => {
     render(AiModelsSection)
-    for (const p of PROVIDERS) {
+    // The four curated providers keep the plain <select>; OpenRouter (300+) uses
+    // the searchable combobox instead (asserted separately).
+    for (const p of PROVIDERS.filter((pr) => pr.id !== 'openrouter')) {
       const select = screen.getByLabelText(new RegExp(`${p.displayName} model`, 'i')) as HTMLSelectElement
+      expect(select.tagName).toBe('SELECT')
       expect(select.value).toBe(p.defaultModel)
       const optionValues = Array.from(select.options).map((o) => o.value)
       expect(optionValues).toEqual(p.models.map((m) => m.id))
     }
   })
 
-  it('renders an OpenRouter card with key input + model select listing its curated slugs', () => {
+  it('renders an OpenRouter card whose model picker is the searchable combobox (not a flat select)', () => {
     render(AiModelsSection)
     const card = within(providerCard('OpenRouter'))
     expect(card.getByRole('radio', { name: 'OpenRouter' })).toBeInTheDocument()
     expect(card.getByLabelText(/openrouter api key/i)).toBeInTheDocument()
-    const select = card.getByLabelText(/openrouter model/i) as HTMLSelectElement
+    // The OpenRouter model control is a role=combobox text input, NOT a <select>.
+    const combobox = card.getByRole('combobox', { name: /openrouter model/i }) as HTMLInputElement
+    expect(combobox.tagName).toBe('INPUT')
+    // Its placeholder reflects the current (default) selection — a namespaced slug's label.
     const or = getProvider('openrouter')!
-    expect(select.value).toBe(or.defaultModel)
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(or.models.map((m) => m.id))
-    // Slugs are vendor-namespaced.
-    expect(select.value).toBe('deepseek/deepseek-chat-v3.1')
+    const def = or.models.find((m) => m.id === or.defaultModel)!
+    expect(combobox.placeholder).toBe(def.label)
+    // The flat <select> is gone for this card.
+    expect(card.queryByRole('listbox')).toBeNull() // closed by default
   })
 
   it('the ACTIVE provider card is emphasized (data-active) and inactive cards are not', () => {
@@ -105,6 +111,46 @@ describe('AiModelsSection — provider context cards (layout)', () => {
     const geminiKey = screen.getByLabelText(/gemini api key/i) as HTMLInputElement
     await userEvent.type(geminiKey, 'AIza-inactive-edit')
     expect(geminiKey.value).toBe('AIza-inactive-edit')
+  })
+})
+
+describe('AiModelsSection — OpenRouter searchable combobox (adaptive picker)', () => {
+  it('selecting an OpenRouter model via the combobox persists aiModel when OpenRouter is active', async () => {
+    setAiProvider('openrouter')
+    render(AiModelsSection)
+    const combobox = within(providerCard('OpenRouter')).getByRole('combobox', { name: /openrouter model/i })
+    await userEvent.click(combobox)
+    // Empty query → featured options are listed; pick a featured flagship.
+    const or = getProvider('openrouter')!
+    const featured = or.models.find((m) => m.featured)!
+    const option = await screen.findByRole('option', { name: new RegExp(featured.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })
+    await userEvent.click(option)
+    expect(getSettings().aiModel).toBe(featured.id)
+  })
+
+  it('typing filters the OpenRouter list and selecting the match updates aiModel', async () => {
+    setAiProvider('openrouter')
+    render(AiModelsSection)
+    const combobox = within(providerCard('OpenRouter')).getByRole('combobox', { name: /openrouter model/i })
+    const or = getProvider('openrouter')!
+    // Find any model whose slug contains a distinctive token.
+    const target = or.models.find((m) => m.id.includes('gpt-5'))
+    if (target) {
+      await userEvent.click(combobox)
+      await userEvent.type(combobox, 'gpt-5')
+      const option = await screen.findByRole('option', { name: new RegExp(target.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })
+      await userEvent.click(option)
+      expect(getSettings().aiModel).toBe(target.id)
+    }
+  })
+
+  it('keeps a plain <select> (no combobox) for the small-list providers', () => {
+    render(AiModelsSection)
+    for (const name of ['DeepSeek', 'OpenAI', 'Anthropic', 'Gemini']) {
+      const card = within(providerCard(name))
+      const select = card.getByLabelText(new RegExp(`${name} model`, 'i'))
+      expect(select.tagName).toBe('SELECT')
+    }
   })
 })
 

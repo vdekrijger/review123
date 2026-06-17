@@ -142,14 +142,35 @@ describe('PROVIDERS — structure', () => {
     expect(getModelDef(getProvider('gemini')!, 'gemini-2.5-flash')).toBeDefined()
   })
 
-  it('every provider ships a curated lineup (single-vendor 2-4; the OpenRouter gateway more)', () => {
+  it('every provider ships a lineup (single-vendor 2-4; the OpenRouter gateway the FULL generated list)', () => {
     for (const p of PROVIDERS) {
       expect(p.models.length).toBeGreaterThanOrEqual(2)
-      // The OpenRouter gateway fronts many labs, so it carries a wider curated
-      // set (~10-15); the single-vendor providers stay tight (2-4).
-      const upperBound = p.id === 'openrouter' ? 20 : 4
-      expect(p.models.length).toBeLessThanOrEqual(upperBound)
+      if (p.id === 'openrouter') {
+        // OpenRouter now carries the FULL generated chat lineup (~300 models)
+        // for the searchable, lab-grouped picker — not a hand-curated handful.
+        expect(p.models.length).toBeGreaterThan(50)
+      } else {
+        // The single-vendor providers stay tight (2-4).
+        expect(p.models.length).toBeLessThanOrEqual(4)
+      }
     }
+  })
+
+  it('every OpenRouter model is a `lab/model` slug with pricing + context (single pricing source)', () => {
+    const or = getProvider('openrouter')!
+    for (const m of or.models) {
+      expect(m.id).toMatch(/^[~]?[\w.-]+\/[\w.:-]+$/)
+      expect(m.contextWindowTokens).toBeGreaterThan(0)
+      expect(m.pricing).toBeDefined()
+      expect(m.pricing!.inputPer1M).toBeGreaterThanOrEqual(0)
+      expect(m.pricing!.outputPer1M).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('OpenRouter marks a small featured set (~10 flagships) for the picker default view', () => {
+    const featured = getProvider('openrouter')!.models.filter((m) => m.featured)
+    expect(featured.length).toBeGreaterThanOrEqual(5)
+    expect(featured.length).toBeLessThanOrEqual(15)
   })
 
   it('every model def has a non-empty id, a human label and a positive context window', () => {

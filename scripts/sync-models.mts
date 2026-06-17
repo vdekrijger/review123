@@ -26,6 +26,8 @@ export interface ModelDef {
   contextWindowTokens: number
   supportsTools?: boolean
   pricing?: { inputPer1M: number; outputPer1M: number }
+  /** Flagship marker for the OpenRouter combobox's empty-query / default view. */
+  featured?: boolean
 }
 
 export type ProviderId = 'deepseek' | 'openai' | 'anthropic' | 'gemini'
@@ -41,10 +43,20 @@ export type Catalog = Record<ProviderId, ModelDef[]> & { openrouter?: ModelDef[]
 /** Raw shape of an OpenRouter /api/v1/models entry (only the fields we use). */
 export interface OpenRouterModel {
   id: string
+  /** Friendly upstream name, e.g. "OpenAI: GPT-5.5" — used as the label. */
+  name?: string | null
   context_length?: number | null
   pricing?: { prompt?: string | null; completion?: string | null } | null
   /** Unix SECONDS the model was added upstream — gates auto-additions. */
   created?: number | null
+  /** Modality info — lets us keep CHAT/text models and drop image/audio gens. */
+  architecture?: {
+    modality?: string | null
+    input_modalities?: string[] | null
+    output_modalities?: string[] | null
+  } | null
+  /** The params the model accepts; "tools" present ⇒ supportsTools. */
+  supported_parameters?: string[] | null
 }
 
 /**
@@ -167,6 +179,98 @@ export function humanizeId(id: string): string {
 }
 
 const PROVIDER_IDS: ProviderId[] = ['deepseek', 'openai', 'anthropic', 'gemini']
+
+// ---------------------------------------------------------------------------
+// OpenRouter FULL catalog — unlike the four curated provider lineups, we carry
+// OpenRouter's ENTIRE current chat lineup (~300 models) so the searchable picker
+// can offer everything. NOT recency-gated (that gate stays for the curated
+// providers only). Regenerated wholesale on each sync from /api/v1/models.
+// ---------------------------------------------------------------------------
+
+/**
+ * Stable list of flagship slugs that drive the picker's default/empty-query
+ * view. Preserved across syncs (a regen re-applies these flags); if a slug
+ * disappears upstream it is silently dropped (and logged by the IO shell).
+ * Pick the current flagship from each major lab — the models a user reaches for
+ * first. Edit this list (not the generated file) to change the featured set.
+ */
+export const OPENROUTER_FEATURED_IDS: string[] = [
+  'openai/gpt-5.5',
+  'anthropic/claude-opus-4.8',
+  'anthropic/claude-sonnet-4.6',
+  'google/gemini-3.1-pro-preview',
+  'google/gemini-3.5-flash',
+  'x-ai/grok-4.3',
+  'deepseek/deepseek-chat-v3.1',
+  'meta-llama/llama-3.3-70b-instruct',
+  'qwen/qwen3-235b-a22b',
+  'mistralai/mistral-large',
+]
+
+/**
+ * True for an upstream entry we treat as a CHAT/text model: it takes text in and
+ * produces ONLY text out. Drops pure image/audio/video generators, embeddings
+ * and moderation models (which output non-text or take no text). Missing
+ * modality info ⇒ assume chat (OpenRouter's text gateway default).
+ */
+export function isChatModel(m: OpenRouterModel): boolean {
+  // Drop OpenRouter's auto-router meta-models: they carry sentinel NEGATIVE
+  // ("dynamic") pricing, which would poison the cost panel's per-1M math. We
+  // only want concrete, fixed-priced chat models.
+  const prompt = Number(m.pricing?.prompt)
+  const completion = Number(m.pricing?.completion)
+  if (prompt < 0 || completion < 0) return false
+  const arch = m.architecture
+  if (!arch) return true
+  const input = arch.input_modalities ?? undefined
+  const output = arch.output_modalities ?? undefined
+  // Output must be text-only (a model that also emits image/audio is a media
+  // generator, not a chat model for our purposes).
+  if (output && !(output.length === 1 && output[0] === 'text')) return false
+  // Input must accept text.
+  if (input && !input.includes('text')) return false
+  return true
+}
+
+/** supported_parameters contains "tools" ⇒ the model supports tool calling. */
+export function supportsToolsFromUpstream(m: OpenRouterModel): boolean {
+  return Array.isArray(m.supported_parameters) && m.supported_parameters.includes('tools')
+}
+
+/**
+ * Build the FULL OpenRouter model lineup (one ModelDef per current chat model)
+ * from upstream, applying the featured flags. Deterministic: emitted in upstream
+ * order, deduped by slug (first occurrence wins). `supportsTools` is set
+ * explicitly (true/false) since we know it per-model from supported_parameters.
+ * Returns the list plus the featured ids that were actually found (so the caller
+ * can log any that vanished upstream).
+ */
+export function computeOpenrouterCatalog(
+  upstream: OpenRouterModel[],
+  featuredIds: string[] = OPENROUTER_FEATURED_IDS,
+): { models: ModelDef[]; foundFeatured: string[]; missingFeatured: string[] } {
+  const featuredSet = new Set(featuredIds)
+  const seen = new Set<string>()
+  const models: ModelDef[] = []
+  for (const m of upstream) {
+    if (seen.has(m.id) || !isChatModel(m)) continue
+    seen.add(m.id)
+    const model: ModelDef = {
+      id: m.id,
+      label: (m.name && m.name.trim()) || humanizeId(m.id),
+      contextWindowTokens: m.context_length ?? 0,
+      supportsTools: supportsToolsFromUpstream(m),
+    }
+    const pricing = pricingFromUpstream(m)
+    if (pricing) model.pricing = pricing
+    if (featuredSet.has(m.id)) model.featured = true
+    models.push(model)
+  }
+  const present = new Set(models.map((m) => m.id))
+  const foundFeatured = featuredIds.filter((id) => present.has(id))
+  const missingFeatured = featuredIds.filter((id) => !present.has(id))
+  return { models, foundFeatured, missingFeatured }
+}
 
 /**
  * PURE core: given OpenRouter's `data[]` and the current catalog, compute the
@@ -292,12 +396,45 @@ export function serializeModel(m: ModelDef): string {
   const parts = [`id: ${JSON.stringify(m.id)}`, `label: ${JSON.stringify(m.label)}`, `contextWindowTokens: ${m.contextWindowTokens}`]
   if (m.supportsTools !== undefined) parts.push(`supportsTools: ${m.supportsTools}`)
   if (m.pricing) parts.push(`pricing: { inputPer1M: ${m.pricing.inputPer1M}, outputPer1M: ${m.pricing.outputPer1M} }`)
+  if (m.featured) parts.push(`featured: true`)
   return `    { ${parts.join(', ')} },`
 }
 
-// Emission order. Includes the hand-curated `openrouter` passthrough block so
-// the rewritten file keeps every key LlmProviderId requires at runtime.
-const CATALOG_PROVIDER_ORDER: (keyof Catalog)[] = ['deepseek', 'openai', 'anthropic', 'gemini', 'openrouter']
+/**
+ * Render the AUTO-GENERATED openrouterCatalog.generated.ts module — the full
+ * OpenRouter chat lineup as an OPENROUTER_MODELS: LlmModelDef[]. MODEL_CATALOG's
+ * `openrouter` block points at this so it stays the single pricing source.
+ */
+export function serializeOpenrouterCatalog(models: ModelDef[]): string {
+  const header = `/**
+ * AUTO-GENERATED by scripts/sync-models.mts — do not edit by hand.
+ *
+ * The FULL current OpenRouter chat/text model lineup (every non-deprecated
+ * chat model on openrouter.ai/api/v1/models), regenerated wholesale on each
+ * daily model-sync run. Unlike the four curated provider lineups in
+ * modelCatalog.ts, this is NOT recency-gated — the searchable, lab-grouped
+ * picker offers everything. Slugs are vendor-namespaced (\`lab/model\`); pricing
+ * is upstream per-token USD ×1e6 (per-1M); \`supportsTools\` reflects upstream
+ * \`supported_parameters\` containing "tools". A small flagship set carries
+ * \`featured: true\` (see OPENROUTER_FEATURED_IDS in the sync script) to drive
+ * the picker's empty-query default view.
+ *
+ * MODEL_CATALOG.openrouter (modelCatalog.ts) re-exports this list, so it remains
+ * the single source of truth for OpenRouter pricing lookups across the app.
+ */
+
+import type { LlmModelDef } from './providers'
+
+export const OPENROUTER_MODELS: LlmModelDef[] = [`
+  const rows = models.map(serializeModel).join('\n')
+  return `${header}\n${rows}\n]\n`
+}
+
+// Emission order for the INLINE per-provider blocks. `openrouter` is NOT
+// inlined — its full lineup lives in openrouterCatalog.generated.ts and is
+// referenced via the imported OPENROUTER_MODELS (kept the single pricing source
+// and a manageable diff vs. inlining ~300 rows).
+const CATALOG_PROVIDER_ORDER: ProviderId[] = ['deepseek', 'openai', 'anthropic', 'gemini']
 
 /** Render the full modelCatalog.ts source from a computed catalog. */
 export function serializeCatalog(catalog: Catalog): string {
@@ -318,10 +455,13 @@ export function serializeCatalog(catalog: Catalog): string {
  * existing entries are NOT preserved across an automated rewrite.
  *
  * AUTO-GENERATED region: the MODEL_CATALOG below is regenerated by
- * scripts/sync-models.mts. Prefer editing via that script.
+ * scripts/sync-models.mts. Prefer editing via that script. The \`openrouter\`
+ * lineup is the FULL generated list (openrouterCatalog.generated.ts), imported
+ * here so this stays the single pricing source for every selectable model.
  */
 
 import type { LlmModelDef, LlmProviderId } from './providers'
+import { OPENROUTER_MODELS } from './openrouterCatalog.generated'
 
 export const MODEL_CATALOG: Record<LlmProviderId, LlmModelDef[]> = {`
 
@@ -330,7 +470,7 @@ export const MODEL_CATALOG: Record<LlmProviderId, LlmModelDef[]> = {`
     return `  ${id}: [\n${rows}\n  ],`
   })
 
-  return `${header}\n${blocks.join('\n')}\n}\n`
+  return `${header}\n${blocks.join('\n')}\n  openrouter: OPENROUTER_MODELS,\n}\n`
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +489,7 @@ async function main(): Promise<void> {
   const here = dirname(fileURLToPath(import.meta.url))
   const repoRoot = join(here, '..')
   const catalogPath = join(repoRoot, 'src/lib/llm/modelCatalog.ts')
+  const openrouterPath = join(repoRoot, 'src/lib/llm/openrouterCatalog.generated.ts')
   const changesPath = join(repoRoot, 'model-sync-changes.md')
 
   // Load the real MODEL_CATALOG through a throwaway Vite SSR server so the
@@ -374,17 +515,43 @@ async function main(): Promise<void> {
 
   const { nextCatalog, changes } = computeCatalogSync(upstream, currentCatalog, Date.now())
 
-  if (isEmptyChanges(changes)) {
+  // OpenRouter's full chat lineup — always regenerated wholesale (not gated by
+  // the curated-provider drift above). Featured flags are re-applied from the
+  // stable OPENROUTER_FEATURED_IDS list, so they survive every regen.
+  const { models: openrouterModels, foundFeatured, missingFeatured } = computeOpenrouterCatalog(upstream)
+  console.log(`OpenRouter full chat lineup: ${openrouterModels.length} models, ${foundFeatured.length} featured.`)
+  if (missingFeatured.length) {
+    console.warn(`::warning::Featured OpenRouter slug(s) absent upstream — dropping: ${missingFeatured.join(', ')}`)
+  }
+  // Keep MODEL_CATALOG.openrouter pointed at the generated full list so it stays
+  // the single pricing source. (The emitted modelCatalog.ts re-exports it.)
+  const prevOpenrouter = (await import('node:fs')).readFileSync(openrouterPath, 'utf8')
+  const nextOpenrouter = serializeOpenrouterCatalog(openrouterModels)
+  if (nextOpenrouter !== prevOpenrouter) {
+    writeFileSync(openrouterPath, nextOpenrouter)
+    console.log(`Rewrote ${openrouterPath}`)
+  }
+
+  const openrouterChanged = nextOpenrouter !== prevOpenrouter
+  if (isEmptyChanges(changes) && !openrouterChanged) {
     console.log(`${NO_CHANGES_MARKER}: catalog already current — no drift.`)
     writeFileSync(changesPath, `## Model catalog sync\n\nNo drift — catalog already current.\n`)
     process.exit(0)
   }
 
   const markdown = renderChangesMarkdown(changes)
-  writeFileSync(catalogPath, serializeCatalog(nextCatalog))
-  writeFileSync(changesPath, `${markdown}\n`)
+  const openrouterNote = openrouterChanged
+    ? `\n### OpenRouter full lineup regenerated\n\n- \`openrouterCatalog.generated.ts\`: ${openrouterModels.length} chat models, ${foundFeatured.length} featured${missingFeatured.length ? ` (dropped missing: ${missingFeatured.join(', ')})` : ''}.\n`
+    : ''
+  // The curated MODEL_CATALOG (modelCatalog.ts) only changes when the four
+  // curated providers drift; rewrite it only then to keep diffs minimal.
+  if (!isEmptyChanges(changes)) {
+    writeFileSync(catalogPath, serializeCatalog(nextCatalog))
+    console.log(`\nRewrote ${catalogPath}`)
+  }
+  writeFileSync(changesPath, `${markdown}${openrouterNote}\n`)
   console.log(markdown)
-  console.log(`\nRewrote ${catalogPath}`)
+  console.log(openrouterNote)
   process.exit(0)
 }
 
