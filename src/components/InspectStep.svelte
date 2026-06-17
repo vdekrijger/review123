@@ -20,6 +20,8 @@
   import type { ReplyOutcome } from '../lib/github/replies'
   import { slugify } from '../lib/slug'
   import { renderInlineMarkdown } from '../lib/markdown/render'
+  import AskBox from './AskBox.svelte'
+  import { excerptAround } from '../lib/diff/excerpt'
   import { scrollToFileCard, jumpToFinding } from '../lib/diff/jumpToFile'
   import { observeDiffColHeight } from '../lib/tree/diffColHeight'
   import type { SkillReviewEntry, AskFocus } from '../lib/ai/run.svelte'
@@ -533,6 +535,33 @@
 
   function closeFindingsPopover(): void {
     openFindingsToken = null
+    askOpenKey = null
+  }
+
+  // ---- Ask AI on a popover finding entry --------------------------------------
+  // Only one entry's Ask box is open at a time (keyed by the finding key). Gated
+  // on askFn (no key configured → no Ask AI button), matching the rest of the app.
+  const hasAskFn = $derived(askFn !== null && askFn !== undefined)
+  let askOpenKey = $state<string | null>(null)
+
+  function toggleAsk(key: string): void {
+    askOpenKey = askOpenKey === key ? null : key
+  }
+
+  // Best-effort grounding focus for a popover (file-level / unanchored) finding.
+  // The finding text is the primary anchor; path locates it. A line-bearing
+  // finding gets a hunk excerpt from the patch; a null-line finding falls back to
+  // a small window from the loaded file contents (when available), else empty.
+  function askFocusFor(nav: NavFinding): AskFocus {
+    const file = files.find((f) => f.filename === nav.path)
+    let excerpt = ''
+    if (nav.line !== null && file?.patch) {
+      excerpt = excerptAround(file.patch, nav.line, 'RIGHT', 6)
+    } else {
+      const after = contentsMap?.get(nav.path)?.after
+      if (after) excerpt = after.split('\n').slice(0, 24).join('\n')
+    }
+    return { path: nav.path, line: nav.line ?? 1, excerpt, finding: nav.body }
   }
 
   // Focus the first finding entry when a popover opens (keyboard discoverability).
@@ -858,7 +887,38 @@
         aria-label="Dismiss finding"
         onclick={(e) => { e.stopPropagation(); dismissFinding(nav.key) }}
       >Dismiss</button>
+      {#if hasAskFn}
+        <button
+          type="button"
+          class="findings-popover-action"
+          class:active={askOpenKey === nav.key}
+          aria-label="Ask AI a follow-up about this finding"
+          aria-expanded={askOpenKey === nav.key}
+          data-testid="popover-ask-btn"
+          onclick={(e) => { e.stopPropagation(); toggleAsk(nav.key) }}
+        >Ask AI</button>
+      {/if}
     </div>
+    {#if hasAskFn && askOpenKey === nav.key && askFn}
+      <!-- The keydown/click handlers stop the popover's roving-key + outside-click
+           handlers from hijacking the textarea (arrow keys, typing). This wrapper
+           is a passive container, not itself interactive. -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div
+        class="findings-popover-ask"
+        role="group"
+        aria-label="Ask AI"
+        onkeydown={(e) => e.stopPropagation()}
+        onclick={(e) => e.stopPropagation()}
+      >
+        <AskBox
+          {askFn}
+          focus={askFocusFor(nav)}
+          onclose={() => (askOpenKey = null)}
+        />
+      </div>
+    {/if}
   </div>
 {/snippet}
 
@@ -1931,6 +1991,13 @@
   .findings-popover-action:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
+  }
+  .findings-popover-action.active {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .findings-popover-ask {
+    padding: 0 0.5rem 0.5rem;
   }
 
   /* The error chip is a real Retry button — reset button defaults so it matches

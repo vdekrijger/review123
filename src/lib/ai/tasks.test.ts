@@ -1333,6 +1333,47 @@ describe('askPrompt with focus', () => {
 })
 
 // ---------------------------------------------------------------------------
+// askPrompt — finding clause (Ask AI on a reviewer finding card)
+// When focus.finding is set the system prompt directs the model to engage that
+// finding's reasoning/tradeoffs. Absent → no behavior change.
+// ---------------------------------------------------------------------------
+
+describe('askPrompt with focus.finding', () => {
+  const findingText = "the migration doesn't add db_index=True"
+  const focusWithFinding = { path: 'm/0003.py', line: 12, excerpt: '+    field = models.CharField()', finding: findingText }
+
+  it('includes the finding clause (quoting the finding) when focus.finding is set', () => {
+    const { system } = askPrompt(makeCtx(), [], 'where is the break-even?', focusWithFinding)
+    expect(system).toContain('A reviewer left this finding')
+    expect(system).toContain(findingText)
+    expect(system).toMatch(/follow-up/i)
+  })
+
+  it('directs the model to engage the finding tradeoffs grounded in the excerpt', () => {
+    const { system } = askPrompt(makeCtx(), [], 'q', focusWithFinding)
+    expect(system).toMatch(/tradeoffs|thresholds/i)
+    expect(system).toMatch(/grounded in the excerpt/i)
+  })
+
+  it('is unchanged when focus.finding is absent (focus without finding)', () => {
+    const focusNoFinding = { path: 'm/0003.py', line: 12, excerpt: '+x' }
+    const { system } = askPrompt(makeCtx(), [], 'q', focusNoFinding)
+    expect(system).not.toContain('A reviewer left this finding')
+  })
+
+  it('is unchanged when there is no focus at all', () => {
+    const { system } = askPrompt(makeCtx(), [], 'q')
+    expect(system).not.toContain('A reviewer left this finding')
+  })
+
+  it('still includes the focus location clause alongside the finding clause', () => {
+    const { system } = askPrompt(makeCtx(), [], 'q', focusWithFinding)
+    expect(system).toContain('m/0003.py:12')
+    expect(system).toContain('A reviewer left this finding')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // testInsightPrompt — gaps grouping instruction (ai-quality-round2)
 // Gaps must start with file path + colon so the UI can group them by file.
 // ---------------------------------------------------------------------------

@@ -41,6 +41,7 @@
   import { track } from '../lib/analytics/analytics'
   import { renderInlineMarkdown } from '../lib/markdown/render'
   import { scrollToFileCard } from '../lib/diff/jumpToFile'
+  import { excerptAround } from '../lib/diff/excerpt'
 
   // File-level (null-line) finding shape — mirrors InspectStep's SuggestionEntry
   // for the fields the card needs. Carried into Story mode so null-line findings
@@ -120,6 +121,16 @@
   } = $props()
 
   const fileByPath = $derived(new Map(files.map((f) => [f.filename, f])))
+
+  // Best-effort code excerpt for a file-level finding's Ask AI focus. When the
+  // finding carries a line we pull a hunk excerpt from the patch; for null-line
+  // (truly file-level) findings there's no anchor, so the excerpt is empty and the
+  // finding text + path carry the grounding (see askPrompt's `finding` clause).
+  function fileLevelExcerpt(path: string, line: number | null): string {
+    if (line === null) return ''
+    const patch = fileByPath.get(path)?.patch
+    return patch ? excerptAround(patch, line, 'RIGHT', 6) : ''
+  }
 
   // The PR's changed-file paths — lets the "Tested by" affordance tell whether a
   // paired test file is part of THIS PR's diff (jump-to) or pre-existing context.
@@ -469,6 +480,9 @@
                       added={addedDraftKeys.has(suggestion.key)}
                       onAdd={() => onAddFileLevelDraft?.(suggestion)}
                       onDismiss={() => onDismissFileLevelFinding?.(suggestion.key)}
+                      {askFn}
+                      askPath={path}
+                      askExcerpt={fileLevelExcerpt(path, suggestion.line)}
                     />
                   </div>
                 {/if}

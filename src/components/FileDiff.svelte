@@ -772,6 +772,9 @@
                 added={addedSkillKeys.has(finding.key)}
                 onAdd={() => handleAddSkillFindingDraft(finding)}
                 onDismiss={() => dismissSkillFinding(finding.key)}
+                {askFn}
+                askPath={file.filename}
+                askExcerpt={file.patch ? excerptAround(file.patch, finding.line, splitSideToSide(side), 6) : ''}
               />
             {/each}
           </div>

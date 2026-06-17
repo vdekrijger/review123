@@ -18,7 +18,9 @@
 
   import MarkdownView from './MarkdownView.svelte'
   import VerifyVotesTooltip from './VerifyVotesTooltip.svelte'
+  import AskBox from './AskBox.svelte'
   import type { FindingVerification } from '../lib/ai/schemas'
+  import type { AskFocus } from '../lib/ai/tasks'
 
   interface Props {
     skillName: string
@@ -48,9 +50,34 @@
     findingKey?: string | null
     onAdd: () => void
     onDismiss: () => void
+    /**
+     * Optional streaming grounded Q&A function (mirrors FileDiff's / AiRun.ask).
+     * When provided, an "Ask AI" button appears alongside Add/Dismiss; clicking it
+     * opens an inline AskBox grounded with this finding's text + code location.
+     * Absent → no Ask AI affordance (gated like the rest of the app on a key).
+     */
+    askFn?: ((q: string, onDelta: (t: string) => void, focus?: AskFocus) => Promise<{ ok: true; answer: string } | { ok: false; error: string }>) | null
+    /** Path the finding is anchored to — part of the Ask AI focus. */
+    askPath?: string
+    /** Code excerpt around the finding's line — part of the Ask AI focus. */
+    askExcerpt?: string
   }
 
-  let { skillName, severity, body, verification = undefined, raisedBy = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss }: Props = $props()
+  let { skillName, severity, body, verification = undefined, raisedBy = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss, askFn = null, askPath = undefined, askExcerpt = undefined }: Props = $props()
+
+  // Ask AI is gated on a configured askFn (same convention as the rest of the app).
+  const hasAsk = $derived(askFn !== null && askFn !== undefined)
+  let askOpen = $state(false)
+
+  // Grounding focus for the Ask box: the finding text is the primary anchor; the
+  // path/line/excerpt locate it in the diff. line falls back to 1 for file-level
+  // (null-line) findings — the `finding` text + path carry the grounding there.
+  const askFocus = $derived<AskFocus>({
+    path: askPath ?? '',
+    line: line ?? 1,
+    excerpt: askExcerpt ?? '',
+    finding: body,
+  })
 
   // "raised by A, B" provenance (Plan O 'generate' mode). Shown when the finding
   // was NOT raised by every polled model — i.e. it's a recall-relevant catch
@@ -124,7 +151,25 @@
       aria-label={added ? 'Added to drafts' : 'Add as draft comment'}
     >{added ? '✓ Added' : 'Add as draft'}</button>
     <button class="skill-dismiss-btn" onclick={onDismiss}>Dismiss</button>
+    {#if hasAsk}
+      <button
+        type="button"
+        class="skill-ask-btn"
+        class:active={askOpen}
+        onclick={() => (askOpen = !askOpen)}
+        aria-expanded={askOpen}
+        aria-label="Ask AI a follow-up about this finding"
+        data-testid="skill-ask-btn"
+      >Ask AI</button>
+    {/if}
   </div>
+  {#if hasAsk && askOpen && askFn}
+    <AskBox
+      {askFn}
+      focus={askFocus}
+      onclose={() => (askOpen = false)}
+    />
+  {/if}
 </div>
 
 <style>
@@ -378,5 +423,27 @@
   .skill-dismiss-btn:hover {
     opacity: 1;
     background: var(--surface-raised);
+  }
+
+  .skill-ask-btn {
+    font-size: 0.78rem;
+    padding: 0.18rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.85;
+  }
+
+  .skill-ask-btn:hover {
+    opacity: 1;
+    background: var(--surface-raised);
+  }
+
+  .skill-ask-btn.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    opacity: 1;
   }
 </style>

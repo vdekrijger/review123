@@ -17,6 +17,7 @@ import userEvent from '@testing-library/user-event'
 import InspectStep from './InspectStep.svelte'
 import type { PrFile } from '../lib/github/types'
 import type { SkillReviewEntry } from '../lib/ai/run.svelte'
+import type { AskFocus } from '../lib/ai/tasks'
 import type { createDraftStore } from '../lib/drafts/drafts.svelte'
 import { addSkill, listSkills, removeSkill } from '../lib/skills/skills'
 
@@ -387,5 +388,57 @@ describe('InspectStep — no-findings all-clear state (v10)', () => {
     })
     expect(screen.getByText(/no significant issues/i)).toBeInTheDocument()
     expect(screen.queryByText('not in this PR')).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Ask AI on popover (file-level) findings
+// ---------------------------------------------------------------------------
+
+describe('InspectStep — Ask AI on popover findings', () => {
+  function fileLevelReview(): SkillReviewEntry {
+    return makeSkillReview({
+      state: {
+        status: 'done',
+        value: {
+          skillName: 'Security Reviewer',
+          findings: [{ path: 'src/foo.ts', line: null, severity: 'low', body: 'file-level concern' }],
+        },
+      },
+    })
+  }
+
+  it('no Ask AI button in the popover when askFn is absent', async () => {
+    render(InspectStep, {
+      props: {
+        files: makeFiles(['src/foo.ts']), changedFiles: 1, mode: 'unified', onmode: () => {},
+        draftStore: null, skillReviews: [fileLevelReview()],
+      },
+    })
+    await userEvent.click(screen.getByRole('button', { name: /Show 1 finding from Security Reviewer/i }))
+    expect(screen.queryByTestId('popover-ask-btn')).not.toBeInTheDocument()
+  })
+
+  it('shows an Ask AI button in the popover when askFn is provided, and submits a focus grounded with the finding text', async () => {
+    const askFn = vi.fn(async (_q: string, onDelta: (t: string) => void, _focus?: AskFocus) => {
+      onDelta('answer')
+      return { ok: true as const, answer: 'Grounded answer.' }
+    })
+    render(InspectStep, {
+      props: {
+        files: makeFiles(['src/foo.ts']), changedFiles: 1, mode: 'unified', onmode: () => {},
+        draftStore: null, skillReviews: [fileLevelReview()], askFn,
+      },
+    })
+    await userEvent.click(screen.getByRole('button', { name: /Show 1 finding from Security Reviewer/i }))
+    await userEvent.click(screen.getByTestId('popover-ask-btn'))
+    await userEvent.type(screen.getByTestId('ask-box-input'), 'why does it matter?')
+    await userEvent.click(screen.getByTestId('ask-box-send'))
+
+    expect(askFn).toHaveBeenCalledOnce()
+    const [q, , focus] = askFn.mock.calls[0]
+    expect(q).toBe('why does it matter?')
+    expect(focus).toMatchObject({ path: 'src/foo.ts', line: 1, finding: 'file-level concern' })
+    expect(await screen.findByTestId('ask-box-answer')).toBeInTheDocument()
   })
 })
