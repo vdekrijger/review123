@@ -16,6 +16,8 @@
   import { createDecisionStore } from '../lib/eval/decisions'
   import VerdictStep from '../components/VerdictStep.svelte'
   import { createAiRun } from '../lib/ai/run.svelte'
+  import { listSkills } from '../lib/skills/skills'
+  import { shouldAutoStartReviewers } from '../lib/review/autoStartReviewers'
   import { buildCoachCodeContext } from '../lib/ai/coachContext'
   import { packContext, fetchContents } from '../lib/context/pack'
   import { LLM_CONFIG } from '../lib/llm/config'
@@ -507,6 +509,41 @@
           commentsLoaded = true
         },
       )
+    }
+  })
+
+  // ---- Auto-start skill reviewers early (opt-out, default ON) ----
+  // While the user is still on step 1 (Understand), kick the reviewers off so
+  // findings are ready by the Inspect step. Fires ONCE per loaded PR REGARDLESS
+  // of the current step — guarded by a one-shot flag keyed to the PR identity so
+  // step navigation / re-renders / back-forward never re-trigger it (calling
+  // runSkillReviews again RESETS every entry to 'queued'). The guard resets when
+  // the PR identity (provider/owner/repo/number) changes — App.svelte's {#key}
+  // remount also makes a fresh aiRun per PR, so a new PR auto-starts cleanly.
+  let autoStartedFor = $state<string | null>(null)
+  $effect(() => {
+    const enabledCount = listSkills().filter((s) => s.enabled).length
+    if (
+      shouldAutoStartReviewers({
+        autoRunReviewers: settingsState.current.autoRunReviewers,
+        aiRunReady: aiRun != null,
+        loadReady: load.state.status === 'ready',
+        hasKey: activeProviderHasKey(),
+        skillsMode: settingsState.current.aiTaskModes.skills,
+        enabledSkillCount: enabledCount,
+        alreadyStartedFor: autoStartedFor,
+        prId,
+      })
+    ) {
+      // Local const re-narrows aiRun for TS (the predicate hides the null check).
+      const run = aiRun
+      if (run == null) return
+      autoStartedFor = prId
+      track('reviewers_auto_started', { count: enabledCount })
+      // prComments is lazily fetched (may still be empty on step 1) — pass
+      // whatever is available; the existing-comments list is only a dedupe aid,
+      // never a blocker. autoRetry: 3 so transient failures settle on their own.
+      void run.runSkillReviews(undefined, prComments?.map((c) => c.body) ?? [], { autoRetry: 3 })
     }
   })
 

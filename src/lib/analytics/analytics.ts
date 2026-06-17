@@ -102,6 +102,11 @@ const EVENTS = {
   // Fired when the user opens the bundled "Try a live demo" onboarding path from
   // the landing page. No props — it's a pure navigation signal.
   demo_opened: [],
+  // PRIVACY DECISION: fired ONCE per loaded PR when the skill reviewers are
+  // auto-started early (opt-out setting on, while the user is still on step 1).
+  // Carries only 'count' — the integer number of enabled reviewers kicked off.
+  // Never a path, persona name, finding, or any code/diff content.
+  reviewers_auto_started: ['count'],
 } as const
 
 export type EventName = keyof typeof EVENTS
