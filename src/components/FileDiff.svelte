@@ -1,5 +1,6 @@
 <script lang="ts">
   import { DiffView, DiffModeEnum, SplitSide } from '@git-diff-view/svelte'
+  import { highlighter } from '@git-diff-view/lowlight'
   import '@git-diff-view/svelte/styles/diff-view.css'
   import { buildDiffFile, classifyFile } from '../lib/diff/diffFile'
   import type { PrFile } from '../lib/github/types'
@@ -340,6 +341,15 @@
     if (t === 'dark' || t === 'light') return t
     return prefersDark ? 'dark' : 'light'
   })
+
+  // @git-diff-view skips syntax highlighting once a file's raw length exceeds
+  // `maxLineToIgnoreSyntax` (default 2000). Because we feed it the FULL file
+  // contents (to enable GitHub-style context expansion), large source files —
+  // e.g. a 2000+ line Django module — blew past it and rendered UNHIGHLIGHTED.
+  // Pass the bundled lowlight highlighter with a much higher threshold so real
+  // source files always highlight; the engine + per-language support are reused
+  // unchanged (only the size guard is raised).
+  const highlighterNoSizeCap = { ...highlighter, maxLineToIgnoreSyntax: 200_000 }
 
   // When viewed → collapse diff body; user can re-expand by clicking header or unchecking
   // dim mode reduces opacity only — it does NOT collapse the file
@@ -701,6 +711,7 @@
       {diffFile}
       diffViewMode={mode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
       diffViewHighlight={true}
+      registerHighlighter={highlighterNoSizeCap}
       diffViewTheme={diffTheme}
       diffViewWrap={true}
       diffViewAddWidget={!wsActive}
