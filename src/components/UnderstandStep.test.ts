@@ -291,7 +291,7 @@ describe('UnderstandStep detail panels', () => {
   it('diagrams panel is a <details> with "Diagrams" summary', () => {
     render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
     const diagramsDetails = Array.from(document.querySelectorAll('details')).find(
-      (d) => d.querySelector('summary')?.textContent?.match(/execution flow/i)
+      (d) => d.querySelector('summary')?.textContent?.match(/change impact/i)
     )
     expect(diagramsDetails).not.toBeUndefined()
   })
@@ -990,7 +990,7 @@ describe('UnderstandStep — registry section order', () => {
   it('Diagrams panel appears before Changed files in DOM order', () => {
     const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
     const panels = Array.from(container.querySelectorAll('.detail-panel'))
-    const diagramsIdx = panels.findIndex((p) => p.querySelector('summary')?.textContent?.match(/execution flow/i))
+    const diagramsIdx = panels.findIndex((p) => p.querySelector('summary')?.textContent?.match(/change impact/i))
     const fileStructureIdx = panels.findIndex((p) => p.querySelector('summary')?.textContent?.match(/changed files.*structure/i))
     expect(diagramsIdx).toBeGreaterThanOrEqual(0)
     expect(fileStructureIdx).toBeGreaterThan(diagramsIdx)
@@ -1000,7 +1000,7 @@ describe('UnderstandStep — registry section order', () => {
     const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
     const summaries = Array.from(container.querySelectorAll('.detail-panel summary'))
     const texts = summaries.map((s) => s.textContent?.toLowerCase() ?? '')
-    const orderedKeywords = ['summary', 'execution flow', 'changed files', 'test coverage', 'alternative', 'verdict', 'ci details', 'pr description']
+    const orderedKeywords = ['summary', 'change impact', 'changed files', 'test coverage', 'alternative', 'verdict', 'ci details', 'pr description']
     let lastIdx = -1
     for (const keyword of orderedKeywords) {
       const idx = texts.findIndex((t, i) => i > lastIdx && t.includes(keyword))
@@ -1291,7 +1291,7 @@ describe('UnderstandStep — per-section header status indicator', () => {
   it('AI sections (summary, diagrams, tests, alternatives, verdict) each render a status indicator', () => {
     const run = makeRun({})
     render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
-    for (const match of [/full summary/i, /execution flow/i, /test coverage/i, /alternative approaches/i, /why this verdict/i]) {
+    for (const match of [/full summary/i, /change impact/i, /test coverage/i, /alternative approaches/i, /why this verdict/i]) {
       const header = summaryHeaderOf(match)
       expect(header.querySelector('.section-status')).not.toBeNull()
     }
@@ -1471,7 +1471,7 @@ describe('UnderstandStep — configurable layout (order + enable/disable)', () =
     _resetSettingsStateForTest()
     const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
     const titles = panelTitles(container)
-    const orderedKeywords = ['full summary', 'execution flow', 'changed files', 'test coverage', 'alternative', 'verdict', 'ci details', 'pr description']
+    const orderedKeywords = ['full summary', 'change impact', 'changed files', 'test coverage', 'alternative', 'verdict', 'ci details', 'pr description']
     let lastIdx = -1
     for (const keyword of orderedKeywords) {
       const idx = titles.findIndex((t, i) => i > lastIdx && t.includes(keyword))

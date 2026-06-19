@@ -68,9 +68,9 @@ export function createDemoRun(): AiRun {
   return {
     summary: done<string>(demoSummary),
     attention: done(demoAttention),
-    // Diagrams ARE bundled now: a pre-'done' flow-of-execution diagram
+    // Diagrams ARE bundled now: a pre-'done' change-impact / blast-radius view
     // (demoGraph) so the Understand step (and ContextRail) shows the real
-    // flowchart instead of the muted "enable in settings" state. Alternatives
+    // diagram instead of the muted "enable in settings" state. Alternatives
     // stay 'disabled' (NOT 'idle') so their panel renders the compact muted
     // state — never a skeleton/spinner (the demo shows zero pending UI: every
     // panel is settled). Story, likewise, is pre-'done' with the canned

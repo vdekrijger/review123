@@ -178,7 +178,7 @@ export const SECTION_REGISTRY: readonly SectionDescriptor[] = [
   },
   {
     id: 'diagrams',
-    title: 'Execution flow',
+    title: 'Change impact',
     defaultOpen: { page: false },
     show: { page: true, rail: true },
   },

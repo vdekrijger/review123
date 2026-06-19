@@ -392,18 +392,16 @@ const ATTENTION_RESULT: AttentionResult = {
   testFlags: [],
 }
 
-// A deep-flow result (Plan L): an ordered execution flow whose steps carry the
-// change tags + files. before/after are emitted empty under the new shape.
+// A deep change-impact result: the changed symbols + their 1-hop callers
+// (blast radius) and callees. before/after are emitted empty under the shape.
 const DIAGRAM_RESULT: GraphResult = {
   kind: 'flow',
   before: { nodes: [], edges: [] },
   after: { nodes: [], edges: [] },
-  flow: {
-    steps: [
-      { id: 'entry', label: 'handleSubmit', file: 'src/router.ts', kind: 'entry', change: 'changed' },
-      { id: 'save', label: 'write to store', file: 'src/store.ts', kind: 'effect', change: 'added' },
-    ],
-    transitions: [{ from: 'entry', to: 'save' }],
+  impact: {
+    changed: [{ symbol: 'handleSubmit', file: 'src/router.ts', kind: 'changed' }],
+    callers: [{ symbol: 'route', file: 'src/router.ts' }],
+    callees: [{ symbol: 'writeStore', file: 'src/store.ts' }],
   },
 }
 
@@ -628,9 +626,9 @@ describe('deep diagrams task', () => {
     expect(diagramLoopCall).toBeDefined()
     const diagramSystem = (diagramLoopCall![0] as { system: string }).system
     expect(diagramSystem).toContain('Deep review mode')
-    // Deep-flow-specific guidance (Plan L): follow the real call chain with tools
-    expect(diagramSystem).toContain('follow the real call chain')
-    expect(diagramSystem).toMatch(/read_file|search_code/)
+    // Deep-impact guidance: find REAL callers with the tools
+    expect(diagramSystem).toContain('find REAL callers')
+    expect(diagramSystem).toMatch(/find_references|search_code/)
 
     const deepKey = `${PR_KEY}|diagrams|deep|v${PROMPT_VERSION}`
     expect(deps.getCached).toHaveBeenCalledWith(deepKey)
@@ -646,19 +644,20 @@ describe('deep diagrams task', () => {
     expect(run.diagrams.activity).toBeUndefined()
   })
 
-  it('surfaces the execution flow steps with change tags + files', async () => {
+  it('surfaces the changed symbols with their callers + callees', async () => {
     seedSettings({ aiDeepReview: true })
     const deps = makeMultiTaskDeps()
     const run = createAiRun(makeInput(makeSource()), deps)
     await run.start()
 
     const value = run.diagrams.value as GraphResult
-    expect(value.flow?.steps.length).toBe(2)
-    const entry = value.flow?.steps.find((s) => s.kind === 'entry')
-    expect(entry?.change).toBe('changed')
-    expect(entry?.file).toBe('src/router.ts')
-    const effect = value.flow?.steps.find((s) => s.kind === 'effect')
-    expect(effect?.change).toBe('added')
+    expect(value.impact?.changed.length).toBe(1)
+    const changed = value.impact?.changed[0]
+    expect(changed?.symbol).toBe('handleSubmit')
+    expect(changed?.kind).toBe('changed')
+    expect(changed?.file).toBe('src/router.ts')
+    expect(value.impact?.callers.map((c) => c.symbol)).toContain('route')
+    expect(value.impact?.callees.map((c) => c.symbol)).toContain('writeStore')
   })
 
   it('unwraps a deep cache hit: result + toolCallsUsed, no diagram loop call', async () => {

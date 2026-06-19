@@ -5,7 +5,7 @@ describe('aiProgressLabel — honest per-task status lines', () => {
   it.each<[Exclude<AiProgressTask, 'skill'>, string]>([
     ['summary', 'Summarizing the change…'],
     ['attention', 'Finding what needs attention…'],
-    ['diagrams', 'Tracing the execution path…'],
+    ['diagrams', 'Mapping the change impact…'],
     ['tests', 'Mapping tests to code…'],
     ['alternatives', 'Weighing alternatives…'],
     ['verdict', 'Forming a verdict…'],

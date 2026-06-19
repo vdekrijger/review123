@@ -9,11 +9,19 @@
  * in sync with the Mermaid serializer (Task 7).
  */
 
-import type { Graph, GraphResult, NodeStatus, ExecutionFlow, FlowStep, FlowTransition } from '../diagram/types'
+import type { Graph, GraphResult, NodeStatus, ChangeImpact, ImpactChanged, ImpactNode } from '../diagram/types'
 import { isGeneratedPath } from '../diff/generated'
 
 // Re-export so consumers can import everything from one place.
-export type { Graph, GraphResult, ExecutionFlow, FlowStep, FlowTransition }
+export type { Graph, GraphResult, ChangeImpact, ImpactChanged, ImpactNode }
+
+/**
+ * Cap on entries PER GROUP (changed / callers / callees) in a change-impact
+ * view. Keeps the blast-radius graph tiny + legible and the structured output
+ * short enough to come back intact. Exported so the prompt builder, validator,
+ * and any consumer share one number.
+ */
+export const IMPACT_MAX_PER_GROUP = 6
 
 // ---------------------------------------------------------------------------
 // AttentionResult
@@ -124,9 +132,11 @@ export function validateVerdict(x: unknown): VerdictResult | null {
  * Validate an unknown value as GraphResult.
  * Returns the typed value or null if the shape is invalid.
  *
- * Accepts optional `changeMap` (D1: change-map graph with statuses) and
- * optional `status` on nodes/edges. Absent statuses/changeMap stay valid
- * (backward compatible with cached v3 results).
+ * Accepts optional `changeMap` (D1: change-map graph with statuses), optional
+ * `impact` (change-impact / blast-radius view), and optional `status` on
+ * nodes/edges. Absent statuses/changeMap/impact stay valid — old cached results
+ * (including retired `flow`-only payloads, whose unknown `flow` key is simply
+ * ignored) degrade gracefully to a suppressed impact.
  *
  * Invalid status enum value → null (strict enum enforcement).
  */
@@ -151,65 +161,76 @@ export function validateGraphResult(x: unknown): GraphResult | null {
     changeMap = cm
   }
 
-  // flow — optional ExecutionFlow (Plan L). Absent → backward-compatible with
-  // cached change-map results. Present-but-malformed → null (strict).
-  let flow: ExecutionFlow | undefined
-  if ('flow' in x && x['flow'] !== undefined) {
-    const f = validateFlow(x['flow'])
-    if (f === null) return null
-    flow = f
+  // impact — optional ChangeImpact (change-impact / blast-radius view).
+  // Absent → backward-compatible (old cached results, incl. retired `flow`-only
+  // payloads, degrade to the suppressed note). Present-but-malformed → null.
+  let impact: ChangeImpact | undefined
+  if ('impact' in x && x['impact'] !== undefined) {
+    const im = validateChangeImpact(x['impact'])
+    if (im === null) return null
+    impact = im
   }
 
   const result: GraphResult = { before, after, kind: x['kind'] as 'flow' | 'module' }
   if (changeMap !== undefined) result.changeMap = changeMap
-  if (flow !== undefined) result.flow = flow
+  if (impact !== undefined) result.impact = impact
   return result
 }
 
 // ---------------------------------------------------------------------------
-// ExecutionFlow (Plan L — flow-of-execution diagram)
+// ChangeImpact (change-impact / blast-radius view)
 // ---------------------------------------------------------------------------
 
-const FLOW_STEP_KINDS = new Set<string>(['entry', 'call', 'branch', 'effect', 'return'])
-const FLOW_CHANGES = new Set<string>(['added', 'changed', 'unchanged', 'removed'])
+const IMPACT_KINDS = new Set<string>(['added', 'changed', 'removed'])
+
+/** Validate one caller/callee node: { symbol: string, file?: string }. */
+function validateImpactNode(x: unknown): ImpactNode | null {
+  if (!isObject(x)) return null
+  if (typeof x['symbol'] !== 'string') return null
+  if ('file' in x && x['file'] !== undefined && typeof x['file'] !== 'string') return null
+  return x as unknown as ImpactNode
+}
 
 /**
- * Validate an unknown value as ExecutionFlow.
+ * Validate an unknown value as ChangeImpact.
  * Returns the typed value or null if the shape is invalid.
  *
- * Strict on: steps array (each step's id/label strings, kind + change enums,
- * optional file/symbol strings) and transitions array (from/to strings,
- * optional label/condition strings). Tolerant of extra keys. An EMPTY steps
- * array is VALID — it is the graceful-fallback signal (the panel renders the
- * "no clear execution flow" note). Invalid kind/change enum → null.
+ * Strict on: changed array (each { symbol: string, file?: string, kind:
+ * added|changed|removed }) and callers/callees arrays (each { symbol: string,
+ * file?: string }). Each of the three arrays is capped at IMPACT_MAX_PER_GROUP
+ * (more than the cap → null). Tolerant of extra keys. An EMPTY impact (changed
+ * = []) is VALID — it is the AUTO-SUPPRESS signal (the panel renders the "no
+ * notable call-graph impact" note). Forward-compatible: unknown extra fields on
+ * the root/elements are ignored.
  */
-export function validateFlow(x: unknown): ExecutionFlow | null {
+export function validateChangeImpact(x: unknown): ChangeImpact | null {
   if (!isObject(x)) return null
 
-  // steps — required array (may be empty)
-  if (!Array.isArray(x['steps'])) return null
-  for (const step of x['steps']) {
-    if (!isObject(step)) return null
-    if (typeof step['id'] !== 'string') return null
-    if (typeof step['label'] !== 'string') return null
-    if (typeof step['kind'] !== 'string' || !FLOW_STEP_KINDS.has(step['kind'] as string)) return null
-    if (typeof step['change'] !== 'string' || !FLOW_CHANGES.has(step['change'] as string)) return null
-    // file / symbol — optional strings
-    if ('file' in step && step['file'] !== undefined && typeof step['file'] !== 'string') return null
-    if ('symbol' in step && step['symbol'] !== undefined && typeof step['symbol'] !== 'string') return null
+  // changed — required array (may be empty = suppress), capped, kind enum strict.
+  if (!Array.isArray(x['changed'])) return null
+  if (x['changed'].length > IMPACT_MAX_PER_GROUP) return null
+  for (const c of x['changed']) {
+    if (!isObject(c)) return null
+    if (typeof c['symbol'] !== 'string') return null
+    if ('file' in c && c['file'] !== undefined && typeof c['file'] !== 'string') return null
+    if (typeof c['kind'] !== 'string' || !IMPACT_KINDS.has(c['kind'] as string)) return null
   }
 
-  // transitions — required array (may be empty)
-  if (!Array.isArray(x['transitions'])) return null
-  for (const t of x['transitions']) {
-    if (!isObject(t)) return null
-    if (typeof t['from'] !== 'string') return null
-    if (typeof t['to'] !== 'string') return null
-    if ('label' in t && t['label'] !== undefined && typeof t['label'] !== 'string') return null
-    if ('condition' in t && t['condition'] !== undefined && typeof t['condition'] !== 'string') return null
+  // callers — required array (may be empty), capped.
+  if (!Array.isArray(x['callers'])) return null
+  if (x['callers'].length > IMPACT_MAX_PER_GROUP) return null
+  for (const n of x['callers']) {
+    if (validateImpactNode(n) === null) return null
   }
 
-  return x as unknown as ExecutionFlow
+  // callees — required array (may be empty), capped.
+  if (!Array.isArray(x['callees'])) return null
+  if (x['callees'].length > IMPACT_MAX_PER_GROUP) return null
+  for (const n of x['callees']) {
+    if (validateImpactNode(n) === null) return null
+  }
+
+  return x as unknown as ChangeImpact
 }
 
 // ---------------------------------------------------------------------------

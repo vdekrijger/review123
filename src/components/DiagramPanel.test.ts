@@ -108,7 +108,7 @@ describe('DiagramPanel — state rendering', () => {
     // Accessible region label preserved on the wrapper
     expect(container.querySelector('[aria-label="Loading diagrams"]')).not.toBeNull()
     // Unified honest status line from aiProgressLabel('diagrams')
-    expect(screen.getByText(/tracing the execution path…/i)).toBeInTheDocument()
+    expect(screen.getByText(/mapping the change impact…/i)).toBeInTheDocument()
     // Content-shaped skeleton instead of a bare spinner
     expect(container.querySelector('.skeleton-rect')).not.toBeNull()
     expect(container.querySelector('.spinner')).toBeNull()

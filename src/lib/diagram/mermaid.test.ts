@@ -710,141 +710,110 @@ describe('graphToMermaid — context status (deep-diagram neighborhood)', () => 
 })
 
 // ---------------------------------------------------------------------------
-// flowToMermaid (Plan L) — flow-of-execution serializer
+// impactToMermaid / impactToGraph — change-impact (blast-radius) serializer
 // ---------------------------------------------------------------------------
 
-import { flowToMermaid } from './mermaid'
-import type { ExecutionFlow } from './types'
+import { impactToMermaid, impactToGraph, impactIsRenderable } from './mermaid'
+import type { ChangeImpact } from './types'
 
-function sampleFlow(): ExecutionFlow {
+function sampleImpact(): ChangeImpact {
   return {
-    steps: [
-      { id: 'h', label: 'handleSubmit', file: 'src/handler.ts', symbol: 'handleSubmit', kind: 'entry', change: 'changed' },
-      { id: 'v', label: 'validate input', file: 'src/validate.ts', kind: 'branch', change: 'added' },
-      { id: 'save', label: 'write to DB', file: 'src/store.ts', kind: 'effect', change: 'added' },
-      { id: 'old', label: 'legacy path', file: 'src/legacy.ts', kind: 'call', change: 'removed' },
-      { id: 'ret', label: 'return result', kind: 'return', change: 'unchanged' },
-    ],
-    transitions: [
-      { from: 'h', to: 'v' },
-      { from: 'v', to: 'save', condition: 'valid' },
-      { from: 'v', to: 'old', condition: 'invalid' },
-      { from: 'save', to: 'ret', label: 'then' },
+    changed: [{ symbol: 'useSearch', file: 'src/search/useSearch.ts', kind: 'changed' }],
+    callers: [{ symbol: 'SearchBox', file: 'src/search/SearchBox.tsx' }],
+    callees: [
+      { symbol: 'fetchResults', file: 'src/search/api.ts' },
+      { symbol: 'AbortController' },
     ],
   }
 }
 
-describe('flowToMermaid — basic', () => {
-  it('empty steps → empty mermaid (fallback signal)', () => {
-    const { mermaid, dropped } = flowToMermaid({ steps: [], transitions: [] })
+describe('impactIsRenderable', () => {
+  it('is false for undefined or an empty impact (auto-suppress signal)', () => {
+    expect(impactIsRenderable(undefined)).toBe(false)
+    expect(impactIsRenderable({ changed: [], callers: [], callees: [] })).toBe(false)
+  })
+
+  it('is true when at least one changed symbol is present', () => {
+    expect(impactIsRenderable({ changed: [{ symbol: 'x', kind: 'changed' }], callers: [], callees: [] })).toBe(true)
+  })
+})
+
+describe('impactToMermaid — basic', () => {
+  it('empty impact → empty mermaid (auto-suppress signal)', () => {
+    const { mermaid, dropped } = impactToMermaid({ changed: [], callers: [], callees: [] })
     expect(mermaid).toBe('')
     expect(dropped).toEqual([])
   })
 
-  it('emits flowchart TD header and remaps ids to sN', () => {
-    const { mermaid } = flowToMermaid(sampleFlow())
+  it('emits flowchart TD header for a non-empty impact', () => {
+    const { mermaid } = impactToMermaid(sampleImpact())
     expect(mermaid.split('\n')[0]).toBe('flowchart TD')
-    expect(mermaid).toContain('s0')
-    expect(mermaid).toContain('s4')
-    // original ids never reach the output
-    expect(mermaid).not.toMatch(/\bhandleSubmit\["/) // label only inside quotes, not as id
   })
 
   it('is deterministic — same input yields byte-identical output', () => {
-    const a = flowToMermaid(sampleFlow()).mermaid
-    const b = flowToMermaid(sampleFlow()).mermaid
-    expect(a).toBe(b)
+    expect(impactToMermaid(sampleImpact()).mermaid).toBe(impactToMermaid(sampleImpact()).mermaid)
+  })
+
+  it('renders the changed symbol with its change status + file basename label', () => {
+    const { mermaid } = impactToMermaid(sampleImpact())
+    // changed node carries the `changed` class and a "symbol — basename" label
+    expect(mermaid).toContain('classDef changed')
+    expect(mermaid).toMatch(/\["useSearch — useSearch\.ts"\]/)
+  })
+
+  it('added / removed changed kinds map to their status classDefs', () => {
+    const added = impactToMermaid({ changed: [{ symbol: 'newFn', kind: 'added' }], callers: [], callees: [] })
+    expect(added.mermaid).toContain('classDef added')
+    const removed = impactToMermaid({ changed: [{ symbol: 'gone', kind: 'removed' }], callers: [], callees: [] })
+    expect(removed.mermaid).toContain('classDef removed')
   })
 })
 
-describe('flowToMermaid — change classDefs (both palettes)', () => {
-  for (const palette of ['dark', 'light'] as const) {
-    it(`${palette}: emits classDefs for each change present and assigns them`, () => {
-      const { mermaid } = flowToMermaid(sampleFlow(), { palette })
-      // four change tags present in the sample
-      expect(mermaid).toContain('classDef added')
-      expect(mermaid).toContain('classDef removed')
-      expect(mermaid).toContain('classDef changed')
-      expect(mermaid).toContain('classDef unchanged')
-      // class assignments by change → status
-      expect(mermaid).toContain('class s0 changed')
-      expect(mermaid).toContain('class s1 added')
-      expect(mermaid).toContain('class s3 removed')
-      expect(mermaid).toContain('class s4 unchanged')
+describe('impactToGraph — composition (callers → changed → callees)', () => {
+  it('callers and callees are de-emphasized context nodes', () => {
+    const g = impactToGraph(sampleImpact())
+    const caller = g.nodes.find((n) => n.label.includes('SearchBox'))
+    const callee = g.nodes.find((n) => n.label.includes('fetchResults'))
+    const changed = g.nodes.find((n) => n.label.includes('useSearch'))
+    expect(caller?.status).toBe('context')
+    expect(callee?.status).toBe('context')
+    expect(changed?.status).toBe('changed')
+  })
+
+  it('edges read caller --calls--> changed and changed --uses--> callee (context arrows)', () => {
+    const g = impactToGraph(sampleImpact())
+    const changedId = g.nodes.find((n) => n.label.includes('useSearch'))!.id
+    const callerEdge = g.edges.find((e) => e.to === changedId)
+    const calleeEdge = g.edges.find((e) => e.from === changedId)
+    expect(callerEdge).toMatchObject({ label: 'calls', status: 'context' })
+    expect(calleeEdge).toMatchObject({ label: 'uses', status: 'context' })
+  })
+
+  it('a callee without a file renders the bare symbol (no separator)', () => {
+    const g = impactToGraph(sampleImpact())
+    expect(g.nodes.some((n) => n.label === 'AbortController')).toBe(true)
+  })
+
+  it('mermaid wires the two sides through the changed centre with dotted labeled arrows', () => {
+    const { mermaid } = impactToMermaid(sampleImpact())
+    // context edges render as dotted labeled arrows (-. "label" .->)
+    expect(mermaid).toContain('-. "calls" .->')
+    expect(mermaid).toContain('-. "uses" .->')
+  })
+
+  it('a changed-only impact (no callers/callees) still renders the centre', () => {
+    const { mermaid } = impactToMermaid({ changed: [{ symbol: 'solo', kind: 'changed' }], callers: [], callees: [] })
+    expect(mermaid).toContain('flowchart TD')
+    expect(mermaid).toContain('["solo"]')
+  })
+
+  it('duplicate symbols across groups never collide (namespaced ids)', () => {
+    const g = impactToGraph({
+      changed: [{ symbol: 'foo', kind: 'changed' }],
+      callers: [{ symbol: 'foo' }],
+      callees: [{ symbol: 'foo' }],
     })
-  }
-
-  it('only emits classDefs for change tags that appear', () => {
-    const flow: ExecutionFlow = {
-      steps: [{ id: 'a', label: 'go', kind: 'entry', change: 'added' }],
-      transitions: [],
-    }
-    const { mermaid } = flowToMermaid(flow)
-    expect(mermaid).toContain('classDef added')
-    expect(mermaid).not.toContain('classDef removed')
-    expect(mermaid).not.toContain('classDef unchanged')
-  })
-})
-
-describe('flowToMermaid — kind shapes', () => {
-  it('entry=stadium, effect=subroutine, branch=rhombus, call/return=rectangle', () => {
-    const { mermaid } = flowToMermaid(sampleFlow())
-    // entry stadium ([...])
-    expect(mermaid).toContain('s0(["handleSubmit"])')
-    // branch rhombus {...}
-    expect(mermaid).toContain('s1{"validate input"}')
-    // effect subroutine [[...]]
-    expect(mermaid).toContain('s2[["write to DB"]]')
-    // call rectangle [...]
-    expect(mermaid).toContain('s3["legacy path"]')
-    // return rectangle [...]
-    expect(mermaid).toContain('s4["return result"]')
-  })
-})
-
-describe('flowToMermaid — transitions', () => {
-  it('renders branch condition labels on edges', () => {
-    const { mermaid } = flowToMermaid(sampleFlow())
-    expect(mermaid).toContain('s1 -- "valid" --> s2')
-    expect(mermaid).toContain('s1 -- "invalid" --> s3')
-  })
-
-  it('renders plain ordered label when no condition', () => {
-    const { mermaid } = flowToMermaid(sampleFlow())
-    expect(mermaid).toContain('s2 -- "then" --> s4')
-  })
-
-  it('renders bare arrow when neither condition nor label', () => {
-    const { mermaid } = flowToMermaid(sampleFlow())
-    expect(mermaid).toContain('s0 --> s1')
-  })
-
-  it('drops transitions referencing unknown step ids', () => {
-    const flow: ExecutionFlow = {
-      steps: [{ id: 'a', label: 'go', kind: 'entry', change: 'added' }],
-      transitions: [{ from: 'a', to: 'ghost' }],
-    }
-    const { mermaid, dropped } = flowToMermaid(flow)
-    expect(dropped).toContain('ghost')
-    expect(mermaid).not.toContain('ghost')
-  })
-})
-
-describe('flowToMermaid — supports loops (back-edge)', () => {
-  it('serializes a back-edge labeled for-each naturally', () => {
-    const flow: ExecutionFlow = {
-      steps: [
-        { id: 'a', label: 'iterate items', kind: 'entry', change: 'changed' },
-        { id: 'b', label: 'process item', kind: 'call', change: 'added' },
-      ],
-      transitions: [
-        { from: 'a', to: 'b' },
-        { from: 'b', to: 'a', label: 'for each item' },
-      ],
-    }
-    const { mermaid, dropped } = flowToMermaid(flow)
-    expect(dropped).toEqual([])
-    expect(mermaid).toContain('s0 --> s1')
-    expect(mermaid).toContain('s1 -- "for each item" --> s0')
+    const ids = g.nodes.map((n) => n.id)
+    expect(new Set(ids).size).toBe(ids.length)
   })
 })

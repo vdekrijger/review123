@@ -12,7 +12,7 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import type { CoachCodeContext } from './coachContext'
-import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
+import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP } from './schemas'
 
 // PROMPT_VERSION 23 (verify absence-claims): fail-closed floor against the
 // absence/external-evidence false positive ("no test verifies X", "not called",
@@ -55,11 +55,18 @@ import { STORY_LAYERS, STORY_MAX_STEPS } from './schemas'
 // findings now carry an aggregated cross-model `verification` object (the new
 // adversarial verify prompt lives in crossVerify.ts). The bump invalidates
 // cached skill/verdict results so they re-run and verify under the new shape.
-// PROMPT_VERSION 17 (Plan L): the diagram task's output shape changed from the
-// module-dependency change-map to a flow-of-execution (GraphResult.flow). The
-// bump invalidates cached diagram results so old change-maps don't render under
-// the new "Execution flow" label.
-export const PROMPT_VERSION = 23
+// PROMPT_VERSION 24 (change-impact / blast-radius): the diagram task's output
+// shape changed from the flow-of-execution (GraphResult.flow, retired) to a
+// change-impact view (GraphResult.impact) — the CHANGED symbols with their
+// 1-hop callers (blast radius / affected) and callees (what they now use). The
+// prompt now asks for changed symbols + callers + callees (NOT execution steps),
+// instructs the deep mode to find REAL callers via find_references/search_code,
+// and auto-suppresses (empty impact) on trivial/no-impact changes. The bump
+// invalidates cached diagram results so retired flow payloads don't render; they
+// lack `impact` and degrade to the suppressed "no notable call-graph impact" note.
+// PROMPT_VERSION 17 (Plan L): the diagram task's output shape was a
+// flow-of-execution (GraphResult.flow) — now retired.
+export const PROMPT_VERSION = 24
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)
@@ -253,159 +260,155 @@ Do not include any text outside the JSON object.`
 }
 
 // ---------------------------------------------------------------------------
-// diagramsPrompt — JSON GraphResult.flow (flow-of-execution; Plan L)
+// diagramsPrompt — JSON GraphResult.impact (change-impact / blast-radius view)
 // ---------------------------------------------------------------------------
 
 // The few-shot marker is intentional so tests can assert its presence.
 const FEW_SHOT_EXAMPLE = `/* FEW_SHOT_EXAMPLE_START */
-Example: a PR adds input validation to a submit handler and writes the result to the store; \
-the old direct-write path is removed.
+Example: a PR changes the \`useSearch\` hook to debounce + cancel requests. It is referenced \
+by the \`SearchBox\` component (a caller), and it now calls \`fetchResults\` and constructs an \
+\`AbortController\` (callees).
 
-Example valid output JSON (one delta-annotated execution flow — note kind:"flow", an empty \
-before/after, and the flow's steps + transitions):
+Example valid output JSON (a change-impact view — note kind:"flow", empty before/after, and \
+the impact's changed / callers / callees):
 {
   "kind": "flow",
   "before": { "nodes": [], "edges": [] },
   "after": { "nodes": [], "edges": [] },
-  "flow": {
-    "steps": [
-      { "id": "entry", "label": "handleSubmit", "file": "src/handler.ts", "symbol": "handleSubmit", "kind": "entry", "change": "changed" },
-      { "id": "validate", "label": "validate input", "file": "src/validate.ts", "kind": "branch", "change": "added" },
-      { "id": "save", "label": "write to store", "file": "src/store.ts", "kind": "effect", "change": "added" },
-      { "id": "directWrite", "label": "old direct write", "file": "src/handler.ts", "kind": "effect", "change": "removed" },
-      { "id": "ret", "label": "return result", "file": "src/handler.ts", "kind": "return", "change": "unchanged" }
+  "impact": {
+    "changed": [
+      { "symbol": "useSearch", "file": "src/search/useSearch.ts", "kind": "changed" }
     ],
-    "transitions": [
-      { "from": "entry", "to": "validate" },
-      { "from": "validate", "to": "save", "condition": "valid" },
-      { "from": "validate", "to": "ret", "condition": "invalid" },
-      { "from": "save", "to": "ret" }
+    "callers": [
+      { "symbol": "SearchBox", "file": "src/search/SearchBox.tsx" }
+    ],
+    "callees": [
+      { "symbol": "fetchResults", "file": "src/search/api.ts" },
+      { "symbol": "AbortController" }
     ]
   }
 }
 /* FEW_SHOT_EXAMPLE_END */`
 
 /**
- * Cap on the number of execution-flow steps. Keeping the flow small (the model
- * groups/elides trivial plumbing) keeps the structured output short enough to
- * come back intact and the diagram readable. Exported for the prompt test.
+ * Cap on entries PER GROUP (changed / callers / callees) in the change-impact
+ * view. Re-exported from schemas as the single source of truth — keeps the blast
+ * radius tiny + legible and the structured output short enough to come back
+ * intact. Exported for the prompt test.
  */
-export const FLOW_MAX_STEPS = 14
+export const IMPACT_MAX_PER_GROUP_PROMPT = IMPACT_MAX_PER_GROUP
 
 /**
- * Build prompts for the diagram generation task (Plan L — flow of execution).
+ * Build prompts for the diagram generation task (change-impact / blast-radius).
  *
- * Output must be JSON-only, matching GraphResult with a `flow` field:
+ * Output must be JSON-only, matching GraphResult with an `impact` field:
  *   {
  *     kind: "flow" | "module",
  *     before: Graph,   // emitted empty — legacy fields kept for the type
  *     after: Graph,
- *     flow: { steps: FlowStep[], transitions: FlowTransition[] }
+ *     impact: {
+ *       changed:  { symbol, file?, kind: added|changed|removed }[],
+ *       callers:  { symbol, file? }[],   // 1-hop upstream — the blast radius
+ *       callees:  { symbol, file? }[]    // 1-hop downstream — what it now uses
+ *     }
  *   }
  *
- * The model traces the EXECUTION PATH the diff changes — entry point → handler
- * → service → store/effect — and marks each step's change-status. It NEVER
- * writes Mermaid syntax; the serializer (lib/diagram/mermaid.ts flowToMermaid)
- * converts the flow to Mermaid.
+ * The model identifies the CHANGED symbols and their 1-hop callers (what
+ * references them → what's affected / could break) and callees (what they now
+ * call/depend on). It NEVER writes Mermaid syntax; the serializer
+ * (lib/diagram/mermaid.ts impactToMermaid) converts the impact to Mermaid.
  *
- * Graceful fallback: when the change has no meaningful execution flow (pure
- * data/config/schema/dependency change) the model returns an EMPTY steps array
- * — the panel then shows an honest note instead of a fabricated flow.
+ * Auto-suppress: when the change has no meaningful blast radius (pure
+ * data/config/schema/CRUD/dependency change) the model returns an EMPTY impact
+ * (changed: []) — the panel then shows an honest note instead of a forced graph.
  *
- * Deep variant (options.deep): the model USES THE TOOLS to follow the real call
- * chain (read the entry function, find what it calls) so the flow is accurate.
+ * Deep variant (options.deep): the model USES THE TOOLS — find_references /
+ * search_code — to find REAL callers across the repo (not guesses) and verify
+ * the callees.
  */
 export function diagramsPrompt(
   ctx: PackedContext,
   options?: { deep?: boolean },
 ): { system: string; user: string } {
   const importGraphSection = ctx.importGraph
-    ? `\n\n## Module relationships (extracted from code)\n\n${ctx.importGraph}\n\nUse these REAL import/call relationships to follow the execution path — which file calls \
-which — so each step's \`file\` and the order of transitions reflect the actual call chain.`
+    ? `\n\n## Module relationships (extracted from code)\n\n${ctx.importGraph}\n\nUse these REAL import/call relationships to infer the callers (which files reference the \
+changed symbols) and callees (what the changed code depends on) — prefer entries you can ground \
+in this graph over guesses.`
     : ''
 
-  // Deep-flow guidance (Plan L): when the agentic harness is on, the model
-  // FOLLOWS THE REAL CALL CHAIN with the tools — read the entry function, find
-  // what it calls, step through to the effect — so the flow is accurate, not
-  // guessed. withDeepReviewGuidance() adds the generic tool-loop discipline.
-  const deepFlowSection = options?.deep
-    ? `\n\n## Deep mode — follow the real call chain with the tools (IMPORTANT)
-You have verification tools (read_file / read_file_at_base / search_code). Trace the execution \
-path for real instead of guessing:
-- Read the ENTRY function the change affects (read_file) and see what it actually calls.
-- search_code for each called symbol to follow the chain one hop at a time, through to the \
-  EFFECT (DB write, API response, state change).
-- Mark each step's change from the diff (read_file_at_base to compare against the pre-PR code \
-  when a step's status is ambiguous).
-- DROP any step you cannot substantiate from what the tools show — a guessed step must not \
-  appear. A short, accurate flow beats a long speculative one.`
+  // Deep-impact guidance: when the agentic harness is on, the model finds REAL
+  // callers across the repo with the tools instead of guessing from the diff.
+  // withDeepReviewGuidance() adds the generic tool-loop discipline on top.
+  const deepImpactSection = options?.deep
+    ? `\n\n## Deep mode — find REAL callers with the tools (IMPORTANT)
+You have verification tools (find_references / search_code / read_file). Find the true blast \
+radius instead of guessing:
+- For each CHANGED symbol, run find_references (or search_code for the symbol name) to find \
+  what ACTUALLY references it across the repo — these are the real callers / blast radius. Do \
+  NOT invent callers from the diff alone.
+- read_file the changed symbol to verify the callees — what it now calls/constructs/depends on.
+- DROP any caller or callee you cannot substantiate from what the tools show — a guessed edge \
+  must not appear. A small, REAL blast radius beats a large speculative one.`
     : ''
 
-  const system = `You are an expert code reviewer assistant. Trace the EXECUTION PATH this pull \
-request changes and respond with JSON ONLY — no explanation, no markdown, no code fences, and \
-absolutely NO Mermaid syntax. Your response must be valid JSON matching this shape exactly:
+  const system = `You are an expert code reviewer assistant. Map the CHANGE IMPACT (blast \
+radius) of this pull request and respond with JSON ONLY — no explanation, no markdown, no code \
+fences, and absolutely NO Mermaid syntax. Your response must be valid JSON matching this shape \
+exactly:
 
 {
   "kind": "flow" | "module",
   "before": { "nodes": [], "edges": [] },
   "after": { "nodes": [], "edges": [] },
-  "flow": {
-    "steps": [
+  "impact": {
+    "changed": [
       {
-        "id": "<unique-id>",
-        "label": "<what happens, ≤6 words>",
-        "file": "<path the step lives in, optional>",
-        "symbol": "<function/symbol, optional>",
-        "kind": "entry" | "call" | "branch" | "effect" | "return",
-        "change": "added" | "changed" | "unchanged" | "removed"
+        "symbol": "<changed function/class/method/endpoint>",
+        "file": "<path it lives in, optional>",
+        "kind": "added" | "changed" | "removed"
       }
     ],
-    "transitions": [
-      { "from": "<step-id>", "to": "<step-id>", "label": "<optional>", "condition": "<optional branch condition>" }
+    "callers": [
+      { "symbol": "<what references a changed symbol>", "file": "<path, optional>" }
+    ],
+    "callees": [
+      { "symbol": "<what the changed code now calls/depends on>", "file": "<path, optional>" }
     ]
   }
 }
 
-What to produce — ONE delta-annotated execution flow (NOT before/after):
-- Trace the path the change touches: start at the ENTRY POINT(s) the change affects (a request \
-  handler, an endpoint, a job, or the function under test), follow the calls through to the \
-  EFFECT (a DB write, an API response, a state/store change), and end at the return/result.
-- Each step is one stop on that path. Mark each step's "change" from the diff: "added" (new \
-  step in this run), "changed" (existing step whose behavior changed), "removed" (a step the PR \
-  deletes from the path), "unchanged" (ambient step kept for context). The delta is visible in \
-  ONE view — added/changed/removed steps render visually distinct.
-- "kind" classifies the step for shape: "entry" (where the run starts), "call" (a function \
-  call), "branch" (a decision that fans out), "effect" (a side effect — DB/API/state), \
-  "return" (the result).
-- transitions are ORDERED edges between steps. A "branch" step may fan to ≥2 transitions, each \
-  with a "condition" label (e.g. "valid" / "invalid"). A loop is a back-edge labeled "for each \
-  …". Keep transitions consistent with the steps' ids.
-- Set each step's "file" to the path it lives in (so the reviewer can jump to it). Steps with \
-  no single file may omit it.
+What to produce — a TINY graph centred on the CHANGE (NOT the whole call chain):
+- changed: the symbols (functions / classes / methods / endpoints) this diff ADDS, CHANGES, or \
+  REMOVES. This is the centre of the blast radius. Mark each with "kind": "added" | "changed" | \
+  "removed".
+- callers: the 1-hop UPSTREAM neighbours — code that CALLS or REFERENCES the changed symbols. \
+  This is the blast radius: what is AFFECTED and could break. Prefer FEWER, high-confidence \
+  entries over padding.
+- callees: the 1-hop DOWNSTREAM neighbours — what the changed code now CALLS or DEPENDS ON. \
+  This is what the change reaches into.
+- Each entry is a SYMBOL plus (optionally) the file it lives in. Do not include unchanged \
+  plumbing that is neither a changed symbol nor a direct caller/callee — keep it tiny.
 
-Choosing kind:
-- "flow": the normal case for this task — the PR changes behavior / a call path.
-- "module": rarely; only when the change is purely structural with no runnable path.
+Choosing kind: keep "kind": "flow" (the legacy field is unused by this view). Use "module" \
+only for a purely structural change with no symbols.
 
-GRACEFUL FALLBACK (IMPORTANT — do NOT fabricate a flow):
-- If this PR has NO meaningful execution flow — a pure data/config/schema/dependency/styling \
-  change, generated output, or you genuinely cannot construct an accurate path — return \
-  "flow": { "steps": [], "transitions": [] } (an EMPTY flow). The UI renders an honest \
-  "no clear execution flow" note. An empty flow is a GOOD, expected outcome for such changes \
-  — never invent steps to fill the diagram.
+AUTO-SUPPRESS (IMPORTANT — do NOT fabricate a graph):
+- If this PR has NO meaningful blast radius — a pure data/config/schema/dependency/styling \
+  change, a CRUD/data tweak, generated output, or you genuinely cannot identify changed symbols \
+  with notable callers/callees — return "impact": { "changed": [], "callers": [], "callees": [] } \
+  (an EMPTY impact). The UI renders an honest "no notable call-graph impact" note. An empty \
+  impact is a GOOD, expected outcome for such changes — never invent symbols or edges to fill \
+  the diagram. OMIT trivial/no-impact changes rather than inventing a graph.
 
-DO NOT write any Mermaid syntax. The downstream serializer converts your flow data to Mermaid.
+DO NOT write any Mermaid syntax. The downstream serializer converts your impact data to Mermaid.
 
-Size & label constraints (IMPORTANT):
-- At most ${FLOW_MAX_STEPS} steps. If the real path is longer, GROUP / ELIDE trivial plumbing \
-  (logging, getters, glue) so the flow stays readable. Multiple independent changed paths → \
-  pick the most important 1–2; do not sprawl.
-- Step labels ≤ 6 words — name what happens, not a sentence (e.g. "validate input", not "this \
-  step validates the user's input").
-- Edge / condition labels ≤ 3 words. Emit NO explanatory prose anywhere — the output is JSON \
-  only.
+Size constraints (IMPORTANT):
+- At most ${IMPACT_MAX_PER_GROUP} entries in EACH of changed / callers / callees. If there are \
+  more, keep the most important by blast radius. Prefer FEWER, high-confidence entries.
+- Symbol names are bare identifiers (e.g. "fetchResults", not "calls fetchResults(query)"). \
+  Emit NO explanatory prose anywhere — the output is JSON only.
 
-${FEW_SHOT_EXAMPLE}${importGraphSection}${deepFlowSection}
+${FEW_SHOT_EXAMPLE}${importGraphSection}${deepImpactSection}
 
 Do not include any text outside the JSON object.`
 
