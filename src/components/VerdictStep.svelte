@@ -40,6 +40,7 @@
   import type { VerdictModelBreakdown } from '../lib/ai/run.svelte'
   import type { ModelCostRow } from '../lib/ai/modelCostBreakdown'
   import { buildReviewPrompt } from '../lib/ai/reviewPrompt'
+  import { buildReviewCommand, type ReviewExportFormat } from '../lib/github/reviewExport'
   import type { PrFile } from '../lib/github/types'
 
   interface Props {
@@ -337,6 +338,54 @@
     copied = true
     if (copyTimer) clearTimeout(copyTimer)
     copyTimer = setTimeout(() => { copied = false }, 2000)
+  }
+
+  // ---- Copy review command (GitHub only) ----
+  // Deterministic export: wrap the SAME GitHub review JSON payload submitReview
+  // would send into a paste-ready command in one of three formats. Posts the
+  // whole review (overall comment + verdict + every drafted line comment) to the
+  // PR WITHOUT installing the OAuth app. Like Copy-as-LLM-prompt, it NEVER
+  // submits or clears drafts.
+  //
+  // GitHub only: the payload + endpoint are GitHub-specific. Hidden for
+  // GitLab/Bitbucket. An absent provider is treated as GitHub (the demo route
+  // passes no provider but uses a GitHub PR) — mirrors the isSignedIn check.
+  const isGithubProvider = $derived(!provider || provider.id === 'github')
+
+  const REVIEW_FORMAT_HINTS: Record<ReviewExportFormat, string> = {
+    browser: 'Browser console — paste in devtools, needs a PAT',
+    gh: 'gh — uses your gh login (no token needed)',
+    curl: 'curl — needs $GITHUB_TOKEN',
+  }
+
+  let reviewFormat = $state<ReviewExportFormat>('browser')
+  let commandCopied = $state(false)
+  let commandCopyError = $state<string | null>(null)
+  let commandCopyTimer: ReturnType<typeof setTimeout> | undefined
+
+  async function handleCopyCommand() {
+    if (!canCopyPrompt) return
+    commandCopyError = null
+    const itemCount = store.count
+    const command = buildReviewCommand(reviewFormat, {
+      owner: prRef.owner,
+      repo: prRef.repo,
+      number: prRef.number,
+      commitId,
+      verdict,
+      body,
+      drafts: [...store.drafts],
+    })
+    try {
+      await copyFn(command)
+    } catch {
+      commandCopyError = 'Could not copy to clipboard.'
+      return
+    }
+    track('review_command_copied', { format: reviewFormat, item_count: itemCount })
+    commandCopied = true
+    if (commandCopyTimer) clearTimeout(commandCopyTimer)
+    commandCopyTimer = setTimeout(() => { commandCopied = false }, 2000)
   }
 
   // ---- Submit handler ----
@@ -641,6 +690,49 @@
       </button>
     </div>
 
+    {#if isGithubProvider}
+      <!-- Copy review command (GitHub only): a self-contained command that posts
+           the whole review to the PR without installing the OAuth app. Three
+           formats wrap the SAME review JSON. Deterministic export — never submits
+           or clears drafts. -->
+      <div class="review-command" data-testid="review-command">
+        <div class="review-command-row">
+          <label class="review-format-label" for="review-format-select">Format</label>
+          <select
+            id="review-format-select"
+            class="review-format-select"
+            bind:value={reviewFormat}
+            aria-label="Review command format"
+          >
+            <option value="browser">Browser console</option>
+            <option value="gh">gh CLI</option>
+            <option value="curl">curl</option>
+          </select>
+          <button
+            class="copy-command-btn"
+            type="button"
+            onclick={handleCopyCommand}
+            disabled={!canCopyPrompt}
+            aria-label="Copy review command"
+            title={canCopyPrompt
+              ? 'Copy a command that posts this whole review to the GitHub PR — no app install'
+              : 'Draft a comment or write an overall comment first'}
+          >
+            {commandCopied ? 'Copied ✓' : 'Copy review command'}
+          </button>
+        </div>
+        <p class="review-command-hint" aria-live="polite">
+          {#if commandCopyError}
+            <span class="copy-error">{commandCopyError}</span>
+          {:else if commandCopied}
+            Review command copied to clipboard.
+          {:else}
+            {REVIEW_FORMAT_HINTS[reviewFormat]}
+          {/if}
+        </p>
+      </div>
+    {/if}
+
     <!-- Transient confirmation / error, announced to assistive tech -->
     <p class="copy-status" role="status" aria-live="polite">
       {#if copyError}
@@ -804,6 +896,63 @@
   }
 
   .copy-status .copy-error {
+    color: var(--legend-removed-color);
+  }
+
+  /* ---- Copy review command (GitHub only) ---- */
+  .review-command {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .review-command-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .review-format-label {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .review-format-select {
+    /* Chrome (appearance/background/border/chevron) comes from the global select
+       primitive in app.css — do not re-declare it here. */
+    font-size: 0.9rem;
+  }
+
+  .copy-command-btn {
+    padding: 0.5rem 1.25rem;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font-size: 0.95rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .copy-command-btn:hover:not(:disabled) {
+    background: var(--surface-raised);
+  }
+
+  .copy-command-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .review-command-hint {
+    margin: 0;
+    min-height: 1.1rem;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+
+  .review-command-hint .copy-error {
     color: var(--legend-removed-color);
   }
 
