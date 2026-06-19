@@ -358,16 +358,57 @@
     curl: 'curl — needs $GITHUB_TOKEN',
   }
 
-  let reviewFormat = $state<ReviewExportFormat>('browser')
+  // The export formats, in menu order. Each menu item builds + copies its own
+  // format, so there's no separate "picked format" state — one click = copy.
+  const REVIEW_FORMATS: { id: ReviewExportFormat; label: string }[] = [
+    { id: 'browser', label: 'Browser console' },
+    { id: 'gh', label: 'gh CLI' },
+    { id: 'curl', label: 'curl' },
+  ]
+
   let commandCopied = $state(false)
   let commandCopyError = $state<string | null>(null)
   let commandCopyTimer: ReturnType<typeof setTimeout> | undefined
 
-  async function handleCopyCommand() {
+  // Split menu-button state (trigger opens a dropdown of the 3 formats).
+  let menuOpen = $state(false)
+  let menuTriggerEl = $state<HTMLButtonElement | null>(null)
+  function openMenu() {
     if (!canCopyPrompt) return
+    menuOpen = true
+  }
+  function closeMenu() { menuOpen = false }
+  function toggleMenu() { menuOpen ? closeMenu() : openMenu() }
+  function focusFirstItem() {
+    queueMicrotask(() => {
+      ;(document.querySelector('.review-cmd-dropdown [role="menuitem"]') as HTMLElement | null)?.focus()
+    })
+  }
+  function onTriggerKeydown(e: KeyboardEvent) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); openMenu(); focusFirstItem() }
+    else if (e.key === 'Escape') closeMenu()
+  }
+  function onMenuKeydown(e: KeyboardEvent) {
+    const items = [...(e.currentTarget as HTMLElement).querySelectorAll('[role="menuitem"]')] as HTMLElement[]
+    const i = items.indexOf(document.activeElement as HTMLElement)
+    if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus() }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus() }
+    else if (e.key === 'Escape') { e.preventDefault(); closeMenu(); menuTriggerEl?.focus() }
+  }
+  /** Close when focus leaves the whole menu (trigger + dropdown). */
+  function onMenuFocusOut(e: FocusEvent) {
+    const next = e.relatedTarget as Node | null
+    const root = (e.currentTarget as HTMLElement).closest('.review-cmd-menu')
+    if (root && next && root.contains(next)) return
+    closeMenu()
+  }
+
+  async function handleCopyCommand(format: ReviewExportFormat) {
+    if (!canCopyPrompt) return
+    closeMenu()
     commandCopyError = null
     const itemCount = store.count
-    const command = buildReviewCommand(reviewFormat, {
+    const command = buildReviewCommand(format, {
       owner: prRef.owner,
       repo: prRef.repo,
       number: prRef.number,
@@ -382,7 +423,7 @@
       commandCopyError = 'Could not copy to clipboard.'
       return
     }
-    track('review_command_copied', { format: reviewFormat, item_count: itemCount })
+    track('review_command_copied', { format, item_count: itemCount })
     commandCopied = true
     if (commandCopyTimer) clearTimeout(commandCopyTimer)
     commandCopyTimer = setTimeout(() => { commandCopied = false }, 2000)
@@ -688,50 +729,44 @@
       >
         {copied ? 'Copied ✓' : 'Copy as LLM prompt'}
       </button>
-    </div>
 
-    {#if isGithubProvider}
-      <!-- Copy review command (GitHub only): a self-contained command that posts
-           the whole review to the PR without installing the OAuth app. Three
-           formats wrap the SAME review JSON. Deterministic export — never submits
-           or clears drafts. -->
-      <div class="review-command" data-testid="review-command">
-        <div class="review-command-row">
-          <label class="review-format-label" for="review-format-select">Format</label>
-          <select
-            id="review-format-select"
-            class="review-format-select"
-            bind:value={reviewFormat}
-            aria-label="Review command format"
-          >
-            <option value="browser">Browser console</option>
-            <option value="gh">gh CLI</option>
-            <option value="curl">curl</option>
-          </select>
+      {#if isGithubProvider}
+        <!-- Copy review command (GitHub only): a split menu button. Pick a format
+             and it copies a self-contained command that posts the whole review to
+             the PR without installing the OAuth app. All three wrap the SAME review
+             JSON. Deterministic export — never submits or clears drafts. -->
+        <div class="review-cmd-menu" data-testid="review-command" onfocusout={onMenuFocusOut}>
           <button
             class="copy-command-btn"
             type="button"
-            onclick={handleCopyCommand}
+            bind:this={menuTriggerEl}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
             disabled={!canCopyPrompt}
-            aria-label="Copy review command"
+            onclick={toggleMenu}
+            onkeydown={onTriggerKeydown}
             title={canCopyPrompt
               ? 'Copy a command that posts this whole review to the GitHub PR — no app install'
               : 'Draft a comment or write an overall comment first'}
           >
-            {commandCopied ? 'Copied ✓' : 'Copy review command'}
+            {commandCopied ? 'Copied ✓' : 'Copy review command'}<span class="review-cmd-caret" aria-hidden="true">▾</span>
           </button>
-        </div>
-        <p class="review-command-hint" aria-live="polite">
-          {#if commandCopyError}
-            <span class="copy-error">{commandCopyError}</span>
-          {:else if commandCopied}
-            Review command copied to clipboard.
-          {:else}
-            {REVIEW_FORMAT_HINTS[reviewFormat]}
+          {#if menuOpen}
+            <div class="review-cmd-dropdown" role="menu" tabindex="-1" aria-label="Review command format" onkeydown={onMenuKeydown}>
+              {#each REVIEW_FORMATS as f (f.id)}
+                <button class="review-cmd-item" type="button" role="menuitem" onclick={() => handleCopyCommand(f.id)}>
+                  <span class="review-cmd-item-label">{f.label}</span>
+                  <span class="review-cmd-item-hint">{REVIEW_FORMAT_HINTS[f.id]}</span>
+                </button>
+              {/each}
+            </div>
           {/if}
-        </p>
-      </div>
-    {/if}
+          {#if commandCopyError}
+            <span class="copy-error" role="alert">{commandCopyError}</span>
+          {/if}
+        </div>
+      {/if}
+    </div>
 
     <!-- Transient confirmation / error, announced to assistive tech -->
     <p class="copy-status" role="status" aria-live="polite">
@@ -899,32 +934,17 @@
     color: var(--legend-removed-color);
   }
 
-  /* ---- Copy review command (GitHub only) ---- */
-  .review-command {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .review-command-row {
-    display: flex;
+  /* ---- Copy review command (GitHub only) — split menu button ---- */
+  .review-cmd-menu {
+    position: relative;
+    display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-
-  .review-format-label {
-    font-size: 0.85rem;
-    color: var(--text-muted);
-  }
-
-  .review-format-select {
-    /* Chrome (appearance/background/border/chevron) comes from the global select
-       primitive in app.css — do not re-declare it here. */
-    font-size: 0.9rem;
   }
 
   .copy-command-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
     padding: 0.5rem 1.25rem;
     border: 1px solid var(--hairline);
     border-radius: 6px;
@@ -945,14 +965,62 @@
     cursor: not-allowed;
   }
 
-  .review-command-hint {
-    margin: 0;
-    min-height: 1.1rem;
-    font-size: 0.82rem;
+  .review-cmd-caret {
+    font-size: 0.7em;
     color: var(--text-muted);
   }
 
-  .review-command-hint .copy-error {
+  .review-cmd-dropdown {
+    position: absolute;
+    z-index: 30;
+    top: calc(100% + 0.35rem);
+    left: 0;
+    min-width: 16rem;
+    max-width: min(24rem, 90vw);
+    padding: 0.25rem;
+    background: var(--surface-raised);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  .review-cmd-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.45rem 0.6rem;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .review-cmd-item:hover,
+  .review-cmd-item:focus-visible {
+    background: var(--surface-hover, rgba(127, 127, 127, 0.1));
+    outline: none;
+  }
+
+  .review-cmd-item-label {
+    font-size: 0.9rem;
+    font-weight: 500;
+  }
+
+  .review-cmd-item-hint {
+    font-size: 0.76rem;
+    color: var(--text-muted);
+  }
+
+  .review-cmd-menu .copy-error {
+    margin-left: 0.5rem;
+    font-size: 0.82rem;
     color: var(--legend-removed-color);
   }
 
