@@ -254,15 +254,15 @@ describe('Demo route', () => {
     expect(externalFetchCalls()).toEqual([])
   })
 
-  it('renders the flow-of-execution diagram on the Understand step (done, not "enable in settings")', async () => {
+  it('renders the change-impact diagram on the Understand step (done, not "enable in settings")', async () => {
     render(Demo)
 
     // The diagrams section reaches the rendered/done state: DiagramPanel's
-    // static "Execution flow" heading renders (Plan L flow view) — the flow
-    // diagram's own steps render into an async Mermaid SVG (not asserted here as
+    // static "Change impact" heading renders (blast-radius view) — the impact
+    // diagram's own nodes render into an async Mermaid SVG (not asserted here as
     // jsdom has no real SVG layout).
     // (Appears on the page section AND in the ContextRail → match all.)
-    expect((await screen.findAllByText(/Execution flow/i)).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText(/Change impact/i)).length).toBeGreaterThan(0)
 
     // The diagrams panel is NOT the muted "Disabled — enable in AI settings"
     // state (that copy lives inside .diagrams-panel when status==='disabled').

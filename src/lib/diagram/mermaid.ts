@@ -1,4 +1,4 @@
-import type { Graph, NodeStatus, ExecutionFlow, FlowChange, FlowStepKind } from './types'
+import type { Graph, NodeStatus, ChangeImpact, ImpactKind } from './types'
 
 export type { Graph, GraphResult } from './types'
 
@@ -179,130 +179,106 @@ export function graphToMermaid(
 }
 
 // ---------------------------------------------------------------------------
-// flowToMermaid (Plan L) — render an ExecutionFlow as a flowchart TD
+// impactToMermaid — render a ChangeImpact (blast-radius view) as a flowchart TD
 // ---------------------------------------------------------------------------
 
 /**
- * Result of serializing a flow. `mermaid` is empty when there are no steps —
- * the caller (DiagramPanel) then renders the honest "no clear execution flow"
- * fallback note instead of an empty diagram. `dropped` lists transition
- * endpoints that referenced an unknown step id (defensive; mirrors graph edges).
+ * Result of serializing a ChangeImpact. `mermaid` is empty when there is no
+ * changed symbol — the caller (DiagramPanel) then renders the honest
+ * "No notable call-graph impact" note instead of a forced/empty diagram (the
+ * AUTO-SUPPRESS path). `dropped` is reserved for parity with the graph
+ * serializer (impact composes into a Graph with no dangling edges, so it is
+ * always empty here).
  */
-export interface FlowMermaidResult {
+export interface ImpactMermaidResult {
   mermaid: string
   dropped: string[]
 }
 
-// A flow step's `change` reuses the four core status classDefs (added / removed
-// / changed / unchanged) so the dark+light palettes already cover it — no new
-// colours. `context` is graph-only and never used by flows.
-const FLOW_CHANGE_TO_STATUS: Record<FlowChange, NodeStatus> = {
+// The changed-symbol `kind` reuses the three change classDefs (added / removed
+// / changed) so both palettes already cover the centre — no new colours.
+const IMPACT_KIND_TO_STATUS: Record<ImpactKind, NodeStatus> = {
   added: 'added',
   removed: 'removed',
   changed: 'changed',
-  unchanged: 'unchanged',
+}
+
+/** Format a node label: `symbol` alone, or `symbol — file-basename` when a file is present. */
+function impactLabel(symbol: string, file?: string): string {
+  if (!file) return symbol
+  const base = file.split('/').pop() || file
+  return `${symbol} — ${base}`
 }
 
 /**
- * Wrap a (pre-escaped) label in the Mermaid shape delimiters for a step kind:
- *   - entry  → stadium  `([ … ])`  (the start of the run)
- *   - effect → subroutine `[[ … ]]` (a side effect: DB write, API response, …)
- *   - branch → rhombus  `{ … }`    (a decision point)
- *   - call / return → rectangle `[" … "]`
- * Entry/effect get distinct shapes where Mermaid supports it (per the plan);
- * call/return stay rectangles so the path reads as a straight line.
- */
-function flowNodeShape(kind: FlowStepKind, escaped: string): string {
-  switch (kind) {
-    case 'entry':
-      return `(["${escaped}"])`
-    case 'effect':
-      return `[["${escaped}"]]`
-    case 'branch':
-      return `{"${escaped}"}`
-    case 'call':
-    case 'return':
-    default:
-      return `["${escaped}"]`
-  }
-}
-
-/**
- * Serialize an ExecutionFlow to a Mermaid `flowchart TD` string.
+ * Compose a ChangeImpact into a status-bearing `Graph` for rendering.
  *
- * Contract:
- * - `flowchart TD` header; steps emitted in array order (deterministic).
- * - Step ids remapped to s0, s1, … (arbitrary id strings are safe).
- * - Each step coloured by `change` via the shared status classDefs (both
- *   palettes); shaped by `kind` (entry=stadium, effect=subroutine, branch=
- *   rhombus, call/return=rectangle).
- * - Transitions render in array order. `condition` (branch) takes precedence
- *   over `label` as the edge label. Transitions to/from an unknown step id are
- *   DROPPED and reported in `dropped`.
- * - Empty steps → `{ mermaid: '', dropped: [] }` (fallback signal).
+ * Layout (top → bottom): callers (de-emphasized `context`) → changed (centre,
+ * accent change status) → callees (de-emphasized `context`). Edges read
+ * `caller --calls--> changed` and `changed --uses--> callee`, both with the
+ * dotted `context` arrow so they sit as ambient blast-radius, not loud change
+ * edges. The two sides are distinguished by edge labels ("calls" vs "uses") and
+ * their position relative to the accent centre.
+ *
+ * Pure + deterministic. Node ids are namespaced (caller#i / changed#i /
+ * callee#i) so duplicate symbols across groups never collide. Each caller is
+ * wired to EVERY changed node, and each callee from EVERY changed node — a
+ * blast-radius view, not a precise per-symbol call graph.
  */
-export function flowToMermaid(
-  flow: ExecutionFlow,
+export function impactToGraph(impact: ChangeImpact): Graph {
+  const nodes: Graph['nodes'] = []
+  const edges: Graph['edges'] = []
+
+  const changedIds: string[] = []
+  for (let i = 0; i < impact.changed.length; i++) {
+    const c = impact.changed[i]
+    const id = `changed#${i}`
+    changedIds.push(id)
+    nodes.push({ id, label: impactLabel(c.symbol, c.file), status: IMPACT_KIND_TO_STATUS[c.kind] })
+  }
+
+  for (let i = 0; i < impact.callers.length; i++) {
+    const n = impact.callers[i]
+    const id = `caller#${i}`
+    nodes.push({ id, label: impactLabel(n.symbol, n.file), status: 'context' })
+    for (const cid of changedIds) {
+      edges.push({ from: id, to: cid, label: 'calls', status: 'context' })
+    }
+  }
+
+  for (let i = 0; i < impact.callees.length; i++) {
+    const n = impact.callees[i]
+    const id = `callee#${i}`
+    nodes.push({ id, label: impactLabel(n.symbol, n.file), status: 'context' })
+    for (const cid of changedIds) {
+      edges.push({ from: cid, to: id, label: 'uses', status: 'context' })
+    }
+  }
+
+  return { nodes, edges }
+}
+
+/**
+ * Serialize a ChangeImpact to a Mermaid `flowchart TD` string via impactToGraph
+ * + graphToMermaid. An impact with NO changed symbols → `{ mermaid: '', … }`
+ * (the auto-suppress signal). Deterministic.
+ */
+export function impactToMermaid(
+  impact: ChangeImpact,
   options?: { palette?: 'dark' | 'light' },
-): FlowMermaidResult {
-  const palette = options?.palette ?? 'dark'
-  if (flow.steps.length === 0) {
+): ImpactMermaidResult {
+  if (impact.changed.length === 0) {
     return { mermaid: '', dropped: [] }
   }
+  return graphToMermaid(impactToGraph(impact), 'flow', options)
+}
 
-  // original step id → safe alias (s0, s1, …)
-  const idMap = new Map<string, string>()
-  for (let i = 0; i < flow.steps.length; i++) {
-    idMap.set(flow.steps[i].id, `s${i}`)
-  }
-
-  // Which change tags are present → which classDefs to emit (deterministic order).
-  const usedStatuses = new Set<NodeStatus>()
-  for (const step of flow.steps) usedStatuses.add(FLOW_CHANGE_TO_STATUS[step.change])
-
-  const lines: string[] = ['flowchart TD']
-
-  const defs = CLASS_DEFS[palette]
-  for (const status of STATUS_ORDER) {
-    if (usedStatuses.has(status)) {
-      lines.push(`    ${defs[status]}`)
-    }
-  }
-
-  // Node definitions (shape by kind, label escaped).
-  for (const step of flow.steps) {
-    const alias = idMap.get(step.id)!
-    const label = escapeLabel(step.label)
-    lines.push(`    ${alias}${flowNodeShape(step.kind, label)}`)
-  }
-
-  // Class assignments (colour by change → status class).
-  for (const step of flow.steps) {
-    const alias = idMap.get(step.id)!
-    lines.push(`    class ${alias} ${FLOW_CHANGE_TO_STATUS[step.change]}`)
-  }
-
-  // Transitions in array order. Drop any with unknown endpoints.
-  const dropped: string[] = []
-  for (const t of flow.transitions) {
-    const fromAlias = idMap.get(t.from)
-    const toAlias = idMap.get(t.to)
-    if (fromAlias === undefined) {
-      dropped.push(t.from)
-      continue
-    }
-    if (toAlias === undefined) {
-      dropped.push(t.to)
-      continue
-    }
-    // condition (branch) wins over a plain ordered label as the edge caption.
-    const caption = t.condition ?? t.label
-    if (caption !== undefined && caption !== '') {
-      lines.push(`    ${fromAlias} -- "${escapeLabel(caption)}" --> ${toAlias}`)
-    } else {
-      lines.push(`    ${fromAlias} --> ${toAlias}`)
-    }
-  }
-
-  return { mermaid: lines.join('\n'), dropped }
+/**
+ * Whether a ChangeImpact is worth rendering. EMPTY (no changed symbol) → the
+ * panel suppresses to an honest muted note. A changed symbol with zero callers
+ * AND zero callees still renders (the centre alone is informative — "this
+ * symbol changed; nothing references it / it calls nothing notable").
+ */
+export function impactIsRenderable(impact: ChangeImpact | undefined): boolean {
+  return !!impact && impact.changed.length > 0
 }

@@ -21,9 +21,8 @@ import {
   skillReviewPrompt,
   parseReadingOrder,
   stripReadingOrder,
-  FLOW_MAX_STEPS,
 } from './tasks'
-import { STORY_LAYERS } from './schemas'
+import { STORY_LAYERS, IMPACT_MAX_PER_GROUP } from './schemas'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
@@ -193,100 +192,94 @@ describe('diagramsPrompt', () => {
     expect(system).toContain('FEW_SHOT_EXAMPLE_START')
   })
 
-  // Plan L — flow-of-execution prompt
+  // change-impact / blast-radius prompt
 
-  it('instructs the model to TRACE THE EXECUTION PATH the change touches', () => {
+  it('asks for CHANGED symbols + callers + callees (NOT execution steps)', () => {
     const { system } = diagramsPrompt(makeCtx())
-    expect(system.toLowerCase()).toContain('execution path')
-    // entry → effect framing
-    expect(system.toLowerCase()).toContain('entry')
-    expect(system.toLowerCase()).toContain('effect')
+    expect(system).toContain('"impact"')
+    expect(system).toContain('"changed"')
+    expect(system).toContain('"callers"')
+    expect(system).toContain('"callees"')
+    // The retired flow framing must be gone.
+    expect(system).not.toContain('"transitions"')
+    expect(system).not.toContain('execution path')
   })
 
-  it('system prompt mentions the flow shape: steps + transitions', () => {
+  it('frames callers as the blast radius (what is affected) and callees as what it uses', () => {
     const { system } = diagramsPrompt(makeCtx())
-    expect(system).toContain('"flow"')
-    expect(system).toContain('"steps"')
-    expect(system).toContain('"transitions"')
+    expect(system.toLowerCase()).toMatch(/blast radius|affected/)
+    expect(system.toLowerCase()).toMatch(/calls or references|references the changed/)
+    expect(system.toLowerCase()).toMatch(/depends on|calls or depends/)
   })
 
-  it('system prompt advertises the step kind enum values', () => {
-    const { system } = diagramsPrompt(makeCtx())
-    for (const kind of ['"entry"', '"call"', '"branch"', '"effect"', '"return"']) {
-      expect(system).toContain(kind)
-    }
-  })
-
-  it('system prompt advertises the four change enum values', () => {
+  it('system prompt advertises the three changed-kind enum values', () => {
     const { system } = diagramsPrompt(makeCtx())
     expect(system).toContain('"added"')
-    expect(system).toContain('"removed"')
     expect(system).toContain('"changed"')
-    expect(system).toContain('"unchanged"')
+    expect(system).toContain('"removed"')
   })
 
-  it('system prompt tells the model to set each step file (for jump/coverage)', () => {
+  it('system prompt tells the model to set each entry file (for jump/grounding)', () => {
     const { system } = diagramsPrompt(makeCtx())
     expect(system).toContain('"file"')
+    expect(system).toContain('"symbol"')
   })
 
-  it('system prompt instructs the graceful empty-flow fallback (no fabrication)', () => {
+  it('system prompt instructs the AUTO-SUPPRESS empty impact (no fabrication)', () => {
     const { system } = diagramsPrompt(makeCtx())
-    expect(system.toLowerCase()).toContain('no clear execution flow')
-    expect(system).toMatch(/empty flow|"steps": \[\]/i)
-    expect(system).toMatch(/do not fabricate|never invent|do not fabricate a flow/i)
+    expect(system.toLowerCase()).toContain('no notable call-graph impact')
+    expect(system).toMatch(/empty impact|"changed": \[\]/i)
+    expect(system).toMatch(/do not fabricate|never invent|omit trivial/i)
   })
 
-  it('system prompt instructs the flow step cap', () => {
+  it('system prompt instructs the per-group cap', () => {
     const { system } = diagramsPrompt(makeCtx())
-    expect(system).toContain(String(FLOW_MAX_STEPS))
-    expect(FLOW_MAX_STEPS).toBe(14)
+    expect(system).toContain(String(IMPACT_MAX_PER_GROUP))
+    expect(IMPACT_MAX_PER_GROUP).toBe(6)
   })
 
-  it('few-shot example demonstrates a flow with steps + change tags', () => {
+  it('few-shot example demonstrates an impact with changed + callers + callees', () => {
     const { system } = diagramsPrompt(makeCtx())
     const start = system.indexOf('FEW_SHOT_EXAMPLE_START')
     const end = system.indexOf('FEW_SHOT_EXAMPLE_END')
     expect(start).toBeGreaterThan(-1)
     const block = system.slice(start, end)
-    expect(block).toContain('"flow"')
-    expect(block).toContain('"kind"')
-    expect(block).toContain('"change"')
-    expect(block).toContain('"transitions"')
+    expect(block).toContain('"impact"')
+    expect(block).toContain('"changed"')
+    expect(block).toContain('"callers"')
+    expect(block).toContain('"callees"')
   })
 })
 
 // ---------------------------------------------------------------------------
-// diagramsPrompt — deep mode (follow the call chain; Plan L)
+// diagramsPrompt — deep mode (find REAL callers with the tools)
 // ---------------------------------------------------------------------------
 
-describe('diagramsPrompt — deep mode (call chain)', () => {
-  it('single-pass (default / deep:false) omits the deep call-chain section', () => {
+describe('diagramsPrompt — deep mode (real callers)', () => {
+  it('single-pass (default / deep:false) omits the deep real-callers section', () => {
     const { system: def } = diagramsPrompt(makeCtx())
     const { system: off } = diagramsPrompt(makeCtx(), { deep: false })
-    expect(def).not.toContain('follow the real call chain')
-    expect(off).not.toContain('follow the real call chain')
+    expect(def).not.toContain('find REAL callers')
+    expect(off).not.toContain('find REAL callers')
     // Default and explicit deep:false are byte-identical
     expect(def).toBe(off)
   })
 
-  it('deep mode tells the model to USE THE TOOLS to follow the call chain', () => {
+  it('deep mode tells the model to USE THE TOOLS (find_references/search_code) for real callers', () => {
     const { system } = diagramsPrompt(makeCtx(), { deep: true })
-    expect(system.toLowerCase()).toContain('follow the real call chain')
-    expect(system).toMatch(/read_file|search_code/)
-    // trace entry → effect using tools
-    expect(system.toLowerCase()).toContain('entry')
+    expect(system.toLowerCase()).toContain('find real callers')
+    expect(system).toMatch(/find_references|search_code/)
   })
 
-  it('deep mode tells the model to DROP steps it cannot substantiate', () => {
+  it('deep mode tells the model to DROP callers/callees it cannot substantiate', () => {
     const { system } = diagramsPrompt(makeCtx(), { deep: true })
-    expect(system.toLowerCase()).toMatch(/drop any step|cannot substantiate/)
+    expect(system.toLowerCase()).toMatch(/drop any caller or callee|cannot substantiate/)
   })
 
-  it('deep mode keeps the flow shape and the no-Mermaid rule', () => {
+  it('deep mode keeps the impact shape and the no-Mermaid rule', () => {
     const { system } = diagramsPrompt(makeCtx(), { deep: true })
-    expect(system).toContain('"flow"')
-    expect(system).toContain('"steps"')
+    expect(system).toContain('"impact"')
+    expect(system).toContain('"changed"')
     expect(system.toLowerCase()).toContain('mermaid')
   })
 })
@@ -1765,23 +1758,23 @@ describe('alternativesPrompt — v11 one-sentence caps', () => {
 })
 
 // ---------------------------------------------------------------------------
-// diagramsPrompt — v11 terse edge labels + no explanatory prose
+// diagramsPrompt — terse output + no explanatory prose (change-impact)
 // ---------------------------------------------------------------------------
 
-describe('diagramsPrompt — terse labels (Plan L flow)', () => {
-  it('caps edge/condition labels at ≤3 words', () => {
-    const { system } = diagramsPrompt(makeCtx())
-    expect(system).toMatch(/Edge \/ condition labels ≤ 3 words/i)
-  })
-
-  it('forbids explanatory prose in the flow output', () => {
+describe('diagramsPrompt — terse labels (change-impact)', () => {
+  it('forbids explanatory prose in the impact output', () => {
     const { system } = diagramsPrompt(makeCtx())
     expect(system).toMatch(/Emit NO explanatory prose/i)
   })
 
-  it('caps step labels at ≤6 words', () => {
+  it('instructs bare symbol identifiers (not call expressions)', () => {
     const { system } = diagramsPrompt(makeCtx())
-    expect(system).toMatch(/Step labels ≤ 6 words/i)
+    expect(system).toMatch(/bare identifiers/i)
+  })
+
+  it('caps each group at the per-group bound', () => {
+    const { system } = diagramsPrompt(makeCtx())
+    expect(system).toMatch(/At most 6 entries in EACH/i)
   })
 })
 
@@ -1970,8 +1963,8 @@ describe('storyOrderPrompt', () => {
 })
 
 describe('PROMPT_VERSION', () => {
-  it('is bumped to 23 (verify absence-claims — fail-closed floor)', () => {
-    expect(PROMPT_VERSION).toBe(23)
+  it('is bumped to 24 (change-impact / blast-radius diagram replaces flow)', () => {
+    expect(PROMPT_VERSION).toBe(24)
   })
 })
 

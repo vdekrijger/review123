@@ -15,7 +15,8 @@ import {
   validateTestInsight,
   validateCoachResult,
   validateAlternativesResult,
-  validateFlow,
+  validateChangeImpact,
+  IMPACT_MAX_PER_GROUP,
 } from './schemas'
 
 // ---------------------------------------------------------------------------
@@ -1427,105 +1428,138 @@ describe('appendCatchAllStep (Plan K — structural 100% coverage)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// validateFlow (Plan L) + validateGraphResult with flow
+// validateChangeImpact (change-impact / blast-radius) + validateGraphResult
 // ---------------------------------------------------------------------------
 
-describe('validateFlow', () => {
-  const validFlow = {
-    steps: [
-      { id: 'h', label: 'handleSubmit', file: 'src/handler.ts', symbol: 'handleSubmit', kind: 'entry', change: 'changed' },
-      { id: 's', label: 'write DB', file: 'src/store.ts', kind: 'effect', change: 'added' },
-    ],
-    transitions: [{ from: 'h', to: 's', condition: 'valid' }],
+describe('validateChangeImpact', () => {
+  const validImpact = {
+    changed: [{ symbol: 'useSearch', file: 'src/search/useSearch.ts', kind: 'changed' }],
+    callers: [{ symbol: 'SearchBox', file: 'src/search/SearchBox.tsx' }],
+    callees: [{ symbol: 'fetchResults', file: 'src/search/api.ts' }, { symbol: 'AbortController' }],
   }
 
-  it('accepts a well-formed flow', () => {
-    expect(validateFlow(validFlow)).not.toBeNull()
+  it('accepts a well-formed impact', () => {
+    expect(validateChangeImpact(validImpact)).not.toBeNull()
   })
 
-  it('accepts an empty steps array (graceful-fallback signal)', () => {
-    expect(validateFlow({ steps: [], transitions: [] })).not.toBeNull()
+  it('accepts an EMPTY impact (auto-suppress signal)', () => {
+    expect(validateChangeImpact({ changed: [], callers: [], callees: [] })).not.toBeNull()
   })
 
-  it('accepts steps without optional file/symbol', () => {
-    const x = { steps: [{ id: 'a', label: 'go', kind: 'return', change: 'unchanged' }], transitions: [] }
-    expect(validateFlow(x)).not.toBeNull()
+  it('accepts changed/caller/callee entries without the optional file', () => {
+    const x = { changed: [{ symbol: 'a', kind: 'added' }], callers: [{ symbol: 'b' }], callees: [{ symbol: 'c' }] }
+    expect(validateChangeImpact(x)).not.toBeNull()
   })
 
-  it('tolerates extra keys on step, transition, and root', () => {
+  it('accepts all three changed kind enum values', () => {
+    for (const kind of ['added', 'changed', 'removed']) {
+      const x = { changed: [{ symbol: 's', kind }], callers: [], callees: [] }
+      expect(validateChangeImpact(x)).not.toBeNull()
+    }
+  })
+
+  it('tolerates extra keys on entries and root (forward-compatible)', () => {
     const x = {
-      steps: [{ id: 'a', label: 'go', kind: 'call', change: 'added', extra: 1 }],
-      transitions: [{ from: 'a', to: 'a', label: 'loop', junk: true }],
+      changed: [{ symbol: 'a', kind: 'changed', extra: 1 }],
+      callers: [{ symbol: 'b', junk: true }],
+      callees: [],
       meta: 'ignored',
     }
-    expect(validateFlow(x)).not.toBeNull()
+    expect(validateChangeImpact(x)).not.toBeNull()
   })
 
-  it('rejects an invalid kind enum', () => {
-    const x = { steps: [{ id: 'a', label: 'go', kind: 'sideways', change: 'added' }], transitions: [] }
-    expect(validateFlow(x)).toBeNull()
+  it('rejects an invalid changed kind enum', () => {
+    const x = { changed: [{ symbol: 's', kind: 'modified' }], callers: [], callees: [] }
+    expect(validateChangeImpact(x)).toBeNull()
   })
 
-  it('rejects an invalid change enum', () => {
-    const x = { steps: [{ id: 'a', label: 'go', kind: 'call', change: 'context' }], transitions: [] }
-    expect(validateFlow(x)).toBeNull()
+  it('rejects a non-string symbol', () => {
+    expect(validateChangeImpact({ changed: [{ symbol: 42, kind: 'added' }], callers: [], callees: [] })).toBeNull()
+    expect(validateChangeImpact({ changed: [], callers: [{ symbol: 7 }], callees: [] })).toBeNull()
   })
 
-  it('rejects a non-string label', () => {
-    const x = { steps: [{ id: 'a', label: 42, kind: 'call', change: 'added' }], transitions: [] }
-    expect(validateFlow(x)).toBeNull()
+  it('rejects a non-string file', () => {
+    expect(validateChangeImpact({ changed: [{ symbol: 's', file: 3, kind: 'added' }], callers: [], callees: [] })).toBeNull()
   })
 
-  it('rejects a transition missing from/to', () => {
-    const x = { steps: [{ id: 'a', label: 'go', kind: 'call', change: 'added' }], transitions: [{ from: 'a' }] }
-    expect(validateFlow(x)).toBeNull()
+  it('rejects a missing changed kind', () => {
+    expect(validateChangeImpact({ changed: [{ symbol: 's' }], callers: [], callees: [] })).toBeNull()
   })
 
-  it('rejects a non-array steps / transitions', () => {
-    expect(validateFlow({ steps: {}, transitions: [] })).toBeNull()
-    expect(validateFlow({ steps: [], transitions: 'x' })).toBeNull()
+  it('rejects a non-array changed / callers / callees', () => {
+    expect(validateChangeImpact({ changed: {}, callers: [], callees: [] })).toBeNull()
+    expect(validateChangeImpact({ changed: [], callers: 'x', callees: [] })).toBeNull()
+    expect(validateChangeImpact({ changed: [], callers: [], callees: null })).toBeNull()
+  })
+
+  it('enforces the per-group cap (more than IMPACT_MAX_PER_GROUP → null)', () => {
+    const over = Array.from({ length: IMPACT_MAX_PER_GROUP + 1 }, (_, i) => ({ symbol: `c${i}` }))
+    expect(validateChangeImpact({ changed: [], callers: over, callees: [] })).toBeNull()
+    const overChanged = Array.from({ length: IMPACT_MAX_PER_GROUP + 1 }, (_, i) => ({ symbol: `c${i}`, kind: 'changed' }))
+    expect(validateChangeImpact({ changed: overChanged, callers: [], callees: [] })).toBeNull()
+  })
+
+  it('accepts exactly IMPACT_MAX_PER_GROUP entries (cap is inclusive)', () => {
+    const atCap = Array.from({ length: IMPACT_MAX_PER_GROUP }, (_, i) => ({ symbol: `c${i}` }))
+    expect(validateChangeImpact({ changed: [], callers: atCap, callees: atCap })).not.toBeNull()
   })
 
   it('rejects non-objects', () => {
-    expect(validateFlow(null)).toBeNull()
-    expect(validateFlow([])).toBeNull()
-    expect(validateFlow('flow')).toBeNull()
+    expect(validateChangeImpact(null)).toBeNull()
+    expect(validateChangeImpact([])).toBeNull()
+    expect(validateChangeImpact('impact')).toBeNull()
+  })
+
+  it('IMPACT_MAX_PER_GROUP is a sane small bound', () => {
+    expect(IMPACT_MAX_PER_GROUP).toBe(6)
   })
 })
 
-describe('validateGraphResult with flow', () => {
+describe('validateGraphResult with impact', () => {
   const base = {
     kind: 'flow',
     before: { nodes: [], edges: [] },
     after: { nodes: [], edges: [] },
   }
 
-  it('accepts a result carrying a valid flow', () => {
+  it('accepts a result carrying a valid impact', () => {
     const x = {
+      ...base,
+      impact: { changed: [{ symbol: 'a', kind: 'added' }], callers: [], callees: [] },
+    }
+    const out = validateGraphResult(x)
+    expect(out).not.toBeNull()
+    expect(out?.impact?.changed.length).toBe(1)
+  })
+
+  it('accepts a result with an EMPTY impact (suppress)', () => {
+    const out = validateGraphResult({ ...base, impact: { changed: [], callers: [], callees: [] } })
+    expect(out).not.toBeNull()
+    expect(out?.impact?.changed).toEqual([])
+  })
+
+  it('rejects a result whose impact is malformed', () => {
+    const x = { ...base, impact: { changed: [{ symbol: 'a', kind: 'bad' }], callers: [], callees: [] } }
+    expect(validateGraphResult(x)).toBeNull()
+  })
+
+  it('stays backward compatible — a result without impact validates', () => {
+    expect(validateGraphResult(base)).not.toBeNull()
+    expect(validateGraphResult(base)?.impact).toBeUndefined()
+  })
+
+  it('an OLD cached flow-only result degrades to no-impact (unknown `flow` ignored, no throw)', () => {
+    // A retired Plan L payload carrying `flow` — the key is unknown to the new
+    // validator, so it is ignored and the result validates with impact absent.
+    const oldFlow = {
       ...base,
       flow: {
         steps: [{ id: 'a', label: 'go', kind: 'entry', change: 'added' }],
         transitions: [],
       },
     }
-    const out = validateGraphResult(x)
+    const out = validateGraphResult(oldFlow)
     expect(out).not.toBeNull()
-    expect(out?.flow?.steps.length).toBe(1)
-  })
-
-  it('accepts a result with an empty-steps flow (fallback)', () => {
-    const out = validateGraphResult({ ...base, flow: { steps: [], transitions: [] } })
-    expect(out).not.toBeNull()
-    expect(out?.flow?.steps).toEqual([])
-  })
-
-  it('rejects a result whose flow is malformed', () => {
-    const x = { ...base, flow: { steps: [{ id: 'a', label: 'go', kind: 'bad', change: 'added' }], transitions: [] } }
-    expect(validateGraphResult(x)).toBeNull()
-  })
-
-  it('stays backward compatible — a result without flow validates', () => {
-    expect(validateGraphResult(base)).not.toBeNull()
-    expect(validateGraphResult(base)?.flow).toBeUndefined()
+    expect(out?.impact).toBeUndefined()
   })
 })

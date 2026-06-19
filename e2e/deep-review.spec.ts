@@ -84,18 +84,20 @@ const ALTERNATIVES_RESULT = {
   alternatives: [],
 }
 
-// Deep-flow result (Plan L): the deep diagram task follows the real call chain
-// with the tools and emits an execution flow whose steps carry change tags.
+// Deep change-impact result: the deep diagram task finds the REAL callers with
+// the tools and emits a blast-radius view whose changed symbols carry change
+// kinds (a changed + an added symbol → both classDefs round-trip).
 const DIAGRAM_RESULT = {
   kind: 'flow',
   before: { nodes: [], edges: [] },
   after: { nodes: [], edges: [] },
-  flow: {
-    steps: [
-      { id: 'entry', label: 'handleFeature', file: 'src/feature.ts', kind: 'entry', change: 'changed' },
-      { id: 'save', label: 'persist feature', file: 'src/feature.ts', kind: 'effect', change: 'added' },
+  impact: {
+    changed: [
+      { symbol: 'handleFeature', file: 'src/feature.ts', kind: 'changed' },
+      { symbol: 'persistFeature', file: 'src/feature.ts', kind: 'added' },
     ],
-    transitions: [{ from: 'entry', to: 'save' }],
+    callers: [{ symbol: 'route', file: 'src/router.ts' }],
+    callees: [{ symbol: 'db', file: 'src/db.ts' }],
   },
 }
 
@@ -311,14 +313,14 @@ test('deep review: 2-round tool conversation renders verdict with the tool-call 
   await expect(testsPanel).toContainText('extends the existing flow')
   await expect(testsPanel.locator('.ai-deep-footer')).toHaveText(/Deep review: verified with 1 tool call/)
 
-  // Diagram task ALSO ran through the deep harness (same toggle): its execution
-  // flow renders with the steps' change classes (added + changed), plus the same
-  // tool-call footer.
+  // Diagram task ALSO ran through the deep harness (same toggle): its change-impact
+  // view renders with the changed symbols' status classes (added + changed), plus
+  // the same tool-call footer.
   const diagramsPanel = page.locator('details.diagrams-panel')
   await expect(diagramsPanel).toBeVisible({ timeout: 20_000 })
   await diagramsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
-  // The flow SVG renders; mermaid injects a <style> block with the change-tag
-  // classDefs (added/changed), proving the flow round-trips through the
+  // The impact SVG renders; mermaid injects a <style> block with the status
+  // classDefs (added/changed), proving the impact round-trips through the
   // deterministic serializer end-to-end.
   const flowSvg = diagramsPanel.locator('.diagram-container--full svg').first()
   await expect(flowSvg).toBeVisible({ timeout: 20_000 })

@@ -21,7 +21,7 @@
    * v3 cached results without changeMap fall back to the before/after layout.
    */
   import { track } from '../lib/analytics/analytics'
-  import { graphToMermaid, flowToMermaid } from '../lib/diagram/mermaid'
+  import { graphToMermaid, impactToMermaid, impactIsRenderable } from '../lib/diagram/mermaid'
   import { getMermaid } from '../lib/diagram/mermaidInit'
   import type { GraphResult } from '../lib/diagram/types'
   import { resolvedTheme } from '../lib/settings/appearance.svelte'
@@ -58,7 +58,7 @@
   let { result, panelState, highlightFiles = [], doneFiles = [], visitedFiles = [], onnodeclick = null }: Props = $props()
 
   // Containers for Mermaid SVG output
-  let flowContainer = $state<HTMLDivElement | null>(null)
+  let impactContainer = $state<HTMLDivElement | null>(null)
   let changeMapContainer = $state<HTMLDivElement | null>(null)
   let beforeContainer = $state<HTMLDivElement | null>(null)
   let afterContainer = $state<HTMLDivElement | null>(null)
@@ -157,45 +157,49 @@
     return result.changeMap.nodes.map((n) => n.label)
   }
 
-  // ---- Flow-mode (Plan L): does the result carry an execution flow? ----------
-  // A flow with steps is the primary view. A flow present but with NO steps is
-  // the graceful-fallback signal: render an honest note, never a forced diagram.
-  const hasFlow = $derived(!!result?.flow && result.flow.steps.length > 0)
-  const flowFallback = $derived(!!result?.flow && result.flow.steps.length === 0)
+  // ---- Impact-mode (change-impact / blast radius): does the result carry it? --
+  // An impact with at least one changed symbol is the primary view. An impact
+  // present but EMPTY (or absent — old cached/retired-flow results) is the
+  // AUTO-SUPPRESS signal: render an honest muted note, never a forced diagram.
+  const hasImpact = $derived(impactIsRenderable(result?.impact))
+  const impactSuppressed = $derived(!!result?.impact && !impactIsRenderable(result.impact))
 
-  // ---- Flow node ↔ file matching for click-jump + #114 coverage --------------
-  // Flow step nodes are labeled with the step's action text (e.g. "validate
-  // input"), NOT a file basename — so we resolve a rendered node to its file via
-  // the step's own `file` field (mapped by label). Steps without a file simply
+  // ---- Impact node ↔ file matching for click-jump + coverage -----------------
+  // Impact nodes are labeled "symbol — file-basename" (see impactLabel), so we
+  // resolve a rendered node to its file by matching the node's file basename
+  // against the changed/caller/callee entries. Entries without a file simply
   // don't check off / aren't clickable (graceful).
-  function flowFileForLabel(label: string): string | null {
+  function impactFileForLabel(label: string): string | null {
     const trimmed = label.trim()
-    if (!trimmed || !result?.flow) return null
-    for (const step of result.flow.steps) {
-      if (step.file && step.label.trim() === trimmed) return step.file
+    if (!trimmed || !result?.impact) return null
+    const all = [...result.impact.changed, ...result.impact.callers, ...result.impact.callees]
+    for (const entry of all) {
+      if (!entry.file) continue
+      const base = entry.file.split('/').pop() ?? entry.file
+      if (trimmed.includes(base) || trimmed.includes(entry.symbol)) return entry.file
     }
     return null
   }
 
   /**
-   * Decorate flow-step nodes after render: wire click-to-jump (by the step's
-   * file) and tag visited steps (#114 coverage). Maps a node to its file via the
-   * step.file field. No-ops when no onnodeclick and no visitedFiles. Each node is
-   * decorated once (dataset stamp), mirroring decorateStoryNodes.
+   * Decorate impact nodes after render: wire click-to-jump (by the entry's file)
+   * and tag visited/current nodes. No-ops when no onnodeclick and no
+   * visited/highlight inputs. Each node is decorated once (dataset stamp),
+   * mirroring decorateStoryNodes.
    */
-  function decorateFlowNodes(container: HTMLElement): void {
+  function decorateImpactNodes(container: HTMLElement): void {
     if (!onnodeclick && visitedFiles.length === 0 && highlightFiles.length === 0) return
     const nodes = container.querySelectorAll('g.node, .node')
     for (const node of nodes) {
       const label = node.textContent ?? ''
-      const file = flowFileForLabel(label)
+      const file = impactFileForLabel(label)
       if (file && visitedFiles.includes(file)) node.classList.add('story-node-visited')
       if (file && highlightFiles.includes(file)) node.classList.add('story-node-current')
       if (onnodeclick && file) {
         ;(node as HTMLElement).style.cursor = 'pointer'
         node.classList.add('story-node-clickable')
-        if (!(node as HTMLElement).dataset['flowWired']) {
-          ;(node as HTMLElement).dataset['flowWired'] = '1'
+        if (!(node as HTMLElement).dataset['impactWired']) {
+          ;(node as HTMLElement).dataset['impactWired'] = '1'
           node.addEventListener('click', (e) => {
             e.stopPropagation()
             onnodeclick?.(file)
@@ -205,30 +209,30 @@
     }
   }
 
-  // Render the execution-flow diagram (Plan L) — primary view when present.
+  // Render the change-impact diagram — primary view when present + renderable.
   $effect(() => {
-    if (!hasFlow || !result?.flow || !flowContainer) return
+    if (!hasImpact || !result?.impact || !impactContainer) return
 
-    const flowMermaid = flowToMermaid(result.flow, { palette: resolvedTheme() }).mermaid
+    const impactMermaid = impactToMermaid(result.impact, { palette: resolvedTheme() }).mermaid
     // Re-run when highlight/visited inputs change (re-decorate).
     void highlightFiles
     void visitedFiles
 
     let cancelled = false
 
-    async function renderFlow() {
-      const fc = flowContainer
-      if (!fc) return
-      const svg = await renderDiagram(fc, flowMermaid, 'flow')
+    async function renderImpact() {
+      const ic = impactContainer
+      if (!ic) return
+      const svg = await renderDiagram(ic, impactMermaid, 'impact')
       if (cancelled) return
-      decorateFlowNodes(fc)
+      decorateImpactNodes(ic)
       if (svg && !hasTracked) {
         hasTracked = true
         track('diagram_viewed')
       }
     }
 
-    renderFlow()
+    renderImpact()
 
     return () => {
       cancelled = true
@@ -312,11 +316,11 @@
     }
   })
 
-  function openOverlay(which: 'flow' | 'changemap' | 'before' | 'after') {
+  function openOverlay(which: 'impact' | 'changemap' | 'before' | 'after') {
     if (!result) return
     let container: HTMLDivElement | null
-    if (which === 'flow') {
-      container = flowContainer
+    if (which === 'impact') {
+      container = impactContainer
     } else if (which === 'changemap') {
       container = changeMapContainer
     } else if (which === 'before') {
@@ -346,12 +350,14 @@
     }
   }
 
-  // Derived: are both before/after graphs empty? A flow result (Plan L) is
-  // NEVER "empty" here — it renders the flow (hasFlow) or the honest fallback
-  // note (flowFallback), so it must not fall through to "No structural changes".
+  // Derived: are both before/after graphs empty? An impact result is NEVER
+  // "empty" here — it renders the impact (hasImpact) or the honest suppressed
+  // note (impactSuppressed), so it must not fall through to "No structural
+  // changes". An ABSENT impact (old cached / retired flow) still falls through
+  // to the before/after / changeMap path below.
   const bothEmpty = $derived(
     !result ||
-      (!result.flow &&
+      (!result.impact &&
         result.before.nodes.length === 0 &&
         result.after.nodes.length === 0 &&
         !result.changeMap)
@@ -378,35 +384,34 @@
   <div class="panel-empty" role="status">
     No structural changes detected.
   </div>
-{:else if flowFallback}
-  <!-- Plan L graceful fallback: the change has no meaningful execution flow
-       (pure data/config/schema/dependency change). Honest note, never a forced
-       or fabricated diagram. -->
-  <div class="panel-empty flow-fallback" role="status">
-    No clear execution flow for this change.
+{:else if impactSuppressed}
+  <!-- Auto-suppress: the change has no notable blast radius (pure
+       data/config/schema/CRUD/dependency change). Honest muted note, never a
+       forced or fabricated diagram. -->
+  <div class="panel-empty impact-suppressed" role="status">
+    No notable call-graph impact for this change.
   </div>
 {:else if result}
   <div class="diagram-panel">
-    {#if hasFlow}
-      <!-- Plan L: flow-of-execution (primary view, full width) -->
-      <div class="flow-section">
+    {#if hasImpact}
+      <!-- Change-impact / blast-radius (primary view, full width):
+           callers (de-emphasized) → changed (accent) → callees (de-emphasized). -->
+      <div class="impact-section">
         <div class="changemap-header">
-          <span class="changemap-title">Execution flow</span>
-          <div class="legend" aria-label="Execution flow legend">
-            <span class="chip legend-chip legend-added">Added</span>
-            <span class="chip legend-chip legend-changed">Changed</span>
-            <span class="chip legend-chip legend-removed">Removed</span>
-            <span class="chip legend-chip legend-unchanged">Unchanged</span>
+          <span class="changemap-title">Change impact</span>
+          <div class="legend" aria-label="Change impact legend">
+            <span class="chip legend-chip legend-changed">Affected by this change</span>
+            <span class="chip legend-chip legend-unchanged">This change uses</span>
           </div>
         </div>
         <div
           class="diagram-container diagram-container--full"
           role="button"
           tabindex="0"
-          aria-label="View execution flow full screen"
-          bind:this={flowContainer}
-          onclick={() => openOverlay('flow')}
-          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') openOverlay('flow') }}
+          aria-label="View change impact full screen"
+          bind:this={impactContainer}
+          onclick={() => openOverlay('impact')}
+          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') openOverlay('impact') }}
         ></div>
       </div>
     {:else if hasChangeMap}

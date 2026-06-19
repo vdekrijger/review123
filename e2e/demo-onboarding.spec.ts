@@ -55,13 +55,13 @@ test('landing CTA opens the demo with banner, summary, verdict, finding — no e
   await page.getByText('Why this verdict', { exact: true }).click()
   await expect(page.getByText(/Adds a 250ms debounce in useSearch/i)).toBeVisible()
 
-  // Diagrams: the demo ships a pre-generated flow-of-execution diagram (Plan L),
-  // so the Understand step shows the real flowchart — NOT the muted "enable in
-  // AI settings" disabled state. Expand the diagrams panel (its summary title is
-  // "Execution flow") and confirm the flow view renders with a Mermaid SVG.
+  // Diagrams: the demo ships a pre-generated change-impact / blast-radius view,
+  // so the Understand step shows the real diagram — NOT the muted "enable in
+  // AI settings" disabled state. Expand the diagrams panel (its in-panel title is
+  // "Change impact") and confirm the impact view renders with a Mermaid SVG.
   const diagramsPanel = page.locator('.diagrams-panel')
   await diagramsPanel.locator('summary.detail-summary').click()
-  await expect(diagramsPanel.locator('.changemap-title', { hasText: 'Execution flow' })).toBeVisible()
+  await expect(diagramsPanel.locator('.changemap-title', { hasText: 'Change impact' })).toBeVisible()
   await expect(diagramsPanel.locator('.diagram-container svg').first()).toBeVisible()
   await expect(diagramsPanel.locator('.ai-panel-disabled')).toHaveCount(0)
 

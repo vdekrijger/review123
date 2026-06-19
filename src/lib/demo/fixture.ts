@@ -660,107 +660,40 @@ export const demoTotalUsage: LlmUsage = usage(
 )
 
 // ---------------------------------------------------------------------------
-// Flow-of-execution diagram (Plan L) — the demo's sample diagram
+// Change-impact / blast-radius diagram — the demo's sample diagram
 // ---------------------------------------------------------------------------
 
 /**
- * Pre-generated flow-of-execution diagram for the demo PR — the flowchart the
- * Understand step (and ContextRail) shows in normal mode. It traces the
- * debounce/abort EXECUTION PATH across the demo's six files, top to bottom:
+ * Pre-generated change-impact (blast-radius) view for the demo PR — the tiny
+ * graph the Understand step (and ContextRail) shows in normal mode. It answers
+ * "what does this change touch?" centred on the changed `useSearch` hook:
  *
- *   entry  SearchBox onChange          (src/search/SearchBox.tsx, unchanged)
- *   call   useSearch(query) effect     (src/search/useSearch.ts, changed)
- *   branch query === ''?               (src/search/useSearch.ts)
- *   effect setTimeout(DEBOUNCE_MS)     (src/search/useSearch.ts, added)
- *   call   controller.abort() prev     (src/search/useSearch.ts, added)
- *   call   fetchResults(query, signal) (src/search/api.ts, changed)
- *   return setResults(rows)            (src/search/useSearch.ts)
+ *   callers (affected):  SearchBox            (src/search/SearchBox.tsx)
+ *   changed (centre):    useSearch (changed)  (src/search/useSearch.ts)
+ *   callees (uses):      fetchResults         (src/search/api.ts)
+ *                        AbortController       (constructed for cancellation)
+ *                        DEBOUNCE_MS           (src/search/config.ts)
  *
- * It uses the real FlowStepKind (entry|call|branch|effect|return) and FlowChange
- * (added|changed|unchanged|removed) enums. `kind: 'flow'` with EMPTY before/after
- * graphs is valid — the panel prefers `flow` when present. Conceptually valid
- * against validateFlow / validateGraphResult: every transition's from/to
- * references an existing step id, so flowToMermaid wires cleanly.
+ * `kind: 'flow'` with EMPTY before/after graphs is valid — the panel prefers
+ * `impact` when present + renderable. Curated (not a mechanical mirror of the
+ * diff): only the genuinely load-bearing 1-hop neighbours of the changed hook.
+ * Conceptually valid against validateChangeImpact / validateGraphResult.
  */
 export const demoGraph: GraphResult = {
   kind: 'flow',
   before: { nodes: [], edges: [] },
   after: { nodes: [], edges: [] },
-  flow: {
-    steps: [
-      {
-        id: 'onChange',
-        label: 'SearchBox onChange',
-        file: 'src/search/SearchBox.tsx',
-        symbol: 'SearchBox',
-        kind: 'entry',
-        change: 'unchanged',
-      },
-      {
-        id: 'useSearch',
-        label: 'useSearch(query) effect',
-        file: 'src/search/useSearch.ts',
-        symbol: 'useSearch',
-        kind: 'call',
-        change: 'changed',
-      },
-      {
-        id: 'emptyQuery',
-        label: "query === ''?",
-        file: 'src/search/useSearch.ts',
-        symbol: 'useSearch',
-        kind: 'branch',
-        change: 'changed',
-      },
-      {
-        id: 'clear',
-        label: 'setResults([])',
-        file: 'src/search/useSearch.ts',
-        symbol: 'useSearch',
-        kind: 'return',
-        change: 'unchanged',
-      },
-      {
-        id: 'debounce',
-        label: 'setTimeout(DEBOUNCE_MS)',
-        file: 'src/search/useSearch.ts',
-        symbol: 'useSearch',
-        kind: 'effect',
-        change: 'added',
-      },
-      {
-        id: 'abort',
-        label: 'controller.abort() prev',
-        file: 'src/search/useSearch.ts',
-        symbol: 'useSearch',
-        kind: 'call',
-        change: 'added',
-      },
-      {
-        id: 'fetch',
-        label: 'fetchResults(query, signal)',
-        file: 'src/search/api.ts',
-        symbol: 'fetchResults',
-        kind: 'call',
-        change: 'changed',
-      },
-      {
-        id: 'setResults',
-        label: 'setResults(rows)',
-        file: 'src/search/useSearch.ts',
-        symbol: 'useSearch',
-        kind: 'return',
-        change: 'unchanged',
-      },
+  impact: {
+    changed: [
+      { symbol: 'useSearch', file: 'src/search/useSearch.ts', kind: 'changed' },
     ],
-    transitions: [
-      { from: 'onChange', to: 'useSearch' },
-      { from: 'useSearch', to: 'emptyQuery' },
-      { from: 'emptyQuery', to: 'clear', condition: 'empty' },
-      { from: 'emptyQuery', to: 'debounce', condition: 'non-empty' },
-      { from: 'debounce', to: 'abort', label: 'after 250ms' },
-      { from: 'abort', to: 'fetch' },
-      { from: 'fetch', to: 'setResults' },
+    callers: [
+      { symbol: 'SearchBox', file: 'src/search/SearchBox.tsx' },
+    ],
+    callees: [
+      { symbol: 'fetchResults', file: 'src/search/api.ts' },
+      { symbol: 'AbortController' },
+      { symbol: 'DEBOUNCE_MS', file: 'src/search/config.ts' },
     ],
   },
 }

@@ -254,34 +254,26 @@ const ATTENTION_RESULT = {
   testFlags: [{ path: 'src/feature.ts', note: 'No test covers this change' }],
 }
 
-// Plan L contract: GRAPH_RESULT carries a flow-of-execution (steps + transitions
-// with change tags). before/after/changeMap kept empty/minimal for the type.
+// Change-impact contract: GRAPH_RESULT carries a blast-radius view (changed
+// symbols + callers + callees). before/after/changeMap kept empty for the type.
 const GRAPH_RESULT = {
   kind: 'flow',
   before: { nodes: [], edges: [] },
   after: { nodes: [], edges: [] },
-  flow: {
-    steps: [
-      { id: 'entry', label: 'handleFeature', file: 'src/feature.ts', kind: 'entry', change: 'changed' },
-      { id: 'validate', label: 'validate input', file: 'src/feature.ts', kind: 'branch', change: 'added' },
-      { id: 'save', label: 'write feature', file: 'src/feature.ts', kind: 'effect', change: 'added' },
-      { id: 'ret', label: 'return result', file: 'src/feature.ts', kind: 'return', change: 'unchanged' },
-    ],
-    transitions: [
-      { from: 'entry', to: 'validate' },
-      { from: 'validate', to: 'save', condition: 'valid' },
-      { from: 'save', to: 'ret' },
-    ],
+  impact: {
+    changed: [{ symbol: 'handleFeature', file: 'src/feature.ts', kind: 'changed' }],
+    callers: [{ symbol: 'route', file: 'src/router.ts' }],
+    callees: [{ symbol: 'validateInput', file: 'src/feature.ts' }],
   },
 }
 
-// Plan L fallback: a pure-data change has NO meaningful execution flow → the
-// model returns an EMPTY flow and the panel shows an honest note.
+// Suppress fallback: a pure-data change has NO meaningful blast radius → the
+// model returns an EMPTY impact and the panel shows an honest muted note.
 const GRAPH_RESULT_NO_FLOW = {
   kind: 'flow',
   before: { nodes: [], edges: [] },
   after: { nodes: [], edges: [] },
-  flow: { steps: [], transitions: [] },
+  impact: { changed: [], callers: [], callees: [] },
 }
 
 const VERDICT_RESULT = {
@@ -994,11 +986,11 @@ test('tests-panel: glance chip shows covered/gap counts; open panel shows checkl
 })
 
 // ---------------------------------------------------------------------------
-// Test 6: flow-of-execution — execution-flow panel renders flowchart nodes with
+// Test 6: change-impact — blast-radius panel renders flowchart nodes with
 // change classes + the legend (Plan L)
 // ---------------------------------------------------------------------------
 
-test('execution flow: panel renders flowchart nodes with change classes + legend', async ({
+test('change impact: panel renders flowchart nodes with status classes + legend', async ({
   page,
 }) => {
   await setupRoutes(page)
@@ -1012,31 +1004,31 @@ test('execution flow: panel renders flowchart nodes with change classes + legend
     page.getByRole('heading', { name: /Test PR: add feature/i }),
   ).toBeVisible({ timeout: 10_000 })
 
-  // Open the execution-flow detail panel inside UnderstandStep
-  const diagramsPanel = page.locator('details').filter({ hasText: 'Execution flow' }).first()
+  // Open the change-impact detail panel inside UnderstandStep
+  const diagramsPanel = page.locator('details').filter({ hasText: 'Change impact' }).first()
   await diagramsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
 
-  // The flow legend appears once the flow renders
-  const legend = page.locator('[aria-label="Execution flow legend"]').first()
+  // The impact legend appears once the diagram renders
+  const legend = page.locator('[aria-label="Change impact legend"]').first()
   await expect(legend).toBeVisible({ timeout: 20_000 })
-  await expect(legend.locator('.legend-chip.legend-added')).toContainText('Added')
-  await expect(legend.locator('.legend-chip.legend-changed')).toContainText('Changed')
+  await expect(legend.locator('.legend-chip.legend-changed')).toContainText('Affected by this change')
+  await expect(legend.locator('.legend-chip.legend-unchanged')).toContainText('This change uses')
 
   // The deterministic serializer emits classDef-styled nodes; mermaid injects a
-  // <style> block applying each change class. Its presence proves the flow's
-  // change tags (added + changed) round-trip through the serializer end-to-end.
-  const flowSvg = diagramsPanel.locator('.diagram-container--full svg').first()
-  await expect(flowSvg).toBeVisible({ timeout: 20_000 })
-  await expect(flowSvg.locator('style')).toContainText('.added', { timeout: 20_000 })
-  await expect(flowSvg.locator('style')).toContainText('.changed')
+  // <style> block applying each status class. Its presence proves the impact's
+  // changed (accent) + context (de-emphasized) nodes round-trip end-to-end.
+  const impactSvg = diagramsPanel.locator('.diagram-container--full svg').first()
+  await expect(impactSvg).toBeVisible({ timeout: 20_000 })
+  await expect(impactSvg.locator('style')).toContainText('.changed', { timeout: 20_000 })
+  await expect(impactSvg.locator('style')).toContainText('.context')
 })
 
 // ---------------------------------------------------------------------------
-// Test 6b: graceful fallback — a pure-data change (empty flow) renders the
-// honest "no clear execution flow" note instead of a forced diagram (Plan L)
+// Test 6b: auto-suppress — a pure-data change (empty impact) renders the honest
+// "no notable call-graph impact" note instead of a forced diagram
 // ---------------------------------------------------------------------------
 
-test('execution flow: empty flow renders the graceful fallback note', async ({ page }) => {
+test('change impact: empty impact renders the auto-suppress note', async ({ page }) => {
   await setupRoutes(page, { emptyFlow: true })
   await page.addInitScript((settings) => {
     localStorage.setItem('review123:settings', JSON.stringify(settings))
@@ -1048,11 +1040,11 @@ test('execution flow: empty flow renders the graceful fallback note', async ({ p
     page.getByRole('heading', { name: /Test PR: add feature/i }),
   ).toBeVisible({ timeout: 10_000 })
 
-  const diagramsPanel = page.locator('details').filter({ hasText: 'Execution flow' }).first()
+  const diagramsPanel = page.locator('details').filter({ hasText: 'Change impact' }).first()
   await diagramsPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
 
-  // Honest fallback note — never a forced/empty diagram.
-  await expect(diagramsPanel.getByText(/no clear execution flow/i)).toBeVisible({ timeout: 20_000 })
+  // Honest suppressed note — never a forced/empty diagram.
+  await expect(diagramsPanel.getByText(/no notable call-graph impact/i)).toBeVisible({ timeout: 20_000 })
 })
 
 // ---------------------------------------------------------------------------

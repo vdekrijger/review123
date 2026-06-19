@@ -69,19 +69,21 @@ const STORY_RESULT = {
   ],
 }
 
-// Plan L: the diagram task returns an execution flow whose steps carry the same
-// files as the story steps, so the flow doubles as the story progress map —
-// highlighting the current step's node (by step.file) and supporting click-jump.
+// The diagram task returns a change-impact view whose changed symbols carry the
+// same files as the story steps, so the impact graph doubles as the story
+// progress map — highlighting the current step's node (by file) and supporting
+// click-jump (decorateImpactNodes matches a node to its file by basename).
 const DIAGRAM_RESULT = {
   kind: 'flow',
   before: { nodes: [], edges: [] },
   after: { nodes: [], edges: [] },
-  flow: {
-    steps: [
-      { id: 'schema', label: 'add provider column', file: 'src/db/schema.ts', kind: 'entry', change: 'changed' },
-      { id: 'card', label: 'render provider badge', file: 'src/ui/Card.ts', kind: 'effect', change: 'changed' },
+  impact: {
+    changed: [
+      { symbol: 'addProviderColumn', file: 'src/db/schema.ts', kind: 'changed' },
+      { symbol: 'ProviderBadge', file: 'src/ui/Card.ts', kind: 'changed' },
     ],
-    transitions: [{ from: 'schema', to: 'card' }],
+    callers: [],
+    callees: [],
   },
 }
 
