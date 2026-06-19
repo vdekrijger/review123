@@ -1733,12 +1733,22 @@ describe('VerdictStep — Copy review command', () => {
     _setCaptureForTest(noopCapture)
   })
 
-  it('renders the format picker + copy button for a GitHub PR (provider absent → GitHub)', () => {
+  it('renders the Copy-review-command menu button for a GitHub PR (provider absent → GitHub), opening to the 3 formats', async () => {
+    const user = userEvent.setup()
+    const store = makeStore()
+    await store.upsert({ path: 'src/a.ts', line: 7, side: 'RIGHT', body: 'Rename this.' })
     render(VerdictStep, {
-      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit },
+      props: { prRef, commitId, store, prUrl, submitFn: okSubmit },
     })
-    expect(screen.getByRole('button', { name: /copy review command/i })).toBeInTheDocument()
-    expect(screen.getByLabelText(/review command format/i)).toBeInTheDocument()
+    const trigger = screen.getByRole('button', { name: /copy review command/i })
+    expect(trigger).toBeInTheDocument()
+    // The format menu is collapsed until the trigger is clicked.
+    expect(screen.queryByRole('menu', { name: /review command format/i })).toBeNull()
+    await user.click(trigger)
+    expect(screen.getByRole('menu', { name: /review command format/i })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /browser console/i })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /gh cli/i })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /curl/i })).toBeInTheDocument()
   })
 
   it('renders for an explicit GitHub provider', () => {
@@ -1781,6 +1791,7 @@ describe('VerdictStep — Copy review command', () => {
     })
 
     await user.click(screen.getByRole('button', { name: /copy review command/i }))
+    await user.click(screen.getByRole('menuitem', { name: /browser console/i }))
     expect(copyFn).toHaveBeenCalledTimes(1)
     const text = copyFn.mock.calls[0][0] as string
     expect(text).toContain('prompt(')
@@ -1798,8 +1809,8 @@ describe('VerdictStep — Copy review command', () => {
       props: { prRef, commitId, store, prUrl, submitFn: okSubmit, copyFn },
     })
 
-    await user.selectOptions(screen.getByLabelText(/review command format/i), 'gh')
     await user.click(screen.getByRole('button', { name: /copy review command/i }))
+    await user.click(screen.getByRole('menuitem', { name: /gh cli/i }))
 
     const text = copyFn.mock.calls[0][0] as string
     expect(text).toContain('gh api --method POST')
@@ -1817,8 +1828,8 @@ describe('VerdictStep — Copy review command', () => {
       props: { prRef, commitId, store, prUrl, submitFn: okSubmit, copyFn },
     })
 
-    await user.selectOptions(screen.getByLabelText(/review command format/i), 'curl')
     await user.click(screen.getByRole('button', { name: /copy review command/i }))
+    await user.click(screen.getByRole('menuitem', { name: /curl/i }))
 
     const text = copyFn.mock.calls[0][0] as string
     expect(text).toContain('GITHUB_TOKEN')
@@ -1837,7 +1848,9 @@ describe('VerdictStep — Copy review command', () => {
     })
 
     await user.click(screen.getByRole('button', { name: /copy review command/i }))
+    await user.click(screen.getByRole('menuitem', { name: /browser console/i }))
 
+    expect(copyFn).toHaveBeenCalledTimes(1)
     expect(submitFn).not.toHaveBeenCalled()
     expect(store.count).toBe(1)
   })
@@ -1855,6 +1868,7 @@ describe('VerdictStep — Copy review command', () => {
     })
 
     await user.click(screen.getByRole('button', { name: /copy review command/i }))
+    await user.click(screen.getByRole('menuitem', { name: /browser console/i }))
     expect(capture).toHaveBeenCalledWith('review_command_copied', { format: 'browser', item_count: 1 })
   })
 
