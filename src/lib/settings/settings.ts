@@ -246,6 +246,23 @@ export interface Settings {
    * new. Default OFF: toggling off is byte-identical to the prior UI.
    */
   showTokenCost: boolean
+  /**
+   * Per-browser Understand-step layout: the user's ORDERED list of page
+   * sections + whether each is enabled. Drives the order + visibility of the 8
+   * detail panels on step 1. Undefined/absent → the canonical registry order,
+   * all enabled (byte-identical to the pre-setting behavior). The id is a bare
+   * string here (validated against the section registry by
+   * resolveUnderstandSections) so this module needs no import of the
+   * component-dir registry. Unknown ids and runtime-hidden sections are handled
+   * by the resolver; this is purely the saved preference.
+   */
+  understandSections?: UnderstandSectionPref[]
+}
+
+/** One stored Understand-step section preference (ordered list element). */
+export interface UnderstandSectionPref {
+  id: string
+  enabled: boolean
 }
 
 /** Default task-mode matrix: every task 'standard' (today's behavior). */
@@ -457,6 +474,33 @@ function coerceTaskModes(obj: Record<string, unknown>): Record<AiTaskId, AiTaskM
   return defaultTaskModes()
 }
 
+/**
+ * Coerce a stored `understandSections` list. Tolerant of partial/garbage input:
+ *  • non-array → undefined (fall back to registry order at resolve time).
+ *  • each entry must be an object with a string `id`; bad entries are dropped.
+ *  • `enabled` is coerced to a boolean (missing/non-boolean → defaults to true,
+ *    i.e. only an explicit false disables).
+ *  • duplicate ids keep their FIRST occurrence.
+ * Ids are NOT validated against the registry here (kept registry-free); the
+ * resolver drops unknown / non-page ids. An empty resulting list is preserved
+ * (a deliberate "everything off" is still a stored preference) — only a
+ * genuinely non-array value yields undefined.
+ */
+function coerceUnderstandSections(raw: unknown): UnderstandSectionPref[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const seen = new Set<string>()
+  const result: UnderstandSectionPref[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const obj = entry as Record<string, unknown>
+    const id = obj['id']
+    if (typeof id !== 'string' || seen.has(id)) continue
+    seen.add(id)
+    result.push({ id, enabled: obj['enabled'] !== false })
+  }
+  return result
+}
+
 function coerce(raw: unknown): Partial<Settings> {
   if (typeof raw !== 'object' || raw === null) return {}
   const obj = raw as Record<string, unknown>
@@ -563,6 +607,11 @@ function coerce(raw: unknown): Partial<Settings> {
   }
   const showTokenCost = obj['showTokenCost']
   if (typeof showTokenCost === 'boolean') result.showTokenCost = showTokenCost
+
+  if ('understandSections' in obj) {
+    const sections = coerceUnderstandSections(obj['understandSections'])
+    if (sections !== undefined) result.understandSections = sections
+  }
 
   // Prefer explicit githubAuth; fall back to migrating legacy githubPat string
   if ('githubAuth' in obj) {
@@ -807,6 +856,20 @@ export const setTestFileDisplay = (v: TestFileDisplay) => save({ testFileDisplay
 export const setDiffWidth = (v: DiffWidth) => save({ diffWidth: v })
 export const setFocusMode = (v: FocusMode) => save({ focusMode: v })
 export const setShowTokenCost = (v: boolean) => save({ showTokenCost: v })
+
+/**
+ * Save the Understand-step layout preference (ordered + enable/disable list).
+ * Pass undefined (or null) to CLEAR the preference — the page falls back to the
+ * canonical registry order, all enabled. Entries are coerced (non-string ids
+ * dropped, `enabled` forced boolean, duplicates de-duped) before saving.
+ */
+export function setUnderstandSections(list: UnderstandSectionPref[] | null | undefined): void {
+  if (list == null) {
+    save({ understandSections: undefined })
+    return
+  }
+  save({ understandSections: coerceUnderstandSections(list) ?? [] })
+}
 
 /**
  * Normalize a GitLab host input.

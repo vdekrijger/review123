@@ -79,6 +79,96 @@ export const AI_SECTION_TASK: Partial<Record<SectionId, 'summary' | 'diagrams' |
   'verdict-evidence': 'verdict',
 }
 
+/**
+ * One stored Understand-step section preference: the section's stable id plus
+ * whether it is enabled. The user's ordered list of these (settings
+ * `understandSections`) drives the page panel order + visibility. Typed with a
+ * bare `string` id (not SectionId) so the settings module can store/coerce it
+ * without importing this component-dir registry (avoids an import cycle); the
+ * resolver below validates ids against the registry.
+ */
+export interface StoredUnderstandSection {
+  id: string
+  enabled: boolean
+}
+
+/** A resolved page section: its registry descriptor + whether it is enabled. */
+export interface ResolvedUnderstandSection {
+  descriptor: SectionDescriptor
+  enabled: boolean
+}
+
+/**
+ * Resolve the ordered+visible Understand-step page sections from the stored
+ * preference, against the canonical registry.
+ *
+ * Rules:
+ *  • Only `show.page` sections participate (rail-only / hidden ids never appear).
+ *  • Start from the STORED order, skipping ids that are unknown or not show.page.
+ *  • FORWARD-COMPAT MERGE: any show.page registry section NOT present in the
+ *    stored list is appended in its registry-relative position, enabled by
+ *    default — so a newly-added section shows up for existing users.
+ *  • With no stored preference (undefined/null) → exactly the registry order,
+ *    all enabled (byte-identical to the pre-setting behavior).
+ *
+ * Deterministic: the same input always yields the same output.
+ */
+export function resolveUnderstandSections(
+  stored: StoredUnderstandSection[] | null | undefined,
+): ResolvedUnderstandSection[] {
+  const pageSections = SECTION_REGISTRY.filter((s) => s.show.page)
+
+  // No stored preference → registry order, all enabled.
+  if (!Array.isArray(stored)) {
+    return pageSections.map((descriptor) => ({ descriptor, enabled: true }))
+  }
+
+  const byId = new Map(pageSections.map((s) => [s.id, s]))
+  const seen = new Set<SectionId>()
+  const result: ResolvedUnderstandSection[] = []
+
+  // 1) Honor the stored order, validating each entry against the registry.
+  for (const entry of stored) {
+    if (!entry || typeof entry.id !== 'string') continue
+    const descriptor = byId.get(entry.id as SectionId)
+    if (!descriptor || seen.has(descriptor.id)) continue
+    seen.add(descriptor.id)
+    result.push({ descriptor, enabled: entry.enabled !== false })
+  }
+
+  // 2) Forward-compat merge: re-insert any registry page section the stored
+  //    list omitted, in its registry-relative position, enabled by default.
+  //    A missing section is placed immediately AFTER its nearest preceding
+  //    registry neighbor that is already present in the result; if none is
+  //    present it goes to the front. This puts a newly-added section back in its
+  //    registry slot for existing users WITHOUT disturbing a user's explicit
+  //    reordering of the sections they did pick (those keep their stored order).
+  //    Iterating in registry order keeps consecutive new sections in their
+  //    relative order too.
+  const positionInResult = (id: SectionId): number =>
+    result.findIndex((r) => r.descriptor.id === id)
+
+  for (let i = 0; i < pageSections.length; i++) {
+    const descriptor = pageSections[i]
+    if (seen.has(descriptor.id)) continue
+    // Walk backwards through earlier registry sections to find one already in
+    // the result; insert just after it. (Sections appended earlier in this loop
+    // are now in `result`, so consecutive new sections chain correctly.)
+    let insertAt = 0
+    for (let k = i - 1; k >= 0; k--) {
+      const pos = positionInResult(pageSections[k].id)
+      if (pos !== -1) {
+        insertAt = pos + 1
+        break
+      }
+    }
+    result.splice(insertAt, 0, { descriptor, enabled: true })
+    seen.add(descriptor.id)
+  }
+
+  return result
+}
+
 export const SECTION_REGISTRY: readonly SectionDescriptor[] = [
   {
     id: 'summary',

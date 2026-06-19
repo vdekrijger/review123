@@ -5,7 +5,7 @@ import {
   saveBitbucketAuth, setGitlabHost,
   setOpenaiKey, setAnthropicKey, setGeminiKey, setOpenrouterKey, setAiProvider, setAiModel,
   setAiDeepReview, setStoryMode, setAutoRunReviewers, setFocusMode, setShowTokenCost,
-  findInvalidKeyChar, invalidKeyCharMessage,
+  findInvalidKeyChar, invalidKeyCharMessage, setUnderstandSections,
   setAiTaskMode, setAiTaskModes, setAllTasksDeep, setAllTasksStandard, setOffAllExtras,
   defaultTaskModes, allDeepTaskModes, setAiPanel, setPanelOneGenerator, setPanelAllGenerate,
   type PanelParticipant,
@@ -1123,6 +1123,81 @@ describe('key character sanitization', () => {
       for (const t of ['attention', 'diagrams', 'tests', 'alternatives', 'skills'] as const) {
         expect(m[t]).toBe('off')
       }
+    })
+  })
+
+  describe('understandSections (Understand-step layout)', () => {
+    it('defaults to undefined when nothing stored', () => {
+      expect(getSettings().understandSections).toBeUndefined()
+    })
+
+    it('setter persists an ordered list', () => {
+      setUnderstandSections([
+        { id: 'pr-description', enabled: true },
+        { id: 'summary', enabled: false },
+      ])
+      expect(getSettings().understandSections).toEqual([
+        { id: 'pr-description', enabled: true },
+        { id: 'summary', enabled: false },
+      ])
+    })
+
+    it('setter survives a round-trip through storage', () => {
+      setUnderstandSections([{ id: 'summary', enabled: true }])
+      const reloaded = getSettings().understandSections
+      expect(reloaded).toEqual([{ id: 'summary', enabled: true }])
+    })
+
+    it('setUnderstandSections(null) clears the preference', () => {
+      setUnderstandSections([{ id: 'summary', enabled: false }])
+      setUnderstandSections(null)
+      expect(getSettings().understandSections).toBeUndefined()
+    })
+
+    it('coercion coerces enabled to a boolean (missing → true; only explicit false disables)', () => {
+      localStorage.setItem(
+        'review123:settings',
+        JSON.stringify({
+          understandSections: [
+            { id: 'summary' }, // missing enabled → true
+            { id: 'diagrams', enabled: false },
+            { id: 'ci-details', enabled: 'yes' }, // non-boolean truthy → true
+          ],
+        }),
+      )
+      expect(getSettings().understandSections).toEqual([
+        { id: 'summary', enabled: true },
+        { id: 'diagrams', enabled: false },
+        { id: 'ci-details', enabled: true },
+      ])
+    })
+
+    it('coercion drops entries without a string id and de-dupes', () => {
+      localStorage.setItem(
+        'review123:settings',
+        JSON.stringify({
+          understandSections: [
+            { id: 'summary', enabled: true },
+            { enabled: true }, // no id → dropped
+            { id: 42, enabled: true }, // non-string id → dropped
+            'garbage', // not an object → dropped
+            { id: 'summary', enabled: false }, // duplicate id → dropped (first wins)
+          ],
+        }),
+      )
+      expect(getSettings().understandSections).toEqual([{ id: 'summary', enabled: true }])
+    })
+
+    it('coercion is tolerant: a non-array value yields undefined (registry default)', () => {
+      localStorage.setItem(
+        'review123:settings',
+        JSON.stringify({ understandSections: 'not-an-array' }),
+      )
+      expect(getSettings().understandSections).toBeUndefined()
+    })
+
+    it('does not add the key to default settings when absent', () => {
+      expect('understandSections' in getSettings()).toBe(false)
     })
   })
 })

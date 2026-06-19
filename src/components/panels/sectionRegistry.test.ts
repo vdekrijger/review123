@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { SECTION_REGISTRY } from './sectionRegistry'
+import { SECTION_REGISTRY, resolveUnderstandSections } from './sectionRegistry'
 import type { SectionId } from './sectionRegistry'
+
+const PAGE_IDS = SECTION_REGISTRY.filter((s) => s.show.page).map((s) => s.id)
 
 // ---------------------------------------------------------------------------
 // Registry structure
@@ -146,5 +148,100 @@ describe('SECTION_REGISTRY — defaultOpen flags', () => {
     for (const s of SECTION_REGISTRY) {
       expect('rail' in s.defaultOpen).toBe(false)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// resolveUnderstandSections — order + enable/disable + forward-compat merge
+// ---------------------------------------------------------------------------
+
+describe('resolveUnderstandSections', () => {
+  it('undefined → registry page order, all enabled (byte-identical to default)', () => {
+    const resolved = resolveUnderstandSections(undefined)
+    expect(resolved.map((r) => r.descriptor.id)).toEqual(PAGE_IDS)
+    expect(resolved.every((r) => r.enabled)).toBe(true)
+  })
+
+  it('null behaves like undefined → registry order, all enabled', () => {
+    const resolved = resolveUnderstandSections(null)
+    expect(resolved.map((r) => r.descriptor.id)).toEqual(PAGE_IDS)
+    expect(resolved.every((r) => r.enabled)).toBe(true)
+  })
+
+  it('a custom order reorders the page sections accordingly', () => {
+    const stored = [
+      { id: 'pr-description', enabled: true },
+      { id: 'summary', enabled: true },
+    ]
+    const resolved = resolveUnderstandSections(stored)
+    // The two explicitly-ordered sections come first, in stored order.
+    expect(resolved[0].descriptor.id).toBe('pr-description')
+    expect(resolved[1].descriptor.id).toBe('summary')
+  })
+
+  it('disabled entries carry enabled:false', () => {
+    const stored = PAGE_IDS.map((id) => ({ id, enabled: id !== 'ci-details' }))
+    const resolved = resolveUnderstandSections(stored)
+    const ci = resolved.find((r) => r.descriptor.id === 'ci-details')!
+    expect(ci.enabled).toBe(false)
+    expect(resolved.filter((r) => !r.enabled)).toHaveLength(1)
+  })
+
+  it('unknown / removed ids in the stored list are dropped', () => {
+    const stored = [
+      { id: 'summary', enabled: true },
+      { id: 'does-not-exist', enabled: true },
+      { id: 'diagrams', enabled: true },
+    ]
+    const resolved = resolveUnderstandSections(stored)
+    expect(resolved.map((r) => r.descriptor.id)).not.toContain('does-not-exist')
+    // All resolved ids are valid page ids.
+    expect(resolved.every((r) => PAGE_IDS.includes(r.descriptor.id))).toBe(true)
+  })
+
+  it('a registry page section missing from stored is appended (forward-compat), enabled', () => {
+    // Store only the first two; the rest must be merged back in, enabled.
+    const stored = [
+      { id: 'summary', enabled: false },
+      { id: 'diagrams', enabled: true },
+    ]
+    const resolved = resolveUnderstandSections(stored)
+    // Every page section is present.
+    expect(resolved.map((r) => r.descriptor.id).sort()).toEqual([...PAGE_IDS].sort())
+    // Stored ones keep their enabled state; merged-in ones default enabled.
+    expect(resolved.find((r) => r.descriptor.id === 'summary')!.enabled).toBe(false)
+    expect(resolved.find((r) => r.descriptor.id === 'file-structure')!.enabled).toBe(true)
+  })
+
+  it('forward-compat merge inserts a missing section in its registry-relative position', () => {
+    // Omit 'diagrams' (registry index 1). The remaining stored sections are in
+    // registry order, so diagrams should land back between summary and file-structure.
+    const stored = PAGE_IDS.filter((id) => id !== 'diagrams').map((id) => ({ id, enabled: true }))
+    const resolved = resolveUnderstandSections(stored).map((r) => r.descriptor.id)
+    const summaryIdx = resolved.indexOf('summary')
+    const diagramsIdx = resolved.indexOf('diagrams')
+    const fileStructureIdx = resolved.indexOf('file-structure')
+    expect(diagramsIdx).toBe(summaryIdx + 1)
+    expect(diagramsIdx).toBeLessThan(fileStructureIdx)
+  })
+
+  it('non-page sections never appear (rail-only/hidden ids ignored)', () => {
+    // No registry section is rail-only today, but a stored entry for a
+    // non-page id (or any id not show.page) must never be resolved.
+    const stored = [{ id: 'some-rail-only-id', enabled: true }]
+    const resolved = resolveUnderstandSections(stored)
+    // Falls back to merging ALL page sections (none of which is the bogus id).
+    expect(resolved.map((r) => r.descriptor.id)).not.toContain('some-rail-only-id')
+    expect(resolved.every((r) => r.descriptor.show.page)).toBe(true)
+  })
+
+  it('is deterministic for the same input', () => {
+    const stored = [
+      { id: 'verdict-evidence', enabled: false },
+      { id: 'summary', enabled: true },
+    ]
+    const a = resolveUnderstandSections(stored).map((r) => `${r.descriptor.id}:${r.enabled}`)
+    const b = resolveUnderstandSections(stored).map((r) => `${r.descriptor.id}:${r.enabled}`)
+    expect(a).toEqual(b)
   })
 })
