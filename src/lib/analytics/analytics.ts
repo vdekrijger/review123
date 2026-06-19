@@ -63,6 +63,11 @@ const EVENTS = {
   // when the reviewer clicks "Copy as LLM prompt". No comment bodies, code,
   // diffs, file paths, or PR identifiers are sent — counts only.
   review_prompt_copied: ['item_count'],
+  // PRIVACY DECISION: fired when the reviewer clicks "Copy review command".
+  // Carries only 'format' (the export format id: 'browser' | 'gh' | 'curl') and
+  // 'item_count' (integer count of drafted line comments). No comment bodies,
+  // code, diffs, file paths, tokens, or PR identifiers are sent — counts only.
+  review_command_copied: ['format', 'item_count'],
   settings_key_added: ['service'],
   // PRIVACY DECISION: engagement events below carry section/surface identifiers only.
   // 'section' is a stable registry id (e.g. 'summary', 'diagrams', 'queue', 'recent') —

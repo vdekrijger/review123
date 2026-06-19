@@ -1695,6 +1695,186 @@ describe('VerdictStep — Copy as LLM prompt', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Copy review command — GitHub-only export (no submit) of a browser / gh / curl
+// command that posts the whole review to the PR without installing the app.
+// ---------------------------------------------------------------------------
+
+describe('VerdictStep — Copy review command', () => {
+  function makeCmdProvider(id: 'github' | 'gitlab' | 'bitbucket', displayName: string): ReviewProvider {
+    return {
+      id,
+      displayName,
+      capabilities: {
+        resolvedThreads: true, checks: true, suggestions: true, atomicReview: true,
+        compare: true, commentReplies: true, selfReviewBlocked: false,
+      },
+      parseUrl: vi.fn(),
+      prWebUrl: vi.fn(() => ''),
+      getPrMeta: vi.fn(),
+      getPrFiles: vi.fn(),
+      getFileAtRef: vi.fn(),
+      getCiSummary: vi.fn(),
+      getComments: vi.fn(),
+      getResolvedCommentIds: vi.fn(),
+      getCommits: vi.fn(),
+      compareCommits: vi.fn(),
+      submitReview: vi.fn(),
+      authState: vi.fn().mockReturnValue({ configured: true, hint: '' }),
+    } as unknown as ReviewProvider
+  }
+
+  beforeEach(() => {
+    signOut()
+    signIn()
+    _setCaptureForTest(vi.fn())
+  })
+  afterEach(() => {
+    _setCaptureForTest(noopCapture)
+  })
+
+  it('renders the format picker + copy button for a GitHub PR (provider absent → GitHub)', () => {
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit },
+    })
+    expect(screen.getByRole('button', { name: /copy review command/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/review command format/i)).toBeInTheDocument()
+  })
+
+  it('renders for an explicit GitHub provider', () => {
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, provider: makeCmdProvider('github', 'GitHub') },
+    })
+    expect(screen.getByRole('button', { name: /copy review command/i })).toBeInTheDocument()
+  })
+
+  it('is ABSENT for non-GitHub providers (GitLab)', () => {
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, provider: makeCmdProvider('gitlab', 'GitLab') },
+    })
+    expect(screen.queryByRole('button', { name: /copy review command/i })).toBeNull()
+    expect(screen.queryByLabelText(/review command format/i)).toBeNull()
+  })
+
+  it('is ABSENT for Bitbucket', () => {
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit, provider: makeCmdProvider('bitbucket', 'Bitbucket') },
+    })
+    expect(screen.queryByRole('button', { name: /copy review command/i })).toBeNull()
+  })
+
+  it('is disabled when there are no drafts and no overall comment', () => {
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn: okSubmit },
+    })
+    expect(screen.getByRole('button', { name: /copy review command/i })).toBeDisabled()
+  })
+
+  it('default format is Browser console — copies the JS snippet', async () => {
+    const user = userEvent.setup()
+    const copyFn = vi.fn().mockResolvedValue(undefined)
+    const store = makeStore()
+    await store.upsert({ path: 'src/a.ts', line: 7, side: 'RIGHT', body: 'Rename this.' })
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store, prUrl, submitFn: okSubmit, copyFn },
+    })
+
+    await user.click(screen.getByRole('button', { name: /copy review command/i }))
+    expect(copyFn).toHaveBeenCalledTimes(1)
+    const text = copyFn.mock.calls[0][0] as string
+    expect(text).toContain('prompt(')
+    expect(text).toContain('https://api.github.com/repos/alice/widgets/pulls/42/reviews')
+    expect(text).toContain('Rename this.')
+  })
+
+  it('switching the format then copying copies THAT format (gh)', async () => {
+    const user = userEvent.setup()
+    const copyFn = vi.fn().mockResolvedValue(undefined)
+    const store = makeStore()
+    await store.upsert({ path: 'src/a.ts', line: 7, side: 'RIGHT', body: 'Rename this.' })
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store, prUrl, submitFn: okSubmit, copyFn },
+    })
+
+    await user.selectOptions(screen.getByLabelText(/review command format/i), 'gh')
+    await user.click(screen.getByRole('button', { name: /copy review command/i }))
+
+    const text = copyFn.mock.calls[0][0] as string
+    expect(text).toContain('gh api --method POST')
+    expect(text).toContain('/repos/alice/widgets/pulls/42/reviews')
+    expect(text).not.toContain('Bearer')
+  })
+
+  it('curl format references $GITHUB_TOKEN', async () => {
+    const user = userEvent.setup()
+    const copyFn = vi.fn().mockResolvedValue(undefined)
+    const store = makeStore()
+    await store.upsert({ path: 'src/a.ts', line: 7, side: 'RIGHT', body: 'Rename this.' })
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store, prUrl, submitFn: okSubmit, copyFn },
+    })
+
+    await user.selectOptions(screen.getByLabelText(/review command format/i), 'curl')
+    await user.click(screen.getByRole('button', { name: /copy review command/i }))
+
+    const text = copyFn.mock.calls[0][0] as string
+    expect(text).toContain('GITHUB_TOKEN')
+    expect(text).toContain('curl')
+  })
+
+  it('copying the command does NOT submit or clear drafts', async () => {
+    const user = userEvent.setup()
+    const copyFn = vi.fn().mockResolvedValue(undefined)
+    const submitFn = vi.fn().mockResolvedValue({ ok: true } as SubmitOutcome)
+    const store = makeStore()
+    await store.upsert({ path: 'src/a.ts', line: 7, side: 'RIGHT', body: 'Rename this.' })
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store, prUrl, submitFn, copyFn },
+    })
+
+    await user.click(screen.getByRole('button', { name: /copy review command/i }))
+
+    expect(submitFn).not.toHaveBeenCalled()
+    expect(store.count).toBe(1)
+  })
+
+  it('emits review_command_copied analytics with format + item_count only', async () => {
+    const user = userEvent.setup()
+    const copyFn = vi.fn().mockResolvedValue(undefined)
+    const capture = vi.fn()
+    _setCaptureForTest(capture)
+    const store = makeStore()
+    await store.upsert({ path: 'src/a.ts', line: 7, side: 'RIGHT', body: 'Rename this.' })
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store, prUrl, submitFn: okSubmit, copyFn },
+    })
+
+    await user.click(screen.getByRole('button', { name: /copy review command/i }))
+    expect(capture).toHaveBeenCalledWith('review_command_copied', { format: 'browser', item_count: 1 })
+  })
+
+  it('the LLM-prompt button still works alongside the command picker', async () => {
+    const user = userEvent.setup()
+    const copyFn = vi.fn().mockResolvedValue(undefined)
+    const store = makeStore()
+    await store.upsert({ path: 'src/a.ts', line: 7, side: 'RIGHT', body: 'Rename this.' })
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store, prUrl, prTitle: 'My PR', submitFn: okSubmit, copyFn },
+    })
+
+    await user.click(screen.getByRole('button', { name: /copy as llm prompt/i }))
+    const text = copyFn.mock.calls[0][0] as string
+    expect(text).toContain('PR #42 — My PR')
+    expect(text).toContain('src/a.ts:7')
+  })
+})
+
 describe('VerdictStep — consolidated review cost panel', () => {
   beforeEach(() => {
     signOut()

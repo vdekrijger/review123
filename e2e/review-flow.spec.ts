@@ -2504,4 +2504,18 @@ test('copy-as-llm-prompt: seed draft, step 3, copy → clipboard has file:line +
 
   // Copying does NOT submit — the verdict form is still present
   await expect(page.getByRole('button', { name: /submit review/i })).toBeVisible()
+
+  // GitHub-only "Copy review command": the gh format copies a gh api command
+  // carrying the same review payload — no submit, no app install.
+  await page.getByLabel(/review command format/i).selectOption('gh')
+  const cmdBtn = page.getByRole('button', { name: /copy review command/i })
+  await expect(cmdBtn).toBeEnabled()
+  await cmdBtn.click()
+  const cmdClip = await page.evaluate(() => navigator.clipboard.readText())
+  expect(cmdClip).toContain('gh api --method POST')
+  expect(cmdClip).toContain(`/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews`)
+  expect(cmdClip).toContain('Seeded draft for testing')
+
+  // Still not submitted.
+  await expect(page.getByRole('button', { name: /submit review/i })).toBeVisible()
 })
