@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { getSettings, setTheme, setUiFont, setShowProgress, setTestFileDisplay, setDiffWidth, setFocusMode, setShowTokenCost, type Theme, type UiFont, type TestFileDisplay, type DiffWidth, type FocusMode } from '../../lib/settings/settings'
+  import { getSettings, setTheme, setUiFont, setShowProgress, setTestFileDisplay, setDiffWidth, setFocusMode, setShowTokenCost, setUnderstandSections, type Theme, type UiFont, type TestFileDisplay, type DiffWidth, type FocusMode } from '../../lib/settings/settings'
   import { applyAppearance } from '../../lib/settings/appearance.svelte'
+  import { resolveUnderstandSections } from '../panels/sectionRegistry'
 
   const current = getSettings()
   let theme = $state<Theme>(current.theme)
@@ -10,6 +11,48 @@
   let diffWidth = $state<DiffWidth>(current.diffWidth)
   let focusMode = $state<FocusMode>(current.focusMode)
   let showTokenCost = $state<boolean>(current.showTokenCost)
+
+  // --- Understand-step layout (order + enable/disable of the 8 page panels) ---
+  // Seeded from the resolved preference so a fresh (unset) state shows the
+  // canonical registry order, all enabled. Each mutation persists immediately
+  // via setUnderstandSections, which the Understand step reads reactively.
+  let understandRows = $state<{ id: string; title: string; enabled: boolean }[]>(
+    resolveUnderstandSections(current.understandSections).map((s) => ({
+      id: s.descriptor.id,
+      title: s.descriptor.title,
+      enabled: s.enabled,
+    })),
+  )
+
+  /** Persist the current local rows as the ordered preference. */
+  function persistUnderstand() {
+    setUnderstandSections(understandRows.map((r) => ({ id: r.id, enabled: r.enabled })))
+  }
+
+  function toggleUnderstandEnabled(index: number, enabled: boolean) {
+    understandRows[index].enabled = enabled
+    persistUnderstand()
+  }
+
+  function moveUnderstand(index: number, delta: -1 | 1) {
+    const target = index + delta
+    if (target < 0 || target >= understandRows.length) return
+    const next = [...understandRows]
+    const [row] = next.splice(index, 1)
+    next.splice(target, 0, row)
+    understandRows = next
+    persistUnderstand()
+  }
+
+  function resetUnderstand() {
+    setUnderstandSections(null)
+    // Re-seed from the registry default (cleared preference → registry order).
+    understandRows = resolveUnderstandSections(getSettings().understandSections).map((s) => ({
+      id: s.descriptor.id,
+      title: s.descriptor.title,
+      enabled: s.enabled,
+    }))
+  }
 
   function onThemeChange(value: Theme) {
     theme = value
@@ -150,6 +193,43 @@
     </label>
     <p class="field-note">Display approximate tokens/cost per AI section (power users).</p>
   </fieldset>
+
+  <fieldset class="understand-layout" aria-label="Understand step layout">
+    <legend>Understand step layout</legend>
+    <p class="field-note">Reorder and show/hide the detail panels on the Understand step. Panels can still hide automatically when they have no data (e.g. no CI, no PR description).</p>
+    <ul class="understand-list">
+      {#each understandRows as row, i (row.id)}
+        <li class="understand-row">
+          <label class="understand-toggle">
+            <input
+              type="checkbox"
+              checked={row.enabled}
+              aria-label="Show {row.title}"
+              onchange={(e) => toggleUnderstandEnabled(i, (e.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="understand-title">{row.title}</span>
+          </label>
+          <span class="understand-moves">
+            <button
+              type="button"
+              class="move-btn"
+              aria-label="Move {row.title} up"
+              disabled={i === 0}
+              onclick={() => moveUnderstand(i, -1)}
+            >↑</button>
+            <button
+              type="button"
+              class="move-btn"
+              aria-label="Move {row.title} down"
+              disabled={i === understandRows.length - 1}
+              onclick={() => moveUnderstand(i, 1)}
+            >↓</button>
+          </span>
+        </li>
+      {/each}
+    </ul>
+    <button type="button" class="reset-btn" onclick={resetUnderstand}>Reset to default</button>
+  </fieldset>
 </section>
 
 <style>
@@ -205,5 +285,97 @@
     margin: 0;
     font-size: 0.8em;
     color: var(--text-muted);
+  }
+
+  /* ===== Understand step layout ===== */
+  .understand-layout {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+
+  .understand-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    width: 100%;
+  }
+
+  .understand-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--hairline);
+    border-radius: 5px;
+    background: var(--surface);
+  }
+
+  .understand-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.9em;
+    cursor: pointer;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .understand-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .understand-moves {
+    display: flex;
+    gap: 0.25rem;
+    flex-shrink: 0;
+  }
+
+  .move-btn {
+    border: 1px solid var(--hairline);
+    background: var(--surface-raised);
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.85em;
+    line-height: 1;
+    padding: 0.2rem 0.45rem;
+    color: var(--text);
+  }
+
+  .move-btn:hover:not(:disabled) {
+    background: #8881;
+  }
+
+  .move-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .move-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .reset-btn {
+    align-self: flex-start;
+    border: 1px solid var(--hairline);
+    background: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8em;
+    font-weight: 500;
+    color: var(--text-muted);
+    padding: 0.3rem 0.7rem;
+  }
+
+  .reset-btn:hover {
+    background: #8881;
+    color: var(--text);
   }
 </style>

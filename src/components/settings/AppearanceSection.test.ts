@@ -10,7 +10,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import AppearanceSection from './AppearanceSection.svelte'
-import { getSettings, setShowProgress } from '../../lib/settings/settings'
+import { getSettings, setShowProgress, setUnderstandSections } from '../../lib/settings/settings'
+import { SECTION_REGISTRY } from '../panels/sectionRegistry'
 
 // Stub applyAppearance so tests don't need real DOM env for it
 vi.mock('../../lib/settings/appearance.svelte', () => ({
@@ -178,5 +179,92 @@ describe('AppearanceSection', () => {
     const group = screen.getByRole('group', { name: /focus mode/i })
     await userEvent.click(within(group).getByRole('radio', { name: /dim imports \+ comments/i }))
     expect(getSettings().focusMode).toBe('imports-comments')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Understand step layout — reorder + enable/disable + reset
+// ---------------------------------------------------------------------------
+
+describe('AppearanceSection — Understand step layout', () => {
+  const PAGE_TITLES = SECTION_REGISTRY.filter((s) => s.show.page).map((s) => s.title)
+
+  it('renders the layout list in registry order by default', () => {
+    render(AppearanceSection)
+    const group = screen.getByRole('group', { name: /understand step layout/i })
+    expect(group).toBeInTheDocument()
+    const checkboxes = within(group).getAllByRole('checkbox')
+    // One row per page section, all checked by default.
+    expect(checkboxes.length).toBe(PAGE_TITLES.length)
+    for (const cb of checkboxes) expect((cb as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('Up button is disabled on the first row, Down on the last', () => {
+    render(AppearanceSection)
+    const group = screen.getByRole('group', { name: /understand step layout/i })
+    const firstTitle = PAGE_TITLES[0]
+    const lastTitle = PAGE_TITLES[PAGE_TITLES.length - 1]
+    const upFirst = within(group).getByRole('button', { name: new RegExp(`move ${firstTitle} up`, 'i') })
+    const downLast = within(group).getByRole('button', { name: new RegExp(`move ${lastTitle} down`, 'i') })
+    expect((upFirst as HTMLButtonElement).disabled).toBe(true)
+    expect((downLast as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('clicking Down on the first row reorders + calls the setter with the new order', async () => {
+    render(AppearanceSection)
+    const group = screen.getByRole('group', { name: /understand step layout/i })
+    const firstTitle = PAGE_TITLES[0]
+    const secondTitle = PAGE_TITLES[1]
+    await userEvent.click(within(group).getByRole('button', { name: new RegExp(`move ${firstTitle} down`, 'i') }))
+    const stored = getSettings().understandSections
+    expect(stored).not.toBeUndefined()
+    // The first two ids are swapped vs. registry order.
+    const firstId = SECTION_REGISTRY.find((s) => s.title === firstTitle)!.id
+    const secondId = SECTION_REGISTRY.find((s) => s.title === secondTitle)!.id
+    expect(stored![0].id).toBe(secondId)
+    expect(stored![1].id).toBe(firstId)
+  })
+
+  it('clicking Up moves a row toward the top', async () => {
+    render(AppearanceSection)
+    const group = screen.getByRole('group', { name: /understand step layout/i })
+    const secondTitle = PAGE_TITLES[1]
+    await userEvent.click(within(group).getByRole('button', { name: new RegExp(`move ${secondTitle} up`, 'i') }))
+    const stored = getSettings().understandSections!
+    const secondId = SECTION_REGISTRY.find((s) => s.title === secondTitle)!.id
+    expect(stored[0].id).toBe(secondId)
+  })
+
+  it('toggling a checkbox off persists enabled:false for that section', async () => {
+    render(AppearanceSection)
+    const group = screen.getByRole('group', { name: /understand step layout/i })
+    const firstTitle = PAGE_TITLES[0]
+    const checkbox = within(group).getByRole('checkbox', { name: new RegExp(`show ${firstTitle}`, 'i') })
+    await userEvent.click(checkbox)
+    const stored = getSettings().understandSections!
+    const firstId = SECTION_REGISTRY.find((s) => s.title === firstTitle)!.id
+    const entry = stored.find((s) => s.id === firstId)!
+    expect(entry.enabled).toBe(false)
+  })
+
+  it('Reset to default clears the stored preference', async () => {
+    // Seed a non-default preference first.
+    setUnderstandSections([{ id: 'pr-description', enabled: false }])
+    render(AppearanceSection)
+    const group = screen.getByRole('group', { name: /understand step layout/i })
+    await userEvent.click(within(group).getByRole('button', { name: /reset to default/i }))
+    expect(getSettings().understandSections).toBeUndefined()
+  })
+
+  it('reflects a stored disabled section as an unchecked box', () => {
+    const disabledTitle = PAGE_TITLES[0]
+    const disabledId = SECTION_REGISTRY.find((s) => s.title === disabledTitle)!.id
+    setUnderstandSections(
+      SECTION_REGISTRY.filter((s) => s.show.page).map((s) => ({ id: s.id, enabled: s.id !== disabledId })),
+    )
+    render(AppearanceSection)
+    const group = screen.getByRole('group', { name: /understand step layout/i })
+    const checkbox = within(group).getByRole('checkbox', { name: new RegExp(`show ${disabledTitle}`, 'i') }) as HTMLInputElement
+    expect(checkbox.checked).toBe(false)
   })
 })

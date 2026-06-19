@@ -30,7 +30,7 @@
   import Spinner from './Spinner.svelte'
   import SectionStatus from './panels/SectionStatus.svelte'
   import { aiProgressLabel } from '../lib/ai/progressLabel'
-  import { SECTION_REGISTRY, type SectionId } from './panels/sectionRegistry'
+  import { SECTION_REGISTRY, resolveUnderstandSections, type SectionId } from './panels/sectionRegistry'
   import { track } from '../lib/analytics/analytics'
   import { stripReadingOrder } from '../lib/ai/tasks'
   import { settingsState } from '../lib/settings/settingsState.svelte'
@@ -55,11 +55,17 @@
 
   let { meta, files, ci, ciError, run, onhotspot, onRefreshCi, ciRefreshing = false }: Props = $props()
 
-  // --- Section open state (lifted out of the <details> so Expand all / Collapse
-  // all can set them en masse while individual toggles keep working). Seeded from
-  // the registry's per-page defaultOpen; each section's <details> binds its open
-  // attribute to its entry, so user clicks and the bulk button share one source.
-  const pageSections = $derived(SECTION_REGISTRY.filter((s) => s.show.page))
+  // --- Page sections: resolved from the user's per-browser Understand-step
+  // layout preference (order + enable/disable) against the canonical registry.
+  // Reactive: reordering / toggling in settings reflects live here. Only ENABLED
+  // sections render; the per-section RUNTIME guards below still apply on top, so
+  // an enabled section can still hide for lack of data. With no stored
+  // preference this is byte-identical to the registry's show.page order.
+  const pageSections = $derived(
+    resolveUnderstandSections(settingsState.current.understandSections)
+      .filter((s) => s.enabled)
+      .map((s) => s.descriptor),
+  )
 
   const openState = $state<Record<string, boolean>>(
     Object.fromEntries(

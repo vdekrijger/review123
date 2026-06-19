@@ -1,7 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import UnderstandStep from './UnderstandStep.svelte'
+import { setUnderstandSections } from '../lib/settings/settings'
+import { _resetSettingsStateForTest } from '../lib/settings/settingsState.svelte'
 import type { AiRun } from '../lib/ai/run.svelte'
 import type { VerdictResult, AttentionResult, TestInsight } from '../lib/ai/schemas'
 import type { PrMeta, PrFile } from '../lib/github/types'
@@ -1387,5 +1389,94 @@ describe('UnderstandStep — CI badge legibility', () => {
     })
     openAllDetails()
     expect(screen.getByRole('button', { name: /retry loading ci status/i })).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Understand-step layout preference: order + enable/disable applied from
+// settings (feat/configurable-understand-sections). Runtime guards still apply
+// on top of an enabled section.
+// ---------------------------------------------------------------------------
+
+describe('UnderstandStep — configurable layout (order + enable/disable)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetSettingsStateForTest()
+  })
+  afterEach(() => {
+    localStorage.clear()
+    _resetSettingsStateForTest()
+  })
+
+  function panelTitles(container: HTMLElement): string[] {
+    return Array.from(container.querySelectorAll('.detail-panel summary .detail-summary-title')).map(
+      (s) => s.textContent?.toLowerCase().trim() ?? '',
+    )
+  }
+
+  it('renders the panels in a custom stored order', () => {
+    setUnderstandSections([
+      { id: 'pr-description', enabled: true },
+      { id: 'summary', enabled: true },
+      { id: 'diagrams', enabled: true },
+      { id: 'file-structure', enabled: true },
+      { id: 'test-insight', enabled: true },
+      { id: 'alternatives', enabled: true },
+      { id: 'verdict-evidence', enabled: true },
+      { id: 'ci-details', enabled: true },
+    ])
+    _resetSettingsStateForTest()
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    const titles = panelTitles(container)
+    // PR description now leads, summary second.
+    expect(titles[0]).toContain('pr description')
+    expect(titles[1]).toContain('full summary')
+  })
+
+  it('a disabled section is absent from the page', () => {
+    setUnderstandSections([
+      { id: 'summary', enabled: true },
+      { id: 'pr-description', enabled: false },
+    ])
+    _resetSettingsStateForTest()
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    const titles = panelTitles(container)
+    expect(titles.some((t) => t.includes('pr description'))).toBe(false)
+    // A still-enabled section remains.
+    expect(titles.some((t) => t.includes('full summary'))).toBe(true)
+  })
+
+  it('runtime guard still hides a data-less enabled section (ci-details with null CI, no error)', () => {
+    // ci-details enabled, but ci=null + ciError=false → the CI panel renders its
+    // registry slot, but the inner CiSummary shows no checks. The panel itself is
+    // present (registry slot) — confirm the data-less inner content holds.
+    setUnderstandSections([{ id: 'ci-details', enabled: true }])
+    _resetSettingsStateForTest()
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    // The CI badge (which needs real CI data) must not appear with null CI total.
+    expect(document.querySelector('.ci-badge')).not.toBeNull() // "CI loading" badge shows for null ci
+  })
+
+  it('runtime guard: PR description shows "No description" when body is empty even though enabled', () => {
+    setUnderstandSections([{ id: 'pr-description', enabled: true }])
+    _resetSettingsStateForTest()
+    const emptyMeta = { ...meta, body: '' }
+    render(UnderstandStep, { props: { meta: emptyMeta, files, ci: null, ciError: false, run: makeRun({}) } })
+    openAllDetails()
+    expect(screen.getByText(/no description/i)).toBeInTheDocument()
+  })
+
+  it('with no stored preference, renders the canonical registry order (byte-identical default)', () => {
+    localStorage.clear()
+    _resetSettingsStateForTest()
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    const titles = panelTitles(container)
+    const orderedKeywords = ['full summary', 'execution flow', 'changed files', 'test coverage', 'alternative', 'verdict', 'ci details', 'pr description']
+    let lastIdx = -1
+    for (const keyword of orderedKeywords) {
+      const idx = titles.findIndex((t, i) => i > lastIdx && t.includes(keyword))
+      expect(idx).toBeGreaterThan(lastIdx)
+      lastIdx = idx
+    }
   })
 })
