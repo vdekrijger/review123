@@ -33,6 +33,7 @@
  */
 
 import type { Draft } from '../drafts/drafts.svelte'
+import { outgoingCommentBody } from '../drafts/drafts.svelte'
 import type { Verdict } from './review'
 
 /** The exact GitHub "create a review" request body (matches submitReview). */
@@ -85,7 +86,7 @@ export function buildReviewPayload(input: ReviewExportInput): ReviewPayload {
       path: d.path,
       line: d.line,
       side: d.side,
-      body: d.body,
+      body: outgoingCommentBody(d),
       ...(d.startLine != null && d.startLine < d.line
         ? { start_line: d.startLine, start_side: d.side }
         : {}),

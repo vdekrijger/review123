@@ -590,3 +590,25 @@ describe('DraftThread — typed text flows into the ask prompt (DI seam)', () =>
     expect(captured!.system).toMatch(/2[-–]4 sentences/i)
   })
 })
+
+// ---------------------------------------------------------------------------
+// AI-authored 🤖 badge
+// ---------------------------------------------------------------------------
+describe('DraftThread — AI-authored badge', () => {
+  it('renders the 🤖 badge with the reviewer name for an AI-authored draft', () => {
+    const draft: Draft = { ...baseDraft, aiAuthored: true, aiReviewer: 'Security' }
+    render(DraftThread, {
+      props: { draft, path: 'src/a.ts', line: 5, side: 'RIGHT', onsave: vi.fn(), ondelete: vi.fn(), oncancel: vi.fn() },
+    })
+    const badge = screen.getByTestId('draft-ai-badge')
+    expect(badge).toBeInTheDocument()
+    expect(badge).toHaveAttribute('aria-label', expect.stringContaining('Security'))
+  })
+
+  it('does NOT render the badge for a hand-written draft', () => {
+    render(DraftThread, {
+      props: { draft: baseDraft, path: 'src/a.ts', line: 5, side: 'RIGHT', onsave: vi.fn(), ondelete: vi.fn(), oncancel: vi.fn() },
+    })
+    expect(screen.queryByTestId('draft-ai-badge')).not.toBeInTheDocument()
+  })
+})

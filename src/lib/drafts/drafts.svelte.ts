@@ -40,7 +40,35 @@ export interface Draft {
    * (b) preserve provenance when migrating legacy `@sha`-keyed drafts.
    */
   headSha?: string
+  /**
+   * True when this draft was created from an AI reviewer's finding (e.g. via
+   * "Add as draft"). Drives the in-app 🤖 badge and the GitHub-only attribution
+   * marker. Undefined/false for hand-written line comments. The editable `body`
+   * itself stays CLEAN — the marker is only prepended on the way out (see
+   * `outgoingCommentBody`).
+   */
+  aiAuthored?: boolean
+  /**
+   * Display name of the AI reviewer/skill that suggested this finding (e.g.
+   * "Security"). Only meaningful when `aiAuthored` is true. Undefined for older
+   * drafts and hand-written comments.
+   */
+  aiReviewer?: string
   updatedAt: number
+}
+
+/**
+ * The body to POST to GitHub for a draft. AI-authored drafts get a small
+ * attribution marker prepended so the PR author sees the comment came from an AI
+ * reviewer; hand-written drafts post verbatim. PURE — the stored `body` is never
+ * mutated. Used by BOTH the real submit (`submitReview`) and the copy-able
+ * console/curl/gh exports (`buildReviewPayload`) so they never drift. NOT used by
+ * the "Copy as LLM prompt" export (a handoff to a coding agent — stays clean).
+ */
+export function outgoingCommentBody(draft: Pick<Draft, 'body' | 'aiAuthored' | 'aiReviewer'>): string {
+  return draft.aiAuthored
+    ? `🤖 _AI-suggested · ${draft.aiReviewer ?? 'AI reviewer'}_\n\n${draft.body}`
+    : draft.body
 }
 
 export function draftKey(d: Pick<Draft, 'prKey' | 'path' | 'line' | 'side'> & { n?: number; startLine?: number }): string {
@@ -366,6 +394,9 @@ async function migrateLegacyShaKeysToIdentity(db: IDBDatabase, identityPrKey: st
       updatedAt: src.value.updatedAt ?? Date.now(),
       ...(startLine != null ? { startLine } : {}),
       ...(src.sourceSha ? { headSha: src.sourceSha } : {}),
+      // AI-attribution fields ride along with the value during re-keying.
+      ...(src.value.aiAuthored ? { aiAuthored: true } : {}),
+      ...(src.value.aiReviewer != null ? { aiReviewer: src.value.aiReviewer } : {}),
     }
     const targetKey = draftKey({ prKey: identityPrKey, path, line, side, n })
     await idbPut(db, targetKey, record) // adopt
@@ -516,7 +547,7 @@ export function createDraftStore(prKey: string, dbName = 'review123-drafts', mak
       const key = draftKey({ prKey, path: d.path, line: d.line, side: d.side, n })
       // Only store startLine when it forms a real range (< line)
       const startLine = (d.startLine != null && d.startLine < d.line) ? d.startLine : undefined
-      const record: Draft = { path: d.path, line: d.line, side: d.side, body: d.body, prKey, n, updatedAt: Date.now(), ...(startLine != null ? { startLine } : {}), ...(makerSha ? { headSha: makerSha } : {}) }
+      const record: Draft = { path: d.path, line: d.line, side: d.side, body: d.body, prKey, n, updatedAt: Date.now(), ...(startLine != null ? { startLine } : {}), ...(makerSha ? { headSha: makerSha } : {}), ...(d.aiAuthored ? { aiAuthored: true } : {}), ...(d.aiReviewer != null ? { aiReviewer: d.aiReviewer } : {}) }
 
       // Update in-memory state (last-write-wins: replace existing if same key)
       const idx = drafts.findIndex((x) => draftKey(x) === key)

@@ -756,3 +756,103 @@ describe('multi-line comments: startLine field', () => {
     expect(d.line).toBe(5)
   })
 })
+
+// ---------------------------------------------------------------------------
+// AI-authored attribution: aiAuthored / aiReviewer fields
+// ---------------------------------------------------------------------------
+describe('AI-authored attribution fields', () => {
+  it('upsert stores aiAuthored + aiReviewer and round-trips via load', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-ai-rt-${prKey.replace(/[^a-z0-9]/gi, '-')}`
+    const store1 = await freshStore(prKey, db)
+    await store1.load()
+    await store1.upsert({ path: 'a.ts', line: 10, side: 'RIGHT', body: 'from a reviewer', aiAuthored: true, aiReviewer: 'Security' })
+    expect(store1.drafts[0].aiAuthored).toBe(true)
+    expect(store1.drafts[0].aiReviewer).toBe('Security')
+
+    const store2 = await freshStore(prKey, db)
+    await store2.load()
+    expect(store2.drafts[0].aiAuthored).toBe(true)
+    expect(store2.drafts[0].aiReviewer).toBe('Security')
+    expect(store2.drafts[0].body).toBe('from a reviewer') // body stays clean
+  })
+
+  it('hand-written drafts have no aiAuthored / aiReviewer', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-ai-hand-${prKey.replace(/[^a-z0-9]/gi, '-')}`
+    const store = await freshStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 5, side: 'RIGHT', body: 'my own comment' })
+    expect(store.drafts[0].aiAuthored).toBeUndefined()
+    expect(store.drafts[0].aiReviewer).toBeUndefined()
+  })
+
+  it('old drafts on disk without the fields load fine (undefined)', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-ai-legacy-${prKey.replace(/[^a-z0-9]/gi, '-')}`
+    // rawSeed writes a record WITHOUT aiAuthored/aiReviewer (legacy shape).
+    await rawSeed(prKey, db, 'a.ts', 3, 'RIGHT', 'legacy draft')
+    const store = await freshStore(prKey, db)
+    await store.load()
+    expect(store.drafts).toHaveLength(1)
+    expect(store.drafts[0].body).toBe('legacy draft')
+    expect(store.drafts[0].aiAuthored).toBeUndefined()
+    expect(store.drafts[0].aiReviewer).toBeUndefined()
+  })
+
+  it('re-key migration preserves aiAuthored / aiReviewer', async () => {
+    const IDENTITY = 'github:acme/widgets#5'
+    const db = `test-db-ai-rekey-${++testIndex}`
+    const idb = (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB
+    // Seed a legacy @sha-keyed AI-authored draft directly on disk.
+    await new Promise<void>((resolve, reject) => {
+      const open = idb.open(db, 1)
+      open.onupgradeneeded = () => {
+        const dbh = open.result
+        if (!dbh.objectStoreNames.contains('drafts')) dbh.createObjectStore('drafts')
+      }
+      open.onsuccess = () => {
+        const dbh = open.result
+        const tx = dbh.transaction('drafts', 'readwrite')
+        const prKey = `${IDENTITY}@sha1`
+        tx.objectStore('drafts').put(
+          { prKey, path: 'a.ts', line: 1, side: 'RIGHT', body: 'ai finding', n: 0, updatedAt: Date.now(), aiAuthored: true, aiReviewer: 'Perf' },
+          `${prKey}|a.ts|1|RIGHT|0`,
+        )
+        tx.oncomplete = () => { dbh.close(); resolve() }
+        tx.onerror = () => reject(tx.error)
+      }
+      open.onerror = () => reject(open.error)
+    })
+
+    const { createDraftStore } = await import('./drafts.svelte')
+    const store = createDraftStore(IDENTITY, db)
+    await store.load()
+    expect(store.count).toBe(1)
+    const d = store.drafts[0]
+    expect(d.prKey).toBe(IDENTITY)
+    expect(d.headSha).toBe('sha1')
+    expect(d.aiAuthored).toBe(true)
+    expect(d.aiReviewer).toBe('Perf')
+  })
+})
+
+describe('outgoingCommentBody', () => {
+  it('prepends the 🤖 marker + reviewer + blank line for AI-authored drafts', async () => {
+    const { outgoingCommentBody } = await import('./drafts.svelte')
+    const out = outgoingCommentBody({ body: 'Use a constant here.', aiAuthored: true, aiReviewer: 'Security' })
+    expect(out).toBe('🤖 _AI-suggested · Security_\n\nUse a constant here.')
+  })
+
+  it('falls back to "AI reviewer" when aiReviewer is missing', async () => {
+    const { outgoingCommentBody } = await import('./drafts.svelte')
+    const out = outgoingCommentBody({ body: 'Body.', aiAuthored: true })
+    expect(out).toBe('🤖 _AI-suggested · AI reviewer_\n\nBody.')
+  })
+
+  it('returns the body verbatim for hand-written (non-AI) drafts', async () => {
+    const { outgoingCommentBody } = await import('./drafts.svelte')
+    expect(outgoingCommentBody({ body: 'My comment.' })).toBe('My comment.')
+    expect(outgoingCommentBody({ body: 'My comment.', aiAuthored: false, aiReviewer: 'X' })).toBe('My comment.')
+  })
+})

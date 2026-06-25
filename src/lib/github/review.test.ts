@@ -74,6 +74,21 @@ describe('submitReview', () => {
     expect(sentBody.comments[1]).toEqual({ path: 'b.ts', line: 5, side: 'LEFT', body: 'Comment B' })
   })
 
+  it('prepends the 🤖 AI-suggested marker for AI-authored drafts; hand-written stays verbatim', async () => {
+    const f = mockFetch(200, { id: 4 })
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [
+      makeDraft({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'Use a constant.', aiAuthored: true, aiReviewer: 'Security' }),
+      makeDraft({ path: 'b.ts', line: 5, side: 'LEFT', body: 'My own note.' }),
+    ]
+    await submitReview(ref, 'COMMENT', 'Overall', drafts, commitId)
+
+    const sentBody = JSON.parse(f.mock.calls[0][1].body as string)
+    expect(sentBody.comments[0].body).toBe('🤖 _AI-suggested · Security_\n\nUse a constant.')
+    expect(sentBody.comments[1].body).toBe('My own note.')
+  })
+
   it('POSTs to the correct endpoint', async () => {
     const f = mockFetch(200, {})
     vi.stubGlobal('fetch', f)

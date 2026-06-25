@@ -78,7 +78,7 @@
     /**
      * Called when the user clicks "Add as draft" on a skill finding inside FileDiff.
      */
-    onAddSkillFindingDraft?: (finding: { body: string; line: number; key: string }) => Promise<void>
+    onAddSkillFindingDraft?: (finding: { body: string; line: number; key: string; skillName: string }) => Promise<void>
     /**
      * Called when the user DISMISSES a skill finding inside FileDiff (the accept
      * path flows through onAddSkillFindingDraft). Lets the parent record the
@@ -490,7 +490,7 @@
 
   async function handleAddSkillFindingDraft(finding: SkillFinding) {
     if (onAddSkillFindingDraft) {
-      await onAddSkillFindingDraft({ body: finding.body, line: finding.line, key: finding.key })
+      await onAddSkillFindingDraft({ body: finding.body, line: finding.line, key: finding.key, skillName: finding.skillName })
     }
     addedSkillKeys = new Set([...addedSkillKeys, finding.key])
   }

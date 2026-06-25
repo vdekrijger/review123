@@ -210,6 +210,14 @@
     {:else}
       <span class="thread-label">Comment at line {line}</span>
     {/if}
+    {#if draft?.aiAuthored}
+      <span
+        class="ai-badge"
+        data-testid="draft-ai-badge"
+        title={`Suggested by an AI reviewer (${draft.aiReviewer ?? 'AI reviewer'})`}
+        aria-label={`Suggested by an AI reviewer: ${draft.aiReviewer ?? 'AI reviewer'}`}
+      >🤖 AI</span>
+    {/if}
     {#if fromCommit}
       <span class="thread-from-commit" data-testid="draft-from-commit" title="This draft was made on an earlier commit of this PR">from commit {fromCommit}</span>
     {/if}
@@ -306,6 +314,26 @@
     font-size: 0.8rem;
     opacity: 0.7;
     font-weight: 500;
+  }
+
+  .ai-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 0.12rem 0.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-draft, #f0b44488);
+    background: var(--surface-raised, #fff6df);
+    color: var(--text-muted, #b8862a);
+    white-space: nowrap;
+    margin-left: auto;
+    cursor: help;
+  }
+
+  /* When the AI badge is present it already claimed the auto margin; keep a small
+     gap before the from-commit chip instead of a second auto push. */
+  .ai-badge + .thread-from-commit {
+    margin-left: 0.4rem;
   }
 
   .thread-from-commit {

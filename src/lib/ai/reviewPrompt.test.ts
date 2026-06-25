@@ -76,6 +76,17 @@ describe('buildReviewPrompt', () => {
     expect(out).toContain('const x = 1')
   })
 
+  it('does NOT add the 🤖 AI-suggested marker for AI-authored drafts (LLM prompt stays clean)', () => {
+    const out = buildReviewPrompt({
+      pr: pr(),
+      drafts: [draft({ line: 10, body: 'Use a constant here.', aiAuthored: true, aiReviewer: 'Security' })],
+      files: [file()],
+    })
+    expect(out).not.toContain('🤖')
+    expect(out).not.toContain('AI-suggested')
+    expect(out).toContain('Use a constant here.')
+  })
+
   it('uses fileWindow from contents when available', () => {
     const contents = new Map([
       ['src/a.ts', { before: null, after: ['l1', 'l2', 'TARGET', 'l4', 'l5'].join('\n') }],

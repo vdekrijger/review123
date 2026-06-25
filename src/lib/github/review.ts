@@ -5,6 +5,7 @@ import { ghFetch } from './client'
 import { GithubApiError } from './types'
 import type { PrRef } from './parse'
 import type { Draft } from '../drafts/drafts.svelte'
+import { outgoingCommentBody } from '../drafts/drafts.svelte'
 
 export type Verdict = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
 
@@ -56,7 +57,7 @@ export async function submitReview(
         path: d.path,
         line: d.line,
         side: d.side,
-        body: d.body,
+        body: outgoingCommentBody(d),
         ...(d.startLine != null && d.startLine < d.line
           ? { start_line: d.startLine, start_side: d.side }
           : {}),

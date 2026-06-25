@@ -495,6 +495,14 @@
             {#each fileDrafts as draft (draft.path + '|' + draft.line + '|' + draft.side)}
               <div class="draft-item">
                 <span class="draft-line-label">Line {draft.line} ({draft.side})</span>
+                {#if draft.aiAuthored}
+                  <span
+                    class="ai-badge"
+                    data-testid="recap-ai-badge"
+                    title={`Suggested by an AI reviewer (${draft.aiReviewer ?? 'AI reviewer'})`}
+                    aria-label={`Suggested by an AI reviewer: ${draft.aiReviewer ?? 'AI reviewer'}`}
+                  >🤖 AI</span>
+                {/if}
                 <!-- renderMarkdown output is the only acceptable use of {@html} here -->
                 <div class="draft-body">{@html renderMarkdown(draft.body)}</div>
               </div>
@@ -826,8 +834,24 @@
   .draft-line-label {
     font-size: 0.78rem;
     opacity: 0.6;
-    display: block;
+    display: inline-block;
     margin-bottom: 0.25rem;
+  }
+
+  .draft-item .ai-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    line-height: 1;
+    margin-left: 0.4rem;
+    padding: 0.1rem 0.38rem;
+    border-radius: 999px;
+    border: 1px solid var(--hairline);
+    background: var(--surface-raised, transparent);
+    color: var(--text-muted, inherit);
+    opacity: 0.85;
+    white-space: nowrap;
+    cursor: help;
+    vertical-align: middle;
   }
 
   .draft-body :global(p) { margin: 0.25rem 0; }

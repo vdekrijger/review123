@@ -128,6 +128,41 @@ describe('buildReviewPayload', () => {
     const i = input({ drafts: [draft(), draft({ line: 4 })] })
     expect(buildReviewPayload(i)).toEqual(buildReviewPayload(i))
   })
+
+  it('prepends the 🤖 AI-suggested marker for AI-authored drafts (hand-written verbatim)', () => {
+    const p = buildReviewPayload(input({
+      drafts: [
+        draft({ path: 'a.ts', line: 1, body: 'Use a constant.', aiAuthored: true, aiReviewer: 'Security' }),
+        draft({ path: 'b.ts', line: 2, body: 'My own note.' }),
+      ],
+    }))
+    expect(p.comments![0].body).toBe('🤖 _AI-suggested · Security_\n\nUse a constant.')
+    expect(p.comments![1].body).toBe('My own note.')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The 🤖 marker travels through all three console formats for AI-authored drafts
+// ---------------------------------------------------------------------------
+describe('AI-authored marker across console formats', () => {
+  const aiInput = () => input({
+    drafts: [draft({ path: 'a.ts', line: 1, body: 'Use a constant.', aiAuthored: true, aiReviewer: 'Security' })],
+  })
+
+  it('browser console snippet carries the marker', () => {
+    const payload = extractBrowserPayload(buildBrowserConsoleSnippet(aiInput())) as ReviewPayload
+    expect(payload.comments![0].body).toBe('🤖 _AI-suggested · Security_\n\nUse a constant.')
+  })
+
+  it('gh command carries the marker', () => {
+    const payload = extractHeredocJson(buildGhCommand(aiInput())) as ReviewPayload
+    expect(payload.comments![0].body).toBe('🤖 _AI-suggested · Security_\n\nUse a constant.')
+  })
+
+  it('curl script carries the marker', () => {
+    const payload = extractHeredocJson(buildCurlScript(aiInput())) as ReviewPayload
+    expect(payload.comments![0].body).toBe('🤖 _AI-suggested · Security_\n\nUse a constant.')
+  })
 })
 
 // ---------------------------------------------------------------------------

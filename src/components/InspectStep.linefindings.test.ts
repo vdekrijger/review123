@@ -213,6 +213,9 @@ describe('Finding actions — Add as draft / Dismiss', () => {
     expect(arg.path).toBe('src/foo.ts')
     expect(arg.line).toBe(2)
     expect(arg.side).toBe('RIGHT')
+    // A finding turned into a draft is flagged AI-authored with the reviewer name.
+    expect(arg.aiAuthored).toBe(true)
+    expect(arg.aiReviewer).toBe('Security')
   })
 
   it('Add-as-draft auto-hides the finding card (cleanup — the draft now lives in the diff)', async () => {
@@ -303,6 +306,7 @@ describe('FileDiff — skillFindings prop placement', () => {
     const arg = (onAddSkillFindingDraft as ReturnType<typeof vi.fn>).mock.calls[0][0]
     expect(arg.body).toBe('Draft from FileDiff')
     expect(arg.line).toBe(2)
+    expect(arg.skillName).toBe('Security') // reviewer name threaded through for attribution
   })
 
   it('Dismiss hides an inline finding within FileDiff', async () => {
