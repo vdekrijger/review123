@@ -469,7 +469,7 @@
   // home for findings that aren't anchored in the visible diff (the old "bottom"
   // file-level cards were removed), so each entry also carries what
   // addFindingAsDraft / dismissFinding need to act on the finding.
-  type NavFinding = { key: string; path: string; line: number | null; body: string }
+  type NavFinding = { key: string; path: string; line: number | null; body: string; skillName: string }
 
   const navFindingsBySkill = $derived.by(() => {
     const map = new Map<string, NavFinding[]>()
@@ -489,6 +489,7 @@
           path: finding.path,
           line: finding.line,
           body: finding.body,
+          skillName: review.name,
         })
       }
       if (entries.length > 0) map.set(review.skillId, entries)
@@ -744,13 +745,18 @@
     onRetrySkill?.(skillId)
   }
 
-  async function addFindingAsDraft(finding: { findingPath: string; line: number | null; body: string; key: string }) {
+  async function addFindingAsDraft(finding: { findingPath: string; line: number | null; body: string; key: string; skillName?: string }) {
     if (!draftStore) return
     await draftStore.upsert({
       path: finding.findingPath,
       line: finding.line ?? 1,
       side: 'RIGHT',
       body: finding.body,
+      // This draft originates from an AI reviewer's finding → flag it so the
+      // in-app 🤖 badge shows and a GitHub attribution marker is prepended on
+      // submit/export. The editable body stays clean.
+      aiAuthored: true,
+      aiReviewer: finding.skillName,
     })
     track('comment_drafted')
     // Accept signal: record the accept/dismiss telemetry (event + local store).
@@ -879,7 +885,7 @@
         type="button"
         class="findings-popover-action"
         aria-label="Add as draft comment"
-        onclick={(e) => { e.stopPropagation(); addFindingAsDraft({ findingPath: nav.path, line: nav.line, body: nav.body, key: nav.key }) }}
+        onclick={(e) => { e.stopPropagation(); addFindingAsDraft({ findingPath: nav.path, line: nav.line, body: nav.body, key: nav.key, skillName: nav.skillName }) }}
       >Add as draft</button>
       <button
         type="button"
@@ -1194,7 +1200,7 @@
     onRemoveDraft={handleRemoveDraft}
     onAddFileLevelDraft={(suggestion) => addFindingAsDraft(suggestion)}
     onDismissFileLevelFinding={(key) => dismissFinding(key)}
-    onAddSkillFindingDraft={(path, finding) => addFindingAsDraft({ findingPath: path, line: finding.line, body: finding.body, key: finding.key })}
+    onAddSkillFindingDraft={(path, finding) => addFindingAsDraft({ findingPath: path, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName })}
     onDismissSkillFinding={(key) => dismissFinding(key)}
     {askFn}
     {askDisabledReason}
@@ -1283,7 +1289,7 @@
             {askDisabledReason}
             onReply={replyFn}
             skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
-            onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key })}
+            onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName })}
             onDismissSkillFinding={(key) => dismissFinding(key)}
             whitespace={whitespaceByPath.get(file.filename) ?? null}
           />

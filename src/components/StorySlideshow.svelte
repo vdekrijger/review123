@@ -106,7 +106,7 @@
     whitespaceByPath?: Map<string, WhitespaceDisplay>
     onAddDraft: (path: string, line: number, side: 'LEFT' | 'RIGHT', body: string) => void
     onRemoveDraft: (path: string, line: number, side: 'LEFT' | 'RIGHT') => void
-    onAddSkillFindingDraft: (path: string, finding: { body: string; line: number; key: string }) => Promise<void>
+    onAddSkillFindingDraft: (path: string, finding: { body: string; line: number; key: string; skillName: string }) => Promise<void>
     /** Records a dismiss decision for the accept/dismiss telemetry loop. */
     onDismissSkillFinding?: (key: string) => void
     /** Add a file-level (null-line) finding as a draft comment. */

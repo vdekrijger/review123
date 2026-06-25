@@ -309,6 +309,21 @@ describe('VerdictStep', () => {
       expect(screen.getByText(/src\/b\.ts/)).toBeInTheDocument()
       expect(screen.getByText(/drafted comments \(2\)/i)).toBeInTheDocument()
     })
+
+    it('renders the 🤖 badge for an AI-authored draft and not for a hand-written one', async () => {
+      signIn()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'AI finding', aiAuthored: true, aiReviewer: 'Security' })
+      await store.upsert({ path: 'src/b.ts', line: 5, side: 'LEFT', body: 'My own note' })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit },
+      })
+
+      const badges = screen.getAllByTestId('recap-ai-badge')
+      expect(badges).toHaveLength(1)
+      expect(badges[0]).toHaveAttribute('aria-label', expect.stringContaining('Security'))
+    })
   })
 
   // ---- Coach feature tests ----
