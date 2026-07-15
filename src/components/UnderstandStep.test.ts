@@ -129,8 +129,10 @@ describe('UnderstandStep glance card — verdict pill', () => {
 
 describe('UnderstandStep glance card — file/line counts', () => {
   it('shows file count', () => {
-    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
-    expect(screen.getByText(/2 files/i)).toBeInTheDocument()
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run: makeRun({}) } })
+    // Scoped to the stats row's own element — the review-effort factor detail
+    // also mentions the file count, so a page-wide text query would be ambiguous.
+    expect(container.querySelector('.file-count')?.textContent).toMatch(/2 files/i)
   })
 
   it('shows total additions from files', () => {
@@ -1478,5 +1480,137 @@ describe('UnderstandStep — configurable layout (order + enable/disable)', () =
       expect(idx).toBeGreaterThan(lastIdx)
       lastIdx = idx
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Review effort — glance-card badge + expandable factor breakdown
+// (deterministic client-side score, src/lib/risk)
+// ---------------------------------------------------------------------------
+
+describe('UnderstandStep glance card — review effort badge', () => {
+  it('renders the badge with a low level for a tiny benign PR', () => {
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run: makeRun({}) },
+    })
+    const badge = container.querySelector('.risk-badge')
+    expect(badge).not.toBeNull()
+    expect(badge!.textContent).toBe('low')
+    expect(badge!.classList.contains('risk-low')).toBe(true)
+  })
+
+  it('renders a high badge when a factor dominates (huge churn)', () => {
+    const bigFiles: PrFile[] = [
+      { filename: 'src/huge.ts', status: 'modified', additions: 1200, deletions: 300 },
+    ]
+    const { container } = render(UnderstandStep, {
+      props: { meta, files: bigFiles, ci: null, ciError: false, run: makeRun({}) },
+    })
+    const badge = container.querySelector('.risk-badge')
+    expect(badge!.textContent).toBe('high')
+    expect(badge!.classList.contains('risk-high')).toBe(true)
+  })
+
+  it('breakdown is collapsed by default and lists all five named factors when opened', () => {
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run: makeRun({}) },
+    })
+    const details = container.querySelector('.risk-details') as HTMLDetailsElement
+    expect(details).not.toBeNull()
+    expect(details.open).toBe(false)
+    details.open = true
+    const factorEls = details.querySelectorAll('.risk-factor')
+    expect(factorEls.length).toBe(5)
+    const ids = Array.from(factorEls).map((f) => f.getAttribute('data-factor'))
+    expect(ids).toEqual(['size-spread', 'blast-radius', 'verified-findings', 'signals', 'ai-patterns'])
+  })
+
+  it('shows the "refines as analysis completes" hint while reviewers/attention run', () => {
+    const run = makeRun({ attention: { status: 'loading' } })
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    expect(container.querySelector('.risk-refining')).not.toBeNull()
+    expect(container.querySelector('.risk-refining')!.textContent).toMatch(/refines as analysis completes/i)
+  })
+
+  it('hides the refining hint once async inputs settle', () => {
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run: makeRun({}) },
+    })
+    expect(container.querySelector('.risk-refining')).toBeNull()
+  })
+
+  it('lists AI-pattern heuristic flags with file names under the breakdown', () => {
+    const flaggedFiles: PrFile[] = [
+      {
+        filename: 'package.json',
+        status: 'modified',
+        additions: 1,
+        deletions: 0,
+        patch: '@@ -1 +1 @@\n+    "leftpad": "^1.3.0",',
+      },
+    ]
+    const { container } = render(UnderstandStep, {
+      props: { meta, files: flaggedFiles, ci: null, ciError: false, run: makeRun({}) },
+    })
+    const details = container.querySelector('.risk-details') as HTMLDetailsElement
+    details.open = true
+    expect(container.querySelector('.risk-heuristics-head')?.textContent).toMatch(/ai-pattern risks/i)
+    const heuristic = container.querySelector('.risk-heuristic')
+    expect(heuristic).not.toBeNull()
+    expect(heuristic!.textContent).toContain('new dependency: leftpad')
+    expect(heuristic!.textContent).toContain('package.json')
+  })
+
+  it('frames the score as advisory review attention, not defect probability', () => {
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run: makeRun({}) },
+    })
+    const details = container.querySelector('.risk-details') as HTMLDetailsElement
+    details.open = true
+    expect(container.querySelector('.risk-disclaimer')!.textContent).toMatch(/not defect probability/i)
+    expect(container.querySelector('.risk-title')!.textContent).toBe('Review effort')
+  })
+
+  it('marks the blast-radius factor unavailable (not zero-risk) when no impact exists', () => {
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run: makeRun({}) },
+    })
+    const details = container.querySelector('.risk-details') as HTMLDetailsElement
+    details.open = true
+    const blast = container.querySelector('[data-factor="blast-radius"]')!
+    expect(blast.querySelector('.risk-factor-score')!.textContent).toContain('n/a')
+    expect(blast.textContent).toMatch(/unknown, not zero/i)
+  })
+
+  it('reflects reviewer findings in the badge (confirmed high finding → high)', () => {
+    const run = makeRun({
+      skillReviews: [
+        {
+          skillId: 'sec',
+          name: 'Security',
+          state: {
+            status: 'done',
+            value: {
+              skillName: 'Security',
+              findings: [
+                {
+                  path: 'src/a.ts',
+                  line: 1,
+                  severity: 'high',
+                  body: 'issue',
+                  verification: { confirmedBy: 4, polledModels: 4, surfaced: true, perModel: [] },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    })
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    expect(container.querySelector('.risk-badge')!.textContent).toBe('high')
   })
 })

@@ -28,6 +28,7 @@
   import type { SkillReviewResult } from '../lib/ai/schemas'
   import { listSkills } from '../lib/skills/skills'
   import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
+  import { computeFileRisk, type RiskLevel } from '../lib/risk/risk'
   import { classifyFile } from '../lib/diff/diffFile'
   import { isGeneratedFile, sortGeneratedLast } from '../lib/diff/generated'
   import StorySlideshow from './StorySlideshow.svelte'
@@ -278,6 +279,29 @@
         .map(tf => tf.path)
     )
   )
+
+  // Per-file review-effort risk (deterministic — src/lib/risk). Worst files
+  // surface via a compact chip above the diff. To keep rows uncluttered and
+  // avoid double-rendering, the chip is SKIPPED when the hotspot badge already
+  // tells the whole story: for hotspot files we recompute WITHOUT the hotspot
+  // input, and only show the chip if the residual (churn / findings /
+  // sensitive-path) risk is still non-low. Low-risk files get no chip at all.
+  const fileRiskByPath = $derived.by(() => {
+    const map = new Map<string, { level: RiskLevel; show: boolean }>()
+    for (const f of files) {
+      const hotspotLevel = hotspotMap.get(f.filename)?.level ?? null
+      const findings = (skillSuggestionsByPath.get(f.filename) ?? []).map((s) => ({
+        severity: s.severity,
+        verification: s.verification,
+      }))
+      const level = computeFileRisk({ file: f, hotspotLevel, findings })
+      const residual = hotspotLevel
+        ? computeFileRisk({ file: f, hotspotLevel: null, findings })
+        : level
+      map.set(f.filename, { level, show: level !== 'low' && residual !== 'low' })
+    }
+    return map
+  })
 
   // Active path: set on tree click only (no IntersectionObserver)
   let activePath = $state<string | null>(null)
@@ -1262,6 +1286,17 @@
               <span class="hotspot-reason">{file.filename} — {hotspot.reason}</span>
             </div>
           {/if}
+          {#if fileRiskByPath.get(file.filename)?.show}
+            {@const risk = fileRiskByPath.get(file.filename)!}
+            <div
+              class="file-risk-chip risk-{risk.level}"
+              role="note"
+              title="Deterministic review-effort estimate from churn, findings and path — advisory, not a defect prediction"
+            >
+              <span class="file-risk-label">review effort</span>
+              <span class="file-risk-level">{risk.level}</span>
+            </div>
+          {/if}
           {#if testFlagSet.has(file.filename)}
             <div class="test-flag-warning" role="note">
               AI-inferred — not measured coverage
@@ -1629,6 +1664,35 @@
     background: var(--legend-changed-bg);
     color: var(--legend-changed-color);
     border-left: 3px solid var(--legend-changed-border);
+  }
+
+  /* ---- Per-file review-effort chip (deterministic risk) ---- */
+
+  .file-risk-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 10px;
+    font-size: 0.72rem;
+    margin-bottom: 0.25rem;
+    border: 1px solid currentColor;
+  }
+
+  .file-risk-chip.risk-high { color: var(--legend-removed-color); background: var(--legend-removed-bg); }
+  .file-risk-chip.risk-medium { color: var(--legend-changed-color); background: var(--legend-changed-bg); }
+  .file-risk-chip.risk-low { color: var(--text-muted); background: var(--surface-raised); }
+
+  .file-risk-label {
+    opacity: 0.75;
+    white-space: nowrap;
+  }
+
+  .file-risk-level {
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.68rem;
+    letter-spacing: 0.05em;
   }
 
   /* ---- Run button ---- */
