@@ -12,8 +12,14 @@
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import type { CoachCodeContext } from './coachContext'
-import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP } from './schemas'
+import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS } from './schemas'
 
+// PROMPT_VERSION 25 (LLM risk judge): NEW single-pass task (riskJudgePrompt)
+// that judges how much REVIEWER ATTENTION the change deserves — a 0–3 score,
+// a one-line rationale, and up to 5 highlighted risky snippets — feeding the
+// deterministic "Review effort" score (src/lib/risk) as one more factor
+// ("AI judgment"). Adding a task changes the per-task cache universe, so bump
+// to keep cache keys unambiguous; all existing task prompts are byte-identical.
 // PROMPT_VERSION 23 (verify absence-claims): fail-closed floor against the
 // absence/external-evidence false positive ("no test verifies X", "not called",
 // "not handled/validated", "missing guard/index", "fails UNLESS a handler not in
@@ -66,7 +72,7 @@ import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP } from './schemas'
 // lack `impact` and degrade to the suppressed "no notable call-graph impact" note.
 // PROMPT_VERSION 17 (Plan L): the diagram task's output shape was a
 // flow-of-execution (GraphResult.flow) — now retired.
-export const PROMPT_VERSION = 24
+export const PROMPT_VERSION = 25
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)
@@ -738,6 +744,71 @@ Do not include any text outside the JSON object.`
   }
 
   return { system, user: userText }
+}
+
+// ---------------------------------------------------------------------------
+// riskJudgePrompt — JSON RiskJudgeResult (LLM risk judge, PROMPT_VERSION 25)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build prompts for the risk-judge task.
+ *
+ * Output must be JSON-only, matching RiskJudgeResult:
+ *   {
+ *     score: 0 | 1 | 2 | 3,
+ *     rationale: string   (one line, ≤140 chars),
+ *     snippets: [{ path, line?, reason }]   (≤5 entries)
+ *   }
+ *
+ * Framing contract (mirrors src/lib/risk): the judge estimates the REVIEW
+ * ATTENTION the change deserves — never defect probability or code quality.
+ * Its score feeds the deterministic review-effort breakdown as ONE factor.
+ */
+export function riskJudgePrompt(ctx: PackedContext): { system: string; user: string } {
+  const system = `You are an expert change-risk assessor for code review triage. Judge how much \
+REVIEWER ATTENTION the pull request below deserves — NOT defect probability, NOT code quality, \
+NOT whether the author did a good job. Respond with JSON ONLY — no explanation, no markdown, no \
+code fences. Your response must be valid JSON that exactly matches this shape:
+
+{
+  "score": 0 | 1 | 2 | 3,
+  "rationale": "<one line justifying the score>",
+  "snippets": [
+    { "path": "<file-path>", "line": <line number, optional>, "reason": "<why a reviewer should slow down here>" }
+  ]
+}
+
+Score definitions (review attention required):
+- 0: routine — a careful skim suffices (docs, comments, config toggles, mechanical renames with \
+  all call sites updated in this diff).
+- 1: standard — an ordinary read; localized changes with clear behavior and limited reach.
+- 2: elevated — at least one part warrants a slow, careful read (see the signals below).
+- 3: maximal — the change hinges on subtle correctness or has broad behavioral reach; a reviewer \
+  should reserve focused time and read line by line.
+
+Weigh these signals — attention drivers, not line counts:
+- Behavioral blast radius: changed semantics of widely used functions/APIs/contracts, data shapes, \
+  serialization, persisted state, or anything callers rely on.
+- Subtle-correctness hazards: concurrency and async ordering, error/exception paths, retries, \
+  boundary conditions (off-by-one, empty/null, overflow, timezone), caching/invalidation, and \
+  security-adjacent logic (auth, input validation, secrets, injection surfaces).
+- Plausible-but-wrong API usage: code that reads naturally but misuses an API's contract \
+  (ignored return values, wrong argument order/units, misunderstood defaults, misused options).
+Size alone does not raise the score: a large mechanical rename can be 0; a one-line mutex or \
+boundary change can be 3.
+
+Output rules:
+- rationale: ONE line, at most 140 characters, stating the dominant reason for the score.
+- snippets: ONLY places where a reviewer should genuinely slow down — cite the file path (and \
+  line in the NEW file when you can) plus a concrete reason. Prefer FEWER, higher-signal \
+  snippets over coverage. Hard cap: ${RISK_JUDGE_MAX_SNIPPETS}. An EMPTY snippets array is the \
+  expected, GOOD outcome on a routine change — do not invent risk to look thorough.
+
+${ANTI_FATIGUE_RULES}
+
+Do not include any text outside the JSON object.`
+
+  return { system, user: ctx.text }
 }
 
 // ---------------------------------------------------------------------------

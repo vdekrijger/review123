@@ -42,6 +42,7 @@ function makeRun(overrides: Partial<AiRun>): AiRun {
     tests: { status: 'idle' },
     alternatives: { status: 'idle' },
     story: { status: 'idle' },
+    riskJudge: { status: 'idle' },
     skillReviews: [],
     totalUsage: undefined,
     verdictModels: [],
@@ -1511,7 +1512,7 @@ describe('UnderstandStep glance card — review effort badge', () => {
     expect(badge!.classList.contains('risk-high')).toBe(true)
   })
 
-  it('breakdown is collapsed by default and lists all five named factors when opened', () => {
+  it('breakdown is collapsed by default and lists all six named factors when opened', () => {
     const { container } = render(UnderstandStep, {
       props: { meta, files, ci: null, ciError: false, run: makeRun({}) },
     })
@@ -1520,9 +1521,9 @@ describe('UnderstandStep glance card — review effort badge', () => {
     expect(details.open).toBe(false)
     details.open = true
     const factorEls = details.querySelectorAll('.risk-factor')
-    expect(factorEls.length).toBe(5)
+    expect(factorEls.length).toBe(6)
     const ids = Array.from(factorEls).map((f) => f.getAttribute('data-factor'))
-    expect(ids).toEqual(['size-spread', 'blast-radius', 'verified-findings', 'signals', 'ai-patterns'])
+    expect(ids).toEqual(['size-spread', 'blast-radius', 'verified-findings', 'signals', 'ai-patterns', 'ai-judge'])
   })
 
   it('shows the "refines as analysis completes" hint while reviewers/attention run', () => {
@@ -1582,6 +1583,105 @@ describe('UnderstandStep glance card — review effort badge', () => {
     const blast = container.querySelector('[data-factor="blast-radius"]')!
     expect(blast.querySelector('.risk-factor-score')!.textContent).toContain('n/a')
     expect(blast.textContent).toMatch(/unknown, not zero/i)
+  })
+
+  it('marks the AI-judgment factor unavailable when the judge task failed', () => {
+    const run = makeRun({ riskJudge: { status: 'error', error: 'boom' } })
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    const details = container.querySelector('.risk-details') as HTMLDetailsElement
+    details.open = true
+    const judge = container.querySelector('[data-factor="ai-judge"]')!
+    expect(judge.querySelector('.risk-factor-score')!.textContent).toContain('n/a')
+    expect(judge.textContent).toMatch(/unknown, not zero/i)
+  })
+
+  it('renders the AI-judgment factor pending (…) while the judge runs, without blocking the badge', () => {
+    const run = makeRun({ riskJudge: { status: 'loading' } })
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    // Badge still renders from the deterministic factors.
+    expect(container.querySelector('.risk-badge')!.textContent).toBe('low')
+    expect(container.querySelector('.risk-refining')).not.toBeNull()
+    const details = container.querySelector('.risk-details') as HTMLDetailsElement
+    details.open = true
+    const judge = container.querySelector('[data-factor="ai-judge"]')!
+    expect(judge.querySelector('.risk-factor-score')!.textContent).toContain('…')
+    expect(judge.textContent).toMatch(/still running/i)
+  })
+
+  it('renders the AI-judgment row with the rationale as its detail and folds the score into the badge', () => {
+    const run = makeRun({
+      riskJudge: {
+        status: 'done',
+        value: { score: 3, rationale: 'Subtle concurrency change in the retry path.', snippets: [] },
+      },
+    })
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    // Judge score 3 alone drives the overall level to high.
+    expect(container.querySelector('.risk-badge')!.textContent).toBe('high')
+    const details = container.querySelector('.risk-details') as HTMLDetailsElement
+    details.open = true
+    const judge = container.querySelector('[data-factor="ai-judge"]')!
+    expect(judge.querySelector('.risk-factor-label')!.textContent).toBe('AI judgment')
+    expect(judge.querySelector('.risk-factor-detail')!.textContent).toBe('Subtle concurrency change in the retry path.')
+    expect(judge.querySelector('.risk-factor-score')!.textContent).toBe('●●●')
+    // No snippets → no snippet list rendered.
+    expect(judge.querySelector('.risk-snippets')).toBeNull()
+  })
+
+  it('lists risky snippets as path:line — reason beneath the AI-judgment row', () => {
+    const run = makeRun({
+      riskJudge: {
+        status: 'done',
+        value: {
+          score: 2,
+          rationale: 'Two spots deserve a slow read.',
+          snippets: [
+            { path: 'src/a.ts', line: 12, reason: 'error path swallows the abort' },
+            { path: 'src/b.ts', reason: 'boundary condition on empty input' },
+          ],
+        },
+      },
+    })
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    const details = container.querySelector('.risk-details') as HTMLDetailsElement
+    details.open = true
+    const snippets = container.querySelectorAll('.risk-snippet')
+    expect(snippets.length).toBe(2)
+    expect(snippets[0].querySelector('.risk-snippet-path')!.textContent).toBe('src/a.ts:12')
+    expect(snippets[0].textContent).toContain('error path swallows the abort')
+    // Line is optional — the second snippet renders the bare path.
+    expect(snippets[1].querySelector('.risk-snippet-path')!.textContent).toBe('src/b.ts')
+    expect(snippets[1].textContent).toContain('boundary condition on empty input')
+  })
+
+  it('clicking a risky-snippet path jumps to that file (same affordance as hotspot chips)', async () => {
+    const onhotspot = vi.fn()
+    const run = makeRun({
+      riskJudge: {
+        status: 'done',
+        value: {
+          score: 2,
+          rationale: 'One risky spot.',
+          snippets: [{ path: 'src/a.ts', line: 5, reason: 'subtle ordering' }],
+        },
+      },
+    })
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run, onhotspot },
+    })
+    const details = container.querySelector('.risk-details') as HTMLDetailsElement
+    details.open = true
+    const user = userEvent.setup()
+    await user.click(container.querySelector('.risk-snippet-path')!)
+    expect(onhotspot).toHaveBeenCalledWith('src/a.ts')
   })
 
   it('reflects reviewer findings in the badge (confirmed high finding → high)', () => {

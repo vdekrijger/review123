@@ -17,6 +17,7 @@ import {
   coachPrompt,
   alternativesPrompt,
   storyOrderPrompt,
+  riskJudgePrompt,
   askPrompt,
   skillReviewPrompt,
   parseReadingOrder,
@@ -1963,8 +1964,56 @@ describe('storyOrderPrompt', () => {
 })
 
 describe('PROMPT_VERSION', () => {
-  it('is bumped to 24 (change-impact / blast-radius diagram replaces flow)', () => {
-    expect(PROMPT_VERSION).toBe(24)
+  it('is bumped to 25 (LLM risk judge joins the task set)', () => {
+    expect(PROMPT_VERSION).toBe(25)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PROMPT_VERSION 25 — riskJudgePrompt (LLM risk judge)
+// ---------------------------------------------------------------------------
+
+describe('riskJudgePrompt', () => {
+  it('demands JSON-only output matching the RiskJudgeResult shape', () => {
+    const { system } = riskJudgePrompt(makeCtx())
+    expect(system).toMatch(/JSON ONLY/i)
+    expect(system).toContain('"score"')
+    expect(system).toContain('"rationale"')
+    expect(system).toContain('"snippets"')
+    expect(system).toContain('"path"')
+    expect(system).toContain('"reason"')
+    expect(system).toMatch(/Do not include any text outside the JSON object/i)
+  })
+
+  it('frames the judgment as review attention, never defect probability', () => {
+    const { system } = riskJudgePrompt(makeCtx())
+    expect(system).toMatch(/REVIEWER ATTENTION/i)
+    expect(system).toMatch(/NOT defect probability/i)
+  })
+
+  it('weighs blast radius, subtle-correctness hazards, and plausible-but-wrong API usage', () => {
+    const { system } = riskJudgePrompt(makeCtx())
+    expect(system).toMatch(/blast radius/i)
+    expect(system).toMatch(/concurrency/i)
+    expect(system).toMatch(/error\/exception paths/i)
+    expect(system).toMatch(/boundary conditions/i)
+    expect(system).toMatch(/security-adjacent/i)
+    expect(system).toMatch(/plausible-but-wrong API usage/i)
+  })
+
+  it('caps the rationale at 140 chars and the snippets at 5, preferring fewer high-signal ones', () => {
+    const { system } = riskJudgePrompt(makeCtx())
+    expect(system).toMatch(/140 characters/i)
+    expect(system).toMatch(/Hard cap: 5/)
+    expect(system).toMatch(/FEWER, higher-signal/i)
+    expect(system).toMatch(/EMPTY snippets array is the\s+expected, GOOD outcome/i)
+  })
+
+  it('carries the shared anti-fatigue calibration and uses the packed context as the user prompt', () => {
+    const ctx = makeCtx('risk-judge-context-xyz')
+    const { system, user } = riskJudgePrompt(ctx)
+    expect(system).toMatch(/Anti-fatigue calibration/i)
+    expect(user).toBe('risk-judge-context-xyz')
   })
 })
 

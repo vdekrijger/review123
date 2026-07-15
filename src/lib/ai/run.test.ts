@@ -20,7 +20,7 @@ import { createAiRun } from './run.svelte'
 import { LlmError } from '../llm/llm'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
-import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult } from './schemas'
+import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, RiskJudgeResult } from './schemas'
 
 // ---------------------------------------------------------------------------
 // Fixture data
@@ -77,6 +77,12 @@ const STORY_RESULT: StoryOrderResult = {
   ],
 }
 
+const RISK_JUDGE_RESULT: RiskJudgeResult = {
+  score: 1,
+  rationale: 'Localized change with clear behavior.',
+  snippets: [],
+}
+
 // ---------------------------------------------------------------------------
 // Default llmJsonWithRepair implementation that dispatches by validator result
 // Returns appropriate fixture based on which validator accepts the result.
@@ -88,7 +94,7 @@ function defaultJsonDispatch(_opts: unknown, validate: ValidateFn): unknown {
   // Try each fixture in order — return the first one the validator accepts.
   // StoryOrderResult is tried FIRST because validateAttention/etc. would not
   // accept it, but its own shape must win for the story task.
-  for (const candidate of [STORY_RESULT, ATTENTION_RESULT, GRAPH_RESULT, TEST_INSIGHT_RESULT, ALTERNATIVES_RESULT, VERDICT_RESULT]) {
+  for (const candidate of [STORY_RESULT, ATTENTION_RESULT, GRAPH_RESULT, TEST_INSIGHT_RESULT, ALTERNATIVES_RESULT, VERDICT_RESULT, RISK_JUDGE_RESULT]) {
     if (validate(candidate) !== null) return candidate
   }
   return ATTENTION_RESULT // fallback
@@ -285,6 +291,7 @@ describe('cache-hit (EC-17a, track cached:true)', () => {
       if (key.includes('tests')) return TEST_INSIGHT_RESULT
       if (key.includes('alternatives')) return ALTERNATIVES_RESULT
       if (key.includes('story')) return STORY_RESULT
+      if (key.includes('risk-judge')) return RISK_JUDGE_RESULT
       if (key.includes('verdict')) return VERDICT_RESULT
       return null
     })
@@ -589,7 +596,7 @@ describe('verdict records its generator row even without evidence', () => {
 
 describe('modelCostBreakdown reconciles with totalUsage', () => {
   it('sums every task across rows to equal totalUsage, with single-pass labels in the generator byTask', async () => {
-    // Default deps: summary streams (usage 8), the five JSON tasks + verdict each
+    // Default deps: summary streams (usage 8), the six JSON tasks + verdict each
     // report usage 15. Single deepseek key → no cross-verify, so the verdict
     // yields one generator row. Every single-pass task is attributed to the active
     // model's generator row, so the rows must sum to totalUsage.
@@ -609,7 +616,7 @@ describe('modelCostBreakdown reconciles with totalUsage', () => {
     // The active model's generator row carries the single-pass task labels.
     const gen = rows.find((r) => r.role === 'generator')!
     const taskNames = gen.byTask.map((t) => t.task)
-    for (const label of ['Summary', 'Hotspots', 'Diagrams', 'Tests', 'Alternatives', 'Story', 'Verdict']) {
+    for (const label of ['Summary', 'Hotspots', 'Diagrams', 'Tests', 'Alternatives', 'Story', 'Risk judge', 'Verdict']) {
       expect(taskNames).toContain(label)
     }
     // No task's tokens dropped: the generator row's byTask usage sums to its total.
@@ -677,6 +684,8 @@ describe('retry single task', () => {
       if (asAlternatives !== null) return asAlternatives
       const asStory = validate(STORY_RESULT)
       if (asStory !== null) return asStory
+      const asRiskJudge = validate(RISK_JUDGE_RESULT)
+      if (asRiskJudge !== null) return asRiskJudge
       verdictCallCount++
       if (verdictCallCount === 1) throw new LlmError('server', 'verdict broke')
       return VERDICT_RESULT
@@ -783,7 +792,7 @@ describe('duration_ms as number', () => {
     await run.start()
 
     const completedCalls = deps.track.mock.calls.filter((c: unknown[]) => c[0] === 'ai_task_completed')
-    expect(completedCalls.length).toBe(7) // summary + attention + diagrams + tests + alternatives + story + verdict
+    expect(completedCalls.length).toBe(8) // summary + attention + diagrams + tests + alternatives + story + risk-judge + verdict
 
     for (const call of completedCalls) {
       const props = call[1] as Record<string, unknown>
@@ -1881,16 +1890,16 @@ describe('totalUsage — per-review accumulation', () => {
     expect(run.totalUsage).toBeUndefined()
   })
 
-  it('sums every task usage after a full start() (summary 8 + 6 json tasks × 15)', async () => {
+  it('sums every task usage after a full start() (summary 8 + 7 json tasks × 15)', async () => {
     const deps = makeDeps()
     const run = createAiRun(makeInput(), deps)
     await run.start()
 
-    // summary: total 8; attention/diagrams/tests/alternatives/story/verdict: 15 each = 90
+    // summary: total 8; attention/diagrams/tests/alternatives/story/risk-judge/verdict: 15 each = 105
     expect(run.totalUsage).toEqual({
-      prompt_tokens: 5 + 10 * 6,
-      completion_tokens: 3 + 5 * 6,
-      total_tokens: 8 + 15 * 6,
+      prompt_tokens: 5 + 10 * 7,
+      completion_tokens: 3 + 5 * 7,
+      total_tokens: 8 + 15 * 7,
     })
   })
 
@@ -1905,6 +1914,7 @@ describe('totalUsage — per-review accumulation', () => {
       if (key.includes('tests')) return TEST_INSIGHT_RESULT
       if (key.includes('alternatives')) return ALTERNATIVES_RESULT
       if (key.includes('story')) return STORY_RESULT
+      if (key.includes('risk-judge')) return RISK_JUDGE_RESULT
       if (key.includes('verdict')) return VERDICT_RESULT
       return null
     })
@@ -1929,9 +1939,9 @@ describe('totalUsage — per-review accumulation', () => {
 
     expect(run.summary.usage).toBeUndefined()
     expect(run.totalUsage).toEqual({
-      prompt_tokens: 10 * 6,
-      completion_tokens: 5 * 6,
-      total_tokens: 15 * 6,
+      prompt_tokens: 10 * 7,
+      completion_tokens: 5 * 7,
+      total_tokens: 15 * 7,
     })
   })
 

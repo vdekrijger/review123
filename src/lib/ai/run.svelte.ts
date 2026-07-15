@@ -58,6 +58,7 @@ import {
   attentionPrompt,
   diagramsPrompt,
   verdictPrompt,
+  riskJudgePrompt,
   testInsightPrompt,
   coachPrompt,
   alternativesPrompt,
@@ -68,10 +69,10 @@ import {
   type AskFocus,
 } from './tasks'
 export type { AskFocus }
-import { validateAttention, validateVerdict, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, sinkGeneratedSteps, STORY_MAX_STEPS } from './schemas'
+import { validateAttention, validateVerdict, validateRiskJudge, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, sinkGeneratedSteps, STORY_MAX_STEPS } from './schemas'
 import { buildDeterministicStory } from './storyFallback'
 import { matchStoryPath } from './schemas'
-import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, SkillReviewResult } from './schemas'
+import type { AttentionResult, VerdictResult, RiskJudgeResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, SkillReviewResult } from './schemas'
 import type { Draft } from '../drafts/drafts.svelte'
 import type { CoachCodeContext } from './coachContext'
 import {
@@ -181,7 +182,7 @@ export interface VerdictModelBreakdown {
 // Task names (used as cache key discriminants + analytics)
 // ---------------------------------------------------------------------------
 
-type TaskName = 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests' | 'alternatives' | 'story'
+type TaskName = 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests' | 'alternatives' | 'story' | 'riskJudge'
 
 // ---------------------------------------------------------------------------
 // SkillReviewEntry — reactive entry per skill in skillReviews array
@@ -224,13 +225,20 @@ export interface AiRun {
   readonly attention: PanelState<AttentionResult>
   readonly diagrams: PanelState<GraphResult>
   readonly verdict: PanelState<VerdictResult>
+  /**
+   * LLM risk judge: a single-pass 0–3 judgment of the review attention the
+   * change deserves, feeding the deterministic "Review effort" score as ONE
+   * factor ("AI judgment"). The deterministic score never blocks on it.
+   */
+  readonly riskJudge: PanelState<RiskJudgeResult>
   readonly tests: PanelState<TestInsight>
   readonly alternatives: PanelState<AlternativesResult>
   readonly story: PanelState<StoryOrderResult>
   readonly skillReviews: SkillReviewEntry[]
   /**
-   * Sum of every task's captured token usage for THIS PR run (the six core
-   * tasks + any skill reviews). undefined when no task reported usage.
+   * Sum of every task's captured token usage for THIS PR run (the core auto
+   * tasks incl. story + risk judge, plus any skill reviews). undefined when no
+   * task reported usage.
    * Reset implicitly on PR change: a fresh createAiRun() per PR owns its own
    * panel states. Display-only — consumed by the showTokenCost total.
    */
@@ -252,7 +260,7 @@ export interface AiRun {
    * Per-model cost breakdown that RECONCILES with totalUsage: one row per
    * (model, role) whose `total` sums ALL its task contributions (the ensemble
    * verdict/reviewer cross-verify rows AND the single-pass tasks that ran on the
-   * active model — summary/hotspots/diagrams/tests/alternatives/story/coach).
+   * active model — summary/hotspots/diagrams/tests/alternatives/story/risk-judge/coach).
    * Each row carries a per-task drilldown (`byTask`). Summing every row's
    * `total` equals `totalUsage` — no task's tokens are dropped or double-counted.
    * Drives the Step-3 expandable cost panel. Display-only.
@@ -398,6 +406,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   const attentionState = $state<PanelState<AttentionResult>>({ status: 'idle' })
   const diagramsState = $state<PanelState<GraphResult>>({ status: 'idle' })
   const verdictState = $state<PanelState<VerdictResult>>({ status: 'idle' })
+  const riskJudgeState = $state<PanelState<RiskJudgeResult>>({ status: 'idle' })
   const testsState = $state<PanelState<TestInsight>>({ status: 'idle' })
   const alternativesState = $state<PanelState<AlternativesResult>>({ status: 'idle' })
   const storyState = $state<PanelState<StoryOrderResult>>({ status: 'idle' })
@@ -1517,6 +1526,53 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
   }
 
+  async function runRiskJudgeTask(ctx: PackedContext): Promise<void> {
+    // LLM risk judge (PROMPT_VERSION 25): a single-pass task judging how much
+    // REVIEWER ATTENTION the change deserves (0–3 + one-line rationale + up to
+    // 5 risky snippets). Feeds the deterministic "Review effort" score as ONE
+    // factor ("AI judgment") — the deterministic score NEVER blocks on it:
+    // while this runs the factor renders pending; on error, unavailable.
+    // Like story, it is not in the user-facing task matrix (Plan J) and always
+    // runs single-pass on the active model (never the multi-generator ensemble,
+    // never the deep harness) — it is a cheap triage read, not a review task.
+    const key = cacheKey(prKey, 'risk-judge', PROMPT_VERSION)
+
+    const t0 = performance.now()
+    const hit = await getCached<RiskJudgeResult>(key)
+    if (hit !== null) {
+      riskJudgeState.status = 'done'
+      riskJudgeState.value = hit
+      track('ai_task_completed', { task: 'risk-judge', duration_ms: Math.round(performance.now() - t0), cached: true })
+      return
+    }
+
+    riskJudgeState.status = 'loading'
+    const t1 = performance.now()
+    const prompts = riskJudgePrompt(ctx)
+
+    try {
+      const singlePass = await llmJsonWithRepairWithUsage<RiskJudgeResult>(
+        { system: prompts.system, user: prompts.user },
+        validateRiskJudge,
+      )
+      await setCached<RiskJudgeResult>(key, singlePass.result)
+      riskJudgeState.status = 'done'
+      riskJudgeState.value = singlePass.result
+      riskJudgeState.usage = singlePass.usage
+      track('ai_task_completed', {
+        task: 'risk-judge',
+        duration_ms: Math.round(performance.now() - t1),
+        cached: false,
+        ...(singlePass.usage?.total_tokens !== undefined ? { tokens: singlePass.usage.total_tokens } : {}),
+      })
+    } catch (err) {
+      const kind = err instanceof LlmError ? err.kind : 'unknown'
+      riskJudgeState.status = 'error'
+      riskJudgeState.error = humanMessage(kind)
+      track('ai_task_failed', { task: 'risk-judge', reason: kind })
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Deep review helpers (Plan G part 2)
   //
@@ -1873,6 +1929,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     apply('alternatives', alternativesState)
     storyState.status = status
     if (error !== undefined) storyState.error = error
+    // The risk judge, like story, has no user-facing mode — it always takes
+    // the sweep status.
+    riskJudgeState.status = status
+    if (error !== undefined) riskJudgeState.error = error
   }
 
   // ---------------------------------------------------------------------------
@@ -1932,6 +1992,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       alternativesState.status = 'disabled'
       verdictState.status = 'disabled'
       storyState.status = 'disabled'
+      riskJudgeState.status = 'disabled'
       return
     }
 
@@ -1955,6 +2016,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       runTestsTask(ctx),
       runAlternativesTask(ctx),
       runStoryOrderTask(ctx),
+      runRiskJudgeTask(ctx),
       runVerdictTask(ctx, ciData),
     ])
   }
@@ -1979,6 +2041,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     if (task === 'tests') return runTestsTask(ctx)
     if (task === 'alternatives') return runAlternativesTask(ctx)
     if (task === 'story') return runStoryOrderTask(ctx)
+    if (task === 'riskJudge') return runRiskJudgeTask(ctx)
   }
 
   // ---------------------------------------------------------------------------
@@ -2520,6 +2583,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     get attention() { return attentionState },
     get diagrams() { return diagramsState },
     get verdict() { return verdictState },
+    get riskJudge() { return riskJudgeState },
     get tests() { return testsState },
     get alternatives() { return alternativesState },
     get story() { return storyState },
@@ -2528,7 +2592,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // Sum every task's captured usage for this PR run. Tasks with no usage
       // (cached pre-usage results / errors) contribute nothing.
       let total: LlmUsage | undefined
-      const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, storyState]
+      const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, storyState, riskJudgeState]
       for (const s of states) total = addUsage(total, s.usage)
       for (const e of skillReviewsState) total = addUsage(total, e.state.usage)
       // Coach is on-demand (never one of the six core tasks); fold in its usage
@@ -2581,7 +2645,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
       // Single-pass task: one active-model NARRATION contribution carrying its
       // captured usage. The active model ran the DESCRIPTIVE tasks (summary/
-      // hotspots/diagrams/tests/alternatives/story/coach) — it did NOT generate
+      // hotspots/diagrams/tests/alternatives/story/risk-judge/coach) — it did NOT generate
       // review findings, so it's tagged 'narrator' (rendered "active · narration"),
       // distinct from a finding-generating 'generator'. If this same model is ALSO
       // a configured ensemble generator, buildModelCostBreakdown folds these
@@ -2626,6 +2690,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       if (testsState.usage) addSinglePass(testsState.usage, 'Tests')
       if (alternativesState.usage) addSinglePass(alternativesState.usage, 'Alternatives')
       if (storyState.usage) addSinglePass(storyState.usage, 'Story')
+      if (riskJudgeState.usage) addSinglePass(riskJudgeState.usage, 'Risk judge')
       if (coachUsage) addSinglePass(coachUsage, 'Coach')
 
       // Reviewers: per-model rows when an ensemble ran; else attribute the

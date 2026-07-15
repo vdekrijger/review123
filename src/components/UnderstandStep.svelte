@@ -38,7 +38,7 @@
   import type { PrMeta, PrFile } from '../lib/github/types'
   import type { CiSummary as CiSummaryType } from '../lib/github/checks'
   import type { AiRun } from '../lib/ai/run.svelte'
-  import type { AttentionResult, TestInsight, AlternativesResult, VerdictResult, SkillReviewResult, GraphResult } from '../lib/ai/schemas'
+  import type { AttentionResult, TestInsight, AlternativesResult, VerdictResult, SkillReviewResult, GraphResult, RiskJudgeResult } from '../lib/ai/schemas'
   import { computePrRisk } from '../lib/risk/risk'
 
   interface Props {
@@ -184,6 +184,17 @@
   const riskVerdictPending = $derived(
     run.verdict.status === 'loading' || run.verdict.status === 'streaming',
   )
+  // LLM risk judge — ONE more factor ("AI judgment") in the breakdown. The
+  // deterministic score never blocks on it: in flight → the factor renders
+  // pending; failed/absent → unavailable (exactly like blast radius without
+  // impact). (run.riskJudge is guarded — some test doubles of AiRun omit it)
+  const riskJudge = $derived(
+    run.riskJudge?.status === 'done' ? (run.riskJudge.value as RiskJudgeResult) : null,
+  )
+  const riskJudgePending = $derived(
+    run.riskJudge?.status === 'loading' || run.riskJudge?.status === 'streaming',
+  )
+  const riskJudgeSnippets = $derived(riskJudge?.snippets ?? [])
 
   const prRisk = $derived(
     computePrRisk({
@@ -197,6 +208,8 @@
       ci,
       verdictLevel: verdict?.level ?? null,
       verdictPending: riskVerdictPending,
+      riskJudge,
+      riskJudgePending,
     }),
   )
 
@@ -391,6 +404,24 @@
               {#if f.pending}…{:else if f.unavailable}n/a{:else}{riskDots(f.score)}{/if}
             </span>
             <span class="risk-factor-detail">{f.detail}</span>
+            {#if f.id === 'ai-judge' && riskJudgeSnippets.length > 0}
+              <!-- Risky snippets the judge highlighted: compact path:line — reason
+                   lines. The path is clickable and jumps to the file's diff, the
+                   same affordance as the hotspot chips above. -->
+              <ul class="risk-snippets" aria-label="Risky snippets flagged by the AI judgment">
+                {#each riskJudgeSnippets as s, i (`${s.path}:${s.line ?? ''}:${i}`)}
+                  <li class="risk-snippet">
+                    <button
+                      type="button"
+                      class="risk-snippet-path"
+                      onclick={() => handleHotspotClick(s.path)}
+                      title="Open {s.path} in the diff"
+                    >{truncatePath(s.path, 40)}{s.line != null ? `:${s.line}` : ''}</button>
+                    <span class="risk-snippet-reason">— {s.reason}</span>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -808,6 +839,43 @@
   }
 
   .risk-factor-detail { opacity: 0.65; }
+
+  /* Risky snippets under the "AI judgment" factor row (path:line — reason). */
+
+  .risk-snippets {
+    grid-column: 1 / -1;
+    list-style: none;
+    margin: 0.1rem 0 0.15rem;
+    padding: 0 0 0 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .risk-snippet {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem;
+    font-size: 0.75rem;
+  }
+
+  .risk-snippet-path {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font-family: var(--font-mono, monospace);
+    font-size: inherit;
+    color: inherit;
+    opacity: 0.85;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .risk-snippet-path:hover { opacity: 1; }
+
+  .risk-snippet-reason { opacity: 0.6; }
 
   .risk-heuristics-head {
     margin: 0.35rem 0 0.15rem;

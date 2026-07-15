@@ -3,6 +3,7 @@ import type { PrFile } from '../github/types'
 import type { ChangeImpact } from '../diagram/types'
 import type { CiSummary } from '../github/checks'
 import { computePrRisk, computeFileRisk, findingWeight, type RiskFinding } from './risk'
+import type { RiskJudgeResult } from '../ai/schemas'
 
 function file(overrides: Partial<PrFile> & { filename: string }): PrFile {
   return { status: 'modified', additions: 0, deletions: 0, ...overrides }
@@ -211,6 +212,71 @@ describe('AI-pattern factor', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Factor: AI judgment (LLM risk judge)
+// ---------------------------------------------------------------------------
+
+describe('AI judgment factor (LLM risk judge)', () => {
+  const judge = (score: number, rationale = 'Subtle async ordering in the cleanup path.'): RiskJudgeResult => ({
+    score,
+    rationale,
+    snippets: [],
+  })
+
+  it('is unavailable (not zero-risk) when no judgment exists', () => {
+    const f = factor(computePrRisk({ files: smallFiles }), 'ai-judge')
+    expect(f.unavailable).toBe(true)
+    expect(f.pending).toBeUndefined()
+    expect(f.detail).toMatch(/unknown, not zero/i)
+    expect(f.label).toBe('AI judgment')
+  })
+
+  it('is pending while the judge task runs', () => {
+    const f = factor(computePrRisk({ files: smallFiles, riskJudgePending: true }), 'ai-judge')
+    expect(f.pending).toBe(true)
+    expect(f.unavailable).toBeUndefined()
+    expect(f.detail).toMatch(/still running/i)
+  })
+
+  it('carries the judge score with the rationale as the detail when present', () => {
+    const f = factor(
+      computePrRisk({ files: smallFiles, riskJudge: judge(2, 'Concurrency-sensitive change.') }),
+      'ai-judge',
+    )
+    expect(f.score).toBe(2)
+    expect(f.detail).toBe('Concurrency-sensitive change.')
+    expect(f.pending).toBeUndefined()
+    expect(f.unavailable).toBeUndefined()
+  })
+
+  it('defensively clamps an out-of-range judge score into 0-3', () => {
+    expect(factor(computePrRisk({ files: smallFiles, riskJudge: judge(9) }), 'ai-judge').score).toBe(3)
+    expect(factor(computePrRisk({ files: smallFiles, riskJudge: judge(-1) }), 'ai-judge').score).toBe(0)
+  })
+
+  it('a maximal judge score alone drives the overall level to high', () => {
+    const risk = computePrRisk({ files: smallFiles, riskJudge: judge(3) })
+    expect(risk.level).toBe('high')
+  })
+
+  it('a judge score of 2 alone drives the overall level to medium', () => {
+    const risk = computePrRisk({ files: smallFiles, riskJudge: judge(2) })
+    expect(risk.level).toBe('medium')
+  })
+
+  it('pending judge is excluded from the level (deterministic score never blocks on it)', () => {
+    const risk = computePrRisk({ files: smallFiles, riskJudgePending: true })
+    expect(risk.level).toBe('low')
+    expect(risk.pending).toBe(true)
+  })
+
+  it('unavailable judge (failed task) is excluded from the level and not pending', () => {
+    const risk = computePrRisk({ files: smallFiles })
+    expect(risk.level).toBe('low')
+    expect(risk.pending).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Overall level + graceful degradation
 // ---------------------------------------------------------------------------
 
@@ -259,7 +325,7 @@ describe('computePrRisk overall level', () => {
     expect(after.pending).toBe(false)
   })
 
-  it('always returns all five named factors', () => {
+  it('always returns all six named factors', () => {
     const risk = computePrRisk({ files: smallFiles })
     expect(risk.factors.map((f) => f.id)).toEqual([
       'size-spread',
@@ -267,6 +333,7 @@ describe('computePrRisk overall level', () => {
       'verified-findings',
       'signals',
       'ai-patterns',
+      'ai-judge',
     ])
     for (const f of risk.factors) {
       expect(f.label).toBeTruthy()
