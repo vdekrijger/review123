@@ -16,7 +16,9 @@ import {
   validateCoachResult,
   validateAlternativesResult,
   validateChangeImpact,
+  validateRiskJudge,
   IMPACT_MAX_PER_GROUP,
+  RISK_JUDGE_MAX_SNIPPETS,
 } from './schemas'
 
 // ---------------------------------------------------------------------------
@@ -143,6 +145,117 @@ describe('validateAttention', () => {
   it('returns null when testFlags is not an array', () => {
     const bad = { ...valid, testFlags: null }
     expect(validateAttention(bad)).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// validateRiskJudge
+// ---------------------------------------------------------------------------
+
+describe('validateRiskJudge', () => {
+  const valid = {
+    score: 2,
+    rationale: 'Async cancellation ordering is subtle in the cleanup path.',
+    snippets: [
+      { path: 'src/useSearch.ts', line: 24, reason: 'abort-then-refetch ordering' },
+      { path: 'src/api.ts', reason: 'AbortError swallowed - other errors must propagate' },
+    ],
+  }
+
+  it('accepts a valid RiskJudgeResult', () => {
+    const result = validateRiskJudge(valid)
+    expect(result).not.toBeNull()
+    expect(result!.score).toBe(2)
+    expect(result!.rationale).toBe(valid.rationale)
+    expect(result!.snippets).toHaveLength(2)
+    expect(result!.snippets[0]).toEqual({ path: 'src/useSearch.ts', line: 24, reason: 'abort-then-refetch ordering' })
+  })
+
+  it('accepts an empty snippets array (the expected outcome on routine changes)', () => {
+    const result = validateRiskJudge({ ...valid, snippets: [] })
+    expect(result).not.toBeNull()
+    expect(result!.snippets).toEqual([])
+  })
+
+  it('accepts extra keys (tolerant of extras)', () => {
+    expect(validateRiskJudge({ ...valid, confidence: 0.9 })).not.toBeNull()
+  })
+
+  it('line is optional; a snippet without one omits the key', () => {
+    const result = validateRiskJudge(valid)!
+    expect('line' in result.snippets[1]).toBe(false)
+  })
+
+  it('clamps an out-of-range score into 0-3 (above)', () => {
+    expect(validateRiskJudge({ ...valid, score: 7 })!.score).toBe(3)
+  })
+
+  it('clamps a negative score to 0', () => {
+    expect(validateRiskJudge({ ...valid, score: -2 })!.score).toBe(0)
+  })
+
+  it('rounds a fractional score to the nearest integer', () => {
+    expect(validateRiskJudge({ ...valid, score: 2.4 })!.score).toBe(2)
+    expect(validateRiskJudge({ ...valid, score: 2.6 })!.score).toBe(3)
+  })
+
+  it('rounds a fractional snippet line', () => {
+    const result = validateRiskJudge({
+      ...valid,
+      snippets: [{ path: 'a.ts', line: 3.7, reason: 'r' }],
+    })!
+    expect(result.snippets[0].line).toBe(4)
+  })
+
+  it('caps snippets at RISK_JUDGE_MAX_SNIPPETS', () => {
+    const many = Array.from({ length: RISK_JUDGE_MAX_SNIPPETS + 2 }, (_, i) => ({
+      path: `src/f${i}.ts`,
+      reason: `reason ${i}`,
+    }))
+    const result = validateRiskJudge({ ...valid, snippets: many })!
+    expect(result.snippets).toHaveLength(RISK_JUDGE_MAX_SNIPPETS)
+    expect(result.snippets[0].path).toBe('src/f0.ts')
+  })
+
+  it('returns null for a non-numeric score (EC-15a: string/percentage score)', () => {
+    expect(validateRiskJudge({ ...valid, score: 'high' })).toBeNull()
+    expect(validateRiskJudge({ ...valid, score: '66%' })).toBeNull()
+    expect(validateRiskJudge({ ...valid, score: NaN })).toBeNull()
+  })
+
+  it('returns null when score is missing', () => {
+    const { score: _score, ...rest } = valid
+    expect(validateRiskJudge(rest)).toBeNull()
+  })
+
+  it('returns null for a missing or empty rationale', () => {
+    const { rationale: _r, ...rest } = valid
+    expect(validateRiskJudge(rest)).toBeNull()
+    expect(validateRiskJudge({ ...valid, rationale: '' })).toBeNull()
+    expect(validateRiskJudge({ ...valid, rationale: '   ' })).toBeNull()
+  })
+
+  it('returns null when snippets is missing or not an array', () => {
+    const { snippets: _s, ...rest } = valid
+    expect(validateRiskJudge(rest)).toBeNull()
+    expect(validateRiskJudge({ ...valid, snippets: 'none' })).toBeNull()
+  })
+
+  it('returns null when a snippet lacks path or reason', () => {
+    expect(validateRiskJudge({ ...valid, snippets: [{ reason: 'r' }] })).toBeNull()
+    expect(validateRiskJudge({ ...valid, snippets: [{ path: 'a.ts' }] })).toBeNull()
+    expect(validateRiskJudge({ ...valid, snippets: [{ path: '', reason: 'r' }] })).toBeNull()
+  })
+
+  it('returns null when a snippet line is a non-numeric value', () => {
+    expect(validateRiskJudge({ ...valid, snippets: [{ path: 'a.ts', line: 'twelve', reason: 'r' }] })).toBeNull()
+  })
+
+  it('returns null for non-object input', () => {
+    expect(validateRiskJudge(null)).toBeNull()
+    expect(validateRiskJudge('risk')).toBeNull()
+    expect(validateRiskJudge(3)).toBeNull()
+    expect(validateRiskJudge([valid])).toBeNull()
   })
 })
 

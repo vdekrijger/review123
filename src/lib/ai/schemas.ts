@@ -125,6 +125,71 @@ export function validateVerdict(x: unknown): VerdictResult | null {
 }
 
 // ---------------------------------------------------------------------------
+// RiskJudgeResult — LLM change-risk judgment (PROMPT_VERSION 25)
+//
+// One single-pass task whose 0–3 judgment of the REVIEW ATTENTION a change
+// deserves feeds the deterministic review-effort score (src/lib/risk) as ONE
+// factor ("AI judgment"). Advisory framing only — never defect probability.
+// ---------------------------------------------------------------------------
+
+/** Hard cap on risky snippets the judge may return (the validator truncates). */
+export const RISK_JUDGE_MAX_SNIPPETS = 5
+
+/** One place a reviewer should slow down: file (+ optional line) and why. */
+export interface RiskJudgeSnippet {
+  path: string
+  line?: number
+  reason: string
+}
+
+export interface RiskJudgeResult {
+  /** 0 (routine skim) … 3 (deserves the most careful review attention). */
+  score: number
+  /** One-line justification for the score (≤140 chars requested of the model). */
+  rationale: string
+  /** Up to RISK_JUDGE_MAX_SNIPPETS highlighted risky spots. May be empty. */
+  snippets: RiskJudgeSnippet[]
+}
+
+/**
+ * Validate an unknown value as RiskJudgeResult.
+ * Returns a NORMALIZED value or null if the shape is invalid:
+ * - score must be a finite number; it is clamped (and rounded) into 0…3.
+ * - rationale must be a non-empty string.
+ * - snippets must be an array; each entry needs a non-empty path + reason.
+ *   line is optional (finite number → rounded; missing/null → omitted).
+ * - The snippets list is capped at RISK_JUDGE_MAX_SNIPPETS entries.
+ */
+export function validateRiskJudge(x: unknown): RiskJudgeResult | null {
+  if (!isObject(x)) return null
+
+  const rawScore = x['score']
+  if (typeof rawScore !== 'number' || !Number.isFinite(rawScore)) return null
+  const score = Math.min(3, Math.max(0, Math.round(rawScore)))
+
+  const rationale = x['rationale']
+  if (typeof rationale !== 'string' || rationale.trim().length === 0) return null
+
+  if (!Array.isArray(x['snippets'])) return null
+  const snippets: RiskJudgeSnippet[] = []
+  for (const s of x['snippets']) {
+    if (!isObject(s)) return null
+    if (typeof s['path'] !== 'string' || s['path'].trim().length === 0) return null
+    if (typeof s['reason'] !== 'string' || s['reason'].trim().length === 0) return null
+    const line = s['line']
+    const hasLine = typeof line === 'number' && Number.isFinite(line)
+    if (line !== undefined && line !== null && !hasLine) return null
+    snippets.push({
+      path: s['path'],
+      ...(hasLine ? { line: Math.round(line) } : {}),
+      reason: s['reason'],
+    })
+  }
+
+  return { score, rationale, snippets: snippets.slice(0, RISK_JUDGE_MAX_SNIPPETS) }
+}
+
+// ---------------------------------------------------------------------------
 // GraphResult
 // ---------------------------------------------------------------------------
 

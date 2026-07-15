@@ -36,6 +36,7 @@ const GRAPH_RESULT: GraphResult = {
 const TEST_INSIGHT: TestInsight = { covered: [], gaps: [] }
 const ALTERNATIVES_RESULT: AlternativesResult = { problem: 'p', alternatives: [] }
 const SKILL_RESULT: SkillReviewResult = { skillName: 'S', findings: [] }
+const RISK_JUDGE_RESULT = { score: 1, rationale: 'Localized change.', snippets: [] }
 
 function makeSource(): DeepReviewSource {
   return {
@@ -53,7 +54,7 @@ function seedSettings(extra: Record<string, unknown> = {}) {
 }
 
 type ValidateFn = (x: unknown) => unknown
-const CANDIDATES = [VERDICT_RESULT, ATTENTION_RESULT, GRAPH_RESULT, TEST_INSIGHT, ALTERNATIVES_RESULT, SKILL_RESULT]
+const CANDIDATES = [VERDICT_RESULT, ATTENTION_RESULT, GRAPH_RESULT, TEST_INSIGHT, ALTERNATIVES_RESULT, SKILL_RESULT, RISK_JUDGE_RESULT]
 
 function makeDeps() {
   const llmJsonWithRepair = vi.fn().mockImplementation(async (_o: unknown, validate: ValidateFn) => {
@@ -161,7 +162,7 @@ describe('Plan J — per-task off gating', () => {
     const run = createAiRun(makeInput(pack, makeSource()), deps)
     await run.start()
     expect(pack).not.toHaveBeenCalled()
-    for (const s of [run.summary, run.attention, run.diagrams, run.tests, run.alternatives, run.verdict, run.story]) {
+    for (const s of [run.summary, run.attention, run.diagrams, run.tests, run.alternatives, run.verdict, run.story, run.riskJudge]) {
       expect(s.status).toBe('disabled')
     }
   })

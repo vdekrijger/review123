@@ -10,8 +10,8 @@
  * (a catch that rethrows, a dependency line that only bumped a version) must
  * NOT fire. False positives here erode trust in the whole breakdown.
  *
- * The module is pure and framework-free so a later LLM risk-judge factor can
- * sit beside it without touching this file.
+ * The module is pure and framework-free; the LLM risk-judge factor (risk.ts
+ * `ai-judge`) sits beside it without touching this file.
  */
 
 import type { PrFile } from '../github/types'

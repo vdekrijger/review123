@@ -282,6 +282,13 @@ const VERDICT_RESULT = {
   notAnalyzed: [],
 }
 
+// LLM risk judge (PROMPT_VERSION 25): feeds the Review effort "AI judgment" factor
+const RISK_JUDGE_RESULT = {
+  score: 1,
+  rationale: 'Localized feature change with limited reach.',
+  snippets: [],
+}
+
 // v4 contract: TestInsight with 2 covered + 1 gap
 const TEST_INSIGHT_RESULT = {
   covered: [
@@ -632,6 +639,9 @@ async function setupRoutes(
     } else if (systemContent.includes('alternative-is-better') || (systemContent.includes('alternatives') && systemContent.includes('approaches'))) {
       // alternativesPrompt system content mentions "alternative-is-better" enum value and "alternatives"/"approaches"
       result = ALTERNATIVES_RESULT
+    } else if (systemContent.includes('change-risk assessor')) {
+      // riskJudgePrompt system frames the model as a change-risk assessor
+      result = RISK_JUDGE_RESULT
     } else {
       // Default to verdict (also covers summarize which is streaming so won't reach here)
       result = VERDICT_RESULT

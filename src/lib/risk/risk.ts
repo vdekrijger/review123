@@ -14,14 +14,14 @@
  * every factor carries pending/unavailable flags and the overall level is
  * computed from whatever is available NOW; callers re-derive as data lands.
  *
- * Extension point: a later LLM risk-judge lands as one more RiskFactor pushed
- * into the same factors array (same {id,label,score,detail} shape) — no
- * structural change needed.
+ * The LLM risk judge (riskJudge input) is exactly such an async signal: its
+ * 0–3 judgment enters as ONE more factor ("AI judgment") with the same
+ * pending/unavailable degradation — the deterministic score never blocks on it.
  */
 
 import type { PrFile } from '../github/types'
 import type { ChangeImpact } from '../diagram/types'
-import type { AttentionResult, FindingVerification, VerdictResult } from '../ai/schemas'
+import type { AttentionResult, FindingVerification, RiskJudgeResult, VerdictResult } from '../ai/schemas'
 import type { CiSummary } from '../github/checks'
 import { detectHeuristics, isSensitivePath, type HeuristicFlag } from './heuristics'
 
@@ -65,6 +65,10 @@ export interface PrRiskInput {
   ci?: CiSummary | null
   verdictLevel?: VerdictResult['level'] | null
   verdictPending?: boolean
+  /** LLM risk-judge result; null/undefined = not available (see riskJudgePending). */
+  riskJudge?: RiskJudgeResult | null
+  /** True while the risk-judge task is still running. */
+  riskJudgePending?: boolean
 }
 
 export interface PrRisk {
@@ -224,6 +228,29 @@ function aiPatternFactor(flags: HeuristicFlag[]): RiskFactor {
   }
 }
 
+/**
+ * LLM risk-judge factor ("AI judgment"). The judge's 0–3 score enters the
+ * breakdown like any other factor; its one-line rationale is the detail.
+ * In flight → pending (excluded from the level, like every pending factor);
+ * failed/absent → unavailable (unknown is NOT zero-risk). Defensive clamp on
+ * the score — the validator already normalizes, but this module stays pure
+ * and makes no assumptions about its callers.
+ */
+function aiJudgeFactor(judge: RiskJudgeResult | null | undefined, pending: boolean): RiskFactor {
+  if (judge == null) {
+    return pending
+      ? { id: 'ai-judge', label: 'AI judgment', score: 0, detail: 'AI judgment still running', pending: true }
+      : { id: 'ai-judge', label: 'AI judgment', score: 0, detail: 'no AI judgment for this PR — unknown, not zero', unavailable: true }
+  }
+  const score = Math.min(3, Math.max(0, Math.round(judge.score)))
+  return {
+    id: 'ai-judge',
+    label: 'AI judgment',
+    score,
+    detail: judge.rationale,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // computePrRisk
 // ---------------------------------------------------------------------------
@@ -252,6 +279,7 @@ export function computePrRisk(input: PrRiskInput): PrRisk {
       input.attentionPending ?? false,
     ),
     aiPatternFactor(heuristics),
+    aiJudgeFactor(input.riskJudge, input.riskJudgePending ?? false),
   ]
   return {
     level: overallLevel(factors),

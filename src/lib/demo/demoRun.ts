@@ -20,6 +20,7 @@ import {
   demoTotalUsage,
   demoStory,
   demoGraph,
+  demoRiskJudge,
 } from './fixture'
 
 function done<T>(value: T): PanelState<T> {
@@ -77,6 +78,9 @@ export function createDemoRun(): AiRun {
     // demoStory so the Inspect step's Story|Files toggle has a real walkthrough.
     diagrams: done(demoGraph),
     verdict: done(demoVerdict),
+    // LLM risk judge — pre-'done' so the Review effort breakdown shows the
+    // "AI judgment" factor + risky snippets instead of an unavailable row.
+    riskJudge: done(demoRiskJudge),
     tests: done(demoTests),
     alternatives: { status: 'disabled' },
     story: done(demoStory),

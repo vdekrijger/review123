@@ -21,6 +21,7 @@ import type {
   SkillReviewResult,
   StoryOrderResult,
   GraphResult,
+  RiskJudgeResult,
 } from '../ai/schemas'
 
 /** Stable local-storage key for the demo's draft / viewed / decision stores. */
@@ -345,6 +346,27 @@ export const demoAttention: AttentionResult = {
     {
       path: 'src/search/useSearch.test.ts',
       note: 'New tests use fake timers — make sure advanceTimersByTimeAsync matches the 250ms debounce constant.',
+    },
+  ],
+}
+
+/**
+ * Pre-generated LLM risk judgment (RiskJudgeResult schema) — the "AI judgment"
+ * factor in the Review effort breakdown, with a couple of risky snippets.
+ */
+export const demoRiskJudge: RiskJudgeResult = {
+  score: 2,
+  rationale: 'Async cancellation + debounce timing interact — subtle ordering bugs hide in the cleanup path.',
+  snippets: [
+    {
+      path: 'src/search/useSearch.ts',
+      line: 24,
+      reason: 'Abort-then-refetch ordering: confirm the old controller aborts before the new request starts.',
+    },
+    {
+      path: 'src/search/api.ts',
+      line: 11,
+      reason: 'AbortError is swallowed — verify other fetch failures still propagate to the caller.',
     },
   ],
 }
