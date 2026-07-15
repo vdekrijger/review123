@@ -2,7 +2,7 @@
  * Tests for src/lib/skills/builtinSkills.ts
  *
  * Covers:
- *   - BUILTIN_SKILLS is an array of 9 entries
+ *   - BUILTIN_SKILLS is an array of 10 entries
  *   - Each entry has id, name, tagline, and content fields
  *   - Content sanity: < 20_000 chars, non-empty, contains 'Priorities' or 'Discipline'
  *   - Each entry has a unique id
@@ -15,9 +15,9 @@ import { BUILTIN_SKILLS } from './builtinSkills'
 import { SAMPLE_SKILL_NAME } from './sampleSkill'
 
 describe('BUILTIN_SKILLS', () => {
-  it('is an array of exactly 9 entries', () => {
+  it('is an array of exactly 10 entries', () => {
     expect(Array.isArray(BUILTIN_SKILLS)).toBe(true)
-    expect(BUILTIN_SKILLS).toHaveLength(9)
+    expect(BUILTIN_SKILLS).toHaveLength(10)
   })
 
   it('includes the Test Quality & Coverage Reviewer', () => {
@@ -74,6 +74,40 @@ describe('BUILTIN_SKILLS', () => {
   it('Architecture & Design Reviewer has correct tagline', () => {
     const skill = BUILTIN_SKILLS.find((s) => s.name === 'Architecture & Design Reviewer')
     expect(skill?.tagline).toBe('Coupling, boundaries, patterns — is this the right shape?')
+  })
+
+  it('includes a "Domain Modeling & OO Principles" entry', () => {
+    expect(BUILTIN_SKILLS.some((s) => s.name === 'Domain Modeling & OO Principles')).toBe(true)
+  })
+
+  it('Domain Modeling & OO Principles has the expected id and tagline', () => {
+    const skill = BUILTIN_SKILLS.find((s) => s.name === 'Domain Modeling & OO Principles')
+    expect(skill?.id).toBe('domain-modeling')
+    expect(skill?.tagline).toBe('Anemic models, scattered rules — does the logic live with its data?')
+  })
+
+  it('Domain Modeling persona targets the classic OO design smells', () => {
+    const skill = BUILTIN_SKILLS.find((s) => s.id === 'domain-modeling')
+    expect(skill?.content).toMatch(/Anemic domain model/i)
+    expect(skill?.content).toMatch(/Tell, Don't Ask/i)
+    expect(skill?.content).toMatch(/Law of Demeter/i)
+    expect(skill?.content).toMatch(/Hollywood Principle/i)
+    expect(skill?.content).toMatch(/Strategy over conditional sprawl/i)
+    expect(skill?.content).toMatch(/Feature envy/i)
+    expect(skill?.content).toMatch(/Primitive obsession/i)
+  })
+
+  it('Domain Modeling persona stays proportionate (YAGNI guard, no pattern-demands for single call sites)', () => {
+    const skill = BUILTIN_SKILLS.find((s) => s.id === 'domain-modeling')
+    expect(skill?.content).toMatch(/judgment calls/i)
+    expect(skill?.content).toMatch(/YAGNI cuts both ways/i)
+    expect(skill?.content).toMatch(/One call site is not "scattered"/i)
+  })
+
+  it('Domain Modeling persona carries the shared calibration (not bypassed)', async () => {
+    const { SHARED_CALIBRATION } = await import('./builtinSkills')
+    const skill = BUILTIN_SKILLS.find((s) => s.id === 'domain-modeling')
+    expect(skill?.content.endsWith(SHARED_CALIBRATION)).toBe(true)
   })
 
   it('includes a "Security Reviewer (OWASP-minded)" entry', () => {

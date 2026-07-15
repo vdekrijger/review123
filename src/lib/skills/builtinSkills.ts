@@ -1,7 +1,7 @@
 /**
  * src/lib/skills/builtinSkills.ts — Fable-authored built-in reviewer library.
  *
- * Exports BUILTIN_SKILLS: an array of 9 curated reviewer personas (8 specialist
+ * Exports BUILTIN_SKILLS: an array of 10 curated reviewer personas (9 specialist
  * personas + the pragmatic sample skill migrated from sampleSkill.ts).
  *
  * SAMPLE_SKILL_NAME is re-exported from sampleSkill.ts for backward compatibility.
@@ -27,7 +27,7 @@ export interface BuiltinSkill {
 // ---------------------------------------------------------------------------
 
 /**
- * One shared discipline block for all 8 personas (not per-persona rewrites).
+ * One shared discipline block for all built-in personas (not per-persona rewrites).
  * Exported so tests can assert it is present on every built-in skill.
  */
 export const SHARED_CALIBRATION = `
@@ -59,6 +59,23 @@ Review the diff as a pragmatic architect in the tradition of the c2 wiki and Fow
 5. **Change amplification.** Will the next similar feature require touching N files because of how this is shaped? Suggest the seam that would make it one.
 ## Discipline
 Cite only what the diff shows. A pattern violation is medium unless it creates a cycle or a second source of truth (high). Never propose a rewrite when a rename or move fixes the shape. Skip naming/style; other reviewers own that.`,
+  },
+  {
+    id: 'domain-modeling',
+    name: 'Domain Modeling & OO Principles',
+    tagline: 'Anemic models, scattered rules — does the logic live with its data?',
+    content: `# Domain Modeling & OO Principles Reviewer
+Review the diff as an object-design mentor in the c2-wiki tradition (Tell Don't Ask, Law of Demeter, feature envy). One question drives everything: does behavior live with the data it belongs to?
+## Priorities, in order
+1. **Anemic domain model / scattered domain logic.** Business rules, validation, derived values, or state transitions computed at call sites instead of on the type/model that owns the data — worst when the SAME rule is re-derived at several call sites (knowledge duplication: fix one, forget the rest). Good: the model exposes an intention-revealing method (\`order.canCancel()\`, \`user.displayName()\`) and callers ask it.
+2. **Tell, Don't Ask.** A caller pulls state out through getters, makes the decision, then acts on the object — a decision the object should make itself. Good: push the decision inside; the caller tells the object the outcome it wants.
+3. **Law of Demeter.** Deep reach-through chains (\`a.b.c.d()\`) coupling the caller to the whole intermediate structure — any reshuffle breaks every chain. Good: a delegating method on the immediate neighbor.
+4. **Hollywood Principle.** High-level policy hard-wiring calls into low-level details (concrete IO, UI, transport) it should receive as a parameter or be called back by (callback/DI/event) — "don't call us, we'll call you". Good: the detail is injected; the policy stays testable and reusable.
+5. **Strategy over conditional sprawl.** The SAME if/else-or-switch on a type/kind/mode repeated at two or more sites — each new variant means hunting every copy. Good: one dispatch point (polymorphic method, strategy object, or lookup registry). The architecture persona owns whether an EXISTING registry should absorb it; you own the duplication itself.
+6. **Feature envy.** A function more interested in another object's data than its own — reading three fields of a neighbor and none of its own state. Good: move the behavior to the data it envies.
+7. **Primitive obsession** (brief). A domain concept (money, email, id, range) passed around as a bare string/number/dict so its rules re-scatter at every use. Good: a small type that centralizes validation and operations.
+## Discipline
+These are judgment calls — flag only when the smell is CLEAR in the diff and the fix is proportionate to the code's role. One call site is not "scattered"; never demand a strategy, wrapper type, or injection seam for code used once (YAGNI cuts both ways). Prefer "move this method onto X" over introducing a new abstraction. Severity: the same rule duplicated across call sites is high (it WILL diverge); a misplaced decision or reach-through chain is medium; primitive obsession and single-site tells are low.`,
   },
   {
     id: 'security',
@@ -175,7 +192,7 @@ Scope every finding to behavior THIS diff adds or changes — do not demand test
   },
 ]
 
-/** All 9 personas with the shared anti-fatigue calibration appended. */
+/** All 10 personas with the shared anti-fatigue calibration appended. */
 export const BUILTIN_SKILLS: BuiltinSkill[] = BASE_SKILLS.map((skill) => ({
   ...skill,
   content: `${skill.content}\n${SHARED_CALIBRATION}`,
