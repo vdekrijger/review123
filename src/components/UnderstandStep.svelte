@@ -38,7 +38,8 @@
   import type { PrMeta, PrFile } from '../lib/github/types'
   import type { CiSummary as CiSummaryType } from '../lib/github/checks'
   import type { AiRun } from '../lib/ai/run.svelte'
-  import type { AttentionResult, TestInsight, AlternativesResult, VerdictResult } from '../lib/ai/schemas'
+  import type { AttentionResult, TestInsight, AlternativesResult, VerdictResult, SkillReviewResult, GraphResult } from '../lib/ai/schemas'
+  import { computePrRisk } from '../lib/risk/risk'
 
   interface Props {
     meta: PrMeta
@@ -151,6 +152,57 @@
   // --- File/line stats ---
   const totalAdditions = $derived(files.reduce((s, f) => s + f.additions, 0))
   const totalDeletions = $derived(files.reduce((s, f) => s + f.deletions, 0))
+
+  // --- Review effort (deterministic, client-side — src/lib/risk) ------------
+  // Advisory low/medium/high estimate of the ATTENTION this PR needs, fused
+  // from signals we already have. No LLM call of its own; async inputs
+  // (findings / attention / impact) flow in reactively, so the badge refines
+  // as analysis completes. Framed as review effort — never defect probability.
+  // (run.skillReviews is guarded — some test doubles of AiRun omit it)
+  const riskFindings = $derived(
+    (run.skillReviews ?? []).flatMap((e) =>
+      e.state.status === 'done' && e.state.value
+        ? (e.state.value as SkillReviewResult).findings.map((f) => ({
+            severity: f.severity,
+            verification: f.verification,
+          }))
+        : [],
+    ),
+  )
+  const riskFindingsPending = $derived(
+    (run.skillReviews ?? []).some((e) => e.state.status === 'loading' || e.state.status === 'queued'),
+  )
+  const riskImpact = $derived(
+    run.diagrams.status === 'done' ? ((run.diagrams.value as GraphResult).impact ?? null) : null,
+  )
+  const riskImpactPending = $derived(
+    run.diagrams.status === 'loading' || run.diagrams.status === 'streaming',
+  )
+  const riskAttentionPending = $derived(
+    run.attention.status === 'loading' || run.attention.status === 'streaming',
+  )
+  const riskVerdictPending = $derived(
+    run.verdict.status === 'loading' || run.verdict.status === 'streaming',
+  )
+
+  const prRisk = $derived(
+    computePrRisk({
+      files,
+      impact: riskImpact,
+      impactPending: riskImpactPending,
+      attention,
+      attentionPending: riskAttentionPending,
+      findings: riskFindings,
+      findingsPending: riskFindingsPending,
+      ci,
+      verdictLevel: verdict?.level ?? null,
+      verdictPending: riskVerdictPending,
+    }),
+  )
+
+  function riskDots(score: number): string {
+    return '●'.repeat(score) + '○'.repeat(3 - score)
+  }
 
   // --- Churn chart: top 8 files by additions+deletions ---
   const churns = $derived.by(() => {
@@ -320,6 +372,42 @@
         </button>
       {/if}
     </div>
+
+    <!-- Row 1.5: Review effort — deterministic, advisory attention estimate -->
+    <details class="risk-details">
+      <summary class="risk-summary" title="Deterministic estimate of the review attention this PR needs — advisory, not a defect prediction">
+        <span class="risk-title">Review effort</span>
+        <span class="risk-badge risk-{prRisk.level}" aria-label="Review effort: {prRisk.level}">{prRisk.level}</span>
+        {#if prRisk.pending}
+          <span class="risk-refining" role="status">refines as analysis completes</span>
+        {/if}
+        <span class="risk-caret" aria-hidden="true">⌄</span>
+      </summary>
+      <ul class="risk-factors">
+        {#each prRisk.factors as f (f.id)}
+          <li class="risk-factor" data-factor={f.id}>
+            <span class="risk-factor-label">{f.label}</span>
+            <span class="risk-factor-score" aria-label={f.pending ? `${f.label}: pending` : f.unavailable ? `${f.label}: unavailable` : `${f.label}: ${f.score} of 3`}>
+              {#if f.pending}…{:else if f.unavailable}n/a{:else}{riskDots(f.score)}{/if}
+            </span>
+            <span class="risk-factor-detail">{f.detail}</span>
+          </li>
+        {/each}
+      </ul>
+      {#if prRisk.heuristics.length > 0}
+        <p class="risk-heuristics-head">AI-pattern risks</p>
+        <ul class="risk-heuristics">
+          {#each prRisk.heuristics as h, i (`${h.id}:${h.file}:${i}`)}
+            <li class="risk-heuristic">
+              <span class="risk-heuristic-label">{h.label}</span>
+              <span class="risk-heuristic-file">{truncatePath(h.file, 40)}</span>
+              <span class="risk-heuristic-evidence">{h.evidence}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      <p class="risk-disclaimer">Advisory — estimates the review attention needed, not defect probability.</p>
+    </details>
 
     <!-- Row 2: TL;DR -->
     <div class="glance-row glance-row-tldr">
@@ -621,6 +709,153 @@
 
   .additions { color: var(--legend-added-color); font-weight: 500; }
   .deletions { color: var(--legend-removed-color); font-weight: 500; }
+
+  /* Row 1.5 — Review effort (deterministic badge + expandable breakdown) */
+
+  .risk-details {
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    padding: 0;
+  }
+
+  .risk-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.55rem;
+    cursor: pointer;
+    list-style: none;
+    font-size: 0.8rem;
+  }
+
+  .risk-summary::-webkit-details-marker { display: none; }
+
+  .risk-title {
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .risk-badge {
+    display: inline-block;
+    padding: 0.1rem 0.55rem;
+    border-radius: 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+
+  .risk-badge.risk-low {
+    color: var(--legend-added-color);
+    background: var(--legend-added-bg);
+    border-color: var(--legend-added-border);
+  }
+
+  .risk-badge.risk-medium {
+    color: var(--legend-changed-color);
+    background: var(--legend-changed-bg);
+    border-color: var(--legend-changed-border);
+  }
+
+  .risk-badge.risk-high {
+    color: var(--legend-removed-color);
+    background: var(--legend-removed-bg);
+    border-color: var(--legend-removed-border);
+  }
+
+  .risk-refining {
+    font-size: 0.72rem;
+    font-style: italic;
+    opacity: 0.55;
+    white-space: nowrap;
+  }
+
+  .risk-caret {
+    margin-left: auto;
+    opacity: 0.5;
+    transition: transform 0.15s;
+  }
+
+  .risk-details[open] .risk-caret { transform: rotate(180deg); }
+
+  .risk-factors {
+    list-style: none;
+    margin: 0;
+    padding: 0.4rem 0.55rem 0.2rem;
+    border-top: 1px solid var(--hairline);
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .risk-factor {
+    display: grid;
+    grid-template-columns: minmax(9rem, auto) auto 1fr;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-size: 0.78rem;
+  }
+
+  .risk-factor-label { font-weight: 500; }
+
+  .risk-factor-score {
+    font-size: 0.7rem;
+    letter-spacing: 0.15em;
+    opacity: 0.75;
+    white-space: nowrap;
+  }
+
+  .risk-factor-detail { opacity: 0.65; }
+
+  .risk-heuristics-head {
+    margin: 0.35rem 0 0.15rem;
+    padding: 0 0.55rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.6;
+  }
+
+  .risk-heuristics {
+    list-style: none;
+    margin: 0;
+    padding: 0 0.55rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .risk-heuristic {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+  }
+
+  .risk-heuristic-label {
+    font-weight: 500;
+    color: var(--legend-changed-color);
+    white-space: nowrap;
+  }
+
+  .risk-heuristic-file {
+    font-family: var(--font-mono, monospace);
+    opacity: 0.8;
+  }
+
+  .risk-heuristic-evidence { opacity: 0.6; }
+
+  .risk-disclaimer {
+    margin: 0.35rem 0 0;
+    padding: 0.25rem 0.55rem 0.4rem;
+    font-size: 0.7rem;
+    font-style: italic;
+    opacity: 0.5;
+  }
 
   /* Row 2 — TL;DR */
 
