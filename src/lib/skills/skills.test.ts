@@ -3,7 +3,7 @@
  *
  * Covers:
  *   - CRUD: list/add/update/remove/toggle
- *   - Cap: max 10 skills
+ *   - Cap: max 25 skills (SKILLS_CAP)
  *   - Content cap: 20_000 chars max
  *   - Corrupt localStorage is tolerated
  *   - Shape validation on load
@@ -115,7 +115,7 @@ describe('addSkill', () => {
     expect(() => addSkill('Exact', content)).not.toThrow()
   })
 
-  it('throws when skills cap reached (10)', () => {
+  it('throws when skills cap reached (SKILLS_CAP)', () => {
     for (let i = 0; i < SKILLS_CAP; i++) {
       addSkill(`Skill ${i}`, 'content')
     }

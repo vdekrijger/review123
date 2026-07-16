@@ -2,7 +2,7 @@
  * src/lib/skills/skills.ts — Reviewer skill store (bring-your-own persona).
  *
  * Persists to localStorage under `review123:reviewer-skills`.
- * Cap: 10 skills; content cap: 20_000 chars.
+ * Cap: 25 skills (SKILLS_CAP); content cap: 20_000 chars.
  * id = djb2(name + addedAt) — content-addressed enough for our purposes.
  */
 
@@ -13,7 +13,7 @@ import { djb2 } from '../viewed/viewed.svelte'
 // ---------------------------------------------------------------------------
 
 export const SKILLS_KEY = 'review123:reviewer-skills'
-export const SKILLS_CAP = 10
+export const SKILLS_CAP = 25
 export const SKILL_CONTENT_CAP = 20_000
 
 // ---------------------------------------------------------------------------
