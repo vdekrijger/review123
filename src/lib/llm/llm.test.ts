@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { llmComplete, llmCompleteWithUsage, llmStream, llmStreamWithUsage, llmJsonWithRepair, llmJsonWithRepairWithUsage, llmTestConnection, LlmError } from './llm'
+import { setTransientRetryPolicyForTests } from './transientRetry'
 import { setDeepseekKey, setOpenaiKey } from '../settings/settings'
 
 // ---------------------------------------------------------------------------
@@ -45,6 +46,13 @@ function completionBody(content: string) {
 beforeEach(() => {
   localStorage.clear()
   vi.unstubAllGlobals()
+  // This suite is about terminal MAPPING of each status — transient-retry
+  // behavior has its own dedicated suite (transientRetry.test.ts).
+  setTransientRetryPolicyForTests({ maxRetries: 0 })
+})
+
+afterEach(() => {
+  setTransientRetryPolicyForTests(null)
 })
 
 // ---------------------------------------------------------------------------

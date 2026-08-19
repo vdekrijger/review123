@@ -9,31 +9,34 @@
  * budgets, but NO single cap across ALL of those layers. On big PRs they fire
  * together and trip provider rate limits, failing the review.
  *
- * This module adds ONE shared async semaphore that EVERY real LLM HTTP request
- * funnels through (wired into dispatchComplete / dispatchStream in llm.ts — the
- * chokepoints all complete/stream calls pass through). No matter how many
- * tasks / reviewers / verifiers / tool-loops run, at most
- * MAX_INFLIGHT_LLM_CALLS requests are in flight at once; the rest queue FIFO
- * and start as slots free. It sits UNDERNEATH the existing reviewer queue —
- * both coexist (the reviewer queue still bounds reviewer fan-out; this bounds
- * the actual wire traffic globally).
+ * This module provides PER-PROVIDER async semaphores that EVERY real LLM HTTP
+ * request funnels through (wired into dispatchComplete / dispatchStream /
+ * dispatchCompleteFor in llm.ts and postJson in llmToolLoop.ts — the
+ * chokepoints all calls pass through). No matter how many tasks / reviewers /
+ * verifiers / tool-loops run, at most MAX_INFLIGHT_LLM_CALLS requests are in
+ * flight at once PER PROVIDER; the rest queue FIFO and start as slots free.
+ * Per-provider (not one global gate) because the fan-out is provider-blind:
+ * with a single global gate all 5 slots could dogpile ONE provider while the
+ * others sat idle. It sits UNDERNEATH the existing reviewer queue — both
+ * coexist (the reviewer queue still bounds reviewer fan-out; this bounds the
+ * actual wire traffic per provider).
  *
- * IMPORTANT: the exported `llmConcurrencyGate` is a single module-level
- * SINGLETON, so it is shared across ALL callers/tasks/reviewers — NOT a
- * per-task gate. Importing this module anywhere gets the same gate instance.
+ * IMPORTANT: gates are module-level and cached in a Map keyed by provider id,
+ * so they are shared across ALL callers/tasks/reviewers — NOT per-task gates.
+ * `gateFor(id)` anywhere returns the same instance for the same provider.
  *
  * The implementation is dependency-free and deterministic: a counter of active
  * slots plus a FIFO queue of waiters. No Date.now()/Math.random()/timers.
  */
 
 /**
- * Global backpressure knob: the maximum number of LLM HTTP requests allowed in
- * flight at once across the WHOLE app. Tuned low (5) so a big-PR fan-out can't
+ * Backpressure knob: the maximum number of LLM HTTP requests allowed in
+ * flight at once PER PROVIDER. Tuned low (5) so a big-PR fan-out can't
  * trip provider rate limits. A single named constant — no settings UI.
  *
- * Future refinement (not built): this could become per-provider (e.g. a map of
- * provider id → cap) so a fast provider isn't throttled by a slow one. For now
- * one global cap is the simplest thing that survives big PRs.
+ * (This was originally one global cap; it is now per-provider via gateFor()
+ * so one saturated/slow provider can't starve the others — cross-model
+ * verifier calls to provider B proceed while provider A is dogpiled.)
  */
 export const MAX_INFLIGHT_LLM_CALLS = 5
 
@@ -98,8 +101,33 @@ export class ConcurrencyGate {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Per-provider gates
+// ---------------------------------------------------------------------------
+
+/** One lazily-created gate per provider id, each capped at the shared knob. */
+const providerGates = new Map<string, ConcurrencyGate>()
+
 /**
- * THE global singleton. Shared across every LLM HTTP call in the app. Do not
- * construct another gate for production traffic — import this one.
+ * The per-provider gate accessor — the production chokepoint. Every real LLM
+ * HTTP request runs under `gateFor(provider.id).run(...)` (wired in llm.ts
+ * dispatchers + llmToolLoop's postJson). Gates are created lazily and cached
+ * for the process lifetime, so all callers hitting the same provider share
+ * ONE gate; different providers are isolated (A saturated ≠ B blocked).
+ */
+export function gateFor(providerId: string): ConcurrencyGate {
+  let gate = providerGates.get(providerId)
+  if (!gate) {
+    gate = new ConcurrencyGate(MAX_INFLIGHT_LLM_CALLS)
+    providerGates.set(providerId, gate)
+  }
+  return gate
+}
+
+/**
+ * LEGACY back-compat export: the former global singleton. Production traffic
+ * now routes through `gateFor(providerId)` (per-provider); this instance is
+ * kept only so existing imports keep compiling/behaving. Do not wire new
+ * traffic through it.
  */
 export const llmConcurrencyGate = new ConcurrencyGate(MAX_INFLIGHT_LLM_CALLS)

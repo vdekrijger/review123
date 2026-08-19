@@ -18,7 +18,8 @@
  */
 
 import { getSettings } from '../settings/settings'
-import { llmConcurrencyGate } from './concurrencyGate'
+import { gateFor } from './concurrencyGate'
+import { withTransientRetry } from './transientRetry'
 import { activeLlmConfig, PROVIDER_KEY_FIELDS } from './config'
 import { getProvider, getModelDef } from './providers'
 import type { LlmProviderDef, LlmModelDef, LlmProviderId } from './providers'
@@ -37,12 +38,20 @@ export type LlmErrorKind =
   | 'invalid-output'
 
 export class LlmError extends Error {
+  /** HTTP status of the failed response, when the failure was HTTP-level. */
+  public readonly status?: number
+  /** Parsed Retry-After header in ms (429s), when the provider sent one. */
+  public readonly retryAfterMs?: number
+
   constructor(
     public readonly kind: LlmErrorKind,
     message?: string,
+    detail?: { status?: number; retryAfterMs?: number },
   ) {
     super(message ?? `llm: ${kind}`)
     this.name = 'LlmError'
+    this.status = detail?.status
+    this.retryAfterMs = detail?.retryAfterMs
   }
 }
 
@@ -152,9 +161,25 @@ export function mapFetchError(err: unknown): never {
 
 // Exported for llmToolLoop.ts (Plan G) — shared transport plumbing, not public API.
 export function mapHttpStatus(status: number): never {
-  if (status === 401) throw new LlmError('auth', 'Unauthorized (401)')
-  if (status === 429) throw new LlmError('rate-limited', 'Rate limited (429)')
-  throw new LlmError('server', `Server error (${status})`)
+  if (status === 401) throw new LlmError('auth', 'Unauthorized (401)', { status })
+  if (status === 429) throw new LlmError('rate-limited', 'Rate limited (429)', { status })
+  throw new LlmError('server', `Server error (${status})`, { status })
+}
+
+/**
+ * Parse an HTTP Retry-After header into milliseconds. Both RFC 9110 forms:
+ *   delta-seconds — "30"                          → 30_000
+ *   http-date     — "Wed, 21 Oct 2026 07:28:00 GMT" → date minus now (min 0)
+ * Absent / unparseable → undefined. `nowMs` is injectable for tests.
+ */
+export function parseRetryAfterMs(header: string | null, nowMs = Date.now()): number | undefined {
+  if (header === null) return undefined
+  const trimmed = header.trim()
+  if (trimmed === '') return undefined
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000
+  const dateMs = Date.parse(trimmed)
+  if (Number.isNaN(dateMs)) return undefined
+  return Math.max(0, dateMs - nowMs)
 }
 
 /**
@@ -188,9 +213,13 @@ export async function mapHttpError(res: Response): Promise<never> {
   }
   detail = detail.replace(/\s+/g, ' ').trim().slice(0, 300)
   const suffix = detail ? `: ${detail}` : ''
-  if (res.status === 401) throw new LlmError('auth', `Unauthorized (401)${suffix}`)
-  if (res.status === 429) throw new LlmError('rate-limited', `Rate limited (429)${suffix}`)
-  throw new LlmError('server', `Server error (${res.status})${suffix}`)
+  const errDetail = {
+    status: res.status,
+    retryAfterMs: parseRetryAfterMs(res.headers.get('Retry-After')),
+  }
+  if (res.status === 401) throw new LlmError('auth', `Unauthorized (401)${suffix}`, errDetail)
+  if (res.status === 429) throw new LlmError('rate-limited', `Rate limited (429)${suffix}`, errDetail)
+  throw new LlmError('server', `Server error (${res.status})${suffix}`, errDetail)
 }
 
 /** Parse an SSE line's data payload into the raw string. Returns null to skip. */
@@ -791,20 +820,28 @@ function getActiveConfig(): { provider: LlmProviderDef; model: LlmModelDef } {
 }
 
 async function dispatchComplete(opts: LlmCompleteOpts, includeUsage: boolean): Promise<LlmCompleteResult> {
-  // Global backpressure: every real (non-cached) completion holds one of the
-  // MAX_INFLIGHT_LLM_CALLS slots for the duration of the request, released on
-  // success or error. Cache HITs never reach here, so they never consume a slot.
-  return llmConcurrencyGate.run(() => {
-    const { provider, model } = getActiveConfig()
-    switch (provider.transport) {
-      case 'openai-compat':
-        return openaiCompatComplete(provider, model, opts, includeUsage)
-      case 'anthropic':
-        return anthropicComplete(provider, model, opts)
-      case 'gemini':
-        return geminiComplete(provider, model, opts)
-    }
-  })
+  // Per-provider backpressure: every real (non-cached) completion holds one of
+  // the provider's MAX_INFLIGHT_LLM_CALLS slots for the duration of the
+  // request, released on success or error. Cache HITs never reach here, so
+  // they never consume a slot. Transient failures (429 / 5xx) are retried by
+  // withTransientRetry OUTSIDE the gate — the slot is released before each
+  // backoff sleep, so a sleeping call never starves other traffic; every
+  // attempt re-runs the adapter, which builds a fresh 60s timeout signal.
+  const { provider, model } = getActiveConfig()
+  return withTransientRetry(
+    () =>
+      gateFor(provider.id).run(() => {
+        switch (provider.transport) {
+          case 'openai-compat':
+            return openaiCompatComplete(provider, model, opts, includeUsage)
+          case 'anthropic':
+            return anthropicComplete(provider, model, opts)
+          case 'gemini':
+            return geminiComplete(provider, model, opts)
+        }
+      }),
+    { providerId: provider.id, signal: opts.signal },
+  )
 }
 
 /**
@@ -822,18 +859,24 @@ async function dispatchCompleteFor(
   const provider = getProvider(cfg.providerId)
   if (!provider) throw new LlmError('server', `Unknown provider: ${cfg.providerId}`)
   if (!cfg.key) throw new LlmError('no-key', `No key for provider ${cfg.providerId}`)
-  // Cross-model verifier calls share the SAME global gate as the active path —
-  // verifier fan-out across providers is exactly what trips rate limits at scale.
-  return llmConcurrencyGate.run(() => {
-    switch (provider.transport) {
-      case 'openai-compat':
-        return openaiCompatComplete(provider, cfg.model, opts, includeUsage, cfg.key)
-      case 'anthropic':
-        return anthropicComplete(provider, cfg.model, opts, cfg.key)
-      case 'gemini':
-        return geminiComplete(provider, cfg.model, opts, cfg.key)
-    }
-  })
+  // Cross-model verifier calls share the SAME per-provider gate as the active
+  // path — verifier fan-out is exactly what trips rate limits at scale — but a
+  // verifier's provider being saturated never blocks the OTHER providers.
+  // Retry wraps the gate (slot released during backoff), same as dispatchComplete.
+  return withTransientRetry(
+    () =>
+      gateFor(provider.id).run(() => {
+        switch (provider.transport) {
+          case 'openai-compat':
+            return openaiCompatComplete(provider, cfg.model, opts, includeUsage, cfg.key)
+          case 'anthropic':
+            return anthropicComplete(provider, cfg.model, opts, cfg.key)
+          case 'gemini':
+            return geminiComplete(provider, cfg.model, opts, cfg.key)
+        }
+      }),
+    { providerId: provider.id, signal: opts.signal },
+  )
 }
 
 async function dispatchStream(
@@ -846,17 +889,26 @@ async function dispatchStream(
   // missing terminator) BEFORE their promise settles, so gate.run() acquires
   // before the first chunk and releases (in its finally) exactly when the
   // stream finishes, errors, or is aborted — never leaking a slot.
-  return llmConcurrencyGate.run(() => {
-    const { provider, model } = getActiveConfig()
-    switch (provider.transport) {
-      case 'openai-compat':
-        return openaiCompatStream(provider, model, opts, onDelta, includeUsage)
-      case 'anthropic':
-        return anthropicStream(provider, model, opts, onDelta)
-      case 'gemini':
-        return geminiStream(provider, model, opts, onDelta)
-    }
-  })
+  //
+  // Retry safety: a transient 429/5xx surfaces via mapHttpError BEFORE any
+  // delta is emitted (the body is only read after res.ok), so a retried
+  // stream never double-emits. Mid-stream failures map to 'network' (no
+  // status) and are NOT retried.
+  const { provider, model } = getActiveConfig()
+  return withTransientRetry(
+    () =>
+      gateFor(provider.id).run(() => {
+        switch (provider.transport) {
+          case 'openai-compat':
+            return openaiCompatStream(provider, model, opts, onDelta, includeUsage)
+          case 'anthropic':
+            return anthropicStream(provider, model, opts, onDelta)
+          case 'gemini':
+            return geminiStream(provider, model, opts, onDelta)
+        }
+      }),
+    { providerId: provider.id, signal: opts.signal },
+  )
 }
 
 // ===========================================================================

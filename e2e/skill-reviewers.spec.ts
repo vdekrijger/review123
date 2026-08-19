@@ -510,8 +510,11 @@ test('skill-reviewers: errored reviewer chip retries and resolves to findings', 
     if (systemContent.includes('reviewer persona') || systemContent.includes('security reviewer')) {
       skillCalls += 1
       if (skillCalls === 1) {
-        // First run fails → the reviewer enters the error state.
-        return route.fulfill({ status: 500, json: { error: { message: 'server error' } } })
+        // First run fails → the reviewer enters the error state. Uses a
+        // NON-transient status (400): transient 429/5xx are now auto-retried by
+        // the transport (src/lib/llm/transientRetry.ts) and would self-heal
+        // before the error chip — this test is about the MANUAL retry UI.
+        return route.fulfill({ status: 400, json: { error: { message: 'server error' } } })
       }
       // Retry succeeds.
       return route.fulfill({
