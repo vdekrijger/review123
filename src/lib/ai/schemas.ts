@@ -932,6 +932,19 @@ export interface FindingVerification {
   perModel: FindingVerdict[]
 }
 
+/**
+ * One finding ABSORBED into a convergence-merged primary (cross-reviewer
+ * convergence pass). Preserved verbatim — reviewer + location + body — so the
+ * merge destroys nothing; the card's "also flagged as…" disclosure renders it.
+ */
+export interface AbsorbedFinding {
+  reviewer: string
+  path: string
+  line: number | null
+  severity: 'high' | 'medium' | 'low'
+  body: string
+}
+
 export interface SkillFinding {
   path: string
   line: number | null
@@ -945,6 +958,21 @@ export interface SkillFinding {
    * single-generator ('verify') mode. With ≥2 raisers the UI shows "raised by A,B".
    */
   raisedBy?: string[]
+  /**
+   * Cross-reviewer convergence: sibling findings (from OTHER reviewers) that
+   * described the same underlying issue and were merged into this one. Never
+   * produced by the reviewer LLM itself — attached by applyConvergence.
+   */
+  mergedFrom?: AbsorbedFinding[]
+  /** ≤100-char LLM reason the cluster describes one underlying issue. */
+  mergedReason?: string
+  /**
+   * Cross-reviewer convergence: this finding makes the same point as one of the
+   * user's OWN draft comments (at the given location). The card renders it
+   * collapsed/de-emphasized ("covered by your comment on path:line") instead of
+   * deleting it — silent disappearance would look like data loss.
+   */
+  coveredByDraft?: { path: string; line: number }
 }
 
 export interface SkillReviewResult {

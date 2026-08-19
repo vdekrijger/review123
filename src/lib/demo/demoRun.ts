@@ -85,6 +85,9 @@ export function createDemoRun(): AiRun {
     alternatives: { status: 'disabled' },
     story: done(demoStory),
     skillReviews,
+    // No convergence pass in the demo (the canned reviewers don't overlap) —
+    // 'idle' is the honest "skipped" state and renders nothing.
+    convergence: { status: 'idle' },
     totalUsage: demoTotalUsage,
     verdictModels: demoModelPerformance,
     modelPerformance: demoModelPerformance,
