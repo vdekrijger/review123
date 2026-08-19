@@ -486,7 +486,7 @@ describe('listDraftSummaries', () => {
     expect(byKey.get(prA)?.headSha).toBe('shaA')
     // lastUpdatedAt is the max updatedAt across the group's drafts
     expect(byKey.get(prA)?.lastUpdatedAt).toBe(
-      Math.max(...storeA.drafts.map((d) => d.updatedAt)),
+      Math.max(...storeA.drafts.map((d) => d.updatedAt ?? 0)),
     )
   })
 
@@ -834,6 +834,292 @@ describe('AI-authored attribution fields', () => {
     expect(d.headSha).toBe('sha1')
     expect(d.aiAuthored).toBe(true)
     expect(d.aiReviewer).toBe('Perf')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Draft lifecycle: createdAt stamping + preservation
+// ---------------------------------------------------------------------------
+
+/** Seed an ARBITRARY raw record (e.g. one with NO timestamps) under a prKey. */
+async function rawSeedRecord(db: string, key: string, record: Record<string, unknown>) {
+  const idb = (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB
+  await new Promise<void>((resolve, reject) => {
+    const open = idb.open(db, 1)
+    open.onupgradeneeded = () => {
+      const dbh = open.result
+      if (!dbh.objectStoreNames.contains('drafts')) dbh.createObjectStore('drafts')
+    }
+    open.onsuccess = () => {
+      const dbh = open.result
+      const tx = dbh.transaction('drafts', 'readwrite')
+      tx.objectStore('drafts').put(record, key)
+      tx.oncomplete = () => { dbh.close(); resolve() }
+      tx.onerror = () => reject(tx.error)
+    }
+    open.onerror = () => reject(open.error)
+  })
+}
+
+describe('createdAt lifecycle', () => {
+  // NOTE: vi.useFakeTimers() hangs fake-indexeddb (its transactions run on real
+  // timers), so these tests pin time with a Date.now spy instead.
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('stamps createdAt at creation and preserves it on body edit (updatedAt bumps)', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-createdat-${testIndex}`
+    const store = await freshStore(prKey, db)
+    await store.load()
+
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'v1' })
+    expect(store.drafts[0].createdAt).toBe(1_000)
+    expect(store.drafts[0].updatedAt).toBe(1_000)
+
+    nowSpy.mockReturnValue(5_000)
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'v2' })
+    expect(store.drafts[0].body).toBe('v2')
+    expect(store.drafts[0].createdAt).toBe(1_000) // preserved
+    expect(store.drafts[0].updatedAt).toBe(5_000) // bumped
+  })
+
+  it('createdAt round-trips through persistence', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-createdat-rt-${testIndex}`
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(42_000)
+    const store1 = await freshStore(prKey, db)
+    await store1.load()
+    await store1.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'hello' })
+    nowSpy.mockRestore()
+
+    const store2 = await freshStore(prKey, db)
+    await store2.load()
+    expect(store2.drafts[0].createdAt).toBe(42_000)
+  })
+
+  it('editing a legacy draft without createdAt does NOT backfill it', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-createdat-legacy-edit-${testIndex}`
+    // Legacy record: updatedAt present, NO createdAt (the pre-lifecycle shape).
+    await rawSeed(prKey, db, 'a.ts', 3, 'RIGHT', 'legacy body')
+
+    const store = await freshStore(prKey, db)
+    await store.load()
+    expect(store.drafts[0].createdAt).toBeUndefined()
+
+    await store.upsert({ path: 'a.ts', line: 3, side: 'RIGHT', body: 'edited body', n: 0 })
+    expect(store.drafts[0].body).toBe('edited body')
+    expect(store.drafts[0].createdAt).toBeUndefined() // still honest "unknown age"
+    expect(store.drafts[0].updatedAt).toBeGreaterThan(0)
+  })
+
+  it('old drafts with NO timestamps at all survive round-trips unchanged', async () => {
+    const prKey = nextPrKey()
+    const db = `test-db-no-ts-rt-${testIndex}`
+    // Very old shape: no createdAt, no updatedAt.
+    await rawSeedRecord(db, `${prKey}|a.ts|1|RIGHT|0`, { prKey, path: 'a.ts', line: 1, side: 'RIGHT', body: 'ancient', n: 0 })
+
+    const store1 = await freshStore(prKey, db)
+    await store1.load()
+    expect(store1.drafts).toHaveLength(1)
+    expect(store1.drafts[0].createdAt).toBeUndefined()
+    expect(store1.drafts[0].updatedAt).toBeUndefined()
+
+    // A second load (fresh instance) still sees them unchanged — no fabrication.
+    const store2 = await freshStore(prKey, db)
+    await store2.load()
+    expect(store2.drafts[0].body).toBe('ancient')
+    expect(store2.drafts[0].createdAt).toBeUndefined()
+    expect(store2.drafts[0].updatedAt).toBeUndefined()
+  })
+
+  it('re-key migration preserves createdAt and updatedAt exactly', async () => {
+    const IDENTITY = 'github:acme/widgets#77'
+    const db = `test-db-rekey-ts-${++testIndex}`
+    const legacyKey = `${IDENTITY}@shaZ`
+    await rawSeedRecord(db, `${legacyKey}|a.ts|1|RIGHT|0`, {
+      prKey: legacyKey, path: 'a.ts', line: 1, side: 'RIGHT', body: 'timed', n: 0,
+      createdAt: 111, updatedAt: 222,
+    })
+
+    const { createDraftStore } = await import('./drafts.svelte')
+    const store = createDraftStore(IDENTITY, db)
+    await store.load()
+    expect(store.count).toBe(1)
+    expect(store.drafts[0].createdAt).toBe(111)
+    expect(store.drafts[0].updatedAt).toBe(222)
+    expect(store.drafts[0].headSha).toBe('shaZ')
+  })
+
+  it('re-key migration keeps timestamp ABSENCE (no fabricated times)', async () => {
+    const IDENTITY = 'github:acme/widgets#78'
+    const db = `test-db-rekey-nots-${++testIndex}`
+    const legacyKey = `${IDENTITY}@shaY`
+    await rawSeedRecord(db, `${legacyKey}|a.ts|1|RIGHT|0`, {
+      prKey: legacyKey, path: 'a.ts', line: 1, side: 'RIGHT', body: 'untimed', n: 0,
+    })
+
+    const { createDraftStore } = await import('./drafts.svelte')
+    const store = createDraftStore(IDENTITY, db)
+    await store.load()
+    expect(store.count).toBe(1)
+    expect(store.drafts[0].createdAt).toBeUndefined()
+    expect(store.drafts[0].updatedAt).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// isStaleDraft — path-vs-current-diff + older-revision signals
+// ---------------------------------------------------------------------------
+describe('isStaleDraft', () => {
+  it('is stale when the path is not in the current file list', async () => {
+    const { isStaleDraft } = await import('./drafts.svelte')
+    const r = isStaleDraft({ path: 'gone.ts' }, [{ filename: 'a.ts' }, { filename: 'b.ts' }], 'sha1')
+    expect(r.stale).toBe(true)
+  })
+
+  it('is not stale when the path is in the current file list', async () => {
+    const { isStaleDraft } = await import('./drafts.svelte')
+    expect(isStaleDraft({ path: 'a.ts' }, [{ filename: 'a.ts' }], 'sha1').stale).toBe(false)
+  })
+
+  it('renamed file: the NEW name is current — old-path drafts are stale, new-path drafts are not', async () => {
+    const { isStaleDraft } = await import('./drafts.svelte')
+    // GitHub reports renamed files with filename = NEW path, previousFilename = old.
+    const files = [{ filename: 'src/new-name.ts', status: 'renamed' as const, previousFilename: 'src/old-name.ts' }]
+    expect(isStaleDraft({ path: 'src/old-name.ts' }, files, 'sha1').stale).toBe(true)
+    expect(isStaleDraft({ path: 'src/new-name.ts' }, files, 'sha1').stale).toBe(false)
+  })
+
+  it('a file with status "removed" is still in the diff — drafts on it are NOT stale', async () => {
+    const { isStaleDraft } = await import('./drafts.svelte')
+    const files = [{ filename: 'deleted.ts', status: 'removed' as const }]
+    expect(isStaleDraft({ path: 'deleted.ts' }, files, 'sha1').stale).toBe(false)
+  })
+
+  it('empty file list → never stale (no list to judge against)', async () => {
+    const { isStaleDraft } = await import('./drafts.svelte')
+    expect(isStaleDraft({ path: 'anything.ts' }, [], 'sha1').stale).toBe(false)
+  })
+
+  it('olderRevision is true only when both shas are known and differ', async () => {
+    const { isStaleDraft } = await import('./drafts.svelte')
+    const files = [{ filename: 'a.ts' }]
+    expect(isStaleDraft({ path: 'a.ts', headSha: 'old' }, files, 'new').olderRevision).toBe(true)
+    expect(isStaleDraft({ path: 'a.ts', headSha: 'same' }, files, 'same').olderRevision).toBe(false)
+    expect(isStaleDraft({ path: 'a.ts' }, files, 'new').olderRevision).toBe(false)
+    expect(isStaleDraft({ path: 'a.ts', headSha: 'old' }, files, undefined).olderRevision).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// clearAllDrafts / clearStaleDrafts — module-level lifecycle helpers
+// ---------------------------------------------------------------------------
+describe('clearAllDrafts', () => {
+  it('removes every draft for the prKey, leaving other PRs untouched', async () => {
+    const db = `test-db-clearall-mod-${++testIndex}`
+    const { createDraftStore, clearAllDrafts } = await import('./drafts.svelte')
+
+    const prA = 'github:acme/widgets#11'
+    const prB = 'github:acme/widgets#12'
+    const storeA = createDraftStore(prA, db)
+    await storeA.load()
+    await storeA.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'a1' })
+    const storeB = createDraftStore(prB, db)
+    await storeB.load()
+    await storeB.upsert({ path: 'b.ts', line: 1, side: 'LEFT', body: 'b1' })
+
+    await clearAllDrafts(prA, db)
+
+    const reloadA = createDraftStore(prA, db)
+    await reloadA.load()
+    expect(reloadA.count).toBe(0)
+    const reloadB = createDraftStore(prB, db)
+    await reloadB.load()
+    expect(reloadB.count).toBe(1)
+  })
+})
+
+describe('clearStaleDrafts', () => {
+  it('removes ONLY drafts whose file left the diff; returns the removed count', async () => {
+    const db = `test-db-clearstale-${++testIndex}`
+    const { createDraftStore, clearStaleDrafts } = await import('./drafts.svelte')
+
+    const prKey = 'github:acme/widgets#21'
+    const store = createDraftStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'kept.ts', line: 1, side: 'RIGHT', body: 'still here' })
+    await store.upsert({ path: 'kept.ts', line: 9, side: 'RIGHT', body: 'also here' })
+    await store.upsert({ path: 'gone.ts', line: 2, side: 'RIGHT', body: 'file left the diff' })
+
+    const removed = await clearStaleDrafts(prKey, [{ filename: 'kept.ts' }], 'sha1', db)
+    expect(removed).toBe(1)
+
+    const reload = createDraftStore(prKey, db)
+    await reload.load()
+    expect(reload.count).toBe(2)
+    expect(reload.drafts.every((d) => d.path === 'kept.ts')).toBe(true)
+  })
+
+  it('empty file list removes nothing (returns 0)', async () => {
+    const db = `test-db-clearstale-empty-${++testIndex}`
+    const { createDraftStore, clearStaleDrafts } = await import('./drafts.svelte')
+
+    const prKey = 'github:acme/widgets#22'
+    const store = createDraftStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'x' })
+
+    expect(await clearStaleDrafts(prKey, [], 'sha1', db)).toBe(0)
+    const reload = createDraftStore(prKey, db)
+    await reload.load()
+    expect(reload.count).toBe(1)
+  })
+
+  it('returns 0 when no draft is stale', async () => {
+    const db = `test-db-clearstale-none-${++testIndex}`
+    const { createDraftStore, clearStaleDrafts } = await import('./drafts.svelte')
+
+    const prKey = 'github:acme/widgets#23'
+    const store = createDraftStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'x' })
+
+    expect(await clearStaleDrafts(prKey, [{ filename: 'a.ts' }], 'sha1', db)).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// draftTimeLabel / draftTimeTitle — relative age + tooltip text
+// ---------------------------------------------------------------------------
+describe('draftTimeLabel / draftTimeTitle', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('renders relative ages via the shared relativeTime helper', async () => {
+    const { draftTimeLabel } = await import('./drafts.svelte')
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T12:00:00Z'))
+    expect(draftTimeLabel(new Date('2026-08-20T11:59:40Z').getTime())).toBe('just now')
+    expect(draftTimeLabel(new Date('2026-08-20T11:45:00Z').getTime())).toBe('15m ago')
+    expect(draftTimeLabel(new Date('2026-08-20T09:00:00Z').getTime())).toBe('3h ago')
+    expect(draftTimeLabel(new Date('2026-08-18T12:00:00Z').getTime())).toBe('2d ago')
+  })
+
+  it('falls back to "earlier session" when createdAt is missing', async () => {
+    const { draftTimeLabel } = await import('./drafts.svelte')
+    expect(draftTimeLabel(undefined)).toBe('earlier session')
+  })
+
+  it('title text is the exact local datetime, or an honest no-timestamp note', async () => {
+    const { draftTimeTitle } = await import('./drafts.svelte')
+    const ts = new Date('2026-08-18T12:00:00Z').getTime()
+    expect(draftTimeTitle(ts)).toBe(new Date(ts).toLocaleString())
+    expect(draftTimeTitle(undefined)).toBe('Created in an earlier session (no timestamp recorded)')
   })
 })
 
