@@ -86,6 +86,11 @@ const EVENTS = {
   // opened or closed every section) and 'surface' ('page'). No content.
   expand_all: ['expanded', 'surface'],
   file_expanded: ['origin'],
+  // PRIVACY DECISION (symbol click-through): fired when clicking an identifier
+  // in the diff opens the symbol popover. Carries only 'definitions' and
+  // 'references' — integer COUNTS of what the popover listed. Never the symbol
+  // name, file paths, line numbers, or any code content.
+  symbol_popover_opened: ['definitions', 'references'],
   drawer_opened: [],
   // Carries no content — fired when the user turns ON "Hide whitespace changes".
   whitespace_hidden: [],

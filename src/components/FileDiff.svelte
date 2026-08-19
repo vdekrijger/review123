@@ -22,6 +22,11 @@
   import type { WhitespaceDisplay } from '../lib/diff/whitespace'
   import { excerptAround } from '../lib/diff/excerpt'
   import { track } from '../lib/analytics/analytics'
+  import SymbolPopover from './SymbolPopover.svelte'
+  import { registerSymbolSource, unregisterSymbolSource, currentSymbolIndex } from '../lib/symbols/symbolSources'
+  import { resolveClickedToken } from '../lib/symbols/clickToken'
+  import { jumpToDiffLine } from '../lib/symbols/jumpToLine'
+  import type { SymbolDefinition, SymbolReference, DiffSide } from '../lib/symbols/symbolIndex'
 
   /** A skill finding scoped to a specific line in this file */
   export interface SkillFinding {
@@ -654,6 +659,50 @@
 
   // Skill findings whose anchor is NOT in the current diff — fallback block
   const unanchoredSkillFindings = $derived(visibleSkillFindings.filter(f => !rightAnchorLines.has(f.line)))
+
+  // ---- Symbol click-through (Tier 1) ---------------------------------------
+  // Each mounted FileDiff registers its file's text (patch + full contents
+  // when fetched) into the shared symbol-source registry, so clicking an
+  // identifier ANYWHERE in the review can resolve definitions/references
+  // across all rendered PR files. Re-runs when contents arrive (refresh);
+  // unregisters on unmount. See src/lib/symbols/symbolSources.ts.
+  $effect(() => {
+    registerSymbolSource({ filename: file.filename, status: file.status, patch: file.patch, contents: contents ?? null })
+    return () => unregisterSymbolSource(file.filename)
+  })
+
+  interface SymbolPopoverState {
+    symbol: string
+    definitions: SymbolDefinition[]
+    references: SymbolReference[]
+    x: number
+    y: number
+  }
+  let symbolPopover = $state<SymbolPopoverState | null>(null)
+
+  /**
+   * Delegated click handler on the diff container. A PLAIN click opens the
+   * symbol popover — chosen over modified-click because the selection guard
+   * below keeps it from fighting text selection: a click that ends a drag
+   * leaves a non-collapsed selection and is ignored.
+   */
+  function handleDiffClick(e: MouseEvent) {
+    const sel = window.getSelection()
+    if (sel && !sel.isCollapsed) return
+    if (e.defaultPrevented) return
+    const token = resolveClickedToken(e.target, e.clientX, e.clientY)
+    if (!token) return
+    const index = currentSymbolIndex()
+    if (!index.has(token)) return
+    const definitions = index.definitionsOf(token)
+    const references = index.referencesOf(token)
+    symbolPopover = { symbol: token, definitions, references, x: e.clientX, y: e.clientY }
+    track('symbol_popover_opened', { definitions: definitions.length, references: references.length })
+  }
+
+  function handleSymbolJump(path: string, line: number, side: DiffSide) {
+    jumpToDiffLine(path, line, side)
+  }
 </script>
 
 <article class="file-diff" class:is-collapsed={collapsed} class:test-dim={isTest && testFileDisplay === 'dim'} class:test-highlight={isTest && testFileDisplay === 'highlight'}>
@@ -708,10 +757,12 @@
       <p class="ws-inline-note" role="note">Line comments are disabled while whitespace changes are hidden — turn off "Hide whitespace" to comment on exact lines.</p>
     {/if}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       class="focus-dim-host"
       data-focus-mode={focusMode}
       use:focusDim={[focusMode, file.filename, mode, isGenerated]}
+      onclick={handleDiffClick}
     >
     <DiffView
       {diffFile}
@@ -809,6 +860,23 @@
       {/snippet}
     </DiffView>
     </div>
+
+    <!-- Symbol click-through popover (Tier 1): definition + call points for
+         the clicked identifier. Cross-file jumps ride the shared
+         #file-<slug> scroll mechanism (jumpToDiffLine), so no InspectStep
+         wiring is needed. -->
+    {#if symbolPopover}
+      <SymbolPopover
+        symbol={symbolPopover.symbol}
+        definitions={symbolPopover.definitions}
+        references={symbolPopover.references}
+        x={symbolPopover.x}
+        y={symbolPopover.y}
+        currentFile={file.filename}
+        onJump={handleSymbolJump}
+        onClose={() => (symbolPopover = null)}
+      />
+    {/if}
 
     <!-- Fallback draft annotations: ONLY drafts whose line anchor is not present
          in the current diff. Anchored drafts render inline at their line via
@@ -1029,6 +1097,23 @@
   .focus-dim-host :global(.diff-line-new-content.dimmed-noise):hover {
     opacity: 1;
   }
+  /* ---- Symbol click-through (Tier 1) ---- */
+  /* Hover affordance: identifier-ish highlighted tokens hint clickability.
+     Keyword/string/comment/literal tokens are excluded to mirror the click
+     handler's rejection rules. CSS-only — no library surgery. */
+  .focus-dim-host :global(.diff-line-syntax-raw span[class*='hljs-']:not(.hljs-keyword):not(.hljs-string):not(.hljs-comment):not(.hljs-literal):not(.hljs-number):not(.hljs-regexp):not(.hljs-meta):not(.hljs-doctag):not(.hljs-operator):not(.hljs-punctuation)):hover {
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+
+  /* Flash highlight on the row a symbol-popover jump landed on (the class is
+     toggled by src/lib/symbols/jumpToLine.ts; reuses the draft-save flash
+     keyframes). */
+  .focus-dim-host :global(tr.symbol-jump-flash td) {
+    animation: flash-new-draft 1.5s ease-out forwards;
+  }
+
   /* Apply the --font-mono token to the diff view container */
   :global(.unified-diff-table-wrapper),
   :global(.old-diff-table-wrapper),
