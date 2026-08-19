@@ -13,6 +13,7 @@
   import ReviewProgress from '../components/ReviewProgress.svelte'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
   import { createDraftStore } from '../lib/drafts/drafts.svelte'
+  import DraftLifecycleBanner from '../components/DraftLifecycleBanner.svelte'
   import { createDecisionStore } from '../lib/eval/decisions'
   import VerdictStep from '../components/VerdictStep.svelte'
   import { createAiRun } from '../lib/ai/run.svelte'
@@ -142,6 +143,11 @@
   let decisionStore: ReturnType<typeof createDecisionStore> | null = $state(null)
   let storeInitialized = false
 
+  // How many drafts the store loaded FROM DISK for this PR — i.e. drafts made
+  // in an earlier session. Drives the draft-lifecycle banner; drafts created in
+  // THIS session never trigger it (the count is captured once, post-load()).
+  let preexistingDraftCount = $state(0)
+
   // ---- Since-last-visit interdiff state ----
   // The headSha from the PREVIOUS visit (null = first visit or same sha)
   let prevVisitSha: string | null = $state(null)
@@ -186,7 +192,11 @@
       // Un-awaited intentionally: causes a cosmetic 0-count flash on mount
       // but avoids blocking render. Load completes asynchronously (and absorbs
       // any legacy sha-keyed drafts via the re-key migration in load()).
-      void store.load()
+      // Once loaded, the on-disk count = drafts from a previous session — it
+      // gates the draft-lifecycle banner (Keep / Clear stale / Clear all).
+      void store.load().then(() => {
+        preexistingDraftCount = store.count
+      })
 
       // Record this PR in the recent-reviews history. The full file stats are
       // already loaded here, so persist the diff size too — the landing page
@@ -751,6 +761,19 @@
       </a>
     </div>
     <Stepper {step} onstep={(s) => goStep(s)} />
+
+    <!-- Draft-lifecycle banner: this PR opened with drafts from an earlier
+         session. Shown on every step (top of the flow) until kept/cleared;
+         dismissal is per-PR-per-session, so it greets the next visit again
+         while old drafts remain. -->
+    {#if draftStore && preexistingDraftCount > 0}
+      <DraftLifecycleBanner
+        store={draftStore}
+        files={load.state.files}
+        headSha={load.state.meta.headSha}
+        prKey={prId}
+      />
+    {/if}
 
     <!-- ContextRail outside step switch (all steps) -->
     {#if aiRun}
