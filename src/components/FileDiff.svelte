@@ -34,6 +34,12 @@
     verification?: import('../lib/ai/schemas').FindingVerification
     /** Multi-generator provenance (Plan O) — drives the "raised by A,B" chip. */
     raisedBy?: string[]
+    /** Convergence: absorbed sibling findings ("also flagged as…" disclosure). */
+    mergedFrom?: import('../lib/ai/schemas').AbsorbedFinding[]
+    /** Convergence: ≤100-char shared-root-cause reason (tooltip). */
+    mergedReason?: string
+    /** Convergence: same point as the user's own draft → collapsed rendering. */
+    coveredByDraft?: { path: string; line: number }
   }
 
   interface Props {
@@ -776,6 +782,9 @@
                 body={finding.body}
                 verification={finding.verification}
                 raisedBy={finding.raisedBy}
+                mergedFrom={finding.mergedFrom}
+                mergedReason={finding.mergedReason}
+                coveredByDraft={finding.coveredByDraft}
                 line={finding.line}
                 anchored={true}
                 compact={true}
@@ -838,6 +847,9 @@
             body={finding.body}
             verification={finding.verification}
             raisedBy={finding.raisedBy}
+            mergedFrom={finding.mergedFrom}
+            mergedReason={finding.mergedReason}
+            coveredByDraft={finding.coveredByDraft}
             line={finding.line}
             anchored={false}
             findingKey={finding.key}

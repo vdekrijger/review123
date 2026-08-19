@@ -19,7 +19,7 @@
   import MarkdownView from './MarkdownView.svelte'
   import VerifyVotesTooltip from './VerifyVotesTooltip.svelte'
   import AskBox from './AskBox.svelte'
-  import type { FindingVerification } from '../lib/ai/schemas'
+  import type { FindingVerification, AbsorbedFinding } from '../lib/ai/schemas'
   import type { AskFocus } from '../lib/ai/tasks'
 
   interface Props {
@@ -61,9 +61,34 @@
     askPath?: string
     /** Code excerpt around the finding's line — part of the Ask AI focus. */
     askExcerpt?: string
+    /**
+     * Cross-reviewer convergence: the sibling findings (other reviewers) merged
+     * into this card. Renders the expandable "also flagged as…" disclosure —
+     * every absorbed finding stays readable (reviewer + location + body).
+     */
+    mergedFrom?: AbsorbedFinding[]
+    /** ≤100-char reason the cluster describes one underlying issue (tooltip). */
+    mergedReason?: string
+    /**
+     * Cross-reviewer convergence: this finding makes the same point as the
+     * user's own draft at path:line. The card renders COLLAPSED/de-emphasized
+     * ("covered by your comment on path:line") — expandable, never vanishing.
+     */
+    coveredByDraft?: { path: string; line: number }
   }
 
-  let { skillName, severity, body, verification = undefined, raisedBy = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss, askFn = null, askPath = undefined, askExcerpt = undefined }: Props = $props()
+  let { skillName, severity, body, verification = undefined, raisedBy = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss, askFn = null, askPath = undefined, askExcerpt = undefined, mergedFrom = undefined, mergedReason = undefined, coveredByDraft = undefined }: Props = $props()
+
+  // Covered-by-draft cards start collapsed; the toggle discloses the full card.
+  let coveredExpanded = $state(false)
+  const coveredLabel = $derived(
+    coveredByDraft ? `covered by your comment on ${coveredByDraft.path}:${coveredByDraft.line}` : '',
+  )
+
+  /** First line of an absorbed finding's body, for the one-line disclosure row. */
+  function firstLine(text: string): string {
+    return text.split('\n')[0]
+  }
 
   // Ask AI is gated on a configured askFn (same convention as the rest of the app).
   const hasAsk = $derived(askFn !== null && askFn !== undefined)
@@ -104,11 +129,38 @@
   )
 </script>
 
-<div class="skill-finding severity-{severity}" class:compact class:lower-confidence={isLowerConfidence} role="note" aria-label="{skillName} finding, severity {severity}" data-finding-key={findingKey ?? undefined}>
+{#if coveredByDraft && !coveredExpanded}
+  <!-- Collapsed covered-by-draft state: the finding makes the same point as the
+       user's own draft. De-emphasized one-liner — expandable, never deleted
+       (silent disappearance would look like data loss). -->
+  <div class="skill-finding covered-collapsed" class:compact role="note" aria-label="{skillName} finding, {coveredLabel}" data-finding-key={findingKey ?? undefined}>
+    <button
+      type="button"
+      class="covered-toggle"
+      aria-expanded="false"
+      onclick={() => (coveredExpanded = true)}
+    >
+      <span class="skill-persona-label">{skillName}</span>
+      <span class="covered-chip">✓ {coveredLabel}</span>
+      <span class="covered-expand-hint" aria-hidden="true">⌄</span>
+    </button>
+  </div>
+{:else}
+<div class="skill-finding severity-{severity}" class:compact class:lower-confidence={isLowerConfidence} class:covered-by-draft={!!coveredByDraft} role="note" aria-label="{skillName} finding, severity {severity}" data-finding-key={findingKey ?? undefined}>
   <div class="skill-finding-header">
     <span class="skill-persona-label">{skillName}</span>
     {#if line !== null && !anchored}
       <span class="skill-line-note">line {line} — not in this diff</span>
+    {/if}
+    {#if coveredByDraft}
+      <span class="covered-chip">✓ {coveredLabel}</span>
+      <button
+        type="button"
+        class="covered-expand-hint covered-collapse-btn"
+        aria-expanded="true"
+        aria-label="Collapse this covered finding"
+        onclick={() => (coveredExpanded = false)}
+      >⌃</button>
     {/if}
     {#if added}
       <span class="skill-state-chip" role="status">✓ added as draft</span>
@@ -142,6 +194,22 @@
   <div class="skill-finding-body">
     <MarkdownView source={body} />
   </div>
+  {#if mergedFrom && mergedFrom.length > 0}
+    <!-- Convergence disclosure: every absorbed sibling finding stays readable
+         (reviewer + location + one-line body) — the merge destroys nothing. -->
+    <details class="merged-from" title={mergedReason || undefined}>
+      <summary class="merged-from-summary">also flagged as… ({mergedFrom.length})</summary>
+      <ul class="merged-from-list">
+        {#each mergedFrom as m, i (i)}
+          <li class="merged-from-item">
+            <span class="merged-from-reviewer">{m.reviewer}</span>
+            <span class="merged-from-loc">{m.path}{m.line !== null ? `:${m.line}` : ''}</span>
+            <span class="merged-from-body">{firstLine(m.body)}</span>
+          </li>
+        {/each}
+      </ul>
+    </details>
+  {/if}
   <div class="skill-finding-actions">
     <button
       class="skill-add-draft-btn"
@@ -171,6 +239,7 @@
     />
   {/if}
 </div>
+{/if}
 
 <style>
   /* ---- Card: severity drives the (solid) border + background tint ---- */
@@ -332,6 +401,99 @@
   .skill-lower-confidence-chip:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
+  }
+
+  /* ---- Covered-by-draft (convergence): collapsed, de-emphasized ---- */
+  .skill-finding.covered-collapsed {
+    border-style: dashed;
+    border-color: var(--border-subtle);
+    background: var(--surface-raised);
+    opacity: 0.72;
+    padding: 0.25rem 0.5rem;
+  }
+
+  .skill-finding.covered-collapsed:hover,
+  .skill-finding.covered-collapsed:focus-within {
+    opacity: 1;
+  }
+
+  /* Expanded covered card: still visibly weaker than a live finding. */
+  .skill-finding.covered-by-draft {
+    border-style: dashed;
+    opacity: 0.85;
+  }
+
+  .covered-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .covered-chip {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    background: var(--surface-raised);
+    color: var(--text-muted);
+    border: 1px dashed var(--border-subtle);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  .covered-expand-hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .covered-collapse-btn {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    padding: 0 0.2rem;
+  }
+
+  /* ---- Merged-from disclosure (convergence "also flagged as…") ---- */
+  .merged-from {
+    margin: 0 0 0.4rem;
+    font-size: 0.75rem;
+  }
+
+  .merged-from-summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+
+  .merged-from-list {
+    margin: 0.25rem 0 0;
+    padding-left: 1rem;
+    list-style: disc;
+  }
+
+  .merged-from-item {
+    margin-bottom: 0.15rem;
+    line-height: 1.35;
+  }
+
+  .merged-from-reviewer {
+    font-weight: 600;
+  }
+
+  .merged-from-loc {
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    margin: 0 0.3rem;
   }
 
   /* ---- Unresolvable-anchor note: muted, labeled, mono ---- */

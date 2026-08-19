@@ -55,6 +55,10 @@
     key: string
     verification?: FindingVerification
     raisedBy?: string[]
+    /** Convergence: absorbed sibling findings ("also flagged as…"). */
+    mergedFrom?: import('../lib/ai/schemas').AbsorbedFinding[]
+    mergedReason?: string
+    coveredByDraft?: { path: string; line: number }
   }
 
   let {
@@ -474,6 +478,9 @@
                       body={suggestion.body}
                       verification={suggestion.verification}
                       raisedBy={suggestion.raisedBy}
+                      mergedFrom={suggestion.mergedFrom}
+                      mergedReason={suggestion.mergedReason}
+                      coveredByDraft={suggestion.coveredByDraft}
                       line={suggestion.line}
                       anchored={false}
                       findingKey={suggestion.key}
