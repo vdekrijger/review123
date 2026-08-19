@@ -626,7 +626,11 @@ async function setupRoutes(
 
     let result: unknown
 
-    if (systemContent.includes('hotspot') || systemContent.includes('readingorder')) {
+    if (systemContent.includes('consolidating overlapping code-review findings')) {
+      // Convergence pass (PROMPT_VERSION 26): no overlaps — a valid empty
+      // cluster set, so the flow renders findings unmerged (loss-proof path).
+      result = { clusters: [] }
+    } else if (systemContent.includes('hotspot') || systemContent.includes('readingorder')) {
       result = ATTENTION_RESULT
     } else if (systemContent.includes('execution path') || systemContent.includes('mermaid')) {
       result = opts.emptyFlow ? GRAPH_RESULT_NO_FLOW : GRAPH_RESULT
