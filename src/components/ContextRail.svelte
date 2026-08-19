@@ -120,7 +120,7 @@
           <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
             <summary class="rail-section-summary">
               <span class="rail-section-title">{section.title}</span>
-              <SectionStatus status={run.summary.status} title={section.title} />
+              <SectionStatus status={run.summary.status} error={run.summary.error} errorDetail={run.summary.errorDetail} title={section.title} />
             </summary>
             <div class="rail-section-body">
               <SummaryPanel {run} />
@@ -195,7 +195,7 @@
           <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
             <summary class="rail-section-summary">
               <span class="rail-section-title">{section.title}</span>
-              <SectionStatus status={run.diagrams.status} title={section.title} />
+              <SectionStatus status={run.diagrams.status} error={run.diagrams.error} errorDetail={run.diagrams.errorDetail} title={section.title} />
             </summary>
             <div class="rail-section-body">
               <DiagramsSection {run} />
@@ -206,7 +206,7 @@
           <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
             <summary class="rail-section-summary">
               <span class="rail-section-title">{section.title}</span>
-              <SectionStatus status={run.tests.status} title={section.title} />
+              <SectionStatus status={run.tests.status} error={run.tests.error} errorDetail={run.tests.errorDetail} title={section.title} />
             </summary>
             <div class="rail-section-body">
               <TestInsightPanel {run} {onhotspot} />
@@ -217,7 +217,7 @@
           <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
             <summary class="rail-section-summary">
               <span class="rail-section-title">{section.title}</span>
-              <SectionStatus status={run.alternatives.status} title={section.title} />
+              <SectionStatus status={run.alternatives.status} error={run.alternatives.error} errorDetail={run.alternatives.errorDetail} title={section.title} />
             </summary>
             <div class="rail-section-body">
               <AlternativesPanel {run} />
@@ -228,7 +228,7 @@
           <details class="rail-section-details" open={isRailSectionExpanded(section.id)} ontoggle={(e) => handleRailSectionToggle(e, section.id)}>
             <summary class="rail-section-summary">
               <span class="rail-section-title">{section.title}</span>
-              <SectionStatus status={run.verdict.status} title={section.title} />
+              <SectionStatus status={run.verdict.status} error={run.verdict.error} errorDetail={run.verdict.errorDetail} title={section.title} />
             </summary>
             <div class="rail-section-body">
               <VerdictPanel {run} {onhotspot} />

@@ -120,6 +120,34 @@ describe('DiagramPanel — state rendering', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/failed/i)
   })
 
+  it('error state shows the HUMAN message + detail (hover title and secondary line) when provided', () => {
+    render(DiagramPanel, {
+      props: {
+        result: null,
+        panelState: 'error',
+        error: 'DeepSeek server error. Please try again later.',
+        errorDetail: 'Server error (503): upstream model overloaded',
+      },
+    })
+    const alert = screen.getByRole('alert')
+    // The canned human sentence replaces the generic fallback…
+    expect(alert).toHaveTextContent(/DeepSeek server error/i)
+    expect(alert).not.toHaveTextContent('Diagram generation failed.')
+    // …the concrete detail rides along as hover title AND a secondary line.
+    expect(alert).toHaveAttribute('title', 'Server error (503): upstream model overloaded')
+    expect(alert.querySelector('.panel-error-detail')?.textContent).toBe(
+      'Server error (503): upstream model overloaded',
+    )
+  })
+
+  it('error state without props keeps the legacy fallback and gains NO title/detail', () => {
+    render(DiagramPanel, { props: { result: null, panelState: 'error' } })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Diagram generation failed.')
+    expect(alert).not.toHaveAttribute('title')
+    expect(alert.querySelector('.panel-error-detail')).toBeNull()
+  })
+
   it('declined state shows declined message', () => {
     render(DiagramPanel, { props: { result: null, panelState: 'declined' } })
     expect(screen.getByText(/declined/i)).toBeInTheDocument()

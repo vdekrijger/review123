@@ -1214,7 +1214,11 @@
               {/if}
             {/if}
           {:else if entry.state.status === 'error'}
-            {@const errText = entry.state.error?.trim() ? entry.state.error.trim() : ''}
+            {@const errLead = entry.state.error?.trim() ? entry.state.error.trim() : ''}
+            {@const errDetail = entry.state.errorDetail?.trim() ? entry.state.errorDetail.trim() : ''}
+            <!-- Canned sentence + the CONCRETE upstream detail (provider error
+                 body), so the hover explains the failure, not just its kind. -->
+            {@const errText = [errLead, errDetail].filter(Boolean).join(' — ')}
             {#if onRetrySkill}
               <button
                 type="button"

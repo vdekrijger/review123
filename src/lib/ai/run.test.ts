@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createAiRun } from './run.svelte'
+import { createAiRun, describeTaskError } from './run.svelte'
 import { LlmError } from '../llm/llm'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
@@ -2094,5 +2094,75 @@ describe('per-model breakdown survives a cache hit (companion |models entry)', (
     // No companion entry → empty breakdown for the verdict, nothing thrown.
     expect(run.verdictModels).toEqual([])
     expect(run.modelPerformance.find((m) => m.role === 'generator')).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// errorDetail — concrete failure detail lands in PanelState + analytics
+// ---------------------------------------------------------------------------
+
+describe('task failure surfaces errorDetail (state + reason_detail analytics)', () => {
+  it('failing transport → summary.errorDetail carries the concrete provider message', async () => {
+    const deps = makeDeps()
+    deps.llmStream.mockRejectedValue(
+      new LlmError('server', 'Server error (500): upstream model exploded', { status: 500 }),
+    )
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.summary.status).toBe('error')
+    // The canned lead is untouched…
+    expect(run.summary.error).toMatch(/server error/i)
+    // …and the CONCRETE upstream detail is now kept, with the transient
+    // (5xx → auto-retried) note appended.
+    expect(run.summary.errorDetail).toContain('upstream model exploded')
+    expect(run.summary.errorDetail).toContain('retried automatically')
+
+    // ai_task_failed carries reason AND the truncated reason_detail.
+    const failedCall = deps.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_failed' && (c[1] as Record<string, unknown>)['task'] === 'summary',
+    )
+    expect(failedCall).toBeTruthy()
+    const props = failedCall![1] as Record<string, unknown>
+    expect(props['reason']).toBe('server')
+    expect(props['reason_detail']).toContain('upstream model exploded')
+    expect((props['reason_detail'] as string).length).toBeLessThanOrEqual(120)
+  })
+
+  it('structured-task failure → errorDetail on the failing panel only', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockImplementation(async (_opts: unknown, validate: ValidateFn) => {
+      if (validate(ATTENTION_RESULT) !== null) {
+        throw new LlmError('auth', 'Unauthorized (401): invalid api key', { status: 401 })
+      }
+      return defaultJsonDispatch(_opts, validate)
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.attention.status).toBe('error')
+    expect(run.attention.errorDetail).toBe('Unauthorized (401): invalid api key')
+    // Succeeding panels never carry stale detail.
+    expect(run.diagrams.status).toBe('done')
+    expect(run.diagrams.errorDetail).toBeUndefined()
+  })
+
+  it('message identical to the canned sentence → errorDetail omitted (state stays lean)', async () => {
+    const deps = makeDeps()
+    const canned = describeTaskError(new LlmError('network', 'x')).error
+    deps.llmStream.mockRejectedValue(new LlmError('network', canned))
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.summary.status).toBe('error')
+    expect(run.summary.errorDetail).toBeUndefined()
+    const failedCall = deps.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_failed' && (c[1] as Record<string, unknown>)['task'] === 'summary',
+    )
+    expect(failedCall).toBeTruthy()
+    expect('reason_detail' in (failedCall![1] as Record<string, unknown>)).toBe(false)
   })
 })

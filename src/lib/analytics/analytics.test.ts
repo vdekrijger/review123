@@ -124,6 +124,22 @@ describe('analytics privacy choke-point', () => {
     expect(props).toHaveProperty('tokens', 800)
     expect(props).not.toHaveProperty('output')
   })
+
+  it('ai_task_failed allows reason_detail (provider error text, PRIVACY DECISION)', () => {
+    track('ai_task_failed', { task: 'summary', reason: 'server', reason_detail: 'Server error (503): overloaded' })
+    expect(capture.mock.calls[0][1]).toEqual({
+      task: 'summary',
+      reason: 'server',
+      reason_detail: 'Server error (503): overloaded',
+    })
+  })
+
+  it('ai_task_failed still strips content-ish keys alongside reason_detail', () => {
+    track('ai_task_failed', { task: 'summary', reason: 'server', reason_detail: 'boom', prompt: 'leaked diff' } as never)
+    const props = capture.mock.calls[0][1]
+    expect(props).toHaveProperty('reason_detail', 'boom')
+    expect(props).not.toHaveProperty('prompt')
+  })
 })
 
 describe('initAnalytics — posthog.init config (exception capture + masked replay)', () => {

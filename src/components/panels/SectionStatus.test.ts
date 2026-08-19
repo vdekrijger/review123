@@ -66,3 +66,43 @@ describe('SectionStatus — problem states show a muted hint (no spinner)', () =
     expect(container.querySelector('.section-status-live')?.textContent).toMatch(/api key/i)
   })
 })
+
+describe('SectionStatus — error detail on hover (title + aria)', () => {
+  const ERROR = 'DeepSeek server error. Please try again later.'
+  const DETAIL = 'Server error (503): upstream model overloaded'
+
+  it('error + detail → title joins both, aria-label is enriched, cursor:help class present', () => {
+    const { container } = render(SectionStatus, {
+      props: { status: 'error' as PanelStatus, title: 'Full summary', error: ERROR, errorDetail: DETAIL },
+    })
+    const root = container.querySelector('.section-status')
+    expect(root?.getAttribute('title')).toBe(`${ERROR} — ${DETAIL}`)
+    expect(root?.getAttribute('aria-label')).toBe(`Full summary unavailable: ${ERROR} — ${DETAIL}`)
+    expect(root?.classList.contains('has-error-detail')).toBe(true)
+    // The visual treatment is unchanged: still the muted hint dot, no spinner.
+    expect(container.querySelector('.section-status-hint')).not.toBeNull()
+    expect(container.querySelector('.ui-spinner')).toBeNull()
+  })
+
+  it('error without detail → title is just the canned sentence', () => {
+    const { container } = render(SectionStatus, {
+      props: { status: 'error' as PanelStatus, title: 'Full summary', error: ERROR },
+    })
+    expect(container.querySelector('.section-status')?.getAttribute('title')).toBe(ERROR)
+  })
+
+  it('error status with NO error text → no title, no aria-label (nothing to show)', () => {
+    const { container } = renderStatus('error')
+    const root = container.querySelector('.section-status')
+    expect(root?.getAttribute('title')).toBeNull()
+    expect(root?.getAttribute('aria-label')).toBeNull()
+    expect(root?.classList.contains('has-error-detail')).toBe(false)
+  })
+
+  it('non-error statuses never grow a tooltip even when error props are passed', () => {
+    const { container } = render(SectionStatus, {
+      props: { status: 'done' as PanelStatus, title: 'Full summary', error: ERROR, errorDetail: DETAIL },
+    })
+    expect(container.querySelector('.section-status')?.getAttribute('title')).toBeNull()
+  })
+})

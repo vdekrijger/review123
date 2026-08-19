@@ -31,6 +31,17 @@
     result: GraphResult | null
     panelState: 'idle' | 'loading' | 'error' | 'declined'
     /**
+     * The diagrams task's canned human error sentence (PanelState.error) —
+     * shown in the 'error' state instead of the generic
+     * "Diagram generation failed." fallback. Optional for compatibility.
+     */
+    error?: string
+    /**
+     * The concrete upstream failure detail (PanelState.errorDetail) — rendered
+     * as a muted secondary line and hover title in the 'error' state.
+     */
+    errorDetail?: string
+    /**
      * Story mode (Plan H): file paths covered by the CURRENT story step. The
      * change-map nodes whose label matches one of these files are highlighted
      * as "current"; nodes for files in an EARLIER step (doneFiles) are marked
@@ -55,7 +66,7 @@
     onnodeclick?: ((file: string) => void) | null
   }
 
-  let { result, panelState, highlightFiles = [], doneFiles = [], visitedFiles = [], onnodeclick = null }: Props = $props()
+  let { result, panelState, error, errorDetail, highlightFiles = [], doneFiles = [], visitedFiles = [], onnodeclick = null }: Props = $props()
 
   // Containers for Mermaid SVG output
   let impactContainer = $state<HTMLDivElement | null>(null)
@@ -373,8 +384,11 @@
     <AiProgress task="diagrams" state={{ status: 'loading' }} skeletonVariant="block" />
   </div>
 {:else if panelState === 'error'}
-  <div class="panel-error" role="alert">
-    Diagram generation failed.
+  <div class="panel-error" role="alert" title={errorDetail}>
+    <span>{error ?? 'Diagram generation failed.'}</span>
+    {#if errorDetail}
+      <span class="panel-error-detail">{errorDetail}</span>
+    {/if}
   </div>
 {:else if panelState === 'declined'}
   <div class="panel-declined" role="status">
@@ -569,6 +583,14 @@
   .panel-error {
     color: #dc2626;
     opacity: 1;
+    flex-wrap: wrap;
+  }
+
+  /* Concrete upstream failure detail — muted secondary line under the message. */
+  .panel-error-detail {
+    flex-basis: 100%;
+    font-size: 0.78rem;
+    opacity: 0.75;
   }
 
   .diagram-panel {

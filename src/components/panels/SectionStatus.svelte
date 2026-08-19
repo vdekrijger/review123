@@ -32,9 +32,20 @@
     status: PanelStatus
     /** Section title — used only for the aria-live announcement ("<title> ready"). */
     title: string
+    /** The task's canned error sentence (PanelState.error) — hover detail on the error dot. */
+    error?: string
+    /** The concrete upstream failure detail (PanelState.errorDetail) — appended to the hover. */
+    errorDetail?: string
   }
 
-  let { status, title }: Props = $props()
+  let { status, title, error, errorDetail }: Props = $props()
+
+  // Hover/tooltip text for the error dot: the canned sentence plus the concrete
+  // upstream detail, when present. Only for 'error' — no-key/declined already
+  // read clearly from their own panel states.
+  const errorTooltip = $derived(
+    status === 'error' ? [error, errorDetail].filter(Boolean).join(' — ') : ''
+  )
 
   // Pending = the task is (or will be) running. 'idle' is the queued-before-loading
   // window the run signals before 'loading' — treat it as pending so the spinner
@@ -62,7 +73,14 @@
   )
 </script>
 
-<span class="section-status" class:is-problem={problem} class:is-disabled={disabled}>
+<span
+  class="section-status"
+  class:is-problem={problem}
+  class:is-disabled={disabled}
+  class:has-error-detail={errorTooltip !== ''}
+  title={errorTooltip !== '' ? errorTooltip : undefined}
+  aria-label={errorTooltip !== '' ? `${title} unavailable: ${errorTooltip}` : undefined}
+>
   {#if pending}
     <Spinner size="0.8em" />
   {:else if ready}
@@ -93,6 +111,11 @@
 
   .is-problem {
     opacity: 0.85;
+  }
+
+  /* Error dot with a concrete failure reason on hover — invite the hover. */
+  .has-error-detail {
+    cursor: help;
   }
 
   .section-status-hint {

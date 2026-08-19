@@ -196,3 +196,34 @@ describe('AiPanel — disabled state (Plan J)', () => {
     expect(sessionStorage.getItem('review123:settingsReturnTo')).not.toBeNull()
   })
 })
+
+describe('AiPanel — error state shows the concrete detail under the canned line', () => {
+  const ERROR_STATE = {
+    status: 'error' as const,
+    error: 'DeepSeek server error. Please try again later.',
+    errorDetail: 'Server error (503): upstream model overloaded',
+  }
+
+  it('renders the detail muted+small when present', () => {
+    const { container } = render(AiPanel, {
+      props: { title: 'Summary', task: 'summary', state: ERROR_STATE, onretry: vi.fn() },
+    })
+    expect(screen.getByText('DeepSeek server error. Please try again later.')).toBeInTheDocument()
+    const detail = container.querySelector('.error-detail')
+    expect(detail?.textContent).toBe('Server error (503): upstream model overloaded')
+    // Retry stays available.
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
+  })
+
+  it('renders NO detail line when errorDetail is absent (unchanged legacy error UI)', () => {
+    const { container } = render(AiPanel, {
+      props: {
+        title: 'Summary',
+        task: 'summary',
+        state: { status: 'error' as const, error: 'DeepSeek server error. Please try again later.' },
+        onretry: vi.fn(),
+      },
+    })
+    expect(container.querySelector('.error-detail')).toBeNull()
+  })
+})

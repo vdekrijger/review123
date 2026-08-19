@@ -239,7 +239,7 @@ describe('convergence pass — loss-proof degradation', () => {
     expect(run.skillReviews[0].state.status).toBe('done')
     expect(run.skillReviews[0].state.value).toEqual(SKILL_RESULT_A)
     expect(run.skillReviews[1].state.value).toEqual(SKILL_RESULT_B)
-    expect(deps.track).toHaveBeenCalledWith('ai_task_failed', { task: 'convergence', reason: 'unknown' })
+    expect(deps.track).toHaveBeenCalledWith('ai_task_failed', { task: 'convergence', reason: 'unknown', reason_detail: 'boom' })
     // Nothing cached for the failed pass.
     const cachedKeys = deps.setCached.mock.calls.map((c: unknown[]) => c[0] as string)
     expect(cachedKeys.some((k) => k.includes('convergence:'))).toBe(false)

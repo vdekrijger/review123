@@ -537,7 +537,7 @@
       <details class="detail-panel summary-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
         <summary class="detail-summary">
           <span class="detail-summary-title">{section.title}</span>
-          <SectionStatus status={run.summary.status} title={section.title} />
+          <SectionStatus status={run.summary.status} error={run.summary.error} errorDetail={run.summary.errorDetail} title={section.title} />
         </summary>
         <div class="detail-body">
           <SummaryPanel {run} />
@@ -548,7 +548,7 @@
       <details class="detail-panel diagrams-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
         <summary class="detail-summary">
           <span class="detail-summary-title">{section.title}</span>
-          <SectionStatus status={run.diagrams.status} title={section.title} />
+          <SectionStatus status={run.diagrams.status} error={run.diagrams.error} errorDetail={run.diagrams.errorDetail} title={section.title} />
         </summary>
         <div class="detail-body">
           <DiagramsSection {run} />
@@ -575,7 +575,7 @@
       <details class="detail-panel tests-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
         <summary class="detail-summary">
           <span class="detail-summary-title">{section.title}</span>
-          <SectionStatus status={run.tests.status} title={section.title} />
+          <SectionStatus status={run.tests.status} error={run.tests.error} errorDetail={run.tests.errorDetail} title={section.title} />
         </summary>
         <div class="detail-body">
           <TestInsightPanel {run} {onhotspot} />
@@ -586,7 +586,7 @@
       <details class="detail-panel alternatives-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
         <summary class="detail-summary">
           <span class="detail-summary-title">{section.title}</span>
-          <SectionStatus status={run.alternatives.status} title={section.title} />
+          <SectionStatus status={run.alternatives.status} error={run.alternatives.error} errorDetail={run.alternatives.errorDetail} title={section.title} />
         </summary>
         <div class="detail-body">
           <AlternativesPanel {run} />
@@ -597,7 +597,7 @@
       <details class="detail-panel verdict-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
         <summary class="detail-summary">
           <span class="detail-summary-title">{section.title}</span>
-          <SectionStatus status={run.verdict.status} title={section.title} />
+          <SectionStatus status={run.verdict.status} error={run.verdict.error} errorDetail={run.verdict.errorDetail} title={section.title} />
         </summary>
         <div class="detail-body">
           <VerdictPanel {run} {onhotspot} />
