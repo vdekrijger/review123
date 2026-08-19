@@ -39,7 +39,8 @@
  */
 
 import { activeLlmConfig } from './config'
-import { llmConcurrencyGate } from './concurrencyGate'
+import { gateFor } from './concurrencyGate'
+import { withTransientRetry } from './transientRetry'
 import type { LlmProviderDef, LlmModelDef } from './providers'
 import {
   LlmError,
@@ -149,31 +150,40 @@ function parseArgs(raw: unknown): Record<string, unknown> {
 }
 
 async function postJson(
+  providerId: string,
   url: string,
   headers: Record<string, string>,
   body: Record<string, unknown>,
   signal: AbortSignal | undefined,
 ): Promise<unknown> {
   // Each deep-mode tool-loop round is a separate non-streaming HTTP call, so it
-  // acquires/releases a global gate slot individually (the loop's rounds are
-  // sequential, but they coexist with all the OTHER concurrent task/reviewer/
-  // verifier calls — the gate caps the union of them).
-  return llmConcurrencyGate.run(async () => {
-    const effectiveSignal = signal ?? AbortSignal.timeout(60_000)
-    let res: Response
-    try {
-      res = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: effectiveSignal,
-      })
-    } catch (err) {
-      mapFetchError(err)
-    }
-    if (!res!.ok) await mapHttpError(res!)
-    return res!.json() as Promise<unknown>
-  })
+  // acquires/releases a slot of ITS provider's gate individually (the loop's
+  // rounds are sequential, but they coexist with all the OTHER concurrent
+  // task/reviewer/verifier calls — the gate caps the union of them, per
+  // provider). Transient 429/5xx rounds are retried by the SAME shared wrapper
+  // as the llm.ts dispatchers; retry wraps the gate, so a backoff sleep holds
+  // no slot, and each attempt builds a fresh 60s timeout signal. Retrying a
+  // round is safe: nothing is appended to the conversation until it succeeds.
+  return withTransientRetry(
+    () =>
+      gateFor(providerId).run(async () => {
+        const effectiveSignal = signal ?? AbortSignal.timeout(60_000)
+        let res: Response
+        try {
+          res = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+            signal: effectiveSignal,
+          })
+        } catch (err) {
+          mapFetchError(err)
+        }
+        if (!res!.ok) await mapHttpError(res!)
+        return res!.json() as Promise<unknown>
+      }),
+    { providerId, signal },
+  )
 }
 
 /**
@@ -233,6 +243,7 @@ function createOpenAICompatTransport(
       const body: Record<string, unknown> = { model: model.id, messages, tools }
       if (finalOnly) body.tool_choice = 'none'
       const data = (await postJson(
+        provider.id,
         `${provider.baseUrl}/chat/completions`,
         buildOpenAICompatHeaders(key, provider.id),
         body,
@@ -325,6 +336,7 @@ function createAnthropicTransport(
       }
       if (finalOnly) body.tool_choice = { type: 'none' }
       const data = (await postJson(
+        provider.id,
         `${provider.baseUrl}/v1/messages`,
         buildAnthropicHeaders(key),
         body,
@@ -411,6 +423,7 @@ function createGeminiTransport(
       const body: Record<string, unknown> = { contents, tools }
       if (finalOnly) body.toolConfig = { functionCallingConfig: { mode: 'NONE' } }
       const data = (await postJson(
+        provider.id,
         `${provider.baseUrl}/v1beta/models/${model.id}:generateContent`,
         buildGeminiHeaders(key),
         body,

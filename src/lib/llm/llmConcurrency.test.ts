@@ -9,9 +9,10 @@
  * timing. (No Date.now() / Math.random().)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { llmComplete, llmStream } from './llm'
 import { MAX_INFLIGHT_LLM_CALLS } from './concurrencyGate'
+import { setTransientRetryPolicyForTests } from './transientRetry'
 import { setDeepseekKey } from '../settings/settings'
 
 interface Deferred<T> {
@@ -61,6 +62,13 @@ beforeEach(() => {
   localStorage.clear()
   vi.unstubAllGlobals()
   setDeepseekKey('sk-test')
+  // These tests prove slot accounting with exact fetch counts; transient
+  // retries (which re-fetch) are covered separately in transientRetry.test.ts.
+  setTransientRetryPolicyForTests({ maxRetries: 0 })
+})
+
+afterEach(() => {
+  setTransientRetryPolicyForTests(null)
 })
 
 describe('global gate — dispatchComplete', () => {
