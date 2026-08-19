@@ -16,7 +16,11 @@ const EVENTS = {
   // calls a coach run split into, and 'partial' is a boolean (some chunks
   // failed) — neither carries comment bodies, code, file paths, or counts of
   // content. Added for coach-robustness observability only.
-  ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls', 'chunks', 'partial'],
+  // PRIVACY DECISION (finding convergence): 'clusters' is the integer count of
+  // overlap clusters the convergence pass produced — a count only, never
+  // finding text, code, file paths, or reviewer names. Added so we can observe
+  // how often reviewers actually overlap (merge-rate observability).
+  ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls', 'chunks', 'partial', 'clusters'],
   ai_task_failed: ['task', 'reason', 'partial'],
   // PRIVACY DECISION (robust big-PR story): fired when the story task degrades
   // to the deterministic structural walkthrough (AI ordering failed or returned
