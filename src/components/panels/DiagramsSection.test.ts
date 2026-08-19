@@ -23,6 +23,7 @@ function makeRun(overrides: Partial<AiRun>): AiRun {
     story: { status: 'idle' },
     riskJudge: { status: 'idle' },
     skillReviews: [],
+    convergence: { status: 'idle' },
     totalUsage: undefined,
     verdictModels: [],
     modelPerformance: [],

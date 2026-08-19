@@ -65,9 +65,19 @@ import {
   storyOrderPrompt,
   askPrompt,
   skillReviewPrompt,
+  convergencePrompt,
   withDeepReviewGuidance,
   type AskFocus,
 } from './tasks'
+import {
+  enumerateFindings,
+  enumerateDrafts,
+  validateConvergence,
+  toAppliedClusters,
+  type ConvergenceValue,
+  type ReviewerFindings,
+} from './convergence'
+export type { ConvergenceValue }
 export type { AskFocus }
 import { validateAttention, validateVerdict, validateRiskJudge, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, sinkGeneratedSteps, STORY_MAX_STEPS } from './schemas'
 import { buildDeterministicStory } from './storyFallback'
@@ -236,6 +246,16 @@ export interface AiRun {
   readonly story: PanelState<StoryOrderResult>
   readonly skillReviews: SkillReviewEntry[]
   /**
+   * Cross-reviewer finding convergence: one cheap single-pass call after ALL
+   * reviewers settle that clusters findings describing the same underlying
+   * issue (across reviewers + against the user's drafts). The value carries the
+   * validated clusters + a fingerprint of the finding set they were computed
+   * for; the UI applies the pure merge itself (applyConvergence), so reviewer
+   * entries are NEVER mutated — on failure/skip the originals render unmerged.
+   * 'idle' = skipped (<2 reviewers with findings / nothing to converge).
+   */
+  readonly convergence: PanelState<ConvergenceValue>
+  /**
    * Sum of every task's captured token usage for THIS PR run (the core auto
    * tasks incl. story + risk judge, plus any skill reviews). undefined when no
    * task reported usage.
@@ -323,6 +343,13 @@ export interface AiRunInput {
    * excerpt is derivable from the packed context only. Best-effort.
    */
   verifyCodeContext?: (anchors: { path: string; line: number; side: 'LEFT' | 'RIGHT' }[]) => CoachCodeContext[]
+  /**
+   * The user's CURRENT draft comments (finding convergence). Read once when the
+   * convergence pass runs, so findings that make the same point as an existing
+   * draft can be marked "covered by your comment" instead of duplicating it.
+   * Absent → the pass runs with no drafts (cross-reviewer clustering only).
+   */
+  drafts?: () => Draft[]
 }
 
 // ---------------------------------------------------------------------------
@@ -391,7 +418,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     ...deps,
   }
 
-  const { prKey, repo, isPrivate, pack, ci, ask: askConsent, deepReview, coachCodeContext, verifyCodeContext } = input
+  const { prKey, repo, isPrivate, pack, ci, ask: askConsent, deepReview, coachCodeContext, verifyCodeContext, drafts: getDrafts } = input
 
   // Shared per-REVIEW deep-review fetch cache (Plan G cost reduction). Created
   // ONCE per createAiRun — and the Review route makes a fresh run per PR — so
@@ -413,6 +440,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
   // Skill review entries — populated on-demand by runSkillReviews()
   let skillReviewsState = $state<SkillReviewEntry[]>([])
+
+  // Cross-reviewer convergence pass state (runs after all reviewers settle).
+  // The reviewer entries above are NEVER mutated by the pass — loss-proof.
+  const convergenceState = $state<PanelState<ConvergenceValue>>({ status: 'idle' })
 
   // Token usage from the most recent coach() run (on-demand, never cached).
   // Folded into totalUsage so the per-PR total includes coaching cost.
@@ -2445,6 +2476,98 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     onUpdate?.()
   }
 
+  // ---------------------------------------------------------------------------
+  // Convergence pass — cross-REVIEWER analogue of fuseSkillReview, run ONCE
+  // after ALL reviewers settle. One cheap single-pass call on the ACTIVE
+  // (narrator) model — never the ensemble. Loss-proof: this function only ever
+  // writes convergenceState; the reviewer entries are untouched, so any
+  // failure/decline/garbage leaves the original findings rendering unmerged.
+  // ---------------------------------------------------------------------------
+
+  async function runConvergencePass(onUpdate?: () => void): Promise<void> {
+    // Reviewers that settled 'done' with a real result object. Defensive on the
+    // findings array — a malformed cached value must degrade to "no findings",
+    // never throw (loss-proof includes surviving weird cache content).
+    const reviewers: ReviewerFindings[] = skillReviewsState
+      .filter((e) => e.state.status === 'done' && typeof e.state.value === 'object' && e.state.value !== null)
+      .map((e) => {
+        const value = e.state.value as SkillReviewResult
+        return { skillId: e.skillId, name: e.name, findings: Array.isArray(value.findings) ? value.findings : [] }
+      })
+
+    // Skip (stay 'idle') when fewer than 2 reviewers produced findings — a
+    // single reviewer has nobody to converge with; no call, no tokens.
+    if (reviewers.filter((r) => r.findings.length > 0).length < 2) {
+      convergenceState.status = 'idle'
+      return
+    }
+
+    const { inputs, fingerprint } = enumerateFindings(reviewers)
+    // Root draft comments only (n>0 are thread replies) — best-effort.
+    let draftList: Draft[] = []
+    try {
+      draftList = (getDrafts?.() ?? []).filter((d) => (d.n ?? 0) === 0)
+    } catch {
+      draftList = []
+    }
+    const draftEnum = enumerateDrafts(draftList.map((d) => ({ path: d.path, line: d.line, body: d.body })))
+
+    // Cache key folds PROMPT_VERSION + a hash of the finding AND draft content,
+    // so a changed finding set (or draft set) re-runs the pass.
+    const key = cacheKey(prKey, 'convergence:' + djb2(fingerprint + '||' + draftEnum.fingerprint), PROMPT_VERSION)
+    const t0 = performance.now()
+
+    const hit = await getCached<ConvergenceValue>(key)
+    if (hit !== null) {
+      convergenceState.status = 'done'
+      convergenceState.value = hit
+      track('ai_task_completed', { task: 'convergence', duration_ms: Math.round(performance.now() - t0), cached: true, clusters: hit.clusters.length })
+      onUpdate?.()
+      return
+    }
+
+    convergenceState.status = 'loading'
+    convergenceState.error = undefined
+    onUpdate?.()
+
+    const prompts = convergencePrompt(inputs, draftEnum.inputs)
+    const findingIds = new Set(inputs.map((i) => i.id))
+    const draftIds = new Set(draftEnum.inputs.map((i) => i.id))
+    const draftById = new Map(draftEnum.inputs.map((i) => [i.id, { path: i.path, line: i.line }]))
+
+    try {
+      const { result, usage } = await llmJsonWithRepairWithUsage(
+        { system: prompts.system, user: prompts.user },
+        (x) => validateConvergence(x, findingIds, draftIds),
+      )
+      // Defense in depth: re-validate the returned value (a stubbed/bypassing
+      // transport must never push garbage into the merge).
+      const checked = validateConvergence(result, findingIds, draftIds)
+      if (checked === null) throw new LlmError('invalid-output', 'convergence: invalid clusters')
+
+      const value: ConvergenceValue = { fingerprint, clusters: toAppliedClusters(checked, draftById) }
+      await setCached<ConvergenceValue>(key, value)
+      convergenceState.status = 'done'
+      convergenceState.value = value
+      convergenceState.usage = usage
+      track('ai_task_completed', {
+        task: 'convergence',
+        duration_ms: Math.round(performance.now() - t0),
+        cached: false,
+        clusters: value.clusters.length,
+        ...(usage?.total_tokens !== undefined ? { tokens: usage.total_tokens } : {}),
+      })
+    } catch (err) {
+      // Loss-proof degrade: log to run state; the UI renders the original
+      // findings unmerged exactly as before the pass.
+      const kind = err instanceof LlmError ? err.kind : 'unknown'
+      convergenceState.status = 'error'
+      convergenceState.error = humanMessage(kind)
+      track('ai_task_failed', { task: 'convergence', reason: kind })
+    }
+    onUpdate?.()
+  }
+
   async function runSkillReviews(onUpdate?: () => void, existingComments?: string[], opts?: { autoRetry?: number }): Promise<void> {
     // Plan J: skills 'off' → never offer/run reviewers (no entries, no tokens).
     const skillsMode = resolveTaskMode('skills', deepReview)
@@ -2472,6 +2595,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // Deep review (Plan G/J): one mode resolution for the whole batch, driven
     // by the 'skills' task mode (deep / standard) resolved above.
     const deep = { enabled: skillsMode.deep, note: skillsMode.note }
+
+    // A fresh batch invalidates any previous convergence value (the finding set
+    // is about to change; applyConvergence is fingerprint-guarded anyway).
+    convergenceState.status = 'idle'
+    convergenceState.value = undefined
+    convergenceState.error = undefined
 
     // Initialize every entry as 'queued' — none has a slot yet. Six concurrent
     // LLM calls trip provider rate limits, so we cap in-flight reviewers at
@@ -2524,6 +2653,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         await executeSkillReview(ctx, skill, idx, deep, onUpdate, existingComments)
       })
     }
+
+    // Convergence pass — once, after every reviewer (incl. auto-retries) has
+    // settled. Skips itself when <2 reviewers produced findings.
+    await runConvergencePass(onUpdate)
   }
 
   // ---------------------------------------------------------------------------
@@ -2572,6 +2705,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     onUpdate?.()
 
     await executeSkillReview(ctx, skill, idx, deep, onUpdate, existingComments)
+
+    // The finding set changed → recompute the convergence pass. Any previous
+    // value is fingerprint-guarded, so until this settles the UI simply renders
+    // the fresh findings unmerged (never a stale merge).
+    await runConvergencePass(onUpdate)
   }
 
   // ---------------------------------------------------------------------------
@@ -2588,11 +2726,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     get alternatives() { return alternativesState },
     get story() { return storyState },
     get skillReviews() { return skillReviewsState },
+    get convergence() { return convergenceState },
     get totalUsage(): LlmUsage | undefined {
       // Sum every task's captured usage for this PR run. Tasks with no usage
       // (cached pre-usage results / errors) contribute nothing.
       let total: LlmUsage | undefined
-      const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, storyState, riskJudgeState]
+      const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, storyState, riskJudgeState, convergenceState]
       for (const s of states) total = addUsage(total, s.usage)
       for (const e of skillReviewsState) total = addUsage(total, e.state.usage)
       // Coach is on-demand (never one of the six core tasks); fold in its usage
@@ -2692,6 +2831,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       if (storyState.usage) addSinglePass(storyState.usage, 'Story')
       if (riskJudgeState.usage) addSinglePass(riskJudgeState.usage, 'Risk judge')
       if (coachUsage) addSinglePass(coachUsage, 'Coach')
+      if (convergenceState.usage) addSinglePass(convergenceState.usage, 'Convergence')
 
       // Reviewers: per-model rows when an ensemble ran; else attribute the
       // reviewer's total usage to the active model as a GENERATOR (it produced

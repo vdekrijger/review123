@@ -201,6 +201,19 @@ async function setupRoutes(page: import('@playwright/test').Page) {
     // JSON mode — detect skill persona prompt by its system content
     const systemContent = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
 
+    // Convergence pass (must dispatch BEFORE the persona branch — its system
+    // prompt mentions "reviewer personas"): valid empty cluster set → unmerged.
+    if (systemContent.includes('consolidating overlapping code-review findings')) {
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify({ clusters: [] }) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
+
     // Skill review prompt contains "reviewer persona" and the persona name
     if (systemContent.includes('reviewer persona') || systemContent.includes('security reviewer')) {
       return route.fulfill({
@@ -484,6 +497,16 @@ test('skill-reviewers: errored reviewer chip retries and resolves to findings', 
     }
 
     const systemContent = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
+    if (systemContent.includes('consolidating overlapping code-review findings')) {
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify({ clusters: [] }) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
     if (systemContent.includes('reviewer persona') || systemContent.includes('security reviewer')) {
       skillCalls += 1
       if (skillCalls === 1) {
@@ -598,6 +621,18 @@ test('skill-reviewers: queue caps running reviewers at 4, rest show in Waiting r
     }
 
     const systemContent = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
+    if (systemContent.includes('consolidating overlapping code-review findings')) {
+      // Six identical reviewers overlap → after the batch the convergence pass
+      // fires; answer instantly with a valid empty cluster set (no merges).
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify({ clusters: [] }) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
     if (systemContent.includes('reviewer persona') || systemContent.includes('reviewer')) {
       // Hold the response so concurrency is observable in the UI.
       await new Promise((r) => setTimeout(r, 900))

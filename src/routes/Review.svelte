@@ -501,6 +501,10 @@
         // actual code at each finding's file:line so verifier models judge
         // against real code. Same source as the coach context above.
         verifyCodeContext: (anchors) => buildCoachCodeContext(anchors, files, contentsMap),
+        // Current draft comments for the finding-convergence pass: findings that
+        // make the same point as the user's own draft render "covered by your
+        // comment" instead of duplicating it. Read at pass time (post-reviewers).
+        drafts: () => draftStore?.drafts ?? [],
       })
       aiRun = run
 
@@ -858,6 +862,7 @@
         resolvedCommentIds={isCompareActive ? new Set() : resolvedCommentIds}
         {contentsMap}
         skillReviews={aiRun?.skillReviews ?? []}
+        convergence={aiRun?.convergence ?? null}
         runSkillReviewsFn={aiRun != null ? (() => { void aiRun!.runSkillReviews(undefined, prComments.map((c) => c.body)) }) : null}
         onRetrySkill={aiRun != null ? ((skillId) => { void aiRun!.retrySkill(skillId, undefined, prComments.map((c) => c.body)) }) : null}
         askFn={aiRun ? aiRun.ask : null}

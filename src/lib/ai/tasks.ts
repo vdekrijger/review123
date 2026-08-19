@@ -14,6 +14,13 @@ import type { CiSummary } from '../github/checks'
 import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS } from './schemas'
 
+// PROMPT_VERSION 26 (finding convergence): NEW single-pass task
+// (convergencePrompt) that runs ONCE after all skill reviewers settle: it
+// clusters surfaced findings that describe the SAME underlying issue — across
+// reviewers AND against the user's existing draft comments — so each cluster
+// renders as ONE card credited to all contributing reviewers. Adding a task
+// changes the per-task cache universe, so bump to keep cache keys unambiguous;
+// all existing task prompts are byte-identical.
 // PROMPT_VERSION 25 (LLM risk judge): NEW single-pass task (riskJudgePrompt)
 // that judges how much REVIEWER ATTENTION the change deserves — a 0–3 score,
 // a one-line rationale, and up to 5 highlighted risky snippets — feeding the
@@ -72,7 +79,7 @@ import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNI
 // lack `impact` and degrade to the suppressed "no notable call-graph impact" note.
 // PROMPT_VERSION 17 (Plan L): the diagram task's output shape was a
 // flow-of-execution (GraphResult.flow) — now retired.
-export const PROMPT_VERSION = 25
+export const PROMPT_VERSION = 26
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)
@@ -1238,6 +1245,78 @@ Field rules:
 Do not include any text outside the JSON object.`
 
   return { system, user: ctx.text }
+}
+
+// ---------------------------------------------------------------------------
+// convergencePrompt — cross-reviewer finding convergence (PROMPT_VERSION 26)
+// ---------------------------------------------------------------------------
+
+/** Body-length caps for the compact convergence input (prompt cost bound). */
+const CONVERGENCE_FINDING_BODY_MAX = 400
+const CONVERGENCE_DRAFT_BODY_MAX = 300
+
+/**
+ * Build prompts for the convergence pass: ONE cheap single-pass call, after all
+ * skill reviewers settle, that clusters findings describing the SAME underlying
+ * issue — across reviewers AND against the user's existing draft comments.
+ *
+ * Input rows use the positional ids from convergence.ts (`f0…` / `draft-0…`);
+ * the SAME enumeration rebuilds the id map at merge time, guarded by a content
+ * fingerprint. Output: {"clusters":[{members, primary, reason}]}. The framing
+ * is deliberately CONSERVATIVE — same symptom of the same root cause only;
+ * different bugs on the same line are NOT a cluster; when unsure, don't merge.
+ *
+ * The system prompt's "consolidating overlapping code-review findings" phrase
+ * is the e2e stubs' dispatch marker — keep it stable.
+ */
+export function convergencePrompt(
+  findings: { id: string; reviewer: string; path: string; line: number | null; severity: string; body: string }[],
+  drafts: { id: string; path: string; line: number; body: string }[],
+): { system: string; user: string } {
+  const system = `You are consolidating overlapping code-review findings from multiple independent \
+reviewer personas. Different reviewers often flag the SAME underlying issue at slightly different \
+nearby lines or in different words, and the review author may already have drafted a comment making \
+the same point. Your ONLY job is to identify those overlaps as clusters of item ids. You never \
+rewrite, re-judge, or drop findings.
+
+Clustering rules (CONSERVATIVE — a wrong merge hides a real finding, a missed merge only costs a \
+duplicate card):
+- A cluster groups 2 or more items that describe the SAME underlying defect / root cause — the same \
+symptom of the same problem, even when anchored a few lines apart or phrased differently.
+- Different bugs on or near the same line are NOT a cluster.
+- The same THEME or category (e.g. two unrelated "missing error handling" points) is NOT a cluster — \
+only the same concrete issue is.
+- When unsure whether two items are the same issue, DO NOT merge them.
+- Items whose id starts with "draft-" are the review author's OWN existing draft comments. Include a \
+draft in a cluster ONLY when the finding(s) make the point that draft already makes — such a cluster \
+means "already covered by the author's own comment".
+- Clusters must be disjoint: no item id may appear in more than one cluster.
+- primary: the member that best anchors the issue (clearest wording, most precise location). It must \
+be one of the cluster's members.
+- reason: at most 100 characters stating the shared root cause.
+- No overlaps found → {"clusters":[]} — a perfectly good answer.
+
+Respond with JSON ONLY — no explanation, no markdown, no code fences:
+
+{
+  "clusters": [
+    { "members": ["f0", "f3"], "primary": "f0", "reason": "<shared root cause, ≤100 chars>" }
+  ]
+}`
+
+  const findingLines = findings.map((f) =>
+    `${f.id} [${f.reviewer}] ${f.path}${f.line !== null ? `:${f.line}` : ''} (${f.severity}): ${f.body.replace(/\n/g, ' ').slice(0, CONVERGENCE_FINDING_BODY_MAX)}`,
+  )
+  const draftLines = drafts.map((d) =>
+    `${d.id} ${d.path}:${d.line}: ${d.body.replace(/\n/g, ' ').slice(0, CONVERGENCE_DRAFT_BODY_MAX)}`,
+  )
+
+  const user = `Reviewer findings:
+${findingLines.join('\n')}
+${draftLines.length > 0 ? `\nThe author's existing draft comments:\n${draftLines.join('\n')}\n` : ''}
+Cluster the items that describe the same underlying issue.`
+
+  return { system, user }
 }
 
 // ---------------------------------------------------------------------------

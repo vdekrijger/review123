@@ -24,8 +24,9 @@
   import { excerptAround } from '../lib/diff/excerpt'
   import { scrollToFileCard, jumpToFinding } from '../lib/diff/jumpToFile'
   import { observeDiffColHeight } from '../lib/tree/diffColHeight'
-  import type { SkillReviewEntry, AskFocus } from '../lib/ai/run.svelte'
-  import type { SkillReviewResult } from '../lib/ai/schemas'
+  import type { SkillReviewEntry, AskFocus, PanelState, ConvergenceValue } from '../lib/ai/run.svelte'
+  import type { SkillReviewResult, SkillFinding as SchemaSkillFinding } from '../lib/ai/schemas'
+  import { applyConvergence, mergedReviewerLabel, type ReviewerFindings } from '../lib/ai/convergence'
   import { listSkills } from '../lib/skills/skills'
   import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
   import { computeFileRisk, type RiskLevel } from '../lib/risk/risk'
@@ -54,6 +55,7 @@
     resolvedCommentIds = new Set(),
     contentsMap = null,
     skillReviews = [],
+    convergence = null,
     runSkillReviewsFn = null,
     onRetrySkill = null,
     askFn = null,
@@ -100,6 +102,12 @@
     contentsMap?: Map<string, { before: string | null; after: string | null }> | null
     /** Skill reviews from the AI run — populated after runSkillReviews() */
     skillReviews?: SkillReviewEntry[]
+    /**
+     * Cross-reviewer convergence pass state (AiRun.convergence). When 'done',
+     * the pure merge is applied HERE (fingerprint-guarded) — reviewer entries
+     * are never mutated, so a failed/absent pass renders originals unchanged.
+     */
+    convergence?: PanelState<ConvergenceValue> | null
     /** Optional callback to trigger runSkillReviews on the AiRun instance */
     runSkillReviewsFn?: (() => void) | null
     /**
@@ -414,22 +422,53 @@
     prevRunning = nowRunning
   })
 
+  // ---------------------------------------------------------------------------
+  // Cross-reviewer convergence (applied here, loss-proof)
+  // ---------------------------------------------------------------------------
+  // The EFFECTIVE findings per reviewer: the settled results with the
+  // convergence merge applied when (and only when) the pass finished AND its
+  // fingerprint matches the current finding set. Everything downstream
+  // (per-file cards, popovers, decision telemetry) reads THIS map, so a
+  // failed/skipped/stale pass renders the original findings byte-identically.
+  const effectiveFindingsBySkill = $derived.by(() => {
+    const reviewers: ReviewerFindings[] = []
+    for (const review of skillReviews) {
+      if (review.state.status !== 'done' || !review.state.value || typeof review.state.value === 'string') continue
+      const value = review.state.value as SkillReviewResult
+      // Defensive on odd cached values — degrade to "no findings", never throw.
+      reviewers.push({ skillId: review.skillId, name: review.name, findings: Array.isArray(value.findings) ? value.findings : [] })
+    }
+    const v =
+      convergence && convergence.status === 'done' && convergence.value && typeof convergence.value === 'object'
+        ? (convergence.value as ConvergenceValue)
+        : null
+    const effective = v ? applyConvergence(reviewers, v) : reviewers
+    return new Map(effective.map((r) => [r.skillId, r.findings]))
+  })
+
+  /** Display credit for a finding: merged → all contributing reviewers. */
+  function findingLabel(reviewName: string, finding: SchemaSkillFinding): string {
+    return finding.mergedFrom && finding.mergedFrom.length > 0
+      ? mergedReviewerLabel(reviewName, finding.mergedFrom)
+      : reviewName
+  }
+
   // Per-file skill suggestions, filtered to only paths in the PR
   // Split into two maps: file-level (null line) stays above the file in InspectStep;
   // line-bearing findings are passed into FileDiff via skillFindings prop.
   // Shape: Map<path, entry[]>
-  type SuggestionEntry = { skillName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string; verification?: import('../lib/ai/schemas').FindingVerification; raisedBy?: string[] }
+  type SuggestionEntry = { skillName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string; verification?: import('../lib/ai/schemas').FindingVerification; raisedBy?: string[]; mergedFrom?: import('../lib/ai/schemas').AbsorbedFinding[]; mergedReason?: string; coveredByDraft?: { path: string; line: number } }
 
   const skillSuggestionsByPath = $derived.by(() => {
     const map = new Map<string, SuggestionEntry[]>()
     for (const review of skillReviews) {
       if (review.state.status !== 'done' || !review.state.value) continue
-      const result = review.state.value as SkillReviewResult
-      for (const finding of result.findings) {
+      const findings = effectiveFindingsBySkill.get(review.skillId) ?? []
+      for (const finding of findings) {
         if (!prPathSet.has(finding.path)) continue
         const arr = map.get(finding.path) ?? []
         arr.push({
-          skillName: review.name,
+          skillName: findingLabel(review.name, finding),
           findingPath: finding.path,
           line: finding.line,
           severity: finding.severity,
@@ -437,6 +476,9 @@
           key: `${review.skillId}:${finding.path}:${finding.line}:${finding.body.slice(0, 30)}`,
           verification: finding.verification,
           raisedBy: finding.raisedBy,
+          mergedFrom: finding.mergedFrom,
+          mergedReason: finding.mergedReason,
+          coveredByDraft: finding.coveredByDraft,
         })
         map.set(finding.path, arr)
       }
@@ -476,6 +518,9 @@
           key: s.key,
           verification: s.verification,
           raisedBy: s.raisedBy,
+          mergedFrom: s.mergedFrom,
+          mergedReason: s.mergedReason,
+          coveredByDraft: s.coveredByDraft,
         }))
       if (lineOnly.length > 0) map.set(path, lineOnly)
     }
@@ -499,9 +544,9 @@
     const map = new Map<string, NavFinding[]>()
     for (const review of skillReviews) {
       if (review.state.status !== 'done' || !review.state.value) continue
-      const result = review.state.value as SkillReviewResult
+      const findings = effectiveFindingsBySkill.get(review.skillId) ?? []
       const entries: NavFinding[] = []
-      for (const finding of result.findings) {
+      for (const finding of findings) {
         if (!prPathSet.has(finding.path)) continue
         const key = `${review.skillId}:${finding.path}:${finding.line}:${finding.body.slice(0, 30)}`
         // Hide a finding once it's been dismissed or added as a draft — same
@@ -513,7 +558,7 @@
           path: finding.path,
           line: finding.line,
           body: finding.body,
-          skillName: review.name,
+          skillName: findingLabel(review.name, finding),
         })
       }
       if (entries.length > 0) map.set(review.skillId, entries)
@@ -668,8 +713,8 @@
     const map = new Map<string, DecisionMeta>()
     for (const review of skillReviews) {
       if (review.state.status !== 'done' || !review.state.value) continue
-      const result = review.state.value as SkillReviewResult
-      for (const finding of result.findings) {
+      const findings = effectiveFindingsBySkill.get(review.skillId) ?? []
+      for (const finding of findings) {
         const key = `${review.skillId}:${finding.path}:${finding.line}:${finding.body.slice(0, 30)}`
         const v = finding.verification
         map.set(key, {
@@ -1098,6 +1143,19 @@
         {/each}
       </ul>
     </div>
+  {/if}
+
+  <!-- CONVERGENCE status: the cross-reviewer consolidation pass that runs once
+       after all reviewers settle. Loss-proof: on error we show a muted note and
+       the original findings render unmerged — nothing is ever lost. -->
+  {#if convergence?.status === 'loading'}
+    <p class="convergence-status" role="status" aria-live="polite">
+      <Spinner size="0.75em" />Consolidating overlapping findings…
+    </p>
+  {:else if convergence?.status === 'error'}
+    <p class="convergence-error-note" role="note">
+      Couldn't consolidate overlapping findings — showing all findings separately.
+    </p>
   {/if}
 
   <!-- SETTLED region: done/error result chips, aligned and wrapping for many
@@ -1727,6 +1785,24 @@
      many reviewers run concurrently — NOT N stacked full activity logs. */
   .skill-running-region {
     padding: 0.4rem 0;
+  }
+
+  /* CONVERGENCE status — the cross-reviewer consolidation pass. */
+  .convergence-status {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0.2rem 0;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  .convergence-error-note {
+    margin: 0.2rem 0;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    opacity: 0.85;
   }
 
   /* WAITING region — queued reviewers that have NOT started their LLM call.

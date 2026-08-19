@@ -34,6 +34,7 @@ function makeRun(attn?: AttentionResult): AiRun {
     story: { status: 'idle' },
     riskJudge: { status: 'idle' },
     skillReviews: [],
+    convergence: { status: 'idle' },
     totalUsage: undefined,
     verdictModels: [],
     modelPerformance: [],
