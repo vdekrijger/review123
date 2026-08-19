@@ -30,6 +30,7 @@
   import type { PrRef } from '../lib/github/parse'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
   import type { Draft } from '../lib/drafts/drafts.svelte'
+  import { draftKey, isStaleDraft, draftTimeLabel, draftTimeTitle } from '../lib/drafts/drafts.svelte'
   import { COACH_DIMENSIONS, type CoachDimension, type CoachResult, type CommentReview } from '../lib/ai/schemas'
   import type { PrComment } from '../lib/github/comments'
   import type { ReviewProvider } from '../lib/provider/types'
@@ -298,6 +299,42 @@
     return map
   })
 
+  // ---- Draft lifecycle in the recap ----
+
+  /** Remove ONE draft — single click (it's one visible comment, no confirm). */
+  function removeDraft(draft: Draft) {
+    void store.remove(draftKey(draft))
+  }
+
+  /** Stale = the draft's file is no longer in the PR's current diff. */
+  function isDraftStale(draft: Draft): boolean {
+    return isStaleDraft(draft, files, commitId).stale
+  }
+
+  // "Clear all drafts (N)": two-step inline confirm (button morphs to
+  // "Really clear N?"; resets on focusout/Escape — never window.confirm).
+  let confirmingClearDrafts = $state(false)
+
+  function handleClearAllDrafts() {
+    if (!confirmingClearDrafts) {
+      confirmingClearDrafts = true
+      return
+    }
+    confirmingClearDrafts = false
+    void store.clearAll()
+  }
+
+  function resetClearDraftsConfirm() {
+    confirmingClearDrafts = false
+  }
+
+  function onClearDraftsKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && confirmingClearDrafts) {
+      e.preventDefault()
+      resetClearDraftsConfirm()
+    }
+  }
+
   // ---- Copy as LLM prompt ----
   // Deterministic export: assemble the drafted review into an agent-ready
   // markdown prompt and copy it to the clipboard. No LLM call, no key needed,
@@ -492,7 +529,7 @@
         {#each [...draftsByPath.entries()] as [path, fileDrafts] (path)}
           <details open class="file-group">
             <summary class="file-path">{path}</summary>
-            {#each fileDrafts as draft (draft.path + '|' + draft.line + '|' + draft.side)}
+            {#each fileDrafts as draft (draft.path + '|' + draft.line + '|' + draft.side + '|' + (draft.n ?? 0))}
               <div class="draft-item">
                 <span class="draft-line-label">Line {draft.line} ({draft.side})</span>
                 {#if draft.aiAuthored}
@@ -503,12 +540,43 @@
                     aria-label={`Suggested by an AI reviewer: ${draft.aiReviewer ?? 'AI reviewer'}`}
                   >🤖 AI</span>
                 {/if}
+                <span
+                  class="draft-time"
+                  data-testid="recap-draft-time"
+                  title={draftTimeTitle(draft.createdAt)}
+                >{draftTimeLabel(draft.createdAt)}</span>
+                {#if isDraftStale(draft)}
+                  <span
+                    class="draft-stale"
+                    data-testid="recap-draft-stale"
+                    title="This draft's file is not in the PR's current diff — it can't be posted as a line comment"
+                  >file no longer in this PR</span>
+                {/if}
+                <button
+                  class="draft-remove"
+                  type="button"
+                  data-testid="recap-draft-remove"
+                  aria-label={`Remove draft at ${draft.path} line ${draft.line}`}
+                  title="Remove this draft"
+                  onclick={() => removeDraft(draft)}
+                >×</button>
                 <!-- renderMarkdown output is the only acceptable use of {@html} here -->
                 <div class="draft-body">{@html renderMarkdown(draft.body)}</div>
               </div>
             {/each}
           </details>
         {/each}
+        <button
+          class="clear-drafts-btn"
+          class:clear-drafts-confirming={confirmingClearDrafts}
+          type="button"
+          data-testid="recap-clear-all"
+          onclick={handleClearAllDrafts}
+          onfocusout={resetClearDraftsConfirm}
+          onkeydown={onClearDraftsKeydown}
+        >
+          {confirmingClearDrafts ? `Really clear ${store.count}?` : `Clear all drafts (${store.count})`}
+        </button>
       </section>
     {:else}
       <p class="no-drafts">No line comments drafted yet. You can still leave an overall comment below.</p>
@@ -856,6 +924,80 @@
 
   .draft-body :global(p) { margin: 0.25rem 0; }
   .draft-body :global(pre) { overflow-x: auto; }
+
+  .draft-time {
+    font-size: 0.72rem;
+    font-weight: 500;
+    margin-left: 0.4rem;
+    padding: 0.1rem 0.38rem;
+    border-radius: 999px;
+    border: 1px solid var(--hairline);
+    color: var(--text-muted, inherit);
+    opacity: 0.85;
+    white-space: nowrap;
+    cursor: help;
+    vertical-align: middle;
+  }
+
+  .draft-stale {
+    font-size: 0.72rem;
+    font-weight: 500;
+    margin-left: 0.4rem;
+    padding: 0.1rem 0.38rem;
+    border-radius: 999px;
+    background: var(--legend-changed-bg);
+    border: 1px solid var(--legend-changed-border);
+    color: var(--legend-changed-color);
+    white-space: nowrap;
+    cursor: help;
+    vertical-align: middle;
+  }
+
+  .draft-remove {
+    float: right;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--text-muted, inherit);
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0.05rem 0.35rem;
+    cursor: pointer;
+    opacity: 0.6;
+  }
+
+  .draft-remove:hover,
+  .draft-remove:focus-visible {
+    opacity: 1;
+    color: var(--legend-removed-color);
+    border-color: var(--legend-removed-border);
+  }
+
+  .clear-drafts-btn {
+    align-self: flex-start;
+    margin-top: 0.25rem;
+    padding: 0.3rem 0.8rem;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted, inherit);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .clear-drafts-btn:hover {
+    background: var(--surface-raised);
+    color: var(--legend-removed-color);
+  }
+
+  .clear-drafts-confirming {
+    border-color: var(--legend-removed-border);
+    color: var(--legend-removed-color);
+    background: var(--legend-removed-bg);
+    font-weight: 600;
+  }
 
   .no-drafts {
     opacity: 0.6;

@@ -19,6 +19,7 @@
   import CommentEditor from './CommentEditor.svelte'
   import MarkdownView from './MarkdownView.svelte'
   import type { Draft } from '../lib/drafts/drafts.svelte'
+  import { draftTimeLabel, draftTimeTitle } from '../lib/drafts/drafts.svelte'
 
   interface ConversationEntry {
     question: string
@@ -221,6 +222,15 @@
     {#if fromCommit}
       <span class="thread-from-commit" data-testid="draft-from-commit" title="This draft was made on an earlier commit of this PR">from commit {fromCommit}</span>
     {/if}
+    {#if draft !== null && !editing}
+      <!-- View-mode creation-time chip: relative age, exact datetime on hover;
+           "earlier session" for drafts that predate the createdAt field. -->
+      <span
+        class="thread-time"
+        data-testid="draft-created-at"
+        title={draftTimeTitle(draft.createdAt)}
+      >{draftTimeLabel(draft.createdAt)}</span>
+    {/if}
   </div>
 
   {#if editing}
@@ -347,6 +357,26 @@
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     margin-left: auto;
+  }
+
+  .thread-time {
+    font-size: 0.72rem;
+    font-weight: 500;
+    opacity: 0.75;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-draft, #f0b44488);
+    color: var(--text-muted, #b8862a);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    margin-left: auto;
+    cursor: help;
+  }
+
+  /* Any earlier chip already claimed the auto margin — keep a small gap only. */
+  .ai-badge ~ .thread-time,
+  .thread-from-commit ~ .thread-time {
+    margin-left: 0.4rem;
   }
 
   .draft-body {

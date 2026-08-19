@@ -14,6 +14,9 @@
  *   - upsert with no n specified appends at next n; with n specified, updates in place
  */
 
+import type { PrFile } from '../github/types'
+import { relativeTime } from '../time'
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -54,7 +57,18 @@ export interface Draft {
    * drafts and hand-written comments.
    */
   aiReviewer?: string
-  updatedAt: number
+  /**
+   * Epoch-ms when this draft was first created. Undefined for drafts that
+   * predate this field — such drafts render an "earlier session" fallback
+   * instead of a relative age. Preserved (never backfilled) on edits and by
+   * the re-key migration, so its absence stays an honest "unknown age".
+   */
+  createdAt?: number
+  /**
+   * Epoch-ms of the last body write. Optional because drafts written by very
+   * old app versions may lack it; consumers must tolerate undefined.
+   */
+  updatedAt?: number
 }
 
 /**
@@ -69,6 +83,64 @@ export function outgoingCommentBody(draft: Pick<Draft, 'body' | 'aiAuthored' | '
   return draft.aiAuthored
     ? `🤖 _AI-suggested · ${draft.aiReviewer ?? 'AI reviewer'}_\n\n${draft.body}`
     : draft.body
+}
+
+// ---------------------------------------------------------------------------
+// Draft lifecycle — staleness + age labels
+// ---------------------------------------------------------------------------
+
+/** The two lifecycle signals for a draft against the PR's CURRENT diff. */
+export interface DraftStaleness {
+  /**
+   * Hard signal: the draft's file is not in the PR's current diff at all
+   * (deleted from the PR, or renamed away — PrFile.filename is always the
+   * CURRENT name, so a draft anchored at a renamed file's OLD path is stale).
+   * Note: a file with status 'removed' is still IN the diff (the deletion is
+   * part of the PR), so drafts on it are NOT stale.
+   */
+  stale: boolean
+  /**
+   * Soft signal: the draft was made on a different (older) head commit than
+   * the current one. The draft may still anchor fine — this is informational.
+   * False when either sha is unknown.
+   */
+  olderRevision: boolean
+}
+
+/**
+ * Classify one draft against the PR's current file list + head sha. PURE.
+ *
+ * When `files` is empty the staleness check is skipped (stale: false): a real
+ * PR diff always has ≥1 file, so an empty list means the caller has no file
+ * list to judge against (demo/tests) — never that every file left the diff.
+ */
+export function isStaleDraft(
+  draft: Pick<Draft, 'path' | 'headSha'>,
+  files: readonly Pick<PrFile, 'filename'>[],
+  headSha?: string,
+): DraftStaleness {
+  const stale = files.length > 0 && !files.some((f) => f.filename === draft.path)
+  const olderRevision = !!draft.headSha && !!headSha && draft.headSha !== headSha
+  return { stale, olderRevision }
+}
+
+/**
+ * Relative age label for a draft's creation time: "just now", "5m ago",
+ * "3h ago", "2d ago" — or "earlier session" when the draft predates the
+ * createdAt field (we don't know its age, only that it wasn't made now).
+ */
+export function draftTimeLabel(createdAt: number | undefined): string {
+  if (createdAt == null) return 'earlier session'
+  return relativeTime(new Date(createdAt).toISOString())
+}
+
+/**
+ * Tooltip (title=) text for a draft's creation time: the exact local datetime,
+ * or an honest explanation when the draft has no recorded creation time.
+ */
+export function draftTimeTitle(createdAt: number | undefined): string {
+  if (createdAt == null) return 'Created in an earlier session (no timestamp recorded)'
+  return new Date(createdAt).toLocaleString()
 }
 
 export function draftKey(d: Pick<Draft, 'prKey' | 'path' | 'line' | 'side'> & { n?: number; startLine?: number }): string {
@@ -391,7 +463,11 @@ async function migrateLegacyShaKeysToIdentity(db: IDBDatabase, identityPrKey: st
       body,
       prKey: identityPrKey,
       n,
-      updatedAt: src.value.updatedAt ?? Date.now(),
+      // Timestamps are PRESERVED verbatim — including their absence. A legacy
+      // draft without createdAt/updatedAt keeps rendering as "earlier session";
+      // fabricating times here would lie about the draft's age.
+      ...(src.value.createdAt != null ? { createdAt: src.value.createdAt } : {}),
+      ...(src.value.updatedAt != null ? { updatedAt: src.value.updatedAt } : {}),
       ...(startLine != null ? { startLine } : {}),
       ...(src.sourceSha ? { headSha: src.sourceSha } : {}),
       // AI-attribution fields ride along with the value during re-keying.
@@ -547,10 +623,15 @@ export function createDraftStore(prKey: string, dbName = 'review123-drafts', mak
       const key = draftKey({ prKey, path: d.path, line: d.line, side: d.side, n })
       // Only store startLine when it forms a real range (< line)
       const startLine = (d.startLine != null && d.startLine < d.line) ? d.startLine : undefined
-      const record: Draft = { path: d.path, line: d.line, side: d.side, body: d.body, prKey, n, updatedAt: Date.now(), ...(startLine != null ? { startLine } : {}), ...(makerSha ? { headSha: makerSha } : {}), ...(d.aiAuthored ? { aiAuthored: true } : {}), ...(d.aiReviewer != null ? { aiReviewer: d.aiReviewer } : {}) }
+      // createdAt: stamped once at creation; a body edit PRESERVES the original
+      // (including its absence on pre-timestamp drafts — never backfilled, so
+      // "earlier session" stays honest). updatedAt tracks the last body write.
+      const existingIdx = drafts.findIndex((x) => draftKey(x) === key)
+      const createdAt = existingIdx >= 0 ? drafts[existingIdx].createdAt : Date.now()
+      const record: Draft = { path: d.path, line: d.line, side: d.side, body: d.body, prKey, n, updatedAt: Date.now(), ...(createdAt != null ? { createdAt } : {}), ...(startLine != null ? { startLine } : {}), ...(makerSha ? { headSha: makerSha } : {}), ...(d.aiAuthored ? { aiAuthored: true } : {}), ...(d.aiReviewer != null ? { aiReviewer: d.aiReviewer } : {}) }
 
       // Update in-memory state (last-write-wins: replace existing if same key)
-      const idx = drafts.findIndex((x) => draftKey(x) === key)
+      const idx = existingIdx
       if (idx >= 0) {
         drafts[idx] = record
       } else {
@@ -663,4 +744,45 @@ export async function clearDraftsForPr(prKey: string, dbName = 'review123-drafts
   const db = await openSharedDb(dbName)
   if (!db) return
   await idbClearRange(db, prKey)
+}
+
+/**
+ * Delete every draft under a single prKey. Alias of clearDraftsForPr with the
+ * lifecycle-management name — one implementation, two entry points.
+ *
+ * NOTE: this operates on DISK only. When a live createDraftStore instance
+ * exists for the prKey, call store.clearAll() instead so the reactive in-memory
+ * array updates too.
+ */
+export function clearAllDrafts(prKey: string, dbName = 'review123-drafts'): Promise<void> {
+  return clearDraftsForPr(prKey, dbName)
+}
+
+/**
+ * Delete only the STALE drafts under a prKey — those whose file is no longer
+ * in the PR's current diff (see isStaleDraft). Non-stale drafts are untouched.
+ * Returns how many drafts were removed. No-op (0) when IndexedDB is
+ * unavailable or `files` is empty (no file list to judge against).
+ *
+ * Same disk-only caveat as clearAllDrafts: with a live store, prefer removing
+ * the stale drafts through the store so the UI updates reactively.
+ */
+export async function clearStaleDrafts(
+  prKey: string,
+  files: readonly Pick<PrFile, 'filename'>[],
+  headSha?: string,
+  dbName = 'review123-drafts',
+): Promise<number> {
+  const db = await openSharedDb(dbName)
+  if (!db || files.length === 0) return 0
+
+  const entries = await idbGetAllForPr(db, prKey)
+  let removed = 0
+  for (const { key, value } of entries) {
+    if (isStaleDraft(value, files, headSha).stale) {
+      await idbDelete(db, key)
+      removed++
+    }
+  }
+  return removed
 }
