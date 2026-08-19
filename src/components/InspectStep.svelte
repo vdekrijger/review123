@@ -434,7 +434,9 @@
     const reviewers: ReviewerFindings[] = []
     for (const review of skillReviews) {
       if (review.state.status !== 'done' || !review.state.value || typeof review.state.value === 'string') continue
-      reviewers.push({ skillId: review.skillId, name: review.name, findings: (review.state.value as SkillReviewResult).findings })
+      const value = review.state.value as SkillReviewResult
+      // Defensive on odd cached values — degrade to "no findings", never throw.
+      reviewers.push({ skillId: review.skillId, name: review.name, findings: Array.isArray(value.findings) ? value.findings : [] })
     }
     const v =
       convergence && convergence.status === 'done' && convergence.value && typeof convergence.value === 'object'

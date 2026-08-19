@@ -2485,10 +2485,15 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // ---------------------------------------------------------------------------
 
   async function runConvergencePass(onUpdate?: () => void): Promise<void> {
-    // Reviewers that settled 'done' with a real result object.
+    // Reviewers that settled 'done' with a real result object. Defensive on the
+    // findings array — a malformed cached value must degrade to "no findings",
+    // never throw (loss-proof includes surviving weird cache content).
     const reviewers: ReviewerFindings[] = skillReviewsState
       .filter((e) => e.state.status === 'done' && typeof e.state.value === 'object' && e.state.value !== null)
-      .map((e) => ({ skillId: e.skillId, name: e.name, findings: (e.state.value as SkillReviewResult).findings }))
+      .map((e) => {
+        const value = e.state.value as SkillReviewResult
+        return { skillId: e.skillId, name: e.name, findings: Array.isArray(value.findings) ? value.findings : [] }
+      })
 
     // Skip (stay 'idle') when fewer than 2 reviewers produced findings — a
     // single reviewer has nobody to converge with; no call, no tokens.
