@@ -302,6 +302,24 @@ export const githubProvider: ReviewProvider = {
     return lines.join('\n')
   },
 
+  // Symbol popover "Search repo" (Tier 2 symbol navigation): structured
+  // path-list variant of the code search. Same /search/code endpoint as
+  // searchCode, but returns the matched FILE PATHS (deduped, capped at 10)
+  // so the caller can fetch each file at the PR's head SHA and re-scan it
+  // with the client-side symbol index. Requires auth; errors (including
+  // rate limits) propagate as GithubApiError for the caller to surface.
+  async searchCodePaths(repo: { owner: string; repo: string }, symbol: string): Promise<string[]> {
+    const q = encodeURIComponent(`${symbol} repo:${repo.owner}/${repo.repo}`)
+    const data = await ghFetch<{ items?: { path?: string }[] }>(`/search/code?q=${q}&per_page=10`)
+    const paths: string[] = []
+    for (const item of data.items ?? []) {
+      if (typeof item.path !== 'string') continue
+      if (!paths.includes(item.path)) paths.push(item.path)
+      if (paths.length >= 10) break
+    }
+    return paths
+  },
+
   getCiSummary(ref: PrRefX, headSha: string): Promise<CiSummary> {
     return getCiSummary(toRef(ref), headSha)
   },

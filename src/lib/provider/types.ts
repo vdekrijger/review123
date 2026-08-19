@@ -230,6 +230,22 @@ export interface ReviewProvider {
   findReferences?(repo: { owner: string; repo: string }, symbol: string): Promise<string>
 
   /**
+   * Search the repo's code for a symbol and return the matching FILE PATHS
+   * (structured, unlike searchCode/findReferences which return LLM-oriented
+   * prose). Powers the symbol popover's on-demand "Search repo" action
+   * (Tier 2 symbol navigation): the caller fetches each path at the PR's
+   * head SHA via getFileAtRef and re-scans the real content, so results from
+   * the provider's default-branch search index self-correct for moved or
+   * deleted files. Deduped, capped at ~10 paths. Requires auth on GitHub
+   * (unauthenticated /search/code is rejected). Throws provider API errors
+   * (rate limits included) — callers surface them as user-facing messages.
+   *
+   * Optional — capability by method presence (same pattern as getMyQueue).
+   * GitHub-only in v1; GitLab/Bitbucket omit it honestly (additive later).
+   */
+  searchCodePaths?(repo: { owner: string; repo: string }, symbol: string): Promise<string[]>
+
+  /**
    * Return open PRs/MRs in the current user's review queue.
    * - authorIsMe=false → awaiting this user's review (reviewer-requested)
    * - authorIsMe=true  → authored by this user (open PRs)

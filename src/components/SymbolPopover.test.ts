@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import SymbolPopover from './SymbolPopover.svelte'
 import type { SymbolDefinition, SymbolReference } from '../lib/symbols/symbolIndex'
+import type { RepoSearchOutcome } from '../lib/symbols/repoSearch'
 
 const def: SymbolDefinition = {
   name: 'computeTotal',
@@ -125,5 +126,105 @@ describe('SymbolPopover', () => {
     const closeBtn = screen.getByRole('button', { name: 'Close symbol popover' })
     await fireEvent.focusOut(dialog, { relatedTarget: closeBtn })
     expect(onClose).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// "In repo" section (Tier 2 — on-demand repo search)
+// ---------------------------------------------------------------------------
+
+const repoRefs: RepoSearchOutcome = {
+  ok: true,
+  definitions: [],
+  references: [
+    { name: 'computeTotal', file: 'src/other.ts', line: 1, side: 'new', snippet: "import { computeTotal } from './util'", inDiff: false },
+    { name: 'computeTotal', file: 'src/other.ts', line: 3, side: 'new', snippet: 'return computeTotal(xs) * 2', inDiff: false },
+  ],
+  filesScanned: 1,
+  filesSkipped: 0,
+}
+
+describe('SymbolPopover — In repo section', () => {
+  it('is hidden entirely when the provider has no code search (onSearchRepo null)', () => {
+    renderPopover({ onSearchRepo: null })
+    expect(screen.queryByText(/^In repo/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Search repo' })).not.toBeInTheDocument()
+  })
+
+  it('shows the on-demand Search repo button and never searches automatically', () => {
+    const onSearchRepo = vi.fn()
+    renderPopover({ onSearchRepo })
+    expect(screen.getByText('In repo')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Search repo' })).toBeInTheDocument()
+    expect(onSearchRepo).not.toHaveBeenCalled()
+  })
+
+  it('shows a loading state while the search runs', async () => {
+    let resolve!: (v: RepoSearchOutcome) => void
+    const onSearchRepo = vi.fn(() => new Promise<RepoSearchOutcome>((r) => { resolve = r }))
+    renderPopover({ onSearchRepo })
+    await fireEvent.click(screen.getByRole('button', { name: 'Search repo' }))
+    expect(onSearchRepo).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('status')).toHaveTextContent('Searching repo…')
+    resolve(repoRefs)
+    await screen.findByText('In repo (2)')
+  })
+
+  it('renders results grouped by file — non-clickable, with tooltip and footnote', async () => {
+    const { container } = renderPopover({ onSearchRepo: vi.fn().mockResolvedValue(repoRefs) })
+    await fireEvent.click(screen.getByRole('button', { name: 'Search repo' }))
+    await screen.findByText('In repo (2)')
+
+    const section = container.querySelector('section.repo')!
+    expect(section.querySelector('.ref-file-name.repo-file')!.textContent).toContain('src/other.ts')
+    const rows = [...section.querySelectorAll('.ref-row.static')]
+    expect(rows).toHaveLength(2)
+    expect(rows[0].textContent).toContain("import { computeTotal } from './util'")
+    expect(rows[0].getAttribute('title')).toBe("Not in this PR's diff")
+    expect(rows.every((r) => r.tagName !== 'BUTTON')).toBe(true)
+    // The path is copyable (copy button per file group).
+    expect(screen.getByRole('button', { name: 'Copy path src/other.ts' })).toBeInTheDocument()
+    // Honest footnote about the default-branch search index + head re-check.
+    expect(screen.getByText(/default branch index; results re-checked at this PR's head/)).toBeInTheDocument()
+  })
+
+  it('shows the empty message when no other call points exist', async () => {
+    const onSearchRepo = vi.fn().mockResolvedValue({ ok: true, definitions: [], references: [], filesScanned: 0, filesSkipped: 0 })
+    renderPopover({ onSearchRepo })
+    await fireEvent.click(screen.getByRole('button', { name: 'Search repo' }))
+    await screen.findByText('No other call points found in the repo.')
+    expect(screen.getByText('In repo (0)')).toBeInTheDocument()
+  })
+
+  it('surfaces a search error and keeps the button for retry', async () => {
+    const onSearchRepo = vi.fn().mockResolvedValue({ ok: false, message: 'Code search rate-limited — try again in a minute.' })
+    renderPopover({ onSearchRepo })
+    await fireEvent.click(screen.getByRole('button', { name: 'Search repo' }))
+    await screen.findByRole('alert')
+    expect(screen.getByRole('alert')).toHaveTextContent('Code search rate-limited — try again in a minute.')
+    expect(screen.getByRole('button', { name: 'Search repo' })).toBeInTheDocument()
+  })
+
+  it('upgrades the "not in changed files" state when the search finds the definition', async () => {
+    const withDef: RepoSearchOutcome = {
+      ok: true,
+      definitions: [
+        { name: 'computeTotal', kind: 'function', file: 'src/other.ts', line: 1, side: 'new', snippet: 'export function computeTotal(values: number[]): number {', inDiff: false },
+      ],
+      references: [],
+      filesScanned: 1,
+      filesSkipped: 0,
+    }
+    renderPopover({ definitions: [], onSearchRepo: vi.fn().mockResolvedValue(withDef) })
+    expect(screen.getByText(/Definition not in the changed files of this PR/)).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Search repo' }))
+    await screen.findByTestId('repo-definition')
+    expect(screen.queryByText(/Definition not in the changed files of this PR/)).not.toBeInTheDocument()
+    const entry = screen.getByTestId('repo-definition')
+    expect(entry.textContent).toContain('export function computeTotal')
+    expect(entry.textContent).toContain('src/other.ts:1')
+    expect(entry.textContent).toContain('repo')
+    // Repo definitions are never jump targets.
+    expect(entry.querySelector('button.loc')).toBeNull()
   })
 })

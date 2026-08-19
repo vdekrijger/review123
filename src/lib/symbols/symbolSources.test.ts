@@ -3,6 +3,7 @@ import {
   registerSymbolSource,
   unregisterSymbolSource,
   currentSymbolIndex,
+  registeredSymbolFilenames,
   _resetSymbolSourcesForTest,
 } from './symbolSources'
 
@@ -70,5 +71,13 @@ describe('symbolSources registry', () => {
 
   it('unregistering an unknown file is a no-op', () => {
     expect(() => unregisterSymbolSource('nope.ts')).not.toThrow()
+  })
+
+  it('exposes the registered filenames (repo search excludes the PR files)', () => {
+    registerSymbolSource(utilFile)
+    registerSymbolSource(appFile)
+    expect(registeredSymbolFilenames()).toEqual(new Set(['src/util.ts', 'src/app.ts']))
+    unregisterSymbolSource('src/app.ts')
+    expect(registeredSymbolFilenames()).toEqual(new Set(['src/util.ts']))
   })
 })
