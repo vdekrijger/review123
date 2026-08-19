@@ -465,3 +465,66 @@ describe('SkillFindingCard — Ask AI (grounded follow-up)', () => {
     expect(onAdd).not.toHaveBeenCalled()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Convergence: merged multi-reviewer cards + covered-by-draft rendering
+// ---------------------------------------------------------------------------
+
+describe('SkillFindingCard — convergence merged card', () => {
+  const MERGED_FROM = [
+    { reviewer: 'Resiliency & SRE', path: 'src/a.ts', line: 12 as number | null, severity: 'high' as const, body: 'comparing naive datetime raises TypeError\nsecond line' },
+  ]
+
+  it('shows all contributing reviewer names (label passed by the parent)', () => {
+    renderCard({ skillName: 'UX & Interaction · Resiliency & SRE', mergedFrom: MERGED_FROM })
+    expect(screen.getByText('UX & Interaction · Resiliency & SRE')).toBeInTheDocument()
+  })
+
+  it('renders an expandable "also flagged as…" disclosure listing each absorbed finding', () => {
+    const { container } = renderCard({ mergedFrom: MERGED_FROM, mergedReason: 'same TypeError' })
+    const details = container.querySelector('details.merged-from')
+    expect(details).toBeTruthy()
+    // The cluster reason is surfaced as the disclosure tooltip.
+    expect(details?.getAttribute('title')).toBe('same TypeError')
+    expect(screen.getByText('also flagged as… (1)')).toBeInTheDocument()
+    // Absorbed finding preserved: reviewer + location + ONE-LINE body.
+    expect(screen.getByText('Resiliency & SRE')).toBeInTheDocument()
+    expect(screen.getByText('src/a.ts:12')).toBeInTheDocument()
+    expect(screen.getByText('comparing naive datetime raises TypeError')).toBeInTheDocument()
+    expect(screen.queryByText(/second line/)).not.toBeInTheDocument()
+  })
+
+  it('renders no disclosure without mergedFrom (unmerged cards unchanged)', () => {
+    const { container } = renderCard()
+    expect(container.querySelector('details.merged-from')).toBeNull()
+  })
+})
+
+describe('SkillFindingCard — covered by the user draft (convergence)', () => {
+  const COVERED = { path: 'src/a.ts', line: 11 }
+
+  it('renders collapsed/de-emphasized with the covered label; body hidden until expanded', async () => {
+    const { container } = renderCard({ coveredByDraft: COVERED })
+    const collapsed = container.querySelector('.skill-finding.covered-collapsed')
+    expect(collapsed).toBeTruthy()
+    expect(screen.getByText(/covered by your comment on src\/a\.ts:11/)).toBeInTheDocument()
+    // The finding did NOT vanish — but its body is collapsed away.
+    expect(screen.queryByText('Consider extracting this into a helper')).not.toBeInTheDocument()
+
+    // Expanding discloses the full card (body + actions), still marked covered.
+    await userEvent.click(screen.getByRole('button', { name: /covered by your comment/i }))
+    expect(screen.getByText('Consider extracting this into a helper')).toBeInTheDocument()
+    expect(container.querySelector('.skill-finding.covered-by-draft')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument()
+
+    // And it can collapse back.
+    await userEvent.click(screen.getByRole('button', { name: /collapse this covered finding/i }))
+    expect(screen.queryByText('Consider extracting this into a helper')).not.toBeInTheDocument()
+  })
+
+  it('keeps the data-finding-key on the collapsed card (jump targets still work)', () => {
+    const { container } = renderCard({ coveredByDraft: COVERED, findingKey: 'skill:src/a.ts:10:x' })
+    const collapsed = container.querySelector('.skill-finding.covered-collapsed')
+    expect(collapsed?.getAttribute('data-finding-key')).toBe('skill:src/a.ts:10:x')
+  })
+})

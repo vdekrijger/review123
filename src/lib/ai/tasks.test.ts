@@ -20,6 +20,7 @@ import {
   riskJudgePrompt,
   askPrompt,
   skillReviewPrompt,
+  convergencePrompt,
   parseReadingOrder,
   stripReadingOrder,
 } from './tasks'
@@ -1964,8 +1965,70 @@ describe('storyOrderPrompt', () => {
 })
 
 describe('PROMPT_VERSION', () => {
-  it('is bumped to 25 (LLM risk judge joins the task set)', () => {
-    expect(PROMPT_VERSION).toBe(25)
+  it('is bumped to 26 (finding convergence joins the task set)', () => {
+    expect(PROMPT_VERSION).toBe(26)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PROMPT_VERSION 26 — convergencePrompt (cross-reviewer finding convergence)
+// ---------------------------------------------------------------------------
+
+describe('convergencePrompt', () => {
+  const FINDINGS = [
+    { id: 'f0', reviewer: 'UX & Interaction', path: 'src/a.ts', line: 10, severity: 'medium', body: 'naive vs aware TypeError' },
+    { id: 'f1', reviewer: 'Resiliency & SRE', path: 'src/a.ts', line: 12, severity: 'high', body: 'same TypeError two lines down' },
+  ]
+  const DRAFTS = [{ id: 'draft-0', path: 'src/a.ts', line: 11, body: 'my own comment about the datetime bug' }]
+
+  it('carries the stable e2e dispatch marker in the system prompt', () => {
+    const { system } = convergencePrompt(FINDINGS, [])
+    expect(system).toContain('consolidating overlapping code-review findings')
+  })
+
+  it('demands conservative clustering: same root cause only, never merge when unsure', () => {
+    const { system } = convergencePrompt(FINDINGS, [])
+    expect(system).toMatch(/SAME underlying defect \/ root cause/i)
+    expect(system).toMatch(/Different bugs on or near the same line are NOT a cluster/i)
+    expect(system).toMatch(/DO NOT merge/i)
+    expect(system).toMatch(/disjoint/i)
+  })
+
+  it('demands JSON-only output in the clusters shape (members/primary/reason ≤100 chars)', () => {
+    const { system } = convergencePrompt(FINDINGS, [])
+    expect(system).toMatch(/JSON ONLY/i)
+    expect(system).toContain('"clusters"')
+    expect(system).toContain('"members"')
+    expect(system).toContain('"primary"')
+    expect(system).toContain('"reason"')
+    expect(system).toMatch(/100 char/i)
+    expect(system).toContain('{"clusters":[]}')
+  })
+
+  it('lists every finding with id, reviewer, location, severity and body', () => {
+    const { user } = convergencePrompt(FINDINGS, [])
+    expect(user).toContain('f0 [UX & Interaction] src/a.ts:10 (medium): naive vs aware TypeError')
+    expect(user).toContain('f1 [Resiliency & SRE] src/a.ts:12 (high): same TypeError two lines down')
+  })
+
+  it('includes draft rows + the draft semantics only when drafts exist', () => {
+    const withDrafts = convergencePrompt(FINDINGS, DRAFTS)
+    expect(withDrafts.user).toContain('draft-0 src/a.ts:11: my own comment about the datetime bug')
+    expect(withDrafts.system).toMatch(/already covered by the author's own comment/i)
+    const without = convergencePrompt(FINDINGS, [])
+    expect(without.user).not.toContain('draft-')
+  })
+
+  it('flattens newlines and caps body length in the compact rows', () => {
+    const { user } = convergencePrompt(
+      [{ id: 'f0', reviewer: 'R', path: 'p.ts', line: null, severity: 'low', body: 'line one\nline two ' + 'x'.repeat(500) }],
+      [],
+    )
+    expect(user).toContain('f0 [R] p.ts (low): line one line two')
+    expect(user).not.toContain('\nline two')
+    // Body capped at 400 chars.
+    const row = user.split('\n').find((l) => l.startsWith('f0 '))!
+    expect(row.length).toBeLessThan(450)
   })
 })
 
