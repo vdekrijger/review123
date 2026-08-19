@@ -159,6 +159,23 @@ describe('SymbolPopover — In repo section', () => {
     expect(onSearchRepo).not.toHaveBeenCalled()
   })
 
+  it('parks focus on the dialog when the search starts (the unmounting button must not self-close the popover)', async () => {
+    // The loading state unmounts the [Search repo] button. If it unmounted
+    // while still focused, the browser would fire focusout with relatedTarget
+    // null and the focus-leave idiom would close the popover mid-search.
+    let resolve!: (v: RepoSearchOutcome) => void
+    const onSearchRepo = vi.fn(() => new Promise<RepoSearchOutcome>((r) => { resolve = r }))
+    const { onClose } = renderPopover({ onSearchRepo })
+    const btn = screen.getByRole('button', { name: 'Search repo' })
+    btn.focus()
+    await fireEvent.click(btn)
+    const dialog = screen.getByRole('dialog', { name: /Symbol computeTotal/ })
+    expect(document.activeElement).toBe(dialog)
+    expect(onClose).not.toHaveBeenCalled()
+    resolve({ ok: true, definitions: [], references: [], filesScanned: 0, filesSkipped: 0 })
+    await screen.findByText('In repo (0)')
+  })
+
   it('shows a loading state while the search runs', async () => {
     let resolve!: (v: RepoSearchOutcome) => void
     const onSearchRepo = vi.fn(() => new Promise<RepoSearchOutcome>((r) => { resolve = r }))

@@ -101,6 +101,12 @@
   async function runRepoSearch() {
     if (!onSearchRepo || repoState.phase === 'loading') return
     const forSymbol = symbol
+    // The click leaves focus on the [Search repo] button, and the loading
+    // state UNMOUNTS that button. Removing the focused element fires focusout
+    // with relatedTarget null, which the focus-leave idiom would read as
+    // "focus left the popover" — closing it mid-search. Park focus back on
+    // the dialog BEFORE the button unmounts.
+    dialogEl?.focus()
     repoState = { phase: 'loading' }
     const outcome = await onSearchRepo()
     // Drop a stale result if the popover was retargeted mid-flight.

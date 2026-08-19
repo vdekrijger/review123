@@ -873,18 +873,26 @@
          #file-<slug> scroll mechanism (jumpToDiffLine), so no InspectStep
          wiring is needed. -->
     {#if symbolPopover}
-      {@const sp = symbolPopover}
+      <!-- The optional chains are NOT redundant: closing the popover nulls
+           `symbolPopover` and these @const deriveds re-evaluate during the
+           SAME flush that tears the branch down — a bare `.symbol` there
+           throws mid-flush and strands the popover DOM. -->
+      {@const sym = symbolPopover?.symbol ?? ''}
+      {@const spDefs = symbolPopover?.definitions ?? []}
+      {@const spRefs = symbolPopover?.references ?? []}
+      {@const spX = symbolPopover?.x ?? 0}
+      {@const spY = symbolPopover?.y ?? 0}
       {@const searchCtx = repoSearchCtx}
       <SymbolPopover
-        symbol={sp.symbol}
-        definitions={sp.definitions}
-        references={sp.references}
-        x={sp.x}
-        y={sp.y}
+        symbol={sym}
+        definitions={spDefs}
+        references={spRefs}
+        x={spX}
+        y={spY}
         currentFile={file.filename}
         onJump={handleSymbolJump}
         onClose={() => (symbolPopover = null)}
-        onSearchRepo={searchCtx ? () => searchRepoForSymbol(sp.symbol, searchCtx) : null}
+        onSearchRepo={searchCtx && sym ? () => searchRepoForSymbol(sym, searchCtx) : null}
       />
     {/if}
 
