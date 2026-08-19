@@ -12,6 +12,7 @@ import {
   ConcurrencyGate,
   MAX_INFLIGHT_LLM_CALLS,
   llmConcurrencyGate,
+  gateFor,
 } from './concurrencyGate'
 
 // ---------------------------------------------------------------------------
@@ -239,6 +240,60 @@ describe('ConcurrencyGate — rejection releases the slot', () => {
 // ---------------------------------------------------------------------------
 // run() returns the wrapped value transparently
 // ---------------------------------------------------------------------------
+
+describe('gateFor — per-provider gates', () => {
+  it('returns the SAME gate instance for the same provider id', () => {
+    expect(gateFor('deepseek')).toBe(gateFor('deepseek'))
+    expect(gateFor('anthropic')).toBe(gateFor('anthropic'))
+  })
+
+  it('returns DIFFERENT gates for different providers, each at the shared cap', async () => {
+    const a = gateFor('prov-a')
+    const b = gateFor('prov-b')
+    expect(a).not.toBe(b)
+    expect(a).toBeInstanceOf(ConcurrencyGate)
+    expect(b).toBeInstanceOf(ConcurrencyGate)
+
+    // Saturate A at the cap: B must still grant slots immediately.
+    const parked = Array.from({ length: MAX_INFLIGHT_LLM_CALLS }, () => deferred())
+    const aRuns = parked.map((d) => a.run(() => d.promise))
+    await flushMicrotasks()
+    expect(a.inFlight).toBe(MAX_INFLIGHT_LLM_CALLS)
+
+    let bRan = false
+    await b.run(async () => {
+      bRan = true
+    })
+    expect(bRan).toBe(true)
+    expect(a.inFlight).toBe(MAX_INFLIGHT_LLM_CALLS) // A still saturated
+
+    for (const d of parked) d.resolve()
+    await Promise.all(aRuns)
+    expect(a.inFlight).toBe(0)
+  })
+
+  it('an extra call on a saturated provider queues (isolation is per provider, not per call)', async () => {
+    const gate = gateFor('prov-queueing')
+    const parked = Array.from({ length: MAX_INFLIGHT_LLM_CALLS }, () => deferred())
+    const runs = parked.map((d) => gate.run(() => d.promise))
+    await flushMicrotasks()
+
+    let extraRan = false
+    const extra = gate.run(async () => {
+      extraRan = true
+    })
+    await flushMicrotasks()
+    expect(extraRan).toBe(false)
+    expect(gate.queued).toBe(1)
+
+    parked[0].resolve()
+    await flushMicrotasks()
+    expect(extraRan).toBe(true)
+
+    for (const d of parked) d.resolve()
+    await Promise.all([...runs, extra])
+  })
+})
 
 describe('ConcurrencyGate — transparency', () => {
   it('forwards the resolved value of fn unchanged', async () => {

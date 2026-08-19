@@ -12,8 +12,9 @@
  *   - modelSupportsTools capability flag
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { llmToolLoop, DEFAULT_MAX_TOOL_CALLS } from './llmToolLoop'
+import { setTransientRetryPolicyForTests } from './transientRetry'
 import type { LlmToolDef } from './llmToolLoop'
 import { LlmError } from './llm'
 import { PROVIDERS, getProvider, modelSupportsTools } from './providers'
@@ -90,6 +91,13 @@ function openaiFinalResponse(
 beforeEach(() => {
   localStorage.clear()
   vi.unstubAllGlobals()
+  // Terminal-error expectations in this suite (e.g. a mid-loop 429) assume no
+  // transient retry — retry behavior is covered by transientRetry.test.ts.
+  setTransientRetryPolicyForTests({ maxRetries: 0 })
+})
+
+afterEach(() => {
+  setTransientRetryPolicyForTests(null)
 })
 
 // ===========================================================================

@@ -10,13 +10,14 @@
  *   - cache key model component (cacheKey with modelId)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   PROVIDERS,
   getProvider,
   getModelDef,
   computeBudgetTokens,
 } from './providers'
+import { setTransientRetryPolicyForTests } from './transientRetry'
 import { activeLlmConfig } from './config'
 import {
   llmComplete,
@@ -67,6 +68,13 @@ function makeStream(chunks: string[]): ReadableStream<Uint8Array> {
 beforeEach(() => {
   localStorage.clear()
   vi.unstubAllGlobals()
+  // This suite is about terminal status MAPPING per transport — transient
+  // retry has its own dedicated suite (transientRetry.test.ts).
+  setTransientRetryPolicyForTests({ maxRetries: 0 })
+})
+
+afterEach(() => {
+  setTransientRetryPolicyForTests(null)
 })
 
 // ===========================================================================
