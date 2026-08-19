@@ -13,7 +13,7 @@
     title: string
     /** AI task this panel renders — drives the unified status line. */
     task: AiProgressTask
-    state: { status: PanelStatus; error?: string; activity?: string[]; toolCallsUsed?: number; note?: string; usage?: LlmUsage }
+    state: { status: PanelStatus; error?: string; errorDetail?: string; activity?: string[]; toolCallsUsed?: number; note?: string; usage?: LlmUsage }
     onretry: () => void
     /** Shape of the pending skeleton — content-shaped per section. */
     skeletonVariant?: 'text' | 'block' | 'cards'
@@ -59,6 +59,11 @@
   <div class="ai-panel-error" role="alert">
     <p class="error-msg">{state.error ?? 'Something went wrong.'}</p>
     <button class="retry-btn" onclick={onretry}>Retry</button>
+    {#if state.errorDetail}
+      <!-- Concrete upstream failure detail (provider error body) — muted,
+           small, on its own line under the canned sentence. -->
+      <p class="error-detail">{state.errorDetail}</p>
+    {/if}
   </div>
 {:else if state.status === 'no-key'}
   <div class="ai-panel-no-key">
@@ -128,6 +133,14 @@
     margin: 0;
     color: #cf222e;
     font-size: 0.9rem;
+  }
+
+  .error-detail {
+    margin: 0;
+    flex-basis: 100%;
+    font-size: 0.78rem;
+    color: var(--text-muted, currentColor);
+    opacity: 0.85;
   }
 
   .retry-btn {

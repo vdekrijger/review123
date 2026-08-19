@@ -21,6 +21,7 @@ import {
   LlmError,
 } from '../llm/llm'
 import type { LlmUsage, ProviderConfig } from '../llm/llm'
+import { isTransientLlmError } from '../llm/transientRetry'
 import {
   crossVerify,
   buildVerifyPrompt,
@@ -129,6 +130,14 @@ export interface PanelState<T> {
   status: PanelStatus
   value?: T | string
   error?: string
+  /**
+   * The CONCRETE upstream failure detail (provider error body / thrown
+   * message) behind the canned `error` sentence — composed by
+   * describeTaskError. Surfaced on hover (title/tooltip) wherever an error
+   * indicator renders, so "server error" is diagnosable without DevTools.
+   * Absent when the raw message added nothing beyond `error`.
+   */
+  errorDetail?: string
   /** Deep review: humanized tool-activity lines, present while the loop runs. */
   activity?: string[]
   /** Deep review: tool calls used by the run ("verified with N tool calls"). */
@@ -389,6 +398,66 @@ function humanMessage(kind: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// describeTaskError — ONE composition of kind + canned sentence + concrete
+// detail, used by EVERY task catch (state, tooltips, analytics).
+// ---------------------------------------------------------------------------
+
+/** Cap on the detail folded into errorDetail (mirrors mapHttpError's 300-char body cap). */
+const ERROR_DETAIL_MAX = 300
+/** Cap on the reason_detail analytics property — enough to classify the failure mix. */
+const REASON_DETAIL_MAX = 120
+
+export interface TaskErrorInfo {
+  /** LlmError kind, or 'unknown' for non-LlmError throws. */
+  kind: string
+  /** The canned human sentence for the kind (the existing UI lead line). */
+  error: string
+  /** The concrete upstream detail, when it adds information — see rules below. */
+  errorDetail?: string
+}
+
+/**
+ * Map a task failure into { kind, error, errorDetail } — the single source for
+ * PanelState error fields AND the ai_task_failed analytics props.
+ *
+ * errorDetail composition rules:
+ *   1. Raw = LlmError.message (already capped at 300 chars by mapHttpError) or
+ *      the thrown Error's message / String(err) for non-LlmError throws,
+ *      trimmed and capped at 300 chars.
+ *   2. OMITTED when it adds nothing: empty, identical to the canned sentence,
+ *      or the LlmError constructor's bare `llm: <kind>` default.
+ *   3. `HTTP <status>: ` prefix when the LlmError carries a status the message
+ *      doesn't already name (mapHttpError messages embed "(NNN)" themselves).
+ *   4. ` — retried automatically before failing` appended for transient-
+ *      classified errors (rate-limited / 5xx): withTransientRetry exhausts its
+ *      retries before such an error can surface here, so this is knowable from
+ *      classification alone — no retry-hook bookkeeping needed.
+ */
+export function describeTaskError(err: unknown): TaskErrorInfo {
+  const kind = err instanceof LlmError ? err.kind : 'unknown'
+  const error = humanMessage(kind)
+  const rawMessage = err instanceof Error ? err.message : err == null ? '' : String(err)
+  let raw = rawMessage.trim().slice(0, ERROR_DETAIL_MAX)
+  if (raw === error || raw === `llm: ${kind}`) raw = ''
+  const status = err instanceof LlmError ? err.status : undefined
+  if (raw && status !== undefined && !raw.includes(`(${status})`)) raw = `HTTP ${status}: ${raw}`
+  const retried = err instanceof LlmError && isTransientLlmError(err)
+  const errorDetail = retried
+    ? (raw ? `${raw} — retried automatically before failing` : 'Retried automatically before failing')
+    : raw
+  return { kind, error, ...(errorDetail ? { errorDetail } : {}) }
+}
+
+/** ai_task_failed props for a described failure — reason + truncated reason_detail. */
+function failureProps(task: string, info: TaskErrorInfo): { task: string; reason: string; reason_detail?: string } {
+  return {
+    task,
+    reason: info.kind,
+    ...(info.errorDetail ? { reason_detail: info.errorDetail.slice(0, REASON_DETAIL_MAX) } : {}),
+  }
+}
+
+// ---------------------------------------------------------------------------
 // createAiRun
 // ---------------------------------------------------------------------------
 
@@ -456,6 +525,21 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // Packed context — kept in closure so retry can reuse it without re-packing
   // (unless the initial pack failed, in which case retry re-packs)
   let packedCtx: PackedContext | null = null
+
+  /**
+   * THE task-failure funnel: every task catch lands here. Sets the panel's
+   * error state (canned lead + concrete errorDetail for tooltips), clears any
+   * deep-mode activity lines, and emits ai_task_failed with reason AND
+   * reason_detail so the failure mix is measurable — not just a 7-value enum.
+   */
+  function failTask(state: PanelState<unknown>, task: string, err: unknown): void {
+    const info = describeTaskError(err)
+    state.status = 'error'
+    state.error = info.error
+    state.errorDetail = info.errorDetail
+    state.activity = undefined
+    track('ai_task_failed', failureProps(task, info))
+  }
 
   // ---------------------------------------------------------------------------
   // Cross-model verification (Plan M)
@@ -1056,10 +1140,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       })
     } catch (err) {
       // Partial stream NEVER cached — do not call setCached here
-      const kind = err instanceof LlmError ? err.kind : 'unknown'
-      summaryState.status = 'error'
-      summaryState.error = humanMessage(kind)
-      track('ai_task_failed', { task: 'summary', reason: kind })
+      failTask(summaryState, 'summary', err)
     }
   }
 
@@ -1139,11 +1220,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
     } catch (err) {
-      const kind = err instanceof LlmError ? err.kind : 'unknown'
-      attentionState.status = 'error'
-      attentionState.error = humanMessage(kind)
-      attentionState.activity = undefined
-      track('ai_task_failed', { task: 'attention', reason: kind })
+      failTask(attentionState, 'attention', err)
     }
   }
 
@@ -1223,11 +1300,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
     } catch (err) {
-      const kind = err instanceof LlmError ? err.kind : 'unknown'
-      diagramsState.status = 'error'
-      diagramsState.error = humanMessage(kind)
-      diagramsState.activity = undefined
-      track('ai_task_failed', { task: 'diagrams', reason: kind })
+      failTask(diagramsState, 'diagrams', err)
     }
   }
 
@@ -1302,11 +1375,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
     } catch (err) {
-      const kind = err instanceof LlmError ? err.kind : 'unknown'
-      testsState.status = 'error'
-      testsState.error = humanMessage(kind)
-      testsState.activity = undefined
-      track('ai_task_failed', { task: 'tests', reason: kind })
+      failTask(testsState, 'tests', err)
     }
   }
 
@@ -1381,11 +1450,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
     } catch (err) {
-      const kind = err instanceof LlmError ? err.kind : 'unknown'
-      alternativesState.status = 'error'
-      alternativesState.error = humanMessage(kind)
-      alternativesState.activity = undefined
-      track('ai_task_failed', { task: 'alternatives', reason: kind })
+      failTask(alternativesState, 'alternatives', err)
     }
   }
 
@@ -1436,6 +1501,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     storyState.status = 'done'
     storyState.value = story
     storyState.error = undefined
+    storyState.errorDetail = undefined
     storyState.activity = undefined
     storyState.fallback = true
     storyState.fallbackReason = reason
@@ -1528,6 +1594,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       storyState.fallback = undefined
       storyState.fallbackReason = undefined
       storyState.error = undefined
+      storyState.errorDetail = undefined
       if (toolCallsUsed !== undefined) storyState.toolCallsUsed = toolCallsUsed
       track('ai_task_completed', {
         task: 'story',
@@ -1538,22 +1605,17 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       })
     } catch (err) {
       // Surface the SPECIFIC reason (mirrors #148): the friendly kind message as
-      // the lead, plus the concrete LlmError.message (e.g. "maximum context
-      // length exceeded …", "LLM produced invalid JSON after repair retry") when
-      // it adds information. This reason is shown by the fallback note.
-      const kind = err instanceof LlmError ? err.kind : 'unknown'
-      const lead = humanMessage(kind)
-      // Append the concrete LlmError.message only when it adds information — not
-      // the bare `llm: <kind>` default the constructor sets, and not a repeat of
-      // the friendly lead.
-      const raw = err instanceof LlmError ? err.message : ''
-      const detail = raw && raw !== lead && raw !== `llm: ${kind}` ? raw : ''
-      const reason = detail ? `${lead} — ${detail}` : lead
-      track('ai_task_failed', { task: 'story', reason: kind })
+      // the lead, plus the concrete detail (e.g. "maximum context length
+      // exceeded …", "LLM produced invalid JSON after repair retry") when it
+      // adds information — composed by describeTaskError, same as every task.
+      // This reason is shown by the fallback note.
+      const info = describeTaskError(err)
+      const reason = info.errorDetail ? `${info.error} — ${info.errorDetail}` : info.error
+      track('ai_task_failed', failureProps('story', info))
       // Robustness win: instead of the generic 'error' state, ALWAYS degrade to
       // the deterministic structural walkthrough so Story mode renders. The
       // specific reason rides along as fallbackReason for the muted UI note.
-      applyStoryFallback(ctx, reason, kind)
+      applyStoryFallback(ctx, reason, info.kind)
     }
   }
 
@@ -1597,10 +1659,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         ...(singlePass.usage?.total_tokens !== undefined ? { tokens: singlePass.usage.total_tokens } : {}),
       })
     } catch (err) {
-      const kind = err instanceof LlmError ? err.kind : 'unknown'
-      riskJudgeState.status = 'error'
-      riskJudgeState.error = humanMessage(kind)
-      track('ai_task_failed', { task: 'risk-judge', reason: kind })
+      failTask(riskJudgeState, 'risk-judge', err)
     }
   }
 
@@ -1924,11 +1983,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
     } catch (err) {
-      const kind = err instanceof LlmError ? err.kind : 'unknown'
-      verdictState.status = 'error'
-      verdictState.error = humanMessage(kind)
-      verdictState.activity = undefined
-      track('ai_task_failed', { task: 'verdict', reason: kind })
+      failTask(verdictState, 'verdict', err)
     }
   }
 
@@ -2257,9 +2312,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       })
       return { ok: true, answer: askStreamResult.content }
     } catch (err) {
-      const kind = err instanceof LlmError ? err.kind : 'unknown'
-      track('ai_task_failed', { task: 'ask', reason: kind })
-      return { ok: false, error: humanMessage(kind) }
+      const info = describeTaskError(err)
+      track('ai_task_failed', failureProps('ask', info))
+      return { ok: false, error: info.error }
     }
   }
 
@@ -2465,13 +2520,17 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
     } catch (err) {
-      const kind = err instanceof LlmError ? err.kind : 'unknown'
+      const info = describeTaskError(err)
       skillReviewsState[idx] = {
         skillId: skill.id,
         name: skill.name,
-        state: { status: 'error', error: humanMessage(kind) },
+        state: {
+          status: 'error',
+          error: info.error,
+          ...(info.errorDetail ? { errorDetail: info.errorDetail } : {}),
+        },
       }
-      track('ai_task_failed', { task: 'skill-review', reason: kind })
+      track('ai_task_failed', failureProps('skill-review', info))
     }
     onUpdate?.()
   }
@@ -2528,6 +2587,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
     convergenceState.status = 'loading'
     convergenceState.error = undefined
+    convergenceState.errorDetail = undefined
     onUpdate?.()
 
     const prompts = convergencePrompt(inputs, draftEnum.inputs)
@@ -2560,10 +2620,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     } catch (err) {
       // Loss-proof degrade: log to run state; the UI renders the original
       // findings unmerged exactly as before the pass.
-      const kind = err instanceof LlmError ? err.kind : 'unknown'
-      convergenceState.status = 'error'
-      convergenceState.error = humanMessage(kind)
-      track('ai_task_failed', { task: 'convergence', reason: kind })
+      failTask(convergenceState, 'convergence', err)
     }
     onUpdate?.()
   }
@@ -2601,6 +2658,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     convergenceState.status = 'idle'
     convergenceState.value = undefined
     convergenceState.error = undefined
+    convergenceState.errorDetail = undefined
 
     // Initialize every entry as 'queued' — none has a slot yet. Six concurrent
     // LLM calls trip provider rate limits, so we cap in-flight reviewers at

@@ -21,7 +21,16 @@ const EVENTS = {
   // finding text, code, file paths, or reviewer names. Added so we can observe
   // how often reviewers actually overlap (merge-rate observability).
   ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls', 'chunks', 'partial', 'clusters'],
-  ai_task_failed: ['task', 'reason', 'partial'],
+  // PRIVACY DECISION (error-detail surfacing): 'reason_detail' is the concrete
+  // upstream failure text behind the coarse 'reason' kind — the provider's OWN
+  // error body (e.g. "insufficient quota", "maximum context length exceeded")
+  // or an internal error message, truncated to 120 chars at the call site. It
+  // is provider/tool-generated text about request shape or account state —
+  // never diff content, code, prompts, or API keys (mapHttpError's detail path
+  // already guarantees key-free bodies; providers do not echo request bodies).
+  // Added so the failure mix is measurable (which real reasons dominate each
+  // kind) instead of a 7-value enum.
+  ai_task_failed: ['task', 'reason', 'reason_detail', 'partial'],
   // PRIVACY DECISION (robust big-PR story): fired when the story task degrades
   // to the deterministic structural walkthrough (AI ordering failed or returned
   // an unusable result). Carries only 'task' ('story') and 'reason' — a
