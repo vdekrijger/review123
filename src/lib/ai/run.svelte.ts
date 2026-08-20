@@ -10,6 +10,7 @@
  */
 
 import { activeLlmConfig, activeProviderHasKey, crossModelVerifyEffective, verifierProviderConfigs, resolveEnsemble, fusionGenerateEffective, fusionParticipants, fusionGenerators, type FusionParticipant } from '../llm/config'
+import { estimateTokens } from '../context/pack'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import {
@@ -80,7 +81,7 @@ import {
 } from './convergence'
 export type { ConvergenceValue }
 export type { AskFocus }
-import { validateAttention, validateVerdict, validateRiskJudge, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, sinkGeneratedSteps, STORY_MAX_STEPS } from './schemas'
+import { validateAttention, validateVerdict, validateRiskJudge, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, salvageAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, sinkGeneratedSteps, STORY_MAX_STEPS } from './schemas'
 import { buildDeterministicStory } from './storyFallback'
 import { matchStoryPath } from './schemas'
 import type { AttentionResult, VerdictResult, RiskJudgeResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, SkillReviewResult } from './schemas'
@@ -224,6 +225,12 @@ export interface CoachNotCoached {
   indices: number[]
   /** Human-readable reason (mapped from the failed chunk's LlmError kind). */
   message: string
+  /**
+   * The failing chunk's CONCRETE upstream error detail (describeTaskError
+   * composition — same rules as PanelState.errorDetail), for tooltips.
+   * Absent when the raw failure added nothing beyond the canned message.
+   */
+  detail?: string
 }
 
 /**
@@ -297,7 +304,7 @@ export interface AiRun {
   readonly modelCostBreakdown: ModelCostRow[]
   start(): Promise<void>
   retry(task: TaskName): Promise<void>
-  coach(drafts: Draft[], prComments?: string[], verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'): Promise<CoachOutcome | { error: string }>
+  coach(drafts: Draft[], prComments?: string[], verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'): Promise<CoachOutcome | { error: string; errorDetail?: string }>
   ask(question: string, onDelta: (t: string) => void, focus?: AskFocus): Promise<{ ok: true; answer: string } | { ok: false; error: string }>
   /**
    * Run every enabled skill reviewer (batch). `opts.autoRetry` (default 0) adds
@@ -458,6 +465,75 @@ function failureProps(task: string, info: TaskErrorInfo): { task: string; reason
 }
 
 // ---------------------------------------------------------------------------
+// JSON-task call options — output headroom + size-aware timeout
+// ---------------------------------------------------------------------------
+
+/**
+ * Output-token headroom for every non-streaming JSON task. Without it the
+ * Anthropic adapter silently caps output at its 4096 default (a long
+ * alternatives/story JSON gets truncated → invalid-output), and DeepSeek's
+ * server-side default is similarly small. 8192 is generous for every JSON
+ * shape we request while staying within all providers' output ceilings.
+ */
+export const JSON_TASK_MAX_TOKENS = 8192
+
+/**
+ * Prompt size (estimated tokens, prompt = system + user) above which a JSON
+ * task gets the extended timeout instead of the transport's 60s default. A
+ * full packed context near the pack budget takes providers well over 60s to
+ * ingest + answer — the old fixed window turned big-PR tasks into 'timeout'
+ * failures.
+ */
+export const LARGE_PROMPT_TOKEN_THRESHOLD = 30_000
+
+/** Extended per-attempt timeout for large-prompt JSON tasks (default stays 60s). */
+export const LARGE_PROMPT_TIMEOUT_MS = 120_000
+
+/**
+ * Build the LLM call options for a non-streaming JSON task: the prompts plus
+ * explicit output headroom, and — when the prompt itself is large (ships the
+ * full packed context near budget) — a scaled timeout. Every transient-retry
+ * attempt re-runs the transport adapter, so each attempt gets the full window.
+ */
+function jsonTaskOpts(prompts: { system: string; user: string }): {
+  system: string
+  user: string
+  maxTokens: number
+  timeoutMs?: number
+} {
+  const promptTokens = estimateTokens(prompts.system) + estimateTokens(prompts.user)
+  return {
+    system: prompts.system,
+    user: prompts.user,
+    maxTokens: JSON_TASK_MAX_TOKENS,
+    ...(promptTokens > LARGE_PROMPT_TOKEN_THRESHOLD ? { timeoutMs: LARGE_PROMPT_TIMEOUT_MS } : {}),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reviewer auto-retry pacing — retry rounds wait before re-dispatching so an
+// exhausted rate limit isn't hammered the instant it failed (retry storms).
+// ---------------------------------------------------------------------------
+
+/** Fallback per-round delays when no Retry-After was observed (2s/4s/8s). */
+export const AUTO_RETRY_ROUND_DELAYS_MS: readonly number[] = [2_000, 4_000, 8_000]
+
+/** Hard cap on any single auto-retry round delay (Retry-After included). */
+export const AUTO_RETRY_MAX_DELAY_MS = 20_000
+
+/**
+ * Delay before auto-retry round `round` (0-based): the max Retry-After
+ * observed across the round's failed reviewers when knowable (the provider
+ * TOLD us when capacity returns), else the 2s/4s/8s ladder. Capped at 20s.
+ */
+export function autoRetryDelayMs(round: number, observedRetryAfterMs: number[]): number {
+  const fallback =
+    AUTO_RETRY_ROUND_DELAYS_MS[Math.min(round, AUTO_RETRY_ROUND_DELAYS_MS.length - 1)]
+  const base = observedRetryAfterMs.length > 0 ? Math.max(...observedRetryAfterMs) : fallback
+  return Math.min(base, AUTO_RETRY_MAX_DELAY_MS)
+}
+
+// ---------------------------------------------------------------------------
 // createAiRun
 // ---------------------------------------------------------------------------
 
@@ -560,7 +636,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const prompts = buildVerifyPrompt(findings)
     const { result, usage } = await llmJsonWithRepairFor(
       cfg,
-      { system: prompts.system, user: prompts.user },
+      jsonTaskOpts(prompts),
       validateVerifierResponse,
     )
     return { result, usage }
@@ -809,6 +885,23 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         usageByModel.set(key, addUsage(usageByModel.get(key), res.value.usage) as LlmUsage)
       }
     })
+    // Rate-limit fail-fast: when EVERY generator failed and at least one hit a
+    // rate limit, surface the rate-limit error instead of pretending the fusion
+    // produced an (empty) result — the caller fails the task with the REAL
+    // error (which the reviewer auto-retry then paces), rather than burning a
+    // second full single-pass+verify spend against an exhausted limit. Partial
+    // failures are unchanged: any surviving generator keeps the fusion going.
+    if (perGenerator.length === 0 && results.length > 0) {
+      const rateLimited = results
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map((r) => r.reason)
+        .filter((e): e is LlmError => e instanceof LlmError && e.kind === 'rate-limited')
+      if (rateLimited.length > 0) {
+        // Throw the one carrying the LARGEST Retry-After (best pacing signal).
+        rateLimited.sort((a, b) => (b.retryAfterMs ?? -1) - (a.retryAfterMs ?? -1))
+        throw rateLimited[0]
+      }
+    }
     return { perGenerator, usage, usageByModel }
   }
 
@@ -859,8 +952,13 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
    * actually PRODUCED findings: a generator that finds nothing (or whose call
    * fails) still gets a GENERATOR row (0 findings is a valid generated result),
    * so a model the user marked Generator is never demoted to a verifier. Only the
-   * caller's <2-generator gate falls back to the single-generator path. Never
-   * throws — any unexpected failure returns null (caller falls back).
+   * caller's <2-generator gate falls back to the single-generator path.
+   *
+   * Errors: RATE-LIMIT-classified failures (kind==='rate-limited') are
+   * RETHROWN — the caller's task catch fails the reviewer entry with the real
+   * error (paced auto-retry handles it) instead of burning a second full
+   * single-pass+verify spend against an exhausted limit. Any OTHER failure
+   * returns null (caller falls back to the single-generator path, unchanged).
    *
    * When `deep` is true each generator GENERATES through its own DEEP pass
    * (runDeepJson with the generator's provider override), sharing the per-review
@@ -908,7 +1006,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
               )
             : await llmJsonWithRepairFor<SkillReviewResult>(
                 cfg,
-                { system: prompts.system, user: prompts.user },
+                jsonTaskOpts(prompts),
                 validateSkillReviewResult,
               )
           const findings: VerifiableFinding[] = result.findings.map((f, i) => ({
@@ -960,7 +1058,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         outcome.generatorImpact,
       )
       return { result: { skillName, findings }, usage: totalUsage, models }
-    } catch {
+    } catch (err) {
+      // Rate-limit fail-fast: rethrow so the reviewer entry fails with the real
+      // error (paced auto-retry) instead of double-spending on the fallback.
+      if (err instanceof LlmError && err.kind === 'rate-limited') throw err
       return null
     }
   }
@@ -981,7 +1082,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
    * configured generator stays a GENERATOR row even when the union is empty, so a
    * verdict that finds no evidence does not silently demote a configured
    * generator to a verifier. Returns null only when there are <2 usable
-   * generators (caller's gate) or no primary verdict was produced. Never throws.
+   * generators (caller's gate) or no primary verdict was produced.
+   *
+   * Errors: RATE-LIMIT-classified failures (kind==='rate-limited') are
+   * RETHROWN — the caller's task catch fails the verdict with the real error
+   * instead of burning a second full single-pass+verify spend against an
+   * exhausted limit. Any OTHER failure returns null (fallback unchanged).
    *
    * When `deep` is true each generator generates its verdict through its own DEEP
    * pass (runDeepJson with the generator's provider override), sharing the
@@ -1022,7 +1128,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
               )
             : await llmJsonWithRepairFor<VerdictResult>(
                 cfg,
-                { system: prompts.system, user: prompts.user },
+                jsonTaskOpts(prompts),
                 validateVerdict,
               )
           perVerdict.set(`${cfg.providerId}:${cfg.model.id}`, result)
@@ -1087,7 +1193,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         outcome.generatorImpact,
       )
       return { result, usage: totalUsage, models }
-    } catch {
+    } catch (err) {
+      // Rate-limit fail-fast: rethrow so the verdict fails with the real error
+      // instead of double-spending on the fallback single-pass+verify.
+      if (err instanceof LlmError && err.kind === 'rate-limited') throw err
       return null
     }
   }
@@ -1200,7 +1309,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         await setCached<DeepCached<AttentionResult>>(key, { deep: true, result: attentionResult, toolCallsUsed, usage: attentionUsage })
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<AttentionResult>(
-          { system: prompts.system, user: prompts.user },
+          jsonTaskOpts(prompts),
           validateAttention,
         )
         attentionResult = singlePass.result
@@ -1280,7 +1389,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         await setCached<DeepCached<GraphResult>>(key, { deep: true, result: diagramsResult, toolCallsUsed, usage: diagramsUsage })
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<GraphResult>(
-          { system: prompts.system, user: prompts.user },
+          jsonTaskOpts(prompts),
           validateGraphResult,
         )
         diagramsResult = singlePass.result
@@ -1355,7 +1464,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         await setCached<DeepCached<TestInsight>>(key, { deep: true, result: testsResult, toolCallsUsed, usage: testsUsage })
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<TestInsight>(
-          { system: prompts.system, user: prompts.user },
+          jsonTaskOpts(prompts),
           validateTestInsight,
         )
         testsResult = singlePass.result
@@ -1377,6 +1486,16 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     } catch (err) {
       failTask(testsState, 'tests', err)
     }
+  }
+
+  // Alternatives post-process: strict-validate → salvage partial JSON (drop
+  // malformed elements, keep valid ones; tolerate a missing assessment by
+  // omitting the field). Returns null only when NOTHING usable survives —
+  // the caller then takes the error path. Mirrors story's shapeStoryOrder:
+  // passed as the validator to the transport so the salvage applies on every
+  // parse, including the repair pass. Prompt text is untouched.
+  function shapeAlternatives(x: unknown): AlternativesResult | null {
+    return validateAlternativesResult(x) ?? salvageAlternativesResult(x)
   }
 
   async function runAlternativesTask(ctx: PackedContext): Promise<void> {
@@ -1421,7 +1540,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       let toolCallsUsed: number | undefined
 
       if (deep.enabled) {
-        const deepOutcome = await runDeepJson<AlternativesResult>(prompts, validateAlternativesResult, (line) => {
+        const deepOutcome = await runDeepJson<AlternativesResult>(prompts, shapeAlternatives, (line) => {
           alternativesState.activity = [...(alternativesState.activity ?? []), line]
         })
         alternativesResult = deepOutcome.result
@@ -1430,8 +1549,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         await setCached<DeepCached<AlternativesResult>>(key, { deep: true, result: alternativesResult, toolCallsUsed, usage: alternativesUsage })
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<AlternativesResult>(
-          { system: prompts.system, user: prompts.user },
-          validateAlternativesResult,
+          jsonTaskOpts(prompts),
+          shapeAlternatives,
         )
         alternativesResult = singlePass.result
         alternativesUsage = singlePass.usage
@@ -1564,7 +1683,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         toolCallsUsed = deepOutcome.toolCallsUsed
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<StoryOrderResult>(
-          { system: prompts.system, user: prompts.user },
+          jsonTaskOpts(prompts),
           shapeStoryOrder,
         )
         storyResult = singlePass.result
@@ -1645,7 +1764,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
     try {
       const singlePass = await llmJsonWithRepairWithUsage<RiskJudgeResult>(
-        { system: prompts.system, user: prompts.user },
+        jsonTaskOpts(prompts),
         validateRiskJudge,
       )
       await setCached<RiskJudgeResult>(key, singlePass.result)
@@ -1908,7 +2027,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         toolCallsUsed = deepOutcome.toolCallsUsed
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<VerdictResult>(
-          { system: prompts.system, user: prompts.user },
+          jsonTaskOpts(prompts),
           validateVerdict,
         )
         verdictResult = singlePass.result
@@ -2138,7 +2257,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     drafts: Draft[],
     prComments?: string[],
     verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT',
-  ): Promise<CoachOutcome | { error: string }> {
+  ): Promise<CoachOutcome | { error: string; errorDetail?: string }> {
     // No-key check: same early-exit as start()
     if (!activeProviderHasKey()) {
       return { error: humanMessage('no-key') }
@@ -2200,13 +2319,20 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       })
       try {
         const { result, usage } = await llmJsonWithRepairWithUsage<CoachResult>(
-          { system: prompts.system, user: prompts.user },
+          jsonTaskOpts(prompts),
           validateCoachResult,
         )
         return { ok: true, result, usage }
       } catch (err) {
-        const kind = err instanceof LlmError ? err.kind : 'unknown'
-        return { ok: false, kind, indices: chunkDrafts.map((d) => d.index) }
+        // describeTaskError composes kind + concrete detail with the SAME rules
+        // as every task catch (status prefix, retried-automatically suffix).
+        const info = describeTaskError(err)
+        return {
+          ok: false,
+          kind: info.kind,
+          indices: chunkDrafts.map((d) => d.index),
+          ...(info.errorDetail ? { detail: info.errorDetail } : {}),
+        }
       }
     }
 
@@ -2227,10 +2353,16 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
     // Every chunk failed → no partial result to show; surface the error so the
     // UI takes the error path (with retry), same as the old single-call coach.
+    // The failing chunk's concrete detail rides along for tooltips/analytics.
     if (merged.reviews.length === 0 && merged.failedIndices.length > 0) {
       const kind = merged.failureKind ?? 'unknown'
-      track('ai_task_failed', { task: 'coach', reason: kind })
-      return { error: humanMessage(kind) }
+      const info: TaskErrorInfo = {
+        kind,
+        error: humanMessage(kind),
+        ...(merged.failureDetail ? { errorDetail: merged.failureDetail } : {}),
+      }
+      track('ai_task_failed', failureProps('coach', info))
+      return { error: info.error, ...(info.errorDetail ? { errorDetail: info.errorDetail } : {}) }
     }
 
     track('ai_task_completed', {
@@ -2251,10 +2383,18 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     if (merged.failedIndices.length > 0) {
       const reason = humanMessage(merged.failureKind ?? 'unknown')
       const n = merged.failedIndices.length
-      track('ai_task_failed', { task: 'coach', reason: merged.failureKind ?? 'unknown', partial: true })
+      track('ai_task_failed', {
+        ...failureProps('coach', {
+          kind: merged.failureKind ?? 'unknown',
+          error: reason,
+          ...(merged.failureDetail ? { errorDetail: merged.failureDetail } : {}),
+        }),
+        partial: true,
+      })
       result.notCoached = {
         indices: merged.failedIndices,
         message: `Couldn't coach ${n} comment${n === 1 ? '' : 's'} (${reason}) — retry to grade ${n === 1 ? 'it' : 'them'}.`,
+        ...(merged.failureDetail ? { detail: merged.failureDetail } : {}),
       }
     }
     return result
@@ -2332,6 +2472,14 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
    * so a re-run re-hits the LLM). Mutates only entry [idx] — sibling reviews and
    * drafts are untouched. Assumes the entry at [idx] is already in loading state.
    */
+  /**
+   * Retry-After observed for each reviewer entry's LAST failed attempt (by
+   * entry index). Written by executeSkillReview's catch when the failure was a
+   * rate limit carrying Retry-After; cleared at the start of every attempt.
+   * Read by the auto-retry loop to pace the next round (autoRetryDelayMs).
+   */
+  const reviewerRetryAfterMs = new Map<number, number>()
+
   async function executeSkillReview(
     ctx: PackedContext,
     skill: { id: string; name: string; content: string },
@@ -2340,6 +2488,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     onUpdate?: () => void,
     existingComments?: string[],
   ): Promise<void> {
+    // Fresh attempt: any Retry-After from a PRIOR attempt is stale.
+    reviewerRetryAfterMs.delete(idx)
     // Content-addressed cache key: includes djb2(skill.content).
     // Deep runs carry a '|deep' marker so they never collide with
     // single-pass results for the same skill content.
@@ -2432,7 +2582,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         toolCallsUsed = deepOutcome.toolCallsUsed
       } else {
         const singlePass = await llmJsonWithRepairWithUsage<SkillReviewResult>(
-          { system: prompts.system, user: prompts.user },
+          jsonTaskOpts(prompts),
           validateSkillReviewResult,
         )
         skillResult = singlePass.result
@@ -2521,6 +2671,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       })
     } catch (err) {
       const info = describeTaskError(err)
+      // Record the provider's Retry-After (rate limits only) so the auto-retry
+      // loop can pace the next round instead of re-dispatching immediately.
+      if (err instanceof LlmError && err.kind === 'rate-limited' && typeof err.retryAfterMs === 'number') {
+        reviewerRetryAfterMs.set(idx, err.retryAfterMs)
+      }
       skillReviewsState[idx] = {
         skillId: skill.id,
         name: skill.name,
@@ -2597,7 +2752,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
     try {
       const { result, usage } = await llmJsonWithRepairWithUsage(
-        { system: prompts.system, user: prompts.user },
+        jsonTaskOpts(prompts),
         (x) => validateConvergence(x, findingIds, draftIds),
       )
       // Defense in depth: re-validate the returned value (a stubbed/bypassing
@@ -2689,6 +2844,13 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // re-hits the LLM; an entry that already settled 'done' is never reset/re-run.
     // Bounded by `autoRetry` AND by an early exit once no entry is errored — a
     // reviewer that always fails ends 'error' after the budget is spent (no loop).
+    //
+    // PACED: each round WAITS before re-dispatching — an errored reviewer has
+    // already exhausted the transport-level retries (withTransientRetry), so
+    // firing the round immediately just re-hits the same exhausted rate limit
+    // (retry storm). Delay = the max Retry-After the failed round observed when
+    // the provider told us (rate limits carry it since the transport-retry PR),
+    // else a 2s/4s/8s ladder; capped at 20s. Total rounds unchanged.
     const autoRetry = Math.max(0, Math.floor(opts?.autoRetry ?? 0))
     for (let round = 0; round < autoRetry; round++) {
       // Collect the still-errored reviewers paired with their array index so the
@@ -2700,6 +2862,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         .map(({ entry, idx }) => ({ idx, skill: skills.find((s) => s.id === entry.skillId) }))
         .filter((x): x is { idx: number; skill: (typeof skills)[number] } => x.skill !== undefined)
       if (errored.length === 0) break
+
+      const observed = errored
+        .map(({ idx }) => reviewerRetryAfterMs.get(idx))
+        .filter((v): v is number => typeof v === 'number')
+      const delayMs = autoRetryDelayMs(round, observed)
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
 
       await mapWithConcurrency(errored, REVIEWER_CONCURRENCY, async ({ idx, skill }) => {
         skillReviewsState[idx] = {

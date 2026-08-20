@@ -29,16 +29,20 @@
             <!-- eslint-disable-next-line svelte/no-at-html-tags -->
             <p class="alternative-approach">{@html renderInlineMarkdown(alt.approach)}</p>
             <p class="alternative-tradeoffs"><MarkdownView source={alt.tradeoffs} /></p>
-            <span
-              class="assessment-chip assessment-{alt.assessment}"
-              aria-label="Assessment: {alt.assessment}"
-            >
-              {#if alt.assessment === 'pr-is-better'}PR's approach is better
-              {:else if alt.assessment === 'comparable'}Comparable
-              {:else if alt.assessment === 'alternative-is-better'}Worth considering
-              {:else}Different goals
-              {/if}
-            </span>
+            <!-- assessment is optional since the salvage path: a salvaged
+                 alternative without one keeps its substance, chip omitted. -->
+            {#if alt.assessment}
+              <span
+                class="assessment-chip assessment-{alt.assessment}"
+                aria-label="Assessment: {alt.assessment}"
+              >
+                {#if alt.assessment === 'pr-is-better'}PR's approach is better
+                {:else if alt.assessment === 'comparable'}Comparable
+                {:else if alt.assessment === 'alternative-is-better'}Worth considering
+                {:else}Different goals
+                {/if}
+              </span>
+            {/if}
             <p class="alternative-rationale"><MarkdownView source={alt.rationale} /></p>
           </div>
         {/each}

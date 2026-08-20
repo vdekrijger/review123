@@ -76,7 +76,7 @@
      * Review.svelte passes run.coach. The third argument is the verdict
      * selected at coaching time, enabling the verdict-coherence check.
      */
-    coachFn?: (drafts: Draft[], prComments?: string[], verdict?: Verdict) => Promise<(CoachResult & { usage?: LlmUsage; notCoached?: { indices: number[]; message: string } }) | { error: string }>
+    coachFn?: (drafts: Draft[], prComments?: string[], verdict?: Verdict) => Promise<(CoachResult & { usage?: LlmUsage; notCoached?: { indices: number[]; message: string; detail?: string } }) | { error: string; errorDetail?: string }>
     /**
      * Consolidated per-model cost + performance for the WHOLE review (verdict
      * generator/verifiers + every reviewer's models, aggregated). Drives the
@@ -192,10 +192,14 @@
   let coachPending = $state(false)
   let coachResult = $state<CoachResult | null>(null)
   let coachError = $state<string | null>(null)
+  // The concrete upstream failure behind coachError (describeTaskError detail)
+  // — surfaced as a hover tooltip, same pattern as PanelState.errorDetail.
+  let coachErrorDetail = $state<string | null>(null)
   // Partial-failure note: present when SOME comments couldn't be coached (a
   // chunk failed) while others succeeded. We still show the graded results plus
   // this honest note + a Retry affordance — never silently dropping comments.
-  let coachNotCoached = $state<{ indices: number[]; message: string } | null>(null)
+  // `detail` (when present) is the failing chunk's concrete error, on hover.
+  let coachNotCoached = $state<{ indices: number[]; message: string; detail?: string } | null>(null)
   // Token usage from the last coach run (display-only, behind showTokenCost).
   let coachUsage = $state<LlmUsage | undefined>(undefined)
   const coachUsageLabel = $derived(
@@ -213,6 +217,7 @@
     if (!coachFn) return
     coachPending = true
     coachError = null
+    coachErrorDetail = null
     coachResult = null
     coachUsage = undefined
     coachNotCoached = null
@@ -224,6 +229,7 @@
       const result = await coachFn([...store.drafts], prCommentBodies, verdict)
       if ('error' in result) {
         coachError = result.error
+        coachErrorDetail = result.errorDetail ?? null
       } else {
         coachResult = result
         coachUsage = result.usage
@@ -600,14 +606,16 @@
         {/if}
 
         {#if coachError}
-          <p class="coach-error" role="alert">{coachError}</p>
+          <!-- title carries the concrete upstream failure (errorDetail) on
+               hover — same diagnosability pattern as the task error chips. -->
+          <p class="coach-error" role="alert" title={coachErrorDetail}>{coachError}</p>
         {/if}
 
         {#if coachNotCoached}
           <!-- Partial failure: some chunks failed. Show graded results + an
                honest note for the comments that weren't coached, with retry. -->
           <div class="coach-partial-note" role="alert" data-testid="coach-partial-note">
-            <span>{coachNotCoached.message}</span>
+            <span title={coachNotCoached.detail}>{coachNotCoached.message}</span>
             <button class="coach-retry-btn" type="button" onclick={handleCoach} disabled={coachPending}>
               Retry
             </button>

@@ -15,6 +15,7 @@ import {
   validateTestInsight,
   validateCoachResult,
   validateAlternativesResult,
+  salvageAlternativesResult,
   validateChangeImpact,
   validateRiskJudge,
   IMPACT_MAX_PER_GROUP,
@@ -1241,6 +1242,92 @@ describe('validateAlternativesResult', () => {
     expect(validateAlternativesResult('string')).toBeNull()
     expect(validateAlternativesResult(42)).toBeNull()
     expect(validateAlternativesResult([])).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// salvageAlternativesResult — lenient per-element recovery (mirrors
+// salvageStoryOrder): drop malformed elements, keep valid ones; a
+// missing/invalid assessment is omitted rather than dropping the element.
+// ---------------------------------------------------------------------------
+
+describe('salvageAlternativesResult', () => {
+  const good = {
+    approach: 'Use a WeakMap.',
+    tradeoffs: 'Better isolation.',
+    assessment: 'alternative-is-better',
+    rationale: 'Avoids shared state.',
+  }
+
+  it('keeps valid elements and drops malformed ones (>=1 survivor → success)', () => {
+    const x = {
+      problem: 'Global singleton.',
+      alternatives: [
+        good,
+        { approach: 42, tradeoffs: 't', assessment: 'comparable', rationale: 'r' }, // bad approach
+        'not-an-object',
+        { approach: 'a', tradeoffs: 't', assessment: 'comparable' }, // missing rationale
+      ],
+    }
+    const result = salvageAlternativesResult(x)
+    expect(result).not.toBeNull()
+    expect(result!.problem).toBe('Global singleton.')
+    expect(result!.alternatives).toEqual([good])
+  })
+
+  it('tolerates a MISSING assessment by omitting the field, keeping the element', () => {
+    const x = {
+      problem: 'p',
+      alternatives: [{ approach: 'a', tradeoffs: 't', rationale: 'r' }],
+    }
+    const result = salvageAlternativesResult(x)
+    expect(result).not.toBeNull()
+    expect(result!.alternatives).toEqual([{ approach: 'a', tradeoffs: 't', rationale: 'r' }])
+    expect('assessment' in result!.alternatives[0]).toBe(false)
+  })
+
+  it('tolerates an INVALID assessment enum by omitting the field', () => {
+    const x = {
+      problem: 'p',
+      alternatives: [{ approach: 'a', tradeoffs: 't', assessment: 'way-better', rationale: 'r' }],
+    }
+    const result = salvageAlternativesResult(x)
+    expect(result).not.toBeNull()
+    expect(result!.alternatives[0].assessment).toBeUndefined()
+    expect(result!.alternatives[0].approach).toBe('a')
+  })
+
+  it('preserves a valid assessment on a kept element', () => {
+    const x = { problem: 'p', alternatives: [good] }
+    expect(salvageAlternativesResult(x)!.alternatives[0].assessment).toBe('alternative-is-better')
+  })
+
+  it('returns null when NOTHING usable survives (all elements malformed)', () => {
+    const x = {
+      problem: 'p',
+      alternatives: [{ approach: 1 }, 'junk', null],
+    }
+    expect(salvageAlternativesResult(x)).toBeNull()
+  })
+
+  it('returns null for an empty alternatives array (nothing salvaged)', () => {
+    expect(salvageAlternativesResult({ problem: 'p', alternatives: [] })).toBeNull()
+  })
+
+  it('returns null when problem is missing or not a string', () => {
+    expect(salvageAlternativesResult({ alternatives: [good] })).toBeNull()
+    expect(salvageAlternativesResult({ problem: 7, alternatives: [good] })).toBeNull()
+  })
+
+  it('returns null when alternatives is missing or not an array', () => {
+    expect(salvageAlternativesResult({ problem: 'p' })).toBeNull()
+    expect(salvageAlternativesResult({ problem: 'p', alternatives: {} })).toBeNull()
+  })
+
+  it('returns null for non-object input', () => {
+    expect(salvageAlternativesResult(null)).toBeNull()
+    expect(salvageAlternativesResult('x')).toBeNull()
+    expect(salvageAlternativesResult([])).toBeNull()
   })
 })
 

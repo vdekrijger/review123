@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { llmComplete, llmCompleteWithUsage, llmStream, llmStreamWithUsage, llmJsonWithRepair, llmJsonWithRepairWithUsage, llmTestConnection, LlmError } from './llm'
 import { setTransientRetryPolicyForTests } from './transientRetry'
-import { setDeepseekKey, setOpenaiKey } from '../settings/settings'
+import { setDeepseekKey, setOpenaiKey, setGeminiKey, setAiProvider } from '../settings/settings'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -667,5 +667,125 @@ describe('llmTestConnection — output-token cap field', () => {
     const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
     expect(body.max_tokens).toBe(1024)
     expect(body.max_completion_tokens).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// timeoutMs — size-aware per-request timeout threading (fix/ai-task-hardening)
+//
+// Adapters build `signal ?? AbortSignal.timeout(timeoutMs ?? 60_000)` per
+// attempt. We spy on AbortSignal.timeout to assert the window that was built:
+//   - default stays 60s when timeoutMs is not passed
+//   - an explicit timeoutMs is honored
+//   - an explicit `signal` takes full control (no adapter-built timeout)
+//   - every transient-retry attempt rebuilds a FRESH full window
+// ---------------------------------------------------------------------------
+
+describe('llmComplete — timeoutMs threading', () => {
+  beforeEach(() => {
+    setDeepseekKey('sk-test')
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('defaults to a 60s adapter-built timeout when timeoutMs is not passed', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse(completionBody('ok'))))
+    await llmComplete({ system: 's', user: 'u' })
+    expect(spy).toHaveBeenCalledWith(60_000)
+  })
+
+  it('honors an explicit timeoutMs (scaled window for large prompts)', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse(completionBody('ok'))))
+    await llmComplete({ system: 's', user: 'u', timeoutMs: 120_000 })
+    expect(spy).toHaveBeenCalledWith(120_000)
+    expect(spy).not.toHaveBeenCalledWith(60_000)
+  })
+
+  it('an explicit signal takes precedence — no adapter-built timeout at all', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse(completionBody('ok'))))
+    const ctrl = new AbortController()
+    await llmComplete({ system: 's', user: 'u', timeoutMs: 120_000, signal: ctrl.signal })
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('each transient-retry attempt rebuilds a fresh full window', async () => {
+    // One retry, zero backoff — the suite-level default is maxRetries: 0.
+    setTransientRetryPolicyForTests({ maxRetries: 1, baseDelayMs: 0, maxSleepMs: 0 })
+    const spy = vi.spyOn(AbortSignal, 'timeout')
+    const f = vi
+      .fn()
+      .mockResolvedValueOnce(makeJsonResponse({ error: { message: 'slow down' } }, 429))
+      .mockResolvedValueOnce(makeJsonResponse(completionBody('ok')))
+    vi.stubGlobal('fetch', f)
+    const content = await llmComplete({ system: 's', user: 'u', timeoutMs: 120_000 })
+    expect(content).toBe('ok')
+    expect(f).toHaveBeenCalledTimes(2)
+    // TWO adapter runs → TWO fresh 120s windows (never a shared/stale signal).
+    const windows = spy.mock.calls.map((c) => c[0])
+    expect(windows).toEqual([120_000, 120_000])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Gemini — maxTokens honored as generationConfig.maxOutputTokens (additive:
+// body unchanged when maxTokens is unset).
+// ---------------------------------------------------------------------------
+
+describe('gemini — maxTokens → generationConfig.maxOutputTokens', () => {
+  function geminiBody(content: string) {
+    return { candidates: [{ content: { parts: [{ text: content }] } }] }
+  }
+
+  beforeEach(() => {
+    setGeminiKey('g-key')
+    setAiProvider('gemini')
+  })
+
+  it('passes maxTokens as generationConfig.maxOutputTokens (with json mime type)', async () => {
+    const f = vi.fn().mockResolvedValue(makeJsonResponse(geminiBody('{"x":1}')))
+    vi.stubGlobal('fetch', f)
+    await llmComplete({ system: 's', user: 'u', json: true, maxTokens: 8192 })
+    const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
+    expect(body.generationConfig).toEqual({
+      responseMimeType: 'application/json',
+      maxOutputTokens: 8192,
+    })
+  })
+
+  it('sets maxOutputTokens alone when json is off', async () => {
+    const f = vi.fn().mockResolvedValue(makeJsonResponse(geminiBody('ok')))
+    vi.stubGlobal('fetch', f)
+    await llmComplete({ system: 's', user: 'u', maxTokens: 2048 })
+    const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
+    expect(body.generationConfig).toEqual({ maxOutputTokens: 2048 })
+  })
+
+  it('json without maxTokens keeps the old body (responseMimeType only)', async () => {
+    const f = vi.fn().mockResolvedValue(makeJsonResponse(geminiBody('{"x":1}')))
+    vi.stubGlobal('fetch', f)
+    await llmComplete({ system: 's', user: 'u', json: true })
+    const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
+    expect(body.generationConfig).toEqual({ responseMimeType: 'application/json' })
+  })
+
+  it('no json, no maxTokens → no generationConfig at all (byte-identical default)', async () => {
+    const f = vi.fn().mockResolvedValue(makeJsonResponse(geminiBody('ok')))
+    vi.stubGlobal('fetch', f)
+    await llmComplete({ system: 's', user: 'u' })
+    const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
+    expect(body.generationConfig).toBeUndefined()
+  })
+
+  it('llmTestConnection(gemini) now carries its 1024 cap to the wire', async () => {
+    const f = vi.fn().mockResolvedValue(makeJsonResponse(geminiBody('ok')))
+    vi.stubGlobal('fetch', f)
+    await llmTestConnection('gemini')
+    const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
+    expect(body.generationConfig).toEqual({ maxOutputTokens: 1024 })
   })
 })

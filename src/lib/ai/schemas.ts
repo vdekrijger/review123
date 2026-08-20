@@ -539,7 +539,12 @@ export function validateCoachResult(x: unknown): CoachResult | null {
 export interface Alternative {
   approach: string
   tradeoffs: string
-  assessment: 'pr-is-better' | 'comparable' | 'alternative-is-better' | 'different-goals'
+  /**
+   * Optional since the salvage path landed: a salvaged alternative whose
+   * assessment was missing/invalid keeps its substance (approach/tradeoffs/
+   * rationale) and simply omits the chip. Strict validation still requires it.
+   */
+  assessment?: 'pr-is-better' | 'comparable' | 'alternative-is-better' | 'different-goals'
   rationale: string
 }
 
@@ -579,6 +584,42 @@ export function validateAlternativesResult(x: unknown): AlternativesResult | nul
   }
 
   return x as unknown as AlternativesResult
+}
+
+/**
+ * Best-effort salvage of a malformed alternatives payload (mirrors
+ * salvageStoryOrder): walk `alternatives[]` leniently and KEEP each element
+ * that carries the substance (approach/tradeoffs/rationale strings), dropping
+ * only genuinely malformed elements — one truncated/garbled entry no longer
+ * nukes the whole result. A missing/invalid `assessment` does NOT drop the
+ * element: the field is simply omitted (the UI hides the chip). Returns null
+ * when nothing usable survives (`problem` missing or zero valid elements) —
+ * the caller then takes the error path.
+ */
+export function salvageAlternativesResult(x: unknown): AlternativesResult | null {
+  if (!isObject(x)) return null
+  if (typeof x['problem'] !== 'string') return null
+  if (!Array.isArray(x['alternatives'])) return null
+
+  const alternatives: Alternative[] = []
+  for (const raw of x['alternatives']) {
+    if (!isObject(raw)) continue
+    if (typeof raw['approach'] !== 'string') continue
+    if (typeof raw['tradeoffs'] !== 'string') continue
+    if (typeof raw['rationale'] !== 'string') continue
+    const assessment =
+      typeof raw['assessment'] === 'string' && ASSESSMENT_VALUES.has(raw['assessment'])
+        ? (raw['assessment'] as NonNullable<Alternative['assessment']>)
+        : undefined
+    alternatives.push({
+      approach: raw['approach'],
+      tradeoffs: raw['tradeoffs'],
+      rationale: raw['rationale'],
+      ...(assessment !== undefined ? { assessment } : {}),
+    })
+  }
+  if (alternatives.length === 0) return null
+  return { problem: x['problem'], alternatives }
 }
 
 function isObject(x: unknown): x is Record<string, unknown> {

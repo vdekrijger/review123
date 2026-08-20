@@ -102,21 +102,37 @@ export interface LlmCompleteOpts {
   json?: boolean
   signal?: AbortSignal
   /**
-   * Optional output-token cap. Used by llmTestConnection's ping. Routed to the
-   * provider's field: openai-compat → `provider.maxTokensParam` (OpenAI's GPT-5
-   * family needs `max_completion_tokens`; DeepSeek uses `max_tokens`); anthropic
-   * → `max_tokens` (else 4096). Gemini IGNORES it. Keep it GENEROUS: reasoning
+   * Optional output-token cap. Used by llmTestConnection's ping and the JSON
+   * tasks' output headroom. Routed to the provider's field: openai-compat →
+   * `provider.maxTokensParam` (OpenAI's GPT-5 family needs
+   * `max_completion_tokens`; DeepSeek uses `max_tokens`); anthropic →
+   * `max_tokens` (else 4096); gemini → `generationConfig.maxOutputTokens`
+   * (unset → provider default, unchanged). Keep it GENEROUS: reasoning
    * models spend hidden reasoning tokens, so too-small a cap fails the request
    * ("could not finish … reached max_tokens") rather than truncating.
    */
   maxTokens?: number
+  /**
+   * Per-request timeout for the adapter-built AbortSignal (default 60s).
+   * Large-prompt tasks pass a scaled value so a big packed context isn't
+   * killed at the default window. IGNORED when `signal` is provided — an
+   * explicit signal takes full control of cancellation (unchanged semantics).
+   * Each transient-retry attempt re-runs the adapter, so every attempt gets a
+   * fresh, full window.
+   */
+  timeoutMs?: number
 }
 
 export interface LlmStreamOpts {
   system: string
   user: string
   signal?: AbortSignal
+  /** Same contract as LlmCompleteOpts.timeoutMs (default 60s; ignored when `signal` is set). */
+  timeoutMs?: number
 }
+
+/** Default per-request timeout used when neither `signal` nor `timeoutMs` is given. */
+const DEFAULT_TIMEOUT_MS = 60_000
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -275,7 +291,7 @@ async function openaiCompatComplete(
   keyOverride?: string,
 ): Promise<LlmCompleteResult> {
   const key = keyOverride ?? getKeyForProvider(provider)
-  const { system, user, json, signal, maxTokens } = opts
+  const { system, user, json, signal, maxTokens, timeoutMs } = opts
 
   const body: Record<string, unknown> = {
     model: model.id,
@@ -289,7 +305,7 @@ async function openaiCompatComplete(
   // declared field (max_completion_tokens for OpenAI, max_tokens elsewhere).
   if (maxTokens !== undefined) body[provider.maxTokensParam ?? 'max_tokens'] = maxTokens
 
-  const effectiveSignal = signal ?? AbortSignal.timeout(60_000)
+  const effectiveSignal = signal ?? AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
 
   let res: Response
   try {
@@ -333,7 +349,7 @@ async function openaiCompatStream(
   includeUsage: boolean,
 ): Promise<LlmStreamResult> {
   const key = getKeyForProvider(provider)
-  const { system, user, signal } = opts
+  const { system, user, signal, timeoutMs } = opts
 
   const body: Record<string, unknown> = {
     model: model.id,
@@ -347,7 +363,7 @@ async function openaiCompatStream(
     body.stream_options = { include_usage: true }
   }
 
-  const effectiveSignal = signal ?? AbortSignal.timeout(60_000)
+  const effectiveSignal = signal ?? AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
 
   let res: Response
   try {
@@ -461,7 +477,7 @@ async function anthropicComplete(
   keyOverride?: string,
 ): Promise<LlmCompleteResult> {
   const key = keyOverride ?? getKeyForProvider(provider)
-  const { system, user, signal, maxTokens } = opts
+  const { system, user, signal, maxTokens, timeoutMs } = opts
 
   const body: Record<string, unknown> = {
     model: model.id,
@@ -470,7 +486,7 @@ async function anthropicComplete(
     messages: [{ role: 'user', content: user }],
   }
 
-  const effectiveSignal = signal ?? AbortSignal.timeout(60_000)
+  const effectiveSignal = signal ?? AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
 
   let res: Response
   try {
@@ -517,7 +533,7 @@ async function anthropicStream(
   onDelta: (text: string) => void,
 ): Promise<LlmStreamResult> {
   const key = getKeyForProvider(provider)
-  const { system, user, signal } = opts
+  const { system, user, signal, timeoutMs } = opts
 
   const body: Record<string, unknown> = {
     model: model.id,
@@ -527,7 +543,7 @@ async function anthropicStream(
     stream: true,
   }
 
-  const effectiveSignal = signal ?? AbortSignal.timeout(60_000)
+  const effectiveSignal = signal ?? AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
 
   let res: Response
   try {
@@ -651,15 +667,19 @@ function buildGeminiBody(
   user: string,
   json: boolean,
   stream: boolean,
+  maxTokens?: number,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     contents: [
       { role: 'user', parts: [{ text: `${system}\n\n${user}` }] },
     ],
   }
-  if (json) {
-    body.generationConfig = { responseMimeType: 'application/json' }
-  }
+  // Additive: generationConfig only appears when something sets it, so the
+  // no-json / no-maxTokens request body is byte-identical to before.
+  const generationConfig: Record<string, unknown> = {}
+  if (json) generationConfig.responseMimeType = 'application/json'
+  if (maxTokens !== undefined) generationConfig.maxOutputTokens = maxTokens
+  if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig
   return body
 }
 
@@ -670,10 +690,10 @@ async function geminiComplete(
   keyOverride?: string,
 ): Promise<LlmCompleteResult> {
   const key = keyOverride ?? getKeyForProvider(provider)
-  const { system, user, json, signal } = opts
+  const { system, user, json, signal, maxTokens, timeoutMs } = opts
 
-  const body = buildGeminiBody(system, user, !!json, false)
-  const effectiveSignal = signal ?? AbortSignal.timeout(60_000)
+  const body = buildGeminiBody(system, user, !!json, false, maxTokens)
+  const effectiveSignal = signal ?? AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
 
   let res: Response
   try {
@@ -722,10 +742,10 @@ async function geminiStream(
   onDelta: (text: string) => void,
 ): Promise<LlmStreamResult> {
   const key = getKeyForProvider(provider)
-  const { system, user, signal } = opts
+  const { system, user, signal, timeoutMs } = opts
 
   const body = buildGeminiBody(system, user, false, true)
-  const effectiveSignal = signal ?? AbortSignal.timeout(60_000)
+  const effectiveSignal = signal ?? AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
 
   let res: Response
   try {
@@ -826,7 +846,8 @@ async function dispatchComplete(opts: LlmCompleteOpts, includeUsage: boolean): P
   // they never consume a slot. Transient failures (429 / 5xx) are retried by
   // withTransientRetry OUTSIDE the gate — the slot is released before each
   // backoff sleep, so a sleeping call never starves other traffic; every
-  // attempt re-runs the adapter, which builds a fresh 60s timeout signal.
+  // attempt re-runs the adapter, which builds a fresh timeout signal for the
+  // full window (60s default, or the caller's timeoutMs).
   const { provider, model } = getActiveConfig()
   return withTransientRetry(
     () =>
