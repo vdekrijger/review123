@@ -2717,10 +2717,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
 
     const { inputs, fingerprint } = enumerateFindings(reviewers)
-    // Root draft comments only (n>0 are thread replies) — best-effort.
+    // ALL draft comments feed the pass — every n at a line is an independent
+    // root-level comment (multiple drafts coexist per line; n>0 is NOT a
+    // thread reply). Best-effort.
     let draftList: Draft[] = []
     try {
-      draftList = (getDrafts?.() ?? []).filter((d) => (d.n ?? 0) === 0)
+      draftList = getDrafts?.() ?? []
     } catch {
       draftList = []
     }

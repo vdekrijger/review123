@@ -347,6 +347,117 @@ test('skill-reviewers: anchored finding inline at line, unanchored in per-file b
 })
 
 // ---------------------------------------------------------------------------
+// Test: MULTI-DRAFTS PER LINE — a manual draft and an added finding COEXIST on
+//       the same line (adding never clobbers); "Add another comment" appends a
+//       third; removing one leaves the others intact.
+// ---------------------------------------------------------------------------
+
+/** Seed one manual draft at line 2 (the SAME line the anchored finding targets). */
+function seedLine2DraftScript() {
+  // The store binds to the PR IDENTITY prKey (provider:owner/repo#number, no sha).
+  const prKey = `github:${OWNER}/${REPO}#${PR_NUMBER}`
+  return `
+    (() => {
+      const request = indexedDB.open('review123-drafts', 1);
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('drafts')) db.createObjectStore('drafts');
+      };
+      request.onsuccess = (e) => {
+        const db = e.target.result;
+        const tx = db.transaction('drafts', 'readwrite');
+        tx.objectStore('drafts').put({
+          prKey: ${JSON.stringify(prKey)},
+          path: 'src/feature.ts',
+          line: 2,
+          side: 'RIGHT',
+          body: 'Seeded manual comment at line 2',
+          n: 0,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        }, ${JSON.stringify(prKey)} + '|src/feature.ts|2|RIGHT|0');
+      };
+    })();
+  `
+}
+
+test('skill-reviewers: two comments coexist on one line — manual draft + added finding; add-another appends; removing one keeps the rest', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings())
+  await page.addInitScript(seedSkillScript())
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+  await page.addInitScript(seedLine2DraftScript())
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Wait for file contents to finish loading (expand affordances appear) —
+  // the diff rebuilds when contents arrive, remounting inline annotations;
+  // interacting before that races the remount (same guard as review-flow's
+  // inline-ask-ai test).
+  await expect(
+    page.locator('button[title="Expand Up"], button[title="Expand Down"], button[title="Expand All"]').first(),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // The seeded manual draft is counted and rendered inline at line 2
+  const draftStatus = page.locator('.draft-status')
+  await expect(draftStatus).toContainText('1 comment', { timeout: 5_000 })
+  const line2Annotations = page.locator('[data-testid="inline-annotations"][data-line="2"]')
+  await expect(line2Annotations).toBeVisible({ timeout: 5_000 })
+  await expect(line2Annotations).toContainText('Seeded manual comment at line 2')
+
+  // Run reviewers → the anchored finding targets the SAME line 2
+  await page.getByRole('button', { name: /run my reviewers \(1\)/i }).click()
+  const inlineCard = page.locator('.diff-line-extend .line-findings .skill-finding')
+  await expect(inlineCard).toBeVisible({ timeout: 15_000 })
+
+  // "Add as draft" on the line-2 finding — must APPEND, never clobber the
+  // manual draft (the reported bug: the first comment vanished here).
+  const addDraftBtn = inlineCard.getByRole('button', { name: /add as draft/i })
+  await addDraftBtn.click()
+  await expect(draftStatus).toContainText('2 comments', { timeout: 5_000 })
+
+  // BOTH comments are visible stacked at line 2
+  await expect(line2Annotations).toContainText('Seeded manual comment at line 2')
+  await expect(line2Annotations).toContainText('Potential XSS vulnerability')
+  await expect(line2Annotations.locator('[data-testid="draft-thread"]')).toHaveCount(2)
+
+  // "Add another comment" below the stack appends a THIRD comment via the UI
+  const addAnother = line2Annotations.getByTestId('add-another-comment')
+  await expect(addAnother).toBeVisible()
+  await addAnother.evaluate((el: HTMLButtonElement) => el.click())
+  const textarea = line2Annotations.getByRole('textbox', { name: /comment body/i })
+  await expect(textarea).toBeVisible({ timeout: 5_000 })
+  await textarea.evaluate((el: HTMLTextAreaElement, v) => {
+    el.value = v
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  }, 'Third comment on the same line')
+  const leaveBtn = line2Annotations.getByRole('button', { name: /^leave comment$/i })
+  await leaveBtn.evaluate((el: HTMLButtonElement) => el.click())
+  await expect(draftStatus).toContainText('3 comments', { timeout: 5_000 })
+  await expect(line2Annotations.locator('[data-testid="draft-thread"]')).toHaveCount(3)
+
+  // Remove ONE (the seeded manual comment) — the other two must survive
+  const manualThread = line2Annotations.locator('[data-testid="draft-thread"]', {
+    hasText: 'Seeded manual comment at line 2',
+  })
+  await manualThread.getByRole('button', { name: /delete/i }).evaluate((el: HTMLButtonElement) => el.click())
+  await expect(draftStatus).toContainText('2 comments', { timeout: 5_000 })
+  await expect(line2Annotations).not.toContainText('Seeded manual comment at line 2')
+  await expect(line2Annotations).toContainText('Potential XSS vulnerability')
+  await expect(line2Annotations).toContainText('Third comment on the same line')
+})
+
+// ---------------------------------------------------------------------------
 // Test: clicking a reviewer's result chip (2 findings) opens a popover listing
 //       both findings; clicking an entry scrolls to + flashes that finding.
 // ---------------------------------------------------------------------------

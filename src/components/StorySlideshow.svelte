@@ -108,8 +108,10 @@
     /** Keys already added as drafts — drives the card's "✓ added" state. */
     addedDraftKeys?: Set<string>
     whitespaceByPath?: Map<string, WhitespaceDisplay>
-    onAddDraft: (path: string, line: number, side: 'LEFT' | 'RIGHT', body: string) => void
-    onRemoveDraft: (path: string, line: number, side: 'LEFT' | 'RIGHT') => void
+    /** `n` = ordinal of the draft being edited in place; undefined = append NEW. */
+    onAddDraft: (path: string, line: number, side: 'LEFT' | 'RIGHT', body: string, n?: number) => void
+    /** `n` = ordinal of the draft to remove at the line; undefined = first. */
+    onRemoveDraft: (path: string, line: number, side: 'LEFT' | 'RIGHT', n?: number) => void
     onAddSkillFindingDraft: (path: string, finding: { body: string; line: number; key: string; skillName: string }) => Promise<void>
     /** Records a dismiss decision for the accept/dismiss telemetry loop. */
     onDismissSkillFinding?: (key: string) => void
@@ -503,8 +505,8 @@
               drafts={draftsFor(path)}
               comments={commentsFor(path)}
               {resolvedCommentIds}
-              onAddDraft={(line, side, body) => onAddDraft(path, line, side, body)}
-              onRemoveDraft={(line, side) => onRemoveDraft(path, line, side)}
+              onAddDraft={(line, side, body, n) => onAddDraft(path, line, side, body, n)}
+              onRemoveDraft={(line, side, n) => onRemoveDraft(path, line, side, n)}
               viewed={viewedStore?.isViewed(path, file.patch) ?? false}
               changedSinceViewed={viewedStore?.changedSinceViewed(path, file.patch) ?? false}
               onToggleViewed={() => viewedStore?.toggle(path, file.patch)}
@@ -543,8 +545,8 @@
                   drafts={draftsFor(path)}
                   comments={commentsFor(path)}
                   {resolvedCommentIds}
-                  onAddDraft={(line, side, body) => onAddDraft(path, line, side, body)}
-                  onRemoveDraft={(line, side) => onRemoveDraft(path, line, side)}
+                  onAddDraft={(line, side, body, n) => onAddDraft(path, line, side, body, n)}
+                  onRemoveDraft={(line, side, n) => onRemoveDraft(path, line, side, n)}
                   viewed={viewedStore?.isViewed(path, file.patch) ?? false}
                   changedSinceViewed={viewedStore?.changedSinceViewed(path, file.patch) ?? false}
                   onToggleViewed={() => viewedStore?.toggle(path, file.patch)}

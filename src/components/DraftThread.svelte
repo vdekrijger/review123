@@ -113,7 +113,10 @@
   // When draft changes externally (different draft loaded for same line), reset editor state.
   // On first mount, lastDraftKey is undefined, so this always runs once on mount.
   $effect(() => {
-    const key = draft ? `${draft.prKey}|${draft.path}|${draft.line}|${draft.side}` : null
+    // Identity includes the ordinal n: multiple DraftThreads can coexist at the
+    // same line (one per draft) — each instance tracks ITS draft, and a body
+    // edit (same key) must not reset the editor state.
+    const key = draft ? `${draft.prKey}|${draft.path}|${draft.line}|${draft.side}|${draft.n ?? 0}` : null
     if (key !== lastDraftKey) {
       lastDraftKey = key ?? undefined
       if (draft === null) {

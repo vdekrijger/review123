@@ -217,15 +217,23 @@
     return draftStore?.drafts.filter((d) => d.path === path) ?? []
   }
 
-  async function handleAddDraft(path: string, line: number, side: 'LEFT' | 'RIGHT', body: string) {
+  /**
+   * Save a draft. `n` identifies the draft being EDITED in place (its store
+   * ordinal); undefined = a NEW comment → APPEND via the store's n=-1 sentinel
+   * so multiple drafts coexist at one line (adding never clobbers).
+   */
+  async function handleAddDraft(path: string, line: number, side: 'LEFT' | 'RIGHT', body: string, n?: number) {
     if (!draftStore) return
-    await draftStore.upsert({ path, line, side, body })
+    await draftStore.upsert({ path, line, side, body, n: n ?? -1 })
     track('comment_drafted')
   }
 
-  async function handleRemoveDraft(path: string, line: number, side: 'LEFT' | 'RIGHT') {
+  /** Remove ONE draft at a line — the one with ordinal `n` (undefined = first). */
+  async function handleRemoveDraft(path: string, line: number, side: 'LEFT' | 'RIGHT', n?: number) {
     if (!draftStore) return
-    const draft = draftStore.drafts.find((d) => d.path === path && d.line === line && d.side === side)
+    const draft = draftStore.drafts.find(
+      (d) => d.path === path && d.line === line && d.side === side && (n === undefined || (d.n ?? 0) === n),
+    )
     if (draft) {
       await draftStore.remove(draftKey(draft))
     }
@@ -821,6 +829,9 @@
       line: finding.line ?? 1,
       side: 'RIGHT',
       body: finding.body,
+      // APPEND (n=-1 sentinel): the user may already have their own draft at
+      // this line — adding a finding must never overwrite it.
+      n: -1,
       // This draft originates from an AI reviewer's finding → flag it so the
       // in-app 🤖 badge shows and a GitHub attribution marker is prepended on
       // submit/export. The editable body stays clean.
@@ -1376,8 +1387,8 @@
             drafts={draftsForFile(file.filename)}
             comments={commentsForFile(file.filename)}
             {resolvedCommentIds}
-            onAddDraft={(line, side, body) => handleAddDraft(file.filename, line, side, body)}
-            onRemoveDraft={(line, side) => handleRemoveDraft(file.filename, line, side)}
+            onAddDraft={(line, side, body, n) => handleAddDraft(file.filename, line, side, body, n)}
+            onRemoveDraft={(line, side, n) => handleRemoveDraft(file.filename, line, side, n)}
             viewed={viewedStore?.isViewed(file.filename, file.patch) ?? false}
             changedSinceViewed={viewedStore?.changedSinceViewed(file.filename, file.patch) ?? false}
             onToggleViewed={() => handleToggleViewed(file)}

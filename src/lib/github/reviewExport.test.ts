@@ -139,6 +139,21 @@ describe('buildReviewPayload', () => {
     expect(p.comments![0].body).toBe('🤖 _AI-suggested · Security_\n\nUse a constant.')
     expect(p.comments![1].body).toBe('My own note.')
   })
+
+  it('maps MULTIPLE drafts at the SAME line (n=0 and n=1) to separate comments', () => {
+    // Multi-drafts-per-line: every draft at a line goes out as its own review
+    // comment (GitHub/GitLab allow several comments on one line).
+    const p = buildReviewPayload(input({
+      drafts: [
+        draft({ path: 'src/x.ts', line: 5, side: 'RIGHT', body: 'First comment', n: 0 }),
+        draft({ path: 'src/x.ts', line: 5, side: 'RIGHT', body: 'Second comment', n: 1 }),
+      ],
+    }))
+    expect(p.comments).toEqual([
+      { path: 'src/x.ts', line: 5, side: 'RIGHT', body: 'First comment' },
+      { path: 'src/x.ts', line: 5, side: 'RIGHT', body: 'Second comment' },
+    ])
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -57,10 +57,19 @@
     comments?: PrComment[]
     /** Set of comment databaseIds that belong to resolved review threads */
     resolvedCommentIds?: Set<number>
-    /** Called when the user saves a comment at a given line */
-    onAddDraft?: (line: number, side: 'LEFT' | 'RIGHT', body: string) => void
-    /** Called when the user deletes a comment at a given line */
-    onRemoveDraft?: (line: number, side: 'LEFT' | 'RIGHT') => void
+    /**
+     * Called when the user saves a comment at a given line. `n` identifies the
+     * draft being EDITED in place (its store ordinal); omitted → this is a NEW
+     * comment and the parent must APPEND it (multiple drafts can coexist at
+     * one line — adding never overwrites an existing draft).
+     */
+    onAddDraft?: (line: number, side: 'LEFT' | 'RIGHT', body: string, n?: number) => void
+    /**
+     * Called when the user deletes a comment at a given line. `n` identifies
+     * WHICH draft at the line to remove; omitted → the first draft at the line
+     * (legacy single-draft behavior).
+     */
+    onRemoveDraft?: (line: number, side: 'LEFT' | 'RIGHT', n?: number) => void
     /** Whether this file has been marked viewed (hash-matched) */
     viewed?: boolean
     /** Whether the file changed since it was last viewed (entry exists, hash differs) */
@@ -447,8 +456,13 @@
     // Toggle: clicking the same line again closes the widget
     if (openWidget && openWidget.line === lineNumber && openWidget.side === side) {
       openWidget = null
+      composerAt = null
     } else {
       openWidget = { line: lineNumber, side }
+      // The "+" gutter click means "add a comment HERE": when the line already
+      // has draft(s), open the new-comment composer below the stack right away
+      // (on an empty line the stack snippet shows the composer regardless).
+      composerAt = `${lineNumber}|${splitSideToSide(side)}`
     }
   }
 
@@ -576,7 +590,8 @@
   // extendData renders inline at visible lines in BOTH unified and split
   // modes — the same path drafts already used in split mode.
   interface ExtendEntry {
-    draft?: Draft
+    /** ALL drafts at this line, sorted by ordinal n (multiple can coexist). */
+    drafts: Draft[]
     findings: SkillFinding[]
     threads: Thread[]
   }
@@ -586,18 +601,24 @@
     const newFile: Record<string, { data: ExtendEntry }> = {}
     const entryAt = (map: Record<string, { data: ExtendEntry }>, line: number): ExtendEntry => {
       const key = String(line)
-      if (!map[key]) map[key] = { data: { findings: [], threads: [] } }
+      if (!map[key]) map[key] = { data: { drafts: [], findings: [], threads: [] } }
       return map[key].data
     }
     for (const d of drafts) {
       if (!isAnchoredDraft(d)) continue
       // While the add/edit widget is open at this line, the widget shows the
-      // draft — suppress the extend entry so the draft never renders twice.
+      // draft stack — suppress the extend entry so drafts never render twice.
       if (openWidget && openWidget.line === d.line && splitSideToSide(openWidget.side) === d.side) continue
       if (d.side === 'LEFT') {
-        entryAt(oldFile, d.line).draft = d
+        entryAt(oldFile, d.line).drafts.push(d)
       } else {
-        entryAt(newFile, d.line).draft = d
+        entryAt(newFile, d.line).drafts.push(d)
+      }
+    }
+    // Stack order within a line: by ordinal n ascending (comment thread order)
+    for (const map of [oldFile, newFile]) {
+      for (const key of Object.keys(map)) {
+        map[key].data.drafts.sort((a, b) => (a.n ?? 0) - (b.n ?? 0))
       }
     }
     for (const f of visibleSkillFindings) {
@@ -630,32 +651,32 @@
 
   // ---- Helpers for DraftThread handlers ----------------------------------
 
-  function handleWidgetSave(line: number, side: SplitSide, body: string) {
-    const sideStr = splitSideToSide(side)
-    onAddDraft?.(line, sideStr, body)
-    // Fix-B: DO NOT close the widget — stay open showing the saved draft in read view.
-    // The widget will re-render with existingDraft set (since drafts prop updates).
-    // onClose is NOT called here; only called on explicit cancel/delete.
-    addFlash(line, sideStr)
+  // The one open "add another comment" composer, keyed `${line}|${side}`.
+  // Shared by the widget row and the extend row (only one composer at a time —
+  // same invariant as openWidget). null = no composer open.
+  let composerAt = $state<string | null>(null)
+
+  /** All drafts at a line/side, sorted by ordinal n (thread order). */
+  function draftsAtLine(line: number, side: 'LEFT' | 'RIGHT'): Draft[] {
+    return drafts
+      .filter((d) => d.line === line && d.side === side)
+      .sort((a, b) => (a.n ?? 0) - (b.n ?? 0))
   }
 
-  function handleWidgetCancel(hasDraft: boolean, onClose: () => void) {
-    // Fix-B: only close if there is no draft saved for this line
-    if (!hasDraft) {
-      onClose()
-      openWidget = null
-    }
-    // If there's a draft, cancel means "go back to read view" (handled inside DraftThread)
+  /**
+   * Save a draft at a line. `n` = the ordinal of the draft being EDITED in
+   * place; undefined = a NEW comment → the parent APPENDS it (never overwrites
+   * an existing draft at the line).
+   */
+  function handleExtendSave(line: number, side: SplitSide, body: string, n?: number) {
+    const sideStr = splitSideToSide(side)
+    onAddDraft?.(line, sideStr, body, n)
   }
 
-  function handleExtendSave(line: number, side: SplitSide, body: string) {
+  /** Delete the draft with ordinal `n` at a line (undefined = first draft). */
+  function handleExtendDelete(line: number, side: SplitSide, n?: number) {
     const sideStr = splitSideToSide(side)
-    onAddDraft?.(line, sideStr, body)
-  }
-
-  function handleExtendDelete(line: number, side: SplitSide) {
-    const sideStr = splitSideToSide(side)
-    onRemoveDraft?.(line, sideStr)
+    onRemoveDraft?.(line, sideStr, n)
   }
 
   // Skill findings whose anchor is NOT in the current diff — fallback block
@@ -771,6 +792,72 @@
       use:focusDim={[focusMode, file.filename, mode, isGenerated]}
       onclick={handleDiffClick}
     >
+    <!-- Shared stack: EVERY draft at the line (ordered by n) as its own
+         DraftThread — each independently editable/removable — followed by the
+         new-comment composer (or the "Add another comment" affordance).
+         `widgetClose` is non-null when rendering inside the widget row: it
+         closes the widget when the LAST draft is deleted or when composing
+         the FIRST comment is cancelled (the pre-existing single-draft UX).
+         Declared OUTSIDE <DiffView> so it stays a lexical snippet (declaring
+         it inside the tag would pass it to DiffView as an unknown prop). -->
+    {#snippet draftStack(lineNumber: number, side: SplitSide, widgetClose: (() => void) | null)}
+      {@const sideStr = splitSideToSide(side)}
+      {@const lineDrafts = draftsAtLine(lineNumber, sideStr)}
+      {@const composerKey = `${lineNumber}|${sideStr}`}
+      {@const composing = lineDrafts.length === 0 || composerAt === composerKey}
+      {@const lineExcerpt = file.patch ? excerptAround(file.patch, lineNumber, sideStr, 6) : ''}
+      {#each lineDrafts as draft (draft.n ?? 0)}
+        <DraftThread
+          {draft}
+          path={file.filename}
+          line={lineNumber}
+          side={sideStr}
+          onsave={(body) => handleExtendSave(lineNumber, side, body, draft.n ?? 0)}
+          ondelete={() => {
+            handleExtendDelete(lineNumber, side, draft.n ?? 0)
+            // Deleting the LAST draft closes the widget (single-draft UX);
+            // with siblings left, the stack stays open.
+            if (widgetClose && lineDrafts.length === 1) widgetClose()
+          }}
+          oncancel={() => {}}
+          {askFn}
+          {askDisabledReason}
+          {currentHeadSha}
+          excerpt={lineExcerpt}
+        />
+      {/each}
+      {#if composing}
+        <DraftThread
+          draft={null}
+          path={file.filename}
+          line={lineNumber}
+          side={sideStr}
+          onsave={(body) => {
+            // NEW comment → append (never overwrites an existing draft)
+            handleExtendSave(lineNumber, side, body)
+            composerAt = null
+            addFlash(lineNumber, sideStr)
+          }}
+          ondelete={() => {}}
+          oncancel={() => {
+            composerAt = null
+            // Cancelling the FIRST comment on the line closes the widget
+            if (widgetClose && lineDrafts.length === 0) widgetClose()
+          }}
+          {askFn}
+          {askDisabledReason}
+          excerpt={lineExcerpt}
+        />
+      {:else if !wsActive}
+        <button
+          type="button"
+          class="add-another-comment"
+          data-testid="add-another-comment"
+          onclick={() => (composerAt = composerKey)}
+        >+ Add another comment</button>
+      {/if}
+    {/snippet}
+
     <DiffView
       {diffFile}
       diffViewMode={mode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
@@ -783,52 +870,24 @@
       onAddWidgetClick={handleAddWidgetClick}
     >
       {#snippet renderWidgetLine({ lineNumber, side, onClose })}
-        {@const existingDraft = drafts.find(
-          (d) => d.line === lineNumber && sideToSplitSide(d.side) === side,
-        )}
-        {@const lineExcerpt = file.patch ? excerptAround(file.patch, lineNumber, splitSideToSide(side), 6) : ''}
-        <DraftThread
-          draft={existingDraft ?? null}
-          path={file.filename}
-          line={lineNumber}
-          side={splitSideToSide(side)}
-          onsave={(body) => {
-            // Fix-B: do NOT call onClose here — widget stays open showing saved draft
-            handleWidgetSave(lineNumber, side, body)
-          }}
-          ondelete={() => {
-            handleExtendDelete(lineNumber, side)
+        <!-- Fix-B: saving does NOT close the widget — the saved draft stack
+             stays visible in read view (onClose only fires on explicit
+             cancel-with-no-drafts or deleting the last draft). -->
+        <div class="draft-annotations inline-annotation" data-testid="widget-annotations" data-line={lineNumber}>
+          {@render draftStack(lineNumber, side, () => {
             onClose()
             openWidget = null
-          }}
-          oncancel={() => {
-            // Fix-B: only close widget if no draft saved for this line
-            handleWidgetCancel(existingDraft !== undefined, onClose)
-          }}
-          {askFn}
-          {askDisabledReason}
-          excerpt={lineExcerpt}
-        />
+            composerAt = null
+          })}
+        </div>
       {/snippet}
 
       {#snippet renderExtendLine({ lineNumber, side, data })}
         {@const entry = data as ExtendEntry}
-        {#if entry?.draft}
-          {@const flashKey = `${entry.draft.line}|${entry.draft.side}`}
-          <div class="draft-annotations inline-annotation" data-testid="inline-annotations" data-line={lineNumber} class:flash={flashKeys.has(flashKey)} aria-label="Draft comment at line {lineNumber}">
-            <DraftThread
-              draft={entry.draft}
-              path={file.filename}
-              line={lineNumber}
-              side={splitSideToSide(side)}
-              onsave={(body) => handleExtendSave(lineNumber, side, body)}
-              ondelete={() => handleExtendDelete(lineNumber, side)}
-              oncancel={() => {}}
-              {askFn}
-              {askDisabledReason}
-              {currentHeadSha}
-              excerpt={file.patch ? excerptAround(file.patch, lineNumber, splitSideToSide(side), 6) : ''}
-            />
+        {#if entry?.drafts?.length}
+          {@const flashKey = `${lineNumber}|${splitSideToSide(side)}`}
+          <div class="draft-annotations inline-annotation" data-testid="inline-annotations" data-line={lineNumber} class:flash={flashKeys.has(flashKey)} aria-label="Draft comments at line {lineNumber}">
+            {@render draftStack(lineNumber, side, null)}
           </div>
         {/if}
         {#if entry?.findings?.length}
@@ -909,8 +968,8 @@
               path={file.filename}
               line={draft.line}
               side={draft.side}
-              onsave={(body) => handleExtendSave(draft.line, sideToSplitSide(draft.side), body)}
-              ondelete={() => handleExtendDelete(draft.line, sideToSplitSide(draft.side))}
+              onsave={(body) => handleExtendSave(draft.line, sideToSplitSide(draft.side), body, draft.n ?? 0)}
+              ondelete={() => handleExtendDelete(draft.line, sideToSplitSide(draft.side), draft.n ?? 0)}
               oncancel={() => {}}
               {askFn}
               {askDisabledReason}
@@ -1190,6 +1249,26 @@
   /* ---- Inline (at-line) annotation containers inside extend rows ---- */
   .draft-annotations.inline-annotation {
     border-top: none;
+  }
+
+  /* "Add another comment" affordance below a line's draft stack (GitHub-style
+     thread feel). Subtle: text-button look, draft accent on hover. */
+  .add-another-comment {
+    align-self: flex-start;
+    background: none;
+    border: 1px dashed var(--border-draft, #f0b44488);
+    border-radius: 6px;
+    padding: 0.25rem 0.6rem;
+    margin-top: 0.25rem;
+    font-size: 0.8rem;
+    font-family: inherit;
+    color: var(--text-muted, #b8862a);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .add-another-comment:hover {
+    background: var(--surface-draft, #fffbf0);
   }
 
   .draft-annotations.inline-annotation.flash {

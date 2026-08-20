@@ -138,8 +138,9 @@ describe('convergence pass — happy path', () => {
     const b = addSkill('Performance Reviewer', 'perf content')
     const drafts: Draft[] = [
       { prKey: 'k', path: 'src/foo.ts', line: 11, side: 'RIGHT', body: 'I think this is injectable', updatedAt: 1 },
-      // A thread REPLY (n>0) must be excluded — only root comments are candidates.
-      { prKey: 'k', path: 'src/foo.ts', line: 11, side: 'RIGHT', body: 'reply text', n: 1, updatedAt: 2 },
+      // A SECOND comment at the same line (n>0) is an independent root-level
+      // comment (multiple drafts coexist per line) — it must be included too.
+      { prKey: 'k', path: 'src/foo.ts', line: 11, side: 'RIGHT', body: 'second comment text', n: 1, updatedAt: 2 },
     ]
 
     const run = createAiRun(makeInput(() => drafts), deps)
@@ -148,8 +149,8 @@ describe('convergence pass — happy path', () => {
     const call = convergenceCalls(deps)[0]
     expect(call.user).toContain('draft-0')
     expect(call.user).toContain('I think this is injectable')
-    expect(call.user).not.toContain('draft-1')
-    expect(call.user).not.toContain('reply text')
+    expect(call.user).toContain('draft-1')
+    expect(call.user).toContain('second comment text')
     expect(run.convergence.status).toBe('done')
 
     removeSkill(a.id)
