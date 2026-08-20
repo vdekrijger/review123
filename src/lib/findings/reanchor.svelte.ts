@@ -93,11 +93,21 @@ export function findingAnchorHash(f: FindingAnchorIdentity): string {
  * The current PR's override bucket. Review route → "provider:owner/repo#number"
  * (drafts' prKey format, sans sha); demo route → "demo"; anything else (tests,
  * standalone renders) → "local".
+ *
+ * The router access is guarded: tests that partially mock the router module
+ * (e.g. Demo.test.ts mocks only `navigate`) make ANY access to the absent
+ * `router` export throw (vitest's mock proxy) — those contexts simply fall
+ * into the 'local' bucket.
  */
 export function currentPrKey(): string {
-  const route = router.route
-  if (route.name === 'review') return `${route.provider}:${route.owner}/${route.repo}#${route.number}`
-  if (route.name === 'demo') return 'demo'
+  let route: (typeof router)['route'] | undefined
+  try {
+    route = router?.route
+  } catch {
+    route = undefined
+  }
+  if (route?.name === 'review') return `${route.provider}:${route.owner}/${route.repo}#${route.number}`
+  if (route?.name === 'demo') return 'demo'
   return 'local'
 }
 
