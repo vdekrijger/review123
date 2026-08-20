@@ -21,6 +21,7 @@
   import AskBox from './AskBox.svelte'
   import type { FindingVerification, AbsorbedFinding } from '../lib/ai/schemas'
   import type { AskFocus } from '../lib/ai/tasks'
+  import { reanchorDrag, REANCHOR_DND_MIME } from '../lib/findings/reanchor.svelte'
 
   interface Props {
     skillName: string
@@ -75,9 +76,96 @@
      * ("covered by your comment on path:line") — expandable, never vanishing.
      */
     coveredByDraft?: { path: string; line: number }
+    // ---- Re-anchor (drag a mis-anchored finding to the correct diff line) ----
+    /**
+     * The finding's re-anchor identity hash (src/lib/findings/reanchor).
+     * When present (and the card is not `added`), a drag handle appears and
+     * dragging the card carries this hash as the drop payload. Absent → the
+     * card is not draggable (e.g. contexts without re-anchor support).
+     */
+    anchorHash?: string | null
+    /**
+     * Set when the finding renders at a USER-CORRECTED anchor: the original
+     * reported location. Renders the "moved from line N" chip with an undo (✕)
+     * that calls onUndoMove. Semantics on move: the card's `added` state is
+     * never set by moving, and moving never touches drafts already created
+     * from this finding — a draft is the user's document once added (and an
+     * added card is hidden from the diff anyway, so only never-added findings
+     * offer the move affordances).
+     */
+    movedFrom?: { path: string; line: number } | null
+    /** Clears the anchor override (undo ✕ on the moved chip). */
+    onUndoMove?: (() => void) | null
+    /**
+     * Keyboard/no-drag re-anchor path: called with the line number typed into
+     * the "Move to line…" input. Returns true when the move was applied; false
+     * when the line isn't an anchorable diff line (the card shows an inline
+     * error). Targets the new-file (RIGHT) side — drag supports both sides.
+     */
+    onMoveToLine?: ((line: number) => boolean) | null
   }
 
-  let { skillName, severity, body, verification = undefined, raisedBy = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss, askFn = null, askPath = undefined, askExcerpt = undefined, mergedFrom = undefined, mergedReason = undefined, coveredByDraft = undefined }: Props = $props()
+  let { skillName, severity, body, verification = undefined, raisedBy = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss, askFn = null, askPath = undefined, askExcerpt = undefined, mergedFrom = undefined, mergedReason = undefined, coveredByDraft = undefined, anchorHash = null, movedFrom = null, onUndoMove = null, onMoveToLine = null }: Props = $props()
+
+  // ---- Re-anchor: drag handle + "Move to line…" keyboard path --------------
+  // Only never-added findings offer move affordances: adding turns the finding
+  // into the user's draft (and hides the card in the app), so there is nothing
+  // left to re-anchor — the draft has its own tools.
+  const canDrag = $derived(anchorHash !== null && anchorHash !== undefined && !added)
+  const canMoveToLine = $derived(onMoveToLine !== null && !added)
+
+  /** Card root element — used as the drag image so the whole card appears to move. */
+  let cardEl = $state<HTMLElement | null>(null)
+
+  function handleDragStart(e: DragEvent) {
+    if (!canDrag || !anchorHash || !e.dataTransfer) return
+    e.dataTransfer.setData(REANCHOR_DND_MIME, anchorHash)
+    e.dataTransfer.setData('text/plain', anchorHash)
+    e.dataTransfer.effectAllowed = 'move'
+    if (cardEl) e.dataTransfer.setDragImage(cardEl, 12, 12)
+    // dragover handlers can't read dataTransfer (DnD spec) — publish the
+    // in-flight hash so diff rows can validate/highlight during the drag.
+    reanchorDrag.hash = anchorHash
+  }
+
+  function handleDragEnd() {
+    reanchorDrag.hash = null
+  }
+
+  // "Move to line…" inline form state
+  let moveOpen = $state(false)
+  let moveLineInput = $state('')
+  let moveError = $state<string | null>(null)
+
+  function toggleMoveOpen() {
+    moveOpen = !moveOpen
+    moveError = null
+    moveLineInput = ''
+  }
+
+  function submitMove(e: Event) {
+    e.preventDefault()
+    const n = parseInt(moveLineInput, 10)
+    if (!Number.isInteger(n) || n < 1) {
+      moveError = 'Enter a line number.'
+      return
+    }
+    if (onMoveToLine?.(n)) {
+      moveOpen = false
+      moveError = null
+      moveLineInput = ''
+    } else {
+      moveError = `line ${n} isn't in this diff`
+    }
+  }
+
+  function handleMoveKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.stopPropagation()
+      moveOpen = false
+      moveError = null
+    }
+  }
 
   // Covered-by-draft cards start collapsed; the toggle discloses the full card.
   let coveredExpanded = $state(false)
@@ -146,11 +234,39 @@
     </button>
   </div>
 {:else}
-<div class="skill-finding severity-{severity}" class:compact class:lower-confidence={isLowerConfidence} class:covered-by-draft={!!coveredByDraft} role="note" aria-label="{skillName} finding, severity {severity}" data-finding-key={findingKey ?? undefined}>
+<div bind:this={cardEl} class="skill-finding severity-{severity}" class:compact class:lower-confidence={isLowerConfidence} class:covered-by-draft={!!coveredByDraft} role="note" aria-label="{skillName} finding, severity {severity}" data-finding-key={findingKey ?? undefined}>
   <div class="skill-finding-header">
+    {#if canDrag}
+      <!-- Mouse-only affordance (HTML5 DnD); the keyboard path is the
+           "Move to line…" action below. draggable lives on the HANDLE, not the
+           card, so body text stays selectable and buttons never start a drag. -->
+      <span
+        class="finding-drag-handle"
+        draggable="true"
+        title="Drag to a diff line to re-anchor this finding"
+        aria-hidden="true"
+        data-testid="finding-drag-handle"
+        ondragstart={handleDragStart}
+        ondragend={handleDragEnd}
+      >⠿</span>
+    {/if}
     <span class="skill-persona-label">{skillName}</span>
     {#if line !== null && !anchored}
       <span class="skill-line-note">line {line} — not in this diff</span>
+    {/if}
+    {#if movedFrom}
+      <span class="skill-moved-chip" role="status" data-testid="finding-moved-chip">
+        moved from line {movedFrom.line}
+        {#if onUndoMove}
+          <button
+            type="button"
+            class="skill-moved-undo"
+            aria-label="Undo move — restore line {movedFrom.line}"
+            title="Undo move — restore line {movedFrom.line}"
+            onclick={onUndoMove}
+          >✕</button>
+        {/if}
+      </span>
     {/if}
     {#if coveredByDraft}
       <span class="covered-chip">✓ {coveredLabel}</span>
@@ -219,6 +335,17 @@
       aria-label={added ? 'Added to drafts' : 'Add as draft comment'}
     >{added ? '✓ Added' : 'Add as draft'}</button>
     <button class="skill-dismiss-btn" onclick={onDismiss}>Dismiss</button>
+    {#if canMoveToLine}
+      <button
+        type="button"
+        class="skill-move-btn"
+        class:active={moveOpen}
+        onclick={toggleMoveOpen}
+        aria-expanded={moveOpen}
+        aria-label="Move this finding to another diff line"
+        data-testid="finding-move-btn"
+      >Move to line…</button>
+    {/if}
     {#if hasAsk}
       <button
         type="button"
@@ -231,6 +358,29 @@
       >Ask AI</button>
     {/if}
   </div>
+  {#if canMoveToLine && moveOpen}
+    <!-- Keyboard re-anchor path: type the target NEW-file line, Enter commits,
+         Esc cancels. Validation happens in the parent (onMoveToLine returns
+         false for a line not in the diff hunks) → inline error, form stays. -->
+    <form class="skill-move-form" onsubmit={submitMove} data-testid="finding-move-form">
+      <!-- svelte-ignore a11y_autofocus -->
+      <input
+        class="skill-move-input"
+        type="number"
+        min="1"
+        step="1"
+        placeholder="line"
+        aria-label="Target line number"
+        autofocus
+        bind:value={moveLineInput}
+        onkeydown={handleMoveKeydown}
+      />
+      <button type="submit" class="skill-move-go-btn">Move</button>
+      {#if moveError}
+        <span class="skill-move-error" role="alert">{moveError}</span>
+      {/if}
+    </form>
+  {/if}
   {#if hasAsk && askOpen && askFn}
     <AskBox
       {askFn}
@@ -494,6 +644,108 @@
     font-family: var(--font-mono);
     color: var(--text-muted);
     margin: 0 0.3rem;
+  }
+
+  /* ---- Re-anchor: drag handle + moved chip + move-to-line form ---- */
+  .finding-drag-handle {
+    cursor: grab;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    line-height: 1;
+    padding: 0 0.1rem;
+    user-select: none;
+    touch-action: none;
+  }
+
+  .finding-drag-handle:active {
+    cursor: grabbing;
+  }
+
+  /* Moved chip: state chip family (small, labeled) — amber "changed" tokens so
+     it reads as "location edited", distinct from the green added chip. */
+  .skill-moved-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    background: var(--legend-changed-bg);
+    color: var(--legend-changed-color);
+    border: 1px solid var(--legend-changed-border);
+    white-space: nowrap;
+  }
+
+  .skill-moved-undo {
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: 0.7rem;
+    line-height: 1;
+    padding: 0 0.05rem;
+    cursor: pointer;
+    opacity: 0.75;
+  }
+
+  .skill-moved-undo:hover {
+    opacity: 1;
+  }
+
+  .skill-move-btn {
+    font-size: 0.78rem;
+    padding: 0.18rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.85;
+  }
+
+  .skill-move-btn:hover {
+    opacity: 1;
+    background: var(--surface-raised);
+  }
+
+  .skill-move-btn.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    opacity: 1;
+  }
+
+  .skill-move-form {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-top: 0.35rem;
+  }
+
+  .skill-move-input {
+    width: 4.5rem;
+    font-size: 0.78rem;
+    font-family: var(--font-mono);
+    padding: 0.15rem 0.35rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    background: var(--surface, transparent);
+    color: inherit;
+  }
+
+  .skill-move-go-btn {
+    font-size: 0.78rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--accent);
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+  }
+
+  .skill-move-error {
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+    color: var(--legend-removed-color);
   }
 
   /* ---- Unresolvable-anchor note: muted, labeled, mono ---- */

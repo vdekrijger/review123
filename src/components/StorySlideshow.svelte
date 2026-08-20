@@ -112,7 +112,13 @@
     onAddDraft: (path: string, line: number, side: 'LEFT' | 'RIGHT', body: string, n?: number) => void
     /** `n` = ordinal of the draft to remove at the line; undefined = first. */
     onRemoveDraft: (path: string, line: number, side: 'LEFT' | 'RIGHT', n?: number) => void
-    onAddSkillFindingDraft: (path: string, finding: { body: string; line: number; key: string; skillName: string }) => Promise<void>
+    /**
+     * `line`/`side` are the finding's EFFECTIVE anchor: FileDiff applies any
+     * user re-anchor override before invoking this, so Story mode gets the
+     * full drag/keyboard re-anchor behaviour for free (FileDiff is reused
+     * verbatim — nothing story-specific to degrade).
+     */
+    onAddSkillFindingDraft: (path: string, finding: { body: string; line: number; key: string; skillName: string; side?: 'LEFT' | 'RIGHT' }) => Promise<void>
     /** Records a dismiss decision for the accept/dismiss telemetry loop. */
     onDismissSkillFinding?: (key: string) => void
     /** Add a file-level (null-line) finding as a draft comment. */
