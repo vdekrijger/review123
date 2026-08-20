@@ -1,6 +1,6 @@
 /**
- * src/lib/symbols/symbolIndex.ts — Heuristic symbol index for the PR's files
- * (symbol click-through, Tier 1).
+ * src/lib/symbols/symbolIndex.ts — Symbol index for the PR's files
+ * (symbol click-through, Tiers 1 + 3).
  *
  * buildSymbolIndex(sources) scans ALL text available client-side for this PR —
  * full before/after file contents when they've been fetched (the same
@@ -8,7 +8,7 @@
  * patch — and answers two questions per identifier:
  *
  *   definitionsOf(name) — where is this symbol DEFINED in the PR's files?
- *   referencesOf(name)  — every line (word-boundary match) that mentions it.
+ *   referencesOf(name)  — every line that mentions it.
  *
  * Every occurrence is tagged with file, 1-based line, side ('old' | 'new'),
  * a one-line context snippet, and `inDiff` — whether that line is inside the
@@ -16,20 +16,38 @@
  * fetched full contents (an unchanged region the diff doesn't show unless the
  * user expands context).
  *
- * ⚠️ HEURISTIC BACKEND. This is deliberately approximate: per-language regex
- * rules keyed off the file extension (TS/JS, Python, Go, Ruby + a generic
- * word-boundary fallback), cheap single-line string/comment stripping, and a
- * keyword stoplist. A follow-up PR swaps these internals for a tree-sitter
- * backend; the SymbolIndex interface is the contract that survives that swap.
- * A later PR also adds repo-wide search — today "not in the index" honestly
- * means "not findable in this PR's available text".
+ * TWO BACKENDS, ONE CONTRACT:
  *
- * Pure + deterministic — no LLM, no network, unit-testable.
+ *   1. tree-sitter (treeSitter.ts) — syntax-aware definitions and identifier
+ *      references from a real parse (WASM grammars for TS/TSX/JS/JSX, Python,
+ *      Go, Ruby). Strings and comments can never produce references, and
+ *      definitions come from AST node types, not line regexes. Used per file
+ *      side whenever the grammar has finished loading; patch-only sides are
+ *      parsed from a gap-filled per-side reconstruction (tree-sitter is
+ *      error-tolerant, so imperfect fragments still yield identifiers).
+ *
+ *   2. heuristic (this file) — per-language regex rules, cheap single-line
+ *      string/comment stripping, and a keyword stoplist. The fallback for
+ *      unsupported languages (incl. .svelte/.vue), grammar load failures, and
+ *      the window before grammars finish loading. symbolSources.ts invalidates
+ *      its cached index when a grammar lands, so the next click upgrades.
+ *
+ * Both backends keep the same query-side rules: word identifiers only,
+ * MIN_NAME_LEN, the keyword stoplist, definition lines excluded from
+ * references, snippets capped, and the old-side deletion-only indexing rule.
+ * Repo-wide search (repoSearch.ts, Tier 2) reuses this index over fetched
+ * repo files — "not in the index" honestly means "not findable in the
+ * available text".
+ *
+ * Pure + deterministic given the loaded grammars — no LLM, no network,
+ * unit-testable (unit tests exercise the heuristic path by default and
+ * install real WASM parsers explicitly in treeSitter.test.ts).
  */
 
 import type { PrFile } from '../github/types'
 import { langForFilename, type CodeLang } from '../diff/codeNoise'
 import { patchLineNumbers } from '../diff/patchLines'
+import { extractDocumentSymbols } from './treeSitter'
 
 // ---------------------------------------------------------------------------
 // Public interface (kept small so a tree-sitter backend can implement it)
@@ -321,11 +339,21 @@ interface IndexedLine {
   line: number
   /** Raw text (for the snippet). */
   raw: string
-  /** String/comment-stripped text (for matching). */
+  /** String/comment-stripped text (for heuristic matching). */
   code: string
   lang: CodeLang | null
   inDiff: boolean
+  /**
+   * Identifier names the tree-sitter parse found on this line, or null when
+   * this line was indexed by the heuristic backend (→ regex-match `code`).
+   * An empty set means "parsed, and nothing identifier-like here" — e.g. a
+   * line that only holds string/comment content.
+   */
+  idents: ReadonlySet<string> | null
 }
+
+/** Shared empty set for parsed lines without identifiers. */
+const NO_IDENTS: ReadonlySet<string> = new Set()
 
 function snippetOf(raw: string): string {
   const t = raw.trim()
@@ -336,53 +364,99 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/** Line-number → text map for full file contents (already split). */
+function contentsMap(contentLines: string[]): Map<number, string> {
+  const m = new Map<number, string>()
+  for (let i = 0; i < contentLines.length; i++) m.set(i + 1, contentLines[i])
+  return m
+}
+
+/**
+ * Rebuild one side's text from its patch line map (gaps between hunks become
+ * empty lines) so the tree-sitter backend can parse it. Null when there's
+ * nothing to parse or the side's line numbers exceed the safety cap.
+ */
+function reconstructSideText(map: ReadonlyMap<number, string>): string | null {
+  let max = 0
+  for (const n of map.keys()) if (n > max) max = n
+  if (max === 0 || max > MAX_FULL_CONTENT_LINES) return null
+  const arr = new Array<string>(max).fill('')
+  for (const [n, text] of map) arr[n - 1] = text
+  return arr.join('\n')
+}
+
 export function buildSymbolIndex(sources: SymbolSource[]): SymbolIndex {
   const lines: IndexedLine[] = []
   const definitions = new Map<string, SymbolDefinition[]>()
   /** "file|side|line" keys of lines that DEFINE a given name. */
   const defLineKeys = new Map<string, Set<string>>()
 
-  function addLine(entry: IndexedLine): void {
-    lines.push(entry)
-    const def = definitionOnLine(entry.code, entry.lang)
-    if (def) {
-      const d: SymbolDefinition = {
-        name: def.name,
-        kind: def.kind,
-        file: entry.file,
-        side: entry.side,
-        line: entry.line,
-        snippet: snippetOf(entry.raw),
-        inDiff: entry.inDiff,
+  function addDefinition(name: string, kind: DefinitionKind, file: string, side: DiffSide, line: number, raw: string, inDiff: boolean): void {
+    const d: SymbolDefinition = { name, kind, file, side, line, snippet: snippetOf(raw), inDiff }
+    const arr = definitions.get(name) ?? []
+    arr.push(d)
+    definitions.set(name, arr)
+    const keys = defLineKeys.get(name) ?? new Set<string>()
+    keys.add(`${file}|${side}|${line}`)
+    defLineKeys.set(name, keys)
+  }
+
+  /**
+   * Index one side of one file.
+   *
+   * `emit` is the set of lines this side actually indexes (line → raw text) —
+   * e.g. deletions only, for the old side of a modified file. `parseText` is
+   * the side's full text for the tree-sitter backend; it may cover MORE lines
+   * than `emit` (old-side context improves the parse but is never emitted —
+   * it's byte-identical to its already-indexed new-side counterpart).
+   * `inDiffLines` is hunk membership; null means every emitted line is part
+   * of the rendered diff. Falls back to the heuristic when the tree-sitter
+   * backend can't answer (unsupported lang / grammar not loaded / parse threw).
+   */
+  function indexSide(
+    file: string,
+    side: DiffSide,
+    lang: CodeLang | null,
+    emit: ReadonlyMap<number, string>,
+    parseText: string | null,
+    inDiffLines: ReadonlySet<number> | null,
+  ): void {
+    if (emit.size === 0) return
+    const inDiffFor = (n: number): boolean => inDiffLines === null || inDiffLines.has(n)
+
+    const extracted = parseText !== null ? extractDocumentSymbols(file, parseText) : null
+    if (extracted) {
+      for (const [n, raw] of emit) {
+        lines.push({ file, side, line: n, raw, code: '', lang, inDiff: inDiffFor(n), idents: extracted.identifiersByLine.get(n) ?? NO_IDENTS })
       }
-      const arr = definitions.get(def.name) ?? []
-      arr.push(d)
-      definitions.set(def.name, arr)
-      const keys = defLineKeys.get(def.name) ?? new Set<string>()
-      keys.add(`${entry.file}|${entry.side}|${entry.line}`)
-      defLineKeys.set(def.name, keys)
+      for (const def of extracted.definitions) {
+        const raw = emit.get(def.line)
+        if (raw === undefined) continue // non-emitted line (e.g. old-side context)
+        addDefinition(def.name, def.kind, file, side, def.line, raw, inDiffFor(def.line))
+      }
+      return
+    }
+
+    for (const [n, raw] of emit) {
+      const code = stripLiteralsAndComments(raw, lang)
+      lines.push({ file, side, line: n, raw, code, lang, inDiff: inDiffFor(n), idents: null })
+      const def = definitionOnLine(code, lang)
+      if (def) addDefinition(def.name, def.kind, file, side, n, raw, inDiffFor(n))
     }
   }
 
   for (const src of sources) {
     const lang = langForFilename(src.filename)
     const patchText = walkPatch(src.patch)
-    const hunkNew = patchLineNumbers(src.patch, 'RIGHT')
-    const hunkOld = patchLineNumbers(src.patch, 'LEFT')
 
     if (src.status === 'removed') {
       // Removed file: only the old side exists. Prefer full "before" contents.
       const before = src.contents?.before ?? null
       const beforeLines = before !== null ? before.split('\n') : null
-      if (beforeLines && beforeLines.length <= MAX_FULL_CONTENT_LINES) {
-        for (let i = 0; i < beforeLines.length; i++) {
-          const raw = beforeLines[i]
-          addLine({ file: src.filename, side: 'old', line: i + 1, raw, code: stripLiteralsAndComments(raw, lang), lang, inDiff: hunkOld.has(i + 1) })
-        }
+      if (before !== null && beforeLines && beforeLines.length <= MAX_FULL_CONTENT_LINES) {
+        indexSide(src.filename, 'old', lang, contentsMap(beforeLines), before, patchLineNumbers(src.patch, 'LEFT'))
       } else {
-        for (const [n, raw] of patchText.oldAll) {
-          addLine({ file: src.filename, side: 'old', line: n, raw, code: stripLiteralsAndComments(raw, lang), lang, inDiff: true })
-        }
+        indexSide(src.filename, 'old', lang, patchText.oldAll, reconstructSideText(patchText.oldAll), null)
       }
       continue
     }
@@ -391,23 +465,17 @@ export function buildSymbolIndex(sources: SymbolSource[]): SymbolIndex {
     // otherwise the patch's new-side lines (context + additions).
     const after = src.contents?.after ?? null
     const afterLines = after !== null ? after.split('\n') : null
-    if (afterLines && afterLines.length <= MAX_FULL_CONTENT_LINES) {
-      for (let i = 0; i < afterLines.length; i++) {
-        const raw = afterLines[i]
-        addLine({ file: src.filename, side: 'new', line: i + 1, raw, code: stripLiteralsAndComments(raw, lang), lang, inDiff: hunkNew.has(i + 1) })
-      }
+    if (after !== null && afterLines && afterLines.length <= MAX_FULL_CONTENT_LINES) {
+      indexSide(src.filename, 'new', lang, contentsMap(afterLines), after, patchLineNumbers(src.patch, 'RIGHT'))
     } else {
-      for (const [n, raw] of patchText.newLines) {
-        addLine({ file: src.filename, side: 'new', line: n, raw, code: stripLiteralsAndComments(raw, lang), lang, inDiff: true })
-      }
+      indexSide(src.filename, 'new', lang, patchText.newLines, reconstructSideText(patchText.newLines), null)
     }
 
-    // OLD side — only DELETION lines. Old-side context is byte-identical to
-    // its new-side counterpart (already indexed above); re-indexing it would
-    // double-report every reference in an unchanged region.
-    for (const [n, raw] of patchText.oldDeletions) {
-      addLine({ file: src.filename, side: 'old', line: n, raw, code: stripLiteralsAndComments(raw, lang), lang, inDiff: true })
-    }
+    // OLD side — only DELETION lines are emitted. Old-side context is
+    // byte-identical to its new-side counterpart (already indexed above);
+    // re-indexing it would double-report every reference in an unchanged
+    // region. The parse still sees context (oldAll) for a better tree.
+    indexSide(src.filename, 'old', lang, patchText.oldDeletions, reconstructSideText(patchText.oldAll), null)
   }
 
   const refMemo = new Map<string, SymbolReference[]>()
@@ -424,7 +492,9 @@ export function buildSymbolIndex(sources: SymbolSource[]): SymbolIndex {
     const refs: SymbolReference[] = []
     for (const l of lines) {
       if (isStopword(name, l.lang)) continue
-      if (!word.test(l.code)) continue
+      // Parsed lines carry their identifier set (strings/comments excluded by
+      // the grammar); heuristic lines fall back to the word-boundary regex.
+      if (l.idents !== null ? !l.idents.has(name) : !word.test(l.code)) continue
       if (defKeys?.has(`${l.file}|${l.side}|${l.line}`)) continue
       refs.push({ name, file: l.file, side: l.side, line: l.line, snippet: snippetOf(l.raw), inDiff: l.inDiff })
     }

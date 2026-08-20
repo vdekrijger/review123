@@ -16,15 +16,34 @@
  *
  * The built index is cached and invalidated on any registry change; it is
  * (re)built lazily on the next lookup — clicks are rare, mounts are not.
+ *
+ * Registration also kicks off the lazy tree-sitter backend (fire-and-forget,
+ * per language actually present in the review — never at app startup), and
+ * the cache is invalidated when a grammar finishes loading, so the NEXT
+ * symbol click rebuilds with tree-sitter accuracy. Until then the heuristic
+ * backend answers.
  */
 
 import { buildSymbolIndex, type SymbolIndex, type SymbolSource } from './symbolIndex'
+import { initTreeSitterBackend, onBackendUpgraded, treeSitterLangForFilename } from './treeSitter'
 
 const entries = new Map<string, { count: number; source: SymbolSource }>()
 let cached: SymbolIndex | null = null
 
+// A grammar finished loading → any cached index may have been built on the
+// heuristic. Drop it; the next lookup rebuilds syntax-aware.
+onBackendUpgraded(() => {
+  cached = null
+})
+
 /** Register (or refresh) a file's text. Pair every call with an unregister. */
 export function registerSymbolSource(source: SymbolSource): void {
+  // Fire-and-forget grammar load for this file's language (lazy + idempotent;
+  // no-op for unsupported languages). Skipped under vitest: jsdom can't fetch
+  // wasm, and the unit suites must stay deterministic on the heuristic path —
+  // treeSitter.test.ts installs real parsers explicitly instead.
+  const tsLang = treeSitterLangForFilename(source.filename)
+  if (tsLang && import.meta.env.MODE !== 'test') void initTreeSitterBackend([tsLang])
   const existing = entries.get(source.filename)
   entries.set(source.filename, { count: (existing?.count ?? 0) + 1, source })
   cached = null
