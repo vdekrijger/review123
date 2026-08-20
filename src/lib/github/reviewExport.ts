@@ -18,6 +18,12 @@
  *           ? { start_line, start_side } : {}) }
  * and the `comments` key is OMITTED entirely when there are no drafts.
  *
+ * Off-diff coherence: when `files` (patches) are provided, the payload applies
+ * the SAME split as submitReview (anchorSplit): only anchorable drafts ride
+ * `comments`; off-diff drafts are folded into the body's marked section — a
+ * one-shot command cannot post file-level comments, and leaving them in
+ * comments[] would make the exported command 422.
+ *
  * Three formatters wrap that ONE payload:
  *   - buildBrowserConsoleSnippet — JS to paste into devtools (PAT via prompt()).
  *     GitHub's REST API sends CORS headers so a token-auth fetch works
@@ -35,6 +41,7 @@
 import type { Draft } from '../drafts/drafts.svelte'
 import { outgoingCommentBody } from '../drafts/drafts.svelte'
 import type { Verdict } from './review'
+import { splitDraftsByAnchor, foldOffDiffIntoBody, type PatchFile } from './anchorSplit'
 
 /** The exact GitHub "create a review" request body (matches submitReview). */
 export interface ReviewPayload {
@@ -63,6 +70,14 @@ export interface ReviewExportInput {
   /** Overall review comment (may be empty). */
   body: string
   drafts: Draft[]
+  /**
+   * The PR's changed files (patch text) — enables the same off-diff split
+   * submitReview performs. A one-shot exported command cannot post file-level
+   * comments, so off-diff drafts are folded into the review body's marked
+   * section instead (honest + the command cannot 422 on a bad anchor).
+   * Empty/omitted → no split (all drafts ride comments[], as before).
+   */
+  files?: readonly PatchFile[]
 }
 
 /** The heredoc delimiter used by the gh / curl formatters. */
@@ -75,14 +90,22 @@ const HEREDOC = 'REVIEW_PAYLOAD'
  *   - start_line/start_side added only when startLine != null && startLine < line.
  */
 export function buildReviewPayload(input: ReviewExportInput): ReviewPayload {
+  // Same split as submitReview: comments[] carries only anchorable drafts;
+  // off-diff drafts fold into the body (a single POST has nowhere else to
+  // put them — create-review comments[] rejects off-diff lines with a 422).
+  const { inline, offDiff } = splitDraftsByAnchor(input.drafts, input.files ?? [])
+
   const payload: ReviewPayload = {
     commit_id: input.commitId,
-    body: input.body,
+    body: foldOffDiffIntoBody(
+      input.body,
+      offDiff.map((d) => ({ draft: d, outgoingBody: outgoingCommentBody(d) })),
+    ),
     event: input.verdict,
   }
 
-  if (input.drafts.length > 0) {
-    payload.comments = input.drafts.map((d) => ({
+  if (inline.length > 0) {
+    payload.comments = inline.map((d) => ({
       path: d.path,
       line: d.line,
       side: d.side,

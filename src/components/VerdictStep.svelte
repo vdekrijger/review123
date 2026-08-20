@@ -17,7 +17,8 @@
    */
   import { authState } from '../lib/auth/authState.svelte'
   import { beginOAuth } from '../lib/auth/oauthFlow'
-  import { submitReview, type Verdict, type SubmitOutcome } from '../lib/github/review'
+  import { submitReview, type Verdict, type SubmitOutcome, type SubmitBreakdown } from '../lib/github/review'
+  import { splitDraftsByAnchor } from '../lib/github/anchorSplit'
   import { resolveViewerLogin } from '../lib/provider/viewer'
   import { isSelfReviewGated } from '../lib/provider/selfReview'
   import { renderMarkdown } from '../lib/markdown/render'
@@ -70,6 +71,7 @@
       bodyText: string,
       drafts: ReturnType<typeof createDraftStore>['drafts'],
       commitId: string,
+      files?: PrFile[],
     ) => Promise<SubmitOutcome>
     /**
      * Override the coach function — DI seam for tests. In production,
@@ -159,6 +161,9 @@
   let pending = $state(false)
   let submitError = $state<{ kind: string; message: string } | null>(null)
   let success = $state(false)
+  // How the successful submission's comments were actually posted — drives
+  // the honest post-submit breakdown line. Null when the outcome carried none.
+  let successPosted = $state<SubmitBreakdown | null>(null)
   let clientHint = $state<string | null>(null)
 
   // ---- Own-PR verdict gating ----
@@ -320,6 +325,35 @@
     return isStaleDraft(draft, files, commitId).stale
   }
 
+  // ---- Off-diff anchors: pre-submit split -------------------------------
+  // Same client-side truth as the submit path (splitDraftsByAnchor): drafts
+  // whose line is NOT in the diff hunks can't post as line comments — they'll
+  // be re-routed to file-level comments. Surface that BEFORE submitting.
+  // With no files (demo/tests) the split is skipped — no chips, no note.
+  const offDiffDrafts = $derived(splitDraftsByAnchor([...store.drafts], files).offDiff)
+  const offDiffKeys = $derived(new Set(offDiffDrafts.map((d) => draftKey(d))))
+
+  /** Off-diff AND not stale — stale (file gone) already has its own chip. */
+  function isDraftOffDiff(draft: Draft): boolean {
+    return offDiffKeys.has(draftKey(draft)) && !isDraftStale(draft)
+  }
+
+  /** "K posted inline · M posted as file comments (line not in diff) · …" */
+  function postedBreakdownLabel(posted: SubmitBreakdown): string {
+    const parts = [`${posted.inline} posted inline`]
+    if (posted.fileLevel > 0) {
+      parts.push(
+        posted.fileLevel === 1
+          ? '1 posted as a file comment (line not in diff)'
+          : `${posted.fileLevel} posted as file comments (line not in diff)`,
+      )
+    }
+    if (posted.bodyFolded > 0) {
+      parts.push(`${posted.bodyFolded} included in the review body (line not in diff)`)
+    }
+    return parts.join(' · ')
+  }
+
   // "Clear all drafts (N)": two-step inline confirm (button morphs to
   // "Really clear N?"; resets on focusout/Escape — never window.confirm).
   let confirmingClearDrafts = $state(false)
@@ -462,6 +496,7 @@
       verdict,
       body,
       drafts: [...store.drafts],
+      files,
     })
     try {
       await copyFn(command)
@@ -494,7 +529,7 @@
 
     let result: SubmitOutcome
     try {
-      result = await submitFn(prRef, verdict, body, currentDrafts, commitId)
+      result = await submitFn(prRef, verdict, body, currentDrafts, commitId, files)
     } finally {
       pending = false
     }
@@ -503,6 +538,7 @@
       // EC-09g: clear drafts ONLY on success
       await store.clearAll()
       track('review_submitted', { verdict, comment_count: countBeforeSubmit })
+      successPosted = result.posted ?? null
       success = true
     } else {
       // EC-09d/e/f: render message verbatim; drafts NOT cleared
@@ -526,6 +562,13 @@
   <!-- Success state -->
   <div class="success-panel" role="status">
     <p class="success-msg">Your review was submitted successfully.</p>
+    {#if successPosted && (successPosted.fileLevel > 0 || successPosted.bodyFolded > 0)}
+      <!-- Honest routing readout: some comments couldn't anchor to a diff
+           line and were re-routed (file-level comments / review body). -->
+      <p class="submit-breakdown" data-testid="submit-outcome-breakdown">
+        {postedBreakdownLabel(successPosted)}
+      </p>
+    {/if}
     <a href={prUrl} target="_blank" rel="noopener nofollow" class="view-link">View on GitHub</a>
   </div>
 {:else}
@@ -560,6 +603,12 @@
                     data-testid="recap-draft-stale"
                     title="This draft's file is not in the PR's current diff — it can't be posted as a line comment"
                   >file no longer in this PR</span>
+                {:else if isDraftOffDiff(draft)}
+                  <span
+                    class="draft-offdiff"
+                    data-testid="recap-draft-offdiff"
+                    title="This line isn't part of the current diff — the comment will post as a file comment instead of a line comment"
+                  >not in this diff</span>
                 {/if}
                 <button
                   class="draft-remove"
@@ -792,6 +841,19 @@
       </p>
     {/if}
 
+    {#if offDiffDrafts.length > 0}
+      <!-- Pre-submit heads-up: these comments can't anchor to a diff line
+           (same "not in this diff" semantics as the per-row chip) — they'll
+           be re-routed instead of failing the review. Calm and factual. -->
+      <p class="offdiff-note" data-testid="offdiff-presubmit-note">
+        {#if offDiffDrafts.length === 1}
+          1 comment isn't on a line in the current diff — it'll post as a file comment.
+        {:else}
+          {offDiffDrafts.length} comments aren't on lines in the current diff — they'll post as file comments.
+        {/if}
+      </p>
+    {/if}
+
     <!-- Actions: submit (to provider) + copy as LLM prompt (export, no submit) -->
     <div class="actions">
       <!-- Submit -->
@@ -964,6 +1026,20 @@
     vertical-align: middle;
   }
 
+  .draft-offdiff {
+    font-size: 0.72rem;
+    font-weight: 500;
+    margin-left: 0.4rem;
+    padding: 0.1rem 0.38rem;
+    border-radius: 999px;
+    background: var(--legend-changed-bg);
+    border: 1px solid var(--legend-changed-border);
+    color: var(--legend-changed-color);
+    white-space: nowrap;
+    cursor: help;
+    vertical-align: middle;
+  }
+
   .draft-remove {
     float: right;
     background: none;
@@ -1057,6 +1133,22 @@
 
   .non-atomic-note {
     font-size: 0.85rem;
+    color: var(--text-muted);
+    margin: 0;
+  }
+
+  .offdiff-note {
+    font-size: 0.85rem;
+    color: var(--legend-changed-color);
+    background: var(--legend-changed-bg);
+    border: 1px solid var(--legend-changed-border);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    margin: 0;
+  }
+
+  .submit-breakdown {
+    font-size: 0.88rem;
     color: var(--text-muted);
     margin: 0;
   }

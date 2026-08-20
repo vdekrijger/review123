@@ -2126,3 +2126,168 @@ describe('VerdictStep — consolidated review cost panel', () => {
     expect(screen.queryByText(/This review used/)).not.toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Off-diff anchors — pre-submit chip + note, files passed to submitFn, and the
+// post-submit routing breakdown. The split mirrors submitReview's
+// splitDraftsByAnchor: a draft is off-diff when its line isn't in the patch
+// hunks for its side.
+// ---------------------------------------------------------------------------
+describe('off-diff anchors (VerdictStep)', () => {
+  // RIGHT lines 1..4 in this patch; LEFT lines 1..3
+  const PATCH = '@@ -1,3 +1,4 @@\n context\n-removed\n+added\n+added2\n context'
+  const filesFixture = [
+    { filename: 'src/a.ts', status: 'modified' as const, patch: PATCH, additions: 2, deletions: 1 },
+  ]
+
+  beforeEach(() => signIn())
+
+  it('recap shows the "not in this diff" chip ONLY for off-diff drafts', async () => {
+    const store = makeStore()
+    await store.upsert({ path: 'src/a.ts', line: 3, side: 'RIGHT', body: 'In-diff' })
+    await store.upsert({ path: 'src/a.ts', line: 99, side: 'RIGHT', body: 'Off-diff' })
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store, prUrl, submitFn: okSubmit, files: filesFixture },
+    })
+
+    const chips = screen.getAllByTestId('recap-draft-offdiff')
+    expect(chips).toHaveLength(1)
+    expect(chips[0].textContent).toBe('not in this diff')
+  })
+
+  it('stale draft (file gone from the PR) shows the stale chip, NOT the off-diff chip', async () => {
+    const store = makeStore()
+    await store.upsert({ path: 'src/gone.ts', line: 1, side: 'RIGHT', body: 'File left the PR' })
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store, prUrl, submitFn: okSubmit, files: filesFixture },
+    })
+
+    expect(screen.getByTestId('recap-draft-stale')).toBeInTheDocument()
+    expect(screen.queryByTestId('recap-draft-offdiff')).toBeNull()
+  })
+
+  it('pre-submit note appears with the off-diff count; plural copy', async () => {
+    const store = makeStore()
+    await store.upsert({ path: 'src/a.ts', line: 90, side: 'RIGHT', body: 'One' })
+    await store.upsert({ path: 'src/a.ts', line: 91, side: 'RIGHT', body: 'Two' })
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store, prUrl, submitFn: okSubmit, files: filesFixture },
+    })
+
+    const note = screen.getByTestId('offdiff-presubmit-note')
+    expect(note.textContent).toContain("2 comments aren't on lines in the current diff")
+    expect(note.textContent).toContain("they'll post as file comments")
+  })
+
+  it('no note and no chips when the caller provides no files (nothing to judge against)', async () => {
+    const store = makeStore()
+    await store.upsert({ path: 'src/a.ts', line: 99999, side: 'RIGHT', body: 'Anywhere' })
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store, prUrl, submitFn: okSubmit },
+    })
+
+    expect(screen.queryByTestId('offdiff-presubmit-note')).toBeNull()
+    expect(screen.queryByTestId('recap-draft-offdiff')).toBeNull()
+  })
+
+  it('handleSubmit passes the files through to submitFn (6th argument)', async () => {
+    const user = userEvent.setup()
+    const submitFn = vi.fn().mockResolvedValue({ ok: true } as SubmitOutcome)
+    const store = makeStore()
+    await store.upsert({ path: 'src/a.ts', line: 3, side: 'RIGHT', body: 'note' })
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store, prUrl, submitFn, files: filesFixture },
+    })
+
+    await user.click(screen.getByRole('radio', { name: /approve/i }))
+    await user.click(screen.getByRole('button', { name: /submit review/i }))
+
+    await waitFor(() => expect(submitFn).toHaveBeenCalledTimes(1))
+    expect(submitFn.mock.calls[0][5]).toEqual(filesFixture)
+  })
+
+  it('success panel shows the routing breakdown when comments were re-routed', async () => {
+    const user = userEvent.setup()
+    const submitFn = vi.fn().mockResolvedValue({
+      ok: true,
+      posted: { inline: 2, fileLevel: 1, bodyFolded: 0 },
+    } as SubmitOutcome)
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn, files: filesFixture },
+    })
+
+    await user.click(screen.getByRole('radio', { name: /approve/i }))
+    await user.click(screen.getByRole('button', { name: /submit review/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Your review was submitted successfully.')).toBeInTheDocument()
+    })
+    const breakdown = screen.getByTestId('submit-outcome-breakdown')
+    expect(breakdown.textContent).toContain('2 posted inline')
+    expect(breakdown.textContent).toContain('1 posted as a file comment (line not in diff)')
+  })
+
+  it('breakdown includes body-folded comments when the outcome reports them', async () => {
+    const user = userEvent.setup()
+    const submitFn = vi.fn().mockResolvedValue({
+      ok: true,
+      posted: { inline: 0, fileLevel: 0, bodyFolded: 3 },
+    } as SubmitOutcome)
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn, files: filesFixture },
+    })
+
+    await user.click(screen.getByRole('radio', { name: /approve/i }))
+    await user.click(screen.getByRole('button', { name: /submit review/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('submit-outcome-breakdown')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('submit-outcome-breakdown').textContent)
+      .toContain('3 included in the review body (line not in diff)')
+  })
+
+  it('NO breakdown line when everything posted inline (calm success stays calm)', async () => {
+    const user = userEvent.setup()
+    const submitFn = vi.fn().mockResolvedValue({
+      ok: true,
+      posted: { inline: 2, fileLevel: 0, bodyFolded: 0 },
+    } as SubmitOutcome)
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn, files: filesFixture },
+    })
+
+    await user.click(screen.getByRole('radio', { name: /approve/i }))
+    await user.click(screen.getByRole('button', { name: /submit review/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Your review was submitted successfully.')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('submit-outcome-breakdown')).toBeNull()
+  })
+
+  it('legacy submitFn outcome WITHOUT posted still shows plain success', async () => {
+    const user = userEvent.setup()
+    const submitFn = vi.fn().mockResolvedValue({ ok: true } as SubmitOutcome)
+
+    render(VerdictStep, {
+      props: { prRef, commitId, store: makeStore(), prUrl, submitFn, files: filesFixture },
+    })
+
+    await user.click(screen.getByRole('radio', { name: /approve/i }))
+    await user.click(screen.getByRole('button', { name: /submit review/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Your review was submitted successfully.')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('submit-outcome-breakdown')).toBeNull()
+  })
+})

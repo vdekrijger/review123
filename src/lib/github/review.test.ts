@@ -40,7 +40,7 @@ describe('submitReview', () => {
 
     const result = await submitReview(ref, 'APPROVE', 'Looks good', [], commitId)
 
-    expect(result).toEqual({ ok: true })
+    expect(result).toEqual({ ok: true, posted: { inline: 0, fileLevel: 0, bodyFolded: 0 } })
     const sentBody = JSON.parse(f.mock.calls[0][1].body as string)
     expect(sentBody).toEqual({ commit_id: commitId, body: 'Looks good', event: 'APPROVE' })
     expect('comments' in sentBody).toBe(false)
@@ -222,7 +222,7 @@ describe('submitReview', () => {
     // Resolve first
     resolveFirst()
     const firstResult = await first
-    expect(firstResult).toEqual({ ok: true })
+    expect(firstResult).toMatchObject({ ok: true })
   })
 
   it('after completion a new submit works (flag cleared)', async () => {
@@ -234,7 +234,7 @@ describe('submitReview', () => {
     // Second submit after first completes
     const result = await submitReview(ref, 'APPROVE', '', [], commitId)
 
-    expect(result).toEqual({ ok: true })
+    expect(result).toMatchObject({ ok: true })
     expect(f.mock.calls.length).toBe(2)
   })
 
@@ -249,7 +249,7 @@ describe('submitReview', () => {
     // Second submit should NOT be blocked
     const result = await submitReview(ref, 'APPROVE', '', [], commitId)
 
-    expect(result).toEqual({ ok: true })
+    expect(result).toMatchObject({ ok: true })
     expect(f.mock.calls.length).toBe(2)
   })
 })
@@ -310,6 +310,362 @@ describe('submitReview — multi-line comment anchoring', () => {
 
     const sentBody = JSON.parse(f.mock.calls[0][1].body as string)
     expect(sentBody.comments[0].body).toBe(suggestionBody)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Off-diff re-routing — was the pinning repro for "one off-diff comment 422s
+// the ENTIRE review, losing the valid comments too". Now asserts the fix:
+// pre-submit split + file-level re-route + review-body fold + 422 retry net.
+// ---------------------------------------------------------------------------
+describe('submitReview — off-diff comment re-routing (was: whole-review 422 repro)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetInFlightForTest()
+  })
+
+  // The patch for src/foo.ts: RIGHT lines 1..4, LEFT lines 1..3.
+  const PATCH = '@@ -1,3 +1,4 @@\n context\n-removed\n+added\n+added2\n context'
+  const filesFixture = [{ filename: 'src/foo.ts', patch: PATCH }]
+
+  const REVIEWS_URL = 'https://api.github.com/repos/alice/widgets/pulls/42/reviews'
+  const COMMENTS_URL = 'https://api.github.com/repos/alice/widgets/pulls/42/comments'
+
+  /** GitHub-like: 422 the review POST when any comment line is off-diff (>4). */
+  function githubLikeFetch() {
+    return vi.fn().mockImplementation((url: string, init: RequestInit) => {
+      if (url === REVIEWS_URL && init.method === 'POST') {
+        const sent = JSON.parse(init.body as string) as { comments?: { line: number }[] }
+        const bad = (sent.comments ?? []).some((c) => c.line > 4)
+        return Promise.resolve(
+          bad
+            ? jsonResponse({
+                message: 'Unprocessable Entity',
+                errors: [
+                  {
+                    resource: 'PullRequestReviewComment',
+                    code: 'custom',
+                    field: 'pull_request_review_thread.line',
+                    message: 'pull_request_review_thread.line must be part of the diff',
+                  },
+                ],
+              }, {}, 422)
+            : jsonResponse({ id: 77 }, {}, 200),
+        )
+      }
+      // File-level comment posts + review PUT succeed
+      return Promise.resolve(jsonResponse({ id: 1 }, {}, 200))
+    })
+  }
+
+  it('off-diff draft is split out pre-submit: review POST carries only the inline comment; off-diff posts as a file-level comment', async () => {
+    const f = githubLikeFetch()
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [
+      makeDraft({ path: 'src/foo.ts', line: 3, side: 'RIGHT', body: 'Valid — line is in the diff' }),
+      makeDraft({ path: 'src/foo.ts', line: 99, side: 'RIGHT', body: 'Off-diff — line 99 is NOT in the diff' }),
+    ]
+    const result = await submitReview(ref, 'COMMENT', 'Overall', drafts, commitId, filesFixture)
+
+    expect(result).toEqual({ ok: true, posted: { inline: 1, fileLevel: 1, bodyFolded: 0 } })
+
+    // Call 1: review POST with ONLY the anchorable comment
+    expect(f.mock.calls[0][0]).toBe(REVIEWS_URL)
+    const reviewBody = JSON.parse(f.mock.calls[0][1].body as string)
+    expect(reviewBody.comments).toHaveLength(1)
+    expect(reviewBody.comments[0].line).toBe(3)
+
+    // Call 2: the off-diff draft as a file-level comment with the line prefix
+    expect(f.mock.calls.length).toBe(2)
+    expect(f.mock.calls[1][0]).toBe(COMMENTS_URL)
+    const fileComment = JSON.parse(f.mock.calls[1][1].body as string)
+    expect(fileComment).toMatchObject({
+      subject_type: 'file',
+      path: 'src/foo.ts',
+      commit_id: commitId,
+    })
+    expect(fileComment.line).toBeUndefined()
+    expect(fileComment.body).toBe(
+      '**Re: line 99** _(line not in the current diff)_ — Off-diff — line 99 is NOT in the diff',
+    )
+  })
+
+  it('LEFT-side and range anchoring both respect the split (range with off-diff endpoint → file comment)', async () => {
+    const f = githubLikeFetch()
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [
+      makeDraft({ path: 'src/foo.ts', line: 2, side: 'LEFT', body: 'Old-side line 2 is in-diff' }),
+      makeDraft({ path: 'src/foo.ts', line: 90, startLine: 3, side: 'RIGHT', body: 'Range end off-diff' }),
+    ]
+    const result = await submitReview(ref, 'COMMENT', '', drafts, commitId, filesFixture)
+
+    expect(result).toEqual({ ok: true, posted: { inline: 1, fileLevel: 1, bodyFolded: 0 } })
+    const reviewBody = JSON.parse(f.mock.calls[0][1].body as string)
+    expect(reviewBody.comments).toEqual([
+      { path: 'src/foo.ts', line: 2, side: 'LEFT', body: 'Old-side line 2 is in-diff' },
+    ])
+    const fileComment = JSON.parse(f.mock.calls[1][1].body as string)
+    expect(fileComment.body).toContain('**Re: lines 3–90**')
+  })
+
+  it('draft on a file with NO patch (binary) → file-level comment', async () => {
+    const f = githubLikeFetch()
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [makeDraft({ path: 'logo.png', line: 1, side: 'RIGHT', body: 'On a binary' })]
+    const result = await submitReview(ref, 'COMMENT', 'x', drafts, commitId, [
+      ...filesFixture,
+      { filename: 'logo.png', patch: undefined },
+    ])
+
+    expect(result).toEqual({ ok: true, posted: { inline: 0, fileLevel: 1, bodyFolded: 0 } })
+    const reviewBody = JSON.parse(f.mock.calls[0][1].body as string)
+    expect('comments' in reviewBody).toBe(false)
+  })
+
+  it('AI-authored off-diff draft keeps the 🤖 attribution inside the prefixed body', async () => {
+    const f = githubLikeFetch()
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [
+      makeDraft({ path: 'src/foo.ts', line: 99, side: 'RIGHT', body: 'Use a constant.', aiAuthored: true, aiReviewer: 'Security' }),
+    ]
+    await submitReview(ref, 'COMMENT', 'x', drafts, commitId, filesFixture)
+
+    const fileComment = JSON.parse(f.mock.calls[1][1].body as string)
+    expect(fileComment.body).toBe(
+      '**Re: line 99** _(line not in the current diff)_ — 🤖 _AI-suggested · Security_\n\nUse a constant.',
+    )
+  })
+
+  it('file-level comment POST failure → folded into the review body via PUT (never dropped)', async () => {
+    const f = vi.fn().mockImplementation((url: string, init: RequestInit) => {
+      if (url === COMMENTS_URL) {
+        return Promise.resolve(jsonResponse({ message: 'Unprocessable Entity' }, {}, 422))
+      }
+      if (url.endsWith('/reviews/77') && init.method === 'PUT') {
+        return Promise.resolve(jsonResponse({ id: 77 }, {}, 200))
+      }
+      return Promise.resolve(jsonResponse({ id: 77 }, {}, 200))
+    })
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [
+      makeDraft({ path: 'src/foo.ts', line: 3, side: 'RIGHT', body: 'Inline one' }),
+      makeDraft({ path: 'src/foo.ts', line: 99, side: 'RIGHT', body: 'Off-diff one' }),
+    ]
+    const result = await submitReview(ref, 'COMMENT', 'Overall', drafts, commitId, filesFixture)
+
+    expect(result).toEqual({ ok: true, posted: { inline: 1, fileLevel: 0, bodyFolded: 1 } })
+
+    const putCall = f.mock.calls.find((c) => (c[0] as string).endsWith('/reviews/77') && (c[1] as RequestInit).method === 'PUT')
+    expect(putCall).toBeDefined()
+    const putBody = JSON.parse(putCall![1].body as string)
+    expect(putBody.body).toContain('#### Comments on lines outside the diff')
+    expect(putBody.body).toContain('**src/foo.ts:99** — Off-diff one')
+    expect(putBody.body).toContain('Overall')
+  })
+
+  it('file-level failure AND body-fold failure → ok:false, honest message, nothing silently lost', async () => {
+    const f = vi.fn().mockImplementation((url: string, init: RequestInit) => {
+      if (url === REVIEWS_URL && init.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 77 }, {}, 200))
+      }
+      // comments POST and review PUT both fail
+      return Promise.resolve(jsonResponse({ message: 'nope' }, {}, 500))
+    })
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [makeDraft({ path: 'src/foo.ts', line: 99, side: 'RIGHT', body: 'Off-diff' })]
+    const result = await submitReview(ref, 'COMMENT', 'x', drafts, commitId, filesFixture)
+
+    expect(result).toMatchObject({ ok: false, kind: 'other' })
+    const { message } = result as { ok: false; message: string }
+    expect(message).toContain('Your review was posted')
+    expect(message).toContain('src/foo.ts:99')
+  })
+
+  it('no files provided → no split (legacy behavior): every draft rides the review POST', async () => {
+    const f = mockFetch(200, { id: 5 })
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [makeDraft({ path: 'src/foo.ts', line: 99999, side: 'RIGHT' })]
+    const result = await submitReview(ref, 'COMMENT', 'x', drafts, commitId)
+
+    expect(result).toEqual({ ok: true, posted: { inline: 1, fileLevel: 0, bodyFolded: 0 } })
+    const sentBody = JSON.parse(f.mock.calls[0][1].body as string)
+    expect(sentBody.comments).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Resilience net — the review POST 422s DESPITE the split (stale patch vs
+// server state): one retry with offenders re-routed, or body-folded when
+// GitHub's payload doesn't identify them.
+// ---------------------------------------------------------------------------
+describe('submitReview — 422 retry net', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetInFlightForTest()
+  })
+
+  const REVIEWS_URL = 'https://api.github.com/repos/alice/widgets/pulls/42/reviews'
+  const COMMENTS_URL = 'https://api.github.com/repos/alice/widgets/pulls/42/comments'
+  const PATCH = '@@ -1,3 +1,4 @@\n context\n-removed\n+added\n+added2\n context'
+  const filesFixture = [{ filename: 'src/foo.ts', patch: PATCH }, { filename: 'src/bar.ts', patch: PATCH }]
+
+  it('422 identifying comments[i] → that comment re-routes to a file-level comment; retry succeeds', async () => {
+    let reviewPosts = 0
+    const f = vi.fn().mockImplementation((url: string, init: RequestInit) => {
+      if (url === REVIEWS_URL && init.method === 'POST') {
+        reviewPosts++
+        if (reviewPosts === 1) {
+          return Promise.resolve(jsonResponse({
+            message: 'Unprocessable Entity',
+            errors: [{ resource: 'PullRequestReviewComment', message: 'comments[1] line must be part of the diff' }],
+          }, {}, 422))
+        }
+        return Promise.resolve(jsonResponse({ id: 77 }, {}, 200))
+      }
+      return Promise.resolve(jsonResponse({ id: 1 }, {}, 200))
+    })
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [
+      makeDraft({ path: 'src/foo.ts', line: 2, side: 'RIGHT', body: 'Fine' }),
+      makeDraft({ path: 'src/bar.ts', line: 3, side: 'RIGHT', body: 'Server says off-diff' }),
+    ]
+    const result = await submitReview(ref, 'COMMENT', 'x', drafts, commitId, filesFixture)
+
+    expect(result).toEqual({ ok: true, posted: { inline: 1, fileLevel: 1, bodyFolded: 0 } })
+    expect(reviewPosts).toBe(2)
+
+    // Retry carried only the surviving inline comment
+    const retryBody = JSON.parse(f.mock.calls[1][1].body as string)
+    expect(retryBody.comments).toEqual([
+      { path: 'src/foo.ts', line: 2, side: 'RIGHT', body: 'Fine' },
+    ])
+    // The offender went out as a file-level comment
+    const fileCall = f.mock.calls.find((c) => c[0] === COMMENTS_URL)
+    expect(fileCall).toBeDefined()
+    expect(JSON.parse(fileCall![1].body as string).path).toBe('src/bar.ts')
+  })
+
+  it('422 identifying a path in errors[] → all comments on that path re-route', async () => {
+    let reviewPosts = 0
+    const f = vi.fn().mockImplementation((url: string, init: RequestInit) => {
+      if (url === REVIEWS_URL && init.method === 'POST') {
+        reviewPosts++
+        if (reviewPosts === 1) {
+          return Promise.resolve(jsonResponse({
+            message: 'Unprocessable Entity',
+            errors: [{ resource: 'PullRequestReviewComment', path: 'src/bar.ts', message: 'line must be part of the diff' }],
+          }, {}, 422))
+        }
+        return Promise.resolve(jsonResponse({ id: 77 }, {}, 200))
+      }
+      return Promise.resolve(jsonResponse({ id: 1 }, {}, 200))
+    })
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [
+      makeDraft({ path: 'src/foo.ts', line: 2, side: 'RIGHT', body: 'Fine' }),
+      makeDraft({ path: 'src/bar.ts', line: 3, side: 'RIGHT', body: 'Stale anchor' }),
+    ]
+    const result = await submitReview(ref, 'COMMENT', 'x', drafts, commitId, filesFixture)
+
+    expect(result).toEqual({ ok: true, posted: { inline: 1, fileLevel: 1, bodyFolded: 0 } })
+  })
+
+  it('unidentifiable 422 → ONE retry with all line comments folded into the review body', async () => {
+    let reviewPosts = 0
+    const f = vi.fn().mockImplementation((url: string, init: RequestInit) => {
+      if (url === REVIEWS_URL && init.method === 'POST') {
+        reviewPosts++
+        if (reviewPosts === 1) {
+          return Promise.resolve(jsonResponse({ message: 'Unprocessable Entity' }, {}, 422))
+        }
+        return Promise.resolve(jsonResponse({ id: 77 }, {}, 200))
+      }
+      return Promise.resolve(jsonResponse({ id: 1 }, {}, 200))
+    })
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [
+      makeDraft({ path: 'src/foo.ts', line: 2, side: 'RIGHT', body: 'One' }),
+      makeDraft({ path: 'src/bar.ts', line: 3, side: 'RIGHT', body: 'Two' }),
+    ]
+    const result = await submitReview(ref, 'COMMENT', 'Overall', drafts, commitId, filesFixture)
+
+    expect(result).toEqual({ ok: true, posted: { inline: 0, fileLevel: 0, bodyFolded: 2 } })
+    expect(reviewPosts).toBe(2)
+
+    const retryBody = JSON.parse(f.mock.calls[1][1].body as string)
+    expect('comments' in retryBody).toBe(false)
+    expect(retryBody.body).toContain('#### Comments on lines outside the diff')
+    expect(retryBody.body).toContain('**src/foo.ts:2** — One')
+    expect(retryBody.body).toContain('**src/bar.ts:3** — Two')
+  })
+
+  it('retry is capped at ONE: a second 422 surfaces as invalid-anchor', async () => {
+    const f = mockFetch(422, { message: 'Unprocessable Entity' })
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [makeDraft({ path: 'src/foo.ts', line: 2, side: 'RIGHT' })]
+    const result = await submitReview(ref, 'COMMENT', 'x', drafts, commitId, filesFixture)
+
+    expect(result).toMatchObject({ ok: false, kind: 'invalid-anchor' })
+    expect(f.mock.calls.length).toBe(2) // initial + exactly one retry
+  })
+
+  it('"own pull request" 422 is NOT retried (self-approve mapping unchanged)', async () => {
+    const f = mockFetch(422, { message: 'Can not approve your own pull request' })
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [makeDraft({ path: 'src/foo.ts', line: 2, side: 'RIGHT' })]
+    const result = await submitReview(ref, 'APPROVE', '', drafts, commitId, filesFixture)
+
+    expect(result).toMatchObject({ ok: false, kind: 'self-approve' })
+    expect(f.mock.calls.length).toBe(1)
+  })
+
+  it('422 with NO comments in flight is not retried', async () => {
+    const f = mockFetch(422, { message: 'Some other validation error' })
+    vi.stubGlobal('fetch', f)
+
+    const result = await submitReview(ref, 'COMMENT', 'x', [], commitId, filesFixture)
+
+    expect(result).toMatchObject({ ok: false, kind: 'invalid-anchor' })
+    expect(f.mock.calls.length).toBe(1)
+  })
+
+  it('double-submit guard stays closed across the retry + re-route sequence', async () => {
+    let reviewPosts = 0
+    const f = vi.fn().mockImplementation((url: string, init: RequestInit) => {
+      if (url === REVIEWS_URL && init.method === 'POST') {
+        reviewPosts++
+        if (reviewPosts === 1) {
+          return Promise.resolve(jsonResponse({ message: 'Unprocessable Entity' }, {}, 422))
+        }
+        return Promise.resolve(jsonResponse({ id: 77 }, {}, 200))
+      }
+      return Promise.resolve(jsonResponse({ id: 1 }, {}, 200))
+    })
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [makeDraft({ path: 'src/foo.ts', line: 2, side: 'RIGHT' })]
+    const first = submitReview(ref, 'COMMENT', 'x', drafts, commitId, filesFixture)
+    const second = await submitReview(ref, 'COMMENT', 'x', drafts, commitId, filesFixture)
+
+    expect(second).toEqual({ ok: false, kind: 'other', message: 'A submission is already in progress.' })
+    const firstResult = await first
+    expect(firstResult.ok).toBe(true)
+
+    // And the guard clears afterwards
+    const third = await submitReview(ref, 'COMMENT', 'x', [], commitId, filesFixture)
+    expect(third.ok).toBe(true)
   })
 })
 

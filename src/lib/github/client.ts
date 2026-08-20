@@ -31,11 +31,13 @@ export async function ghFetch<T>(path: string, init: RequestInit = {}): Promise<
   if (res.ok) return (await res.json()) as T
   if (res.status === 422) {
     let msg = 'Unprocessable Entity'
+    let errors: unknown[] | undefined
     try {
-      const body = (await res.json()) as { message?: string }
+      const body = (await res.json()) as { message?: string; errors?: unknown[] }
       if (typeof body.message === 'string') msg = body.message
+      if (Array.isArray(body.errors)) errors = body.errors
     } catch { /* ignore parse errors */ }
-    throw new GithubApiError({ kind: 'unprocessable', message: msg })
+    throw new GithubApiError({ kind: 'unprocessable', message: msg, ...(errors ? { errors } : {}) })
   }
   if (res.status === 403 && res.headers.get('X-RateLimit-Remaining') !== '0') {
     // Read body to capture GitHub's message (e.g. org OAuth-app restriction messages)

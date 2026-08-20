@@ -22,6 +22,7 @@ import type { PrComment } from '../github/comments'
 import type { PrCommit } from '../github/commits'
 import type { Verdict, SubmitOutcome } from '../github/review'
 import type { Draft } from '../drafts/drafts.svelte'
+import { splitDraftsByAnchor, offDiffCommentBody } from '../github/anchorSplit'
 
 // ---------------------------------------------------------------------------
 // splitUnifiedDiff — split a raw unified diff into per-file patches
@@ -448,7 +449,10 @@ export const bitbucketProvider: ReviewProvider = {
   // submitReview
   //
   // Per-item submission (not atomic):
-  //   - Each draft → POST /pullrequests/:id/comments with inline {path, to|from}
+  //   - Anchorable drafts → POST /pullrequests/:id/comments with inline {path, to|from}
+  //   - Off-diff drafts (line not in the patch hunks) → non-inline comment with
+  //     a "**Re: path:line**" prefix; an inline post the server rejects retries
+  //     ONCE the same way — user text is never dropped
   //   - APPROVE   → POST /pullrequests/:id/approve
   //   - REQUEST_CHANGES → POST /pullrequests/:id/request-changes
   //   - Body text → POST /pullrequests/:id/comments (top-level general comment)
@@ -460,12 +464,32 @@ export const bitbucketProvider: ReviewProvider = {
     body: string,
     drafts: Draft[],
     _commitId: string,
+    files: readonly Pick<PrFile, 'filename' | 'patch'>[] = [],
   ): Promise<SubmitOutcome> {
     const base = repoPath(ref)
     const failures: string[] = []
 
+    // Split by anchorability: Bitbucket rejects inline comments whose line is
+    // not in the diff. Off-diff drafts post as NON-inline (top-level) comments
+    // with a "**Re: path:line** _(line not in the current diff)_" prefix so
+    // the intended anchor survives. Never drop user text.
+    const { inline: inlineDrafts, offDiff: offDiffDrafts } = splitDraftsByAnchor(drafts, files)
+    let inlinePosted = 0
+    let nonInlinePosted = 0
+
+    /** Post one draft as a non-inline (top-level) PR comment. */
+    function postNonInline(draft: Draft): Promise<unknown> {
+      return bbFetch(`${base}/pullrequests/${ref.number}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: { raw: offDiffCommentBody(draft, draft.body, { includePath: true }) },
+        }),
+      })
+    }
+
     // 1. Post inline comment drafts
-    for (const draft of drafts) {
+    for (const draft of inlineDrafts) {
       try {
         const inlinePayload: Record<string, unknown> = {
           path: draft.path,
@@ -484,9 +508,28 @@ export const bitbucketProvider: ReviewProvider = {
             inline: inlinePayload,
           }),
         })
+        inlinePosted++
+      } catch (err) {
+        // Resilience net: the split said this line anchors, but the server
+        // disagreed. Retry ONCE as a non-inline comment — text preserved.
+        try {
+          await postNonInline(draft)
+          nonInlinePosted++
+        } catch {
+          const msg = err instanceof Error ? err.message : String(err)
+          failures.push(`inline comment on ${draft.path}:${draft.line} — ${msg}`)
+        }
+      }
+    }
+
+    // 1b. Off-diff drafts → non-inline comments
+    for (const draft of offDiffDrafts) {
+      try {
+        await postNonInline(draft)
+        nonInlinePosted++
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        failures.push(`inline comment on ${draft.path}:${draft.line} — ${msg}`)
+        failures.push(`comment on ${draft.path}:${draft.line} (line not in diff) — ${msg}`)
       }
     }
 
@@ -536,7 +579,7 @@ export const bitbucketProvider: ReviewProvider = {
       }
     }
 
-    return { ok: true }
+    return { ok: true, posted: { inline: inlinePosted, fileLevel: nonInlinePosted, bodyFolded: 0 } }
   },
 
   // -------------------------------------------------------------------------

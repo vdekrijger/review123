@@ -800,7 +800,7 @@ describe('submitReview', () => {
     }
   })
 
-  it('returns partial failure outcome enumerating failed drafts', async () => {
+  it('returns partial failure outcome enumerating failed drafts (positioned AND fallback both fail)', async () => {
     let callCount = 0
     const f = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       callCount++
@@ -808,8 +808,10 @@ describe('submitReview', () => {
         // MR meta fetch — success
         return Promise.resolve(jsonResponse(MR_WITH_DIFF_REFS))
       }
-      // Discussion POSTs — second one fails
-      if (callCount === 3) {
+      // Discussion POSTs — the second draft's positioned post (call 3) fails,
+      // and so does its position-less fallback (call 4): a TOTAL failure for
+      // that draft, which must be enumerated.
+      if (callCount === 3 || callCount === 4) {
         return Promise.resolve(jsonResponse({ message: 'invalid position' }, {}, 422))
       }
       return Promise.resolve(jsonResponse({ id: callCount }))
@@ -827,6 +829,56 @@ describe('submitReview', () => {
       expect(result.message).toContain('1 of 2')
       expect(result.message).toContain('src/b.ts:2')
     }
+  })
+
+  it('positioned discussion rejected by the server → retried ONCE as a position-less note (text preserved)', async () => {
+    let callCount = 0
+    const f = vi.fn().mockImplementation(() => {
+      callCount++
+      if (callCount === 1) return Promise.resolve(jsonResponse(MR_WITH_DIFF_REFS))
+      if (callCount === 2) return Promise.resolve(jsonResponse({ message: 'invalid position' }, {}, 422))
+      return Promise.resolve(jsonResponse({ id: callCount }))
+    })
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [makeDraft({ path: 'src/a.ts', line: 7, body: 'My note' })]
+    const result = await gitlabProvider.submitReview(REF, 'COMMENT', '', drafts, 'head222')
+
+    expect(result).toEqual({ ok: true, posted: { inline: 0, fileLevel: 1, bodyFolded: 0 } })
+    // The fallback POST is position-less and carries the path:line prefix
+    const fallbackBody = JSON.parse(f.mock.calls[2][1].body as string)
+    expect(fallbackBody.position).toBeUndefined()
+    expect(fallbackBody.body).toBe('**Re: src/a.ts:7** _(line not in the current diff)_ — My note')
+  })
+
+  it('off-diff draft (files provided) posts as a position-less discussion directly', async () => {
+    // Patch: RIGHT lines 1..4
+    const PATCH = '@@ -1,3 +1,4 @@\n context\n-removed\n+added\n+added2\n context'
+    let callCount = 0
+    const f = vi.fn().mockImplementation(() => {
+      callCount++
+      if (callCount === 1) return Promise.resolve(jsonResponse(MR_WITH_DIFF_REFS))
+      return Promise.resolve(jsonResponse({ id: callCount }))
+    })
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [
+      makeDraft({ path: 'src/a.ts', line: 2, body: 'In-diff' }),
+      makeDraft({ path: 'src/a.ts', line: 99, body: 'Off-diff' }),
+    ]
+    const result = await gitlabProvider.submitReview(
+      REF, 'COMMENT', '', drafts, 'head222',
+      [{ filename: 'src/a.ts', patch: PATCH }],
+    )
+
+    expect(result).toEqual({ ok: true, posted: { inline: 1, fileLevel: 1, bodyFolded: 0 } })
+    // Call 2: positioned discussion for the in-diff draft
+    const positioned = JSON.parse(f.mock.calls[1][1].body as string)
+    expect(positioned.position).toMatchObject({ new_line: 2 })
+    // Call 3: position-less discussion for the off-diff draft, prefix intact
+    const positionless = JSON.parse(f.mock.calls[2][1].body as string)
+    expect(positionless.position).toBeUndefined()
+    expect(positionless.body).toBe('**Re: src/a.ts:99** _(line not in the current diff)_ — Off-diff')
   })
 
   it('returns error when MR meta fetch fails', async () => {
