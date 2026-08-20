@@ -26,6 +26,7 @@
   import { registerSymbolSource, unregisterSymbolSource, currentSymbolIndex } from '../lib/symbols/symbolSources'
   import { resolveClickedToken } from '../lib/symbols/clickToken'
   import { jumpToDiffLine } from '../lib/symbols/jumpToLine'
+  import { currentRepoSearchContext, searchRepoForSymbol } from '../lib/symbols/repoSearch'
   import type { SymbolDefinition, SymbolReference, DiffSide } from '../lib/symbols/symbolIndex'
 
   /** A skill finding scoped to a specific line in this file */
@@ -703,6 +704,12 @@
   function handleSymbolJump(path: string, line: number, side: DiffSide) {
     jumpToDiffLine(path, line, side)
   }
+
+  // Tier 2 repo search context: provider + owner/repo come from the router's
+  // review route (no prop threading needed), head SHA from the existing
+  // currentHeadSha prop. null (demo route, no head SHA, or a provider without
+  // code search — GitLab/Bitbucket today) → the popover omits the action.
+  const repoSearchCtx = $derived(currentRepoSearchContext(currentHeadSha))
 </script>
 
 <article class="file-diff" class:is-collapsed={collapsed} class:test-dim={isTest && testFileDisplay === 'dim'} class:test-highlight={isTest && testFileDisplay === 'highlight'}>
@@ -866,15 +873,26 @@
          #file-<slug> scroll mechanism (jumpToDiffLine), so no InspectStep
          wiring is needed. -->
     {#if symbolPopover}
+      <!-- The optional chains are NOT redundant: closing the popover nulls
+           `symbolPopover` and these @const deriveds re-evaluate during the
+           SAME flush that tears the branch down — a bare `.symbol` there
+           throws mid-flush and strands the popover DOM. -->
+      {@const sym = symbolPopover?.symbol ?? ''}
+      {@const spDefs = symbolPopover?.definitions ?? []}
+      {@const spRefs = symbolPopover?.references ?? []}
+      {@const spX = symbolPopover?.x ?? 0}
+      {@const spY = symbolPopover?.y ?? 0}
+      {@const searchCtx = repoSearchCtx}
       <SymbolPopover
-        symbol={symbolPopover.symbol}
-        definitions={symbolPopover.definitions}
-        references={symbolPopover.references}
-        x={symbolPopover.x}
-        y={symbolPopover.y}
+        symbol={sym}
+        definitions={spDefs}
+        references={spRefs}
+        x={spX}
+        y={spY}
         currentFile={file.filename}
         onJump={handleSymbolJump}
         onClose={() => (symbolPopover = null)}
+        onSearchRepo={searchCtx && sym ? () => searchRepoForSymbol(sym, searchCtx) : null}
       />
     {/if}
 

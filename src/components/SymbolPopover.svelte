@@ -16,8 +16,17 @@
    * Interaction idioms follow the review-command menu (VerdictStep): Escape
    * closes, focus is moved into the popover on open, and focus leaving the
    * popover closes it.
+   *
+   * Tier 2 adds an on-demand "In repo" section: a [Search repo] button (never
+   * automatic — the code-search API allows ~10 searches/min) that finds call
+   * points OUTSIDE the PR's files via lib/symbols/repoSearch. Results are
+   * NON-clickable (those files aren't in the diff view) with a copyable path;
+   * a repo-found definition upgrades the "not in the changed files" state.
+   * The section only renders when the provider supports code search
+   * (onSearchRepo non-null — capability by method presence).
    */
   import type { SymbolDefinition, SymbolReference, DiffSide } from '../lib/symbols/symbolIndex'
+  import type { RepoSearchOutcome } from '../lib/symbols/repoSearch'
 
   interface Props {
     symbol: string
@@ -30,9 +39,15 @@
     currentFile: string
     onJump: (file: string, line: number, side: DiffSide) => void
     onClose: () => void
+    /**
+     * Runs the repo-wide search for this symbol (Tier 2). null → the provider
+     * has no code search (or no head SHA is known) and the "In repo" section
+     * is omitted entirely.
+     */
+    onSearchRepo?: (() => Promise<RepoSearchOutcome>) | null
   }
 
-  let { symbol, definitions, references, x, y, currentFile, onJump, onClose }: Props = $props()
+  let { symbol, definitions, references, x, y, currentFile, onJump, onClose, onSearchRepo = null }: Props = $props()
 
   let dialogEl = $state<HTMLElement | null>(null)
 
@@ -68,6 +83,71 @@
     onClose()
     onJump(file, line, side)
   }
+
+  // ---- "In repo" section (Tier 2) ----------------------------------------
+  type RepoPhase =
+    | { phase: 'idle' }
+    | { phase: 'loading' }
+    | { phase: 'done'; outcome: RepoSearchOutcome }
+  let repoState = $state<RepoPhase>({ phase: 'idle' })
+
+  // Reset when the popover is retargeted to another symbol without unmount
+  // (clicking a different identifier replaces the props, not the component).
+  $effect(() => {
+    void symbol
+    repoState = { phase: 'idle' }
+  })
+
+  async function runRepoSearch() {
+    if (!onSearchRepo || repoState.phase === 'loading') return
+    const forSymbol = symbol
+    // The click leaves focus on the [Search repo] button, and the loading
+    // state UNMOUNTS that button. Removing the focused element fires focusout
+    // with relatedTarget null, which the focus-leave idiom would read as
+    // "focus left the popover" — closing it mid-search. Park focus back on
+    // the dialog BEFORE the button unmounts.
+    dialogEl?.focus()
+    repoState = { phase: 'loading' }
+    const outcome = await onSearchRepo()
+    // Drop a stale result if the popover was retargeted mid-flight.
+    if (symbol !== forSymbol) return
+    repoState = { phase: 'done', outcome }
+  }
+
+  const repoOutcome = $derived(repoState.phase === 'done' ? repoState.outcome : null)
+  const repoOk = $derived(repoOutcome?.ok === true ? repoOutcome : null)
+  const repoError = $derived(repoOutcome && !repoOutcome.ok ? repoOutcome.message : null)
+
+  /** Repo-found definitions — shown in the Definition section, tagged "repo". */
+  const repoDefs = $derived(repoOk ? repoOk.definitions.slice(0, MAX_DEFS_SHOWN) : [])
+
+  const repoRefsByFile = $derived.by(() => {
+    const map = new Map<string, SymbolReference[]>()
+    if (!repoOk) return map
+    const ordered = [...repoOk.references].sort((a, b) => {
+      if (a.file !== b.file) return a.file < b.file ? -1 : 1
+      return a.line - b.line
+    })
+    for (const r of ordered) {
+      const arr = map.get(r.file) ?? []
+      arr.push(r)
+      map.set(r.file, arr)
+    }
+    return map
+  })
+
+  // Copy-path state for repo result files (they aren't in the diff view, so
+  // the path itself is the take-away).
+  let copiedPath = $state<string | null>(null)
+  async function copyRepoPath(path: string) {
+    await navigator.clipboard.writeText(path)
+    copiedPath = path
+    setTimeout(() => {
+      if (copiedPath === path) copiedPath = null
+    }, 1500)
+  }
+
+  const NOT_IN_DIFF_HINT = "Not in this PR's diff"
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
@@ -116,7 +196,7 @@
 
   <section class="defs" aria-label="Definition of {symbol}">
     <h4>Definition</h4>
-    {#if shownDefs.length > 0}
+    {#if shownDefs.length > 0 || repoDefs.length > 0}
       {#each shownDefs as def (def.file + '|' + def.side + '|' + def.line)}
         <div class="def-entry">
           <pre class="def-snippet">{def.snippet}</pre>
@@ -132,6 +212,14 @@
       {#if definitions.length > MAX_DEFS_SHOWN}
         <p class="more-note">+{definitions.length - MAX_DEFS_SHOWN} more definition{definitions.length - MAX_DEFS_SHOWN === 1 ? '' : 's'}</p>
       {/if}
+      <!-- Repo-found definitions (Tier 2) — outside the PR's files, so the
+           location is copy-only, never a jump target. -->
+      {#each repoDefs as def (def.file + '|' + def.line)}
+        <div class="def-entry" data-testid="repo-definition">
+          <pre class="def-snippet">{def.snippet}</pre>
+          <span class="loc" title={NOT_IN_DIFF_HINT}>{def.file}:{def.line} <span class="repo-tag">repo</span></span>
+        </div>
+      {/each}
     {:else}
       <p class="not-found">Definition not in the changed files of this PR.</p>
     {/if}
@@ -164,6 +252,44 @@
       </div>
     {/if}
   </section>
+
+  {#if onSearchRepo}
+    <section class="repo" aria-label="Call points in the repo for {symbol}">
+      <h4>In repo{repoOk ? ` (${repoOk.references.length})` : ''}</h4>
+      {#if repoState.phase === 'loading'}
+        <p class="repo-status" role="status">Searching repo…</p>
+      {:else if repoOk}
+        {#if repoOk.references.length === 0}
+          <p class="not-found">No other call points found in the repo.</p>
+        {:else}
+          <div class="ref-list">
+            {#each [...repoRefsByFile.entries()] as [file, refs] (file)}
+              <div class="ref-file">
+                <div class="ref-file-name repo-file">
+                  <code>{file}</code>
+                  <button class="copy-repo-path" type="button" aria-label="Copy path {file}" onclick={() => copyRepoPath(file)}>
+                    {#if copiedPath === file}<span class="copy-done">Copied</span>{:else}<span aria-hidden="true">⎘</span>{/if}
+                  </button>
+                </div>
+                {#each refs as ref (ref.line)}
+                  <div class="ref-row static" title={NOT_IN_DIFF_HINT}>
+                    <span class="ref-line">{ref.line}</span>
+                    <span class="ref-snippet">{ref.snippet}</span>
+                  </div>
+                {/each}
+              </div>
+            {/each}
+          </div>
+        {/if}
+        <p class="repo-footnote">Repo search uses the default branch index; results re-checked at this PR's head.</p>
+      {:else}
+        {#if repoError}
+          <p class="repo-error" role="alert">{repoError}</p>
+        {/if}
+        <button class="search-repo-btn" type="button" onclick={runRepoSearch}>Search repo</button>
+      {/if}
+    </section>
+  {/if}
 </div>
 
 <style>
@@ -306,4 +432,67 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+
+  /* ---- "In repo" section (Tier 2) ---- */
+  .search-repo-btn {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
+    padding: 0.2rem 0.55rem;
+    font-size: 0.72rem;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .search-repo-btn:hover {
+    background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+    border-color: color-mix(in srgb, var(--accent) 50%, var(--hairline));
+  }
+
+  .repo-status {
+    margin: 0;
+    font-style: italic;
+    color: var(--text-muted);
+  }
+
+  .repo-error {
+    margin: 0 0 0.35rem;
+    color: var(--legend-removed-color);
+  }
+
+  .repo-footnote {
+    margin: 0.4rem 0 0;
+    font-size: 0.68rem;
+    color: var(--text-muted);
+  }
+
+  .repo-tag {
+    display: inline-block;
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    padding: 0 0.3rem;
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    color: var(--text-muted);
+    background: var(--surface);
+  }
+
+  .ref-file-name.repo-file {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .copy-repo-path {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    padding: 0 0.15rem;
+    font-size: 0.78rem;
+    line-height: 1;
+    border-radius: 3px;
+  }
+  .copy-repo-path:hover { color: var(--text); }
+  .copy-done { font-size: 0.62rem; color: var(--legend-added-color); font-weight: 600; }
 </style>

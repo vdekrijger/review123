@@ -135,3 +135,114 @@ test('inspect: clicking an identifier opens the symbol popover with definition +
   await keywordToken.click()
   await expect(popover).toBeHidden()
 })
+
+// ---------------------------------------------------------------------------
+// Tier 2: on-demand "Search repo" — call points OUTSIDE the PR's files via the
+// stubbed /search/code endpoint + a contents fetch at the PR's head SHA.
+// ---------------------------------------------------------------------------
+
+// A repo file OUTSIDE the PR that calls computeTotal (served at HEAD_SHA).
+const OTHER_TS = [
+  "import { computeTotal } from './util'",
+  'export function report(xs: number[]) {',
+  '  return computeTotal(xs) * 2',
+  '}',
+].join('\n')
+
+test('inspect: Search repo lists call points outside the PR files', async ({ page }) => {
+  await page.route('**/*posthog.com/**', (route) => route.abort())
+  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+
+  await page.route('**/api.github.com/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}`) {
+      return route.fulfill({
+        json: {
+          title: 'Symbol nav test PR',
+          state: 'open', merged: false, body: null,
+          base: { sha: BASE_SHA, repo: { private: false } },
+          head: { sha: HEAD_SHA },
+          changed_files: 2,
+        },
+      })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) {
+      return route.fulfill({
+        json: [
+          { filename: 'src/util.ts', status: 'modified', patch: UTIL_PATCH, additions: 3, deletions: 0 },
+          { filename: 'src/app.ts', status: 'modified', patch: APP_PATCH, additions: 1, deletions: 0 },
+        ],
+      })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/commits/${HEAD_SHA}/check-runs`) {
+      return route.fulfill({ json: { total_count: 0, check_runs: [] } })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/comments`) {
+      return route.fulfill({ json: [] })
+    }
+    // Code search: one hit OUTSIDE the PR + one hit that IS a PR file (must be
+    // excluded — Tier 1 already lists its call points).
+    if (path === '/search/code') {
+      return route.fulfill({
+        json: {
+          total_count: 2,
+          items: [{ path: 'src/other.ts' }, { path: 'src/app.ts' }],
+        },
+      })
+    }
+    // The search result file fetched at the PR's HEAD SHA.
+    if (path === `/repos/${OWNER}/${REPO}/contents/src/other.ts`) {
+      expect(url.searchParams.get('ref')).toBe(HEAD_SHA)
+      return route.fulfill({
+        json: { content: Buffer.from(OTHER_TS, 'utf-8').toString('base64'), encoding: 'base64' },
+      })
+    }
+    return route.fulfill({ status: 404, json: { message: 'Not Found' } })
+  })
+
+  await page.route('**/api.deepseek.com/**', (route) => route.abort())
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, { deepseekKey: '', diffMode: 'unified', railCollapsed: true, focusMode: 'off' })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Symbol nav test PR/i })).toBeVisible({
+    timeout: 10_000,
+  })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Open the popover on the computeTotal definition token in util.ts.
+  const defToken = page
+    .locator('#file-src-util-ts .diff-line-content span')
+    .filter({ hasText: /^computeTotal$/ })
+    .first()
+  await expect(defToken).toBeVisible({ timeout: 10_000 })
+  await defToken.click()
+
+  const popover = page.getByTestId('symbol-popover')
+  await expect(popover).toBeVisible()
+
+  // The "In repo" section is idle: on-demand button, nothing searched yet.
+  await expect(popover.getByText('In repo')).toBeVisible()
+  const searchBtn = popover.getByRole('button', { name: 'Search repo' })
+  await expect(searchBtn).toBeVisible()
+
+  await searchBtn.click()
+
+  // Results: grouped under the out-of-PR file, with real line + snippet rows.
+  await expect(popover.getByText('In repo (2)')).toBeVisible({ timeout: 10_000 })
+  await expect(popover.locator('.repo-file', { hasText: 'src/other.ts' })).toBeVisible()
+  const repoRows = popover.locator('section.repo .ref-row.static')
+  await expect(repoRows).toHaveCount(2)
+  await expect(repoRows.nth(1)).toContainText('return computeTotal(xs) * 2')
+  // Rows are honest about not being jumpable (these files aren't in the diff).
+  await expect(repoRows.nth(0)).toHaveAttribute('title', "Not in this PR's diff")
+  // The PR's own file (src/app.ts) was excluded from the repo results.
+  await expect(popover.locator('section.repo .repo-file', { hasText: 'src/app.ts' })).toHaveCount(0)
+  // Honest footnote about the default-branch index + head-SHA re-check.
+  await expect(popover.getByText(/default branch index; results re-checked/)).toBeVisible()
+})

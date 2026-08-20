@@ -39,6 +39,15 @@ export function unregisterSymbolSource(filename: string): void {
   cached = null
 }
 
+/**
+ * The filenames currently registered (i.e. the PR files rendered in this
+ * review). Repo search (Tier 2) excludes these from its results — call points
+ * inside the PR's own files are already listed by the Tier 1 index.
+ */
+export function registeredSymbolFilenames(): Set<string> {
+  return new Set(entries.keys())
+}
+
 /** The symbol index over all currently registered files (lazily rebuilt). */
 export function currentSymbolIndex(): SymbolIndex {
   if (!cached) {
