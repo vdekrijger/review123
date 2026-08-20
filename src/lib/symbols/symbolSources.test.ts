@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
   registerSymbolSource,
   unregisterSymbolSource,
@@ -6,6 +6,7 @@ import {
   registeredSymbolFilenames,
   _resetSymbolSourcesForTest,
 } from './symbolSources'
+import { _installTreeSitterParserForTest, _resetTreeSitterForTest } from './treeSitter'
 
 const utilFile = {
   filename: 'src/util.ts',
@@ -18,6 +19,10 @@ const appFile = {
 
 beforeEach(() => {
   _resetSymbolSourcesForTest()
+})
+
+afterEach(() => {
+  _resetTreeSitterForTest()
 })
 
 describe('symbolSources registry', () => {
@@ -67,6 +72,20 @@ describe('symbolSources registry', () => {
     expect(currentSymbolIndex()).toBe(first) // cached instance
     registerSymbolSource(appFile)
     expect(currentSymbolIndex()).not.toBe(first) // invalidated + rebuilt
+  })
+
+  it('a tree-sitter backend upgrade invalidates the cached index', () => {
+    registerSymbolSource(utilFile)
+    const first = currentSymbolIndex()
+    expect(currentSymbolIndex()).toBe(first) // cached instance
+    // A grammar finishing its load fires the upgrade hook — the registry must
+    // drop its heuristic-built cache so the NEXT lookup rebuilds syntax-aware.
+    // (The stub parser returns null → the rebuild still answers via the
+    // heuristic fallback, exercising both halves of the ladder.)
+    _installTreeSitterParserForTest('typescript', () => null)
+    const rebuilt = currentSymbolIndex()
+    expect(rebuilt).not.toBe(first)
+    expect(rebuilt.definitionsOf('sharedThing')).toHaveLength(1)
   })
 
   it('unregistering an unknown file is a no-op', () => {
