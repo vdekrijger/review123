@@ -24,6 +24,7 @@ import type { PrCommit } from '../github/commits'
 import type { Verdict, SubmitOutcome } from '../github/review'
 import type { ReplyOutcome } from '../github/replies'
 import type { Draft } from '../drafts/drafts.svelte'
+import { splitDraftsByAnchor, offDiffCommentBody } from '../github/anchorSplit'
 
 // ---------------------------------------------------------------------------
 // URL parsing
@@ -652,6 +653,7 @@ export const gitlabProvider: ReviewProvider = {
     body: string,
     drafts: Draft[],
     commitId: string,
+    files: readonly Pick<PrFile, 'filename' | 'patch'>[] = [],
   ): Promise<SubmitOutcome> {
     const pid = projectId(ref)
 
@@ -679,10 +681,29 @@ export const gitlabProvider: ReviewProvider = {
     // The commitId parameter is the head SHA for positioning; use the MR's head if not provided.
     const effectiveHeadSha = commitId || diffRefs.head_sha
 
+    // ---------- Split drafts by anchorability (off-diff re-routing) ----------
+    // GitLab rejects positioned discussions whose line is not in the MR diff.
+    // Off-diff drafts go out as POSITION-LESS discussions instead, with a
+    // "**Re: path:line** _(line not in the current diff)_" prefix so the
+    // intended anchor survives. Never drop user text.
+    const { inline: inlineDrafts, offDiff: offDiffDrafts } = splitDraftsByAnchor(drafts, files)
+
+    /** Post one draft as a position-less discussion (plain note thread). */
+    function postPositionless(draft: Draft): Promise<unknown> {
+      return glFetch(`/projects/${pid}/merge_requests/${ref.number}/discussions`, {
+        method: 'POST',
+        body: JSON.stringify({
+          body: offDiffCommentBody(draft, draft.body, { includePath: true }),
+        }),
+      })
+    }
+
     // ---------- Submit per-draft positioned discussions ----------
     const failedDrafts: Array<{ path: string; line: number; error: string }> = []
+    let inlinePosted = 0
+    let positionlessPosted = 0
 
-    for (const draft of drafts) {
+    for (const draft of inlineDrafts) {
       try {
         const position: Record<string, unknown> = {
           base_sha: diffRefs.base_sha,
@@ -707,6 +728,29 @@ export const gitlabProvider: ReviewProvider = {
             position,
           }),
         })
+        inlinePosted++
+      } catch (err) {
+        // Resilience net: the split said this line anchors, but the server
+        // disagreed (stale patch vs server state). Retry ONCE as a
+        // position-less discussion — same off-diff prefix, text preserved.
+        try {
+          await postPositionless(draft)
+          positionlessPosted++
+        } catch {
+          failedDrafts.push({
+            path: draft.path,
+            line: draft.line,
+            error: mapGitlabError(err, 'unknown error'),
+          })
+        }
+      }
+    }
+
+    // ---------- Off-diff drafts → position-less discussions ----------
+    for (const draft of offDiffDrafts) {
+      try {
+        await postPositionless(draft)
+        positionlessPosted++
       } catch (err) {
         failedDrafts.push({
           path: draft.path,
@@ -782,7 +826,7 @@ export const gitlabProvider: ReviewProvider = {
       }
     }
 
-    return { ok: true }
+    return { ok: true, posted: { inline: inlinePosted, fileLevel: positionlessPosted, bodyFolded: 0 } }
   },
 
   /**

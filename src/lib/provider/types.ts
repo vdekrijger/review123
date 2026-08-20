@@ -134,13 +134,22 @@ export interface ReviewProvider {
   /** Compare two commits and return the list of changed files */
   compareCommits(repo: { owner: string; repo: string }, base: string, head: string): Promise<PrFile[]>
 
-  /** Submit a review with the given verdict, body, and inline comment drafts */
+  /**
+   * Submit a review with the given verdict, body, and inline comment drafts.
+   *
+   * `files` (the PR's changed files with patch text), when provided, lets the
+   * provider split drafts whose line is NOT in the diff hunks away from the
+   * line-anchored path up front and re-route them (file-level comments /
+   * position-less notes / body folding) instead of letting one bad anchor
+   * fail the submission. Empty/omitted → no split (legacy behavior).
+   */
   submitReview(
     ref: PrRefX,
     verdict: Verdict,
     body: string,
     drafts: Draft[],
     commitId: string,
+    files?: readonly Pick<PrFile, 'filename' | 'patch'>[],
   ): Promise<SubmitOutcome>
 
   /** Whether the provider has a token configured and what hint to show */

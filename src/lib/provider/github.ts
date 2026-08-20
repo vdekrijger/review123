@@ -346,8 +346,9 @@ export const githubProvider: ReviewProvider = {
     body: string,
     drafts: Draft[],
     commitId: string,
+    files?: readonly Pick<PrFile, 'filename' | 'patch'>[],
   ): Promise<SubmitOutcome> {
-    return submitReview(toRef(ref), verdict, body, drafts, commitId)
+    return submitReview(toRef(ref), verdict, body, drafts, commitId, files)
   },
 
   replyToThread(ref: PrRefX, root: PrComment, body: string): Promise<ReplyOutcome> {

@@ -157,6 +157,60 @@ describe('buildReviewPayload', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Off-diff coherence — with `files` the payload applies the SAME split as
+// submitReview: only anchorable drafts ride comments[]; off-diff drafts fold
+// into the body's marked section (a one-shot command cannot post file-level
+// comments, and leaving them inline would make the exported command 422).
+// ---------------------------------------------------------------------------
+describe('buildReviewPayload — off-diff split (files provided)', () => {
+  // RIGHT lines 1..4 in this patch
+  const PATCH = '@@ -1,3 +1,4 @@\n context\n-removed\n+added\n+added2\n context'
+  const FILES = [{ filename: 'src/a.ts', patch: PATCH }]
+
+  it('off-diff draft moves from comments[] into the body fold section', () => {
+    const p = buildReviewPayload(input({
+      files: FILES,
+      drafts: [
+        draft({ line: 3, body: 'In-diff comment' }),
+        draft({ line: 99, body: 'Off-diff comment' }),
+      ],
+    }))
+    expect(p.comments).toEqual([
+      { path: 'src/a.ts', line: 3, side: 'RIGHT', body: 'In-diff comment' },
+    ])
+    expect(p.body).toContain('#### Comments on lines outside the diff')
+    expect(p.body).toContain('**src/a.ts:99** — Off-diff comment')
+    expect(p.body).toContain('Overall: nice work.')
+  })
+
+  it('ALL drafts off-diff → comments key omitted entirely, everything folded', () => {
+    const p = buildReviewPayload(input({
+      files: FILES,
+      drafts: [draft({ line: 99, body: 'Only off-diff' })],
+    }))
+    expect('comments' in p).toBe(false)
+    expect(p.body).toContain('**src/a.ts:99** — Only off-diff')
+  })
+
+  it('without files the payload is unchanged (no split, no fold)', () => {
+    const p = buildReviewPayload(input({
+      drafts: [draft({ line: 99, body: 'Anywhere' })],
+    }))
+    expect(p.comments).toHaveLength(1)
+    expect(p.body).toBe('Overall: nice work.')
+  })
+
+  it('AI-authored off-diff draft keeps the 🤖 marker inside the folded body', () => {
+    const p = buildReviewPayload(input({
+      files: FILES,
+      drafts: [draft({ line: 99, body: 'Check this.', aiAuthored: true, aiReviewer: 'Security' })],
+    }))
+    expect(p.body).toContain('🤖 _AI-suggested · Security_')
+    expect(p.body).toContain('Check this.')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // The 🤖 marker travels through all three console formats for AI-authored drafts
 // ---------------------------------------------------------------------------
 describe('AI-authored marker across console formats', () => {

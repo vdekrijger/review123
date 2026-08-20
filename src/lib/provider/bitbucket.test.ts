@@ -792,6 +792,19 @@ describe('compareCommits', () => {
 // ---------------------------------------------------------------------------
 
 describe('submitReview', () => {
+  const makeDraft = (overrides: Partial<{
+    path: string; line: number; side: 'LEFT' | 'RIGHT'; body: string; startLine?: number
+  }> = {}) => ({
+    prKey: 'bitbucket:myws/myrepo#42',
+    path: 'src/foo.ts',
+    line: 10,
+    side: 'RIGHT' as const,
+    body: 'Nice work',
+    n: 0,
+    updatedAt: Date.now(),
+    ...overrides,
+  })
+
   const drafts = [
     {
       prKey: 'myws/myrepo#42',
@@ -896,12 +909,12 @@ describe('submitReview', () => {
     expect(result.ok).toBe(true)
   })
 
-  it('returns partial failure outcome when one draft fails', async () => {
+  it('returns partial failure outcome when one draft fails (inline AND fallback both fail)', async () => {
     let callCount = 0
     mockBbFetch.mockImplementation(async (url: string) => {
       callCount++
-      // Fail the first comment post
-      if (url.includes('/comments') && callCount === 1) {
+      // Fail the first draft's inline post AND its non-inline fallback retry
+      if (url.includes('/comments') && callCount <= 2) {
         throw new BitbucketApiError({ kind: 'server', status: 500 })
       }
       return {}
@@ -912,6 +925,51 @@ describe('submitReview', () => {
     if (result.ok) throw new Error('expected failure')
     expect(result.kind).toBe('other')
     expect(result.message).toMatch(/partial.*failure|1 item/i)
+  })
+
+  it('inline post rejected by the server → retried ONCE as a non-inline comment (text preserved)', async () => {
+    let callCount = 0
+    mockBbFetch.mockImplementation(async (url: string) => {
+      callCount++
+      if (url.includes('/comments') && callCount === 1) {
+        throw new BitbucketApiError({ kind: 'server', status: 500 })
+      }
+      return {}
+    })
+
+    const oneDraft = [makeDraft({ path: 'src/a.ts', line: 7, body: 'My note' })]
+    const result = await bitbucketProvider.submitReview(REF, 'COMMENT', '', oneDraft, 'sha')
+
+    expect(result).toEqual({ ok: true, posted: { inline: 0, fileLevel: 1, bodyFolded: 0 } })
+    // Second /comments call is the fallback: no inline field, prefixed body
+    const fallback = mockBbFetch.mock.calls[1]
+    const payload = JSON.parse((fallback[1] as RequestInit).body as string)
+    expect(payload.inline).toBeUndefined()
+    expect(payload.content.raw).toBe('**Re: src/a.ts:7** _(line not in the current diff)_ — My note')
+  })
+
+  it('off-diff draft (files provided) posts directly as a non-inline comment', async () => {
+    // Patch: RIGHT lines 1..4
+    const PATCH = '@@ -1,3 +1,4 @@\n context\n-removed\n+added\n+added2\n context'
+    mockBbFetch.mockResolvedValue({})
+
+    const mixed = [
+      makeDraft({ path: 'src/a.ts', line: 2, body: 'In-diff' }),
+      makeDraft({ path: 'src/a.ts', line: 99, body: 'Off-diff' }),
+    ]
+    const result = await bitbucketProvider.submitReview(
+      REF, 'COMMENT', '', mixed, 'sha',
+      [{ filename: 'src/a.ts', patch: PATCH }],
+    )
+
+    expect(result).toEqual({ ok: true, posted: { inline: 1, fileLevel: 1, bodyFolded: 0 } })
+    // Call 1: inline comment for the in-diff draft
+    const inlinePayload = JSON.parse((mockBbFetch.mock.calls[0][1] as RequestInit).body as string)
+    expect(inlinePayload.inline).toEqual({ path: 'src/a.ts', to: 2 })
+    // Call 2: non-inline comment for the off-diff draft, prefix intact
+    const nonInlinePayload = JSON.parse((mockBbFetch.mock.calls[1][1] as RequestInit).body as string)
+    expect(nonInlinePayload.inline).toBeUndefined()
+    expect(nonInlinePayload.content.raw).toBe('**Re: src/a.ts:99** _(line not in the current diff)_ — Off-diff')
   })
 
   it('returns unauthorized when approve fails with unauthorized', async () => {
