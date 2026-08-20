@@ -89,6 +89,6 @@ don't.
   (review123.dev). One OAuth serverless fn under `api/`.
 - LLM providers are BYO-key (deepseek / openai / anthropic / gemini /
   openrouter); the ensemble engine fuses generators + verifiers (cross-model
-  verification). `PROMPT_VERSION` (in `src/lib/ai/tasks.ts`) gates the per-task
-  cache — bump it when a prompt changes.
+  verification). The `PROMPT_VERSIONS` map (in `src/lib/ai/tasks.ts`) gates the
+  per-task cache — bump only the changed task's entry when its prompt changes.
 - Daily GitHub Action syncs the OpenRouter model catalog.

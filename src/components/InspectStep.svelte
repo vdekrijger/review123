@@ -188,7 +188,11 @@
   // story surface (skeleton). On error / empty result we fall back to files with
   // a REASON-SPECIFIC note. No-key users never reach here (storyAvailable false).
   const storyPending = $derived(storyStatus === 'idle' || storyStatus === 'loading' || storyStatus === 'streaming')
-  const showStory = $derived(storyAvailable && storyMode && (storyPending || storyHasUsableSteps))
+  // The story TASK is turned off in AI settings (Plan J matrix) — a deliberate
+  // user choice, distinct from no-key unavailability. The switch stays visible
+  // but Story is disabled with an honest note, never the "couldn't build" copy.
+  const storyTaskOff = $derived(storyStatus === 'disabled')
+  const showStory = $derived(storyAvailable && storyMode && !storyTaskOff && (storyPending || storyHasUsableSteps))
   // True when story was chosen but we fell back to Files. Two distinct reasons:
   //  - errored: the task failed (invalid JSON / rate-limited / …) → show the
   //    reason + a Retry button that re-runs just the story task.
@@ -202,7 +206,7 @@
   )
   const storyErrored = $derived(storyAvailable && storyMode && storyStatus === 'error')
   const storyEmpty = $derived(
-    storyAvailable && storyMode && !storyPending && !storyErrored && !storyHasUsableSteps,
+    storyAvailable && storyMode && !storyTaskOff && !storyPending && !storyErrored && !storyHasUsableSteps,
   )
   const storyFellBack = $derived(storyErrored || storyEmpty)
 
@@ -1039,6 +1043,8 @@
       class="flow-btn"
       class:flow-active={showStory}
       aria-pressed={showStory}
+      disabled={storyTaskOff}
+      title={storyTaskOff ? 'The story walkthrough task is turned off in AI settings' : undefined}
       onclick={() => selectMode(true)}
     >Story</button>
     <button
@@ -1050,7 +1056,11 @@
   </div>
 {/if}
 
-{#if storyStructuralFallback}
+{#if storyAvailable && storyMode && storyTaskOff}
+  <p class="story-fallback-note" role="note">
+    Story walkthrough turned off — <a href="/settings" onclick={goToSettings}>enable in AI settings</a>. Showing all files.
+  </p>
+{:else if storyStructuralFallback}
   <p class="story-fallback-note story-structural-note" role="note">
     Structural walkthrough — AI ordering unavailable{storyFallbackReason ? ` (${storyFallbackReason})` : ''}.
     {#if onRetryStory}

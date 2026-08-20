@@ -46,7 +46,7 @@ import {
   DEEP_REVIEW_MAX_TOOL_CALLS,
 } from './deepReview'
 import type { DeepReviewSource } from './deepReview'
-import { getSettings } from '../settings/settings'
+import { getSettings, type AiTaskId } from '../settings/settings'
 import {
   cacheKey,
   getCached as defaultGetCached,
@@ -1630,16 +1630,20 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
   async function runStoryOrderTask(ctx: PackedContext): Promise<void> {
     // Story mode (Plan H): classify changed files into layers and emit an
-    // ORDERED narrative sequence. Runs through the deep harness when the
-    // agentic toggle is on (verify ordering/test-pairing by reading deps),
-    // single-pass otherwise — same branch shape as the other deep tasks.
-    // Story is not in the user-facing task matrix (Plan J). It has its own
-    // storyMode toggle and never goes 'off' here. Its deep depth piggybacks on
-    // the verdict task's mode resolution — the canonical "deep review" anchor —
-    // so the All/None quick-sets still reproduce story's old deep/standard
-    // behavior without exposing a separate story control.
-    const verdictMode = resolveTaskMode('verdict', deepReview)
-    const deep = { enabled: verdictMode.run && verdictMode.deep, note: verdictMode.note }
+    // ORDERED narrative sequence. Runs through the deep harness when set to
+    // deep (verify ordering/test-pairing by reading deps), single-pass
+    // otherwise — same branch shape as the other deep tasks.
+    // Story is in the user-facing task matrix (Plan J follow-up): off →
+    // 'disabled', zero tokens, no pack use, no cache read. Historically its
+    // deep depth piggybacked on the VERDICT task's mode; the settings
+    // migration carries that over for matrices stored before the story key
+    // existed, so behavior is unchanged until the user opts out.
+    const mode = resolveTaskMode('story', deepReview)
+    if (!mode.run) {
+      storyState.status = 'disabled'
+      return
+    }
+    const deep = { enabled: mode.deep, note: mode.note }
     if (deep.note) storyState.note = deep.note
     const key = cacheKey(prKey, deep.enabled ? 'story|deep' : 'story', promptVersionFor('story'))
 
@@ -1744,9 +1748,14 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // 5 risky snippets). Feeds the deterministic "Review effort" score as ONE
     // factor ("AI judgment") — the deterministic score NEVER blocks on it:
     // while this runs the factor renders pending; on error, unavailable.
-    // Like story, it is not in the user-facing task matrix (Plan J) and always
-    // runs single-pass on the active model (never the multi-generator ensemble,
+    // In the user-facing task matrix (Plan J follow-up) with off/standard only:
+    // off → 'disabled', zero tokens, no cache read. When it runs it is always
+    // single-pass on the active model (never the multi-generator ensemble,
     // never the deep harness) — it is a cheap triage read, not a review task.
+    if (!resolveTaskMode('riskJudge', deepReview).run) {
+      riskJudgeState.status = 'disabled'
+      return
+    }
     const key = cacheKey(prKey, 'risk-judge', promptVersionFor('riskJudge'))
 
     const t0 = performance.now()
@@ -2112,13 +2121,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
   function setAllPanels(status: 'no-key' | 'declined' | 'error', error?: string): void {
     // Plan J: an OFF task wins — it shows 'disabled' (no tokens were ever going
-    // to be spent on it) even when the whole run is no-key/declined/error. Only
-    // the story panel has no user mode (it's gated by storyMode), so it always
-    // takes the sweep status.
-    const apply = (
-      task: 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests' | 'alternatives',
-      state: PanelState<unknown>,
-    ): void => {
+    // to be spent on it) even when the whole run is no-key/declined/error.
+    // Story and the risk judge are in the task matrix too, so they get the
+    // same off-wins treatment.
+    const apply = (task: AiTaskId, state: PanelState<unknown>): void => {
       if (getSettings().aiTaskModes[task] === 'off') {
         state.status = 'disabled'
         return
@@ -2132,12 +2138,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     apply('verdict', verdictState)
     apply('tests', testsState)
     apply('alternatives', alternativesState)
-    storyState.status = status
-    if (error !== undefined) storyState.error = error
-    // The risk judge, like story, has no user-facing mode — it always takes
-    // the sweep status.
-    riskJudgeState.status = status
-    if (error !== undefined) riskJudgeState.error = error
+    apply('story', storyState)
+    apply('riskJudge', riskJudgeState)
   }
 
   // ---------------------------------------------------------------------------
@@ -2177,10 +2179,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       return
     }
 
-    // Plan J: if EVERY auto task is turned off, there is nothing to pack or run.
-    // Avoid the pack()/ci() work entirely (cheap token/time win) and mark each
-    // panel disabled. Story shares the diff context, so it only short-circuits
-    // here when the matrix tasks are all off too.
+    // Plan J: if EVERY auto task (incl. story + the risk judge, which are in
+    // the matrix too) is turned off, there is nothing to pack or run. Avoid
+    // the pack()/ci() work entirely (cheap token/time win) and mark each
+    // panel disabled.
     const modes = getSettings().aiTaskModes
     const allAutoOff =
       modes.summary === 'off' &&
@@ -2188,7 +2190,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       modes.diagrams === 'off' &&
       modes.tests === 'off' &&
       modes.alternatives === 'off' &&
-      modes.verdict === 'off'
+      modes.verdict === 'off' &&
+      modes.story === 'off' &&
+      modes.riskJudge === 'off'
     if (allAutoOff) {
       summaryState.status = 'disabled'
       attentionState.status = 'disabled'

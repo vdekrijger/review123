@@ -194,6 +194,10 @@
   const riskJudgePending = $derived(
     run.riskJudge?.status === 'loading' || run.riskJudge?.status === 'streaming',
   )
+  // Turned off in AI settings (a user choice, not a failure) → the factor is
+  // excluded from the level with a calm "turned off in Settings" note instead
+  // of the alarming "unknown, not zero" framing.
+  const riskJudgeDisabled = $derived(run.riskJudge?.status === 'disabled')
   const riskJudgeSnippets = $derived(riskJudge?.snippets ?? [])
 
   const prRisk = $derived(
@@ -210,6 +214,7 @@
       verdictPending: riskVerdictPending,
       riskJudge,
       riskJudgePending,
+      riskJudgeDisabled,
     }),
   )
 

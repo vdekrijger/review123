@@ -522,6 +522,43 @@ describe('AiModelsSection — per-task modes (Plan J)', () => {
     expect(m.verdict).toBe('standard')
     expect(m.diagrams).toBe('off')
     expect(m.skills).toBe('off')
+    // Story + risk judge are extras too — minimal tokens means off.
+    expect(m.story).toBe('off')
+    expect(m.riskJudge).toBe('off')
+  })
+
+  it('renders a Story walkthrough row with all three modes (deep-capable)', () => {
+    render(AiModelsSection)
+    const storyGroup = within(screen.getByRole('radiogroup', { name: /Story walkthrough mode/i }))
+    expect(storyGroup.getByRole('radio', { name: /Off/i })).toBeInTheDocument()
+    expect(storyGroup.getByRole('radio', { name: /Standard/i })).toBeInTheDocument()
+    expect(storyGroup.getByRole('radio', { name: /Deep/i })).toBeInTheDocument()
+  })
+
+  it('renders a Risk judge row with Off + Standard but NO Deep (single-pass by design)', () => {
+    render(AiModelsSection)
+    const judgeGroup = within(screen.getByRole('radiogroup', { name: /Risk judge/i }))
+    expect(judgeGroup.getByRole('radio', { name: /Off/i })).toBeInTheDocument()
+    expect(judgeGroup.getByRole('radio', { name: /Standard/i })).toBeInTheDocument()
+    expect(judgeGroup.queryByRole('radio', { name: /Deep/i })).toBeNull()
+  })
+
+  it('turning the Story walkthrough / Risk judge rows off persists immediately', async () => {
+    render(AiModelsSection)
+    const storyGroup = within(screen.getByRole('radiogroup', { name: /Story walkthrough mode/i }))
+    await userEvent.click(storyGroup.getByRole('radio', { name: /Off/i }))
+    expect(getSettings().aiTaskModes.story).toBe('off')
+    const judgeGroup = within(screen.getByRole('radiogroup', { name: /Risk judge/i }))
+    await userEvent.click(judgeGroup.getByRole('radio', { name: /Off/i }))
+    expect(getSettings().aiTaskModes.riskJudge).toBe('off')
+  })
+
+  it('quick-set All → story deep, riskJudge stays standard (never deep)', async () => {
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /^All$/i }))
+    const m = getSettings().aiTaskModes
+    expect(m.story).toBe('deep')
+    expect(m.riskJudge).toBe('standard')
   })
 })
 

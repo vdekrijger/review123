@@ -1598,6 +1598,23 @@ describe('UnderstandStep glance card — review effort badge', () => {
     expect(judge.textContent).toMatch(/unknown, not zero/i)
   })
 
+  it('shows a CALM "turned off in Settings" note (no unknown-not-zero alarm) when the judge task is disabled', () => {
+    const run = makeRun({ riskJudge: { status: 'disabled' } })
+    const { container } = render(UnderstandStep, {
+      props: { meta, files, ci: null, ciError: false, run },
+    })
+    const details = container.querySelector('.risk-details') as HTMLDetailsElement
+    details.open = true
+    const judge = container.querySelector('[data-factor="ai-judge"]')!
+    // Excluded from the level, like any unavailable factor…
+    expect(judge.querySelector('.risk-factor-score')!.textContent).toContain('n/a')
+    // …but with the calm user-choice wording, never the alarming framing.
+    expect(judge.textContent).toMatch(/turned off in Settings/i)
+    expect(judge.textContent).not.toMatch(/unknown, not zero/i)
+    // A disabled judge is not "refining" — no pending indicator from it.
+    expect(container.querySelector('.risk-refining')).toBeNull()
+  })
+
   it('renders the AI-judgment factor pending (…) while the judge runs, without blocking the badge', () => {
     const run = makeRun({ riskJudge: { status: 'loading' } })
     const { container } = render(UnderstandStep, {

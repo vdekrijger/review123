@@ -152,6 +152,9 @@ describe('Plan J — per-task off gating', () => {
   })
 
   it('ALL auto tasks off → pack() never called, every panel disabled', async () => {
+    // A pre-story/riskJudge stored matrix: the migration derives both as 'off'
+    // (the old start() short-circuit force-disabled them), so the outcome for
+    // this stored shape is byte-identical to before they joined the matrix.
     seedSettings({
       aiTaskModes: {
         summary: 'off', attention: 'off', diagrams: 'off',
@@ -165,6 +168,23 @@ describe('Plan J — per-task off gating', () => {
     for (const s of [run.summary, run.attention, run.diagrams, run.tests, run.alternatives, run.verdict, run.story, run.riskJudge]) {
       expect(s.status).toBe('disabled')
     }
+  })
+
+  it('six original tasks off but story EXPLICITLY standard → pack runs and story still runs', async () => {
+    seedSettings({
+      aiTaskModes: {
+        summary: 'off', attention: 'off', diagrams: 'off',
+        tests: 'off', alternatives: 'off', verdict: 'off',
+        story: 'standard', riskJudge: 'off',
+      },
+    })
+    const { deps, pack } = makeDeps()
+    const run = createAiRun(makeInput(pack, makeSource()), deps)
+    await run.start()
+    expect(pack).toHaveBeenCalled()
+    // Story ran (deterministic fallback at worst → 'done'), riskJudge stayed off.
+    expect(run.story.status).toBe('done')
+    expect(run.riskJudge.status).toBe('disabled')
   })
 
   it('no-key sweep still marks an off task disabled (off wins over no-key)', async () => {
@@ -185,5 +205,74 @@ describe('Plan J — per-task off gating', () => {
     await run.runSkillReviews()
     expect(run.skillReviews).toHaveLength(0)
     expect(deps.llmJsonWithRepairWithUsage).not.toHaveBeenCalled()
+  })
+})
+
+describe('story + riskJudge in the matrix — off gating', () => {
+  it('story off → status disabled, no story LLM call, no story cache read; other tasks unaffected', async () => {
+    seedSettings({ aiTaskModes: { story: 'off' } })
+    const { deps, pack } = makeDeps()
+    const run = createAiRun(makeInput(pack, makeSource()), deps)
+    await run.start()
+
+    expect(run.story.status).toBe('disabled')
+    const keysRead = deps.getCached.mock.calls.map((c) => c[0] as string)
+    expect(keysRead.some((k) => k.includes('|story'))).toBe(false)
+    // The rest of the run is untouched.
+    expect(run.verdict.status).toBe('done')
+    expect(run.riskJudge.status).toBe('done')
+  })
+
+  it('riskJudge off → status disabled, no risk-judge LLM call, no risk-judge cache read', async () => {
+    seedSettings({ aiTaskModes: { riskJudge: 'off' } })
+    const { deps, pack } = makeDeps()
+    const run = createAiRun(makeInput(pack, makeSource()), deps)
+    await run.start()
+
+    expect(run.riskJudge.status).toBe('disabled')
+    const keysRead = deps.getCached.mock.calls.map((c) => c[0] as string)
+    expect(keysRead.some((k) => k.includes('risk-judge'))).toBe(false)
+    expect(run.verdict.status).toBe('done')
+    expect(run.story.status).toBe('done')
+  })
+
+  it('standard (the default) → both tasks run exactly as before', async () => {
+    seedSettings()
+    const { deps, pack } = makeDeps()
+    const run = createAiRun(makeInput(pack, makeSource()), deps)
+    await run.start()
+    expect(run.story.status).toBe('done')
+    expect(run.riskJudge.status).toBe('done')
+    const keysRead = deps.getCached.mock.calls.map((c) => c[0] as string)
+    expect(keysRead.some((k) => k.includes('|story'))).toBe(true)
+    expect(keysRead.some((k) => k.includes('risk-judge'))).toBe(true)
+  })
+
+  it('story deep → runs through the tool loop and caches under a |deep key', async () => {
+    seedSettings({ aiTaskModes: { story: 'deep' } })
+    const { deps, pack } = makeDeps()
+    // The tool loop must return a USABLE story (a step mapping to a PR file),
+    // otherwise the deterministic fallback replaces it and nothing is cached.
+    deps.llmToolLoop.mockImplementation(async () => ({
+      content: JSON.stringify({ steps: [{ index: 0, files: ['src/foo.ts'], caption: 'Change.', layer: 'logic', relatedTests: [] }] }),
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+      toolCallsUsed: 2,
+    }))
+    const run = createAiRun(makeInput(pack, makeSource()), deps)
+    await run.start()
+    expect(run.story.status).toBe('done')
+    expect(run.story.toolCallsUsed).toBe(2)
+    const keysWritten = deps.setCached.mock.calls.map((c) => c[0] as string)
+    expect(keysWritten.some((k) => k.includes('story|deep'))).toBe(true)
+  })
+
+  it('no-key sweep: story/riskJudge off stay disabled while the rest go no-key (off wins)', async () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ aiTaskModes: { story: 'off', riskJudge: 'off' } }))
+    const { deps, pack } = makeDeps()
+    const run = createAiRun(makeInput(pack, makeSource()), deps)
+    await run.start()
+    expect(run.story.status).toBe('disabled')
+    expect(run.riskJudge.status).toBe('disabled')
+    expect(run.verdict.status).toBe('no-key')
   })
 })
