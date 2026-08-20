@@ -460,7 +460,7 @@ describe('submitReview — off-diff comment re-routing (was: whole-review 422 re
 
     expect(result).toEqual({ ok: true, posted: { inline: 1, fileLevel: 0, bodyFolded: 1 } })
 
-    const putCall = f.mock.calls.find(([u, i]: [string, RequestInit]) => u.endsWith('/reviews/77') && i.method === 'PUT')
+    const putCall = f.mock.calls.find((c) => (c[0] as string).endsWith('/reviews/77') && (c[1] as RequestInit).method === 'PUT')
     expect(putCall).toBeDefined()
     const putBody = JSON.parse(putCall![1].body as string)
     expect(putBody.body).toContain('#### Comments on lines outside the diff')
@@ -548,7 +548,7 @@ describe('submitReview — 422 retry net', () => {
       { path: 'src/foo.ts', line: 2, side: 'RIGHT', body: 'Fine' },
     ])
     // The offender went out as a file-level comment
-    const fileCall = f.mock.calls.find(([u]: [string]) => u === COMMENTS_URL)
+    const fileCall = f.mock.calls.find((c) => c[0] === COMMENTS_URL)
     expect(fileCall).toBeDefined()
     expect(JSON.parse(fileCall![1].body as string).path).toBe('src/bar.ts')
   })
