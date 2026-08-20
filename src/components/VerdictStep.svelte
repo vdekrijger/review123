@@ -7,7 +7,10 @@
    *   commitId  - The commit SHA to anchor the review to.
    *   store     - The reactive draft store for this PR.
    *   prUrl     - Full GitHub PR URL for the success link.
-   *   submitFn  - (optional) Override submitReview — used in tests for prop injection.
+   *   submitFn  - (optional) The submit function. Review.svelte passes the
+   *               provider-derived providerFor(id).submitReview; tests inject
+   *               stubs. The default (GitHub submitReview) only serves
+   *               legacy/standalone mounts.
    *   coachFn   - (optional) Override run.coach — DI seam for tests.
    *
    * EC-09a: APPROVE allows empty body/no drafts.
@@ -62,8 +65,11 @@
      */
     copyFn?: (text: string) => Promise<void>
     /**
-     * Override the submit function — allows tests to inject a stub without
-     * module-level mocking. Defaults to the real submitReview.
+     * The submit function. Review.svelte passes a wrapper around the active
+     * provider's submitReview (providerFor(id).submitReview) so GitLab and
+     * Bitbucket reviews hit their own endpoints; tests inject stubs without
+     * module-level mocking. Defaults to the GitHub submitReview for
+     * legacy/standalone mounts only.
      */
     submitFn?: (
       ref: PrRef,
@@ -569,7 +575,7 @@
         {postedBreakdownLabel(successPosted)}
       </p>
     {/if}
-    <a href={prUrl} target="_blank" rel="noopener nofollow" class="view-link">View on GitHub</a>
+    <a href={prUrl} target="_blank" rel="noopener nofollow" class="view-link">View on {provider?.displayName ?? 'GitHub'}</a>
   </div>
 {:else}
   <!-- Main form -->

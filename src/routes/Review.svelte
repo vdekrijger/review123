@@ -911,6 +911,8 @@
         prUrl={activeProvider.prWebUrl(prRefX)}
         prTitle={load.state.meta.title}
         files={load.state.files}
+        submitFn={(ref, verdict, body, drafts, commitId, files) =>
+          activeProvider.submitReview({ ...ref, provider: prRefX.provider }, verdict, body, drafts, commitId, files)}
         {contentsMap}
         coachFn={aiRun ? aiRun.coach : undefined}
         modelPerformance={aiRun ? aiRun.modelPerformance : []}
