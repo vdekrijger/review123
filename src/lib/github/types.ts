@@ -29,7 +29,10 @@ export type GithubError =
   | { kind: 'unauthorized' }       // 401 — bad/expired token (EC-04c/e)
   | { kind: 'rate-limited'; resetAt: Date } // EC-05c
   | { kind: 'forbidden'; message?: string } // other 403
-  | { kind: 'unprocessable'; message: string } // 422 — with parsed body message
+  // 422 — with parsed body message; `errors` carries GitHub's raw errors[]
+  // array when present (it sometimes identifies the offending comment/field —
+  // used by submitReview's one-shot re-route retry).
+  | { kind: 'unprocessable'; message: string; errors?: unknown[] }
   | { kind: 'server'; status: number }
   | { kind: 'network' }
 
