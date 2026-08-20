@@ -50,6 +50,24 @@ importers:
       svelte:
         specifier: ^5.56.1
         version: 5.56.1
+      tree-sitter-go:
+        specifier: 0.25.0
+        version: 0.25.0
+      tree-sitter-javascript:
+        specifier: 0.25.0
+        version: 0.25.0
+      tree-sitter-python:
+        specifier: 0.25.0
+        version: 0.25.0
+      tree-sitter-ruby:
+        specifier: 0.23.1
+        version: 0.23.1
+      tree-sitter-typescript:
+        specifier: 0.23.2
+        version: 0.23.2
+      web-tree-sitter:
+        specifier: 0.26.12
+        version: 0.26.12
     devDependencies:
       '@playwright/test':
         specifier: ^1.60.0
@@ -1070,6 +1088,14 @@ packages:
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
+  node-addon-api@8.9.2:
+    resolution: {integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==}
+    engines: {node: ^18 || ^20 || >= 21}
+
+  node-gyp-build@4.8.4:
+    resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
+    hasBin: true
+
   obug@2.1.2:
     resolution: {integrity: sha512-AWGB9WFcRXOQs48Z/udjI5ZcZMHXwX8XPByNpOydgcGsDLIzjGizhoMWJyKAWze7AVW/2W1i+/gPX4YtKe5cyg==}
     engines: {node: '>=12.20.0'}
@@ -1235,6 +1261,54 @@ packages:
     resolution: {integrity: sha512-bLVMLPtstlZ4iMQHpFHTR7GAGj2jxi8Dg0s2h2MafAE4uSWF98FC/3MomU51iQAMf8/qDUbKWf5GxuvvVcXEhw==}
     engines: {node: '>=20'}
 
+  tree-sitter-go@0.25.0:
+    resolution: {integrity: sha512-APBc/Dq3xz/e35Xpkhb1blu5UgW+2E3RyGWawZSCNcbGwa7jhSQPS8KsUupuzBla8PCo8+lz9W/JDJjmfRa2tw==}
+    peerDependencies:
+      tree-sitter: ^0.25.0
+    peerDependenciesMeta:
+      tree-sitter:
+        optional: true
+
+  tree-sitter-javascript@0.23.1:
+    resolution: {integrity: sha512-/bnhbrTD9frUYHQTiYnPcxyHORIw157ERBa6dqzaKxvR/x3PC4Yzd+D1pZIMS6zNg2v3a8BZ0oK7jHqsQo9fWA==}
+    peerDependencies:
+      tree-sitter: ^0.21.1
+    peerDependenciesMeta:
+      tree-sitter:
+        optional: true
+
+  tree-sitter-javascript@0.25.0:
+    resolution: {integrity: sha512-1fCbmzAskZkxcZzN41sFZ2br2iqTYP3tKls1b/HKGNPQUVOpsUxpmGxdN/wMqAk3jYZnYBR1dd/y/0avMeU7dw==}
+    peerDependencies:
+      tree-sitter: ^0.25.0
+    peerDependenciesMeta:
+      tree-sitter:
+        optional: true
+
+  tree-sitter-python@0.25.0:
+    resolution: {integrity: sha512-eCmJx6zQa35GxaCtQD+wXHOhYqBxEL+bp71W/s3fcDMu06MrtzkVXR437dRrCrbrDbyLuUDJpAgycs7ncngLXw==}
+    peerDependencies:
+      tree-sitter: ^0.25.0
+    peerDependenciesMeta:
+      tree-sitter:
+        optional: true
+
+  tree-sitter-ruby@0.23.1:
+    resolution: {integrity: sha512-d9/RXgWjR6HanN7wTYhS5bpBQLz1VkH048Vm3CodPGyJVnamXMGb8oEhDypVCBq4QnHui9sTXuJBBP3WtCw5RA==}
+    peerDependencies:
+      tree-sitter: ^0.21.1
+    peerDependenciesMeta:
+      tree-sitter:
+        optional: true
+
+  tree-sitter-typescript@0.23.2:
+    resolution: {integrity: sha512-e04JUUKxTT53/x3Uq1zIL45DoYKVfHH4CZqwgZhPg5qYROl5nQjV+85ruFzFGZxu+QeFVbRTPDRnqL9UbU4VeA==}
+    peerDependencies:
+      tree-sitter: ^0.21.0
+    peerDependenciesMeta:
+      tree-sitter:
+        optional: true
+
   ts-dedent@2.2.0:
     resolution: {integrity: sha512-q5W7tVM71e2xjHZTlgfTDoPF/SmqKG5hddq9SzR49CH2hayqRKJtQ4mtRlSxKaJlR/+9rEM+mnBHf7I2/BQcpQ==}
     engines: {node: '>=6.10'}
@@ -1350,6 +1424,9 @@ packages:
   w3c-xmlserializer@5.0.0:
     resolution: {integrity: sha512-o8qghlI8NZHU1lLPrpi2+Uq7abh4GGPpYANlalzWxyWteJOCsr/P+oPBA49TOLu5FTZO4d3F9MnWJfiMo4BkmA==}
     engines: {node: '>=18'}
+
+  web-tree-sitter@0.26.12:
+    resolution: {integrity: sha512-fvqTNZQBGUgUgfP0mHw+iHf9Yf6bRQrp0A3pSf2v/hSKxkT1beCoIWoLVmlPL7O6dmySfSb/t1aJoJvrgTRStw==}
 
   web-vitals@5.3.0:
     resolution: {integrity: sha512-q6LWsLatGYZp5VGBIOvbTj6JBV2nOmC8KvWztXBmwJcfFAzhwKwbOxhUH306XY3CcaZDUlSmSuNPBsCn0bFu+g==}
@@ -2327,6 +2404,10 @@ snapshots:
 
   nanoid@3.3.12: {}
 
+  node-addon-api@8.9.2: {}
+
+  node-gyp-build@4.8.4: {}
+
   obug@2.1.2: {}
 
   package-manager-detector@1.6.0: {}
@@ -2515,6 +2596,37 @@ snapshots:
     dependencies:
       punycode: 2.3.1
 
+  tree-sitter-go@0.25.0:
+    dependencies:
+      node-addon-api: 8.9.2
+      node-gyp-build: 4.8.4
+
+  tree-sitter-javascript@0.23.1:
+    dependencies:
+      node-addon-api: 8.9.2
+      node-gyp-build: 4.8.4
+
+  tree-sitter-javascript@0.25.0:
+    dependencies:
+      node-addon-api: 8.9.2
+      node-gyp-build: 4.8.4
+
+  tree-sitter-python@0.25.0:
+    dependencies:
+      node-addon-api: 8.9.2
+      node-gyp-build: 4.8.4
+
+  tree-sitter-ruby@0.23.1:
+    dependencies:
+      node-addon-api: 8.9.2
+      node-gyp-build: 4.8.4
+
+  tree-sitter-typescript@0.23.2:
+    dependencies:
+      node-addon-api: 8.9.2
+      node-gyp-build: 4.8.4
+      tree-sitter-javascript: 0.23.1
+
   ts-dedent@2.2.0: {}
 
   tslib@2.8.1:
@@ -2570,6 +2682,8 @@ snapshots:
   w3c-xmlserializer@5.0.0:
     dependencies:
       xml-name-validator: 5.0.0
+
+  web-tree-sitter@0.26.12: {}
 
   web-vitals@5.3.0: {}
 

@@ -178,6 +178,14 @@ async function doSearch(symbol: string, ctx: RepoSearchContext): Promise<RepoSea
 
 // ---------------------------------------------------------------------------
 // Cache (per symbol + repo + headSha; failures evicted so retry works)
+//
+// Deliberately NOT invalidated when a tree-sitter grammar finishes loading
+// (unlike symbolSources' Tier 1 cache): a repo search runs on an explicit
+// click, which in practice happens well after the grammars — kicked off when
+// the review's first file mounted — have loaded, so results are almost always
+// syntax-aware already. Re-searching would burn the ~10/min code-search quota
+// for a marginal accuracy delta; the existing eviction-on-failure retry path
+// is enough.
 // ---------------------------------------------------------------------------
 
 const cache = new Map<string, Promise<RepoSearchOutcome>>()

@@ -30,7 +30,13 @@
     "marked": "^18.0.5",
     "mermaid": "^11.15.0",
     "posthog-js": "^1.379.2",
-    "svelte": "^5.56.1"
+    "svelte": "^5.56.1",
+    "tree-sitter-go": "0.25.0",
+    "tree-sitter-javascript": "0.25.0",
+    "tree-sitter-python": "0.25.0",
+    "tree-sitter-ruby": "0.23.1",
+    "tree-sitter-typescript": "0.23.2",
+    "web-tree-sitter": "0.26.12"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
