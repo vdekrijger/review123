@@ -39,6 +39,7 @@
   import { matchStoryPath } from '../lib/ai/schemas'
   import type { StoryOrderResult, GraphResult } from '../lib/ai/schemas'
   import type { PanelStatus } from '../lib/ai/run.svelte'
+  import { findingAnchorHash, pruneAnchorOverrides } from '../lib/findings/reanchor.svelte'
 
   let {
     files,
@@ -494,6 +495,26 @@
     return map
   })
 
+  // Re-anchor housekeeping: once at least one reviewer has settled, drop stored
+  // anchor overrides whose finding no longer exists (a re-run changed/removed
+  // it — the override is an orphan; the fresh run may have fixed the line
+  // itself). This is the ONE place with the COMPLETE finding set across all
+  // files/reviewers, so pruning here can never eat another file's override.
+  // Dismissed/added findings still count as live (their raw findings persist in
+  // the run results), so a dismiss doesn't lose a correction. An in-progress
+  // run (no reviewer done yet → empty suggestion map) never prunes.
+  $effect(() => {
+    const anyDone = skillReviews.some((r) => r.state.status === 'done')
+    if (!anyDone) return
+    const live = new Set<string>()
+    for (const suggestions of skillSuggestionsByPath.values()) {
+      for (const s of suggestions) {
+        live.add(findingAnchorHash({ key: s.key, path: s.findingPath, line: s.line, body: s.body }))
+      }
+    }
+    pruneAnchorOverrides(live)
+  })
+
   // File-level (null-line) suggestions — rendered above the FileDiff (Files mode)
   // and per-file in Story mode. Cross-model demoted findings (Plan M) are NO
   // LONGER pulled out into a separate collapsed group: they render alongside the
@@ -822,12 +843,16 @@
     onRetrySkill?.(skillId)
   }
 
-  async function addFindingAsDraft(finding: { findingPath: string; line: number | null; body: string; key: string; skillName?: string }) {
+  async function addFindingAsDraft(finding: { findingPath: string; line: number | null; body: string; key: string; skillName?: string; side?: 'LEFT' | 'RIGHT' }) {
     if (!draftStore) return
     await draftStore.upsert({
       path: finding.findingPath,
+      // line/side arrive as the finding's EFFECTIVE anchor: a user-corrected
+      // (re-anchored) finding passes its corrected location from FileDiff, so
+      // the draft lands where the user moved it. side defaults to RIGHT (the
+      // findings' home side; only a drag onto a deleted line yields LEFT).
       line: finding.line ?? 1,
-      side: 'RIGHT',
+      side: finding.side ?? 'RIGHT',
       body: finding.body,
       // APPEND (n=-1 sentinel): the user may already have their own draft at
       // this line — adding a finding must never overwrite it.
@@ -1297,7 +1322,7 @@
     onRemoveDraft={handleRemoveDraft}
     onAddFileLevelDraft={(suggestion) => addFindingAsDraft(suggestion)}
     onDismissFileLevelFinding={(key) => dismissFinding(key)}
-    onAddSkillFindingDraft={(path, finding) => addFindingAsDraft({ findingPath: path, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName })}
+    onAddSkillFindingDraft={(path, finding) => addFindingAsDraft({ findingPath: path, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName, side: finding.side })}
     onDismissSkillFinding={(key) => dismissFinding(key)}
     {askFn}
     {askDisabledReason}
@@ -1397,7 +1422,7 @@
             {askDisabledReason}
             onReply={replyFn}
             skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
-            onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName })}
+            onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName, side: finding.side })}
             onDismissSkillFinding={(key) => dismissFinding(key)}
             whitespace={whitespaceByPath.get(file.filename) ?? null}
           />

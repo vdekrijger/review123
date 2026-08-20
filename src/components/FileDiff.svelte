@@ -28,6 +28,14 @@
   import { jumpToDiffLine } from '../lib/symbols/jumpToLine'
   import { currentRepoSearchContext, searchRepoForSymbol } from '../lib/symbols/repoSearch'
   import type { SymbolDefinition, SymbolReference, DiffSide } from '../lib/symbols/symbolIndex'
+  import {
+    findingAnchorHash,
+    getAnchorOverride,
+    setAnchorOverride,
+    clearAnchorOverride,
+    reanchorDrag,
+    REANCHOR_DND_MIME,
+  } from '../lib/findings/reanchor.svelte'
 
   /** A skill finding scoped to a specific line in this file */
   export interface SkillFinding {
@@ -97,9 +105,13 @@
      */
     skillFindings?: SkillFinding[]
     /**
-     * Called when the user clicks "Add as draft" on a skill finding inside FileDiff.
+     * Called when the user clicks "Add as draft" on a skill finding inside
+     * FileDiff. `line`/`side` are the finding's EFFECTIVE anchor — a
+     * user-corrected (re-anchored) finding reports its corrected location, so
+     * the draft lands where the user moved it. `side` defaults to 'RIGHT'
+     * (findings anchor to the new side unless dragged onto a deleted line).
      */
-    onAddSkillFindingDraft?: (finding: { body: string; line: number; key: string; skillName: string }) => Promise<void>
+    onAddSkillFindingDraft?: (finding: { body: string; line: number; key: string; skillName: string; side?: 'LEFT' | 'RIGHT' }) => Promise<void>
     /**
      * Called when the user DISMISSES a skill finding inside FileDiff (the accept
      * path flows through onAddSkillFindingDraft). Lets the parent record the
@@ -514,9 +526,11 @@
     onDismissSkillFinding?.(key)
   }
 
-  async function handleAddSkillFindingDraft(finding: SkillFinding) {
+  async function handleAddSkillFindingDraft(finding: PlacedSkillFinding) {
     if (onAddSkillFindingDraft) {
-      await onAddSkillFindingDraft({ body: finding.body, line: finding.line, key: finding.key, skillName: finding.skillName })
+      // EFFECTIVE anchor: a re-anchored finding carries its corrected line/side
+      // here, so "Add as draft" lands at the user-corrected location.
+      await onAddSkillFindingDraft({ body: finding.body, line: finding.line, key: finding.key, skillName: finding.skillName, side: finding.anchorSide })
     }
     addedSkillKeys = new Set([...addedSkillKeys, finding.key])
   }
@@ -534,6 +548,145 @@
 
   function isAnchoredDraft(d: Draft): boolean {
     return d.side === 'LEFT' ? leftAnchorLines.has(d.line) : rightAnchorLines.has(d.line)
+  }
+
+  // ---- Finding re-anchor (user-corrected anchors) ---------------------------
+  // The LLM sometimes reports a finding at a nearby/incorrect line (or one not
+  // in the diff at all). The user can drag the card onto the correct diff line
+  // (or use its "Move to line…" input); the correction is an OVERRIDE stored in
+  // src/lib/findings/reanchor — the cached AI results are never mutated.
+  // Overrides are applied HERE, before extendData and before the
+  // anchored/unanchored split, so a corrected finding renders at its new line —
+  // including a previously off-diff finding leaving the fallback block.
+
+  /** A finding resolved to its EFFECTIVE anchor (override applied). */
+  interface PlacedSkillFinding extends SkillFinding {
+    /** Re-anchor identity hash (drag payload / override key). */
+    anchorHash: string
+    /** Effective side: RIGHT unless the user dropped it on a deleted line. */
+    anchorSide: 'LEFT' | 'RIGHT'
+    /** Present when an override applied: the ORIGINAL reported location. */
+    movedFrom?: { path: string; line: number }
+  }
+
+  const placedSkillFindings = $derived.by((): PlacedSkillFinding[] => {
+    return visibleSkillFindings.map((f) => {
+      // Identity hashes over the ORIGINAL reported location (f.line from props
+      // is always the raw finding) — a re-run that changes the finding content
+      // produces a new hash and naturally orphans the stored override.
+      const anchorHash = findingAnchorHash({ key: f.key, path: file.filename, line: f.line, body: f.body })
+      const o = getAnchorOverride(anchorHash)
+      // Same-file overrides only: a stale override recorded for another path
+      // must never re-place this file's finding.
+      if (o && o.path === file.filename && (o.line !== f.line || o.side !== 'RIGHT')) {
+        return { ...f, line: o.line, anchorHash, anchorSide: o.side, movedFrom: { path: file.filename, line: f.line } }
+      }
+      return { ...f, anchorHash, anchorSide: 'RIGHT' as const }
+    })
+  })
+
+  /** Hashes renderable in THIS FileDiff — only these accept drops here. */
+  const reanchorableHashes = $derived(new Set(placedSkillFindings.map((f) => f.anchorHash)))
+
+  /** True while one of THIS file's findings is being dragged. */
+  const reanchorDragActive = $derived(reanchorDrag.hash !== null && reanchorableHashes.has(reanchorDrag.hash))
+
+  /** Keyboard path: move a finding to a NEW-side line; false = not in diff. */
+  function moveFindingToLine(finding: PlacedSkillFinding, line: number): boolean {
+    if (!rightAnchorLines.has(line)) return false
+    setAnchorOverride(finding.anchorHash, { path: file.filename, line, side: 'RIGHT' })
+    return true
+  }
+
+  /** Undo (✕ on the moved chip): restore the finding's reported location. */
+  function undoMoveFinding(finding: PlacedSkillFinding): void {
+    clearAnchorOverride(finding.anchorHash)
+  }
+
+  // -- Drop targets: delegated DnD on the diff container. Rows are rendered by
+  //    the third-party DiffView, so per-row Svelte handlers aren't possible —
+  //    we resolve the row under the cursor from the same DOM attributes the
+  //    focus-dim machinery reads (works in unified AND split layouts).
+
+  /** The currently drop-highlighted row (imperative class toggle). */
+  let dropRowEl: HTMLTableRowElement | null = null
+
+  function parseLineAttr(raw: string | null | undefined): number {
+    if (raw == null) return 0
+    const n = parseInt(raw.trim(), 10)
+    return Number.isFinite(n) && n > 0 ? n : 0
+  }
+
+  /**
+   * Resolve a drag event to a VALID drop target: a rendered diff row whose
+   * line is a real patch-hunk anchor for its side. Expanded-context lines and
+   * hunk headers resolve to null — they aren't postable comment anchors, so a
+   * finding dropped there would silently fall back off-diff.
+   */
+  function rowDropTarget(e: DragEvent): { row: HTMLTableRowElement; line: number; side: 'LEFT' | 'RIGHT' } | null {
+    const t = e.target as Element | null
+    const row = (t?.closest?.('tr') ?? null) as HTMLTableRowElement | null
+    if (!row) return null
+    // Never target the annotation rows themselves (extend/widget wrappers).
+    if (row.querySelector('.diff-line-extend-wrapper, .diff-line-widget-wrapper')) return null
+    // Split mode renders two tables; the wrapper identifies the side.
+    const inOld = row.closest('.old-diff-table-wrapper') !== null
+    const inNew = row.closest('.new-diff-table-wrapper') !== null
+    if (inOld || inNew) {
+      const side: 'LEFT' | 'RIGHT' = inOld ? 'LEFT' : 'RIGHT'
+      const sel = inOld ? 'td.diff-line-old-num [data-line-num]' : 'td.diff-line-new-num [data-line-num]'
+      const line = parseLineAttr(row.querySelector(sel)?.getAttribute('data-line-num'))
+      if (line <= 0) return null
+      if (!(side === 'LEFT' ? leftAnchorLines : rightAnchorLines).has(line)) return null
+      return { row, line, side }
+    }
+    // Unified: context rows carry both sides — prefer RIGHT (findings' home
+    // side); a deletion row only has an old number → LEFT.
+    const newLine = parseLineAttr(row.querySelector('[data-line-new-num]')?.getAttribute('data-line-new-num'))
+    if (newLine > 0 && rightAnchorLines.has(newLine)) return { row, line: newLine, side: 'RIGHT' }
+    const oldLine = parseLineAttr(row.querySelector('[data-line-old-num]')?.getAttribute('data-line-old-num'))
+    if (oldLine > 0 && leftAnchorLines.has(oldLine)) return { row, line: oldLine, side: 'LEFT' }
+    return null
+  }
+
+  function clearDropHighlight(): void {
+    dropRowEl?.classList.remove('reanchor-drop-target')
+    dropRowEl = null
+  }
+
+  function handleFindingDragOver(e: DragEvent): void {
+    // dataTransfer is unreadable during dragover (DnD spec) → validate via the
+    // published in-flight hash. Foreign drags (text/files) never match.
+    if (!reanchorDragActive) return
+    const target = rowDropTarget(e)
+    if (!target) {
+      clearDropHighlight()
+      return
+    }
+    e.preventDefault() // required to allow the drop
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+    if (dropRowEl !== target.row) {
+      clearDropHighlight()
+      dropRowEl = target.row
+      dropRowEl.classList.add('reanchor-drop-target')
+    }
+  }
+
+  function handleFindingDrop(e: DragEvent): void {
+    clearDropHighlight()
+    const hash = e.dataTransfer?.getData(REANCHOR_DND_MIME) || reanchorDrag.hash
+    if (!hash || !reanchorableHashes.has(hash)) return
+    const target = rowDropTarget(e)
+    if (!target) return
+    e.preventDefault()
+    setAnchorOverride(hash, { path: file.filename, line: target.line, side: target.side })
+    reanchorDrag.hash = null
+  }
+
+  function handleFindingDragLeave(e: DragEvent): void {
+    // Ignore leave events fired while moving between the host's children.
+    if (e.currentTarget instanceof HTMLElement && e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return
+    clearDropHighlight()
   }
 
   // ---- Existing comments: thread grouping + anchorability split ------------
@@ -592,7 +745,7 @@
   interface ExtendEntry {
     /** ALL drafts at this line, sorted by ordinal n (multiple can coexist). */
     drafts: Draft[]
-    findings: SkillFinding[]
+    findings: PlacedSkillFinding[]
     threads: Thread[]
   }
 
@@ -621,10 +774,12 @@
         map[key].data.drafts.sort((a, b) => (a.n ?? 0) - (b.n ?? 0))
       }
     }
-    for (const f of visibleSkillFindings) {
-      // Findings anchor to the new (RIGHT) side of the diff
-      if (!rightAnchorLines.has(f.line)) continue
-      entryAt(newFile, f.line).findings.push(f)
+    for (const f of placedSkillFindings) {
+      // Findings anchor to the new (RIGHT) side unless a user re-anchor moved
+      // one onto a deleted (LEFT) line. f.line is the EFFECTIVE anchor.
+      const lines = f.anchorSide === 'LEFT' ? leftAnchorLines : rightAnchorLines
+      if (!lines.has(f.line)) continue
+      entryAt(f.anchorSide === 'LEFT' ? oldFile : newFile, f.line).findings.push(f)
     }
     for (const t of anchoredThreads) {
       const map = t.root.side === 'LEFT' ? oldFile : newFile
@@ -679,8 +834,12 @@
     onRemoveDraft?.(line, sideStr, n)
   }
 
-  // Skill findings whose anchor is NOT in the current diff — fallback block
-  const unanchoredSkillFindings = $derived(visibleSkillFindings.filter(f => !rightAnchorLines.has(f.line)))
+  // Skill findings whose EFFECTIVE anchor is NOT in the current diff — fallback
+  // block. A re-anchored finding leaves this block the moment its override
+  // lands on a real diff line (that's the off-diff rescue path).
+  const unanchoredSkillFindings = $derived(
+    placedSkillFindings.filter(f => !(f.anchorSide === 'LEFT' ? leftAnchorLines : rightAnchorLines).has(f.line)),
+  )
 
   // ---- Symbol click-through (Tier 1) ---------------------------------------
   // Each mounted FileDiff registers its file's text (patch + full contents
@@ -788,9 +947,13 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       class="focus-dim-host"
+      class:reanchor-dragging={reanchorDragActive}
       data-focus-mode={focusMode}
       use:focusDim={[focusMode, file.filename, mode, isGenerated]}
       onclick={handleDiffClick}
+      ondragover={handleFindingDragOver}
+      ondrop={handleFindingDrop}
+      ondragleave={handleFindingDragLeave}
     >
     <!-- Shared stack: EVERY draft at the line (ordered by n) as its own
          DraftThread — each independently editable/removable — followed by the
@@ -909,6 +1072,10 @@
                 added={addedSkillKeys.has(finding.key)}
                 onAdd={() => handleAddSkillFindingDraft(finding)}
                 onDismiss={() => dismissSkillFinding(finding.key)}
+                anchorHash={finding.anchorHash}
+                movedFrom={finding.movedFrom ?? null}
+                onUndoMove={finding.movedFrom ? () => undoMoveFinding(finding) : null}
+                onMoveToLine={(line) => moveFindingToLine(finding, line)}
                 {askFn}
                 askPath={file.filename}
                 askExcerpt={file.patch ? excerptAround(file.patch, finding.line, splitSideToSide(side), 6) : ''}
@@ -1001,6 +1168,10 @@
             added={addedSkillKeys.has(finding.key)}
             onAdd={() => handleAddSkillFindingDraft(finding)}
             onDismiss={() => dismissSkillFinding(finding.key)}
+            anchorHash={finding.anchorHash}
+            movedFrom={finding.movedFrom ?? null}
+            onUndoMove={finding.movedFrom ? () => undoMoveFinding(finding) : null}
+            onMoveToLine={(line) => moveFindingToLine(finding, line)}
           />
         {/each}
       </div>
@@ -1191,6 +1362,24 @@
     animation: flash-new-draft 1.5s ease-out forwards;
   }
 
+  /* ---- Finding re-anchor drop targets ---- */
+  /* While one of THIS file's finding cards is being dragged, the diff hints
+     that its rows are drop targets. Subtle: an accent-tinted inset line at the
+     table edge (no per-row noise until hover). */
+  .focus-dim-host.reanchor-dragging {
+    outline: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+    outline-offset: -1px;
+  }
+
+  /* The row currently under the dragged card: amber "location edit" tint (same
+     legend-changed tokens as the moved chip), themed for light + dark. The
+     class is toggled imperatively by the delegated dragover handler — only
+     rows whose line is a real patch-hunk anchor ever receive it. */
+  .focus-dim-host :global(tr.reanchor-drop-target td) {
+    background: var(--legend-changed-bg);
+    box-shadow: inset 0 1px 0 var(--legend-changed-border), inset 0 -1px 0 var(--legend-changed-border);
+  }
+
   /* Apply the --font-mono token to the diff view container */
   :global(.unified-diff-table-wrapper),
   :global(.old-diff-table-wrapper),
@@ -1347,12 +1536,15 @@
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.resolved-label),
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-hint),
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-pending-label),
-  :global(.diff-line-extend-wrapper) .line-findings :global(.skill-line-note) {
+  :global(.diff-line-extend-wrapper) .line-findings :global(.skill-line-note),
+  :global(.diff-line-extend-wrapper) .line-findings :global(.finding-drag-handle) {
     color: var(--text-muted);
   }
 
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.resolved-check),
-  :global(.diff-line-extend-wrapper) .line-findings :global(.skill-add-draft-btn:not(.added)) {
+  :global(.diff-line-extend-wrapper) .line-findings :global(.skill-add-draft-btn:not(.added)),
+  :global(.diff-line-extend-wrapper) .line-findings :global(.skill-move-btn.active),
+  :global(.diff-line-extend-wrapper) .line-findings :global(.skill-move-go-btn) {
     color: var(--accent);
   }
 
@@ -1361,10 +1553,12 @@
   }
 
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-error),
-  :global(.diff-line-extend-wrapper) .line-findings :global(.severity-chip-high) {
+  :global(.diff-line-extend-wrapper) .line-findings :global(.severity-chip-high),
+  :global(.diff-line-extend-wrapper) .line-findings :global(.skill-move-error) {
     color: var(--legend-removed-color);
   }
-  :global(.diff-line-extend-wrapper) .line-findings :global(.severity-chip-medium) {
+  :global(.diff-line-extend-wrapper) .line-findings :global(.severity-chip-medium),
+  :global(.diff-line-extend-wrapper) .line-findings :global(.skill-moved-chip) {
     color: var(--legend-changed-color);
   }
   :global(.diff-line-extend-wrapper) .line-findings :global(.severity-chip-low) {

@@ -12,10 +12,11 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/svelte'
+import { render, screen, fireEvent } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import SkillFindingCard from './SkillFindingCard.svelte'
 import type { AskFocus } from '../lib/ai/tasks'
+import { reanchorDrag } from '../lib/findings/reanchor.svelte'
 
 function renderCard(props: Partial<Parameters<typeof render>[1]> & Record<string, unknown> = {}) {
   return render(SkillFindingCard, {
@@ -526,5 +527,92 @@ describe('SkillFindingCard — covered by the user draft (convergence)', () => {
     const { container } = renderCard({ coveredByDraft: COVERED, findingKey: 'skill:src/a.ts:10:x' })
     const collapsed = container.querySelector('.skill-finding.covered-collapsed')
     expect(collapsed?.getAttribute('data-finding-key')).toBe('skill:src/a.ts:10:x')
+  })
+})
+
+describe('SkillFindingCard — re-anchor affordances (drag handle / moved chip / move-to-line)', () => {
+  it('drag handle renders when anchorHash is set and the card is not added', () => {
+    const { container } = renderCard({ anchorHash: 'abc123' })
+    const handle = container.querySelector('[data-testid="finding-drag-handle"]')
+    expect(handle).toBeTruthy()
+    expect(handle?.getAttribute('draggable')).toBe('true')
+  })
+
+  it('no drag handle without an anchorHash (contexts without re-anchor support)', () => {
+    const { container } = renderCard()
+    expect(container.querySelector('[data-testid="finding-drag-handle"]')).toBeNull()
+  })
+
+  it('no drag handle once added as draft (the draft is the user document now)', () => {
+    const { container } = renderCard({ anchorHash: 'abc123', added: true })
+    expect(container.querySelector('[data-testid="finding-drag-handle"]')).toBeNull()
+  })
+
+  it('buttons never carry the draggable attribute (clicks must not fight drags)', () => {
+    const { container } = renderCard({ anchorHash: 'abc123', onMoveToLine: () => true })
+    for (const btn of container.querySelectorAll('button')) {
+      expect(btn.getAttribute('draggable')).not.toBe('true')
+    }
+  })
+
+  it('moved chip shows the original line and its undo calls onUndoMove', async () => {
+    const onUndoMove = vi.fn()
+    const { container } = renderCard({ movedFrom: { path: 'src/a.ts', line: 12 }, onUndoMove })
+    const chip = container.querySelector('[data-testid="finding-moved-chip"]')
+    expect(chip?.textContent).toContain('moved from line 12')
+    await userEvent.click(screen.getByRole('button', { name: /undo move — restore line 12/i }))
+    expect(onUndoMove).toHaveBeenCalledOnce()
+  })
+
+  it('no moved chip without movedFrom', () => {
+    const { container } = renderCard({ anchorHash: 'abc123' })
+    expect(container.querySelector('[data-testid="finding-moved-chip"]')).toBeNull()
+  })
+
+  it('"Move to line…" opens the form; a valid line calls onMoveToLine and closes it', async () => {
+    const onMoveToLine = vi.fn().mockReturnValue(true)
+    const { container } = renderCard({ onMoveToLine })
+    await userEvent.click(screen.getByRole('button', { name: /move this finding to another diff line/i }))
+    await userEvent.type(screen.getByRole('spinbutton', { name: /target line number/i }), '7')
+    await userEvent.click(screen.getByRole('button', { name: 'Move' }))
+    expect(onMoveToLine).toHaveBeenCalledWith(7)
+    expect(container.querySelector('[data-testid="finding-move-form"]')).toBeNull()
+  })
+
+  it('an invalid line (onMoveToLine → false) shows an inline error; the form stays open', async () => {
+    const onMoveToLine = vi.fn().mockReturnValue(false)
+    const { container } = renderCard({ onMoveToLine })
+    await userEvent.click(screen.getByRole('button', { name: /move this finding to another diff line/i }))
+    await userEvent.type(screen.getByRole('spinbutton', { name: /target line number/i }), '999')
+    await userEvent.click(screen.getByRole('button', { name: 'Move' }))
+    expect(screen.getByRole('alert').textContent).toContain("line 999 isn't in this diff")
+    expect(container.querySelector('[data-testid="finding-move-form"]')).toBeTruthy()
+  })
+
+  it('Escape in the line input closes the form without moving', async () => {
+    const onMoveToLine = vi.fn().mockReturnValue(true)
+    const { container } = renderCard({ onMoveToLine })
+    await userEvent.click(screen.getByRole('button', { name: /move this finding to another diff line/i }))
+    await userEvent.type(screen.getByRole('spinbutton', { name: /target line number/i }), '{Escape}')
+    expect(container.querySelector('[data-testid="finding-move-form"]')).toBeNull()
+    expect(onMoveToLine).not.toHaveBeenCalled()
+  })
+
+  it('no "Move to line…" button once added, or without onMoveToLine', () => {
+    renderCard({ onMoveToLine: () => true, added: true })
+    expect(screen.queryByRole('button', { name: /move this finding to another diff line/i })).not.toBeInTheDocument()
+    renderCard({})
+    expect(screen.queryByRole('button', { name: /move this finding to another diff line/i })).not.toBeInTheDocument()
+  })
+
+  it('dragstart publishes the anchor hash (dataTransfer + in-flight drag state)', async () => {
+    const { container } = renderCard({ anchorHash: 'hash-xyz' })
+    const handle = container.querySelector('[data-testid="finding-drag-handle"]')!
+    const setData = vi.fn()
+    await fireEvent.dragStart(handle, { dataTransfer: { setData, setDragImage: vi.fn(), effectAllowed: 'none' } })
+    expect(setData).toHaveBeenCalledWith('application/x-review123-finding', 'hash-xyz')
+    expect(reanchorDrag.hash).toBe('hash-xyz')
+    await fireEvent.dragEnd(handle)
+    expect(reanchorDrag.hash).toBeNull()
   })
 })
