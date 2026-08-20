@@ -36,9 +36,9 @@ function prFile(filename: string): PrFile {
 
 let dbIndex = 0
 
-/** RAW-seed drafts (optionally without createdAt) and return a load()ed store. */
+/** RAW-seed drafts (optionally without createdAt, at ordinal n) and return a load()ed store. */
 async function seededStore(
-  records: { path: string; line: number; body: string; createdAt?: number }[],
+  records: { path: string; line: number; body: string; createdAt?: number; n?: number }[],
 ) {
   const prKey = `github:alice/widgets#${++dbIndex}`
   const db = `verdict-lifecycle-db-${dbIndex}`
@@ -53,10 +53,10 @@ async function seededStore(
       const tx = dbh.transaction('drafts', 'readwrite')
       for (const r of records) {
         const record: Record<string, unknown> = {
-          prKey, path: r.path, line: r.line, side: 'RIGHT', body: r.body, n: 0, updatedAt: r.createdAt ?? Date.now(),
+          prKey, path: r.path, line: r.line, side: 'RIGHT', body: r.body, n: r.n ?? 0, updatedAt: r.createdAt ?? Date.now(),
         }
         if (r.createdAt != null) record.createdAt = r.createdAt
-        tx.objectStore('drafts').put(record, `${prKey}|${r.path}|${r.line}|RIGHT|0`)
+        tx.objectStore('drafts').put(record, `${prKey}|${r.path}|${r.line}|RIGHT|${r.n ?? 0}`)
       }
       tx.oncomplete = () => { dbh.close(); resolve() }
       tx.onerror = () => reject(tx.error)
@@ -114,6 +114,29 @@ describe('VerdictStep — recap draft lifecycle', () => {
     expect(screen.getByText('Drafted comments (1)')).toBeInTheDocument()
     expect(screen.queryByText('first draft')).toBeNull()
     expect(screen.getByText('second draft')).toBeInTheDocument()
+  })
+
+  it('lists EVERY draft at the same line as its own row; per-row remove deletes exactly that one', async () => {
+    const user = userEvent.setup()
+    // Multi-drafts-per-line: two coexisting comments at src/a.ts line 3
+    const store = await seededStore([
+      { path: 'src/a.ts', line: 3, body: 'first comment at the line', n: 0 },
+      { path: 'src/a.ts', line: 3, body: 'second comment at the line', n: 1 },
+    ])
+    render(VerdictStep, { props: { prRef, commitId, store, prUrl, submitFn: okSubmit } })
+
+    // Both rows are listed in the recap
+    expect(screen.getByText('Drafted comments (2)')).toBeInTheDocument()
+    expect(screen.getByText('first comment at the line')).toBeInTheDocument()
+    expect(screen.getByText('second comment at the line')).toBeInTheDocument()
+
+    // Remove the SECOND draft (disambiguated aria-label carries the ordinal)
+    await user.click(screen.getByRole('button', { name: 'Remove draft at src/a.ts line 3 (comment 2)' }))
+
+    await waitFor(() => expect(store.count).toBe(1))
+    expect(screen.getByText('Drafted comments (1)')).toBeInTheDocument()
+    expect(screen.getByText('first comment at the line')).toBeInTheDocument()
+    expect(screen.queryByText('second comment at the line')).toBeNull()
   })
 
   it('marks drafts whose file left the diff as stale — only those', async () => {

@@ -162,4 +162,73 @@ describe('multi-drafts per line — FileDiff renders the whole stack', () => {
     expect(onRemoveDraft.mock.calls[0][1]).toBe('RIGHT') // side
     expect(onRemoveDraft.mock.calls[0][2]).toBe(1) // n — the SECOND draft's ordinal
   })
+
+  it('"Add another comment" below the stack opens a composer; saving APPENDS (no n passed)', async () => {
+    const onAddDraft = vi.fn()
+    const oneDraft: Draft[] = [
+      { prKey: 'o/r#1', path: 'src/foo.ts', line: 2, side: 'RIGHT', body: 'FIRST draft body', n: 0 },
+    ]
+    const { container } = render(FileDiff, {
+      props: { file: makeFile(), mode: 'unified', drafts: oneDraft, onAddDraft },
+    })
+
+    // The affordance renders below the existing stack
+    const addAnother = await waitFor(() => {
+      const btn = container.querySelector('[data-testid="add-another-comment"]')
+      expect(btn).toBeTruthy()
+      return btn as HTMLButtonElement
+    })
+    await userEvent.click(addAnother)
+
+    // A composer (new-comment editor) appears in the same annotation row
+    const textarea = await waitFor(() => {
+      const ta = container.querySelector('[data-testid="inline-annotations"] textarea')
+      expect(ta).toBeTruthy()
+      return ta as HTMLTextAreaElement
+    })
+    await userEvent.type(textarea, 'A second manual comment')
+    const saveBtn = [...container.querySelectorAll('[data-testid="inline-annotations"] button')]
+      .find((b) => /leave comment/i.test(b.textContent ?? ''))!
+    await userEvent.click(saveBtn)
+
+    // NEW comment → n is NOT passed (undefined = append; the store's n=-1
+    // sentinel picks the next free ordinal — never overwriting the first).
+    expect(onAddDraft).toHaveBeenCalledTimes(1)
+    expect(onAddDraft.mock.calls[0][0]).toBe(2)
+    expect(onAddDraft.mock.calls[0][1]).toBe('RIGHT')
+    expect(onAddDraft.mock.calls[0][2]).toBe('A second manual comment')
+    expect(onAddDraft.mock.calls[0][3]).toBeUndefined()
+  })
+
+  it('editing a stacked draft passes ITS ordinal (edit in place, not append)', async () => {
+    const onAddDraft = vi.fn()
+    const { container } = render(FileDiff, {
+      props: { file: makeFile(), mode: 'unified', drafts: twoDrafts, onAddDraft },
+    })
+
+    await waitFor(() => {
+      expect(container.querySelectorAll('[data-testid="inline-annotations"] [data-testid="draft-thread"]').length).toBe(2)
+    })
+
+    // Edit the SECOND draft (n=1)
+    const threads = [...container.querySelectorAll('[data-testid="inline-annotations"] [data-testid="draft-thread"]')]
+    const second = threads.find((t) => t.textContent?.includes('SECOND draft body'))!
+    const editBtn = [...second.querySelectorAll('button')].find((b) => /edit/i.test(b.textContent ?? ''))!
+    await userEvent.click(editBtn)
+
+    const textarea = await waitFor(() => {
+      const ta = second.querySelector('textarea')
+      expect(ta).toBeTruthy()
+      return ta as HTMLTextAreaElement
+    })
+    await userEvent.clear(textarea)
+    await userEvent.type(textarea, 'SECOND draft body, revised')
+    const saveBtn = [...second.querySelectorAll('button')].find((b) => /leave comment/i.test(b.textContent ?? ''))!
+    await userEvent.click(saveBtn)
+
+    // Edit-in-place: the draft's own ordinal rides along
+    expect(onAddDraft).toHaveBeenCalledTimes(1)
+    expect(onAddDraft.mock.calls[0][2]).toBe('SECOND draft body, revised')
+    expect(onAddDraft.mock.calls[0][3]).toBe(1)
+  })
 })

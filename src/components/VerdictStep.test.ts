@@ -583,6 +583,51 @@ describe('VerdictStep', () => {
       expect(store.drafts[0].body).toBe(suggestion)
     })
 
+    it('Apply suggestion on a SECOND same-line draft edits THAT draft in place (never clobbers the first, never appends a duplicate)', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      // Two coexisting drafts at the SAME line (multi-drafts-per-line)
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'first comment' })
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'second comment', n: -1 })
+      expect(store.count).toBe(2)
+
+      const suggestion = 'Sharper second comment'
+      const result: CoachResult = {
+        reviews: [{
+          index: 1, // the n=1 draft
+          clarity: 2,
+          actionable: true,
+          tone: 'ok',
+          biasQuestion: null,
+          suggestion,
+          accuracy: 'consistent',
+          accuracyNote: null,
+          duplicate: false,
+        }],
+      }
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: okCoach(result) },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /apply suggestion/i })).toBeInTheDocument()
+      })
+      await user.click(screen.getByRole('button', { name: /apply suggestion/i }))
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /apply suggestion/i })).toBeNull()
+      })
+
+      // Still exactly TWO drafts: the edit went to the n=1 draft in place.
+      expect(store.count).toBe(2)
+      const at = store.draftsAt('src/a.ts', 1, 'RIGHT')
+      expect(at[0].body).toBe('first comment')
+      expect(at[1].body).toBe(suggestion)
+    })
+
     it('Dismiss hides the suggestion card without mutating the store', async () => {
       signIn()
       setDeepseek()

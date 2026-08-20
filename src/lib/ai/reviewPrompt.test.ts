@@ -76,6 +76,22 @@ describe('buildReviewPrompt', () => {
     expect(out).toContain('const x = 1')
   })
 
+  it('includes EVERY draft at the same line as its own numbered section (ordered by n)', () => {
+    // Multi-drafts-per-line: the exported prompt must carry all of them.
+    const out = buildReviewPrompt({
+      pr: pr(),
+      drafts: [
+        draft({ line: 10, body: 'Second thought on this line.', n: 1 }),
+        draft({ line: 10, body: 'First thought on this line.', n: 0 }),
+      ],
+      files: [file()],
+    })
+    expect(out).toContain('### 1. src/a.ts:10 (RIGHT)')
+    expect(out).toContain('### 2. src/a.ts:10 (RIGHT)')
+    // Thread order: n=0 before n=1 regardless of input order
+    expect(out.indexOf('First thought on this line.')).toBeLessThan(out.indexOf('Second thought on this line.'))
+  })
+
   it('does NOT add the 🤖 AI-suggested marker for AI-authored drafts (LLM prompt stays clean)', () => {
     const out = buildReviewPrompt({
       pr: pr(),

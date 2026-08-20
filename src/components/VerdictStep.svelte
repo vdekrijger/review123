@@ -246,7 +246,10 @@
   async function applyCoachSuggestion(draftIndex: number, suggestion: string) {
     const draft = store.drafts[draftIndex]
     if (!draft) return
-    await store.upsert({ path: draft.path, line: draft.line, side: draft.side, body: suggestion })
+    // EDIT in place: pass the draft's own ordinal so the suggestion replaces
+    // THIS draft (multiple drafts can coexist at one line — omitting n would
+    // clobber the n=0 draft or, with append semantics, duplicate the comment).
+    await store.upsert({ path: draft.path, line: draft.line, side: draft.side, body: suggestion, n: draft.n ?? 0 })
     // Dismiss the suggestion card after applying
     dismissedSuggestions = new Set([...dismissedSuggestions, draftIndex])
   }
@@ -562,7 +565,7 @@
                   class="draft-remove"
                   type="button"
                   data-testid="recap-draft-remove"
-                  aria-label={`Remove draft at ${draft.path} line ${draft.line}`}
+                  aria-label={`Remove draft at ${draft.path} line ${draft.line}${(draft.n ?? 0) > 0 ? ` (comment ${(draft.n ?? 0) + 1})` : ''}`}
                   title="Remove this draft"
                   onclick={() => removeDraft(draft)}
                 >×</button>
