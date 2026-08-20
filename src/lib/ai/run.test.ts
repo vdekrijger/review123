@@ -1390,6 +1390,68 @@ describe('coach() — partial failure', () => {
     expect(err).not.toMatch(/An unexpected error occurred/)
   })
 
+  it('total failure carries the failing chunk CONCRETE detail as errorDetail', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepairWithUsage.mockRejectedValue(
+      new LlmError('server', 'Server error (502): upstream connect error', { status: 502 }),
+    )
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.coach(manyDrafts(3))
+
+    expect('error' in result).toBe(true)
+    const r = result as { error: string; errorDetail?: string }
+    // describeTaskError composition: the raw message adds info beyond the
+    // canned sentence, so it surfaces (with the retried-automatically suffix
+    // since 5xx is transient-classified).
+    expect(r.errorDetail).toContain('upstream connect error')
+    expect(r.errorDetail).toContain('retried automatically')
+    // Analytics carry reason_detail too (same composition rules).
+    const failed = deps.track.mock.calls.find((c: unknown[]) => c[0] === 'ai_task_failed')!
+    expect((failed[1] as { reason_detail?: string }).reason_detail).toContain('upstream connect error')
+  })
+
+  it('partial failure carries the failing chunk detail as notCoached.detail', async () => {
+    const deps = makeDeps()
+    let call = 0
+    deps.llmJsonWithRepairWithUsage.mockImplementation(async (opts: unknown) => {
+      const payload = JSON.parse((opts as { user: string }).user) as { drafts: { index: number }[] }
+      call++
+      if (call === 2) {
+        throw new LlmError('rate-limited', 'Rate limited (429): tokens exhausted', { status: 429 })
+      }
+      return {
+        result: { reviews: payload.drafts.map((d) => ({
+          index: d.index, clarity: 3, actionable: true, tone: 'ok',
+          biasQuestion: null, suggestion: null, accuracy: 'consistent',
+          accuracyNote: null, duplicate: false,
+        })) },
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.coach(manyDrafts(20))
+
+    const r = result as { notCoached?: { indices: number[]; message: string; detail?: string } }
+    expect(r.notCoached).toBeDefined()
+    expect(r.notCoached!.detail).toContain('tokens exhausted')
+  })
+
+  it('no detail when the failure message adds nothing beyond the canned sentence', async () => {
+    const deps = makeDeps()
+    // Bare LlmError default message `llm: rate-limited` → detail is omitted
+    // (describeTaskError rule 2)… except transient classification appends the
+    // honest retried-automatically note. Assert the raw message never leaks.
+    deps.llmJsonWithRepairWithUsage.mockRejectedValue(new LlmError('rate-limited'))
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.coach(manyDrafts(3))
+
+    const r = result as { error: string; errorDetail?: string }
+    expect(r.errorDetail ?? '').not.toContain('llm: rate-limited')
+  })
+
   it('the failed-chunk indices map back to the right drafts (mapping integrity)', async () => {
     const deps = makeDeps()
     let call = 0

@@ -55,11 +55,14 @@ export function chunk<T>(items: T[], size: number): T[][] {
 /**
  * Outcome of coaching ONE chunk: either the chunk's CoachResult, or an error
  * kind plus the original draft indices that went uncoached (so the caller can
- * tell the user exactly which comments were not graded, and why).
+ * tell the user exactly which comments were not graded, and why). `detail`
+ * carries the CONCRETE upstream failure message (describeTaskError's
+ * errorDetail composition) when it adds information beyond the kind — absent
+ * otherwise.
  */
 export type ChunkOutcome =
   | { ok: true; result: CoachResult }
-  | { ok: false; kind: string; indices: number[] }
+  | { ok: false; kind: string; indices: number[]; detail?: string }
 
 /**
  * A run of coach chunks merged into one shape. `reviews` is the union of every
@@ -75,6 +78,12 @@ export interface MergedCoachResult {
   failedIndices: number[]
   /** The LlmError kind from the (first) failed chunk, for an honest message. */
   failureKind?: string
+  /**
+   * The concrete upstream failure detail from the SAME chunk that supplied
+   * `failureKind` (kept coherent — kind and detail always describe one
+   * failure). Absent when that chunk carried no detail.
+   */
+  failureDetail?: string
 }
 
 /**
@@ -88,6 +97,7 @@ export function mergeChunkOutcomes(outcomes: ChunkOutcome[]): MergedCoachResult 
   const failedIndices: number[] = []
   let verdictCoherence: VerdictCoherence | null | undefined
   let failureKind: string | undefined
+  let failureDetail: string | undefined
 
   for (const outcome of outcomes) {
     if (outcome.ok) {
@@ -98,7 +108,11 @@ export function mergeChunkOutcomes(outcomes: ChunkOutcome[]): MergedCoachResult 
       }
     } else {
       failedIndices.push(...outcome.indices)
-      if (failureKind === undefined) failureKind = outcome.kind
+      // First failed chunk supplies BOTH kind and detail (kept coherent).
+      if (failureKind === undefined) {
+        failureKind = outcome.kind
+        failureDetail = outcome.detail
+      }
     }
   }
 
@@ -110,6 +124,7 @@ export function mergeChunkOutcomes(outcomes: ChunkOutcome[]): MergedCoachResult 
     ...(verdictCoherence !== undefined ? { verdictCoherence } : {}),
     failedIndices,
     ...(failureKind !== undefined ? { failureKind } : {}),
+    ...(failureDetail !== undefined ? { failureDetail } : {}),
   }
 }
 

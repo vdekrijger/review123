@@ -102,6 +102,34 @@ describe('mergeChunkOutcomes', () => {
     expect(merged.failedIndices).toEqual([0, 1, 2, 3])
     expect(merged.failureKind).toBe('network')
   })
+
+  it('carries the failing chunk error detail into failureDetail', () => {
+    const outcomes: ChunkOutcome[] = [
+      { ok: true, result: { reviews: [review(0)] } },
+      { ok: false, kind: 'server', indices: [1, 2], detail: 'HTTP 502: upstream connect error' },
+    ]
+    const merged = mergeChunkOutcomes(outcomes)
+    expect(merged.failureKind).toBe('server')
+    expect(merged.failureDetail).toBe('HTTP 502: upstream connect error')
+  })
+
+  it('failureDetail stays coherent with failureKind — both from the FIRST failed chunk', () => {
+    const outcomes: ChunkOutcome[] = [
+      { ok: false, kind: 'network', indices: [0] }, // first failure: NO detail
+      { ok: false, kind: 'server', indices: [1], detail: 'HTTP 500: boom' },
+    ]
+    const merged = mergeChunkOutcomes(outcomes)
+    expect(merged.failureKind).toBe('network')
+    // The first failed chunk carried no detail → none is reported (never a
+    // mismatched kind/detail pair from two different failures).
+    expect(merged.failureDetail).toBeUndefined()
+  })
+
+  it('failureDetail is absent when no chunk failed', () => {
+    const merged = mergeChunkOutcomes([{ ok: true, result: { reviews: [review(0)] } }])
+    expect(merged.failureDetail).toBeUndefined()
+    expect(merged.failureKind).toBeUndefined()
+  })
 })
 
 describe('mapWithConcurrency', () => {

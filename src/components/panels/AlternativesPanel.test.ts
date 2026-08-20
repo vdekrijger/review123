@@ -66,6 +66,23 @@ describe('AlternativesPanel', () => {
     })
     expect(screen.getByText(/No meaningfully different alternatives/i)).toBeInTheDocument()
   })
+
+  it('omits the assessment chip for a salvaged alternative without assessment', () => {
+    // Salvaged results may drop an invalid assessment while keeping the
+    // element's substance — the card renders, the chip does not.
+    const result: AlternativesResult = {
+      problem: 'How to handle caching?',
+      alternatives: [
+        { approach: 'Use Redis', tradeoffs: 'External dependency', rationale: 'More scalable' },
+      ],
+    }
+    const { container } = render(AlternativesPanel, {
+      props: { run: makeRun({ alternatives: { status: 'done', value: result } }) },
+    })
+    expect(screen.getByText('Use Redis')).toBeInTheDocument()
+    expect(screen.getByText('More scalable')).toBeInTheDocument()
+    expect(container.querySelector('.assessment-chip')).toBeNull()
+  })
 })
 
 // ---------------------------------------------------------------------------
