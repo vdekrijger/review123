@@ -314,6 +314,64 @@ describe('submitReview — multi-line comment anchoring', () => {
 })
 
 // ---------------------------------------------------------------------------
+// PINNING REPRO — off-diff comment 422 fails the ENTIRE review
+//
+// User report: a review containing ONE comment anchored to a line that is not
+// part of the diff hunks gets a 422 from GitHub's create-review endpoint, and
+// the single 422 loses ALL comments (the valid ones too). This test pins
+// today's behavior before the fix: one POST carrying every draft, one 422,
+// total failure.
+// ---------------------------------------------------------------------------
+describe('submitReview — off-diff comment fails the whole review (repro)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetInFlightForTest()
+  })
+
+  // The patch for src/foo.ts contains RIGHT lines 1..4 only.
+  const PATCH = '@@ -1,3 +1,4 @@\n context\n-removed\n+added\n+added2\n context'
+  const filesFixture = [{ filename: 'src/foo.ts', patch: PATCH }]
+
+  it('one off-diff draft 422s the single review POST and loses the valid comment too', async () => {
+    const f = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      const sent = JSON.parse(init.body as string) as { comments?: { line: number }[] }
+      // GitHub rejects the whole review when ANY comment line is off-diff
+      const bad = (sent.comments ?? []).some((c) => c.line > 4)
+      return Promise.resolve(
+        bad
+          ? jsonResponse({
+              message: 'Unprocessable Entity',
+              errors: [
+                {
+                  resource: 'PullRequestReviewComment',
+                  code: 'custom',
+                  field: 'pull_request_review_thread.line',
+                  message: 'pull_request_review_thread.line must be part of the diff',
+                },
+              ],
+            }, {}, 422)
+          : jsonResponse({ id: 1 }, {}, 200),
+      )
+    })
+    vi.stubGlobal('fetch', f)
+
+    const drafts = [
+      makeDraft({ path: 'src/foo.ts', line: 3, side: 'RIGHT', body: 'Valid — line is in the diff' }),
+      makeDraft({ path: 'src/foo.ts', line: 99, side: 'RIGHT', body: 'Off-diff — line 99 is NOT in the diff' }),
+    ]
+    void filesFixture // the current submitReview has no way to receive patches
+    const result = await submitReview(ref, 'COMMENT', 'Overall', drafts, commitId)
+
+    // TODAY (bug): ONE review POST carries both drafts, GitHub 422s the whole
+    // review, and the valid comment is lost along with the off-diff one.
+    expect(f.mock.calls.length).toBe(1)
+    const sentBody = JSON.parse(f.mock.calls[0][1].body as string)
+    expect(sentBody.comments).toHaveLength(2)
+    expect(result).toMatchObject({ ok: false, kind: 'invalid-anchor' })
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Fix-B: two drafts on the same line submit as two separate comments
 // ---------------------------------------------------------------------------
 describe('submitReview — Fix-B same-line threaded drafts', () => {
