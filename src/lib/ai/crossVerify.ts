@@ -19,8 +19,9 @@ import type { FindingVerdict, FindingVerification } from './schemas'
 import { findingsMatch, type AnchoredFinding } from './findingMatch'
 
 // ---------------------------------------------------------------------------
-// Prompt version note: bumped in tasks.ts (PROMPT_VERSION) when this prompt or
-// the aggregation changes, so cached verified results invalidate.
+// Prompt version note: when this prompt or the aggregation changes, bump the
+// entries of the tasks it verifies in tasks.ts (PROMPT_VERSIONS — 'skills' and
+// 'verdict'), so their cached verified results invalidate.
 // ---------------------------------------------------------------------------
 
 /**

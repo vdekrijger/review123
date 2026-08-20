@@ -5,7 +5,7 @@
  *   - validateSkillReviewResult: valid, invalid-enum severity, missing fields,
  *     element-level checking, >15 findings capped/rejected
  *   - skillReviewPrompt: system contains persona content, user = ctx.text,
- *     no PROMPT_VERSION reference, system instructs JSON output
+ *     no prompt-version reference, system instructs JSON output
  */
 
 import { describe, it, expect } from 'vitest'

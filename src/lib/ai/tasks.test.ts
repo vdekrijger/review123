@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
-  PROMPT_VERSION,
+  PROMPT_VERSIONS,
   summarizePrompt,
   attentionPrompt,
   diagramsPrompt,
@@ -36,6 +36,13 @@ function makeCtx(text = 'PR context text here'): PackedContext {
   return { text, notAnalyzed: [], includedFiles: [] }
 }
 
+/**
+ * The prompt-era floor: versions were a single global through v26, so every
+ * historical "PROMPT_VERSION ≥ n" assertion below holds for the MINIMUM across
+ * the per-task map (bumps only ever move a task's version forward).
+ */
+const MIN_PROMPT_VERSION = Math.min(...Object.values(PROMPT_VERSIONS))
+
 function makeCi(failures: { name: string; annotations: string[] }[]): CiSummary {
   return {
     total: failures.length,
@@ -47,17 +54,19 @@ function makeCi(failures: { name: string; annotations: string[] }[]): CiSummary 
 }
 
 // ---------------------------------------------------------------------------
-// PROMPT_VERSION
+// PROMPT_VERSIONS (per-task prompt versions)
 // ---------------------------------------------------------------------------
 
-describe('PROMPT_VERSION', () => {
-  it('is exported as a number', () => {
-    expect(typeof PROMPT_VERSION).toBe('number')
-    expect(PROMPT_VERSION).toBeGreaterThan(0)
+describe('PROMPT_VERSIONS', () => {
+  it('every task version is a positive number', () => {
+    for (const [task, version] of Object.entries(PROMPT_VERSIONS)) {
+      expect(typeof version, task).toBe('number')
+      expect(version, task).toBeGreaterThan(0)
+    }
   })
 
   it('is at least 2 (bumped for concise-summary prompt change)', () => {
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(2)
+    expect(MIN_PROMPT_VERSION).toBeGreaterThanOrEqual(2)
   })
 })
 
@@ -539,7 +548,7 @@ Trailing prose after blank line.`
 
 describe('PROMPT_VERSION v3', () => {
   it('is at least 3 (bumped for sentinel reading-order contract)', () => {
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(3)
+    expect(MIN_PROMPT_VERSION).toBeGreaterThanOrEqual(3)
   })
 })
 
@@ -657,7 +666,7 @@ src/routes/Review.svelte
 
 describe('PROMPT_VERSION v4', () => {
   it('is at least 4 (bumped for changeMap, testInsight, and coach prompts)', () => {
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(4)
+    expect(MIN_PROMPT_VERSION).toBeGreaterThanOrEqual(4)
   })
 })
 
@@ -667,7 +676,7 @@ describe('PROMPT_VERSION v4', () => {
 
 describe('PROMPT_VERSION v8', () => {
   it('is at least 8 (bumped for coach accuracy/duplicate/prComments dimensions)', () => {
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(8)
+    expect(MIN_PROMPT_VERSION).toBeGreaterThanOrEqual(8)
   })
 })
 
@@ -1033,7 +1042,7 @@ describe('coachPrompt', () => {
 
 describe('PROMPT_VERSION v9', () => {
   it('is at least 9 after the coach v9 prompt change', () => {
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(9)
+    expect(MIN_PROMPT_VERSION).toBeGreaterThanOrEqual(9)
   })
 })
 
@@ -1109,7 +1118,7 @@ describe('alternativesPrompt', () => {
 
 describe('PROMPT_VERSION v6', () => {
   it('is at least 6 (bumped for evidence-discipline in attention + verdict prompts)', () => {
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(6)
+    expect(MIN_PROMPT_VERSION).toBeGreaterThanOrEqual(6)
   })
 })
 
@@ -1435,8 +1444,8 @@ describe('diagramsPrompt — import graph context section (ai-quality-round2)', 
     expect(system).toMatch(/ground.*real|real.*relationship|appear.*import graph|import graph.*nodes/i)
   })
 
-  it('PROMPT_VERSION is at least 7 (bumped for import graph context)', () => {
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(7)
+  it('prompt-version floor is at least 7 (bumped for import graph context)', () => {
+    expect(MIN_PROMPT_VERSION).toBeGreaterThanOrEqual(7)
   })
 })
 
@@ -1491,7 +1500,7 @@ describe('askPrompt — typed text contract and concision', () => {
 
 describe('PROMPT_VERSION v10', () => {
   it('is at least 10 (bumped for anti-fatigue calibration — cache invalidation)', () => {
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(10)
+    expect(MIN_PROMPT_VERSION).toBeGreaterThanOrEqual(10)
   })
 })
 
@@ -1667,7 +1676,7 @@ describe('summarizePrompt — anti-fatigue (v10)', () => {
 
 describe('PROMPT_VERSION v11', () => {
   it('is at least 11 (bumped for phase-1 tightening — cache invalidation)', () => {
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(11)
+    expect(MIN_PROMPT_VERSION).toBeGreaterThanOrEqual(11)
   })
 })
 
@@ -1786,7 +1795,7 @@ describe('diagramsPrompt — terse labels (change-impact)', () => {
 
 describe('PROMPT_VERSION v13', () => {
   it('is at least 13 (bumped for assume-best-intent + deep attention — cache invalidation)', () => {
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(13)
+    expect(MIN_PROMPT_VERSION).toBeGreaterThanOrEqual(13)
   })
 })
 
@@ -1964,9 +1973,10 @@ describe('storyOrderPrompt', () => {
   })
 })
 
-describe('PROMPT_VERSION', () => {
-  it('is bumped to 26 (finding convergence joins the task set)', () => {
-    expect(PROMPT_VERSION).toBe(26)
+describe('PROMPT_VERSIONS migration (global PROMPT_VERSION 26 → per-task map)', () => {
+  it('every task was initialized at the former global 26 — no cache invalidated by the switch', () => {
+    // Versions only move forward per task, so ≥ 26 stays true after bumps.
+    expect(MIN_PROMPT_VERSION).toBeGreaterThanOrEqual(26)
   })
 })
 
@@ -2085,8 +2095,8 @@ describe('riskJudgePrompt', () => {
 // ---------------------------------------------------------------------------
 
 describe('PROMPT_VERSION v23 — absence-claim discipline in generator prompts', () => {
-  it('PROMPT_VERSION is at least 23', () => {
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(23)
+  it('prompt-version floor is at least 23', () => {
+    expect(MIN_PROMPT_VERSION).toBeGreaterThanOrEqual(23)
   })
 
   it('the skill-review prompt forbids ASSERTING an absence about code outside the diff', () => {

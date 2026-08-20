@@ -5,12 +5,13 @@
  * llmStream / llmJsonWithRepair. Prose quality is a human-checkpoint concern;
  * tests cover structural requirements only.
  *
- * PROMPT_VERSION is exported so the cache keying layer (Task 8) can invalidate
- * cached results when prompts change.
+ * PROMPT_VERSIONS (per-task) is exported so the cache keying layer (Task 8)
+ * can invalidate a task's cached results when THAT task's prompt changes.
  */
 
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
+import type { AiTaskId } from '../settings/settings'
 import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS } from './schemas'
 
@@ -79,7 +80,48 @@ import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNI
 // lack `impact` and degrade to the suppressed "no notable call-graph impact" note.
 // PROMPT_VERSION 17 (Plan L): the diagram task's output shape was a
 // flow-of-execution (GraphResult.flow) — now retired.
-export const PROMPT_VERSION = 26
+
+/**
+ * Every task whose result is cached under a prompt-versioned key — the seven
+ * user-controllable tasks (AiTaskId) plus the three cached tasks outside the
+ * Plan J matrix: story (storyOrderPrompt), riskJudge (riskJudgePrompt, cache
+ * segment 'risk-judge') and convergence (convergencePrompt). `coach` and `ask`
+ * are not cached, so they are deliberately absent.
+ */
+export type PromptVersionedTaskId = AiTaskId | 'story' | 'riskJudge' | 'convergence'
+
+/**
+ * Per-task prompt versions (H6 — cache-invalidation hygiene).
+ *
+ * THE RULE going forward: changed a task's prompt text (or its cached output
+ * shape)? Bump ONLY that task's entry. A bump cold-invalidates only that
+ * task's cached results — the other tasks' caches stay warm. (The old global
+ * PROMPT_VERSION invalidated EVERY task's cache for every PR on any prompt
+ * tweak — an avoidable thundering herd of LLM calls.)
+ *
+ * Migration note: the former global `PROMPT_VERSION = 26` was replaced by this
+ * map with EVERY entry initialized to 26, so each task's cache-key string
+ * stayed byte-identical and NO cached result was invalidated by the switch
+ * itself. Only future per-task bumps diverge. The changelog comments above
+ * document the shared v1–v26 prompt eras; from here on, record bumps per task.
+ */
+export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
+  summary: 26,
+  attention: 26,
+  diagrams: 26,
+  tests: 26,
+  alternatives: 26,
+  verdict: 26,
+  skills: 26,
+  story: 26,
+  riskJudge: 26,
+  convergence: 26,
+}
+
+/** The prompt version that keys `task`'s cache entries. */
+export function promptVersionFor(task: PromptVersionedTaskId): number {
+  return PROMPT_VERSIONS[task]
+}
 
 // ---------------------------------------------------------------------------
 // Shared anti-fatigue calibration (v10)
@@ -1097,7 +1139,8 @@ export interface AskFocus {
  * question — the system prompt directs the model to answer it directly and to
  * be VERY concise (2-4 sentences unless code is needed).
  *
- * NOTE: No PROMPT_VERSION bump needed — answers are never cached.
+ * NOTE: No prompt-version bump needed — answers are never cached (there is
+ * deliberately no PROMPT_VERSIONS entry for ask).
  */
 export function askPrompt(
   ctx: PackedContext,
@@ -1169,7 +1212,7 @@ so if the excerpt doesn't contain enough to answer.`
  * remains as a parse-side backstop only), evidence gate, brevity format,
  * silence-is-valid, severity honesty.
  *
- * NOTE: The orchestrator's cache key combines PROMPT_VERSION with a
+ * NOTE: The orchestrator's cache key combines PROMPT_VERSIONS.skills with a
  * content-hash (djb2 of skill content), so both prompt and skill edits
  * invalidate the cache.
  */
@@ -1332,7 +1375,7 @@ Cluster the items that describe the same underlying issue.`
  * same spirit — claims must be grounded — but now the model can GROUND them
  * itself with tools instead of hedging.
  *
- * No PROMPT_VERSION bump: deep-review results are cached under keys that
+ * No prompt-version bump: deep-review results are cached under keys that
  * carry a '|deep' marker, so deep and single-pass outputs never collide.
  */
 export function withDeepReviewGuidance(system: string, toolNames: string[]): string {
