@@ -710,6 +710,83 @@ describe('VerdictStep', () => {
       expect(screen.getByRole('button', { name: /^retry$/i })).toBeInTheDocument()
     })
 
+    it('partial failure: notCoached.detail surfaces as a hover tooltip on the note', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      const partialCoach = vi.fn().mockResolvedValue({
+        reviews: [makeCoachResult().reviews[0]],
+        notCoached: {
+          indices: [1],
+          message: "Couldn't coach 1 comment (Rate limited by DeepSeek. Please try again in a moment.) — retry to grade it.",
+          detail: 'Rate limited (429): tokens exhausted — retried automatically before failing',
+        },
+      })
+
+      render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: partialCoach },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        const note = screen.getByTestId('coach-partial-note')
+        const span = note.querySelector('span[title]')
+        expect(span).not.toBeNull()
+        expect(span!.getAttribute('title')).toContain('tokens exhausted')
+      })
+    })
+
+    it('coach error: errorDetail surfaces as a hover tooltip on the error line', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      const failingCoach = vi.fn().mockResolvedValue({
+        error: 'DeepSeek server error. Please try again later.',
+        errorDetail: 'HTTP 502: upstream connect error — retried automatically before failing',
+      })
+
+      const { container } = render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: failingCoach },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        const err = container.querySelector('.coach-error')
+        expect(err).not.toBeNull()
+        expect(err!.getAttribute('title')).toContain('upstream connect error')
+      })
+    })
+
+    it('coach error without errorDetail renders no title tooltip', async () => {
+      signIn()
+      setDeepseek()
+      const user = userEvent.setup()
+      const store = makeStore()
+      await store.upsert({ path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'looks good' })
+
+      const failingCoach = vi.fn().mockResolvedValue({ error: 'No DeepSeek API key configured.' })
+
+      const { container } = render(VerdictStep, {
+        props: { prRef, commitId, store, prUrl, submitFn: okSubmit, coachFn: failingCoach },
+      })
+
+      await user.click(screen.getByRole('button', { name: /coach my comments/i }))
+
+      await waitFor(() => {
+        const err = container.querySelector('.coach-error')
+        expect(err).not.toBeNull()
+        expect(err!.hasAttribute('title')).toBe(false)
+      })
+    })
+
     it('partial-failure Retry re-runs the coach', async () => {
       signIn()
       setDeepseek()
