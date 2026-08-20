@@ -118,7 +118,10 @@ export type AiTaskMode = 'off' | 'standard' | 'deep'
 /**
  * The user-controllable AI tasks (Plan J). The six AUTO tasks that run on PR
  * open, plus `skills` (manual Run-my-reviewers — deep makes it the most
- * expensive). `coach`, `ask`, and `story` are NOT user-controlled here.
+ * expensive), plus the two formerly always-on cached tasks that joined the
+ * matrix later: `story` (Plan H narrative ordering) and `riskJudge` (the
+ * single-pass LLM risk judge, #203). Only `coach` and `ask` remain outside
+ * user control (on-demand, never auto-run).
  */
 export type AiTaskId =
   | 'summary'
@@ -128,6 +131,8 @@ export type AiTaskId =
   | 'alternatives'
   | 'verdict'
   | 'skills'
+  | 'story'
+  | 'riskJudge'
 
 /** All controllable task ids, in display order. */
 export const AI_TASK_IDS: readonly AiTaskId[] = [
@@ -138,11 +143,29 @@ export const AI_TASK_IDS: readonly AiTaskId[] = [
   'alternatives',
   'verdict',
   'skills',
+  'story',
+  'riskJudge',
+] as const
+
+/**
+ * The six ORIGINAL auto tasks of the Plan J matrix (pre story/riskJudge).
+ * Used by the stored-matrix migration: the old orchestrator force-disabled
+ * story + riskJudge exactly when ALL SIX of these were off.
+ */
+const ORIGINAL_AUTO_TASKS = [
+  'summary',
+  'attention',
+  'diagrams',
+  'tests',
+  'alternatives',
+  'verdict',
 ] as const
 
 /**
  * Tasks that support the deep (agentic) harness. `summary` is pure description
- * (no harness) so it only supports off/standard — 'deep' is never valid for it.
+ * (no harness) and `riskJudge` is single-pass BY DESIGN (#203 — a cheap triage
+ * read, never the harness), so both only support off/standard — 'deep' is
+ * never valid for them. `story` runs through the harness when deep (Plan H).
  */
 export const DEEP_CAPABLE_TASKS: readonly AiTaskId[] = [
   'attention',
@@ -151,11 +174,12 @@ export const DEEP_CAPABLE_TASKS: readonly AiTaskId[] = [
   'alternatives',
   'verdict',
   'skills',
+  'story',
 ] as const
 
-/** Whether a task supports 'deep'. (Everything except `summary`.) */
+/** Whether a task supports 'deep'. (Everything except summary + riskJudge.) */
 export function taskSupportsDeep(task: AiTaskId): boolean {
-  return task !== 'summary'
+  return task !== 'summary' && task !== 'riskJudge'
 }
 
 export interface Settings {
@@ -275,6 +299,8 @@ export function defaultTaskModes(): Record<AiTaskId, AiTaskMode> {
     alternatives: 'standard',
     verdict: 'standard',
     skills: 'standard',
+    story: 'standard',
+    riskJudge: 'standard',
   }
 }
 
@@ -443,7 +469,7 @@ function coerceBitbucketAuth(raw: unknown): BitbucketAuth | null {
   return { email: obj['email'] as string, token: obj['token'] as string }
 }
 
-/** A valid mode string for a given task (summary may not be 'deep'). */
+/** A valid mode string for a given task (summary/riskJudge may not be 'deep'). */
 function isValidModeFor(task: AiTaskId, mode: unknown): mode is AiTaskMode {
   if (mode !== 'off' && mode !== 'standard' && mode !== 'deep') return false
   if (mode === 'deep' && !taskSupportsDeep(task)) return false
@@ -453,6 +479,15 @@ function isValidModeFor(task: AiTaskId, mode: unknown): mode is AiTaskMode {
 /**
  * Coerce + migrate the per-task mode matrix (Plan J).
  * - Explicit stored aiTaskModes wins (per-key validated, merged over defaults).
+ * - A stored matrix from BEFORE story/riskJudge joined the matrix lacks those
+ *   keys; they are derived so the OLD behavior is reproduced exactly:
+ *   · both tasks used to be force-disabled only when ALL SIX original auto
+ *     tasks were off (the start() short-circuit) → carried over as 'off';
+ *   · story's deep depth piggybacked on the VERDICT task's mode → a stored
+ *     verdict 'deep' carries story to 'deep';
+ *   · otherwise 'standard' (they always ran single-pass).
+ *   The first save of any mode materializes the full matrix, after which the
+ *   stored keys are authoritative and this derivation no longer applies.
  * - No stored aiTaskModes but legacy aiDeepReview===true → deep-capable tasks
  *   become 'deep' (one-time migration of the old global toggle).
  * - Otherwise → defaults (all 'standard').
@@ -466,6 +501,14 @@ function coerceTaskModes(obj: Record<string, unknown>): Record<AiTaskId, AiTaskM
       const m = src[task]
       if (isValidModeFor(task, m)) result[task] = m
       // summary='deep' (invalid) falls back to the default 'standard'
+    }
+    // Faithful migration for matrices stored before story/riskJudge existed.
+    const allAutoOff = ORIGINAL_AUTO_TASKS.every((t) => result[t] === 'off')
+    if (!isValidModeFor('story', src['story'])) {
+      result.story = allAutoOff ? 'off' : result.verdict === 'deep' ? 'deep' : 'standard'
+    }
+    if (!isValidModeFor('riskJudge', src['riskJudge'])) {
+      result.riskJudge = allAutoOff ? 'off' : 'standard'
     }
     return result
   }
@@ -787,12 +830,13 @@ export function setAiTaskModes(modes: Record<AiTaskId, AiTaskMode>): void {
   save({ aiTaskModes: next })
 }
 
-/** Quick-set: all deep-capable tasks deep, summary standard (legacy All). */
+/** Quick-set: all deep-capable tasks deep, summary/riskJudge standard (legacy All). */
 export const setAllTasksDeep = () => save({ aiTaskModes: allDeepTaskModes() })
 /** Quick-set: every task standard (legacy None). */
 export const setAllTasksStandard = () => save({ aiTaskModes: defaultTaskModes() })
 /**
- * Quick-set: keep summary + verdict on, turn the rest off (minimal tokens).
+ * Quick-set: keep summary + verdict on, turn the rest (incl. story + the risk
+ * judge) off (minimal tokens).
  */
 export function setOffAllExtras(): void {
   const modes = defaultTaskModes()

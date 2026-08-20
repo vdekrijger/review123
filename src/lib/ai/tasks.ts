@@ -82,13 +82,14 @@ import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNI
 // flow-of-execution (GraphResult.flow) — now retired.
 
 /**
- * Every task whose result is cached under a prompt-versioned key — the seven
- * user-controllable tasks (AiTaskId) plus the three cached tasks outside the
- * Plan J matrix: story (storyOrderPrompt), riskJudge (riskJudgePrompt, cache
- * segment 'risk-judge') and convergence (convergencePrompt). `coach` and `ask`
- * are not cached, so they are deliberately absent.
+ * Every task whose result is cached under a prompt-versioned key — the nine
+ * user-controllable tasks (AiTaskId — the Plan J matrix, which now includes
+ * story and riskJudge) plus `convergence` (convergencePrompt), the one cached
+ * task that stays OUTSIDE the mode matrix by design: it runs only as a cheap
+ * follow-up to the reviewers the user already enabled, so it has no mode of
+ * its own. `coach` and `ask` are not cached, so they are deliberately absent.
  */
-export type PromptVersionedTaskId = AiTaskId | 'story' | 'riskJudge' | 'convergence'
+export type PromptVersionedTaskId = AiTaskId | 'convergence'
 
 /**
  * Per-task prompt versions (H6 — cache-invalidation hygiene).

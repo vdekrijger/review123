@@ -69,6 +69,13 @@ export interface PrRiskInput {
   riskJudge?: RiskJudgeResult | null
   /** True while the risk-judge task is still running. */
   riskJudgePending?: boolean
+  /**
+   * True when the risk-judge TASK is turned off in AI settings (a deliberate
+   * user choice, not a failure). The factor is still excluded from the level,
+   * but with a calm "turned off in Settings" note instead of the alarming
+   * "unknown, not zero" framing reserved for pending/failed judges.
+   */
+  riskJudgeDisabled?: boolean
 }
 
 export interface PrRisk {
@@ -232,11 +239,20 @@ function aiPatternFactor(flags: HeuristicFlag[]): RiskFactor {
  * LLM risk-judge factor ("AI judgment"). The judge's 0–3 score enters the
  * breakdown like any other factor; its one-line rationale is the detail.
  * In flight → pending (excluded from the level, like every pending factor);
- * failed/absent → unavailable (unknown is NOT zero-risk). Defensive clamp on
- * the score — the validator already normalizes, but this module stays pure
- * and makes no assumptions about its callers.
+ * failed/absent → unavailable (unknown is NOT zero-risk); turned off in AI
+ * settings → unavailable too, but with a CALM note — the user chose this, so
+ * no alarming "unknown, not zero" framing. Defensive clamp on the score — the
+ * validator already normalizes, but this module stays pure and makes no
+ * assumptions about its callers.
  */
-function aiJudgeFactor(judge: RiskJudgeResult | null | undefined, pending: boolean): RiskFactor {
+function aiJudgeFactor(
+  judge: RiskJudgeResult | null | undefined,
+  pending: boolean,
+  disabled: boolean,
+): RiskFactor {
+  if (disabled) {
+    return { id: 'ai-judge', label: 'AI judgment', score: 0, detail: 'AI judge turned off in Settings', unavailable: true }
+  }
   if (judge == null) {
     return pending
       ? { id: 'ai-judge', label: 'AI judgment', score: 0, detail: 'AI judgment still running', pending: true }
@@ -279,7 +295,7 @@ export function computePrRisk(input: PrRiskInput): PrRisk {
       input.attentionPending ?? false,
     ),
     aiPatternFactor(heuristics),
-    aiJudgeFactor(input.riskJudge, input.riskJudgePending ?? false),
+    aiJudgeFactor(input.riskJudge, input.riskJudgePending ?? false, input.riskJudgeDisabled ?? false),
   ]
   return {
     level: overallLevel(factors),

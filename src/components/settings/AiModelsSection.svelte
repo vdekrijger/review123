@@ -49,6 +49,8 @@
     alternatives: 'Alternatives',
     verdict: 'Verdict',
     skills: 'My reviewers (skills)',
+    story: 'Story walkthrough',
+    riskJudge: 'Risk judge (review effort)',
   }
 
   const MODE_OPTIONS: { value: AiTaskMode; label: string }[] = [

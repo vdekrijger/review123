@@ -33,6 +33,8 @@ describe('settings', () => {
         alternatives: 'standard',
         verdict: 'standard',
         skills: 'standard',
+        story: 'standard',
+        riskJudge: 'standard',
       },
       storyMode: true,
       autoRunReviewers: true,
@@ -116,6 +118,8 @@ describe('settings', () => {
         alternatives: 'standard',
         verdict: 'standard',
         skills: 'standard',
+        story: 'standard',
+        riskJudge: 'standard',
       },
       storyMode: true,
       autoRunReviewers: true,
@@ -1045,16 +1049,19 @@ describe('key character sanitization', () => {
       expect(getSettings().aiTaskModes).toEqual({
         summary: 'standard', attention: 'standard', diagrams: 'standard',
         tests: 'standard', alternatives: 'standard', verdict: 'standard', skills: 'standard',
+        story: 'standard', riskJudge: 'standard',
       })
       expect(defaultTaskModes()).toEqual(getSettings().aiTaskModes)
     })
 
-    it('migration: legacy aiDeepReview=true (no matrix) → deep-capable tasks deep, summary standard', () => {
+    it('migration: legacy aiDeepReview=true (no matrix) → deep-capable tasks deep, summary/riskJudge standard', () => {
       localStorage.setItem('review123:settings', JSON.stringify({ aiDeepReview: true }))
       const m = getSettings().aiTaskModes
       expect(m).toEqual(allDeepTaskModes())
       expect(m.summary).toBe('standard')
-      for (const t of ['attention', 'diagrams', 'tests', 'alternatives', 'verdict', 'skills'] as const) {
+      // riskJudge is single-pass by design — never migrated to deep.
+      expect(m.riskJudge).toBe('standard')
+      for (const t of ['attention', 'diagrams', 'tests', 'alternatives', 'verdict', 'skills', 'story'] as const) {
         expect(m[t]).toBe('deep')
       }
     })
@@ -1115,14 +1122,75 @@ describe('key character sanitization', () => {
       expect(getSettings().aiTaskModes).toEqual(defaultTaskModes())
     })
 
-    it('setOffAllExtras keeps summary + verdict, turns the rest off', () => {
+    it('setOffAllExtras keeps summary + verdict, turns the rest (incl. story + riskJudge) off', () => {
       setOffAllExtras()
       const m = getSettings().aiTaskModes
       expect(m.summary).toBe('standard')
       expect(m.verdict).toBe('standard')
-      for (const t of ['attention', 'diagrams', 'tests', 'alternatives', 'skills'] as const) {
+      for (const t of ['attention', 'diagrams', 'tests', 'alternatives', 'skills', 'story', 'riskJudge'] as const) {
         expect(m[t]).toBe('off')
       }
+    })
+
+    describe('story + riskJudge joining the matrix (stored-matrix migration)', () => {
+      it('a pre-existing matrix without story/riskJudge keys gains both as standard (behavior unchanged)', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({
+          aiTaskModes: { summary: 'off', verdict: 'standard' },
+        }))
+        const m = getSettings().aiTaskModes
+        expect(m.story).toBe('standard')
+        expect(m.riskJudge).toBe('standard')
+      })
+
+      it('a stored verdict=deep carries story to deep (the old verdict piggyback)', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({
+          aiTaskModes: { verdict: 'deep' },
+        }))
+        const m = getSettings().aiTaskModes
+        expect(m.story).toBe('deep')
+        expect(m.riskJudge).toBe('standard')
+      })
+
+      it('ALL six original auto tasks off carries story + riskJudge to off (the old start() short-circuit)', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({
+          aiTaskModes: {
+            summary: 'off', attention: 'off', diagrams: 'off',
+            tests: 'off', alternatives: 'off', verdict: 'off',
+          },
+        }))
+        const m = getSettings().aiTaskModes
+        expect(m.story).toBe('off')
+        expect(m.riskJudge).toBe('off')
+      })
+
+      it('explicit stored story/riskJudge values win over the derivation', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({
+          aiTaskModes: {
+            summary: 'off', attention: 'off', diagrams: 'off',
+            tests: 'off', alternatives: 'off', verdict: 'off',
+            story: 'standard', riskJudge: 'standard',
+          },
+        }))
+        const m = getSettings().aiTaskModes
+        expect(m.story).toBe('standard')
+        expect(m.riskJudge).toBe('standard')
+      })
+
+      it('riskJudge="deep" (invalid — single-pass by design) coerces via the derivation to standard', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({
+          aiTaskModes: { riskJudge: 'deep' },
+        }))
+        expect(getSettings().aiTaskModes.riskJudge).toBe('standard')
+      })
+
+      it('setAiTaskMode coerces riskJudge deep → standard, but persists story deep (deep-capable)', () => {
+        setAiTaskMode('riskJudge', 'deep')
+        expect(getSettings().aiTaskModes.riskJudge).toBe('standard')
+        setAiTaskMode('story', 'deep')
+        expect(getSettings().aiTaskModes.story).toBe('deep')
+        setAiTaskMode('riskJudge', 'off')
+        expect(getSettings().aiTaskModes.riskJudge).toBe('off')
+      })
     })
   })
 

@@ -73,6 +73,34 @@ describe('InspectStep — story gating (key present)', () => {
   })
 })
 
+describe('InspectStep — story task turned off in AI settings (Plan J)', () => {
+  it('shows the honest turned-off note (with a settings link), the all-files diff, and NOT the "couldn\'t build" copy', () => {
+    render(InspectStep, { props: base({ storyAvailable: true, storyMode: true, story: null, storyStatus: 'disabled' }) })
+    expect(screen.getByText(/Story walkthrough turned off/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /enable in AI settings/i })).toBeInTheDocument()
+    // Honest copy — never the failure wording for a deliberate user choice.
+    expect(screen.queryByText(/Couldn't build a walkthrough/)).not.toBeInTheDocument()
+    // Files flow renders the all-files diff.
+    expect(document.getElementById('file-src-db-ts')).not.toBeNull()
+    expect(document.getElementById('file-src-ui-ts')).not.toBeNull()
+  })
+
+  it('keeps the switch visible but disables the Story button with an explanatory title', () => {
+    render(InspectStep, { props: base({ storyAvailable: true, storyMode: true, story: null, storyStatus: 'disabled' }) })
+    const storyBtn = screen.getByRole('button', { name: 'Story' })
+    expect(storyBtn).toBeDisabled()
+    expect(storyBtn.getAttribute('title')).toMatch(/turned off in AI settings/i)
+    // Files is the active flow.
+    expect(screen.getByRole('button', { name: 'Files' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('shows no note when the user already prefers Files (storyMode off)', () => {
+    render(InspectStep, { props: base({ storyAvailable: true, storyMode: false, story: null, storyStatus: 'disabled' }) })
+    expect(screen.queryByText(/Story walkthrough turned off/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Story' })).toBeDisabled()
+  })
+})
+
 describe('InspectStep — story fallback', () => {
   it('shows a skeleton while the story task is loading', () => {
     render(InspectStep, { props: base({ storyAvailable: true, storyMode: true, story: null, storyStatus: 'loading' }) })

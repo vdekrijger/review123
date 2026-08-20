@@ -274,6 +274,29 @@ describe('AI judgment factor (LLM risk judge)', () => {
     expect(risk.level).toBe('low')
     expect(risk.pending).toBe(false)
   })
+
+  it('turned off in Settings → excluded from the level with a CALM note (no "unknown, not zero" alarm)', () => {
+    const f = factor(computePrRisk({ files: smallFiles, riskJudgeDisabled: true }), 'ai-judge')
+    expect(f.unavailable).toBe(true)
+    expect(f.pending).toBeUndefined()
+    expect(f.detail).toBe('AI judge turned off in Settings')
+    expect(f.detail).not.toMatch(/unknown, not zero/i)
+  })
+
+  it('disabled wins over pending (a disabled task never reports "still running")', () => {
+    const f = factor(
+      computePrRisk({ files: smallFiles, riskJudgeDisabled: true, riskJudgePending: true }),
+      'ai-judge',
+    )
+    expect(f.detail).toBe('AI judge turned off in Settings')
+    expect(f.pending).toBeUndefined()
+  })
+
+  it('disabled judge never blocks or raises the overall level', () => {
+    const risk = computePrRisk({ files: smallFiles, riskJudgeDisabled: true })
+    expect(risk.level).toBe('low')
+    expect(risk.pending).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------
