@@ -11,7 +11,7 @@
  *      non-rate-limited fusion failures keep the existing fallback behavior.
  *   4. autoRetryDelayMs — the pacing policy for reviewer auto-retry rounds.
  *
- * No prompt text is asserted or changed here (PROMPT_VERSION untouched).
+ * No prompt text is asserted or changed here (PROMPT_VERSIONS untouched).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'

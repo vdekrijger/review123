@@ -55,7 +55,7 @@ import {
 import { gateAi as defaultGateAi } from '../consent/consent'
 import { track as defaultTrack } from '../analytics/analytics'
 import {
-  PROMPT_VERSION,
+  promptVersionFor,
   summarizePrompt,
   attentionPrompt,
   diagramsPrompt,
@@ -1211,7 +1211,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       summaryState.status = 'disabled'
       return
     }
-    const key = cacheKey(prKey, 'summary', PROMPT_VERSION)
+    const key = cacheKey(prKey, 'summary', promptVersionFor('summary'))
 
     // Cache check
     const t0 = performance.now()
@@ -1266,7 +1266,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
     const deep = { enabled: mode.deep, note: mode.note }
     if (deep.note) attentionState.note = deep.note
-    const key = cacheKey(prKey, deep.enabled ? 'attention|deep' : 'attention', PROMPT_VERSION)
+    const key = cacheKey(prKey, deep.enabled ? 'attention|deep' : 'attention', promptVersionFor('attention'))
 
     const t0 = performance.now()
     if (deep.enabled) {
@@ -1346,7 +1346,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
     const deep = { enabled: mode.deep, note: mode.note }
     if (deep.note) diagramsState.note = deep.note
-    const key = cacheKey(prKey, deep.enabled ? 'diagrams|deep' : 'diagrams', PROMPT_VERSION)
+    const key = cacheKey(prKey, deep.enabled ? 'diagrams|deep' : 'diagrams', promptVersionFor('diagrams'))
 
     const t0 = performance.now()
     if (deep.enabled) {
@@ -1421,7 +1421,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
     const deep = { enabled: mode.deep, note: mode.note }
     if (deep.note) testsState.note = deep.note
-    const key = cacheKey(prKey, deep.enabled ? 'tests|deep' : 'tests', PROMPT_VERSION)
+    const key = cacheKey(prKey, deep.enabled ? 'tests|deep' : 'tests', promptVersionFor('tests'))
 
     const t0 = performance.now()
     if (deep.enabled) {
@@ -1506,7 +1506,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
     const deep = { enabled: mode.deep, note: mode.note }
     if (deep.note) alternativesState.note = deep.note
-    const key = cacheKey(prKey, deep.enabled ? 'alternatives|deep' : 'alternatives', PROMPT_VERSION)
+    const key = cacheKey(prKey, deep.enabled ? 'alternatives|deep' : 'alternatives', promptVersionFor('alternatives'))
 
     const t0 = performance.now()
     if (deep.enabled) {
@@ -1641,7 +1641,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const verdictMode = resolveTaskMode('verdict', deepReview)
     const deep = { enabled: verdictMode.run && verdictMode.deep, note: verdictMode.note }
     if (deep.note) storyState.note = deep.note
-    const key = cacheKey(prKey, deep.enabled ? 'story|deep' : 'story', PROMPT_VERSION)
+    const key = cacheKey(prKey, deep.enabled ? 'story|deep' : 'story', promptVersionFor('story'))
 
     const t0 = performance.now()
     if (deep.enabled) {
@@ -1747,7 +1747,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // Like story, it is not in the user-facing task matrix (Plan J) and always
     // runs single-pass on the active model (never the multi-generator ensemble,
     // never the deep harness) — it is a cheap triage read, not a review task.
-    const key = cacheKey(prKey, 'risk-judge', PROMPT_VERSION)
+    const key = cacheKey(prKey, 'risk-judge', promptVersionFor('riskJudge'))
 
     const t0 = performance.now()
     const hit = await getCached<RiskJudgeResult>(key)
@@ -1786,7 +1786,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // Deep review helpers (Plan G part 2)
   //
   // Deep results cache under a key whose task segment carries a '|deep'
-  // marker (+ PROMPT_VERSION as usual) so deep and single-pass outputs never
+  // marker (+ the task's prompt version as usual) so deep and single-pass outputs never
   // collide. The cached value wraps the result with toolCallsUsed so the
   // "verified with N tool calls" footer survives cache hits. Partial loops
   // are NEVER cached: setCached only runs after successful validation.
@@ -1948,12 +1948,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
     const deep = { enabled: mode.deep, note: mode.note }
     if (deep.note) verdictState.note = deep.note
-    const key = cacheKey(prKey, deep.enabled ? 'verdict|deep' : 'verdict', PROMPT_VERSION)
+    const key = cacheKey(prKey, deep.enabled ? 'verdict|deep' : 'verdict', promptVersionFor('verdict'))
     // Companion entry holding the per-model breakdown (Plan N), keyed off the
     // SAME content hash with a '|models' discriminant so it never collides with
     // the result entry. Persisted alongside the verdict result and restored on a
     // cache hit so the Step-3 cost+performance table survives a re-opened PR.
-    const verdictModelsKey = cacheKey(prKey, (deep.enabled ? 'verdict|deep' : 'verdict') + '|models', PROMPT_VERSION)
+    const verdictModelsKey = cacheKey(prKey, (deep.enabled ? 'verdict|deep' : 'verdict') + '|models', promptVersionFor('verdict'))
 
     const t0 = performance.now()
     if (deep.enabled) {
@@ -2493,12 +2493,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // Content-addressed cache key: includes djb2(skill.content).
     // Deep runs carry a '|deep' marker so they never collide with
     // single-pass results for the same skill content.
-    const key = cacheKey(prKey, 'skill:' + djb2(skill.content) + (deep.enabled ? '|deep' : ''), PROMPT_VERSION)
+    const key = cacheKey(prKey, 'skill:' + djb2(skill.content) + (deep.enabled ? '|deep' : ''), promptVersionFor('skills'))
     // Companion entry holding this reviewer's per-model breakdown (Plan N),
     // keyed off the SAME content hash with a '|models' discriminant. Persisted
     // alongside the skill result and restored on a cache hit so the Step-3 cost+
     // performance table is repopulated for a previously-reviewed PR.
-    const skillModelsKey = cacheKey(prKey, 'skill:' + djb2(skill.content) + (deep.enabled ? '|deep' : '') + '|models', PROMPT_VERSION)
+    const skillModelsKey = cacheKey(prKey, 'skill:' + djb2(skill.content) + (deep.enabled ? '|deep' : '') + '|models', promptVersionFor('skills'))
 
     const t0 = performance.now()
 
@@ -2728,9 +2728,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
     const draftEnum = enumerateDrafts(draftList.map((d) => ({ path: d.path, line: d.line, body: d.body })))
 
-    // Cache key folds PROMPT_VERSION + a hash of the finding AND draft content,
+    // Cache key folds the convergence prompt version + a hash of the finding AND draft content,
     // so a changed finding set (or draft set) re-runs the pass.
-    const key = cacheKey(prKey, 'convergence:' + djb2(fingerprint + '||' + draftEnum.fingerprint), PROMPT_VERSION)
+    const key = cacheKey(prKey, 'convergence:' + djb2(fingerprint + '||' + draftEnum.fingerprint), promptVersionFor('convergence'))
     const t0 = performance.now()
 
     const hit = await getCached<ConvergenceValue>(key)

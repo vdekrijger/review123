@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createAiRun } from './run.svelte'
-import { PROMPT_VERSION } from './tasks'
+import { PROMPT_VERSIONS } from './tasks'
 import { LlmError } from '../llm/llm'
 import { addSkill } from '../skills/skills'
 import { djb2 } from '../viewed/viewed.svelte'
@@ -135,7 +135,7 @@ describe('deep review toggle OFF (default)', () => {
     await run.start()
 
     expect(deps.llmToolLoop).not.toHaveBeenCalled()
-    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|verdict|v${PROMPT_VERSION}`)
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|verdict|v${PROMPT_VERSIONS.verdict}`)
     expect(run.verdict.status).toBe('done')
     expect(run.verdict.toolCallsUsed).toBeUndefined()
     expect(run.verdict.note).toBeUndefined()
@@ -181,7 +181,7 @@ describe('deep verdict task', () => {
     expect(loopOpts.system).toContain('respond with JSON ONLY')
     expect(loopOpts.maxToolCalls).toBe(8)
 
-    const deepKey = `${PR_KEY}|verdict|deep|v${PROMPT_VERSION}`
+    const deepKey = `${PR_KEY}|verdict|deep|v${PROMPT_VERSIONS.verdict}`
     expect(deps.getCached).toHaveBeenCalledWith(deepKey)
     expect(deps.setCached).toHaveBeenCalledWith(deepKey, {
       deep: true,
@@ -227,7 +227,7 @@ describe('deep verdict task', () => {
     seedSettings({ aiDeepReview: true })
     const deps = makeDeps()
     deps.getCached.mockImplementation(async (key: string) =>
-      key === `${PR_KEY}|verdict|deep|v${PROMPT_VERSION}`
+      key === `${PR_KEY}|verdict|deep|v${PROMPT_VERSIONS.verdict}`
         ? { deep: true, result: VERDICT_RESULT, toolCallsUsed: 5 }
         : null,
     )
@@ -253,7 +253,7 @@ describe('deep verdict task', () => {
     expect(deps.llmToolLoop).not.toHaveBeenCalled()
     expect(deps.llmJsonWithRepairWithUsage).toHaveBeenCalled()
     // Single-pass key (no |deep marker) — same cache as a normal run
-    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|verdict|v${PROMPT_VERSION}`)
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|verdict|v${PROMPT_VERSIONS.verdict}`)
     expect(run.verdict.status).toBe('done')
     expect(run.verdict.note).toContain('does not support tool calling')
   })
@@ -290,7 +290,7 @@ describe('deep verdict task', () => {
     expect(repairCall).toBeDefined()
     expect(run.verdict.status).toBe('done')
     expect(run.verdict.toolCallsUsed).toBe(3)
-    expect(deps.setCached).toHaveBeenCalledWith(`${PR_KEY}|verdict|deep|v${PROMPT_VERSION}`, {
+    expect(deps.setCached).toHaveBeenCalledWith(`${PR_KEY}|verdict|deep|v${PROMPT_VERSIONS.verdict}`, {
       deep: true,
       result: VERDICT_RESULT,
       toolCallsUsed: 3,
@@ -321,7 +321,7 @@ describe('deep skill reviews', () => {
     const run = createAiRun(makeInput(makeSource()), deps)
     await run.runSkillReviews()
 
-    const deepKey = `${PR_KEY}|skill:${djb2(content)}|deep|v${PROMPT_VERSION}`
+    const deepKey = `${PR_KEY}|skill:${djb2(content)}|deep|v${PROMPT_VERSIONS.skills}`
     expect(deps.getCached).toHaveBeenCalledWith(deepKey)
     expect(deps.setCached).toHaveBeenCalledWith(deepKey, {
       deep: true,
@@ -341,7 +341,7 @@ describe('deep skill reviews', () => {
     await run.runSkillReviews()
 
     expect(deps.llmToolLoop).not.toHaveBeenCalled()
-    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|skill:${djb2(content)}|v${PROMPT_VERSION}`)
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|skill:${djb2(content)}|v${PROMPT_VERSIONS.skills}`)
     expect(run.skillReviews[0].state.status).toBe('done')
     expect(run.skillReviews[0].state.toolCallsUsed).toBeUndefined()
   })
@@ -474,7 +474,7 @@ describe('deep test-insight task', () => {
     expect(testsLoopCall).toBeDefined()
     expect((testsLoopCall![0] as { system: string }).system).toContain('Deep review mode')
 
-    const deepKey = `${PR_KEY}|tests|deep|v${PROMPT_VERSION}`
+    const deepKey = `${PR_KEY}|tests|deep|v${PROMPT_VERSIONS.tests}`
     expect(deps.getCached).toHaveBeenCalledWith(deepKey)
     expect(deps.setCached).toHaveBeenCalledWith(deepKey, {
       deep: true,
@@ -492,7 +492,7 @@ describe('deep test-insight task', () => {
     seedSettings({ aiDeepReview: true })
     const deps = makeMultiTaskDeps()
     deps.getCached.mockImplementation(async (key: string) =>
-      key === `${PR_KEY}|tests|deep|v${PROMPT_VERSION}`
+      key === `${PR_KEY}|tests|deep|v${PROMPT_VERSIONS.tests}`
         ? { deep: true, result: TESTS_RESULT, toolCallsUsed: 3 }
         : null,
     )
@@ -514,7 +514,7 @@ describe('deep test-insight task', () => {
     const run = createAiRun(makeInput(makeSource()), deps)
     await run.start()
 
-    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|tests|v${PROMPT_VERSION}`)
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|tests|v${PROMPT_VERSIONS.tests}`)
     expect(run.tests.status).toBe('done')
     expect(run.tests.note).toContain('does not support tool calling')
     expect(run.tests.toolCallsUsed).toBeUndefined()
@@ -526,7 +526,7 @@ describe('deep test-insight task', () => {
     const run = createAiRun(makeInput(makeSource()), deps)
     await run.start()
 
-    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|tests|v${PROMPT_VERSION}`)
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|tests|v${PROMPT_VERSIONS.tests}`)
     expect(run.tests.status).toBe('done')
     expect(run.tests.toolCallsUsed).toBeUndefined()
     expect(run.tests.note).toBeUndefined()
@@ -546,7 +546,7 @@ describe('deep alternatives task', () => {
     expect(altLoopCall).toBeDefined()
     expect((altLoopCall![0] as { system: string }).system).toContain('Deep review mode')
 
-    const deepKey = `${PR_KEY}|alternatives|deep|v${PROMPT_VERSION}`
+    const deepKey = `${PR_KEY}|alternatives|deep|v${PROMPT_VERSIONS.alternatives}`
     expect(deps.getCached).toHaveBeenCalledWith(deepKey)
     expect(deps.setCached).toHaveBeenCalledWith(deepKey, {
       deep: true,
@@ -565,7 +565,7 @@ describe('deep alternatives task', () => {
     const run = createAiRun(makeInput(makeSource()), deps)
     await run.start()
 
-    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|alternatives|v${PROMPT_VERSION}`)
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|alternatives|v${PROMPT_VERSIONS.alternatives}`)
     expect(run.alternatives.toolCallsUsed).toBeUndefined()
   })
 
@@ -594,7 +594,7 @@ describe('deep alternatives task', () => {
     expect(run.alternatives.status).toBe('done')
     expect(run.alternatives.value).toEqual(ALTERNATIVES_RESULT)
     expect(run.alternatives.toolCallsUsed).toBe(4)
-    expect(deps.setCached).toHaveBeenCalledWith(`${PR_KEY}|alternatives|deep|v${PROMPT_VERSION}`, {
+    expect(deps.setCached).toHaveBeenCalledWith(`${PR_KEY}|alternatives|deep|v${PROMPT_VERSIONS.alternatives}`, {
       deep: true,
       result: ALTERNATIVES_RESULT,
       toolCallsUsed: 4,
@@ -630,7 +630,7 @@ describe('deep diagrams task', () => {
     expect(diagramSystem).toContain('find REAL callers')
     expect(diagramSystem).toMatch(/find_references|search_code/)
 
-    const deepKey = `${PR_KEY}|diagrams|deep|v${PROMPT_VERSION}`
+    const deepKey = `${PR_KEY}|diagrams|deep|v${PROMPT_VERSIONS.diagrams}`
     expect(deps.getCached).toHaveBeenCalledWith(deepKey)
     expect(deps.setCached).toHaveBeenCalledWith(deepKey, {
       deep: true,
@@ -664,7 +664,7 @@ describe('deep diagrams task', () => {
     seedSettings({ aiDeepReview: true })
     const deps = makeMultiTaskDeps()
     deps.getCached.mockImplementation(async (key: string) =>
-      key === `${PR_KEY}|diagrams|deep|v${PROMPT_VERSION}`
+      key === `${PR_KEY}|diagrams|deep|v${PROMPT_VERSIONS.diagrams}`
         ? { deep: true, result: DIAGRAM_RESULT, toolCallsUsed: 6 }
         : null,
     )
@@ -686,7 +686,7 @@ describe('deep diagrams task', () => {
     await run.start()
 
     expect(deps.llmToolLoop).not.toHaveBeenCalled()
-    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|diagrams|v${PROMPT_VERSION}`)
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|diagrams|v${PROMPT_VERSIONS.diagrams}`)
     expect(run.diagrams.status).toBe('done')
     expect(run.diagrams.note).toContain('does not support tool calling')
     expect(run.diagrams.toolCallsUsed).toBeUndefined()
@@ -699,7 +699,7 @@ describe('deep diagrams task', () => {
     await run.start()
 
     // Single-pass key — no |deep marker
-    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|diagrams|v${PROMPT_VERSION}`)
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|diagrams|v${PROMPT_VERSIONS.diagrams}`)
     // The diagram task never went through the tool loop
     const diagramLoop = deps.llmToolLoop.mock.calls.find((c: unknown[]) =>
       /NO Mermaid syntax/i.test((c[0] as { system: string }).system),
@@ -736,7 +736,7 @@ describe('deep diagrams task', () => {
     expect(run.diagrams.status).toBe('done')
     expect(run.diagrams.value).toEqual(DIAGRAM_RESULT)
     expect(run.diagrams.toolCallsUsed).toBe(5)
-    expect(deps.setCached).toHaveBeenCalledWith(`${PR_KEY}|diagrams|deep|v${PROMPT_VERSION}`, {
+    expect(deps.setCached).toHaveBeenCalledWith(`${PR_KEY}|diagrams|deep|v${PROMPT_VERSIONS.diagrams}`, {
       deep: true,
       result: DIAGRAM_RESULT,
       toolCallsUsed: 5,
@@ -772,7 +772,7 @@ describe('deep attention task', () => {
     // Deep-attention-specific guidance: verify each hotspot before reporting it
     expect(attentionSystem).toContain('VERIFY each hotspot before reporting it')
 
-    const deepKey = `${PR_KEY}|attention|deep|v${PROMPT_VERSION}`
+    const deepKey = `${PR_KEY}|attention|deep|v${PROMPT_VERSIONS.attention}`
     expect(deps.getCached).toHaveBeenCalledWith(deepKey)
     expect(deps.setCached).toHaveBeenCalledWith(deepKey, {
       deep: true,
@@ -815,7 +815,7 @@ describe('deep attention task', () => {
     seedSettings({ aiDeepReview: true })
     const deps = makeMultiTaskDeps()
     deps.getCached.mockImplementation(async (key: string) =>
-      key === `${PR_KEY}|attention|deep|v${PROMPT_VERSION}`
+      key === `${PR_KEY}|attention|deep|v${PROMPT_VERSIONS.attention}`
         ? { deep: true, result: ATTENTION_RESULT, toolCallsUsed: 4 }
         : null,
     )
@@ -836,7 +836,7 @@ describe('deep attention task', () => {
     const run = createAiRun(makeInput(makeSource()), deps)
     await run.start()
 
-    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|attention|v${PROMPT_VERSION}`)
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|attention|v${PROMPT_VERSIONS.attention}`)
     expect(run.attention.status).toBe('done')
     expect(run.attention.note).toContain('does not support tool calling')
     expect(run.attention.toolCallsUsed).toBeUndefined()
@@ -853,7 +853,7 @@ describe('deep attention task', () => {
     const run = createAiRun(makeInput(makeSource()), deps)
     await run.start()
 
-    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|attention|v${PROMPT_VERSION}`)
+    expect(deps.getCached).toHaveBeenCalledWith(`${PR_KEY}|attention|v${PROMPT_VERSIONS.attention}`)
     const attentionLoop = deps.llmToolLoop.mock.calls.find((c: unknown[]) =>
       /testFlags/i.test((c[0] as { system: string }).system),
     )
@@ -890,7 +890,7 @@ describe('deep attention task', () => {
     expect(run.attention.status).toBe('done')
     expect(run.attention.value).toEqual(ATTENTION_RESULT)
     expect(run.attention.toolCallsUsed).toBe(6)
-    expect(deps.setCached).toHaveBeenCalledWith(`${PR_KEY}|attention|deep|v${PROMPT_VERSION}`, {
+    expect(deps.setCached).toHaveBeenCalledWith(`${PR_KEY}|attention|deep|v${PROMPT_VERSIONS.attention}`, {
       deep: true,
       result: ATTENTION_RESULT,
       toolCallsUsed: 6,
