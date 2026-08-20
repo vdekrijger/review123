@@ -68,6 +68,7 @@ import {
   askPrompt,
   skillReviewPrompt,
   convergencePrompt,
+  simplifyPrompt,
   withDeepReviewGuidance,
   type AskFocus,
 } from './tasks'
@@ -76,10 +77,17 @@ import {
   enumerateDrafts,
   validateConvergence,
   toAppliedClusters,
+  applyConvergence,
   type ConvergenceValue,
   type ReviewerFindings,
 } from './convergence'
+import {
+  enumerateForSimplify,
+  validateSimplify,
+  type SimplifyValue,
+} from './simplify'
 export type { ConvergenceValue }
+export type { SimplifyValue }
 export type { AskFocus }
 import { validateAttention, validateVerdict, validateRiskJudge, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, salvageAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, sinkGeneratedSteps, STORY_MAX_STEPS } from './schemas'
 import { buildDeterministicStory } from './storyFallback'
@@ -271,6 +279,16 @@ export interface AiRun {
    * 'idle' = skipped (<2 reviewers with findings / nothing to converge).
    */
   readonly convergence: PanelState<ConvergenceValue>
+  /**
+   * Post-review SIMPLIFY pass: one batched single-pass call after the
+   * reviewers AND the convergence pass settle that rewrites every (merged)
+   * finding body into plain English. The value carries the rewrites + a
+   * fingerprint of the finding set they were computed for; the UI applies
+   * them itself (applySimplify), so reviewer entries are NEVER mutated — on
+   * failure/skip/'off' the original bodies render unchanged.
+   * 'idle' = skipped (no findings to rewrite); 'disabled' = task mode off.
+   */
+  readonly simplify: PanelState<SimplifyValue>
   /**
    * Sum of every task's captured token usage for THIS PR run (the core auto
    * tasks incl. story + risk judge, plus any skill reviews). undefined when no
@@ -589,6 +607,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // Cross-reviewer convergence pass state (runs after all reviewers settle).
   // The reviewer entries above are NEVER mutated by the pass — loss-proof.
   const convergenceState = $state<PanelState<ConvergenceValue>>({ status: 'idle' })
+
+  // Post-review SIMPLIFY pass state (runs after the convergence pass settles —
+  // including when convergence skipped or failed). Same loss-proof contract:
+  // reviewer entries are never mutated; the UI applies rewrites itself.
+  const simplifyState = $state<PanelState<SimplifyValue>>({ status: 'idle' })
 
   // Token usage from the most recent coach() run (on-demand, never cached).
   // Folded into totalUsage so the per-PR total includes coaching cost.
@@ -2786,6 +2809,104 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     onUpdate?.()
   }
 
+  // ---------------------------------------------------------------------------
+  // Simplify pass — one batched single-pass call AFTER the convergence pass
+  // settles (also when convergence skipped/failed — it then rewrites the raw
+  // findings) that turns every finding body the user will see into plain
+  // English. Runs on the ACTIVE (narrator) model — never the ensemble.
+  // Loss-proof: this function only ever writes simplifyState; the reviewer
+  // entries are untouched, so any failure/decline/garbage leaves the original
+  // bodies rendering unchanged. Mode-gated ('simplify' in the Plan J matrix,
+  // off|standard): 'off' → 'disabled', no LLM call, no cache, zero tokens.
+  // ---------------------------------------------------------------------------
+
+  async function runSimplifyPass(onUpdate?: () => void): Promise<void> {
+    // Plan J mode gate (#113/#219 idiom): 'off' → no call, no status noise.
+    if (!resolveTaskMode('simplify', deepReview).run) {
+      simplifyState.status = 'disabled'
+      onUpdate?.()
+      return
+    }
+
+    // Reviewers that settled 'done' with a real result object — same defensive
+    // collection as the convergence pass (weird cache content must never throw).
+    const rawReviewers: ReviewerFindings[] = skillReviewsState
+      .filter((e) => e.state.status === 'done' && typeof e.state.value === 'object' && e.state.value !== null)
+      .map((e) => {
+        const value = e.state.value as SkillReviewResult
+        return { skillId: e.skillId, name: e.name, findings: Array.isArray(value.findings) ? value.findings : [] }
+      })
+
+    // Simplify the bodies users actually SEE: apply the convergence merge first
+    // (fingerprint-guarded; a stale/absent value leaves the raw lists intact).
+    const cv =
+      convergenceState.status === 'done' && convergenceState.value && typeof convergenceState.value === 'object'
+        ? (convergenceState.value as ConvergenceValue)
+        : null
+    const reviewers = cv ? applyConvergence(rawReviewers, cv) : rawReviewers
+
+    const { inputs, fingerprint } = enumerateForSimplify(reviewers)
+    // Nothing to rewrite → skip silently (no call, no tokens, no status noise).
+    if (inputs.length === 0) {
+      simplifyState.status = 'idle'
+      return
+    }
+
+    // Cache key: the simplify prompt version + a hash of the (post-merge)
+    // finding content → "<pr>|simplify:<djb2>|v<N>". A changed finding set
+    // (retry, edited skill, different merge) re-runs the pass.
+    const key = cacheKey(prKey, 'simplify:' + djb2(fingerprint), promptVersionFor('simplify'))
+    const t0 = performance.now()
+
+    const hit = await getCached<SimplifyValue>(key)
+    // Defensive shape guard on cached values (mirrors the run's other guards):
+    // a non-standard cached value is treated as a miss, never applied.
+    if (hit !== null && typeof hit === 'object' && typeof hit.fingerprint === 'string' && Array.isArray(hit.rewrites)) {
+      simplifyState.status = 'done'
+      simplifyState.value = hit
+      track('ai_task_completed', { task: 'simplify', duration_ms: Math.round(performance.now() - t0), cached: true, rewrites: hit.rewrites.length })
+      onUpdate?.()
+      return
+    }
+
+    simplifyState.status = 'loading'
+    simplifyState.error = undefined
+    simplifyState.errorDetail = undefined
+    onUpdate?.()
+
+    const prompts = simplifyPrompt(inputs)
+    const findingIds = new Set(inputs.map((i) => i.id))
+
+    try {
+      const { result, usage } = await llmJsonWithRepairWithUsage(
+        jsonTaskOpts(prompts),
+        (x) => validateSimplify(x, findingIds),
+      )
+      // Defense in depth: re-validate the returned value (a stubbed/bypassing
+      // transport must never push garbage into the apply step).
+      const checked = validateSimplify(result, findingIds)
+      if (checked === null) throw new LlmError('invalid-output', 'simplify: invalid rewrites')
+
+      const value: SimplifyValue = { fingerprint, rewrites: checked.rewrites }
+      await setCached<SimplifyValue>(key, value)
+      simplifyState.status = 'done'
+      simplifyState.value = value
+      simplifyState.usage = usage
+      track('ai_task_completed', {
+        task: 'simplify',
+        duration_ms: Math.round(performance.now() - t0),
+        cached: false,
+        rewrites: value.rewrites.length,
+        ...(usage?.total_tokens !== undefined ? { tokens: usage.total_tokens } : {}),
+      })
+    } catch (err) {
+      // Loss-proof degrade: log to run state; the UI renders the original
+      // finding bodies exactly as before the pass — never blocks rendering.
+      failTask(simplifyState, 'simplify', err)
+    }
+    onUpdate?.()
+  }
+
   async function runSkillReviews(onUpdate?: () => void, existingComments?: string[], opts?: { autoRetry?: number }): Promise<void> {
     // Plan J: skills 'off' → never offer/run reviewers (no entries, no tokens).
     const skillsMode = resolveTaskMode('skills', deepReview)
@@ -2820,6 +2941,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     convergenceState.value = undefined
     convergenceState.error = undefined
     convergenceState.errorDetail = undefined
+
+    // Same for the simplify pass (applySimplify is fingerprint-guarded too).
+    simplifyState.status = 'idle'
+    simplifyState.value = undefined
+    simplifyState.error = undefined
+    simplifyState.errorDetail = undefined
 
     // Initialize every entry as 'queued' — none has a slot yet. Six concurrent
     // LLM calls trip provider rate limits, so we cap in-flight reviewers at
@@ -2889,6 +3016,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // Convergence pass — once, after every reviewer (incl. auto-retries) has
     // settled. Skips itself when <2 reviewers produced findings.
     await runConvergencePass(onUpdate)
+
+    // Simplify pass — once, after convergence settles (it consumes the MERGED
+    // bodies). Also runs when convergence skipped/failed: raw findings deserve
+    // plain English too. Skips itself when there are no findings.
+    await runSimplifyPass(onUpdate)
   }
 
   // ---------------------------------------------------------------------------
@@ -2942,6 +3074,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // value is fingerprint-guarded, so until this settles the UI simply renders
     // the fresh findings unmerged (never a stale merge).
     await runConvergencePass(onUpdate)
+
+    // ...and the simplify pass follows it (same fingerprint guard: until it
+    // settles the fresh findings render their original bodies, never a stale
+    // rewrite).
+    await runSimplifyPass(onUpdate)
   }
 
   // ---------------------------------------------------------------------------
@@ -2959,11 +3096,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     get story() { return storyState },
     get skillReviews() { return skillReviewsState },
     get convergence() { return convergenceState },
+    get simplify() { return simplifyState },
     get totalUsage(): LlmUsage | undefined {
       // Sum every task's captured usage for this PR run. Tasks with no usage
       // (cached pre-usage results / errors) contribute nothing.
       let total: LlmUsage | undefined
-      const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, storyState, riskJudgeState, convergenceState]
+      const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, storyState, riskJudgeState, convergenceState, simplifyState]
       for (const s of states) total = addUsage(total, s.usage)
       for (const e of skillReviewsState) total = addUsage(total, e.state.usage)
       // Coach is on-demand (never one of the six core tasks); fold in its usage
@@ -3064,6 +3202,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       if (riskJudgeState.usage) addSinglePass(riskJudgeState.usage, 'Risk judge')
       if (coachUsage) addSinglePass(coachUsage, 'Coach')
       if (convergenceState.usage) addSinglePass(convergenceState.usage, 'Convergence')
+      if (simplifyState.usage) addSinglePass(simplifyState.usage, 'Simplify')
 
       // Reviewers: per-model rows when an ensemble ran; else attribute the
       // reviewer's total usage to the active model as a GENERATOR (it produced

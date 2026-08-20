@@ -886,6 +886,7 @@
         {contentsMap}
         skillReviews={aiRun?.skillReviews ?? []}
         convergence={aiRun?.convergence ?? null}
+        simplify={aiRun?.simplify ?? null}
         runSkillReviewsFn={aiRun != null ? (() => { void aiRun!.runSkillReviews(undefined, prComments.map((c) => c.body)) }) : null}
         onRetrySkill={aiRun != null ? ((skillId) => { void aiRun!.retrySkill(skillId, undefined, prComments.map((c) => c.body)) }) : null}
         askFn={aiRun ? aiRun.ask : null}

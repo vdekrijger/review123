@@ -27,6 +27,14 @@
     skillName: string
     severity: 'high' | 'medium' | 'low'
     body: string
+    /**
+     * SIMPLIFY pass: the plain-English rewrite of `body`. When present (and
+     * different from `body`), the card shows IT by default with a small
+     * "Show original" text-toggle back to the raw text (per-card state).
+     * Absent → the original body renders with no toggle. Add-as-draft uses
+     * whichever text is currently DISPLAYED (see onAdd).
+     */
+    simpleBody?: string
     /** Cross-model verification (Plan M) — drives the "confirmed by N/M" chip. */
     verification?: FindingVerification
     /**
@@ -49,7 +57,13 @@
      * rendered without a key are simply not jump-targets.
      */
     findingKey?: string | null
-    onAdd: () => void
+    /**
+     * Add-as-draft. Receives the currently-DISPLAYED body text (the simplified
+     * rewrite by default when one exists; the original after "Show original")
+     * so the draft matches what the user read. Callers that ignore the
+     * argument keep the original-body behavior.
+     */
+    onAdd: (displayedBody?: string) => void
     onDismiss: () => void
     /**
      * Optional streaming grounded Q&A function (mirrors FileDiff's / AiRun.ask).
@@ -105,7 +119,15 @@
     onMoveToLine?: ((line: number) => boolean) | null
   }
 
-  let { skillName, severity, body, verification = undefined, raisedBy = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss, askFn = null, askPath = undefined, askExcerpt = undefined, mergedFrom = undefined, mergedReason = undefined, coveredByDraft = undefined, anchorHash = null, movedFrom = null, onUndoMove = null, onMoveToLine = null }: Props = $props()
+  let { skillName, severity, body, simpleBody = undefined, verification = undefined, raisedBy = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss, askFn = null, askPath = undefined, askExcerpt = undefined, mergedFrom = undefined, mergedReason = undefined, coveredByDraft = undefined, anchorHash = null, movedFrom = null, onUndoMove = null, onMoveToLine = null }: Props = $props()
+
+  // ---- Simplify pass: simplified-vs-original body (per-card state) ---------
+  // A toggle exists only when a rewrite is present AND actually differs from
+  // the original (an unchanged "already minimal" body gets no toggle).
+  const hasSimple = $derived(simpleBody !== undefined && simpleBody !== '' && simpleBody !== body)
+  let showOriginal = $state(false)
+  /** The body text currently displayed — and what Add-as-draft will use. */
+  const displayBody = $derived(hasSimple && !showOriginal ? simpleBody! : body)
 
   // ---- Re-anchor: drag handle + "Move to line…" keyboard path --------------
   // Only never-added findings offer move affordances: adding turns the finding
@@ -306,10 +328,22 @@
     <span class="skill-severity-chip severity-chip-{severity}">{severity}</span>
   </div>
   <!-- Full block markdown (paragraphs, fenced code, lists, inline code/bold/links).
-       MarkdownView enforces the sanitization boundary (marked → DOMPurify). -->
+       MarkdownView enforces the sanitization boundary (marked → DOMPurify).
+       Simplify pass: the plain-English rewrite renders by default; the small
+       text-toggle below discloses the original (per-card, never global). -->
   <div class="skill-finding-body">
-    <MarkdownView source={body} />
+    <MarkdownView source={displayBody} />
   </div>
+  {#if hasSimple}
+    <button
+      type="button"
+      class="simple-toggle"
+      aria-pressed={showOriginal}
+      aria-label={showOriginal ? 'Show the simplified finding text' : 'Show the original finding text'}
+      data-testid="finding-simple-toggle"
+      onclick={() => (showOriginal = !showOriginal)}
+    >{showOriginal ? 'Show simplified' : 'Show original'}</button>
+  {/if}
   {#if mergedFrom && mergedFrom.length > 0}
     <!-- Convergence disclosure: every absorbed sibling finding stays readable
          (reviewer + location + one-line body) — the merge destroys nothing. -->
@@ -330,7 +364,7 @@
     <button
       class="skill-add-draft-btn"
       class:added
-      onclick={onAdd}
+      onclick={() => onAdd(displayBody)}
       disabled={added}
       aria-label={added ? 'Added to drafts' : 'Add as draft comment'}
     >{added ? '✓ Added' : 'Add as draft'}</button>
@@ -611,6 +645,28 @@
     background: transparent;
     cursor: pointer;
     padding: 0 0.2rem;
+  }
+
+  /* ---- Simplified/original body toggle (simplify pass) ----
+     Unobtrusive text-button in the merged-from-summary idiom: muted, small,
+     no border — it discloses the raw text without competing with actions. */
+  .simple-toggle {
+    display: inline-block;
+    margin: -0.15rem 0 0.4rem;
+    padding: 0;
+    border: none;
+    background: transparent;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+  }
+
+  .simple-toggle:hover,
+  .simple-toggle:focus-visible {
+    color: inherit;
   }
 
   /* ---- Merged-from disclosure (convergence "also flagged as…") ---- */

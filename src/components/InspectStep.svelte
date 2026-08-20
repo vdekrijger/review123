@@ -24,9 +24,10 @@
   import { excerptAround } from '../lib/diff/excerpt'
   import { scrollToFileCard, jumpToFinding } from '../lib/diff/jumpToFile'
   import { observeDiffColHeight } from '../lib/tree/diffColHeight'
-  import type { SkillReviewEntry, AskFocus, PanelState, ConvergenceValue } from '../lib/ai/run.svelte'
+  import type { SkillReviewEntry, AskFocus, PanelState, ConvergenceValue, SimplifyValue } from '../lib/ai/run.svelte'
   import type { SkillReviewResult, SkillFinding as SchemaSkillFinding } from '../lib/ai/schemas'
   import { applyConvergence, mergedReviewerLabel, type ReviewerFindings } from '../lib/ai/convergence'
+  import { applySimplify } from '../lib/ai/simplify'
   import { listSkills } from '../lib/skills/skills'
   import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
   import { computeFileRisk, type RiskLevel } from '../lib/risk/risk'
@@ -57,6 +58,7 @@
     contentsMap = null,
     skillReviews = [],
     convergence = null,
+    simplify = null,
     runSkillReviewsFn = null,
     onRetrySkill = null,
     askFn = null,
@@ -109,6 +111,13 @@
      * are never mutated, so a failed/absent pass renders originals unchanged.
      */
     convergence?: PanelState<ConvergenceValue> | null
+    /**
+     * Simplify pass state (AiRun.simplify). When 'done', the fingerprint-
+     * guarded rewrites are attached HERE (applySimplify, after the convergence
+     * merge) — reviewer entries are never mutated, so a failed/absent/'off'
+     * pass renders the original bodies unchanged.
+     */
+    simplify?: PanelState<SimplifyValue> | null
     /** Optional callback to trigger runSkillReviews on the AiRun instance */
     runSkillReviewsFn?: (() => void) | null
     /**
@@ -456,7 +465,15 @@
         ? (convergence.value as ConvergenceValue)
         : null
     const effective = v ? applyConvergence(reviewers, v) : reviewers
-    return new Map(effective.map((r) => [r.skillId, r.findings]))
+    // Simplify pass (after the merge — its rewrites were computed against the
+    // MERGED bodies): attach simpleBody where the fingerprint matches. A
+    // failed/stale/absent pass leaves the bodies byte-identical.
+    const s =
+      simplify && simplify.status === 'done' && simplify.value && typeof simplify.value === 'object'
+        ? (simplify.value as SimplifyValue)
+        : null
+    const simplified = s ? applySimplify(effective, s) : effective
+    return new Map(simplified.map((r) => [r.skillId, r.findings]))
   })
 
   /** Display credit for a finding: merged → all contributing reviewers. */
@@ -470,7 +487,7 @@
   // Split into two maps: file-level (null line) stays above the file in InspectStep;
   // line-bearing findings are passed into FileDiff via skillFindings prop.
   // Shape: Map<path, entry[]>
-  type SuggestionEntry = { skillName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string; verification?: import('../lib/ai/schemas').FindingVerification; raisedBy?: string[]; mergedFrom?: import('../lib/ai/schemas').AbsorbedFinding[]; mergedReason?: string; coveredByDraft?: { path: string; line: number } }
+  type SuggestionEntry = { skillName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string; verification?: import('../lib/ai/schemas').FindingVerification; raisedBy?: string[]; mergedFrom?: import('../lib/ai/schemas').AbsorbedFinding[]; mergedReason?: string; coveredByDraft?: { path: string; line: number }; simpleBody?: string }
 
   const skillSuggestionsByPath = $derived.by(() => {
     const map = new Map<string, SuggestionEntry[]>()
@@ -492,6 +509,7 @@
           mergedFrom: finding.mergedFrom,
           mergedReason: finding.mergedReason,
           coveredByDraft: finding.coveredByDraft,
+          simpleBody: finding.simpleBody,
         })
         map.set(finding.path, arr)
       }
@@ -554,6 +572,7 @@
           mergedFrom: s.mergedFrom,
           mergedReason: s.mergedReason,
           coveredByDraft: s.coveredByDraft,
+          simpleBody: s.simpleBody,
         }))
       if (lineOnly.length > 0) map.set(path, lineOnly)
     }
@@ -847,7 +866,7 @@
     onRetrySkill?.(skillId)
   }
 
-  async function addFindingAsDraft(finding: { findingPath: string; line: number | null; body: string; key: string; skillName?: string; side?: 'LEFT' | 'RIGHT' }) {
+  async function addFindingAsDraft(finding: { findingPath: string; line: number | null; body: string; key: string; skillName?: string; side?: 'LEFT' | 'RIGHT'; originalBody?: string }) {
     if (!draftStore) return
     await draftStore.upsert({
       path: finding.findingPath,
@@ -857,6 +876,8 @@
       // findings' home side; only a drag onto a deleted line yields LEFT).
       line: finding.line ?? 1,
       side: finding.side ?? 'RIGHT',
+      // The body is the text the card DISPLAYED when the user clicked — the
+      // simplify pass's rewrite by default when one exists.
       body: finding.body,
       // APPEND (n=-1 sentinel): the user may already have their own draft at
       // this line — adding a finding must never overwrite it.
@@ -866,6 +887,13 @@
       // submit/export. The editable body stays clean.
       aiAuthored: true,
       aiReviewer: finding.skillName,
+      // When the displayed body was the SIMPLIFIED rewrite, carry the raw
+      // finding text along so "Copy as LLM prompt" can hand an agent the full
+      // detail (buildReviewPrompt) — the editable body stays the simplified
+      // text the user chose.
+      ...(finding.originalBody && finding.originalBody !== finding.body
+        ? { aiOriginalBody: finding.originalBody }
+        : {}),
     })
     track('comment_drafted')
     // Accept signal: record the accept/dismiss telemetry (event + local store).
@@ -976,7 +1004,11 @@
      code reads as <code>, never truncated). The body is the navigable menuitem
      (click → jump+flash the inline card / fallback). Add-as-draft + Dismiss live
      here too, because the popover is now the home for findings that aren't
-     anchored in the visible diff (the old "bottom" file-level cards were removed). -->
+     anchored in the visible diff (the old "bottom" file-level cards were removed).
+     Simplify pass: the popover deliberately shows the ORIGINAL body (it is the
+     full-detail navigation surface); only the finding CARDS display simpleBody.
+     Add-as-draft here therefore uses the original — consistent with "the draft
+     is whatever text was displayed". -->
 {#snippet findingEntry(nav: NavFinding)}
   <div class="findings-popover-entry">
     <button
@@ -1204,6 +1236,24 @@
     </p>
   {/if}
 
+  <!-- SIMPLIFY status: the plain-English rewrite pass that runs after the
+       convergence pass settles. Loss-proof: on error we show a muted note
+       (concrete upstream detail on hover, per the errorDetail machinery) and
+       the cards render the original bodies — nothing is ever lost. -->
+  {#if simplify?.status === 'loading'}
+    <p class="convergence-status" role="status" aria-live="polite">
+      <Spinner size="0.75em" />Simplifying findings…
+    </p>
+  {:else if simplify?.status === 'error'}
+    <p
+      class="convergence-error-note"
+      role="note"
+      title={[simplify.error?.trim(), simplify.errorDetail?.trim()].filter(Boolean).join(' — ') || undefined}
+    >
+      Couldn't simplify findings — showing the original text.
+    </p>
+  {/if}
+
   <!-- SETTLED region: done/error result chips, aligned and wrapping for many
        reviewers. An errored reviewer's chip is a real Retry BUTTON. -->
   {#if settledEntries.length > 0}
@@ -1332,7 +1382,7 @@
     onRemoveDraft={handleRemoveDraft}
     onAddFileLevelDraft={(suggestion) => addFindingAsDraft(suggestion)}
     onDismissFileLevelFinding={(key) => dismissFinding(key)}
-    onAddSkillFindingDraft={(path, finding) => addFindingAsDraft({ findingPath: path, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName, side: finding.side })}
+    onAddSkillFindingDraft={(path, finding) => addFindingAsDraft({ findingPath: path, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName, side: finding.side, originalBody: finding.originalBody })}
     onDismissSkillFinding={(key) => dismissFinding(key)}
     {askFn}
     {askDisabledReason}
@@ -1432,7 +1482,7 @@
             {askDisabledReason}
             onReply={replyFn}
             skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
-            onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName, side: finding.side })}
+            onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName, side: finding.side, originalBody: finding.originalBody })}
             onDismissSkillFinding={(key) => dismissFinding(key)}
             whitespace={whitespaceByPath.get(file.filename) ?? null}
           />

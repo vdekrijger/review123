@@ -59,6 +59,10 @@
     mergedFrom?: import('../lib/ai/schemas').AbsorbedFinding[]
     mergedReason?: string
     coveredByDraft?: { path: string; line: number }
+    /** Simplify pass: plain-English rewrite shown by default on the card. */
+    simpleBody?: string
+    /** Set when adding a simplified body as a draft: the raw finding text. */
+    originalBody?: string
   }
 
   let {
@@ -118,7 +122,7 @@
      * full drag/keyboard re-anchor behaviour for free (FileDiff is reused
      * verbatim — nothing story-specific to degrade).
      */
-    onAddSkillFindingDraft: (path: string, finding: { body: string; line: number; key: string; skillName: string; side?: 'LEFT' | 'RIGHT' }) => Promise<void>
+    onAddSkillFindingDraft: (path: string, finding: { body: string; line: number; key: string; skillName: string; side?: 'LEFT' | 'RIGHT'; originalBody?: string }) => Promise<void>
     /** Records a dismiss decision for the accept/dismiss telemetry loop. */
     onDismissSkillFinding?: (key: string) => void
     /** Add a file-level (null-line) finding as a draft comment. */
@@ -484,6 +488,7 @@
                       skillName={suggestion.skillName}
                       severity={suggestion.severity}
                       body={suggestion.body}
+                      simpleBody={suggestion.simpleBody}
                       verification={suggestion.verification}
                       raisedBy={suggestion.raisedBy}
                       mergedFrom={suggestion.mergedFrom}
@@ -493,7 +498,12 @@
                       anchored={false}
                       findingKey={suggestion.key}
                       added={addedDraftKeys.has(suggestion.key)}
-                      onAdd={() => onAddFileLevelDraft?.(suggestion)}
+                      onAdd={(displayedBody) =>
+                        onAddFileLevelDraft?.(
+                          displayedBody !== undefined && displayedBody !== suggestion.body
+                            ? { ...suggestion, body: displayedBody, originalBody: suggestion.body }
+                            : suggestion,
+                        )}
                       onDismiss={() => onDismissFileLevelFinding?.(suggestion.key)}
                       {askFn}
                       askPath={path}

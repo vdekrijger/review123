@@ -20,7 +20,10 @@ const EVENTS = {
   // overlap clusters the convergence pass produced — a count only, never
   // finding text, code, file paths, or reviewer names. Added so we can observe
   // how often reviewers actually overlap (merge-rate observability).
-  ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls', 'chunks', 'partial', 'clusters'],
+  // PRIVACY DECISION (finding simplify): 'rewrites' is the integer count of
+  // finding bodies the simplify pass rewrote — a count only, never finding
+  // text, code, or file paths. Added for rewrite-rate observability.
+  ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls', 'chunks', 'partial', 'clusters', 'rewrites'],
   // PRIVACY DECISION (error-detail surfacing): 'reason_detail' is the concrete
   // upstream failure text behind the coarse 'reason' kind — the provider's OWN
   // error body (e.g. "insufficient quota", "maximum context length exceeded")

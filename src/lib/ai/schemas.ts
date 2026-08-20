@@ -1014,6 +1014,15 @@ export interface SkillFinding {
    * deleting it — silent disappearance would look like data loss.
    */
   coveredByDraft?: { path: string; line: number }
+  /**
+   * SIMPLIFY pass: the plain-English rewrite of `body`. Display-only — the
+   * card shows it by default (with a "Show original" toggle) and add-as-draft
+   * uses whichever text is displayed. Never produced by the reviewer LLM
+   * itself — attached at render time by applySimplify. Every non-display
+   * consumer (risk, convergence, verification, "Copy as LLM prompt") keeps
+   * reading the original `body`.
+   */
+  simpleBody?: string
 }
 
 export interface SkillReviewResult {
