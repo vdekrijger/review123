@@ -781,11 +781,11 @@ describe('gemini — maxTokens → generationConfig.maxOutputTokens', () => {
     expect(body.generationConfig).toBeUndefined()
   })
 
-  it('llmTestConnection(gemini) now carries its 1024 cap to the wire', async () => {
+  it('llmTestConnection(gemini) stays UNCAPPED (pinned: thinking models exhaust small caps)', async () => {
     const f = vi.fn().mockResolvedValue(makeJsonResponse(geminiBody('ok')))
     vi.stubGlobal('fetch', f)
     await llmTestConnection('gemini')
     const body = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
-    expect(body.generationConfig).toEqual({ maxOutputTokens: 1024 })
+    expect(body.generationConfig?.maxOutputTokens).toBeUndefined()
   })
 })

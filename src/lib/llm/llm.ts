@@ -1175,7 +1175,11 @@ export async function llmTestConnection(
       await anthropicComplete(provider, model, opts)
       return
     case 'gemini':
-      await geminiComplete(provider, model, opts)
+      // The gemini PING stays uncapped (pinned decision): Gemini 2.5 thinking
+      // models can exhaust a small maxOutputTokens on hidden thinking before
+      // emitting text, which would read as a failed key. Real tasks pass their
+      // own generous maxTokens; only this ping strips it.
+      await geminiComplete(provider, model, { ...opts, maxTokens: undefined })
       return
   }
 }
