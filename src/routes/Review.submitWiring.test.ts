@@ -209,8 +209,9 @@ describe('Review → VerdictStep submit wiring (provider-routed)', () => {
     expect(screen.getByTestId('submit-outcome-breakdown').textContent).toContain(
       '2 posted as file comments',
     )
-    // Success link is provider-honest, not hardcoded to GitHub
-    expect(screen.getByRole('link', { name: /view on gitlab/i })).toBeInTheDocument()
+    // Success-panel link is provider-honest, not hardcoded to GitHub
+    // (Review's header has its own "View on GitLab" link — scope to .view-link)
+    expect(document.querySelector('.view-link')?.textContent).toContain('View on GitLab')
   })
 
   it('bitbucket: submits through providerFor("bitbucket").submitReview', async () => {
@@ -227,7 +228,7 @@ describe('Review → VerdictStep submit wiring (provider-routed)', () => {
     await waitFor(() => {
       expect(screen.getByText('Your review was submitted successfully.')).toBeInTheDocument()
     })
-    expect(screen.getByRole('link', { name: /view on bitbucket/i })).toBeInTheDocument()
+    expect(document.querySelector('.view-link')?.textContent).toContain('View on Bitbucket')
   })
 
   it('github (default provider): submits through providerFor("github").submitReview — one path for all providers', async () => {

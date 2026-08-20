@@ -1,8 +1,10 @@
 /**
  * e2e/providers.spec.ts — provider-specific flow tests
  *
- * Test (a): GitLab MR flow — seed token, intercept GitLab API, assert title + non-atomic note
- * Test (b): Bitbucket PR flow — seed auth, intercept Bitbucket API, assert title + file diff
+ * Test (a): GitLab MR flow — seed token, intercept GitLab API, assert title + non-atomic note,
+ *           then submit an APPROVE review and assert it routes to GitLab (never GitHub)
+ * Test (b): Bitbucket PR flow — seed auth, intercept Bitbucket API, assert title + file diff,
+ *           then submit an APPROVE review and assert it routes to Bitbucket (never GitHub)
  * Test (c): Legacy GitHub URL redirect — /review/owner/repo/n → /review/github/owner/repo/n/understand
  */
 
@@ -171,7 +173,7 @@ function makeGhPrFiles() {
 // Test (a): GitLab MR flow
 // ---------------------------------------------------------------------------
 
-test('gitlab: paste MR URL → navigates to /understand, title visible, non-atomic note in verdict', async ({
+test('gitlab: paste MR URL → understand, non-atomic note, submit routes to GitLab (never GitHub)', async ({
   page,
 }) => {
   // Block PostHog analytics
@@ -180,11 +182,27 @@ test('gitlab: paste MR URL → navigates to /understand, title visible, non-atom
   // Block DeepSeek so AI doesn't interfere
   await page.route('**/api.deepseek.com/**', (route) => route.abort())
 
+  // A GitLab review must NEVER write to the GitHub API — record every call.
+  // (Regression guard: VerdictStep's default submitFn was the GitHub submitter.)
+  const githubCalls: string[] = []
+  await page.route('**/api.github.com/**', (route) => {
+    githubCalls.push(`${route.request().method()} ${route.request().url()}`)
+    return route.fulfill({ status: 500, json: { message: 'wrong provider' } })
+  })
+
+  let glApproveCalls = 0
+
   // Intercept all GitLab API calls
   await page.route('**/gitlab.com/api/v4/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname
     const pid = `testgroup%2Ftestrepo`
+
+    // MR approve (provider submitReview, APPROVE verdict)
+    if (path === `/api/v4/projects/${pid}/merge_requests/${GL_MR}/approve` && route.request().method() === 'POST') {
+      glApproveCalls++
+      return route.fulfill({ json: { state: 'approved' } })
+    }
 
     // MR meta
     if (path === `/api/v4/projects/${pid}/merge_requests/${GL_MR}`) {
@@ -270,13 +288,31 @@ test('gitlab: paste MR URL → navigates to /understand, title visible, non-atom
   await expect(
     page.getByText(/On GitLab, submitting posts each comment individually/i),
   ).toBeVisible({ timeout: 5_000 })
+
+  // Submit an APPROVE review — must go through the GitLab provider submitter
+  await page.getByRole('radio', { name: /approve/i }).click()
+  await page.getByRole('button', { name: /submit review/i }).click()
+
+  await expect(
+    page.getByText('Your review was submitted successfully.'),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Success link names the provider honestly
+  await expect(page.locator('.view-link')).toHaveText(/View on GitLab/)
+
+  // The approval hit GitLab; nothing was WRITTEN to GitHub. (Read-only GETs
+  // are excluded: lib/context/pack.ts fetchContents still fetches file
+  // contents via the GitHub API for every provider — a known, separately
+  // tracked gap documented in src/lib/provider/github.ts.)
+  expect(glApproveCalls).toBe(1)
+  expect(githubCalls.filter((c) => !c.startsWith('GET '))).toEqual([])
 })
 
 // ---------------------------------------------------------------------------
 // Test (b): Bitbucket PR flow
 // ---------------------------------------------------------------------------
 
-test('bitbucket: paste PR URL → navigates to /understand, title visible, file diff in inspect', async ({
+test('bitbucket: paste PR URL → understand, file diff in inspect, submit routes to Bitbucket (never GitHub)', async ({
   page,
 }) => {
   // Block PostHog analytics
@@ -285,12 +321,27 @@ test('bitbucket: paste PR URL → navigates to /understand, title visible, file 
   // Block DeepSeek
   await page.route('**/api.deepseek.com/**', (route) => route.abort())
 
+  // A Bitbucket review must NEVER write to the GitHub API — record every call.
+  const githubCalls: string[] = []
+  await page.route('**/api.github.com/**', (route) => {
+    githubCalls.push(`${route.request().method()} ${route.request().url()}`)
+    return route.fulfill({ status: 500, json: { message: 'wrong provider' } })
+  })
+
+  let bbApproveCalls = 0
+
   // Intercept all Bitbucket API calls
   await page.route('**/api.bitbucket.org/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname
 
     const base = `/2.0/repositories/${BB_WORKSPACE}/${BB_REPO}`
+
+    // PR approve (provider submitReview, APPROVE verdict)
+    if (path === `${base}/pullrequests/${BB_PR}/approve` && route.request().method() === 'POST') {
+      bbApproveCalls++
+      return route.fulfill({ json: { approved: true } })
+    }
 
     // PR meta
     if (path === `${base}/pullrequests/${BB_PR}`) {
@@ -362,6 +413,25 @@ test('bitbucket: paste PR URL → navigates to /understand, title visible, file 
 
   // File diff article should render
   await expect(page.locator('article.file-diff').first()).toBeVisible({ timeout: 8_000 })
+
+  // Navigate to step 3 (verdict) and submit an APPROVE review
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await page.getByRole('radio', { name: /approve/i }).click()
+  await page.getByRole('button', { name: /submit review/i }).click()
+
+  await expect(
+    page.getByText('Your review was submitted successfully.'),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Success link names the provider honestly
+  await expect(page.locator('.view-link')).toHaveText(/View on Bitbucket/)
+
+  // The approval hit Bitbucket; nothing was WRITTEN to GitHub. (Read-only
+  // GETs are excluded: lib/context/pack.ts fetchContents still fetches file
+  // contents via the GitHub API for every provider — a known, separately
+  // tracked gap documented in src/lib/provider/github.ts.)
+  expect(bbApproveCalls).toBe(1)
+  expect(githubCalls.filter((c) => !c.startsWith('GET '))).toEqual([])
 })
 
 // ---------------------------------------------------------------------------
