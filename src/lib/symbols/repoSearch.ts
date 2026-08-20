@@ -33,6 +33,7 @@
  * providers without it (GitLab/Bitbucket today) simply don't show the action.
  */
 
+import { track } from '../analytics/analytics'
 import { GithubApiError } from '../github/types'
 import { providerFor } from '../provider/registry'
 import type { ReviewProvider } from '../provider/types'
@@ -113,7 +114,10 @@ const FETCH_BATCH = 4
 /** User-facing message for rate-limited / restricted code search (403/422/429). */
 export const REPO_SEARCH_RATE_LIMIT_MESSAGE = 'Code search rate-limited — try again in a minute.'
 
-function messageFor(err: unknown): string {
+/** Analytics outcome for a failed search (the non-'success' enum values). */
+type RepoSearchFailureKind = 'rate_limited' | 'unauthorized' | 'error'
+
+function classifyFailure(err: unknown): { kind: RepoSearchFailureKind; message: string } {
   if (err instanceof GithubApiError) {
     const d = err.detail
     if (
@@ -122,11 +126,11 @@ function messageFor(err: unknown): string {
       d.kind === 'unprocessable' ||
       (d.kind === 'server' && d.status === 429)
     ) {
-      return REPO_SEARCH_RATE_LIMIT_MESSAGE
+      return { kind: 'rate_limited', message: REPO_SEARCH_RATE_LIMIT_MESSAGE }
     }
-    if (d.kind === 'unauthorized') return 'Code search requires a signed-in GitHub token.'
+    if (d.kind === 'unauthorized') return { kind: 'unauthorized', message: 'Code search requires a signed-in GitHub token.' }
   }
-  return 'Repo search failed — try again.'
+  return { kind: 'error', message: 'Repo search failed — try again.' }
 }
 
 async function doSearch(symbol: string, ctx: RepoSearchContext): Promise<RepoSearchOutcome> {
@@ -200,11 +204,36 @@ const cache = new Map<string, Promise<RepoSearchOutcome>>()
 export async function searchRepoForSymbol(symbol: string, ctx: RepoSearchContext): Promise<RepoSearchOutcome> {
   const key = `${ctx.repo.owner}/${ctx.repo.repo}@${ctx.headSha}:${symbol}`
   const inFlight = cache.get(key)
+  // Cache hit (settled result OR a concurrent click joining the in-flight
+  // promise): NO analytics — nothing ran and no quota was spent. The
+  // symbol_repo_searched event counts REAL searches only, so its volume maps
+  // 1:1 onto code-search API usage.
   if (inFlight) return inFlight
-  const promise = doSearch(symbol, ctx).catch((err): RepoSearchOutcome => ({ ok: false, message: messageFor(err) }))
+  const startedAt = Date.now()
+  let failureKind: RepoSearchFailureKind = 'error'
+  const promise = doSearch(symbol, ctx).catch((err): RepoSearchOutcome => {
+    const failure = classifyFailure(err)
+    failureKind = failure.kind
+    return { ok: false, message: failure.message }
+  })
   cache.set(key, promise)
   const outcome = await promise
   if (!outcome.ok) cache.delete(key)
+  // Fired only by the call that STARTED the search (the cache-miss path above
+  // returns early), once it settles. Counts/enums/duration only — never the
+  // symbol, paths, or snippets (see the allowlist in analytics.ts).
+  if (outcome.ok) {
+    track('symbol_repo_searched', {
+      outcome: 'success',
+      definitions: outcome.definitions.length,
+      references: outcome.references.length,
+      files_scanned: outcome.filesScanned,
+      files_skipped: outcome.filesSkipped,
+      duration_ms: Date.now() - startedAt,
+    })
+  } else {
+    track('symbol_repo_searched', { outcome: failureKind, duration_ms: Date.now() - startedAt })
+  }
   return outcome
 }
 

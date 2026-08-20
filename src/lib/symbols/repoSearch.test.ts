@@ -18,6 +18,7 @@ import {
   type RepoSearchContext,
 } from './repoSearch'
 import { registerSymbolSource, _resetSymbolSourcesForTest } from './symbolSources'
+import { _setCaptureForTest } from '../analytics/analytics'
 import { GithubApiError } from '../github/types'
 import { router } from '../router/router.svelte'
 
@@ -216,6 +217,80 @@ describe('searchRepoForSymbol — error surfaces', () => {
     ctx.fetchMock.mockRejectedValue(new GithubApiError({ kind: 'rate-limited', resetAt: new Date() }))
     const out = await searchRepoForSymbol('computeTotal', ctx)
     expect(out).toEqual({ ok: false, message: REPO_SEARCH_RATE_LIMIT_MESSAGE })
+  })
+})
+
+describe('searchRepoForSymbol — analytics (symbol_repo_searched)', () => {
+  const capture = vi.fn()
+  beforeEach(() => {
+    capture.mockClear()
+    _setCaptureForTest(capture)
+  })
+
+  function searchedEvents() {
+    return capture.mock.calls.filter(([name]) => name === 'symbol_repo_searched')
+  }
+
+  it('a real (cache-miss) search fires ONE event with outcome + counts + duration', async () => {
+    const ctx = makeCtx({
+      paths: ['src/other.ts', 'src/gone.ts'],
+      files: { 'src/other.ts': OTHER_TS }, // gone.ts → null at head → skipped
+    })
+    await searchRepoForSymbol('computeTotal', ctx)
+    const events = searchedEvents()
+    expect(events).toHaveLength(1)
+    const props = events[0][1] as Record<string, unknown>
+    expect(props).toMatchObject({
+      outcome: 'success',
+      definitions: 0,
+      references: 2, // import + call line in OTHER_TS
+      files_scanned: 1,
+      files_skipped: 1,
+    })
+    expect(typeof props['duration_ms']).toBe('number')
+    // The choke-point allowlist strips everything else, but the call site must
+    // not even OFFER content: no symbol, path, or snippet keys.
+    expect(props).not.toHaveProperty('symbol')
+    expect(props).not.toHaveProperty('path')
+  })
+
+  it('cache hits fire NOTHING — the event counts real searches only', async () => {
+    const ctx = makeCtx({ paths: ['src/other.ts'], files: { 'src/other.ts': OTHER_TS } })
+    await searchRepoForSymbol('computeTotal', ctx)
+    await searchRepoForSymbol('computeTotal', ctx) // settled-cache hit
+    expect(ctx.searchMock).toHaveBeenCalledTimes(1)
+    expect(searchedEvents()).toHaveLength(1)
+  })
+
+  it('concurrent clicks share one search AND one event', async () => {
+    const ctx = makeCtx({ paths: ['src/other.ts'], files: { 'src/other.ts': OTHER_TS } })
+    await Promise.all([searchRepoForSymbol('computeTotal', ctx), searchRepoForSymbol('computeTotal', ctx)])
+    expect(ctx.searchMock).toHaveBeenCalledTimes(1)
+    expect(searchedEvents()).toHaveLength(1)
+  })
+
+  it.each([
+    ['rate-limited 403', new GithubApiError({ kind: 'rate-limited', resetAt: new Date() }), 'rate_limited'],
+    ['forbidden 403', new GithubApiError({ kind: 'forbidden', message: 'abuse detection' }), 'rate_limited'],
+    ['unauthorized 401', new GithubApiError({ kind: 'unauthorized' }), 'unauthorized'],
+    ['unknown failure', new Error('boom'), 'error'],
+  ])('%s fires outcome %s (no result counts)', async (_name, err, expectedOutcome) => {
+    const ctx = makeCtx({ searchError: err })
+    await searchRepoForSymbol('computeTotal', ctx)
+    const events = searchedEvents()
+    expect(events).toHaveLength(1)
+    const props = events[0][1] as Record<string, unknown>
+    expect(props['outcome']).toBe(expectedOutcome)
+    expect(typeof props['duration_ms']).toBe('number')
+    expect(props).not.toHaveProperty('references')
+  })
+
+  it('a retry after failure is a NEW search and fires again (failure evicted)', async () => {
+    const ctx = makeCtx({ searchError: new GithubApiError({ kind: 'rate-limited', resetAt: new Date() }) })
+    await searchRepoForSymbol('computeTotal', ctx)
+    await searchRepoForSymbol('computeTotal', ctx)
+    expect(ctx.searchMock).toHaveBeenCalledTimes(2)
+    expect(searchedEvents()).toHaveLength(2)
   })
 })
 

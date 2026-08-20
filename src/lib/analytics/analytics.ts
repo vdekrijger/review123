@@ -59,6 +59,24 @@ const EVENTS = {
   // None of these can reconstruct the finding's content, the diff, or repo data.
   ai_finding_accepted: ['reviewer', 'severity', 'deep', 'crossVerified', 'confirmedBy', 'polledModels', 'fusionMode', 'raisedByCount'],
   ai_finding_dismissed: ['reviewer', 'severity', 'deep', 'crossVerified', 'confirmedBy', 'polledModels', 'fusionMode', 'raisedByCount'],
+  // PRIVACY DECISION (finding re-anchor): fired when the user MOVES an AI
+  // finding to a corrected diff line (drag or the "Move to line…" keyboard
+  // path). Props are enums / booleans / a line DELTA only:
+  //   - 'method'          : 'drag' | 'keyboard' — fixed enum input path.
+  //   - 'distance'        : integer ABS delta between the reported line and the
+  //                         corrected line — a relative offset that cannot
+  //                         locate code (omitted for file-level findings that
+  //                         had no reported line).
+  //   - 'same_side'       : boolean — corrected anchor is on the finding's
+  //                         reported (RIGHT/new-file) side.
+  //   - 'off_diff_rescue' : boolean — the reported anchor wasn't a renderable
+  //                         diff line (the move rescued it from the fallback
+  //                         block).
+  // NEVER absolute line numbers, file paths, finding text, or any code content.
+  finding_moved: ['method', 'distance', 'same_side', 'off_diff_rescue'],
+  // Fired when the user undoes a move (✕ on the "moved from line N" chip).
+  // Carries NOTHING — a pure interaction counter, like comment_link_copied.
+  finding_move_undone: [],
   diagram_viewed: [],
   hotspot_clicked: [],
   ci_summary_viewed: ['conclusion'],
@@ -100,6 +118,19 @@ const EVENTS = {
   // 'references' — integer COUNTS of what the popover listed. Never the symbol
   // name, file paths, line numbers, or any code content.
   symbol_popover_opened: ['definitions', 'references'],
+  // PRIVACY DECISION (Tier 2 repo-wide symbol search): fired ONCE per search
+  // that ACTUALLY RUNS — a cache miss that hits the provider's code-search API.
+  // Cache hits (settled or in-flight re-clicks) fire nothing: no quota was
+  // spent and no work ran. Props are enums / counts / a duration only:
+  //   - 'outcome'       : 'success' | 'rate_limited' | 'unauthorized' | 'error'.
+  //   - 'definitions'   : integer count of definitions found (success only).
+  //   - 'references'    : integer count of references found (success only).
+  //   - 'files_scanned' : integer count of result files fetched + indexed.
+  //   - 'files_skipped' : integer count dropped (gone at head / over size cap).
+  //   - 'duration_ms'   : elapsed ms (same convention as ai_task_completed).
+  // NEVER the searched symbol name, file paths, snippets, repo identifiers, or
+  // any code content — counts cannot reconstruct what was searched or found.
+  symbol_repo_searched: ['outcome', 'definitions', 'references', 'files_scanned', 'files_skipped', 'duration_ms'],
   drawer_opened: [],
   // Carries no content — fired when the user turns ON "Hide whitespace changes".
   whitespace_hidden: [],

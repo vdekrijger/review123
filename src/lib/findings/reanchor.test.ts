@@ -10,6 +10,9 @@
  *    corrupt storage degrades to empty, never throws.
  *  - Pruning: hashes absent from the live set are dropped; live ones kept.
  *  - Bounds: per-PR override cap evicts the OLDEST moves.
+ *  - Analytics: set fires `finding_moved` ONLY when the caller passes move
+ *    meta (deltas/enums only); clear of an existing override fires
+ *    `finding_move_undone`; no-op clears and metaless sets fire nothing.
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
@@ -22,7 +25,9 @@ import {
   currentPrKey,
   _resetReanchorForTest,
   type FindingAnchorIdentity,
+  type ReanchorMove,
 } from './reanchor.svelte'
+import { _setCaptureForTest } from '../analytics/analytics'
 import { router } from '../router/router.svelte'
 
 const KEY = 'review123:finding-anchors'
@@ -102,6 +107,76 @@ describe('override CRUD', () => {
   it('overrides are PR-scoped: another prKey sees nothing', () => {
     setAnchorOverride(hash, { path: 'src/a.ts', line: 14, side: 'RIGHT' }, PR)
     expect(getAnchorOverride(hash, 'github:other/repo#9')).toBeNull()
+  })
+})
+
+describe('analytics — finding_moved / finding_move_undone', () => {
+  const hash = findingAnchorHash(identity())
+  const capture = vi.fn()
+  beforeEach(() => {
+    capture.mockClear()
+    _setCaptureForTest(capture)
+  })
+
+  function eventsNamed(name: string) {
+    return capture.mock.calls.filter(([n]) => n === name)
+  }
+
+  const MOVE: ReanchorMove = { method: 'drag', reportedLine: 12, offDiffRescue: false }
+
+  it('set WITH move meta fires finding_moved with method/distance/side/rescue', () => {
+    setAnchorOverride(hash, { path: 'src/a.ts', line: 14, side: 'RIGHT' }, PR, MOVE)
+    const events = eventsNamed('finding_moved')
+    expect(events).toHaveLength(1)
+    expect(events[0][1]).toEqual({ method: 'drag', distance: 2, same_side: true, off_diff_rescue: false })
+  })
+
+  it('keyboard method + off-diff rescue thread through as given', () => {
+    setAnchorOverride(hash, { path: 'src/a.ts', line: 3, side: 'RIGHT' }, PR, {
+      method: 'keyboard',
+      reportedLine: 999,
+      offDiffRescue: true,
+    })
+    expect(eventsNamed('finding_moved')[0][1]).toEqual({
+      method: 'keyboard',
+      distance: 996,
+      same_side: true,
+      off_diff_rescue: true,
+    })
+  })
+
+  it('a LEFT-side drop reports same_side false (reported side is always RIGHT)', () => {
+    setAnchorOverride(hash, { path: 'src/a.ts', line: 10, side: 'LEFT' }, PR, MOVE)
+    expect(eventsNamed('finding_moved')[0][1]).toMatchObject({ same_side: false })
+  })
+
+  it('a file-level finding (reportedLine null) omits distance', () => {
+    setAnchorOverride(hash, { path: 'src/a.ts', line: 5, side: 'RIGHT' }, PR, {
+      method: 'drag',
+      reportedLine: null,
+      offDiffRescue: true,
+    })
+    const props = eventsNamed('finding_moved')[0][1] as Record<string, unknown>
+    expect(props).not.toHaveProperty('distance')
+    expect(props).toMatchObject({ method: 'drag', off_diff_rescue: true })
+  })
+
+  it('set WITHOUT move meta (programmatic/storage-level) fires nothing', () => {
+    setAnchorOverride(hash, { path: 'src/a.ts', line: 14, side: 'RIGHT' }, PR)
+    expect(eventsNamed('finding_moved')).toHaveLength(0)
+  })
+
+  it('clear of an existing override fires finding_move_undone (no props)', () => {
+    setAnchorOverride(hash, { path: 'src/a.ts', line: 14, side: 'RIGHT' }, PR)
+    clearAnchorOverride(hash, PR)
+    const events = eventsNamed('finding_move_undone')
+    expect(events).toHaveLength(1)
+    expect(events[0][1]).toEqual({})
+  })
+
+  it('clear on an absent hash fires nothing (no-op undo)', () => {
+    clearAnchorOverride('nope', PR)
+    expect(eventsNamed('finding_move_undone')).toHaveLength(0)
   })
 })
 

@@ -97,6 +97,58 @@ describe('analytics privacy choke-point', () => {
     expect(props).not.toHaveProperty('description')
   })
 
+  it('symbol_repo_searched carries outcome/counts/duration only — never the symbol or paths', () => {
+    track('symbol_repo_searched', {
+      outcome: 'success',
+      definitions: 1,
+      references: 4,
+      files_scanned: 3,
+      files_skipped: 1,
+      duration_ms: 840,
+      // content that MUST be stripped by the choke-point:
+      symbol: 'computeTotal',
+      path: 'src/lib/secret.ts',
+      snippet: 'const total = computeTotal(xs)',
+    } as never)
+    const props = capture.mock.calls[0][1]
+    expect(props).toEqual({
+      outcome: 'success',
+      definitions: 1,
+      references: 4,
+      files_scanned: 3,
+      files_skipped: 1,
+      duration_ms: 840,
+    })
+    expect(props).not.toHaveProperty('symbol')
+    expect(props).not.toHaveProperty('path')
+    expect(props).not.toHaveProperty('snippet')
+  })
+
+  it('finding_moved carries method/distance/side flags only — never lines, paths, or body', () => {
+    track('finding_moved', {
+      method: 'drag',
+      distance: 3,
+      same_side: true,
+      off_diff_rescue: false,
+      // content that MUST be stripped by the choke-point:
+      line: 42,
+      path: 'src/api/users.ts',
+      body: 'SQL injection in users.ts',
+      hash: 'abc123',
+    } as never)
+    const props = capture.mock.calls[0][1]
+    expect(props).toEqual({ method: 'drag', distance: 3, same_side: true, off_diff_rescue: false })
+    expect(props).not.toHaveProperty('line')
+    expect(props).not.toHaveProperty('path')
+    expect(props).not.toHaveProperty('body')
+    expect(props).not.toHaveProperty('hash')
+  })
+
+  it('finding_move_undone carries nothing at all', () => {
+    track('finding_move_undone', { line: 7, path: 'src/a.ts' } as never)
+    expect(capture.mock.calls[0][1]).toEqual({})
+  })
+
   it('unknown events are dropped entirely', () => {
     track('rogue_event' as never, {} as never)
     expect(capture).not.toHaveBeenCalled()

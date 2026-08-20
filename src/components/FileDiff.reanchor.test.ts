@@ -30,6 +30,7 @@ import {
   _resetReanchorForTest,
   REANCHOR_DND_MIME,
 } from '../lib/findings/reanchor.svelte'
+import { _setCaptureForTest } from '../lib/analytics/analytics'
 
 // DiffView uses canvas.getContext('2d') for text measurement — jsdom has none.
 beforeAll(() => {
@@ -264,6 +265,81 @@ describe('FileDiff re-anchor — drag & drop path', () => {
   it('the drag handle renders on an anchored finding card', () => {
     const { container } = renderDiff([makeFinding(2)])
     expect(container.querySelector('[data-testid="finding-drag-handle"]')).toBeTruthy()
+  })
+})
+
+describe('FileDiff re-anchor — analytics (input-method threading)', () => {
+  const capture = vi.fn()
+  beforeEach(() => {
+    capture.mockClear()
+    _setCaptureForTest(capture)
+  })
+
+  function eventsNamed(name: string) {
+    return capture.mock.calls.filter(([n]) => n === name)
+  }
+
+  it('keyboard move fires finding_moved with method keyboard + distance', async () => {
+    const user = userEvent.setup()
+    const { container } = renderDiff([makeFinding(2)])
+    await user.click(screen.getByRole('button', { name: /move this finding to another diff line/i }))
+    await user.type(screen.getByRole('spinbutton', { name: /target line number/i }), '3')
+    await user.click(screen.getByRole('button', { name: 'Move' }))
+    await waitFor(() => expect(container.querySelector('[data-line-findings="3"]')).toBeTruthy())
+    const events = eventsNamed('finding_moved')
+    expect(events).toHaveLength(1)
+    expect(events[0][1]).toEqual({ method: 'keyboard', distance: 1, same_side: true, off_diff_rescue: false })
+  })
+
+  it('an INVALID keyboard move (line not in diff) fires nothing', async () => {
+    const user = userEvent.setup()
+    renderDiff([makeFinding(2)])
+    await user.click(screen.getByRole('button', { name: /move this finding to another diff line/i }))
+    await user.type(screen.getByRole('spinbutton', { name: /target line number/i }), '999')
+    await user.click(screen.getByRole('button', { name: 'Move' }))
+    expect(eventsNamed('finding_moved')).toHaveLength(0)
+  })
+
+  it('drag drop fires finding_moved with method drag', async () => {
+    const f = makeFinding(2)
+    const hash = hashOf(f)
+    const { container } = renderDiff([f])
+    reanchorDrag.hash = hash
+    const numEl = container.querySelector('[data-line-new-num="3"]')
+    const row = numEl?.closest('tr') as HTMLTableRowElement
+    await fireEvent.drop(row, { dataTransfer: { getData: (t: string) => (t === REANCHOR_DND_MIME ? hash : '') } })
+    await waitFor(() => expect(getAnchorOverride(hash)).not.toBeNull())
+    const events = eventsNamed('finding_moved')
+    expect(events).toHaveLength(1)
+    expect(events[0][1]).toEqual({ method: 'drag', distance: 1, same_side: true, off_diff_rescue: false })
+  })
+
+  it('rescuing an off-diff finding reports off_diff_rescue true + full distance', async () => {
+    const user = userEvent.setup()
+    const f = makeFinding(999, 'Rescue analytics body')
+    const { container } = renderDiff([f])
+    await user.click(screen.getByRole('button', { name: /move this finding to another diff line/i }))
+    await user.type(screen.getByRole('spinbutton', { name: /target line number/i }), '1')
+    await user.click(screen.getByRole('button', { name: 'Move' }))
+    await waitFor(() => expect(container.querySelector('[data-line-findings="1"]')).toBeTruthy())
+    expect(eventsNamed('finding_moved')[0][1]).toEqual({
+      method: 'keyboard',
+      distance: 998,
+      same_side: true,
+      off_diff_rescue: true,
+    })
+  })
+
+  it('undo (✕) fires finding_move_undone', async () => {
+    const user = userEvent.setup()
+    const f = makeFinding(2)
+    setAnchorOverride(hashOf(f), { path: file.filename, line: 3, side: 'RIGHT' }) // setup: no meta → no move event
+    capture.mockClear()
+    renderDiff([f])
+    await user.click(screen.getByRole('button', { name: /undo move — restore line 2/i }))
+    await waitFor(() => expect(getAnchorOverride(hashOf(f))).toBeNull())
+    expect(eventsNamed('finding_move_undone')).toHaveLength(1)
+    expect(eventsNamed('finding_moved')).toHaveLength(0)
   })
 })
 

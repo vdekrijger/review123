@@ -35,6 +35,7 @@
     clearAnchorOverride,
     reanchorDrag,
     REANCHOR_DND_MIME,
+    type ReanchorMove,
   } from '../lib/findings/reanchor.svelte'
 
   /** A skill finding scoped to a specific line in this file */
@@ -591,10 +592,27 @@
   /** True while one of THIS file's findings is being dragged. */
   const reanchorDragActive = $derived(reanchorDrag.hash !== null && reanchorableHashes.has(reanchorDrag.hash))
 
+  /**
+   * Analytics context for a user move gesture (fires `finding_moved` inside
+   * setAnchorOverride). Distance/off-diff are measured against the ORIGINAL
+   * reported anchor (movedFrom when re-moving an already-moved finding) — the
+   * metric is "how far off was the AI", not the previous correction.
+   */
+  function moveMetaFor(finding: PlacedSkillFinding, method: ReanchorMove['method']): ReanchorMove {
+    const reportedLine = finding.movedFrom?.line ?? finding.line
+    return {
+      method,
+      reportedLine,
+      // Reported side is always RIGHT — off-diff means no RIGHT anchor row
+      // exists for the reported line (file-level findings included).
+      offDiffRescue: reportedLine === null || !rightAnchorLines.has(reportedLine),
+    }
+  }
+
   /** Keyboard path: move a finding to a NEW-side line; false = not in diff. */
   function moveFindingToLine(finding: PlacedSkillFinding, line: number): boolean {
     if (!rightAnchorLines.has(line)) return false
-    setAnchorOverride(finding.anchorHash, { path: file.filename, line, side: 'RIGHT' })
+    setAnchorOverride(finding.anchorHash, { path: file.filename, line, side: 'RIGHT' }, undefined, moveMetaFor(finding, 'keyboard'))
     return true
   }
 
@@ -679,7 +697,14 @@
     const target = rowDropTarget(e)
     if (!target) return
     e.preventDefault()
-    setAnchorOverride(hash, { path: file.filename, line: target.line, side: target.side })
+    // reanchorableHashes membership (checked above) guarantees the lookup hits.
+    const finding = placedSkillFindings.find((f) => f.anchorHash === hash)
+    setAnchorOverride(
+      hash,
+      { path: file.filename, line: target.line, side: target.side },
+      undefined,
+      finding ? moveMetaFor(finding, 'drag') : undefined,
+    )
     reanchorDrag.hash = null
   }
 

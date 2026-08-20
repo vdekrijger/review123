@@ -29,6 +29,7 @@
  * read dataTransfer, so drop-target validation reads this instead).
  */
 
+import { track } from '../analytics/analytics'
 import { router } from '../router/router.svelte'
 
 /**
@@ -64,6 +65,22 @@ export interface AnchorTarget {
 
 interface StoredOverride extends AnchorTarget {
   movedAt: number
+}
+
+/**
+ * Analytics context for a USER move gesture, threaded from the caller (only
+ * FileDiff knows the input method and the original anchor's diff status).
+ * Passing it makes setAnchorOverride fire `finding_moved`; omitting it (tests,
+ * programmatic/storage-level calls) fires nothing. The reported line itself is
+ * NEVER sent — only the ABS distance to the corrected line is derived from it.
+ */
+export interface ReanchorMove {
+  /** How the user moved the finding. */
+  method: 'drag' | 'keyboard'
+  /** The ORIGINAL reported line (null = file-level finding, no line). */
+  reportedLine: number | null
+  /** True when the reported anchor wasn't a renderable diff line (fallback block). */
+  offDiffRescue: boolean
 }
 
 type AnchorStore = Record<string, Record<string, StoredOverride>>
@@ -218,11 +235,27 @@ export function getAnchorOverride(hash: string, prKey: string = currentPrKey()):
   return { path: o.path, line: o.line, side: o.side }
 }
 
-/** Record a corrected anchor for a finding hash (persists per-PR). */
-export function setAnchorOverride(hash: string, target: AnchorTarget, prKey: string = currentPrKey()): void {
+/**
+ * Record a corrected anchor for a finding hash (persists per-PR).
+ * When `move` is provided (the user-gesture call sites in FileDiff), fires the
+ * `finding_moved` analytics event — deltas/enums/booleans only, never absolute
+ * lines, paths, or finding text (see the allowlist in analytics.ts).
+ */
+export function setAnchorOverride(hash: string, target: AnchorTarget, prKey: string = currentPrKey(), move?: ReanchorMove): void {
   const forPr = { ...(overrides[prKey] ?? {}) }
   forPr[hash] = { ...target, movedAt: Date.now() }
   persist({ ...overrides, [prKey]: capPr(forPr) })
+  if (move) {
+    track('finding_moved', {
+      method: move.method,
+      // Distance is an ABS line delta (approximate when the sides differ —
+      // old/new numbering). File-level findings have no reported line → omitted.
+      ...(move.reportedLine !== null ? { distance: Math.abs(target.line - move.reportedLine) } : {}),
+      // Findings are always REPORTED on the RIGHT (new-file) side.
+      same_side: target.side === 'RIGHT',
+      off_diff_rescue: move.offDiffRescue,
+    })
+  }
 }
 
 /** Undo: remove the override so the finding returns to its reported line. */
@@ -235,6 +268,10 @@ export function clearAnchorOverride(hash: string, prKey: string = currentPrKey()
   if (Object.keys(next).length === 0) delete store[prKey]
   else store[prKey] = next
   persist(store)
+  // Every production clear IS a user undo (the ✕ on the moved chip) — prune
+  // has its own deletion path and never comes through here. No-op clears
+  // (absent hash) returned above and fire nothing. Event carries no props.
+  track('finding_move_undone')
 }
 
 /**
