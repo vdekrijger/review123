@@ -630,6 +630,10 @@ async function setupRoutes(
       // Convergence pass (PROMPT_VERSION 26): no overlaps — a valid empty
       // cluster set, so the flow renders findings unmerged (loss-proof path).
       result = { clusters: [] }
+    } else if (systemContent.includes('rewriting code-review findings into plain')) {
+      // Simplify pass (runs after convergence): a valid empty rewrite set,
+      // so every finding card keeps its original body.
+      result = { rewrites: [] }
     } else if (systemContent.includes('hotspot') || systemContent.includes('readingorder')) {
       result = ATTENTION_RESULT
     } else if (systemContent.includes('execution path') || systemContent.includes('mermaid')) {

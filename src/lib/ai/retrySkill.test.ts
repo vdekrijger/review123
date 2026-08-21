@@ -15,7 +15,10 @@ import { addSkill } from '../skills/skills'
 
 beforeEach(() => {
   localStorage.clear()
-  localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test' }))
+  // simplify OFF: this suite asserts exact reviewer-LLM call counts; the
+  // post-review simplify pass (one extra call once findings exist) would
+  // inflate them. The pass is covered in simplify-run.test.ts.
+  localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test', aiTaskModes: { simplify: 'off' } }))
 })
 
 function makeStubDeps(overrides: Record<string, unknown> = {}) {

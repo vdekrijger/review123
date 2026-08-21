@@ -180,6 +180,20 @@ export function buildReviewPrompt(input: ReviewPromptInput): string {
     lines.push('')
     lines.push(draft.body.trim())
 
+    // SIMPLIFY-pass decision (documented): the on-card display simplifies
+    // finding bodies for humans, but an LLM consumer benefits from the FULL
+    // original detail. A draft added from a simplified card carries the raw
+    // finding text as `aiOriginalBody` (dropped on user edits) — surface it
+    // here as an extra detail block. The Request stays the body the user chose;
+    // the original is ADDED, never substituted, so user intent is never hidden.
+    const original = draft.aiOriginalBody?.trim()
+    if (original && original !== draft.body.trim()) {
+      lines.push('')
+      lines.push('**Full finding detail (original AI reviewer text):**')
+      lines.push('')
+      lines.push(original)
+    }
+
     if (suggestion !== null) {
       lines.push('')
       lines.push('**Proposed change:**')

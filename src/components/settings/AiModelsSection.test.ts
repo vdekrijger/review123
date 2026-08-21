@@ -522,9 +522,10 @@ describe('AiModelsSection — per-task modes (Plan J)', () => {
     expect(m.verdict).toBe('standard')
     expect(m.diagrams).toBe('off')
     expect(m.skills).toBe('off')
-    // Story + risk judge are extras too — minimal tokens means off.
+    // Story + risk judge + simplify are extras too — minimal tokens means off.
     expect(m.story).toBe('off')
     expect(m.riskJudge).toBe('off')
+    expect(m.simplify).toBe('off')
   })
 
   it('renders a Story walkthrough row with all three modes (deep-capable)', () => {
@@ -559,6 +560,36 @@ describe('AiModelsSection — per-task modes (Plan J)', () => {
     const m = getSettings().aiTaskModes
     expect(m.story).toBe('deep')
     expect(m.riskJudge).toBe('standard')
+  })
+
+  it('renders a Simplify findings row with Off + Standard but NO Deep (pure text rewrite)', () => {
+    render(AiModelsSection)
+    const simplifyGroup = within(screen.getByRole('radiogroup', { name: /Simplify findings/i }))
+    expect(simplifyGroup.getByRole('radio', { name: /Off/i })).toBeInTheDocument()
+    expect(simplifyGroup.getByRole('radio', { name: /Standard/i })).toBeInTheDocument()
+    expect(simplifyGroup.queryByRole('radio', { name: /Deep/i })).toBeNull()
+  })
+
+  it('the Simplify row defaults to Standard (always-on) and persists Off immediately', async () => {
+    render(AiModelsSection)
+    const simplifyGroup = within(screen.getByRole('radiogroup', { name: /Simplify findings/i }))
+    expect(simplifyGroup.getByRole('radio', { name: /Standard/i })).toBeChecked()
+    await userEvent.click(simplifyGroup.getByRole('radio', { name: /Off/i }))
+    expect(getSettings().aiTaskModes.simplify).toBe('off')
+  })
+
+  it('quick-set All (deep) keeps simplify standard — never deep', async () => {
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /^All$/i }))
+    expect(getSettings().aiTaskModes.simplify).toBe('standard')
+  })
+
+  it('quick-set None returns simplify to standard (still on) after it was off', async () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ aiTaskModes: { simplify: 'off' } }))
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /^None$/i }))
+    expect(getSettings().aiTaskModes.simplify).toBe('standard')
   })
 })
 

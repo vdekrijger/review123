@@ -118,10 +118,12 @@ export type AiTaskMode = 'off' | 'standard' | 'deep'
 /**
  * The user-controllable AI tasks (Plan J). The six AUTO tasks that run on PR
  * open, plus `skills` (manual Run-my-reviewers — deep makes it the most
- * expensive), plus the two formerly always-on cached tasks that joined the
- * matrix later: `story` (Plan H narrative ordering) and `riskJudge` (the
- * single-pass LLM risk judge, #203). Only `coach` and `ask` remain outside
- * user control (on-demand, never auto-run).
+ * expensive), plus the formerly always-on cached tasks that joined the
+ * matrix later: `story` (Plan H narrative ordering), `riskJudge` (the
+ * single-pass LLM risk judge, #203), and `simplify` (the post-review pass
+ * that rewrites finding bodies into plain English — off|standard only,
+ * default ON). Only `coach` and `ask` remain outside user control
+ * (on-demand, never auto-run).
  */
 export type AiTaskId =
   | 'summary'
@@ -133,6 +135,7 @@ export type AiTaskId =
   | 'skills'
   | 'story'
   | 'riskJudge'
+  | 'simplify'
 
 /** All controllable task ids, in display order. */
 export const AI_TASK_IDS: readonly AiTaskId[] = [
@@ -145,6 +148,7 @@ export const AI_TASK_IDS: readonly AiTaskId[] = [
   'skills',
   'story',
   'riskJudge',
+  'simplify',
 ] as const
 
 /**
@@ -163,9 +167,10 @@ const ORIGINAL_AUTO_TASKS = [
 
 /**
  * Tasks that support the deep (agentic) harness. `summary` is pure description
- * (no harness) and `riskJudge` is single-pass BY DESIGN (#203 — a cheap triage
- * read, never the harness), so both only support off/standard — 'deep' is
- * never valid for them. `story` runs through the harness when deep (Plan H).
+ * (no harness), `riskJudge` is single-pass BY DESIGN (#203 — a cheap triage
+ * read, never the harness), and `simplify` is a pure text rewrite (nothing for
+ * tools to verify), so those only support off/standard — 'deep' is never valid
+ * for them. `story` runs through the harness when deep (Plan H).
  */
 export const DEEP_CAPABLE_TASKS: readonly AiTaskId[] = [
   'attention',
@@ -177,9 +182,9 @@ export const DEEP_CAPABLE_TASKS: readonly AiTaskId[] = [
   'story',
 ] as const
 
-/** Whether a task supports 'deep'. (Everything except summary + riskJudge.) */
+/** Whether a task supports 'deep'. (Everything except summary + riskJudge + simplify.) */
 export function taskSupportsDeep(task: AiTaskId): boolean {
-  return task !== 'summary' && task !== 'riskJudge'
+  return task !== 'summary' && task !== 'riskJudge' && task !== 'simplify'
 }
 
 export interface Settings {
@@ -301,6 +306,7 @@ export function defaultTaskModes(): Record<AiTaskId, AiTaskMode> {
     skills: 'standard',
     story: 'standard',
     riskJudge: 'standard',
+    simplify: 'standard',
   }
 }
 
@@ -509,6 +515,13 @@ function coerceTaskModes(obj: Record<string, unknown>): Record<AiTaskId, AiTaskM
     }
     if (!isValidModeFor('riskJudge', src['riskJudge'])) {
       result.riskJudge = allAutoOff ? 'off' : 'standard'
+    }
+    // simplify joined the matrix after #219: a stored matrix without it derives
+    // 'standard' (the pass is meant to be always-on) — EXCEPT when the user had
+    // deliberately turned ALL SIX original auto tasks off (the minimal-token
+    // posture): then a brand-new LLM pass must not appear out of nowhere → 'off'.
+    if (!isValidModeFor('simplify', src['simplify'])) {
+      result.simplify = allAutoOff ? 'off' : 'standard'
     }
     return result
   }

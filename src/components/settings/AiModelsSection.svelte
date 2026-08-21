@@ -51,6 +51,7 @@
     skills: 'My reviewers (skills)',
     story: 'Story walkthrough',
     riskJudge: 'Risk judge (review effort)',
+    simplify: 'Simplify findings (plain English)',
   }
 
   const MODE_OPTIONS: { value: AiTaskMode; label: string }[] = [

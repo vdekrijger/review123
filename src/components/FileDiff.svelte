@@ -55,6 +55,8 @@
     mergedReason?: string
     /** Convergence: same point as the user's own draft → collapsed rendering. */
     coveredByDraft?: { path: string; line: number }
+    /** Simplify pass: plain-English rewrite shown by default ("Show original" toggles). */
+    simpleBody?: string
   }
 
   interface Props {
@@ -111,8 +113,12 @@
      * user-corrected (re-anchored) finding reports its corrected location, so
      * the draft lands where the user moved it. `side` defaults to 'RIGHT'
      * (findings anchor to the new side unless dragged onto a deleted line).
+     * `body` is the text the card DISPLAYED when the user clicked (the
+     * simplified rewrite by default when one exists); `originalBody` carries
+     * the raw finding text when it differs (so the draft can keep the full
+     * detail for the "Copy as LLM prompt" export).
      */
-    onAddSkillFindingDraft?: (finding: { body: string; line: number; key: string; skillName: string; side?: 'LEFT' | 'RIGHT' }) => Promise<void>
+    onAddSkillFindingDraft?: (finding: { body: string; line: number; key: string; skillName: string; side?: 'LEFT' | 'RIGHT'; originalBody?: string }) => Promise<void>
     /**
      * Called when the user DISMISSES a skill finding inside FileDiff (the accept
      * path flows through onAddSkillFindingDraft). Lets the parent record the
@@ -527,11 +533,22 @@
     onDismissSkillFinding?.(key)
   }
 
-  async function handleAddSkillFindingDraft(finding: PlacedSkillFinding) {
+  async function handleAddSkillFindingDraft(finding: PlacedSkillFinding, displayedBody?: string) {
     if (onAddSkillFindingDraft) {
       // EFFECTIVE anchor: a re-anchored finding carries its corrected line/side
       // here, so "Add as draft" lands at the user-corrected location.
-      await onAddSkillFindingDraft({ body: finding.body, line: finding.line, key: finding.key, skillName: finding.skillName, side: finding.anchorSide })
+      // The draft body is the text the card DISPLAYED (simplified by default
+      // when the simplify pass rewrote it); the raw finding text rides along
+      // as originalBody when it differs.
+      const body = displayedBody ?? finding.body
+      await onAddSkillFindingDraft({
+        body,
+        line: finding.line,
+        key: finding.key,
+        skillName: finding.skillName,
+        side: finding.anchorSide,
+        ...(body !== finding.body ? { originalBody: finding.body } : {}),
+      })
     }
     addedSkillKeys = new Set([...addedSkillKeys, finding.key])
   }
@@ -1085,6 +1102,7 @@
                 skillName={finding.skillName}
                 severity={finding.severity}
                 body={finding.body}
+                simpleBody={finding.simpleBody}
                 verification={finding.verification}
                 raisedBy={finding.raisedBy}
                 mergedFrom={finding.mergedFrom}
@@ -1095,7 +1113,7 @@
                 compact={true}
                 findingKey={finding.key}
                 added={addedSkillKeys.has(finding.key)}
-                onAdd={() => handleAddSkillFindingDraft(finding)}
+                onAdd={(displayedBody) => handleAddSkillFindingDraft(finding, displayedBody)}
                 onDismiss={() => dismissSkillFinding(finding.key)}
                 anchorHash={finding.anchorHash}
                 movedFrom={finding.movedFrom ?? null}
@@ -1182,6 +1200,7 @@
             skillName={finding.skillName}
             severity={finding.severity}
             body={finding.body}
+            simpleBody={finding.simpleBody}
             verification={finding.verification}
             raisedBy={finding.raisedBy}
             mergedFrom={finding.mergedFrom}
@@ -1191,7 +1210,7 @@
             anchored={false}
             findingKey={finding.key}
             added={addedSkillKeys.has(finding.key)}
-            onAdd={() => handleAddSkillFindingDraft(finding)}
+            onAdd={(displayedBody) => handleAddSkillFindingDraft(finding, displayedBody)}
             onDismiss={() => dismissSkillFinding(finding.key)}
             anchorHash={finding.anchorHash}
             movedFrom={finding.movedFrom ?? null}

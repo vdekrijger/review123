@@ -82,12 +82,13 @@ import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNI
 // flow-of-execution (GraphResult.flow) — now retired.
 
 /**
- * Every task whose result is cached under a prompt-versioned key — the nine
+ * Every task whose result is cached under a prompt-versioned key — the ten
  * user-controllable tasks (AiTaskId — the Plan J matrix, which now includes
- * story and riskJudge) plus `convergence` (convergencePrompt), the one cached
- * task that stays OUTSIDE the mode matrix by design: it runs only as a cheap
- * follow-up to the reviewers the user already enabled, so it has no mode of
- * its own. `coach` and `ask` are not cached, so they are deliberately absent.
+ * story, riskJudge and simplify) plus `convergence` (convergencePrompt), the
+ * one cached task that stays OUTSIDE the mode matrix by design: it runs only
+ * as a cheap follow-up to the reviewers the user already enabled, so it has
+ * no mode of its own. `coach` and `ask` are not cached, so they are
+ * deliberately absent.
  */
 export type PromptVersionedTaskId = AiTaskId | 'convergence'
 
@@ -105,6 +106,10 @@ export type PromptVersionedTaskId = AiTaskId | 'convergence'
  * stayed byte-identical and NO cached result was invalidated by the switch
  * itself. Only future per-task bumps diverge. The changelog comments above
  * document the shared v1–v26 prompt eras; from here on, record bumps per task.
+ *
+ * Tasks added AFTER the migration start their own version history at 1 (a
+ * brand-new cache segment has nothing to invalidate): `simplify` (the
+ * post-review plain-English rewrite pass, simplifyPrompt) starts at 1.
  */
 export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   summary: 26,
@@ -117,6 +122,7 @@ export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   story: 26,
   riskJudge: 26,
   convergence: 26,
+  simplify: 1,
 }
 
 /** The prompt version that keys `task`'s cache entries. */
@@ -1360,6 +1366,75 @@ ${findingLines.join('\n')}
 ${draftLines.length > 0 ? `\nThe author's existing draft comments:\n${draftLines.join('\n')}\n` : ''}
 Cluster the items that describe the same underlying issue.`
 
+  return { system, user }
+}
+
+// ---------------------------------------------------------------------------
+// simplifyPrompt — post-review plain-English rewrite (PROMPT_VERSIONS.simplify)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-body input cap for the simplify prompt (cost bound). Reviewer prompts
+ * already enforce brevity, so real bodies rarely approach this; a runaway body
+ * is truncated rather than sinking the whole batch.
+ */
+const SIMPLIFY_INPUT_BODY_MAX = 2000
+
+/**
+ * Build prompts for the SIMPLIFY pass: ONE batched call, after the reviewers
+ * (and the convergence merge) settle, that rewrites every finding body into
+ * plain, human-sounding English focused on the core of the issue. Model-ese
+ * findings fatigue reviewers; this pass is the always-on antidote.
+ *
+ * Input rows use the positional ids from simplify.ts (`f0…`) — the SAME
+ * enumeration rebuilds the id map at apply time, guarded by a content
+ * fingerprint (mirrors the convergence pass). Output:
+ * {"rewrites":[{id, simple}]}. The rewrite is DISPLAY-ONLY: the original body
+ * is kept and every non-display consumer (risk, convergence, verification,
+ * "Copy as LLM prompt") stays on the original text.
+ *
+ * The system prompt's "rewriting code-review findings into plain" phrase is
+ * the e2e stubs' dispatch marker — keep it stable.
+ */
+export function simplifyPrompt(findings: { id: string; body: string }[]): { system: string; user: string } {
+  const system = `You are rewriting code-review findings into plain, direct English so a busy \
+human can absorb each one at a glance. You receive numbered findings; for each one, produce a \
+shorter rewrite of its text. You never judge, merge, drop, or reorder findings — you only \
+rewrite their wording.
+
+Rewrite contract (every rule is binding):
+- Lead with the core problem in ONE sentence. Two short sentences is the typical result; three \
+is the hard maximum.
+- Plain conversational English, active voice — write like a busy colleague explaining the issue, \
+not like a report.
+- Say what breaks and what to do about it. Nothing else: no restating the code, no context \
+recaps, no methodology narration.
+- PRESERVE technical anchors exactly as written: backticked identifiers, file:line references, \
+and concrete values must survive verbatim.
+- NEVER invent facts, change the technical claim, soften or harden the stated severity, or add \
+hedges the original does not have.
+- Banned phrasings (never emit them): "It's worth noting", "Additionally", "Furthermore", \
+"potential inconsistency wherein", "robust", "leverage", "It is important to", and stacked \
+hedges like "may potentially possibly".
+- If a finding's text is already minimal (roughly 20 words or fewer), return it UNCHANGED.
+
+Respond with JSON ONLY — no explanation, no markdown outside the JSON, no code fences. Your \
+response must be valid JSON that exactly matches this shape:
+
+{
+  "rewrites": [
+    { "id": "f0", "simple": "<the rewritten text>" }
+  ]
+}
+
+Field rules:
+- One entry per finding, in any order. id must be the finding's id exactly as given.
+- simple: the rewritten text (or the original text verbatim when it is already minimal). \
+Plain text; inline markdown such as backticked identifiers is allowed and encouraged where \
+the original used it.`
+
+  const rows = findings.map((f) => ({ id: f.id, body: f.body.slice(0, SIMPLIFY_INPUT_BODY_MAX) }))
+  const user = JSON.stringify({ findings: rows }, null, 2)
   return { system, user }
 }
 

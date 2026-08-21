@@ -58,6 +58,16 @@ export interface Draft {
    */
   aiReviewer?: string
   /**
+   * When the draft was created from a SIMPLIFIED finding body (the simplify
+   * pass's plain-English rewrite), this carries the ORIGINAL finding text.
+   * Consumed ONLY by "Copy as LLM prompt" (buildReviewPrompt) so an agent gets
+   * the full technical detail; the editable `body` stays the text the user
+   * chose. Dropped when the user edits the draft (edits go through upsert
+   * without it) — an edited draft is the user's own words, and stale "original"
+   * detail must not ride along.
+   */
+  aiOriginalBody?: string
+  /**
    * Epoch-ms when this draft was first created. Undefined for drafts that
    * predate this field — such drafts render an "earlier session" fallback
    * instead of a relative age. Preserved (never backfilled) on edits and by
@@ -473,6 +483,7 @@ async function migrateLegacyShaKeysToIdentity(db: IDBDatabase, identityPrKey: st
       // AI-attribution fields ride along with the value during re-keying.
       ...(src.value.aiAuthored ? { aiAuthored: true } : {}),
       ...(src.value.aiReviewer != null ? { aiReviewer: src.value.aiReviewer } : {}),
+      ...(src.value.aiOriginalBody != null ? { aiOriginalBody: src.value.aiOriginalBody } : {}),
     }
     const targetKey = draftKey({ prKey: identityPrKey, path, line, side, n })
     await idbPut(db, targetKey, record) // adopt
@@ -628,7 +639,7 @@ export function createDraftStore(prKey: string, dbName = 'review123-drafts', mak
       // "earlier session" stays honest). updatedAt tracks the last body write.
       const existingIdx = drafts.findIndex((x) => draftKey(x) === key)
       const createdAt = existingIdx >= 0 ? drafts[existingIdx].createdAt : Date.now()
-      const record: Draft = { path: d.path, line: d.line, side: d.side, body: d.body, prKey, n, updatedAt: Date.now(), ...(createdAt != null ? { createdAt } : {}), ...(startLine != null ? { startLine } : {}), ...(makerSha ? { headSha: makerSha } : {}), ...(d.aiAuthored ? { aiAuthored: true } : {}), ...(d.aiReviewer != null ? { aiReviewer: d.aiReviewer } : {}) }
+      const record: Draft = { path: d.path, line: d.line, side: d.side, body: d.body, prKey, n, updatedAt: Date.now(), ...(createdAt != null ? { createdAt } : {}), ...(startLine != null ? { startLine } : {}), ...(makerSha ? { headSha: makerSha } : {}), ...(d.aiAuthored ? { aiAuthored: true } : {}), ...(d.aiReviewer != null ? { aiReviewer: d.aiReviewer } : {}), ...(d.aiOriginalBody != null ? { aiOriginalBody: d.aiOriginalBody } : {}) }
 
       // Update in-memory state (last-write-wins: replace existing if same key)
       const idx = existingIdx

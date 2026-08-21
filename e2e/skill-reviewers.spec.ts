@@ -214,6 +214,20 @@ async function setupRoutes(page: import('@playwright/test').Page) {
       })
     }
 
+    // Simplify pass (runs after convergence): a valid EMPTY rewrite set →
+    // every card keeps its original body, so the placement/severity tests
+    // stay byte-identical. The dedicated simplify test overrides this branch.
+    if (systemContent.includes('rewriting code-review findings into plain')) {
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify({ rewrites: [] }) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
+
     // Skill review prompt contains "reviewer persona" and the persona name
     if (systemContent.includes('reviewer persona') || systemContent.includes('security reviewer')) {
       return route.fulfill({
@@ -344,6 +358,91 @@ test('skill-reviewers: anchored finding inline at line, unanchored in per-file b
   // the confirmation). This is a visual cleanup — the decision is still recorded
   // as 'accepted', NOT a dismiss.
   await expect(inlineCard).toHaveCount(0)
+})
+
+// ---------------------------------------------------------------------------
+// Test: SIMPLIFY pass — the plain-English rewrite renders on the card by
+//       default and "Show original" discloses the raw finding text (per-card
+//       toggle, loss-proof: the original is never gone).
+// ---------------------------------------------------------------------------
+
+const SIMPLIFIED_XSS = 'User input reaches the DOM unsanitized — escape it before rendering.'
+
+test('skill-reviewers: simplify pass — simplified body renders, "Show original" reveals the raw text', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+
+  // Override ONLY the simplify branch: routes registered later take precedence,
+  // and everything that is not the simplify call falls through (route.fallback)
+  // to the base handler above. f0 = the FIRST enumerated finding (the anchored
+  // XSS one); f1 (the unanchored credential finding) gets NO rewrite, proving
+  // per-finding application.
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string }> } = {}
+    try {
+      body = route.request().postDataJSON() as typeof body
+    } catch {
+      // non-JSON body
+    }
+    const systemContent = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
+    if (body?.stream !== true && systemContent.includes('rewriting code-review findings into plain')) {
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify({ rewrites: [{ id: 'f0', simple: SIMPLIFIED_XSS }] }) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
+    return route.fallback()
+  })
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings())
+  await page.addInitScript(seedSkillScript())
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  await page.getByRole('button', { name: /run my reviewers \(1\)/i }).click()
+
+  // The anchored card shows the SIMPLIFIED body, not the raw model text.
+  const inlineCard = page.locator('.diff-line-extend .line-findings .skill-finding')
+  await expect(inlineCard).toBeVisible({ timeout: 15_000 })
+  await expect(inlineCard).toContainText('User input reaches the DOM unsanitized', { timeout: 10_000 })
+  await expect(inlineCard).not.toContainText('Potential XSS vulnerability')
+
+  // "Show original" discloses the raw finding text; the label flips.
+  const toggle = inlineCard.getByTestId('finding-simple-toggle')
+  await expect(toggle).toHaveText('Show original')
+  await toggle.click()
+  await expect(inlineCard).toContainText('Potential XSS vulnerability: user input is not sanitized')
+  await expect(toggle).toHaveText('Show simplified')
+
+  // …and back to the simplified text.
+  await toggle.click()
+  await expect(inlineCard).toContainText('User input reaches the DOM unsanitized')
+
+  // The finding WITHOUT a rewrite (f1) keeps its original body and has no toggle.
+  const blockCard = page.locator('.skill-findings-annotations .skill-finding')
+  await expect(blockCard).toContainText('Hardcoded credential found outside the visible diff')
+  await expect(blockCard.getByTestId('finding-simple-toggle')).toHaveCount(0)
+
+  // Add as draft uses the DISPLAYED (simplified) text: the created inline draft
+  // carries the simplified body, not the raw model text.
+  await inlineCard.getByRole('button', { name: /add as draft/i }).click()
+  const line2Annotations = page.locator('[data-testid="inline-annotations"][data-line="2"]')
+  await expect(line2Annotations).toBeVisible({ timeout: 5_000 })
+  await expect(line2Annotations).toContainText('User input reaches the DOM unsanitized')
+  await expect(line2Annotations).not.toContainText('Potential XSS vulnerability')
 })
 
 // ---------------------------------------------------------------------------
@@ -618,6 +717,17 @@ test('skill-reviewers: errored reviewer chip retries and resolves to findings', 
         },
       })
     }
+    // Simplify pass: valid empty rewrite set → original bodies render.
+    if (systemContent.includes('rewriting code-review findings into plain')) {
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify({ rewrites: [] }) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
     if (systemContent.includes('reviewer persona') || systemContent.includes('security reviewer')) {
       skillCalls += 1
       if (skillCalls === 1) {
@@ -741,6 +851,18 @@ test('skill-reviewers: queue caps running reviewers at 4, rest show in Waiting r
           id: 'chatcmpl-test',
           object: 'chat.completion',
           choices: [{ message: { role: 'assistant', content: JSON.stringify({ clusters: [] }) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
+    // Simplify pass (must dispatch BEFORE the loose 'reviewer' matcher below —
+    // the simplify prompt mentions code-review findings): valid empty set.
+    if (systemContent.includes('rewriting code-review findings into plain')) {
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify({ rewrites: [] }) }, finish_reason: 'stop', index: 0 }],
         },
       })
     }

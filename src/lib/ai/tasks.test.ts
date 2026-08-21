@@ -21,6 +21,7 @@ import {
   askPrompt,
   skillReviewPrompt,
   convergencePrompt,
+  simplifyPrompt,
   parseReadingOrder,
   stripReadingOrder,
 } from './tasks'
@@ -39,9 +40,16 @@ function makeCtx(text = 'PR context text here'): PackedContext {
 /**
  * The prompt-era floor: versions were a single global through v26, so every
  * historical "PROMPT_VERSION ≥ n" assertion below holds for the MINIMUM across
- * the per-task map (bumps only ever move a task's version forward).
+ * the MIGRATION-ERA entries of the per-task map (bumps only ever move a task's
+ * version forward). Tasks added AFTER the migration (e.g. `simplify`, starting
+ * its own history at 1) never lived through those shared eras and are excluded.
  */
-const MIN_PROMPT_VERSION = Math.min(...Object.values(PROMPT_VERSIONS))
+const POST_MIGRATION_TASKS = new Set(['simplify'])
+const MIN_PROMPT_VERSION = Math.min(
+  ...Object.entries(PROMPT_VERSIONS)
+    .filter(([task]) => !POST_MIGRATION_TASKS.has(task))
+    .map(([, v]) => v),
+)
 
 function makeCi(failures: { name: string; annotations: string[] }[]): CiSummary {
   return {
@@ -2039,6 +2047,78 @@ describe('convergencePrompt', () => {
     // Body capped at 400 chars.
     const row = user.split('\n').find((l) => l.startsWith('f0 '))!
     expect(row.length).toBeLessThan(450)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// simplifyPrompt (post-review plain-English rewrite; own version history v1)
+// ---------------------------------------------------------------------------
+
+describe('simplifyPrompt', () => {
+  const FINDINGS = [
+    { id: 'f0', body: 'It is worth noting a potential inconsistency wherein `cache` may possibly go stale' },
+    { id: 'f1', body: 'SQL injection via `query` at src/db.ts:42' },
+  ]
+
+  it('carries the stable e2e dispatch marker in the system prompt', () => {
+    const { system } = simplifyPrompt(FINDINGS)
+    expect(system).toContain('rewriting code-review findings into plain')
+  })
+
+  it('bakes in the rewrite contract: one-sentence lead, 3-sentence cap, colleague voice, what breaks + what to do', () => {
+    const { system } = simplifyPrompt(FINDINGS)
+    expect(system).toMatch(/core problem in ONE sentence/i)
+    expect(system).toMatch(/three is the hard maximum/i)
+    expect(system).toMatch(/busy colleague/i)
+    expect(system).toMatch(/what breaks and what to do/i)
+    expect(system).toMatch(/no restating the code/i)
+  })
+
+  it('demands verbatim technical anchors and forbids inventing/changing claims or severity', () => {
+    const { system } = simplifyPrompt(FINDINGS)
+    expect(system).toMatch(/PRESERVE technical anchors exactly/i)
+    expect(system).toMatch(/backticked identifiers, file:line references/i)
+    expect(system).toMatch(/NEVER invent facts/i)
+    expect(system).toMatch(/soften or harden the stated severity/i)
+  })
+
+  it('bans the AI-isms by name', () => {
+    const { system } = simplifyPrompt(FINDINGS)
+    for (const banned of ["It's worth noting", 'Additionally', 'Furthermore', 'potential inconsistency wherein', 'robust', 'leverage', 'It is important to', 'may potentially possibly']) {
+      expect(system).toContain(banned)
+    }
+  })
+
+  it('instructs returning already-minimal bodies (~20 words) unchanged', () => {
+    const { system } = simplifyPrompt(FINDINGS)
+    expect(system).toMatch(/roughly 20 words or fewer.*UNCHANGED/i)
+  })
+
+  it('demands JSON-only output in the rewrites shape', () => {
+    const { system } = simplifyPrompt(FINDINGS)
+    expect(system).toMatch(/JSON ONLY/i)
+    expect(system).toContain('"rewrites"')
+    expect(system).toContain('"id"')
+    expect(system).toContain('"simple"')
+  })
+
+  it('user payload is JSON carrying every finding id + body (newlines intact for code blocks)', () => {
+    const { user } = simplifyPrompt([{ id: 'f0', body: 'guard:\n\n```ts\nif (!x) return\n```' }])
+    const parsed = JSON.parse(user) as { findings: { id: string; body: string }[] }
+    expect(parsed.findings).toEqual([{ id: 'f0', body: 'guard:\n\n```ts\nif (!x) return\n```' }])
+  })
+
+  it('caps runaway input bodies at 2000 chars', () => {
+    const { user } = simplifyPrompt([{ id: 'f0', body: 'x'.repeat(5000) }])
+    const parsed = JSON.parse(user) as { findings: { id: string; body: string }[] }
+    expect(parsed.findings[0].body).toHaveLength(2000)
+  })
+
+  it('avoids other stubs\' dispatch phrases (reviewer persona / adversarial verifier / assessor / coach)', () => {
+    const sys = simplifyPrompt(FINDINGS).system.toLowerCase()
+    for (const phrase of ['reviewer persona', 'security reviewer', 'adversarial verifier', 'change-risk assessor', 'consolidating overlapping', 'hotspot', 'readingorder', 'mermaid', 'covered', 'gaps', 'clarity', 'senior engineer']) {
+      expect(sys, phrase).not.toContain(phrase)
+    }
   })
 })
 
