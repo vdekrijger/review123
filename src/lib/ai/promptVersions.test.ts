@@ -28,6 +28,25 @@ const PR = 'owner/repo#1@abc123'
 
 const ALL_TASKS = Object.keys(PROMPT_VERSIONS) as PromptVersionedTaskId[]
 
+/**
+ * Tasks that existed at the global-v26 → per-task-map migration. Tasks added
+ * LATER (e.g. `simplify`) start their own version history at 1 — a brand-new
+ * cache segment has nothing to invalidate — so the ≥26 floor applies only to
+ * the migration-era tasks.
+ */
+const MIGRATION_ERA_TASKS: PromptVersionedTaskId[] = [
+  'summary',
+  'attention',
+  'diagrams',
+  'tests',
+  'alternatives',
+  'verdict',
+  'skills',
+  'story',
+  'riskJudge',
+  'convergence',
+]
+
 describe('PROMPT_VERSIONS map', () => {
   it('covers exactly the cached tasks — no more, no less', () => {
     expect(ALL_TASKS.sort()).toEqual(
@@ -42,6 +61,7 @@ describe('PROMPT_VERSIONS map', () => {
         'story',
         'riskJudge',
         'convergence',
+        'simplify',
       ].sort(),
     )
   })
@@ -52,10 +72,14 @@ describe('PROMPT_VERSIONS map', () => {
     }
   })
 
-  it('no task is below the migration value 26 (versions only move forward)', () => {
-    for (const task of ALL_TASKS) {
+  it('no migration-era task is below the migration value 26 (versions only move forward)', () => {
+    for (const task of MIGRATION_ERA_TASKS) {
       expect(PROMPT_VERSIONS[task], task).toBeGreaterThanOrEqual(26)
     }
+  })
+
+  it('post-migration tasks start at ≥1 (simplify has its own version history)', () => {
+    expect(PROMPT_VERSIONS.simplify).toBeGreaterThanOrEqual(1)
   })
 })
 
@@ -128,6 +152,14 @@ describe('cache-key stability (migration: global v26 → per-task map)', () => {
     const hash = djb2(fingerprint + '||' + draftFingerprint)
     expect(cacheKey(PR, 'convergence:' + hash, promptVersionFor('convergence'))).toBe(
       `owner/repo#1@abc123|convergence:${hash}|v26`,
+    )
+  })
+
+  it('simplify (post-merge finding fingerprint hash composes with its OWN v1 history)', () => {
+    const fingerprint = 'f0:src/a.ts:10'
+    const hash = djb2(fingerprint)
+    expect(cacheKey(PR, 'simplify:' + hash, promptVersionFor('simplify'))).toBe(
+      `owner/repo#1@abc123|simplify:${hash}|v1`,
     )
   })
 })

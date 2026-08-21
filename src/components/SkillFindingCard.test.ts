@@ -616,3 +616,65 @@ describe('SkillFindingCard — re-anchor affordances (drag handle / moved chip /
     expect(reanchorDrag.hash).toBeNull()
   })
 })
+
+describe('SkillFindingCard — simplified body (simplify pass)', () => {
+  const ORIGINAL = 'It is worth noting a potential inconsistency wherein the `cache` may possibly serve stale entries'
+  const SIMPLE = 'The `cache` can serve stale entries — invalidate on write.'
+
+  it('shows the simplified body by default; the original text is not rendered', () => {
+    const { container } = renderCard({ body: ORIGINAL, simpleBody: SIMPLE })
+    const bodyEl = container.querySelector('.skill-finding-body')!
+    expect(bodyEl.textContent).toContain('can serve stale entries')
+    expect(bodyEl.textContent).not.toContain('It is worth noting')
+  })
+
+  it('"Show original" reveals the raw text; "Show simplified" flips back (per-card toggle)', async () => {
+    const { container } = renderCard({ body: ORIGINAL, simpleBody: SIMPLE })
+    const toggle = screen.getByTestId('finding-simple-toggle')
+    expect(toggle.textContent).toBe('Show original')
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+
+    await userEvent.click(toggle)
+    const bodyEl = container.querySelector('.skill-finding-body')!
+    expect(bodyEl.textContent).toContain('It is worth noting')
+    expect(toggle.textContent).toBe('Show simplified')
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+
+    await userEvent.click(toggle)
+    expect(bodyEl.textContent).not.toContain('It is worth noting')
+    expect(bodyEl.textContent).toContain('can serve stale entries')
+  })
+
+  it('Add as draft passes the DISPLAYED text: simplified by default, original after the toggle', async () => {
+    const onAdd = vi.fn()
+    renderCard({ body: ORIGINAL, simpleBody: SIMPLE, onAdd })
+
+    await userEvent.click(screen.getByRole('button', { name: /add as draft/i }))
+    expect(onAdd).toHaveBeenLastCalledWith(SIMPLE)
+
+    await userEvent.click(screen.getByTestId('finding-simple-toggle'))
+    await userEvent.click(screen.getByRole('button', { name: /add as draft/i }))
+    expect(onAdd).toHaveBeenLastCalledWith(ORIGINAL)
+  })
+
+  it('no simpleBody → the original renders and there is NO toggle', () => {
+    const { container } = renderCard({ body: ORIGINAL })
+    expect(container.querySelector('.skill-finding-body')!.textContent).toContain('It is worth noting')
+    expect(screen.queryByTestId('finding-simple-toggle')).toBeNull()
+  })
+
+  it('a simpleBody identical to the body → no toggle (nothing to disclose), onAdd gets the body', async () => {
+    const onAdd = vi.fn()
+    renderCard({ body: 'Short and plain.', simpleBody: 'Short and plain.', onAdd })
+    expect(screen.queryByTestId('finding-simple-toggle')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /add as draft/i }))
+    expect(onAdd).toHaveBeenLastCalledWith('Short and plain.')
+  })
+
+  it('markdown in the simplified body still renders (backticks become <code>)', () => {
+    const { container } = renderCard({ body: ORIGINAL, simpleBody: SIMPLE })
+    const code = container.querySelector('.skill-finding-body code')
+    expect(code).not.toBeNull()
+    expect(code!.textContent).toBe('cache')
+  })
+})

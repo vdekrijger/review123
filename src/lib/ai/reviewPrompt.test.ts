@@ -188,4 +188,40 @@ describe('buildReviewPrompt', () => {
     const input: ReviewPromptInput = { pr: pr(), drafts: [draft(), draft({ line: 4 })], files: [file()] }
     expect(buildReviewPrompt(input)).toBe(buildReviewPrompt(input))
   })
+
+  // ---- Simplify pass: the LLM consumer gets the FULL original detail ------
+
+  it('a draft created from a simplified finding ALSO surfaces the original AI text (full detail for the agent)', () => {
+    const out = buildReviewPrompt({
+      pr: pr(),
+      drafts: [
+        draft({
+          body: 'The `cache` can go stale — invalidate on write.',
+          aiAuthored: true,
+          aiOriginalBody: 'It is worth noting a potential inconsistency wherein the `cache` may possibly serve stale entries because invalidation is not performed on the write path.',
+        }),
+      ],
+      files: [file()],
+    })
+    // The Request stays the body the user chose (the simplified text)…
+    expect(out).toContain('**Request:**')
+    expect(out).toContain('The `cache` can go stale — invalidate on write.')
+    // …and the original detail is ADDED, never substituted.
+    expect(out).toContain('**Full finding detail (original AI reviewer text):**')
+    expect(out).toContain('invalidation is not performed on the write path')
+  })
+
+  it('no aiOriginalBody (hand-written or original-text draft) → no detail block', () => {
+    const out = buildReviewPrompt({ pr: pr(), drafts: [draft()], files: [file()] })
+    expect(out).not.toContain('Full finding detail')
+  })
+
+  it('an aiOriginalBody identical to the body → no redundant detail block', () => {
+    const out = buildReviewPrompt({
+      pr: pr(),
+      drafts: [draft({ body: 'Same text.', aiOriginalBody: 'Same text.' })],
+      files: [file()],
+    })
+    expect(out).not.toContain('Full finding detail')
+  })
 })

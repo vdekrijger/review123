@@ -358,8 +358,10 @@ describe('runSkillReviews — concurrency cap', () => {
     expect(run.skillReviews).toHaveLength(6)
     expect(run.skillReviews.every((sr) => sr.state.status === 'done')).toBe(true)
     // 6 reviewer calls + 1 convergence-pass call (≥2 reviewers produced
-    // findings, so the consolidation pass runs once after the batch).
-    expect(deps.llmJsonWithRepairWithUsage).toHaveBeenCalledTimes(7)
+    // findings, so the consolidation pass runs once after the batch) + 1
+    // simplify-pass call (findings exist, so the plain-English rewrite pass
+    // runs once after convergence).
+    expect(deps.llmJsonWithRepairWithUsage).toHaveBeenCalledTimes(8)
 
     skills.forEach((s) => removeSkill(s.id))
   })

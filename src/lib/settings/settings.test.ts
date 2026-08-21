@@ -7,7 +7,7 @@ import {
   setAiDeepReview, setStoryMode, setAutoRunReviewers, setFocusMode, setShowTokenCost,
   findInvalidKeyChar, invalidKeyCharMessage, setUnderstandSections,
   setAiTaskMode, setAiTaskModes, setAllTasksDeep, setAllTasksStandard, setOffAllExtras,
-  defaultTaskModes, allDeepTaskModes, setAiPanel, setPanelOneGenerator, setPanelAllGenerate,
+  defaultTaskModes, allDeepTaskModes, taskSupportsDeep, setAiPanel, setPanelOneGenerator, setPanelAllGenerate,
   type PanelParticipant,
 } from './settings'
 
@@ -35,6 +35,7 @@ describe('settings', () => {
         skills: 'standard',
         story: 'standard',
         riskJudge: 'standard',
+        simplify: 'standard',
       },
       storyMode: true,
       autoRunReviewers: true,
@@ -120,6 +121,7 @@ describe('settings', () => {
         skills: 'standard',
         story: 'standard',
         riskJudge: 'standard',
+        simplify: 'standard',
       },
       storyMode: true,
       autoRunReviewers: true,
@@ -1049,7 +1051,7 @@ describe('key character sanitization', () => {
       expect(getSettings().aiTaskModes).toEqual({
         summary: 'standard', attention: 'standard', diagrams: 'standard',
         tests: 'standard', alternatives: 'standard', verdict: 'standard', skills: 'standard',
-        story: 'standard', riskJudge: 'standard',
+        story: 'standard', riskJudge: 'standard', simplify: 'standard',
       })
       expect(defaultTaskModes()).toEqual(getSettings().aiTaskModes)
     })
@@ -1122,12 +1124,12 @@ describe('key character sanitization', () => {
       expect(getSettings().aiTaskModes).toEqual(defaultTaskModes())
     })
 
-    it('setOffAllExtras keeps summary + verdict, turns the rest (incl. story + riskJudge) off', () => {
+    it('setOffAllExtras keeps summary + verdict, turns the rest (incl. story + riskJudge + simplify) off', () => {
       setOffAllExtras()
       const m = getSettings().aiTaskModes
       expect(m.summary).toBe('standard')
       expect(m.verdict).toBe('standard')
-      for (const t of ['attention', 'diagrams', 'tests', 'alternatives', 'skills', 'story', 'riskJudge'] as const) {
+      for (const t of ['attention', 'diagrams', 'tests', 'alternatives', 'skills', 'story', 'riskJudge', 'simplify'] as const) {
         expect(m[t]).toBe('off')
       }
     })
@@ -1190,6 +1192,56 @@ describe('key character sanitization', () => {
         expect(getSettings().aiTaskModes.story).toBe('deep')
         setAiTaskMode('riskJudge', 'off')
         expect(getSettings().aiTaskModes.riskJudge).toBe('off')
+      })
+    })
+
+    describe('simplify joining the matrix (stored-matrix migration)', () => {
+      it('a pre-existing matrix without a simplify key derives standard (the pass is always-on)', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({
+          aiTaskModes: { summary: 'off', verdict: 'deep' },
+        }))
+        expect(getSettings().aiTaskModes.simplify).toBe('standard')
+      })
+
+      it('ALL six original auto tasks off carries simplify to off (minimal-token posture preserved)', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({
+          aiTaskModes: {
+            summary: 'off', attention: 'off', diagrams: 'off',
+            tests: 'off', alternatives: 'off', verdict: 'off',
+          },
+        }))
+        expect(getSettings().aiTaskModes.simplify).toBe('off')
+      })
+
+      it('an explicit stored simplify value wins over the derivation', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({
+          aiTaskModes: {
+            summary: 'off', attention: 'off', diagrams: 'off',
+            tests: 'off', alternatives: 'off', verdict: 'off',
+            simplify: 'standard',
+          },
+        }))
+        expect(getSettings().aiTaskModes.simplify).toBe('standard')
+      })
+
+      it('simplify="deep" (invalid — a pure text rewrite, no tools) coerces to standard', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({
+          aiTaskModes: { simplify: 'deep' },
+        }))
+        expect(getSettings().aiTaskModes.simplify).toBe('standard')
+        expect(taskSupportsDeep('simplify')).toBe(false)
+      })
+
+      it('setAiTaskMode coerces simplify deep → standard, persists off', () => {
+        setAiTaskMode('simplify', 'deep')
+        expect(getSettings().aiTaskModes.simplify).toBe('standard')
+        setAiTaskMode('simplify', 'off')
+        expect(getSettings().aiTaskModes.simplify).toBe('off')
+      })
+
+      it('legacy aiDeepReview=true migration leaves simplify standard (never deep)', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({ aiDeepReview: true }))
+        expect(getSettings().aiTaskModes.simplify).toBe('standard')
       })
     })
   })

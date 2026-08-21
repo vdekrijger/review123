@@ -41,7 +41,10 @@ const SKILL_RESULT: SkillReviewResult = {
 type ValidateFn = (x: unknown) => unknown
 
 function makeDeps() {
-  localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test' }))
+  // simplify OFF: these suites assert exact per-reviewer ATTEMPT counts; the
+  // post-review simplify pass (its own LLM call once findings exist) would
+  // shift every counter. The pass is covered in simplify-run.test.ts.
+  localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test', aiTaskModes: { simplify: 'off' } }))
   const gateAi = vi.fn().mockResolvedValue(true)
   const getCached = vi.fn().mockResolvedValue(null)
   const setCached = vi.fn().mockResolvedValue(undefined)
