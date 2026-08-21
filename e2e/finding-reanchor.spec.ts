@@ -190,6 +190,19 @@ async function setupRoutes(page: Page) {
       })
     }
 
+    // Simplify pass: valid empty rewrite set → original bodies (re-anchor
+    // identity hashes are computed over the ORIGINAL body, so keep it shown).
+    if (systemContent.includes('rewriting code-review findings into plain')) {
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify({ rewrites: [] }) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
+
     if (systemContent.includes('reviewer persona') || systemContent.includes('security reviewer')) {
       return route.fulfill({
         status: 200,
