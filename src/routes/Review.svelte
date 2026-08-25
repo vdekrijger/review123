@@ -19,9 +19,9 @@
   import { createAiRun } from '../lib/ai/run.svelte'
   import { listSkills } from '../lib/skills/skills'
   import { shouldAutoStartReviewers } from '../lib/review/autoStartReviewers'
-  import { buildCoachCodeContext } from '../lib/ai/coachContext'
-  import { packContext, fetchContents } from '../lib/context/pack'
-  import { LLM_CONFIG } from '../lib/llm/config'
+  import { buildAiRunInput } from '../lib/ai/runInput'
+  import { cancelPrepare } from '../lib/ai/prepare.svelte'
+  import { fetchContents } from '../lib/context/pack'
   import { getProvider } from '../lib/llm/providers'
   import { parseReadingOrder } from '../lib/ai/tasks'
   import ConsentDialog from '../components/ConsentDialog.svelte'
@@ -468,57 +468,36 @@
       aiInitialized = true
       const meta = load.state.meta
       const files = load.state.files
-      const prKey = `${providerId}:${owner}/${repo}#${number}@${meta.headSha}`
-      const repoStr = `${owner}/${repo}`
-      consentDialogRepo = repoStr
+      consentDialogRepo = `${owner}/${repo}`
 
-      const budgetTokens = LLM_CONFIG.contextWindowTokens - LLM_CONFIG.maxOutputTokens - 2000
+      // Navigation safety (prepare-ahead): if a background prepare for THIS PR
+      // is still running, cancel it — this route's run takes over, resuming
+      // from whatever the prepare already cached (per-task caches lose nothing).
+      cancelPrepare(prId)
 
       // Start fetching file contents immediately — shared with InspectStep for
       // context-line expansion (up to 30 files, concurrency cap 4).
       getContents(files, meta)
 
-      const run = createAiRun({
-        prKey,
-        repo: repoStr,
-        isPrivate: meta.private,
-        // PR title + body — the stated intent the intent check verifies
-        // the diff against (skip-when-empty handled inside the run).
-        meta: { title: meta.title, body: meta.body },
-        pack: async () => {
-          const contents = await getContents(files, meta)
-          const ci = await getCi({ owner, repo, number }, meta.headSha)
-          return packContext({ files, contents, ci, budgetTokens })
-        },
-        ci: () => getCi({ owner, repo, number }, meta.headSha),
+      // The input construction (prKey, pack, deep-review tools, code contexts)
+      // is the shared seam with the prepare-ahead path — see runInput.ts.
+      const run = createAiRun(buildAiRunInput({
+        providerId,
+        provider: activeProvider,
+        owner,
+        repo,
+        number,
+        meta,
+        files,
+        getContents: () => getContents(files, meta),
+        contentsNow: () => contentsMap,
+        getCi: () => getCi({ owner, repo, number }, meta.headSha),
         ask: showConsentDialog,
-        // Deep review (Plan G): verification tools wired from the active VCS
-        // provider. Only used when the aiDeepReview setting is on; search is
-        // capability-gated by provider method presence (GitHub-only in v1).
-        deepReview: {
-          getFileAtHead: (path: string) => activeProvider.getFileAtRef({ owner, repo }, path, meta.headSha),
-          getFileAtBase: (path: string) => activeProvider.getFileAtRef({ owner, repo }, path, meta.baseSha),
-          ...(activeProvider.searchCode
-            ? { searchCode: (query: string) => activeProvider.searchCode!({ owner, repo }, query) }
-            : {}),
-          ...(activeProvider.findReferences
-            ? { findReferences: (symbol: string) => activeProvider.findReferences!({ owner, repo }, symbol) }
-            : {}),
-        },
-        // Per-comment code context for the coach (v16): the actual code at each
-        // commented file:line — hunk excerpt + a wider window from the file
-        // contents we already fetched (contentsMap). Lets the coach verify
-        // rather than default to "cannot verify against the diff".
-        coachCodeContext: (drafts) => buildCoachCodeContext(drafts, files, contentsMap),
-        // Per-finding code context for cross-model verification (Plan M): the
-        // actual code at each finding's file:line so verifier models judge
-        // against real code. Same source as the coach context above.
-        verifyCodeContext: (anchors) => buildCoachCodeContext(anchors, files, contentsMap),
         // Current draft comments for the finding-convergence pass: findings that
         // make the same point as the user's own draft render "covered by your
         // comment" instead of duplicating it. Read at pass time (post-reviewers).
         drafts: () => draftStore?.drafts ?? [],
-      })
+      }))
       aiRun = run
 
       // Start AI (non-blocking)
