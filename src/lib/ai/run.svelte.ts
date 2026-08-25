@@ -65,6 +65,8 @@ import {
   coachPrompt,
   alternativesPrompt,
   storyOrderPrompt,
+  intentPrompt,
+  hasMeaningfulIntent,
   askPrompt,
   expandCommentPrompt,
   skillReviewPrompt,
@@ -90,10 +92,10 @@ import {
 export type { ConvergenceValue }
 export type { SimplifyValue }
 export type { AskFocus }
-import { validateAttention, validateVerdict, validateRiskJudge, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, salvageAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, sinkGeneratedSteps, STORY_MAX_STEPS } from './schemas'
+import { validateAttention, validateVerdict, validateRiskJudge, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, salvageAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, sinkGeneratedSteps, STORY_MAX_STEPS, validateIntentCheck, salvageIntentCheck } from './schemas'
 import { buildDeterministicStory } from './storyFallback'
 import { matchStoryPath } from './schemas'
-import type { AttentionResult, VerdictResult, RiskJudgeResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, SkillReviewResult } from './schemas'
+import type { AttentionResult, VerdictResult, RiskJudgeResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, SkillReviewResult, IntentCheckResult } from './schemas'
 import type { Draft } from '../drafts/drafts.svelte'
 import type { CoachCodeContext } from './coachContext'
 import {
@@ -135,6 +137,14 @@ export type PanelStatus =
    * muted "Disabled — enable in AI settings" state (never a skeleton/spinner).
    */
   | 'disabled'
+  /**
+   * Intent check only: the task had NOTHING to check — the PR description is
+   * null/blank/template-noise-only (no meaningful stated intent), so the task
+   * deliberately did not run. Zero tokens, no cache, no error. Distinct from
+   * 'disabled' (a user setting) so the panel can render the calm
+   * "No stated intent to check — the PR description is empty." state.
+   */
+  | 'skipped'
 
 export interface PanelState<T> {
   status: PanelStatus
@@ -211,7 +221,7 @@ export interface VerdictModelBreakdown {
 // Task names (used as cache key discriminants + analytics)
 // ---------------------------------------------------------------------------
 
-type TaskName = 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests' | 'alternatives' | 'story' | 'riskJudge'
+type TaskName = 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests' | 'alternatives' | 'story' | 'riskJudge' | 'intent'
 
 // ---------------------------------------------------------------------------
 // SkillReviewEntry — reactive entry per skill in skillReviews array
@@ -268,6 +278,14 @@ export interface AiRun {
   readonly riskJudge: PanelState<RiskJudgeResult>
   readonly tests: PanelState<TestInsight>
   readonly alternatives: PanelState<AlternativesResult>
+  /**
+   * Intent-vs-implementation check: reads the PR description as the STATED
+   * intent and verifies the diff against it — matched intents (with evidence),
+   * unrequested changes, unfulfilled promises. Single-pass on the active model
+   * (off|standard). 'skipped' = no meaningful PR description → the task never
+   * ran (zero tokens; the panel shows the calm "nothing to check" state).
+   */
+  readonly intent: PanelState<IntentCheckResult>
   readonly story: PanelState<StoryOrderResult>
   readonly skillReviews: SkillReviewEntry[]
   /**
@@ -357,6 +375,13 @@ export interface AiRunInput {
   prKey: string
   repo: string
   isPrivate: boolean | undefined
+  /**
+   * PR title + body — the STATED intent the intent check verifies the diff
+   * against. Optional: when absent (older callers / non-PR contexts) the
+   * intent task treats the description as empty and SKIPS itself (zero
+   * tokens) rather than erroring.
+   */
+  meta?: { title: string; body: string | null }
   pack: () => Promise<PackedContext>
   ci: () => Promise<CiSummary | null>
   ask: () => Promise<boolean>
@@ -590,7 +615,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     ...deps,
   }
 
-  const { prKey, repo, isPrivate, pack, ci, ask: askConsent, deepReview, coachCodeContext, verifyCodeContext, drafts: getDrafts } = input
+  const { prKey, repo, isPrivate, meta, pack, ci, ask: askConsent, deepReview, coachCodeContext, verifyCodeContext, drafts: getDrafts } = input
 
   // Shared per-REVIEW deep-review fetch cache (Plan G cost reduction). Created
   // ONCE per createAiRun — and the Review route makes a fresh run per PR — so
@@ -608,6 +633,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   const riskJudgeState = $state<PanelState<RiskJudgeResult>>({ status: 'idle' })
   const testsState = $state<PanelState<TestInsight>>({ status: 'idle' })
   const alternativesState = $state<PanelState<AlternativesResult>>({ status: 'idle' })
+  const intentState = $state<PanelState<IntentCheckResult>>({ status: 'idle' })
   const storyState = $state<PanelState<StoryOrderResult>>({ status: 'idle' })
 
   // Skill review entries — populated on-demand by runSkillReviews()
@@ -1823,6 +1849,77 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
   }
 
+  // Intent post-process: strict-validate → per-collection salvage (drop
+  // malformed elements, keep the rest; unknown intentId refs dropped; a bad
+  // significance degrades to 'minor'). Returns null only when NOTHING usable
+  // survives — the caller then takes the error path. Mirrors shapeAlternatives:
+  // passed as the validator to the transport so the salvage applies on every
+  // parse, including the repair pass.
+  function shapeIntentCheck(x: unknown): IntentCheckResult | null {
+    return validateIntentCheck(x) ?? salvageIntentCheck(x)
+  }
+
+  async function runIntentTask(ctx: PackedContext): Promise<void> {
+    // Intent-vs-implementation check: reads the PR description as the STATED
+    // intent and verifies the diff against it. In the user-facing task matrix
+    // with off|standard only — always single-pass on the active model (a
+    // tool-verified deep mode is a future candidate, not built). Mode-gated
+    // (#113/#219 idiom): off → 'disabled', zero tokens, no cache read.
+    if (!resolveTaskMode('intent', deepReview).run) {
+      intentState.status = 'disabled'
+      return
+    }
+
+    // Skip-when-empty: a null/blank/template-noise-only description states no
+    // checkable intent — deliberately DO NOT call the LLM (zero tokens). The
+    // distinct 'skipped' status renders the calm "No stated intent to check —
+    // the PR description is empty." panel state (never an error).
+    const title = meta?.title ?? ''
+    const body = meta?.body ?? null
+    if (!hasMeaningfulIntent(body)) {
+      intentState.status = 'skipped'
+      return
+    }
+
+    // Cache key folds a hash of the STATED intent (title + full raw body —
+    // pre-truncation, so ANY description edit invalidates) into the task
+    // segment, like the convergence/skill content hashes. The diff side is
+    // covered by prKey (it carries the head SHA): "<pr>|intent:<djb2>|v<N>".
+    const key = cacheKey(prKey, 'intent:' + djb2(`${title}\n${body}`), promptVersionFor('intent'))
+
+    const t0 = performance.now()
+    const hit = await getCached<IntentCheckResult>(key)
+    if (hit !== null) {
+      intentState.status = 'done'
+      intentState.value = hit
+      track('ai_task_completed', { task: 'intent', duration_ms: Math.round(performance.now() - t0), cached: true })
+      return
+    }
+
+    intentState.status = 'loading'
+    const t1 = performance.now()
+    const prompts = intentPrompt(ctx, { title, body: body as string })
+
+    try {
+      const singlePass = await llmJsonWithRepairWithUsage<IntentCheckResult>(
+        jsonTaskOpts(prompts),
+        shapeIntentCheck,
+      )
+      await setCached<IntentCheckResult>(key, singlePass.result)
+      intentState.status = 'done'
+      intentState.value = singlePass.result
+      intentState.usage = singlePass.usage
+      track('ai_task_completed', {
+        task: 'intent',
+        duration_ms: Math.round(performance.now() - t1),
+        cached: false,
+        ...(singlePass.usage?.total_tokens !== undefined ? { tokens: singlePass.usage.total_tokens } : {}),
+      })
+    } catch (err) {
+      failTask(intentState, 'intent', err)
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Deep review helpers (Plan G part 2)
   //
@@ -2170,6 +2267,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     apply('verdict', verdictState)
     apply('tests', testsState)
     apply('alternatives', alternativesState)
+    apply('intent', intentState)
     apply('story', storyState)
     apply('riskJudge', riskJudgeState)
   }
@@ -2223,6 +2321,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       modes.tests === 'off' &&
       modes.alternatives === 'off' &&
       modes.verdict === 'off' &&
+      modes.intent === 'off' &&
       modes.story === 'off' &&
       modes.riskJudge === 'off'
     if (allAutoOff) {
@@ -2232,6 +2331,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       testsState.status = 'disabled'
       alternativesState.status = 'disabled'
       verdictState.status = 'disabled'
+      intentState.status = 'disabled'
       storyState.status = 'disabled'
       riskJudgeState.status = 'disabled'
       return
@@ -2256,6 +2356,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       runDiagramsTask(ctx),
       runTestsTask(ctx),
       runAlternativesTask(ctx),
+      runIntentTask(ctx),
       runStoryOrderTask(ctx),
       runRiskJudgeTask(ctx),
       runVerdictTask(ctx, ciData),
@@ -2281,6 +2382,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     if (task === 'diagrams') return runDiagramsTask(ctx)
     if (task === 'tests') return runTestsTask(ctx)
     if (task === 'alternatives') return runAlternativesTask(ctx)
+    if (task === 'intent') return runIntentTask(ctx)
     if (task === 'story') return runStoryOrderTask(ctx)
     if (task === 'riskJudge') return runRiskJudgeTask(ctx)
   }
@@ -3171,6 +3273,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     get riskJudge() { return riskJudgeState },
     get tests() { return testsState },
     get alternatives() { return alternativesState },
+    get intent() { return intentState },
     get story() { return storyState },
     get skillReviews() { return skillReviewsState },
     get convergence() { return convergenceState },
@@ -3179,7 +3282,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // Sum every task's captured usage for this PR run. Tasks with no usage
       // (cached pre-usage results / errors) contribute nothing.
       let total: LlmUsage | undefined
-      const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, storyState, riskJudgeState, convergenceState, simplifyState]
+      const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, intentState, storyState, riskJudgeState, convergenceState, simplifyState]
       for (const s of states) total = addUsage(total, s.usage)
       for (const e of skillReviewsState) total = addUsage(total, e.state.usage)
       // Coach and expand are on-demand (never among the core tasks); fold in
@@ -3277,6 +3380,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       if (diagramsState.usage) addSinglePass(diagramsState.usage, 'Diagrams')
       if (testsState.usage) addSinglePass(testsState.usage, 'Tests')
       if (alternativesState.usage) addSinglePass(alternativesState.usage, 'Alternatives')
+      if (intentState.usage) addSinglePass(intentState.usage, 'Intent check')
       if (storyState.usage) addSinglePass(storyState.usage, 'Story')
       if (riskJudgeState.usage) addSinglePass(riskJudgeState.usage, 'Risk judge')
       if (coachUsage) addSinglePass(coachUsage, 'Coach')

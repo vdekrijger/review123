@@ -13,7 +13,7 @@ import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import type { AiTaskId } from '../settings/settings'
 import type { CoachCodeContext } from './coachContext'
-import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS } from './schemas'
+import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS, INTENT_MAX_ITEMS } from './schemas'
 
 // PROMPT_VERSION 26 (finding convergence): NEW single-pass task
 // (convergencePrompt) that runs ONCE after all skill reviewers settle: it
@@ -82,9 +82,9 @@ import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNI
 // flow-of-execution (GraphResult.flow) — now retired.
 
 /**
- * Every task whose result is cached under a prompt-versioned key — the ten
+ * Every task whose result is cached under a prompt-versioned key — the eleven
  * user-controllable tasks (AiTaskId — the Plan J matrix, which now includes
- * story, riskJudge and simplify) plus `convergence` (convergencePrompt), the
+ * story, riskJudge, simplify and intent) plus `convergence` (convergencePrompt), the
  * one cached task that stays OUTSIDE the mode matrix by design: it runs only
  * as a cheap follow-up to the reviewers the user already enabled, so it has
  * no mode of its own. `coach` and `ask` are not cached, so they are
@@ -109,7 +109,8 @@ export type PromptVersionedTaskId = AiTaskId | 'convergence'
  *
  * Tasks added AFTER the migration start their own version history at 1 (a
  * brand-new cache segment has nothing to invalidate): `simplify` (the
- * post-review plain-English rewrite pass, simplifyPrompt) starts at 1.
+ * post-review plain-English rewrite pass, simplifyPrompt) starts at 1, and
+ * `intent` (the intent-vs-implementation check, intentPrompt) starts at 1.
  */
 export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   summary: 26,
@@ -118,6 +119,7 @@ export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   tests: 26,
   alternatives: 26,
   verdict: 26,
+  intent: 1,
   skills: 26,
   story: 26,
   riskJudge: 26,
@@ -865,6 +867,164 @@ ${ANTI_FATIGUE_RULES}
 Do not include any text outside the JSON object.`
 
   return { system, user: ctx.text }
+}
+
+// ---------------------------------------------------------------------------
+// intentPrompt — JSON IntentCheckResult (intent-vs-implementation check)
+// ---------------------------------------------------------------------------
+
+/**
+ * Cap on the PR-description characters shipped to the intent task (cost
+ * bound). A longer body is cut and HONESTLY marked with
+ * INTENT_TRUNCATION_MARKER so the model knows the stated intent is partial.
+ */
+export const INTENT_BODY_MAX = 4000
+
+/** Appended after a cut description so truncation is never silent. */
+export const INTENT_TRUNCATION_MARKER = `[…PR description truncated at ${INTENT_BODY_MAX} characters]`
+
+/**
+ * Minimum count of MEANINGFUL characters (after stripping markdown noise and
+ * checklists — see stripIntentNoise) below which a PR description states no
+ * checkable intent. The orchestrator then SKIPS the task entirely: no LLM
+ * call, zero tokens, a calm "nothing to check" panel state.
+ */
+export const INTENT_MIN_MEANINGFUL_CHARS = 20
+
+/**
+ * Strip the markdown noise that inflates an EMPTY-in-substance description:
+ * HTML comments (PR-template scaffolding), task-list/checkbox lines, images
+ * and badges, link targets and bare URLs, horizontal rules, and markdown
+ * markup characters. Used ONLY by the skip-when-empty heuristic — the prompt
+ * itself ships the raw (capped) body so nothing real is lost.
+ */
+export function stripIntentNoise(body: string): string {
+  return body
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/^[ \t]*[-*+][ \t]*\[[ xX]\][^\n]*$/gm, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm, ' ')
+    .replace(/[#>*_`~|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Whether a PR body states enough intent to be worth checking. null/blank/
+ * template-noise-only bodies → false → the task is skipped with ZERO tokens.
+ */
+export function hasMeaningfulIntent(body: string | null | undefined): boolean {
+  if (body == null) return false
+  return stripIntentNoise(body).length >= INTENT_MIN_MEANINGFUL_CHARS
+}
+
+/**
+ * Build prompts for the intent-vs-implementation check.
+ *
+ * Input: the PR title + description (the STATED intent; body capped at
+ * INTENT_BODY_MAX with an honest truncation marker) plus the SAME packed diff
+ * context every other auto task uses (ctx.text — no bespoke context format).
+ *
+ * Output must be JSON-only, matching IntentCheckResult:
+ *   {
+ *     intents:     [{ id, text }],
+ *     matched:     [{ intentId, evidence: [{ path, line? }], note }],
+ *     unrequested: [{ description, paths: string[], significance: 'minor'|'notable' }],
+ *     unfulfilled: [{ intentId, note }]
+ *   }
+ *
+ * The system prompt's "checking the implementation against the stated intent"
+ * phrase is the e2e stubs' dispatch marker — keep it stable.
+ */
+export function intentPrompt(
+  ctx: PackedContext,
+  meta: { title: string; body: string },
+): { system: string; user: string } {
+  const system = `You are checking the implementation against the stated intent of a pull \
+request. The PR DESCRIPTION below states what the author set out to do; the code changes show \
+what was actually done. Derive the stated intents from the description, verify each against \
+the changes, and report: intents the changes fulfil (with evidence), changes a reader of the \
+description would not expect, and stated intents with no corresponding change. Respond with \
+JSON ONLY — no explanation, no markdown, no code fences. Your response must be valid JSON that \
+exactly matches this shape:
+
+{
+  "intents": [
+    { "id": "i1", "text": "<one promise the description actually makes>" }
+  ],
+  "matched": [
+    {
+      "intentId": "i1",
+      "evidence": [ { "path": "<changed-file path>", "line": <line in the new file, optional> } ],
+      "note": "<one calm sentence on how the changes fulfil it>"
+    }
+  ],
+  "unrequested": [
+    {
+      "description": "<what changed that the description never asked for>",
+      "paths": ["<changed-file path>", ...],
+      "significance": "minor" | "notable"
+    }
+  ],
+  "unfulfilled": [
+    { "intentId": "i2", "note": "<one calm sentence on what is missing>" }
+  ]
+}
+
+Field rules:
+- intents: ONLY what the description actually promises — concrete statements of what this PR \
+  does. NEVER derive an intent from template boilerplate, section headings, task-list/checkbox \
+  lines, badges, or links. Ids are short unique strings ("i1", "i2", …). At most \
+  ${INTENT_MAX_ITEMS} intents — merge near-duplicates rather than splitting hairs.
+- matched: an intent the changes genuinely fulfil. evidence must cite REAL changed files from \
+  the code changes shown (path exactly as it appears; line in the NEW file when you can). \
+  NEVER cite a file that is not in the changes.
+- unrequested: a change a reader of the description would NOT expect after reading it. \
+  significance "minor" for routine ride-alongs (formatting, lockfile churn, comment/doc \
+  touch-ups, import shuffles, small test scaffolding); "notable" for anything with its own \
+  behavior or footprint (a new dependency, a removed or changed feature, an extra refactor, \
+  config/CI changes the description never mentions). Group one coherent unrequested change \
+  into ONE entry — do not list every file separately.
+- unfulfilled: an intent with NO corresponding change in the shown context. If the change may \
+  live in files listed as not analyzed, SAY THAT in the note ("couldn't verify — the change \
+  may be in files not shown") instead of asserting the promise is broken.
+- Every intentId in matched/unfulfilled must be an id from intents. An intent belongs in \
+  matched OR unfulfilled, never both.
+
+Judgment discipline (IMPORTANT):
+- NEVER invent: no intents the description does not state, no evidence paths outside the \
+  changed files, no speculation about motives.
+- Empty unrequested and unfulfilled arrays are GOOD outcomes — they mean the implementation \
+  matches the stated intent, the expected result on a well-scoped PR. Do not manufacture \
+  drift to look thorough.
+- Notes are calm plain English, ONE sentence, active voice — a busy colleague, not a report. \
+  Banned phrasings (never emit them): "It's worth noting", "Additionally", "Furthermore", \
+  "robust", "leverage", "It is important to".
+- If the description ends with the marker "${INTENT_TRUNCATION_MARKER}", it was cut for \
+  length: judge only what is shown and never guess at promises beyond the cut.
+
+Do not include any text outside the JSON object.`
+
+  const cappedBody =
+    meta.body.length > INTENT_BODY_MAX
+      ? `${meta.body.slice(0, INTENT_BODY_MAX)}\n${INTENT_TRUNCATION_MARKER}`
+      : meta.body
+
+  const user = `## Pull request title
+
+${meta.title}
+
+## Pull request description (the stated intent)
+
+${cappedBody}
+
+## Code changes
+
+${ctx.text}`
+
+  return { system, user }
 }
 
 // ---------------------------------------------------------------------------

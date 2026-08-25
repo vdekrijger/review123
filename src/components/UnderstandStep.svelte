@@ -23,6 +23,7 @@
   import MarkdownView from './MarkdownView.svelte'
   import FileTree from './FileTree.svelte'
   import SummaryPanel from './panels/SummaryPanel.svelte'
+  import IntentPanel from './panels/IntentPanel.svelte'
   import DiagramsSection from './panels/DiagramsSection.svelte'
   import TestInsightPanel from './panels/TestInsightPanel.svelte'
   import AlternativesPanel from './panels/AlternativesPanel.svelte'
@@ -546,6 +547,17 @@
         </summary>
         <div class="detail-body">
           <SummaryPanel {run} />
+        </div>
+      </details>
+
+    {:else if section.id === 'intent'}
+      <details class="detail-panel intent-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
+        <summary class="detail-summary">
+          <span class="detail-summary-title">{section.title}</span>
+          <SectionStatus status={run.intent.status} error={run.intent.error} errorDetail={run.intent.errorDetail} title={section.title} />
+        </summary>
+        <div class="detail-body">
+          <IntentPanel {run} {onhotspot} />
         </div>
       </details>
 

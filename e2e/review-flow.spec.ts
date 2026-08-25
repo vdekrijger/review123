@@ -339,6 +339,46 @@ const COACH_RESULT = {
   },
 }
 
+// Intent-vs-implementation check: ALIGNED fixture (the good outcome — every
+// stated intent verified, no drift). The fixture PR body ("This PR adds a new
+// feature for testing.") is a meaningful description, so the task runs.
+const INTENT_RESULT = {
+  intents: [{ id: 'i1', text: 'Add a new feature' }],
+  matched: [
+    {
+      intentId: 'i1',
+      evidence: [{ path: 'src/feature.ts', line: 2 }],
+      note: 'The feature lands in src/feature.ts.',
+    },
+  ],
+  unrequested: [],
+  unfulfilled: [],
+}
+
+// Intent drift fixture: one unfulfilled promise + one notable unrequested
+// change — exercises the grouped drift rendering (unfulfilled first).
+const INTENT_RESULT_DRIFT = {
+  intents: [
+    { id: 'i1', text: 'Add a new feature' },
+    { id: 'i2', text: 'Add tests for the feature' },
+  ],
+  matched: [
+    {
+      intentId: 'i1',
+      evidence: [{ path: 'src/feature.ts', line: 2 }],
+      note: 'The feature lands in src/feature.ts.',
+    },
+  ],
+  unrequested: [
+    {
+      description: 'Renames src/utils.ts to src/old-utils.ts',
+      paths: ['src/old-utils.ts'],
+      significance: 'notable',
+    },
+  ],
+  unfulfilled: [{ intentId: 'i2', note: 'No test files changed in this PR.' }],
+}
+
 // Plan F: AlternativesResult with one alternative-is-better entry to trigger glance chip
 const ALTERNATIVES_RESULT = {
   problem: 'The PR introduces a global singleton cache without per-request isolation.',
@@ -434,6 +474,8 @@ async function setupRoutes(
     onReplyPost?: (body: unknown) => void
     /** Plan L: return the EMPTY-flow diagram fixture (graceful-fallback note). */
     emptyFlow?: boolean
+    /** Intent check: return the DRIFT fixture (unfulfilled + notable unrequested). */
+    intentDrift?: boolean
   } = {},
 ) {
   // Block PostHog analytics
@@ -626,7 +668,11 @@ async function setupRoutes(
 
     let result: unknown
 
-    if (systemContent.includes('consolidating overlapping code-review findings')) {
+    if (systemContent.includes('checking the implementation against the stated intent')) {
+      // Intent-vs-implementation check. Dispatched FIRST among the JSON tasks
+      // (before the 'covered'/'gaps' substring checks) on its stable phrase.
+      result = opts.intentDrift ? INTENT_RESULT_DRIFT : INTENT_RESULT
+    } else if (systemContent.includes('consolidating overlapping code-review findings')) {
       // Convergence pass (PROMPT_VERSION 26): no overlaps — a valid empty
       // cluster set, so the flow renders findings unmerged (loss-proof path).
       result = { clusters: [] }
@@ -2537,4 +2583,75 @@ test('copy-as-llm-prompt: seed draft, step 3, copy → clipboard has file:line +
 
   // Still not submitted.
   await expect(page.getByRole('button', { name: /submit review/i })).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// Intent check (intent-vs-implementation): aligned + drift
+// ---------------------------------------------------------------------------
+
+test('intent check: aligned PR shows the green matches-stated-intent line with verified evidence', async ({ page }) => {
+  await setupRoutes(page)
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_UNDERSTAND)
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // The Intent check section renders in the Understand step; open it.
+  const intentPanel = page.locator('details.detail-panel.intent-panel')
+  await expect(intentPanel).toBeVisible({ timeout: 10_000 })
+  await intentPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+
+  // Aligned outcome: ONE green line with the verified-intent count.
+  await expect(
+    intentPanel.getByText(/Implementation matches the stated intent \(1 intent verified\)/),
+  ).toBeVisible({ timeout: 15_000 })
+
+  // The verified intent + its evidence link render (open by default when aligned).
+  await expect(intentPanel.getByText('Add a new feature', { exact: true })).toBeVisible()
+  await expect(intentPanel.getByRole('button', { name: 'src/feature.ts:2' })).toBeVisible()
+
+  // No drift groups in the aligned state.
+  await expect(intentPanel.locator('[data-group]')).toHaveCount(0)
+})
+
+test('intent check: drift renders the Unfulfilled group first, then notable unrequested', async ({ page }) => {
+  await setupRoutes(page, { intentDrift: true })
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_UNDERSTAND)
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  const intentPanel = page.locator('details.detail-panel.intent-panel')
+  await expect(intentPanel).toBeVisible({ timeout: 10_000 })
+  await intentPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+
+  // UNFULFILLED group (highest signal) renders with the broken promise + note.
+  await expect(
+    intentPanel.getByText(/Unfulfilled — promised in the description/),
+  ).toBeVisible({ timeout: 15_000 })
+  await expect(intentPanel.getByText('Add tests for the feature')).toBeVisible()
+  await expect(intentPanel.getByText('No test files changed in this PR.')).toBeVisible()
+
+  // Notable unrequested group renders below it, with a clickable path.
+  await expect(
+    intentPanel.getByText(/notable changes the description never asked for/),
+  ).toBeVisible()
+  await expect(intentPanel.getByRole('button', { name: 'src/old-utils.ts' })).toBeVisible()
+
+  // Group ORDER: unfulfilled strictly before notable (no minor group in this fixture).
+  const groups = await intentPanel
+    .locator('[data-group]')
+    .evaluateAll((els) => els.map((e) => e.getAttribute('data-group')))
+  expect(groups).toEqual(['unfulfilled', 'notable'])
+
+  // The aligned line never renders in the drift state.
+  await expect(intentPanel.getByText(/Implementation matches the stated intent/)).toHaveCount(0)
 })

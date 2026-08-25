@@ -482,6 +482,9 @@
         prKey,
         repo: repoStr,
         isPrivate: meta.private,
+        // PR title + body — the stated intent the intent check verifies
+        // the diff against (skip-when-empty handled inside the run).
+        meta: { title: meta.title, body: meta.body },
         pack: async () => {
           const contents = await getContents(files, meta)
           const ci = await getCi({ owner, repo, number }, meta.headSha)
@@ -805,7 +808,7 @@
         {ciError}
         onRefreshCi={refreshCi}
         {ciRefreshing}
-        run={aiRun ?? { summary: {status:'idle'}, attention: {status:'idle'}, diagrams: {status:'idle'}, verdict: {status:'idle'}, tests: {status:'idle'}, alternatives: {status:'idle'}, start: async()=>{}, retry: async()=>{}, coach: async()=>({error:'no-key'}) } as any}
+        run={aiRun ?? { summary: {status:'idle'}, attention: {status:'idle'}, diagrams: {status:'idle'}, verdict: {status:'idle'}, tests: {status:'idle'}, alternatives: {status:'idle'}, intent: {status:'idle'}, start: async()=>{}, retry: async()=>{}, coach: async()=>({error:'no-key'}) } as any}
         onhotspot={handleHotspot}
       />
     {:else if step === 2}

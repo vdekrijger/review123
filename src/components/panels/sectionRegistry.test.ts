@@ -36,6 +36,7 @@ describe('SECTION_REGISTRY — structure', () => {
 describe('SECTION_REGISTRY — required sections present', () => {
   const required: SectionId[] = [
     'summary',
+    'intent',
     'diagrams',
     'file-structure',
     'test-insight',
@@ -72,6 +73,11 @@ describe('SECTION_REGISTRY — canonical order', () => {
 
   it('summary comes before diagrams', () => {
     expect(ids.indexOf('summary')).toBeLessThan(ids.indexOf('diagrams'))
+  })
+
+  it('intent sits between summary and diagrams', () => {
+    expect(ids.indexOf('summary')).toBeLessThan(ids.indexOf('intent'))
+    expect(ids.indexOf('intent')).toBeLessThan(ids.indexOf('diagrams'))
   })
 
   it('diagrams comes before file-structure', () => {
@@ -113,6 +119,12 @@ describe('SECTION_REGISTRY — show flags', () => {
   it('file-structure is page-only (show.rail false)', () => {
     const fs = SECTION_REGISTRY.find((s) => s.id === 'file-structure')!
     expect(fs.show.rail).toBe(false)
+  })
+
+  it('intent is page-only in v1 (show.rail false — ContextRail keeps its section set)', () => {
+    const intent = SECTION_REGISTRY.find((s) => s.id === 'intent')!
+    expect(intent.show.rail).toBe(false)
+    expect(intent.title).toBe('Intent check (AI)')
   })
 
   const railSections: SectionId[] = [
@@ -214,14 +226,15 @@ describe('resolveUnderstandSections', () => {
   })
 
   it('forward-compat merge inserts a missing section in its registry-relative position', () => {
-    // Omit 'diagrams' (registry index 1). The remaining stored sections are in
-    // registry order, so diagrams should land back between summary and file-structure.
+    // Omit 'diagrams'. The remaining stored sections are in registry order, so
+    // diagrams should land back right after its registry predecessor (intent)
+    // and before file-structure.
     const stored = PAGE_IDS.filter((id) => id !== 'diagrams').map((id) => ({ id, enabled: true }))
     const resolved = resolveUnderstandSections(stored).map((r) => r.descriptor.id)
-    const summaryIdx = resolved.indexOf('summary')
+    const intentIdx = resolved.indexOf('intent')
     const diagramsIdx = resolved.indexOf('diagrams')
     const fileStructureIdx = resolved.indexOf('file-structure')
-    expect(diagramsIdx).toBe(summaryIdx + 1)
+    expect(diagramsIdx).toBe(intentIdx + 1)
     expect(diagramsIdx).toBeLessThan(fileStructureIdx)
   })
 

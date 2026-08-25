@@ -591,6 +591,34 @@ describe('AiModelsSection — per-task modes (Plan J)', () => {
     await userEvent.click(screen.getByRole('button', { name: /^None$/i }))
     expect(getSettings().aiTaskModes.simplify).toBe('standard')
   })
+
+  it('renders an Intent check row with Off + Standard but NO Deep (off|standard only in v1)', () => {
+    render(AiModelsSection)
+    const intentGroup = within(screen.getByRole('radiogroup', { name: /Intent check/i }))
+    expect(intentGroup.getByRole('radio', { name: /Off/i })).toBeInTheDocument()
+    expect(intentGroup.getByRole('radio', { name: /Standard/i })).toBeInTheDocument()
+    expect(intentGroup.queryByRole('radio', { name: /Deep/i })).toBeNull()
+  })
+
+  it('the Intent check row defaults to Standard and persists Off immediately', async () => {
+    render(AiModelsSection)
+    const intentGroup = within(screen.getByRole('radiogroup', { name: /Intent check/i }))
+    expect(intentGroup.getByRole('radio', { name: /Standard/i })).toBeChecked()
+    await userEvent.click(intentGroup.getByRole('radio', { name: /Off/i }))
+    expect(getSettings().aiTaskModes.intent).toBe('off')
+  })
+
+  it('quick-set All (deep) keeps intent standard — never deep', async () => {
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /^All$/i }))
+    expect(getSettings().aiTaskModes.intent).toBe('standard')
+  })
+
+  it('quick-set Off-all-extras turns intent off (an extra, not summary/verdict)', async () => {
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /Off-all-extras/i }))
+    expect(getSettings().aiTaskModes.intent).toBe('off')
+  })
 })
 
 describe('AiModelsSection — show/hide key toggle', () => {

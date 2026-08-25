@@ -190,6 +190,226 @@ export function validateRiskJudge(x: unknown): RiskJudgeResult | null {
 }
 
 // ---------------------------------------------------------------------------
+// IntentCheckResult — intent-vs-implementation check (PROMPT_VERSIONS.intent)
+//
+// The task reads the PR DESCRIPTION as the stated intent and verifies the
+// diff against it: which promises are matched (with in-diff evidence), which
+// changes a reader of the description would not expect (unrequested), and
+// which promises have no corresponding change (unfulfilled).
+// ---------------------------------------------------------------------------
+
+/** Cap per collection (intents / matched / unrequested / unfulfilled). */
+export const INTENT_MAX_ITEMS = 12
+
+/** One stated intent derived from the PR description. */
+export interface IntentItem {
+  id: string
+  text: string
+}
+
+/** One piece of evidence for a matched intent: a changed file (+ line). */
+export interface IntentEvidence {
+  path: string
+  line?: number
+}
+
+/** One intent the diff fulfils, with the evidence and a one-line note. */
+export interface IntentMatched {
+  intentId: string
+  evidence: IntentEvidence[]
+  note: string
+}
+
+/** One change a reader of the description would not expect. */
+export interface IntentUnrequested {
+  description: string
+  paths: string[]
+  significance: 'minor' | 'notable'
+}
+
+/** One stated intent with no corresponding change in the diff. */
+export interface IntentUnfulfilled {
+  intentId: string
+  note: string
+}
+
+export interface IntentCheckResult {
+  intents: IntentItem[]
+  matched: IntentMatched[]
+  unrequested: IntentUnrequested[]
+  unfulfilled: IntentUnfulfilled[]
+}
+
+const INTENT_SIGNIFICANCE = new Set<string>(['minor', 'notable'])
+
+function validateIntentEvidence(x: unknown): IntentEvidence | null {
+  if (!isObject(x)) return null
+  if (typeof x['path'] !== 'string' || x['path'].trim().length === 0) return null
+  const line = x['line']
+  const hasLine = typeof line === 'number' && Number.isFinite(line)
+  if (line !== undefined && line !== null && !hasLine) return null
+  return { path: x['path'], ...(hasLine ? { line: Math.round(line) } : {}) }
+}
+
+/**
+ * Validate an unknown value as IntentCheckResult (STRICT).
+ * Returns a NORMALIZED value or null if the shape is invalid.
+ *
+ * Strict rules (any violation → null; the caller then tries the salvage):
+ * - all four collections must be arrays.
+ * - intents: each { id: non-empty string, text: non-empty string }.
+ * - matched/unfulfilled: intentId must reference a LISTED intent id;
+ *   note must be a string; evidence entries need a non-empty path
+ *   (line optional finite number → rounded).
+ * - unrequested: description non-empty string, paths array of strings,
+ *   significance exactly 'minor' | 'notable'.
+ * Each collection is capped at INTENT_MAX_ITEMS entries (truncated, not
+ * rejected — mirrors validateRiskJudge's snippet cap).
+ */
+export function validateIntentCheck(x: unknown): IntentCheckResult | null {
+  if (!isObject(x)) return null
+  if (!Array.isArray(x['intents']) || !Array.isArray(x['matched']) || !Array.isArray(x['unrequested']) || !Array.isArray(x['unfulfilled'])) return null
+
+  const intents: IntentItem[] = []
+  for (const raw of x['intents']) {
+    if (!isObject(raw)) return null
+    if (typeof raw['id'] !== 'string' || raw['id'].trim().length === 0) return null
+    if (typeof raw['text'] !== 'string' || raw['text'].trim().length === 0) return null
+    intents.push({ id: raw['id'], text: raw['text'] })
+  }
+  const intentIds = new Set(intents.map((i) => i.id))
+
+  const matched: IntentMatched[] = []
+  for (const raw of x['matched']) {
+    if (!isObject(raw)) return null
+    if (typeof raw['intentId'] !== 'string' || !intentIds.has(raw['intentId'])) return null
+    if (typeof raw['note'] !== 'string') return null
+    if (!Array.isArray(raw['evidence'])) return null
+    const evidence: IntentEvidence[] = []
+    for (const ev of raw['evidence']) {
+      const validated = validateIntentEvidence(ev)
+      if (validated === null) return null
+      evidence.push(validated)
+    }
+    matched.push({ intentId: raw['intentId'], evidence, note: raw['note'] })
+  }
+
+  const unrequested: IntentUnrequested[] = []
+  for (const raw of x['unrequested']) {
+    if (!isObject(raw)) return null
+    if (typeof raw['description'] !== 'string' || raw['description'].trim().length === 0) return null
+    if (!Array.isArray(raw['paths'])) return null
+    for (const p of raw['paths']) {
+      if (typeof p !== 'string') return null
+    }
+    if (typeof raw['significance'] !== 'string' || !INTENT_SIGNIFICANCE.has(raw['significance'])) return null
+    unrequested.push({
+      description: raw['description'],
+      paths: raw['paths'] as string[],
+      significance: raw['significance'] as 'minor' | 'notable',
+    })
+  }
+
+  const unfulfilled: IntentUnfulfilled[] = []
+  for (const raw of x['unfulfilled']) {
+    if (!isObject(raw)) return null
+    if (typeof raw['intentId'] !== 'string' || !intentIds.has(raw['intentId'])) return null
+    if (typeof raw['note'] !== 'string') return null
+    unfulfilled.push({ intentId: raw['intentId'], note: raw['note'] })
+  }
+
+  return {
+    intents: intents.slice(0, INTENT_MAX_ITEMS),
+    matched: matched.slice(0, INTENT_MAX_ITEMS),
+    unrequested: unrequested.slice(0, INTENT_MAX_ITEMS),
+    unfulfilled: unfulfilled.slice(0, INTENT_MAX_ITEMS),
+  }
+}
+
+/**
+ * Best-effort PER-COLLECTION salvage of a malformed intent-check payload
+ * (mirrors salvageAlternativesResult / #220's simplify salvage): each
+ * collection is walked leniently and each element that carries the substance
+ * is KEPT — one truncated/garbled entry no longer nukes the whole result.
+ *
+ * Per-item rules (violation → that ITEM is dropped, the rest kept):
+ * - intents: id + non-empty text required.
+ * - matched/unfulfilled: a KNOWN intentId + string note required; malformed
+ *   evidence entries are dropped individually (a matched item may end with
+ *   empty evidence — the panel then renders the note without links).
+ * - unrequested: non-empty description required; non-string paths dropped;
+ *   a missing/invalid significance degrades to 'minor' (the collapsed,
+ *   lowest-stakes group) rather than dropping the item.
+ * Missing/malformed matched/unrequested/unfulfilled arrays degrade to [].
+ *
+ * Returns null only when nothing usable survives: the value isn't an object
+ * or `intents` isn't an array at all — the caller then takes the error path.
+ */
+export function salvageIntentCheck(x: unknown): IntentCheckResult | null {
+  if (!isObject(x)) return null
+  if (!Array.isArray(x['intents'])) return null
+
+  const intents: IntentItem[] = []
+  for (const raw of x['intents']) {
+    if (!isObject(raw)) continue
+    if (typeof raw['id'] !== 'string' || raw['id'].trim().length === 0) continue
+    if (typeof raw['text'] !== 'string' || raw['text'].trim().length === 0) continue
+    intents.push({ id: raw['id'], text: raw['text'] })
+  }
+  const intentIds = new Set(intents.map((i) => i.id))
+
+  const matched: IntentMatched[] = []
+  if (Array.isArray(x['matched'])) {
+    for (const raw of x['matched']) {
+      if (!isObject(raw)) continue
+      if (typeof raw['intentId'] !== 'string' || !intentIds.has(raw['intentId'])) continue
+      if (typeof raw['note'] !== 'string') continue
+      const evidence: IntentEvidence[] = []
+      if (Array.isArray(raw['evidence'])) {
+        for (const ev of raw['evidence']) {
+          const validated = validateIntentEvidence(ev)
+          if (validated !== null) evidence.push(validated)
+        }
+      }
+      matched.push({ intentId: raw['intentId'], evidence, note: raw['note'] })
+    }
+  }
+
+  const unrequested: IntentUnrequested[] = []
+  if (Array.isArray(x['unrequested'])) {
+    for (const raw of x['unrequested']) {
+      if (!isObject(raw)) continue
+      if (typeof raw['description'] !== 'string' || raw['description'].trim().length === 0) continue
+      const paths = Array.isArray(raw['paths'])
+        ? raw['paths'].filter((p): p is string => typeof p === 'string')
+        : []
+      const significance =
+        typeof raw['significance'] === 'string' && INTENT_SIGNIFICANCE.has(raw['significance'])
+          ? (raw['significance'] as 'minor' | 'notable')
+          : 'minor'
+      unrequested.push({ description: raw['description'], paths, significance })
+    }
+  }
+
+  const unfulfilled: IntentUnfulfilled[] = []
+  if (Array.isArray(x['unfulfilled'])) {
+    for (const raw of x['unfulfilled']) {
+      if (!isObject(raw)) continue
+      if (typeof raw['intentId'] !== 'string' || !intentIds.has(raw['intentId'])) continue
+      if (typeof raw['note'] !== 'string') continue
+      unfulfilled.push({ intentId: raw['intentId'], note: raw['note'] })
+    }
+  }
+
+  return {
+    intents: intents.slice(0, INTENT_MAX_ITEMS),
+    matched: matched.slice(0, INTENT_MAX_ITEMS),
+    unrequested: unrequested.slice(0, INTENT_MAX_ITEMS),
+    unfulfilled: unfulfilled.slice(0, INTENT_MAX_ITEMS),
+  }
+}
+
+// ---------------------------------------------------------------------------
 // GraphResult
 // ---------------------------------------------------------------------------
 
