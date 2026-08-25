@@ -824,8 +824,10 @@ describe('compare-mode: browser back exits compare instead of leaving the PR', (
       expect(backSpy).not.toHaveBeenCalled()
     }, { timeout: 1000 })
 
-    // Route stays on review — status bar still present (not remounted to different page)
-    expect(screen.getByRole('status')).toBeInTheDocument()
+    // Route stays on review — the draft status bar is still present (not
+    // remounted to a different page). Matched by its text because the Inspect
+    // step now renders a second role="status" (the attention-progress line).
+    expect(screen.getByText(/comments? drafted/)).toBeInTheDocument()
   })
 
   it('"Full diff" via picker calls history.back() when state is compare-flagged, leaving history balanced', async () => {
