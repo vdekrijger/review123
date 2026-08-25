@@ -804,6 +804,26 @@ describe('DraftThread — Expand (terse-note expander)', () => {
     await vi.waitFor(() => expect(expandFn).toHaveBeenCalledTimes(2))
   })
 
+  it('saving while an expansion is in flight discards the late result (no stale preview)', async () => {
+    const user = userEvent.setup()
+    const onsave = vi.fn()
+    const { fn, resolve } = makeDeferredExpandFn()
+    render(DraftThread, { props: { ...baseProps, onsave, expandFn: fn } })
+    const textarea = screen.getByRole('textbox', { name: /comment body/i })
+    await user.type(textarea, 'my note')
+    await user.click(screen.getByTestId('expand-btn'))
+    expect(screen.getByTestId('expand-preview')).toBeInTheDocument()
+
+    // Save the note while the expansion is still pending
+    await user.click(screen.getByRole('button', { name: /leave comment/i }))
+    expect(onsave).toHaveBeenCalledWith('my note')
+
+    // The late resolution must NOT resurrect a preview
+    resolve({ ok: true, comment: 'Too late.' })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByTestId('expand-preview')).not.toBeInTheDocument()
+  })
+
   it('a second Expand after Use expands the (edited) composer text, not the stale note', async () => {
     const user = userEvent.setup()
     const expandFn = makeExpandFn('First expansion.')

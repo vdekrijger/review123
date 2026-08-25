@@ -247,7 +247,15 @@
   const expandVisible = $derived(hasExpandFn && editorValue.trim().length > 0)
   const expandDisabled = $derived(!!askDisabledReason || expandLoading)
 
+  /**
+   * Monotonic run id: resetExpand() bumps it so an in-flight expansion that
+   * resolves AFTER a save/cancel/draft-switch is discarded instead of
+   * resurrecting a stale preview.
+   */
+  let expandSeq = 0
+
   function resetExpand() {
+    expandSeq++
     expandLoading = false
     expandPreview = null
     expandStreamText = ''
@@ -260,6 +268,7 @@
     if (!note || expandLoading || !expandFn) return
 
     // Composer text is PRESERVED — the result goes to the preview panel only.
+    const seq = ++expandSeq
     expandLoading = true
     expandPreview = null
     expandStreamText = ''
@@ -267,8 +276,12 @@
     expandErrorDetail = null
 
     const result = await expandFn(note, (delta) => {
+      if (seq !== expandSeq) return
       expandStreamText += delta
     }, { path, line, side })
+
+    // Stale run (the user saved/cancelled/switched drafts meanwhile): drop it.
+    if (seq !== expandSeq) return
 
     if (result.ok) {
       expandPreview = result.comment
