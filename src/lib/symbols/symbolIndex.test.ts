@@ -35,6 +35,9 @@ describe('buildSymbolIndex — TS/JS', () => {
       inDiff: true,
     })
     expect(defs[0].snippet).toContain('export function computeTotal')
+    // Heuristic-backend definitions carry NO endLine — extents are exact
+    // (tree-sitter) or absent; consumers fall back to a heuristic scan.
+    expect(defs[0].endLine).toBeUndefined()
   })
 
   it('finds const-arrow definitions', () => {

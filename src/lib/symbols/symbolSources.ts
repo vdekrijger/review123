@@ -67,6 +67,15 @@ export function registeredSymbolFilenames(): Set<string> {
   return new Set(entries.keys())
 }
 
+/**
+ * The registered source for one file, or null when it isn't rendered. The
+ * symbol popover's definition peek reads from this — the SAME text the index
+ * was built on (see lib/symbols/definitionPeek.ts).
+ */
+export function symbolSourceFor(filename: string): SymbolSource | null {
+  return entries.get(filename)?.source ?? null
+}
+
 /** The symbol index over all currently registered files (lazily rebuilt). */
 export function currentSymbolIndex(): SymbolIndex {
   if (!cached) {

@@ -84,6 +84,7 @@ export interface TSNodeLike {
   type: string
   text: string
   startPosition: { row: number }
+  endPosition: { row: number }
   namedChildCount: number
   namedChild(index: number): TSNodeLike | null
   childForFieldName(fieldName: string): TSNodeLike | null
@@ -190,6 +191,11 @@ export interface ExtractedDefinition {
   kind: DefinitionKind
   /** 1-based line of the definition's NAME node. */
   line: number
+  /**
+   * 1-based line where the definition NODE ends — the grammar-backed full
+   * extent (function/class body included). Always ≥ `line`.
+   */
+  endLine: number
 }
 
 export interface ExtractedSymbols {
@@ -334,7 +340,11 @@ function extractFromTree(root: TSNodeLike, lang: TreeSitterLang): ExtractedSymbo
     } else {
       const def = definitionAt(node, lang)
       if (def && IDENT_RE.test(def.nameNode.text)) {
-        definitions.push({ name: def.nameNode.text, kind: def.kind, line: def.nameNode.startPosition.row + 1 })
+        // `line` is the NAME node's line (the clickable identifier); `endLine`
+        // is the DEFINITION node's full extent (body included) — clamped so a
+        // grammar oddity can never produce endLine < line.
+        const line = def.nameNode.startPosition.row + 1
+        definitions.push({ name: def.nameNode.text, kind: def.kind, line, endLine: Math.max(line, node.endPosition.row + 1) })
       }
     }
     for (let i = node.namedChildCount - 1; i >= 0; i--) {

@@ -138,24 +138,26 @@ describe('tree-sitter TypeScript — definitions', () => {
   })
 
   it.each([
-    ['computeTotal', 'function', 2],
-    ['ReportBuilder', 'class', 7],
-    ['build', 'method', 8],
-    ['handler', 'variable', 12],
-    ['PayloadShape', 'type', 13],
-    ['AliasName', 'type', 14],
-    ['Color', 'type', 15],
-  ] as const)('%s → kind %s at line %d', (name, kind, line) => {
+    // name, kind, line, endLine — endLine is the grammar-backed FULL EXTENT
+    // (body included), exact per node.
+    ['computeTotal', 'function', 2, 4],
+    ['ReportBuilder', 'class', 7, 11],
+    ['build', 'method', 8, 10],
+    ['handler', 'variable', 12, 12],
+    ['PayloadShape', 'type', 13, 13],
+    ['AliasName', 'type', 14, 14],
+    ['Color', 'type', 15, 15],
+  ] as const)('%s → kind %s at lines %d–%d', (name, kind, line, endLine) => {
     const defs = index.definitionsOf(name)
     expect(defs).toHaveLength(1)
-    expect(defs[0]).toMatchObject({ name, kind, line, side: 'new', file: 'src/calc.ts' })
+    expect(defs[0]).toMatchObject({ name, kind, line, endLine, side: 'new', file: 'src/calc.ts' })
   })
 
   it('extractDocumentSymbols exposes the same definitions directly', () => {
     const extracted = extractDocumentSymbols('src/calc.ts', TS_AFTER)
     expect(extracted).not.toBeNull()
-    expect(extracted!.definitions).toContainEqual({ name: 'computeTotal', kind: 'function', line: 2 })
-    expect(extracted!.definitions).toContainEqual({ name: 'build', kind: 'method', line: 8 })
+    expect(extracted!.definitions).toContainEqual({ name: 'computeTotal', kind: 'function', line: 2, endLine: 4 })
+    expect(extracted!.definitions).toContainEqual({ name: 'build', kind: 'method', line: 8, endLine: 10 })
   })
 })
 
@@ -278,6 +280,12 @@ describe('tree-sitter Python', () => {
     expect(index.definitionsOf('ReportModel')[0]).toMatchObject({ kind: 'class', line: 4 })
   })
 
+  it('emits exact body extents (def → last body statement, class → last member)', () => {
+    expect(index.definitionsOf('compute_total')[0].endLine).toBe(3)
+    expect(index.definitionsOf('ReportModel')[0].endLine).toBe(6)
+    expect(index.definitionsOf('refresh')[0].endLine).toBe(6)
+  })
+
   it('references skip the def line (and the comment mention adds nothing extra)', () => {
     expect(index.referencesOf('compute_total').map((r) => r.line)).toEqual([6, 7])
   })
@@ -314,6 +322,12 @@ describe('tree-sitter Go', () => {
     expect(index.definitionsOf('Client')[0]).toMatchObject({ kind: 'type', line: 8 })
   })
 
+  it('emits exact body extents (func/method/struct through their closing brace)', () => {
+    expect(index.definitionsOf('NewClient')[0].endLine).toBe(4)
+    expect(index.definitionsOf('Save')[0].endLine).toBe(7)
+    expect(index.definitionsOf('Client')[0].endLine).toBe(10)
+  })
+
   it('type references include return types, literals, and receivers — not the def line', () => {
     expect(index.referencesOf('Client').map((r) => r.line)).toEqual([2, 3, 5])
   })
@@ -336,6 +350,11 @@ describe('tree-sitter Ruby', () => {
   it('finds the class and its method (class-nested def → method)', () => {
     expect(index.definitionsOf('ReportJob')[0]).toMatchObject({ kind: 'class', line: 1 })
     expect(index.definitionsOf('perform_now')[0]).toMatchObject({ kind: 'method', line: 2 })
+  })
+
+  it('emits exact body extents (def/class through their `end`)', () => {
+    expect(index.definitionsOf('ReportJob')[0].endLine).toBe(5)
+    expect(index.definitionsOf('perform_now')[0].endLine).toBe(4)
   })
 
   it('resolves constant and call references', () => {

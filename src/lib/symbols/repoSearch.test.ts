@@ -147,7 +147,15 @@ describe('searchRepoForSymbol — pipeline', () => {
   it('returns empty refs (ok) when the search finds nothing', async () => {
     const ctx = makeCtx({ paths: [] })
     const out = await searchRepoForSymbol('computeTotal', ctx)
-    expect(out).toEqual({ ok: true, definitions: [], references: [], filesScanned: 0, filesSkipped: 0 })
+    expect(out).toEqual({ ok: true, definitions: [], references: [], filesScanned: 0, filesSkipped: 0, contentsByPath: new Map() })
+  })
+
+  it('carries each scanned file\'s head-SHA contents for the definition peek', async () => {
+    const ctx = makeCtx({ paths: ['src/def.ts'], files: { 'src/def.ts': DEF_TS } })
+    const out = await searchRepoForSymbol('computeTotal', ctx)
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.contentsByPath?.get('src/def.ts')).toBe(DEF_TS)
   })
 })
 
