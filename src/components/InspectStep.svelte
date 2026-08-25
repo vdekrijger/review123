@@ -32,6 +32,8 @@
   import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
   import { computeFileRisk, type RiskLevel } from '../lib/risk/risk'
   import { classifyFile } from '../lib/diff/diffFile'
+  import { classifyFile as classifyAttention, sortRiskFirst, pathCompare, type FileTriage } from '../lib/guide/triage'
+  import { getInspectSort, setInspectSort, type InspectSort } from '../lib/guide/sortPref'
   import { isGeneratedFile, sortGeneratedLast } from '../lib/diff/generated'
   import StorySlideshow from './StorySlideshow.svelte'
   import Skeleton from './Skeleton.svelte'
@@ -268,9 +270,9 @@
     const wasViewed = viewedStore?.isViewed(file.filename, file.patch) ?? false
     viewedStore?.toggle(file.filename, file.patch)
     if (!wasViewed) {
-      const idx = orderedFiles.findIndex((f) => f.filename === file.filename)
-      const next = orderedFiles[idx + 1]
-      if (next) scrollToFileCard(next.filename)
+      const idx = advanceFiles.findIndex((f) => f.filename === file.filename)
+      const next = advanceFiles[idx + 1]
+      if (next) revealFileCard(next.filename)
     }
   }
 
@@ -338,6 +340,109 @@
     }
     return map
   })
+
+  // ---------------------------------------------------------------------------
+  // Risk-guided flow (Files mode only — entirely deterministic, no LLM)
+  // ---------------------------------------------------------------------------
+  // A "Risk first" sort orders files by review-attention need (the existing
+  // per-file risk, highest first, path tie-break) and collapses MECHANICAL
+  // files (generated / tests-only / rename-only / version bumps — per
+  // lib/guide/triage) into one low-attention tail. Narrative (the current
+  // order, generated sink included) stays the default. The choice persists
+  // per-browser (localStorage — the rail-expanded idiom, NOT settings.ts).
+  let inspectSort = $state<InspectSort>(getInspectSort())
+  const riskFirstActive = $derived(inspectSort === 'risk')
+
+  function selectSort(order: InspectSort): void {
+    inspectSort = order
+    setInspectSort(order)
+  }
+
+  // Per-file mechanical-vs-novel triage. Risk level + findings feed the
+  // override (a flagged or high-risk file is NEVER buried in the tail).
+  const triageByPath = $derived.by(() => {
+    const map = new Map<string, FileTriage>()
+    for (const f of files) {
+      const level = fileRiskByPath.get(f.filename)?.level ?? 'low'
+      const findings = (skillSuggestionsByPath.get(f.filename) ?? []).map((s) => ({
+        severity: s.severity,
+        verification: s.verification,
+      }))
+      map.set(f.filename, classifyAttention(f, level, findings, contentsMap?.get(f.filename)))
+    }
+    return map
+  })
+
+  // Attention (novel) files — the denominator of the progress line.
+  const attentionFiles = $derived(files.filter((f) => triageByPath.get(f.filename)?.attention !== 'mechanical'))
+
+  // Mechanical files, path-sorted for a deterministic tail order.
+  const tailFiles = $derived(
+    files
+      .filter((f) => triageByPath.get(f.filename)?.attention === 'mechanical')
+      .slice()
+      .sort((a, b) => pathCompare(a.filename, b.filename)),
+  )
+
+  // Risk-first main list: attention files, highest risk first (path tie-break).
+  const riskFirstFiles = $derived(sortRiskFirst(attentionFiles, (f) => fileRiskByPath.get(f.filename)?.level ?? 'low'))
+
+  // The list the main #each renders. Narrative = orderedFiles (UNCHANGED).
+  const mainFiles = $derived(riskFirstActive ? riskFirstFiles : orderedFiles)
+
+  // Viewed auto-advance order spans main list THEN tail, so checking the last
+  // attention file lands on the tail's first card.
+  const advanceFiles = $derived(riskFirstActive ? [...riskFirstFiles, ...tailFiles] : orderedFiles)
+
+  // Progress framing: "M of N attention files reviewed" (viewed store driven).
+  const attentionViewedCount = $derived(
+    attentionFiles.filter((f) => viewedStore?.isViewed(f.filename, f.patch) ?? false).length,
+  )
+
+  // Tail <details> open state — also opened programmatically when a jump
+  // (tree click / viewed auto-advance) targets a file inside the closed tail.
+  let tailOpen = $state(false)
+
+  /** Scroll to a file card, first opening the tail when the card lives there. */
+  function revealFileCard(path: string): void {
+    if (riskFirstActive && !tailOpen && tailFiles.some((f) => f.filename === path)) tailOpen = true
+    scrollToFileCard(path)
+  }
+
+  // Aggregate reason summary for the collapsed tail ("3 generated, 2 tests only").
+  const tailReasonSummary = $derived.by(() => {
+    const counts = new Map<string, number>()
+    for (const f of tailFiles) {
+      for (const r of triageByPath.get(f.filename)?.reasons ?? []) {
+        counts.set(r, (counts.get(r) ?? 0) + 1)
+      }
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || pathCompare(a[0], b[0]))
+      .map(([reason, n]) => `${n} ${reason}`)
+      .join(', ')
+  })
+
+  const tailUnviewedCount = $derived(
+    tailFiles.filter((f) => !(viewedStore?.isViewed(f.filename, f.patch) ?? false)).length,
+  )
+
+  // "Mark all N viewed" — HONEST SEMANTICS (mirrors the Story-mode #114
+  // autoMarked guard): the bulk action marks each tail file viewed AT MOST ONCE
+  // per session. A file the user then MANUALLY un-views stays un-viewed on
+  // repeat clicks — the bulk button never fights a deliberate un-view. Viewing
+  // is reversible, so no confirmation step. Files already viewed (manually or
+  // by a previous bulk click) are recorded as handled, never toggled off.
+  const bulkMarked = new Set<string>()
+
+  function markAllTailViewed(): void {
+    if (!viewedStore) return
+    for (const f of tailFiles) {
+      if (bulkMarked.has(f.filename)) continue
+      if (!viewedStore.isViewed(f.filename, f.patch)) viewedStore.toggle(f.filename, f.patch)
+      bulkMarked.add(f.filename)
+    }
+  }
 
   // Active path: set on tree click only (no IntersectionObserver)
   let activePath = $state<string | null>(null)
@@ -414,8 +519,9 @@
 
   function handleTreeSelect(path: string): void {
     activePath = path
-    // Shared scroll + expand-if-collapsed mechanism (also used by hotspot jumps)
-    scrollToFileCard(path)
+    // Shared scroll + expand-if-collapsed mechanism (also used by hotspot
+    // jumps), plus tail-opening when the target sits in the low-attention tail.
+    revealFileCard(path)
     // On narrow viewport (<900px), close the drawer after selecting a file
     if (window.innerWidth < NARROW_THRESHOLD) closeTree()
   }
@@ -1075,6 +1181,64 @@
   </div>
 {/snippet}
 
+<!-- One file's full Inspect card (hotspot badge + risk chip + test flag +
+     FileDiff), extracted as a snippet so the risk-first tail renders the SAME
+     card block as the main list — no drift between the two loops. -->
+{#snippet inspectFileCard(file: PrFile)}
+  <div id="file-{slugify(file.filename)}">
+    {#if hotspotMap.has(file.filename)}
+      {@const hotspot = hotspotMap.get(file.filename)!}
+      <div class="hotspot-badge level-{hotspot.level}">
+        <span class="hotspot-level">{hotspot.level}</span>
+        <span class="hotspot-reason">{file.filename} — {hotspot.reason}</span>
+      </div>
+    {/if}
+    {#if fileRiskByPath.get(file.filename)?.show}
+      {@const risk = fileRiskByPath.get(file.filename)!}
+      <div
+        class="file-risk-chip risk-{risk.level}"
+        role="note"
+        title="Deterministic review-effort estimate from churn, findings and path — advisory, not a defect prediction"
+      >
+        <span class="file-risk-label">review effort</span>
+        <span class="file-risk-level">{risk.level}</span>
+      </div>
+    {/if}
+    {#if testFlagSet.has(file.filename)}
+      <div class="test-flag-warning" role="note">
+        AI-inferred — not measured coverage
+      </div>
+    {/if}
+    <!-- File-level (null-line) finding cards used to render here as a
+         separate "bottom" block, duplicating what the reviewer-chip popover
+         now shows in full (markdown body + Add as draft / Dismiss). The
+         redundant block was removed; null-line findings live in the popover.
+         Anchored, in-diff SkillFindingCards still render inline via FileDiff. -->
+    <FileDiff
+      {file}
+      {mode}
+      {currentHeadSha}
+      drafts={draftsForFile(file.filename)}
+      comments={commentsForFile(file.filename)}
+      {resolvedCommentIds}
+      onAddDraft={(line, side, body, n) => handleAddDraft(file.filename, line, side, body, n)}
+      onRemoveDraft={(line, side, n) => handleRemoveDraft(file.filename, line, side, n)}
+      viewed={viewedStore?.isViewed(file.filename, file.patch) ?? false}
+      changedSinceViewed={viewedStore?.changedSinceViewed(file.filename, file.patch) ?? false}
+      onToggleViewed={() => handleToggleViewed(file)}
+      contents={contentsMap?.get(file.filename)}
+      {askFn}
+      {expandFn}
+      {askDisabledReason}
+      onReply={replyFn}
+      skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
+      onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName, side: finding.side, originalBody: finding.originalBody })}
+      onDismissSkillFinding={(key) => dismissFinding(key)}
+      whitespace={whitespaceByPath.get(file.filename) ?? null}
+    />
+  </div>
+{/snippet}
+
 {#if storyAvailable}
   <div class="flow-switch" role="group" aria-label="Inspect flow">
     <button
@@ -1397,6 +1561,32 @@
     {diagrams}
   />
 {:else}
+  <!-- Files-mode guide bar: the deterministic sort control (Narrative | Risk
+       first) + the attention-progress line. Story mode never shows this — its
+       narrative IS its ordering. -->
+  <div class="guide-bar">
+    <div class="sort-switch" role="group" aria-label="File order">
+      <button
+        class="sort-btn"
+        class:sort-active={!riskFirstActive}
+        aria-pressed={!riskFirstActive}
+        title="The current reading order (AI reading order when available, generated files last)"
+        onclick={() => selectSort('narrative')}
+      >Narrative</button>
+      <button
+        class="sort-btn"
+        class:sort-active={riskFirstActive}
+        aria-pressed={riskFirstActive}
+        title="Order files by review-attention need, highest first — low-attention (generated / tests-only / version-bump) files group at the bottom"
+        onclick={() => selectSort('risk')}
+      >Risk first</button>
+    </div>
+    {#if viewedStore && attentionFiles.length > 0}
+      <span class="attention-progress" role="status" data-testid="attention-progress">
+        {attentionViewedCount} of {attentionFiles.length} attention file{attentionFiles.length === 1 ? '' : 's'} reviewed
+      </span>
+    {/if}
+  </div>
   <div class="inspect-layout" class:diff-full={diffWidth === 'full'} data-diffwidth={diffWidth} bind:this={layoutEl}>
     <!-- Collapsible drawer. Two CSS regimes (see drawer CSS block below):
          MARGIN mode (centered + wide viewport): zero-width flex placeholder, nav extends LEFTWARD into the margin.
@@ -1442,60 +1632,49 @@
     <!-- No backdrop in any regime: the drawer never overlays the diff. In inline
          mode it pushes the diff over (flex), in margin mode it dwells in the margin. -->
     <div class="diff-column" bind:this={diffColEl}>
-      {#each orderedFiles as file (file.filename)}
-        <div id="file-{slugify(file.filename)}">
-          {#if hotspotMap.has(file.filename)}
-            {@const hotspot = hotspotMap.get(file.filename)!}
-            <div class="hotspot-badge level-{hotspot.level}">
-              <span class="hotspot-level">{hotspot.level}</span>
-              <span class="hotspot-reason">{file.filename} — {hotspot.reason}</span>
-            </div>
-          {/if}
-          {#if fileRiskByPath.get(file.filename)?.show}
-            {@const risk = fileRiskByPath.get(file.filename)!}
-            <div
-              class="file-risk-chip risk-{risk.level}"
-              role="note"
-              title="Deterministic review-effort estimate from churn, findings and path — advisory, not a defect prediction"
-            >
-              <span class="file-risk-label">review effort</span>
-              <span class="file-risk-level">{risk.level}</span>
-            </div>
-          {/if}
-          {#if testFlagSet.has(file.filename)}
-            <div class="test-flag-warning" role="note">
-              AI-inferred — not measured coverage
-            </div>
-          {/if}
-          <!-- File-level (null-line) finding cards used to render here as a
-               separate "bottom" block, duplicating what the reviewer-chip popover
-               now shows in full (markdown body + Add as draft / Dismiss). The
-               redundant block was removed; null-line findings live in the popover.
-               Anchored, in-diff SkillFindingCards still render inline via FileDiff. -->
-          <FileDiff
-            {file}
-            {mode}
-            {currentHeadSha}
-            drafts={draftsForFile(file.filename)}
-            comments={commentsForFile(file.filename)}
-            {resolvedCommentIds}
-            onAddDraft={(line, side, body, n) => handleAddDraft(file.filename, line, side, body, n)}
-            onRemoveDraft={(line, side, n) => handleRemoveDraft(file.filename, line, side, n)}
-            viewed={viewedStore?.isViewed(file.filename, file.patch) ?? false}
-            changedSinceViewed={viewedStore?.changedSinceViewed(file.filename, file.patch) ?? false}
-            onToggleViewed={() => handleToggleViewed(file)}
-            contents={contentsMap?.get(file.filename)}
-            {askFn}
-            {expandFn}
-            {askDisabledReason}
-            onReply={replyFn}
-            skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
-            onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName, side: finding.side, originalBody: finding.originalBody })}
-            onDismissSkillFinding={(key) => dismissFinding(key)}
-            whitespace={whitespaceByPath.get(file.filename) ?? null}
-          />
-        </div>
+      {#each mainFiles as file (file.filename)}
+        {@render inspectFileCard(file)}
       {/each}
+
+      <!-- Low-attention tail (Risk-first only): mechanical files collapsed
+           into ONE details group with count + reason summary + a one-click
+           "Mark all N viewed" (no confirm — viewing is reversible; the button
+           respects manual un-views, see markAllTailViewed). -->
+      {#if riskFirstActive && tailFiles.length > 0}
+        <details class="attention-tail" data-testid="attention-tail" bind:open={tailOpen}>
+          <summary class="attention-tail-summary">
+            <span class="attention-tail-label">
+              {tailFiles.length} low-attention file{tailFiles.length === 1 ? '' : 's'} — skim or mark all viewed
+              {#if tailReasonSummary}
+                <span class="attention-tail-reasons">({tailReasonSummary})</span>
+              {/if}
+            </span>
+            {#if viewedStore}
+              <button
+                type="button"
+                class="tail-mark-all"
+                disabled={tailUnviewedCount === 0}
+                title={tailUnviewedCount === 0
+                  ? 'All low-attention files are already viewed'
+                  : 'Mark every low-attention file viewed — a file you manually un-view afterwards stays un-viewed'}
+                onclick={(e) => { e.preventDefault(); markAllTailViewed() }}
+              >Mark all {tailFiles.length} viewed</button>
+            {/if}
+          </summary>
+          {#each tailFiles as file (file.filename)}
+            <div class="tail-file">
+              {#if (triageByPath.get(file.filename)?.reasons.length ?? 0) > 0}
+                <div class="triage-chips" role="note" aria-label="Why {file.filename} needs low attention">
+                  {#each triageByPath.get(file.filename)!.reasons as reason (reason)}
+                    <span class="triage-chip">{reason}</span>
+                  {/each}
+                </div>
+              {/if}
+              {@render inspectFileCard(file)}
+            </div>
+          {/each}
+        </details>
+      {/if}
     </div>
   </div>
 {/if}
@@ -2273,5 +2452,133 @@
   /* File-level (null-line) finding cards stack above the FileDiff */
   .file-level-finding {
     margin-bottom: 0.4rem;
+  }
+
+  /* ---- Risk-guided flow (Files mode): sort control + progress + tail ---- */
+
+  .guide-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.75rem;
+    margin-bottom: 0.5rem;
+  }
+
+  /* Same pill treatment as the Story|Files flow switch — one visual language. */
+  .sort-switch {
+    display: inline-flex;
+    gap: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    padding: 0.15rem;
+  }
+  .sort-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.2rem 0.8rem;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .sort-btn.sort-active {
+    background: var(--accent);
+    color: var(--surface, #fff);
+  }
+  .sort-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .attention-progress {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Collapsed low-attention tail: one calm details group at the list bottom. */
+  .attention-tail {
+    margin-top: 0.75rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--surface-raised);
+  }
+
+  .attention-tail-summary {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.75rem;
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    user-select: none;
+  }
+  .attention-tail-summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .attention-tail-label {
+    font-weight: 600;
+  }
+
+  .attention-tail-reasons {
+    font-weight: 400;
+    opacity: 0.85;
+  }
+
+  .tail-mark-all {
+    margin-left: auto;
+    padding: 0.2rem 0.65rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--surface, transparent);
+    color: var(--accent);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .tail-mark-all:hover:not(:disabled) {
+    background: var(--surface-hover, color-mix(in srgb, var(--surface-raised) 80%, var(--text) 10%));
+  }
+  .tail-mark-all:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .tail-mark-all:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .attention-tail[open] {
+    padding-bottom: 0.5rem;
+  }
+
+  .tail-file {
+    padding: 0.25rem 0.5rem 0;
+  }
+
+  /* Why-mechanical chips ("generated", "tests only", "lockfile"…) above each
+     tail card — small, muted, informational. */
+  .triage-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin-bottom: 0.25rem;
+  }
+  .triage-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.05rem 0.45rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-muted);
+    background: var(--surface, transparent);
   }
 </style>
