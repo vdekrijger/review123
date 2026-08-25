@@ -99,6 +99,11 @@
      */
     askFn?: ((q: string, onDelta: (t: string) => void, focus?: AskFocus) => Promise<{ ok: true; answer: string } | { ok: false; error: string }>) | null
     /**
+     * Optional terse-note expander threaded from Review via InspectStep
+     * (mirrors askFn). When provided, DraftThread shows the "Expand" action.
+     */
+    expandFn?: ((note: string, onDelta: (t: string) => void, focus: { path: string; line: number; side: 'LEFT' | 'RIGHT' }) => Promise<{ ok: true; comment: string } | { ok: false; error: string; errorDetail?: string }>) | null
+    /**
      * Optional disabled hint for Ask AI gating (e.g. "No API key configured.").
      */
     askDisabledReason?: string | null
@@ -169,7 +174,7 @@
     currentHeadSha?: string
   }
 
-  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onDismissSkillFinding, onReply = null, whitespace = null, sticky = true, forceExpanded = false, currentHeadSha = undefined }: Props = $props()
+  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, expandFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onDismissSkillFinding, onReply = null, whitespace = null, sticky = true, forceExpanded = false, currentHeadSha = undefined }: Props = $props()
 
   // Test-file display (must be declared before collapsed)
   const testFileDisplay = $derived<TestFileDisplay>(settingsState.current.testFileDisplay)
@@ -1026,6 +1031,7 @@
           }}
           oncancel={() => {}}
           {askFn}
+          {expandFn}
           {askDisabledReason}
           {currentHeadSha}
           excerpt={lineExcerpt}
@@ -1050,6 +1056,7 @@
             if (widgetClose && lineDrafts.length === 0) widgetClose()
           }}
           {askFn}
+          {expandFn}
           {askDisabledReason}
           excerpt={lineExcerpt}
         />
@@ -1182,6 +1189,7 @@
               ondelete={() => handleExtendDelete(draft.line, sideToSplitSide(draft.side), draft.n ?? 0)}
               oncancel={() => {}}
               {askFn}
+              {expandFn}
               {askDisabledReason}
               {currentHeadSha}
               excerpt={file.patch ? excerptAround(file.patch, draft.line, draft.side, 6) : ''}

@@ -86,6 +86,7 @@
     onAddFileLevelDraft = undefined,
     onDismissFileLevelFinding = undefined,
     askFn = null,
+    expandFn = null,
     askDisabledReason = null,
     replyFn = null,
     diagrams = null,
@@ -130,6 +131,8 @@
     /** Dismiss a file-level (null-line) finding. */
     onDismissFileLevelFinding?: (key: string) => void
     askFn?: ((q: string, onDelta: (t: string) => void, focus?: AskFocus) => Promise<{ ok: true; answer: string } | { ok: false; error: string }>) | null
+    /** Terse-note expander threaded to FileDiff → DraftThread (mirrors askFn). */
+    expandFn?: ((note: string, onDelta: (t: string) => void, focus: { path: string; line: number; side: 'LEFT' | 'RIGHT' }) => Promise<{ ok: true; comment: string } | { ok: false; error: string; errorDetail?: string }>) | null
     askDisabledReason?: string | null
     replyFn?: ((root: PrComment, body: string) => Promise<ReplyOutcome>) | null
     /** Change-map source for the progress map; null/pending → no map (never blocks). */
@@ -528,6 +531,7 @@
               onToggleViewed={() => viewedStore?.toggle(path, file.patch)}
               contents={contentsMap?.get(path)}
               {askFn}
+              {expandFn}
               {askDisabledReason}
               onReply={replyFn}
               skillFindings={lineSkillFindingsByPath.get(path) ?? []}
@@ -568,6 +572,7 @@
                   onToggleViewed={() => viewedStore?.toggle(path, file.patch)}
                   contents={contentsMap?.get(path)}
                   {askFn}
+                  {expandFn}
                   {askDisabledReason}
                   onReply={replyFn}
                   whitespace={whitespaceByPath.get(path) ?? null}

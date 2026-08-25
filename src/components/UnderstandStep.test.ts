@@ -54,6 +54,7 @@ function makeRun(overrides: Partial<AiRun>): AiRun {
     retry: async () => {},
     coach: async () => ({ error: 'no-key' }),
     ask: async () => ({ ok: false, error: 'no-key' }),
+    expandComment: async () => ({ ok: false, error: 'no-key' }),
     runSkillReviews: async () => {},
     retrySkill: async () => {},
     ...overrides,
