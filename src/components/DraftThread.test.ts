@@ -612,3 +612,210 @@ describe('DraftThread — AI-authored badge', () => {
     expect(screen.queryByTestId('draft-ai-badge')).not.toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Expand — terse-note expander (preview with Use / Keep my note)
+// ---------------------------------------------------------------------------
+
+describe('DraftThread — Expand (terse-note expander)', () => {
+  type ExpandResult = { ok: true; comment: string } | { ok: false; error: string; errorDetail?: string }
+
+  /** A resolved expandFn stub that streams then returns an expanded comment. */
+  function makeExpandFn(comment = 'This arrow-chain is hard to follow — extract a named helper.') {
+    return vi.fn(async (_note: string, onDelta: (t: string) => void, _focus: { path: string; line: number; side: 'LEFT' | 'RIGHT' }): Promise<ExpandResult> => {
+      onDelta(comment)
+      return { ok: true as const, comment }
+    })
+  }
+
+  /** An expandFn stub that stays pending until `resolve` is called. */
+  function makeDeferredExpandFn() {
+    let resolveFn: ((r: ExpandResult) => void) | null = null
+    const fn = vi.fn(
+      (_note: string, _onDelta: (t: string) => void, _focus: unknown) =>
+        new Promise<ExpandResult>((resolve) => { resolveFn = resolve }),
+    )
+    return { fn, resolve: (r: ExpandResult) => resolveFn?.(r) }
+  }
+
+  const baseProps = {
+    draft: null as Draft | null,
+    path: 'src/a.ts',
+    line: 10,
+    side: 'RIGHT' as const,
+    onsave: vi.fn(),
+    ondelete: vi.fn(),
+    oncancel: vi.fn(),
+  }
+
+  it('without expandFn: no Expand button', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, { props: baseProps })
+    await user.type(screen.getByRole('textbox', { name: /comment body/i }), 'note')
+    expect(screen.queryByTestId('expand-btn')).not.toBeInTheDocument()
+  })
+
+  it('with expandFn but EMPTY composer: Expand is hidden (visible only with text)', () => {
+    render(DraftThread, { props: { ...baseProps, expandFn: makeExpandFn() } })
+    expect(screen.queryByTestId('expand-btn')).not.toBeInTheDocument()
+  })
+
+  it('with expandFn and text: Expand is visible and enabled', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, { props: { ...baseProps, expandFn: makeExpandFn() } })
+    await user.type(screen.getByRole('textbox', { name: /comment body/i }), 'too clever')
+    const btn = screen.getByTestId('expand-btn')
+    expect(btn).toBeInTheDocument()
+    expect(btn).toBeEnabled()
+  })
+
+  it('askDisabledReason (keyless): Expand is shown with text but disabled — same gating as Ask AI', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, {
+      props: { ...baseProps, expandFn: makeExpandFn(), askDisabledReason: 'No API key configured.' },
+    })
+    await user.type(screen.getByRole('textbox', { name: /comment body/i }), 'too clever')
+    expect(screen.getByTestId('expand-btn')).toBeDisabled()
+  })
+
+  it('click Expand → calls expandFn with the note and the {path,line,side} focus', async () => {
+    const user = userEvent.setup()
+    const expandFn = makeExpandFn()
+    render(DraftThread, {
+      props: { ...baseProps, path: 'src/b.ts', line: 55, side: 'LEFT' as const, expandFn },
+    })
+    await user.type(screen.getByRole('textbox', { name: /comment body/i }), 'too clever, simplify')
+    await user.click(screen.getByTestId('expand-btn'))
+    expect(expandFn).toHaveBeenCalledOnce()
+    expect(expandFn.mock.calls[0][0]).toBe('too clever, simplify')
+    expect(expandFn.mock.calls[0][2]).toEqual({ path: 'src/b.ts', line: 55, side: 'LEFT' })
+  })
+
+  it('loading: composer text is PRESERVED and the button is disabled while running', async () => {
+    const user = userEvent.setup()
+    const { fn, resolve } = makeDeferredExpandFn()
+    render(DraftThread, { props: { ...baseProps, expandFn: fn } })
+    const textarea = screen.getByRole('textbox', { name: /comment body/i }) as HTMLTextAreaElement
+    await user.type(textarea, 'too clever')
+    await user.click(screen.getByTestId('expand-btn'))
+
+    // In-flight: loading panel visible, composer untouched, button disabled
+    expect(screen.getByTestId('expand-preview')).toBeInTheDocument()
+    expect(textarea.value).toBe('too clever')
+    expect(screen.getByTestId('expand-btn')).toBeDisabled()
+
+    resolve({ ok: true, comment: 'Expanded.' })
+    await vi.waitFor(() => expect(screen.getByTestId('expand-preview-body')).toBeInTheDocument())
+  })
+
+  it('success → preview shows the expanded comment (markdown-rendered) with Use and Keep my note', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, {
+      props: { ...baseProps, expandFn: makeExpandFn('Extract `parseRange` into a **named helper**.') },
+    })
+    await user.type(screen.getByRole('textbox', { name: /comment body/i }), 'too clever')
+    await user.click(screen.getByTestId('expand-btn'))
+
+    await vi.waitFor(() => expect(screen.getByTestId('expand-preview-body')).toBeInTheDocument())
+    const body = screen.getByTestId('expand-preview-body')
+    expect(body.textContent).toContain('Extract')
+    // markdown rendered: `parseRange` became a <code> element, ** became <strong>
+    expect(body.querySelector('code')).toBeTruthy()
+    expect(body.querySelector('strong')).toBeTruthy()
+    expect(screen.getByTestId('expand-use')).toBeInTheDocument()
+    expect(screen.getByTestId('expand-keep')).toBeInTheDocument()
+  })
+
+  it('Use → expanded text replaces the composer content, preview closes, still editable (NOT saved)', async () => {
+    const user = userEvent.setup()
+    const onsave = vi.fn()
+    render(DraftThread, {
+      props: { ...baseProps, onsave, expandFn: makeExpandFn('The expanded comment.') },
+    })
+    const textarea = screen.getByRole('textbox', { name: /comment body/i }) as HTMLTextAreaElement
+    await user.type(textarea, 'too clever')
+    await user.click(screen.getByTestId('expand-btn'))
+    await vi.waitFor(() => expect(screen.getByTestId('expand-use')).toBeInTheDocument())
+
+    await user.click(screen.getByTestId('expand-use'))
+
+    expect(textarea.value).toBe('The expanded comment.')
+    expect(screen.queryByTestId('expand-preview')).not.toBeInTheDocument()
+    // Still editable before Save — nothing was saved yet.
+    expect(onsave).not.toHaveBeenCalled()
+
+    // Saving now saves the expanded text.
+    await user.click(screen.getByRole('button', { name: /leave comment/i }))
+    expect(onsave).toHaveBeenCalledWith('The expanded comment.')
+  })
+
+  it('Keep my note → preview dismissed, composer untouched', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, {
+      props: { ...baseProps, expandFn: makeExpandFn('The expanded comment.') },
+    })
+    const textarea = screen.getByRole('textbox', { name: /comment body/i }) as HTMLTextAreaElement
+    await user.type(textarea, 'my terse note')
+    await user.click(screen.getByTestId('expand-btn'))
+    await vi.waitFor(() => expect(screen.getByTestId('expand-keep')).toBeInTheDocument())
+
+    await user.click(screen.getByTestId('expand-keep'))
+
+    expect(screen.queryByTestId('expand-preview')).not.toBeInTheDocument()
+    expect(textarea.value).toBe('my terse note')
+  })
+
+  it('Esc with the preview open = Keep my note', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, {
+      props: { ...baseProps, expandFn: makeExpandFn('The expanded comment.') },
+    })
+    const textarea = screen.getByRole('textbox', { name: /comment body/i }) as HTMLTextAreaElement
+    await user.type(textarea, 'my terse note')
+    await user.click(screen.getByTestId('expand-btn'))
+    await vi.waitFor(() => expect(screen.getByTestId('expand-preview-body')).toBeInTheDocument())
+
+    await user.keyboard('{Escape}')
+
+    expect(screen.queryByTestId('expand-preview')).not.toBeInTheDocument()
+    expect(textarea.value).toBe('my terse note')
+  })
+
+  it('error → calm inline error with errorDetail on hover (title), composer untouched, Retry re-runs', async () => {
+    const user = userEvent.setup()
+    const expandFn = vi.fn(async (): Promise<ExpandResult> => ({
+      ok: false as const,
+      error: 'Rate limited by DeepSeek. Please try again in a moment.',
+      errorDetail: 'HTTP 429: too many requests',
+    }))
+    render(DraftThread, { props: { ...baseProps, expandFn } })
+    const textarea = screen.getByRole('textbox', { name: /comment body/i }) as HTMLTextAreaElement
+    await user.type(textarea, 'my note')
+    await user.click(screen.getByTestId('expand-btn'))
+
+    await vi.waitFor(() => expect(screen.getByTestId('expand-error')).toBeInTheDocument())
+    const errorEl = screen.getByTestId('expand-error')
+    expect(errorEl.textContent).toContain('Rate limited')
+    expect(errorEl).toHaveAttribute('title', 'HTTP 429: too many requests')
+    expect(textarea.value).toBe('my note')
+
+    // Retry calls expandFn again with the same note
+    await user.click(screen.getByTestId('expand-retry'))
+    await vi.waitFor(() => expect(expandFn).toHaveBeenCalledTimes(2))
+  })
+
+  it('a second Expand after Use expands the (edited) composer text, not the stale note', async () => {
+    const user = userEvent.setup()
+    const expandFn = makeExpandFn('First expansion.')
+    render(DraftThread, { props: { ...baseProps, expandFn } })
+    const textarea = screen.getByRole('textbox', { name: /comment body/i }) as HTMLTextAreaElement
+    await user.type(textarea, 'note one')
+    await user.click(screen.getByTestId('expand-btn'))
+    await vi.waitFor(() => expect(screen.getByTestId('expand-use')).toBeInTheDocument())
+    await user.click(screen.getByTestId('expand-use'))
+
+    await user.click(screen.getByTestId('expand-btn'))
+    expect(expandFn).toHaveBeenCalledTimes(2)
+    expect(expandFn.mock.calls[1][0]).toBe('First expansion.')
+  })
+})

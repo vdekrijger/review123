@@ -19,11 +19,14 @@ import {
   storyOrderPrompt,
   riskJudgePrompt,
   askPrompt,
+  expandCommentPrompt,
+  EXPAND_POLISH_WORD_THRESHOLD,
   skillReviewPrompt,
   convergencePrompt,
   simplifyPrompt,
   parseReadingOrder,
   stripReadingOrder,
+  type ExpandCommentContext,
 } from './tasks'
 import { STORY_LAYERS, IMPACT_MAX_PER_GROUP } from './schemas'
 import type { PackedContext } from '../context/pack'
@@ -2202,5 +2205,101 @@ describe('PROMPT_VERSION v23 — absence-claim discipline in generator prompts',
     )
     expect(system).toMatch(/Absence\/existence claims/i)
     expect(system).toMatch(/not evidence it is absent/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// expandCommentPrompt — terse note → full review comment (Expand feature)
+// ---------------------------------------------------------------------------
+
+describe('expandCommentPrompt', () => {
+  const context: ExpandCommentContext = {
+    path: 'src/feature.ts',
+    line: 42,
+    side: 'RIGHT',
+    excerpt: '-const old = 1\n+const clever = ((x) => x)(1)',
+    fileWindow: '41: before line\n42: const clever = ((x) => x)(1)\n43: after line',
+  }
+
+  it('includes the terse note in the user prompt', () => {
+    const { user } = expandCommentPrompt('too clever, simplify', context)
+    expect(user).toContain("Reviewer's note: too clever, simplify")
+  })
+
+  it('includes the commented location (path:line + side) and the code context lines', () => {
+    const { user } = expandCommentPrompt('too clever', context)
+    expect(user).toContain('src/feature.ts:42')
+    expect(user).toMatch(/new side/)
+    expect(user).toContain('+const clever = ((x) => x)(1)')
+    expect(user).toContain('42: const clever = ((x) => x)(1)')
+  })
+
+  it('LEFT side is labeled as the old side', () => {
+    const { user } = expandCommentPrompt('note', { ...context, side: 'LEFT' })
+    expect(user).toMatch(/old side/)
+  })
+
+  it('omits the excerpt/fileWindow sections when unavailable', () => {
+    const { user } = expandCommentPrompt('note', {
+      path: 'a.ts', line: 1, side: 'RIGHT', excerpt: '',
+    })
+    expect(user).not.toContain('Diff excerpt')
+    expect(user).not.toContain('Wider file context')
+    expect(user).toContain("Reviewer's note: note")
+  })
+
+  it('carries the style contract: core problem first, 2-3 short sentences, colleague voice', () => {
+    const { system } = expandCommentPrompt('note', context)
+    expect(system).toMatch(/core problem in ONE sentence/i)
+    expect(system).toMatch(/Two to three short sentences/i)
+    expect(system).toMatch(/busy colleague/i)
+    expect(system).toMatch(/active voice/i)
+  })
+
+  it('preserves backticked identifiers and technical anchors verbatim', () => {
+    const { system } = expandCommentPrompt('note', context)
+    expect(system).toMatch(/PRESERVE technical anchors exactly as written/i)
+    expect(system).toMatch(/backticked identifiers/i)
+    expect(system).toMatch(/survive verbatim/i)
+  })
+
+  it('bans AI-ism phrasings (same list as the simplify pass)', () => {
+    const { system } = expandCommentPrompt('note', context)
+    for (const banned of ["It's worth noting", 'Additionally', 'Furthermore', 'leverage', 'robust']) {
+      expect(system).toContain(banned)
+    }
+    expect(system).toMatch(/Banned phrasings/i)
+  })
+
+  it('forbids inventing claims beyond the note + code', () => {
+    const { system } = expandCommentPrompt('note', context)
+    expect(system).toMatch(/NEVER invent facts/i)
+    expect(system).toMatch(/Ground every claim in the reviewer's note and the code shown/i)
+    expect(system).toMatch(/do not manufacture evidence/i)
+  })
+
+  it('directs POLISH (not expansion) for already-full notes, with the word threshold', () => {
+    const { system } = expandCommentPrompt('a long note', context)
+    expect(system).toContain(`${EXPAND_POLISH_WORD_THRESHOLD} words or more`)
+    expect(system).toMatch(/POLISH it instead of expanding/i)
+  })
+
+  it('asks for the comment text ONLY — no JSON, no preamble', () => {
+    const { system } = expandCommentPrompt('note', context)
+    expect(system).toMatch(/comment text ONLY/i)
+    expect(system).toMatch(/no JSON/i)
+  })
+
+  it('carries the stable e2e dispatch marker phrase', () => {
+    const { system } = expandCommentPrompt('note', context)
+    // e2e stubs dispatch streaming responses on this phrase — keep it stable.
+    expect(system).toContain("expanding a reviewer's terse note")
+  })
+
+  it('has NO cache marker: expand is deliberately absent from PROMPT_VERSIONS (never cached)', () => {
+    expect('expand' in PROMPT_VERSIONS).toBe(false)
+    // Same policy as the other user-triggered tasks:
+    expect('ask' in PROMPT_VERSIONS).toBe(false)
+    expect('coach' in PROMPT_VERSIONS).toBe(false)
   })
 })

@@ -480,6 +480,70 @@ describe('FileDiff — anchored drafts render inline only (dedupe)', () => {
 })
 
 // ---------------------------------------------------------------------------
+// FileDiff — expandFn threading (mirrors askFn): FileDiff → DraftThread
+// ---------------------------------------------------------------------------
+
+describe('FileDiff — expandFn wiring to DraftThread', () => {
+  function makeDraft(overrides: Partial<import('../lib/drafts/drafts.svelte').Draft> = {}) {
+    return {
+      prKey: 'o/r#1@sha',
+      path: 'src/a.ts',
+      line: 2,
+      side: 'RIGHT' as const,
+      body: 'terse note here',
+      n: 0,
+      updatedAt: Date.now(),
+      ...overrides,
+    }
+  }
+
+  function makeExpandFn() {
+    return vi.fn(async (_note: string, onDelta: (t: string) => void, _focus: { path: string; line: number; side: 'LEFT' | 'RIGHT' }) => {
+      onDelta('Expanded body.')
+      return { ok: true as const, comment: 'Expanded body.' }
+    })
+  }
+
+  it('anchored draft: Edit → Expand calls expandFn with the note and this file/line/side focus', async () => {
+    const expandFn = makeExpandFn()
+    const { container } = render(FileDiff, {
+      props: { file: modified, mode: 'unified', drafts: [makeDraft()], expandFn },
+    })
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-testid="inline-annotations"]')).toBeInTheDocument()
+    })
+    await fireEvent.click(screen.getByRole('button', { name: /^edit$/i }))
+    const expandBtn = await vi.waitFor(() => screen.getByTestId('expand-btn'))
+    await fireEvent.click(expandBtn)
+
+    expect(expandFn).toHaveBeenCalledOnce()
+    expect(expandFn.mock.calls[0][0]).toBe('terse note here')
+    expect(expandFn.mock.calls[0][2]).toEqual({ path: 'src/a.ts', line: 2, side: 'RIGHT' })
+  })
+
+  it('fallback-block draft (same DraftThread component): Expand is wired there too', async () => {
+    const expandFn = makeExpandFn()
+    render(FileDiff, {
+      props: { file: modified, mode: 'unified', drafts: [makeDraft({ line: 99, body: 'off-patch note' })], expandFn },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: /^edit$/i }))
+    const expandBtn = await vi.waitFor(() => screen.getByTestId('expand-btn'))
+    await fireEvent.click(expandBtn)
+
+    expect(expandFn).toHaveBeenCalledOnce()
+    expect(expandFn.mock.calls[0][2]).toEqual({ path: 'src/a.ts', line: 99, side: 'RIGHT' })
+  })
+
+  it('without expandFn: DraftThread edit mode shows no Expand button (prop is optional)', async () => {
+    render(FileDiff, {
+      props: { file: modified, mode: 'unified', drafts: [makeDraft({ line: 99 })] },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: /^edit$/i }))
+    expect(screen.queryByTestId('expand-btn')).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // FileDiff — context expansion (hunk expand affordance)
 // ---------------------------------------------------------------------------
 
