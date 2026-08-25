@@ -75,6 +75,12 @@ export type DefinitionKind = 'function' | 'class' | 'method' | 'variable' | 'typ
 export interface SymbolDefinition extends SymbolOccurrence {
   name: string
   kind: DefinitionKind
+  /**
+   * 1-based line where the definition's full extent ends (function/class body
+   * included) — EXACT, from the tree-sitter parse. Absent on heuristic-backend
+   * definitions (consumers fall back to a heuristic extent — definitionPeek.ts).
+   */
+  endLine?: number
 }
 
 export interface SymbolReference extends SymbolOccurrence {
@@ -391,8 +397,9 @@ export function buildSymbolIndex(sources: SymbolSource[]): SymbolIndex {
   /** "file|side|line" keys of lines that DEFINE a given name. */
   const defLineKeys = new Map<string, Set<string>>()
 
-  function addDefinition(name: string, kind: DefinitionKind, file: string, side: DiffSide, line: number, raw: string, inDiff: boolean): void {
+  function addDefinition(name: string, kind: DefinitionKind, file: string, side: DiffSide, line: number, raw: string, inDiff: boolean, endLine?: number): void {
     const d: SymbolDefinition = { name, kind, file, side, line, snippet: snippetOf(raw), inDiff }
+    if (endLine !== undefined) d.endLine = endLine
     const arr = definitions.get(name) ?? []
     arr.push(d)
     definitions.set(name, arr)
@@ -432,7 +439,7 @@ export function buildSymbolIndex(sources: SymbolSource[]): SymbolIndex {
       for (const def of extracted.definitions) {
         const raw = emit.get(def.line)
         if (raw === undefined) continue // non-emitted line (e.g. old-side context)
-        addDefinition(def.name, def.kind, file, side, def.line, raw, inDiffFor(def.line))
+        addDefinition(def.name, def.kind, file, side, def.line, raw, inDiffFor(def.line), def.endLine)
       }
       return
     }
@@ -514,4 +521,32 @@ export function buildSymbolIndex(sources: SymbolSource[]): SymbolIndex {
   }
 
   return { definitionsOf, referencesOf, has }
+}
+
+// ---------------------------------------------------------------------------
+// Side text availability (shared with the definition peek — definitionPeek.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * The text lines honestly known for one side of a source — the SAME rules the
+ * index itself applies:
+ *
+ *   - fetched full contents when available (and under the safety cap) → every
+ *     line of that side exists (`full: true`);
+ *   - otherwise the raw patch: new side = context + additions, old side =
+ *     context + deletions (context is byte-identical across sides, so it IS
+ *     real old-side text) — lines outside the hunks are simply absent
+ *     (`full: false`), and consumers must say so rather than pretend.
+ */
+export function availableSideLines(
+  source: SymbolSource,
+  side: DiffSide,
+): { lines: ReadonlyMap<number, string>; full: boolean } {
+  const content = side === 'new' ? (source.contents?.after ?? null) : (source.contents?.before ?? null)
+  if (content !== null) {
+    const arr = content.split('\n')
+    if (arr.length <= MAX_FULL_CONTENT_LINES) return { lines: contentsMap(arr), full: true }
+  }
+  const patchText = walkPatch(source.patch)
+  return { lines: side === 'new' ? patchText.newLines : patchText.oldAll, full: false }
 }

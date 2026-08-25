@@ -100,8 +100,11 @@ const MAX_SNIPPET_LINES = 40
  * Parens inside string/char literals are ignored via a cheap quote tracker; an
  * unterminated quote on a line is reset at the newline (best-effort — real
  * signatures rarely contain unbalanced quotes).
+ *
+ * Exported for reuse by the symbol-popover definition peek
+ * (lib/symbols/definitionPeek.ts) — same header-walk, same rules.
  */
-function pyHeaderEndLine(lines: string[], defLine: number): number {
+export function pyHeaderEndLine(lines: string[], defLine: number): number {
   let depth = 0
   for (let i = defLine; i < lines.length; i++) {
     const text = lines[i]

@@ -73,6 +73,13 @@ export type RepoSearchOutcome =
       filesScanned: number
       /** Files skipped: gone at head SHA (moved/deleted) or over the size cap. */
       filesSkipped: number
+      /**
+       * Full head-SHA contents of each scanned file, keyed by path — the
+       * popover's definition peek reads a repo definition's body from here
+       * (the SAME text the definitions above were indexed from). Optional so
+       * hand-built outcomes (tests, older callers) stay valid.
+       */
+      contentsByPath?: ReadonlyMap<string, string>
     }
   | { ok: false; message: string }
 
@@ -177,6 +184,7 @@ async function doSearch(symbol: string, ctx: RepoSearchContext): Promise<RepoSea
     references: index.referencesOf(symbol),
     filesScanned: fetched.length,
     filesSkipped: skipped,
+    contentsByPath: new Map(fetched.map((f) => [f.path, f.text])),
   }
 }
 

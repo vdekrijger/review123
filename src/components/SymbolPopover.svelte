@@ -27,6 +27,9 @@
    */
   import type { SymbolDefinition, SymbolReference, DiffSide } from '../lib/symbols/symbolIndex'
   import type { RepoSearchOutcome } from '../lib/symbols/repoSearch'
+  import { peekDefinition, type DefinitionPeek } from '../lib/symbols/definitionPeek'
+  import { symbolSourceFor } from '../lib/symbols/symbolSources'
+  import { highlightSnippet, snippetLangForFilename } from '../lib/diff/highlightSnippet'
 
   interface Props {
     symbol: string
@@ -58,6 +61,36 @@
 
   const MAX_DEFS_SHOWN = 3
   const shownDefs = $derived(definitions.slice(0, MAX_DEFS_SHOWN))
+
+  // ---- Definition peek (expandable code block per definition row) ----------
+  // Per-row disclosure state, keyed by origin+location so multiple definitions
+  // expand independently. The toggle button NEVER unmounts on toggle (the peek
+  // block renders BELOW the row) — unmounting the focused element would fire
+  // focusout with relatedTarget null and the focus-leave idiom would close the
+  // whole popover (the #210 lesson).
+  let expandedPeeks = $state<ReadonlySet<string>>(new Set())
+
+  function peekKey(def: SymbolDefinition, origin: 'pr' | 'repo'): string {
+    return `${origin}|${def.file}|${def.side}|${def.line}`
+  }
+
+  function togglePeek(key: string) {
+    const next = new Set(expandedPeeks)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    expandedPeeks = next
+  }
+
+  /**
+   * Peek for a Tier 1 definition — reads the file's REGISTERED symbol source
+   * (the same text the index was built on). null → no expand affordance.
+   */
+  function peekFor(def: SymbolDefinition): DefinitionPeek | null {
+    const source = symbolSourceFor(def.file)
+    return source ? peekDefinition(source, def.side, def.line, def.endLine) : null
+  }
+
+  const PATCH_ONLY_NOTE = 'Only the changed lines are available for this file.'
 
   // References grouped by file — current file first, then path order; within
   // a file new-side rows before old-side (deleted) rows, ascending lines.
@@ -96,6 +129,7 @@
   $effect(() => {
     void symbol
     repoState = { phase: 'idle' }
+    expandedPeeks = new Set()
   })
 
   async function runRepoSearch() {
@@ -120,6 +154,17 @@
 
   /** Repo-found definitions — shown in the Definition section, tagged "repo". */
   const repoDefs = $derived(repoOk ? repoOk.definitions.slice(0, MAX_DEFS_SHOWN) : [])
+
+  /**
+   * Peek for a repo-found definition — reads the fetched head-SHA contents the
+   * search outcome carries (the SAME text those definitions were indexed
+   * from). Outcomes without contents (hand-built/legacy) offer no peek.
+   */
+  function repoPeekFor(def: SymbolDefinition): DefinitionPeek | null {
+    const text = repoOk?.contentsByPath?.get(def.file)
+    if (text === undefined) return null
+    return peekDefinition({ filename: def.file, contents: { before: null, after: text } }, def.side, def.line, def.endLine)
+  }
 
   const repoRefsByFile = $derived.by(() => {
     const map = new Map<string, SymbolReference[]>()
@@ -194,12 +239,55 @@
     <button class="close-btn" type="button" aria-label="Close symbol popover" onclick={onClose}>×</button>
   </header>
 
+  <!-- Expanded definition body: line-number gutter + highlighted code in ONE
+       scroll container (height-capped; horizontal overflow stays inside). -->
+  {#snippet peekBlock(peek: DefinitionPeek, file: string)}
+    {@const code = peek.lines.map((l) => l.text).join('\n')}
+    <div class="peek-block" data-testid="definition-peek">
+      <div class="peek-scroll">
+        <pre class="peek-gutter" aria-hidden="true">{peek.lines.map((l) => l.line).join('\n')}</pre>
+        {#await highlightSnippet(code, snippetLangForFilename(file))}
+          <pre class="peek-code"><code>{code}</code></pre>
+        {:then highlighted}
+          <pre class="peek-code"><code>{@html highlighted}</code></pre>
+        {/await}
+      </div>
+      {#if peek.moreLines > 0}
+        <p class="peek-more">… ({peek.moreLines} more line{peek.moreLines === 1 ? '' : 's'})</p>
+      {/if}
+      {#if peek.limitedToPatch}
+        <p class="peek-partial">{PATCH_ONLY_NOTE}</p>
+      {/if}
+    </div>
+  {/snippet}
+
+  <!-- One definition row: disclosure toggle + one-line snippet, the expanded
+       peek rendered BELOW (the focused toggle must never unmount — #210). -->
+  {#snippet defRow(def: SymbolDefinition, peek: DefinitionPeek | null, key: string)}
+    {@const open = peek !== null && expandedPeeks.has(key)}
+    <div class="def-row">
+      {#if peek}
+        <button
+          class="peek-toggle"
+          type="button"
+          aria-expanded={open}
+          aria-label="Definition body at {def.file}:{def.line}"
+          onclick={() => togglePeek(key)}
+        ><span class="peek-caret" aria-hidden="true">{open ? '▾' : '▸'}</span></button>
+      {/if}
+      <pre class="def-snippet">{def.snippet}</pre>
+    </div>
+    {#if peek !== null && open}
+      {@render peekBlock(peek, def.file)}
+    {/if}
+  {/snippet}
+
   <section class="defs" aria-label="Definition of {symbol}">
     <h4>Definition</h4>
     {#if shownDefs.length > 0 || repoDefs.length > 0}
       {#each shownDefs as def (def.file + '|' + def.side + '|' + def.line)}
         <div class="def-entry">
-          <pre class="def-snippet">{def.snippet}</pre>
+          {@render defRow(def, peekFor(def), peekKey(def, 'pr'))}
           {#if def.inDiff}
             <button class="loc jump" type="button" onclick={() => handleJump(def.file, def.line, def.side)}>
               {def.file}:{def.line}{def.side === 'old' ? ' (old)' : ''}
@@ -216,7 +304,7 @@
            location is copy-only, never a jump target. -->
       {#each repoDefs as def (def.file + '|' + def.line)}
         <div class="def-entry" data-testid="repo-definition">
-          <pre class="def-snippet">{def.snippet}</pre>
+          {@render defRow(def, repoPeekFor(def), peekKey(def, 'repo'))}
           <span class="loc" title={NOT_IN_DIFF_HINT}>{def.file}:{def.line} <span class="repo-tag">repo</span></span>
         </div>
       {/each}
@@ -359,6 +447,170 @@
     font-size: 0.75rem;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  /* ---- Definition peek (expandable code block) ---- */
+  .def-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+  .def-row .def-snippet {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .peek-toggle {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    padding: 0.3rem 0.1rem 0 0;
+    line-height: 1;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+  .peek-toggle:hover { color: var(--text); }
+  .peek-caret { font-size: 0.7rem; }
+
+  .peek-block { margin: 0.15rem 0 0.2rem; }
+
+  .peek-scroll {
+    display: flex;
+    overflow: auto;
+    /* ~15 lines visible; vertical scroll for the rest. */
+    max-height: calc(15 * 1.5 * 0.72rem);
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
+  }
+
+  .peek-gutter {
+    position: sticky; /* survives horizontal scroll of long lines */
+    left: 0;
+    margin: 0;
+    padding: 0.35rem 0.45rem;
+    text-align: right;
+    color: var(--text-muted);
+    background: var(--surface);
+    border-right: 1px solid var(--hairline);
+    user-select: none;
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    line-height: 1.5;
+  }
+
+  .peek-code {
+    margin: 0;
+    padding: 0.35rem 0.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    line-height: 1.5;
+    white-space: pre;
+  }
+  .peek-code code { font-family: inherit; }
+
+  .peek-more,
+  .peek-partial {
+    margin: 0.15rem 0 0;
+    font-size: 0.68rem;
+    color: var(--text-muted);
+  }
+  .peek-partial { font-style: italic; }
+
+  /* Syntax-token colors for the peek, scoped like SymbolTestPairing's snippet
+     palette: GitHub prettylights DARK as the base (the app's default theme),
+     with explicit + auto light-theme overrides below. */
+  .peek-code :global(.hljs-doctag),
+  .peek-code :global(.hljs-keyword),
+  .peek-code :global(.hljs-meta .hljs-keyword),
+  .peek-code :global(.hljs-template-tag),
+  .peek-code :global(.hljs-template-variable),
+  .peek-code :global(.hljs-type),
+  .peek-code :global(.hljs-variable.language_) { color: #ff7b72; }
+  .peek-code :global(.hljs-title),
+  .peek-code :global(.hljs-title.class_),
+  .peek-code :global(.hljs-title.function_) { color: #d2a8ff; }
+  .peek-code :global(.hljs-attr),
+  .peek-code :global(.hljs-attribute),
+  .peek-code :global(.hljs-literal),
+  .peek-code :global(.hljs-meta),
+  .peek-code :global(.hljs-number),
+  .peek-code :global(.hljs-operator),
+  .peek-code :global(.hljs-variable),
+  .peek-code :global(.hljs-selector-attr),
+  .peek-code :global(.hljs-selector-class),
+  .peek-code :global(.hljs-selector-id) { color: #79c0ff; }
+  .peek-code :global(.hljs-regexp),
+  .peek-code :global(.hljs-string),
+  .peek-code :global(.hljs-meta .hljs-string) { color: #a5d6ff; }
+  .peek-code :global(.hljs-built_in),
+  .peek-code :global(.hljs-symbol) { color: #ffa657; }
+  .peek-code :global(.hljs-comment),
+  .peek-code :global(.hljs-code),
+  .peek-code :global(.hljs-formula) { color: #8b949e; }
+  .peek-code :global(.hljs-name),
+  .peek-code :global(.hljs-quote),
+  .peek-code :global(.hljs-selector-tag),
+  .peek-code :global(.hljs-selector-pseudo) { color: #7ee787; }
+  .peek-code :global(.hljs-emphasis) { font-style: italic; }
+  .peek-code :global(.hljs-strong) { font-weight: bold; }
+
+  /* Light palette (GitHub light) — explicit theme choice. */
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-doctag),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-keyword),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-meta .hljs-keyword),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-template-tag),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-template-variable),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-type),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-variable.language_) { color: #d73a49; }
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-title),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-title.class_),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-title.function_) { color: #6f42c1; }
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-attr),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-attribute),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-literal),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-meta),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-number),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-operator),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-variable),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-selector-attr),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-selector-class),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-selector-id) { color: #005cc5; }
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-regexp),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-string),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-meta .hljs-string) { color: #032f62; }
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-built_in),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-symbol) { color: #e36209; }
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-comment),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-code),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-formula) { color: #6a737d; }
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-name),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-quote),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-selector-tag),
+  :global(:root[data-theme='light']) .peek-code :global(.hljs-selector-pseudo) { color: #22863a; }
+
+  /* Auto light preference (no explicit choice stored). */
+  @media (prefers-color-scheme: light) {
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-doctag),
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-keyword),
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-type),
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-variable.language_) { color: #d73a49; }
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-title),
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-title.function_) { color: #6f42c1; }
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-attr),
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-literal),
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-number),
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-selector-id) { color: #005cc5; }
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-regexp),
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-string) { color: #032f62; }
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-built_in),
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-symbol) { color: #e36209; }
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-comment) { color: #6a737d; }
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-name),
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-selector-tag),
+    :global(:root:not([data-theme])) .peek-code :global(.hljs-selector-pseudo) { color: #22863a; }
   }
 
   .loc {
