@@ -24,11 +24,17 @@ import {
   skillReviewPrompt,
   convergencePrompt,
   simplifyPrompt,
+  intentPrompt,
+  hasMeaningfulIntent,
+  stripIntentNoise,
+  INTENT_BODY_MAX,
+  INTENT_TRUNCATION_MARKER,
+  INTENT_MIN_MEANINGFUL_CHARS,
   parseReadingOrder,
   stripReadingOrder,
   type ExpandCommentContext,
 } from './tasks'
-import { STORY_LAYERS, IMPACT_MAX_PER_GROUP } from './schemas'
+import { STORY_LAYERS, IMPACT_MAX_PER_GROUP, INTENT_MAX_ITEMS } from './schemas'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
@@ -47,7 +53,7 @@ function makeCtx(text = 'PR context text here'): PackedContext {
  * version forward). Tasks added AFTER the migration (e.g. `simplify`, starting
  * its own history at 1) never lived through those shared eras and are excluded.
  */
-const POST_MIGRATION_TASKS = new Set(['simplify'])
+const POST_MIGRATION_TASKS = new Set(['simplify', 'intent'])
 const MIN_PROMPT_VERSION = Math.min(
   ...Object.entries(PROMPT_VERSIONS)
     .filter(([task]) => !POST_MIGRATION_TASKS.has(task))
@@ -2119,9 +2125,206 @@ describe('simplifyPrompt', () => {
 
   it('avoids other stubs\' dispatch phrases (reviewer persona / adversarial verifier / assessor / coach)', () => {
     const sys = simplifyPrompt(FINDINGS).system.toLowerCase()
-    for (const phrase of ['reviewer persona', 'security reviewer', 'adversarial verifier', 'change-risk assessor', 'consolidating overlapping', 'hotspot', 'readingorder', 'mermaid', 'covered', 'gaps', 'clarity', 'senior engineer']) {
+    for (const phrase of ['reviewer persona', 'security reviewer', 'adversarial verifier', 'change-risk assessor', 'consolidating overlapping', 'hotspot', 'readingorder', 'mermaid', 'covered', 'gaps', 'clarity', 'senior engineer', 'checking the implementation']) {
       expect(sys, phrase).not.toContain(phrase)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// intentPrompt — intent-vs-implementation check (PROMPT_VERSIONS.intent)
+// ---------------------------------------------------------------------------
+
+describe('intentPrompt', () => {
+  const META = { title: 'feat: add rate limiting', body: 'Adds a token-bucket rate limiter to the API client.' }
+
+  it('carries the stable e2e dispatch marker in the system prompt', () => {
+    const { system } = intentPrompt(makeCtx(), META)
+    expect(system).toContain('checking the implementation against the stated intent')
+  })
+
+  it('demands JSON-only output matching the IntentCheckResult shape', () => {
+    const { system } = intentPrompt(makeCtx(), META)
+    expect(system).toMatch(/JSON ONLY/i)
+    expect(system).toContain('"intents"')
+    expect(system).toContain('"matched"')
+    expect(system).toContain('"unrequested"')
+    expect(system).toContain('"unfulfilled"')
+    expect(system).toContain('"intentId"')
+    expect(system).toContain('"evidence"')
+    expect(system).toContain('"significance"')
+    expect(system).toContain('"minor" | "notable"')
+    expect(system).toMatch(/Do not include any text outside the JSON object/i)
+  })
+
+  it('derives intents ONLY from real promises — never boilerplate/checklists — and caps them', () => {
+    const { system } = intentPrompt(makeCtx(), META)
+    expect(system).toMatch(/ONLY what the description actually promises/i)
+    expect(system).toMatch(/template boilerplate/i)
+    expect(system).toMatch(/task-list\/checkbox/i)
+    expect(system).toContain(`${INTENT_MAX_ITEMS} intents`)
+  })
+
+  it('requires evidence to cite REAL changed files and forbids inventing', () => {
+    const { system } = intentPrompt(makeCtx(), META)
+    expect(system).toMatch(/evidence must cite REAL changed files/i)
+    expect(system).toMatch(/NEVER cite a file that is not in the changes/i)
+    expect(system).toMatch(/NEVER invent/i)
+  })
+
+  it('calibrates unrequested significance: routine ride-alongs minor, own-footprint changes notable', () => {
+    const { system } = intentPrompt(makeCtx(), META)
+    expect(system).toMatch(/formatting, lockfile churn/i)
+    expect(system).toMatch(/new dependency/i)
+    expect(system).toMatch(/extra refactor/i)
+  })
+
+  it('treats empty drift arrays as the GOOD expected outcome (never manufactured drift)', () => {
+    const { system } = intentPrompt(makeCtx(), META)
+    expect(system).toMatch(/Empty unrequested and unfulfilled arrays are GOOD outcomes/i)
+    expect(system).toMatch(/Do not manufacture\s+drift/i)
+  })
+
+  it('demands calm one-sentence plain-English notes and bans the AI-isms (simplify style contract)', () => {
+    const { system } = intentPrompt(makeCtx(), META)
+    expect(system).toMatch(/calm plain English, ONE sentence/i)
+    expect(system).toMatch(/busy colleague/i)
+    for (const banned of ["It's worth noting", 'Additionally', 'Furthermore', 'robust', 'leverage', 'It is important to']) {
+      expect(system).toContain(banned)
+    }
+  })
+
+  it('user prompt carries the title, the description, and the SAME packed diff context', () => {
+    const ctx = makeCtx('intent-packed-context-xyz')
+    const { user } = intentPrompt(ctx, META)
+    expect(user).toContain('feat: add rate limiting')
+    expect(user).toContain('Adds a token-bucket rate limiter to the API client.')
+    expect(user).toContain('intent-packed-context-xyz')
+  })
+
+  it('caps the body at INTENT_BODY_MAX and marks the cut with the honest truncation marker', () => {
+    const longBody = 'x'.repeat(INTENT_BODY_MAX + 500)
+    const { user, system } = intentPrompt(makeCtx(), { title: 't', body: longBody })
+    expect(user).toContain(INTENT_TRUNCATION_MARKER)
+    // The body itself is cut at the cap (the marker follows on its own line).
+    expect(user).not.toContain('x'.repeat(INTENT_BODY_MAX + 1))
+    expect(user).toContain('x'.repeat(INTENT_BODY_MAX))
+    // The system prompt tells the model what the marker means.
+    expect(system).toContain(INTENT_TRUNCATION_MARKER)
+    expect(system).toMatch(/never guess at promises beyond the cut/i)
+  })
+
+  it('a body within the cap ships untouched — no truncation marker', () => {
+    const { user } = intentPrompt(makeCtx(), META)
+    expect(user).not.toContain(INTENT_TRUNCATION_MARKER)
+  })
+
+  it('avoids every other stub\'s dispatch phrase (phrase-collision guard, #220 idiom)', () => {
+    const sys = intentPrompt(makeCtx(), META).system.toLowerCase()
+    for (const phrase of [
+      'reviewer persona', 'security reviewer', 'adversarial verifier', 'change-risk assessor',
+      'consolidating overlapping', 'rewriting code-review findings', 'hotspot', 'readingorder',
+      'mermaid', 'execution path', 'covered', 'gaps', 'clarity', 'senior engineer',
+      'alternative-is-better', 'approaches', "expanding a reviewer's terse note",
+    ]) {
+      expect(sys, phrase).not.toContain(phrase)
+    }
+  })
+
+  it('no OTHER prompt builder contains the intent dispatch phrase (reverse collision guard)', () => {
+    const ctx = makeCtx()
+    const others = [
+      summarizePrompt(ctx).system,
+      attentionPrompt(ctx).system,
+      diagramsPrompt(ctx).system,
+      testInsightPrompt(ctx).system,
+      verdictPrompt(ctx, null).system,
+      riskJudgePrompt(ctx).system,
+      alternativesPrompt(ctx).system,
+      storyOrderPrompt(ctx).system,
+      coachPrompt([{ index: 0, path: 'a.ts', line: 1, body: 'b' }]).system,
+      skillReviewPrompt(ctx, { name: 'P', content: 'c' }).system,
+      convergencePrompt([], []).system,
+      simplifyPrompt([{ id: 'f0', body: 'b' }]).system,
+      expandCommentPrompt('note', { path: 'a.ts', line: 1, side: 'RIGHT', excerpt: '' }).system,
+      askPrompt(ctx, [], 'q').system,
+    ]
+    for (const sys of others) {
+      expect(sys.toLowerCase()).not.toContain('checking the implementation against the stated intent')
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// hasMeaningfulIntent / stripIntentNoise — the skip-when-empty heuristic
+// ---------------------------------------------------------------------------
+
+describe('hasMeaningfulIntent', () => {
+  it('null / undefined / empty / whitespace bodies state no intent', () => {
+    expect(hasMeaningfulIntent(null)).toBe(false)
+    expect(hasMeaningfulIntent(undefined)).toBe(false)
+    expect(hasMeaningfulIntent('')).toBe(false)
+    expect(hasMeaningfulIntent('   \n\t  ')).toBe(false)
+  })
+
+  it('a checklist-only template body states no intent', () => {
+    const body = [
+      '- [ ] Tests added',
+      '- [x] Lint passes',
+      '- [ ] Docs updated',
+    ].join('\n')
+    expect(hasMeaningfulIntent(body)).toBe(false)
+  })
+
+  it('HTML-comment PR-template scaffolding states no intent', () => {
+    const body = '<!-- Describe your change here. Explain the motivation and the approach in detail. -->'
+    expect(hasMeaningfulIntent(body)).toBe(false)
+  })
+
+  it('badges, images, bare links and horizontal rules state no intent', () => {
+    const body = '![build](https://img.shields.io/badge/build-passing-green)\n\n---\n\nhttps://example.com/issue/42'
+    expect(hasMeaningfulIntent(body)).toBe(false)
+  })
+
+  it('a body below the meaningful-chars floor states no intent', () => {
+    expect(hasMeaningfulIntent('Fix typo.')).toBe(false)
+    expect('Fix typo.'.length).toBeLessThan(INTENT_MIN_MEANINGFUL_CHARS)
+  })
+
+  it('a real description states an intent (markup noise stripped, substance kept)', () => {
+    expect(hasMeaningfulIntent('Adds a token-bucket **rate limiter** to the API client.')).toBe(true)
+    // Substance buried in a template still counts once the noise is stripped.
+    const templated = '<!-- template -->\n## Summary\nAdds a token-bucket rate limiter to the API client.\n- [ ] Tests added'
+    expect(hasMeaningfulIntent(templated)).toBe(true)
+  })
+})
+
+describe('stripIntentNoise', () => {
+  it('strips checklists, comments, images, urls, rules, and markup down to substance', () => {
+    const body = [
+      '<!-- PR template -->',
+      '# Summary',
+      'Adds `retry` logic to **fetchData**.',
+      '- [ ] I ran the tests',
+      '![badge](https://x.io/b.svg)',
+      '---',
+      'See https://example.com/ctx',
+    ].join('\n')
+    const stripped = stripIntentNoise(body)
+    expect(stripped).toContain('Adds')
+    expect(stripped).toContain('retry')
+    expect(stripped).toContain('fetchData')
+    expect(stripped).not.toContain('I ran the tests')
+    expect(stripped).not.toContain('PR template')
+    expect(stripped).not.toContain('https://')
+    expect(stripped).not.toContain('#')
+    expect(stripped).not.toContain('`')
+    expect(stripped).not.toContain('*')
+  })
+
+  it('keeps link labels while dropping their targets', () => {
+    expect(stripIntentNoise('Fixes [the flaky spec](https://ci.example.com/run/1)')).toContain('the flaky spec')
+    expect(stripIntentNoise('Fixes [the flaky spec](https://ci.example.com/run/1)')).not.toContain('ci.example.com')
   })
 })
 

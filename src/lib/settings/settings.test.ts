@@ -32,6 +32,7 @@ describe('settings', () => {
         tests: 'standard',
         alternatives: 'standard',
         verdict: 'standard',
+        intent: 'standard',
         skills: 'standard',
         story: 'standard',
         riskJudge: 'standard',
@@ -118,6 +119,7 @@ describe('settings', () => {
         tests: 'standard',
         alternatives: 'standard',
         verdict: 'standard',
+        intent: 'standard',
         skills: 'standard',
         story: 'standard',
         riskJudge: 'standard',
@@ -1050,8 +1052,8 @@ describe('key character sanitization', () => {
     it('defaults to every task standard', () => {
       expect(getSettings().aiTaskModes).toEqual({
         summary: 'standard', attention: 'standard', diagrams: 'standard',
-        tests: 'standard', alternatives: 'standard', verdict: 'standard', skills: 'standard',
-        story: 'standard', riskJudge: 'standard', simplify: 'standard',
+        tests: 'standard', alternatives: 'standard', verdict: 'standard', intent: 'standard',
+        skills: 'standard', story: 'standard', riskJudge: 'standard', simplify: 'standard',
       })
       expect(defaultTaskModes()).toEqual(getSettings().aiTaskModes)
     })
@@ -1124,12 +1126,12 @@ describe('key character sanitization', () => {
       expect(getSettings().aiTaskModes).toEqual(defaultTaskModes())
     })
 
-    it('setOffAllExtras keeps summary + verdict, turns the rest (incl. story + riskJudge + simplify) off', () => {
+    it('setOffAllExtras keeps summary + verdict, turns the rest (incl. story + riskJudge + simplify + intent) off', () => {
       setOffAllExtras()
       const m = getSettings().aiTaskModes
       expect(m.summary).toBe('standard')
       expect(m.verdict).toBe('standard')
-      for (const t of ['attention', 'diagrams', 'tests', 'alternatives', 'skills', 'story', 'riskJudge', 'simplify'] as const) {
+      for (const t of ['attention', 'diagrams', 'tests', 'alternatives', 'intent', 'skills', 'story', 'riskJudge', 'simplify'] as const) {
         expect(m[t]).toBe('off')
       }
     })
@@ -1242,6 +1244,56 @@ describe('key character sanitization', () => {
       it('legacy aiDeepReview=true migration leaves simplify standard (never deep)', () => {
         localStorage.setItem('review123:settings', JSON.stringify({ aiDeepReview: true }))
         expect(getSettings().aiTaskModes.simplify).toBe('standard')
+      })
+    })
+
+    describe('intent joining the matrix (stored-matrix migration)', () => {
+      it('a pre-existing matrix without an intent key derives standard (auto task, default on)', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({
+          aiTaskModes: { summary: 'off', verdict: 'deep' },
+        }))
+        expect(getSettings().aiTaskModes.intent).toBe('standard')
+      })
+
+      it('ALL six original auto tasks off carries intent to off (minimal-token posture preserved)', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({
+          aiTaskModes: {
+            summary: 'off', attention: 'off', diagrams: 'off',
+            tests: 'off', alternatives: 'off', verdict: 'off',
+          },
+        }))
+        expect(getSettings().aiTaskModes.intent).toBe('off')
+      })
+
+      it('an explicit stored intent value wins over the derivation', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({
+          aiTaskModes: {
+            summary: 'off', attention: 'off', diagrams: 'off',
+            tests: 'off', alternatives: 'off', verdict: 'off',
+            intent: 'standard',
+          },
+        }))
+        expect(getSettings().aiTaskModes.intent).toBe('standard')
+      })
+
+      it('intent="deep" (invalid — off|standard only in v1) coerces to standard', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({
+          aiTaskModes: { intent: 'deep' },
+        }))
+        expect(getSettings().aiTaskModes.intent).toBe('standard')
+        expect(taskSupportsDeep('intent')).toBe(false)
+      })
+
+      it('setAiTaskMode coerces intent deep → standard, persists off', () => {
+        setAiTaskMode('intent', 'deep')
+        expect(getSettings().aiTaskModes.intent).toBe('standard')
+        setAiTaskMode('intent', 'off')
+        expect(getSettings().aiTaskModes.intent).toBe('off')
+      })
+
+      it('legacy aiDeepReview=true migration leaves intent standard (never deep)', () => {
+        localStorage.setItem('review123:settings', JSON.stringify({ aiDeepReview: true }))
+        expect(getSettings().aiTaskModes.intent).toBe('standard')
       })
     })
   })

@@ -57,6 +57,7 @@ describe('PROMPT_VERSIONS map', () => {
         'tests',
         'alternatives',
         'verdict',
+        'intent',
         'skills',
         'story',
         'riskJudge',
@@ -78,8 +79,9 @@ describe('PROMPT_VERSIONS map', () => {
     }
   })
 
-  it('post-migration tasks start at ≥1 (simplify has its own version history)', () => {
+  it('post-migration tasks start at ≥1 (simplify and intent have their own version history)', () => {
     expect(PROMPT_VERSIONS.simplify).toBeGreaterThanOrEqual(1)
+    expect(PROMPT_VERSIONS.intent).toBeGreaterThanOrEqual(1)
   })
 })
 
@@ -161,6 +163,18 @@ describe('cache-key stability (migration: global v26 → per-task map)', () => {
     expect(cacheKey(PR, 'simplify:' + hash, promptVersionFor('simplify'))).toBe(
       `owner/repo#1@abc123|simplify:${hash}|v1`,
     )
+  })
+
+  it('intent (title+body hash composes with its OWN v1 history; a body edit changes the key)', () => {
+    const title = 'feat: add feature'
+    const body = 'This PR adds a feature.'
+    const hash = djb2(`${title}\n${body}`)
+    expect(cacheKey(PR, 'intent:' + hash, promptVersionFor('intent'))).toBe(
+      `owner/repo#1@abc123|intent:${hash}|v1`,
+    )
+    // A description edit changes the folded hash → the cached check re-runs.
+    const editedHash = djb2(`${title}\n${body} Now with tests.`)
+    expect(editedHash).not.toBe(hash)
   })
 })
 

@@ -18,8 +18,11 @@ import {
   salvageAlternativesResult,
   validateChangeImpact,
   validateRiskJudge,
+  validateIntentCheck,
+  salvageIntentCheck,
   IMPACT_MAX_PER_GROUP,
   RISK_JUDGE_MAX_SNIPPETS,
+  INTENT_MAX_ITEMS,
 } from './schemas'
 
 // ---------------------------------------------------------------------------
@@ -1761,5 +1764,159 @@ describe('validateGraphResult with impact', () => {
     const out = validateGraphResult(oldFlow)
     expect(out).not.toBeNull()
     expect(out?.impact).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// validateIntentCheck / salvageIntentCheck (intent-vs-implementation check)
+// ---------------------------------------------------------------------------
+
+describe('validateIntentCheck', () => {
+  const valid = {
+    intents: [
+      { id: 'i1', text: 'Add a token-bucket rate limiter' },
+      { id: 'i2', text: 'Add tests for the limiter' },
+    ],
+    matched: [
+      {
+        intentId: 'i1',
+        evidence: [{ path: 'src/limiter.ts', line: 12 }, { path: 'src/client.ts' }],
+        note: 'The limiter lands in src/limiter.ts and is wired into the client.',
+      },
+    ],
+    unrequested: [
+      { description: 'Reformats the config module', paths: ['src/config.ts'], significance: 'minor' },
+    ],
+    unfulfilled: [{ intentId: 'i2', note: 'No test files changed.' }],
+  }
+
+  it('accepts a fully valid result (normalized copy)', () => {
+    const out = validateIntentCheck(valid)
+    expect(out).not.toBeNull()
+    expect(out!.intents).toHaveLength(2)
+    expect(out!.matched[0].evidence).toEqual([{ path: 'src/limiter.ts', line: 12 }, { path: 'src/client.ts' }])
+    expect(out!.unrequested[0].significance).toBe('minor')
+    expect(out!.unfulfilled[0].intentId).toBe('i2')
+  })
+
+  it('accepts empty collections (aligned PR — the good outcome)', () => {
+    const out = validateIntentCheck({ intents: [], matched: [], unrequested: [], unfulfilled: [] })
+    expect(out).toEqual({ intents: [], matched: [], unrequested: [], unfulfilled: [] })
+  })
+
+  it('rejects non-objects and missing collections', () => {
+    expect(validateIntentCheck(null)).toBeNull()
+    expect(validateIntentCheck('x')).toBeNull()
+    expect(validateIntentCheck([])).toBeNull()
+    expect(validateIntentCheck({})).toBeNull()
+    expect(validateIntentCheck({ ...valid, unfulfilled: undefined })).toBeNull()
+    expect(validateIntentCheck({ ...valid, matched: 'not-an-array' })).toBeNull()
+  })
+
+  it('STRICT: rejects a matched/unfulfilled entry referencing an unknown intent id', () => {
+    expect(validateIntentCheck({ ...valid, matched: [{ intentId: 'i9', evidence: [], note: 'n' }] })).toBeNull()
+    expect(validateIntentCheck({ ...valid, unfulfilled: [{ intentId: 'i9', note: 'n' }] })).toBeNull()
+  })
+
+  it('STRICT: rejects an invalid significance enum and malformed evidence', () => {
+    expect(
+      validateIntentCheck({ ...valid, unrequested: [{ description: 'd', paths: [], significance: 'huge' }] }),
+    ).toBeNull()
+    expect(
+      validateIntentCheck({ ...valid, matched: [{ intentId: 'i1', evidence: [{ path: '' }], note: 'n' }] }),
+    ).toBeNull()
+    expect(
+      validateIntentCheck({ ...valid, matched: [{ intentId: 'i1', evidence: [{ path: 'a.ts', line: 'x' }], note: 'n' }] }),
+    ).toBeNull()
+  })
+
+  it('rounds fractional evidence lines and tolerates line: null', () => {
+    const out = validateIntentCheck({
+      ...valid,
+      matched: [{ intentId: 'i1', evidence: [{ path: 'a.ts', line: 3.7 }, { path: 'b.ts', line: null }], note: 'n' }],
+    })
+    expect(out!.matched[0].evidence[0]).toEqual({ path: 'a.ts', line: 4 })
+    expect(out!.matched[0].evidence[1]).toEqual({ path: 'b.ts' })
+  })
+
+  it('caps every collection at INTENT_MAX_ITEMS (truncated, not rejected)', () => {
+    const intents = Array.from({ length: INTENT_MAX_ITEMS + 5 }, (_, i) => ({ id: `i${i}`, text: `intent ${i}` }))
+    const out = validateIntentCheck({ intents, matched: [], unrequested: [], unfulfilled: [] })
+    expect(out!.intents).toHaveLength(INTENT_MAX_ITEMS)
+  })
+
+  it('tolerates extra keys on the root and elements', () => {
+    const out = validateIntentCheck({
+      ...valid,
+      extra: true,
+      intents: [{ id: 'i1', text: 't', confidence: 0.9 }],
+      matched: [],
+      unfulfilled: [],
+    })
+    expect(out).not.toBeNull()
+    expect(out!.intents).toEqual([{ id: 'i1', text: 't' }])
+  })
+})
+
+describe('salvageIntentCheck', () => {
+  it('drops malformed elements per collection and keeps the rest', () => {
+    const out = salvageIntentCheck({
+      intents: [
+        { id: 'i1', text: 'Real intent' },
+        { id: '', text: 'no id' },
+        { id: 'i2' }, // missing text
+        'garbage',
+      ],
+      matched: [
+        { intentId: 'i1', evidence: [{ path: 'a.ts' }, { path: 42 }, 'junk'], note: 'ok' },
+        { intentId: 'i-unknown', evidence: [], note: 'dropped — unknown ref' },
+        { intentId: 'i1' }, // missing note
+      ],
+      unrequested: [
+        { description: 'Lockfile churn', paths: ['pnpm-lock.yaml', 7], significance: 'minor' },
+        { description: '', paths: [], significance: 'minor' }, // empty description dropped
+      ],
+      unfulfilled: [
+        { intentId: 'i1', note: 'kept' },
+        { intentId: 'i-unknown', note: 'dropped' },
+      ],
+    })
+    expect(out).not.toBeNull()
+    expect(out!.intents).toEqual([{ id: 'i1', text: 'Real intent' }])
+    expect(out!.matched).toHaveLength(1)
+    expect(out!.matched[0].evidence).toEqual([{ path: 'a.ts' }]) // bad evidence entries dropped individually
+    expect(out!.unrequested).toEqual([{ description: 'Lockfile churn', paths: ['pnpm-lock.yaml'], significance: 'minor' }])
+    expect(out!.unfulfilled).toEqual([{ intentId: 'i1', note: 'kept' }])
+  })
+
+  it('degrades a missing/invalid significance to minor instead of dropping the item', () => {
+    const out = salvageIntentCheck({
+      intents: [{ id: 'i1', text: 't' }],
+      unrequested: [
+        { description: 'No significance given', paths: [] },
+        { description: 'Bad significance', paths: [], significance: 'catastrophic' },
+      ],
+    })
+    expect(out!.unrequested.map((u) => u.significance)).toEqual(['minor', 'minor'])
+  })
+
+  it('missing matched/unrequested/unfulfilled arrays degrade to [] (intents alone is salvageable)', () => {
+    const out = salvageIntentCheck({ intents: [{ id: 'i1', text: 't' }] })
+    expect(out).toEqual({ intents: [{ id: 'i1', text: 't' }], matched: [], unrequested: [], unfulfilled: [] })
+  })
+
+  it('whole-result garbage returns null (task error path)', () => {
+    expect(salvageIntentCheck(null)).toBeNull()
+    expect(salvageIntentCheck('x')).toBeNull()
+    expect(salvageIntentCheck({})).toBeNull()
+    expect(salvageIntentCheck({ intents: 'nope' })).toBeNull()
+  })
+
+  it('caps every collection at INTENT_MAX_ITEMS', () => {
+    const intents = Array.from({ length: INTENT_MAX_ITEMS + 3 }, (_, i) => ({ id: `i${i}`, text: `t${i}` }))
+    const unfulfilled = intents.map((i) => ({ intentId: i.id, note: 'n' }))
+    const out = salvageIntentCheck({ intents, unfulfilled })
+    expect(out!.intents).toHaveLength(INTENT_MAX_ITEMS)
+    expect(out!.unfulfilled).toHaveLength(INTENT_MAX_ITEMS)
   })
 })

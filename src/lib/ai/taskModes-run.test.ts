@@ -165,7 +165,9 @@ describe('Plan J — per-task off gating', () => {
     const run = createAiRun(makeInput(pack, makeSource()), deps)
     await run.start()
     expect(pack).not.toHaveBeenCalled()
-    for (const s of [run.summary, run.attention, run.diagrams, run.tests, run.alternatives, run.verdict, run.story, run.riskJudge]) {
+    // intent (which joined the matrix after simplify) derives 'off' from an
+    // all-six-off stored matrix too — the minimal-token posture is preserved.
+    for (const s of [run.summary, run.attention, run.diagrams, run.tests, run.alternatives, run.verdict, run.intent, run.story, run.riskJudge]) {
       expect(s.status).toBe('disabled')
     }
   })

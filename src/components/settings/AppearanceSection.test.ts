@@ -189,6 +189,9 @@ describe('AppearanceSection', () => {
 describe('AppearanceSection — Understand step layout', () => {
   const PAGE_TITLES = SECTION_REGISTRY.filter((s) => s.show.page).map((s) => s.title)
 
+  /** Titles may contain regex metacharacters (e.g. "Intent check (AI)") — escape them. */
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
   it('renders the layout list in registry order by default', () => {
     render(AppearanceSection)
     const group = screen.getByRole('group', { name: /understand step layout/i })
@@ -204,8 +207,8 @@ describe('AppearanceSection — Understand step layout', () => {
     const group = screen.getByRole('group', { name: /understand step layout/i })
     const firstTitle = PAGE_TITLES[0]
     const lastTitle = PAGE_TITLES[PAGE_TITLES.length - 1]
-    const upFirst = within(group).getByRole('button', { name: new RegExp(`move ${firstTitle} up`, 'i') })
-    const downLast = within(group).getByRole('button', { name: new RegExp(`move ${lastTitle} down`, 'i') })
+    const upFirst = within(group).getByRole('button', { name: new RegExp(`move ${esc(firstTitle)} up`, 'i') })
+    const downLast = within(group).getByRole('button', { name: new RegExp(`move ${esc(lastTitle)} down`, 'i') })
     expect((upFirst as HTMLButtonElement).disabled).toBe(true)
     expect((downLast as HTMLButtonElement).disabled).toBe(true)
   })
@@ -215,7 +218,7 @@ describe('AppearanceSection — Understand step layout', () => {
     const group = screen.getByRole('group', { name: /understand step layout/i })
     const firstTitle = PAGE_TITLES[0]
     const secondTitle = PAGE_TITLES[1]
-    await userEvent.click(within(group).getByRole('button', { name: new RegExp(`move ${firstTitle} down`, 'i') }))
+    await userEvent.click(within(group).getByRole('button', { name: new RegExp(`move ${esc(firstTitle)} down`, 'i') }))
     const stored = getSettings().understandSections
     expect(stored).not.toBeUndefined()
     // The first two ids are swapped vs. registry order.
@@ -229,7 +232,7 @@ describe('AppearanceSection — Understand step layout', () => {
     render(AppearanceSection)
     const group = screen.getByRole('group', { name: /understand step layout/i })
     const secondTitle = PAGE_TITLES[1]
-    await userEvent.click(within(group).getByRole('button', { name: new RegExp(`move ${secondTitle} up`, 'i') }))
+    await userEvent.click(within(group).getByRole('button', { name: new RegExp(`move ${esc(secondTitle)} up`, 'i') }))
     const stored = getSettings().understandSections!
     const secondId = SECTION_REGISTRY.find((s) => s.title === secondTitle)!.id
     expect(stored[0].id).toBe(secondId)
@@ -239,7 +242,7 @@ describe('AppearanceSection — Understand step layout', () => {
     render(AppearanceSection)
     const group = screen.getByRole('group', { name: /understand step layout/i })
     const firstTitle = PAGE_TITLES[0]
-    const checkbox = within(group).getByRole('checkbox', { name: new RegExp(`show ${firstTitle}`, 'i') })
+    const checkbox = within(group).getByRole('checkbox', { name: new RegExp(`show ${esc(firstTitle)}`, 'i') })
     await userEvent.click(checkbox)
     const stored = getSettings().understandSections!
     const firstId = SECTION_REGISTRY.find((s) => s.title === firstTitle)!.id
@@ -264,7 +267,7 @@ describe('AppearanceSection — Understand step layout', () => {
     )
     render(AppearanceSection)
     const group = screen.getByRole('group', { name: /understand step layout/i })
-    const checkbox = within(group).getByRole('checkbox', { name: new RegExp(`show ${disabledTitle}`, 'i') }) as HTMLInputElement
+    const checkbox = within(group).getByRole('checkbox', { name: new RegExp(`show ${esc(disabledTitle)}`, 'i') }) as HTMLInputElement
     expect(checkbox.checked).toBe(false)
   })
 })

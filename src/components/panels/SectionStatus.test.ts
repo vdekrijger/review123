@@ -67,6 +67,24 @@ describe('SectionStatus — problem states show a muted hint (no spinner)', () =
   })
 })
 
+describe('SectionStatus — skipped state (intent check with nothing to verify)', () => {
+  it('renders a quiet muted n/a — never a spinner, never an error hint', () => {
+    const { container } = renderStatus('skipped')
+    expect(container.querySelector('.ui-spinner')).toBeNull()
+    expect(container.querySelector('.section-status-hint')).toBeNull()
+    const off = container.querySelector('.section-status-off')
+    expect(off).not.toBeNull()
+    expect(off?.textContent).toBe('n/a')
+  })
+
+  it('announces a calm skipped message', () => {
+    const { container } = renderStatus('skipped')
+    expect(container.querySelector('.section-status-live')?.textContent).toBe(
+      'Full summary skipped — nothing to check',
+    )
+  })
+})
+
 describe('SectionStatus — error detail on hover (title + aria)', () => {
   const ERROR = 'DeepSeek server error. Please try again later.'
   const DETAIL = 'Server error (503): upstream model overloaded'

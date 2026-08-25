@@ -1735,3 +1735,50 @@ describe('UnderstandStep glance card — review effort badge', () => {
     expect(container.querySelector('.risk-badge')!.textContent).toBe('high')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Intent check section (intent-vs-implementation)
+// ---------------------------------------------------------------------------
+
+import type { IntentCheckResult } from '../lib/ai/schemas'
+
+describe('UnderstandStep intent check section', () => {
+  it('renders the Intent check panel with the run state (aligned result)', () => {
+    const intent: IntentCheckResult = {
+      intents: [{ id: 'i1', text: 'Add a rate limiter' }],
+      matched: [{ intentId: 'i1', evidence: [{ path: 'src/a.ts', line: 3 }], note: 'Done in src/a.ts.' }],
+      unrequested: [],
+      unfulfilled: [],
+    }
+    const run = makeRun({ intent: { status: 'done', value: intent } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(screen.getByText('Intent check (AI)')).toBeInTheDocument()
+    expect(screen.getByText(/Implementation matches the stated intent \(1 intent verified\)/)).toBeInTheDocument()
+  })
+
+  it('skipped intent (empty description) renders the calm zero-token line + the n/a header cue', () => {
+    const run = makeRun({ intent: { status: 'skipped' } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(screen.getByText('No stated intent to check — the PR description is empty.')).toBeInTheDocument()
+    const header = container.querySelector('.detail-panel.intent-panel .detail-summary .section-status-off')
+    expect(header).not.toBeNull()
+    expect(header!.textContent).toBe('n/a')
+  })
+
+  it('intent evidence links jump to the file diff via onhotspot', async () => {
+    const intent: IntentCheckResult = {
+      intents: [{ id: 'i1', text: 'Add a rate limiter' }],
+      matched: [{ intentId: 'i1', evidence: [{ path: 'src/feature.ts', line: 7 }], note: 'Done.' }],
+      unrequested: [],
+      unfulfilled: [],
+    }
+    const onhotspot = vi.fn()
+    const run = makeRun({ intent: { status: 'done', value: intent } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run, onhotspot } })
+    openAllDetails()
+    await userEvent.click(screen.getByRole('button', { name: 'src/feature.ts:7' }))
+    expect(onhotspot).toHaveBeenCalledWith('src/feature.ts')
+  })
+})
