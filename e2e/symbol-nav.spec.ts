@@ -7,7 +7,8 @@
  *   1. a Definition section pointing at src/util.ts (snippet + file:line), and
  *   2. a "Call points in this PR (N)" section grouped by file.
  * Clicking the definition's file:line jumps ACROSS FILES to util.ts's diff row
- * (flash class). Escape closes the popover. Clicking a keyword never opens it.
+ * (flash class). The definition entry expands (peek) to its actual code body
+ * inline. Escape closes the popover. Clicking a keyword never opens it.
  *
  * Same mocking strategy as focus-mode.spec.ts (route-intercepted GitHub API,
  * no AI, PostHog blocked).
@@ -115,6 +116,22 @@ test('inspect: clicking an identifier opens the symbol popover with definition +
   // Call points: exactly the app.ts call line (the def line is excluded).
   await expect(popover.getByText('Call points in this PR (1)')).toBeVisible()
   await expect(popover.locator('.ref-file-name', { hasText: 'src/app.ts' })).toBeVisible()
+
+  // PEEK: expand the definition entry to its actual code body, inline.
+  const peekToggle = popover.getByRole('button', { name: 'Definition body at src/util.ts:1' })
+  await expect(peekToggle).toHaveAttribute('aria-expanded', 'false')
+  await peekToggle.click()
+  await expect(peekToggle).toHaveAttribute('aria-expanded', 'true')
+  const peek = popover.getByTestId('definition-peek')
+  await expect(peek).toBeVisible()
+  await expect(peek).toContainText('return values.reduce((total, v) => total + v, 0)')
+  // The toggle never unmounts, so the focusout idiom must NOT self-close the
+  // popover on expand (the #210 lesson).
+  await expect(popover).toBeVisible()
+  // Collapse again — the body hides, the popover stays.
+  await peekToggle.click()
+  await expect(popover.getByTestId('definition-peek')).toBeHidden()
+  await expect(popover).toBeVisible()
 
   // CROSS-FILE jump: clicking the app.ts reference row closes the popover and
   // flashes the target row in src/app.ts's diff.

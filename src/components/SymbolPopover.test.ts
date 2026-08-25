@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/svelte'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 import SymbolPopover from './SymbolPopover.svelte'
 import type { SymbolDefinition, SymbolReference } from '../lib/symbols/symbolIndex'
 import type { RepoSearchOutcome } from '../lib/symbols/repoSearch'
+import { registerSymbolSource, _resetSymbolSourcesForTest } from '../lib/symbols/symbolSources'
 
 const def: SymbolDefinition = {
   name: 'computeTotal',
@@ -243,5 +244,176 @@ describe('SymbolPopover — In repo section', () => {
     expect(entry.textContent).toContain('repo')
     // Repo definitions are never jump targets.
     expect(entry.querySelector('button.loc')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Definition peek — expandable code block per definition row
+// ---------------------------------------------------------------------------
+
+const UTIL_CONTENT = [
+  '// utils', // 1
+  'export const A = 1', // 2
+  '', // 3
+  'export function computeTotal(values: number[]): number {', // 4
+  '  return values.reduce((t, v) => t + v, 0)', // 5
+  '}', // 6
+  'export const B = 2', // 7
+].join('\n')
+
+/** Register the def file's source (full contents) — the peek reads from it. */
+function registerUtilSource(content = UTIL_CONTENT) {
+  registerSymbolSource({
+    filename: 'src/util.ts',
+    status: 'modified',
+    contents: { before: null, after: content },
+  })
+}
+
+const PEEK_TOGGLE = { name: 'Definition body at src/util.ts:4' }
+
+describe('SymbolPopover — definition peek', () => {
+  afterEach(() => {
+    _resetSymbolSourcesForTest()
+  })
+
+  it('offers no expand affordance when the definition file has no registered source', () => {
+    renderPopover()
+    expect(screen.queryByRole('button', { name: /Definition body at/ })).not.toBeInTheDocument()
+  })
+
+  it('expands to the definition body with real line numbers, and collapses again', async () => {
+    registerUtilSource()
+    renderPopover()
+    const toggle = screen.getByRole('button', PEEK_TOGGLE)
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('definition-peek')).not.toBeInTheDocument()
+
+    await fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    const block = screen.getByTestId('definition-peek')
+    expect(block.textContent).toContain('return values.reduce((t, v) => t + v, 0)')
+    // Line numbers start at the definition's REAL line (4), not 1.
+    expect(block.querySelector('.peek-gutter')!.textContent).toBe('4\n5\n6')
+    // Complete body → neither the cap marker nor the patch-only note.
+    expect(block.textContent).not.toContain('more line')
+    expect(block.textContent).not.toContain('Only the changed lines')
+
+    await fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('definition-peek')).not.toBeInTheDocument()
+  })
+
+  it('keeps focus on the toggle and the popover open across expand/collapse', async () => {
+    registerUtilSource()
+    const { onClose } = renderPopover()
+    const toggle = screen.getByRole('button', PEEK_TOGGLE)
+    toggle.focus()
+    await fireEvent.click(toggle)
+    expect(document.activeElement).toBe(toggle) // no unmount → no focusout close
+    await fireEvent.click(toggle)
+    expect(document.activeElement).toBe(toggle)
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('syntax-highlights the expanded body (hljs token spans)', async () => {
+    registerUtilSource()
+    renderPopover()
+    await fireEvent.click(screen.getByRole('button', PEEK_TOGGLE))
+    await waitFor(() => {
+      expect(screen.getByTestId('definition-peek').querySelector('.peek-code')!.innerHTML).toContain('hljs-')
+    })
+  })
+
+  it('caps long bodies at 40 lines with an honest more-lines marker', async () => {
+    const body = ['export function computeTotal() {', ...Array.from({ length: 59 }, (_, i) => `  step(${i})`), '}']
+    registerUtilSource(body.join('\n'))
+    renderPopover({ definitions: [{ ...def, line: 1, endLine: 61 }] })
+    await fireEvent.click(screen.getByRole('button', { name: 'Definition body at src/util.ts:1' }))
+    const block = screen.getByTestId('definition-peek')
+    expect(block.querySelector('.peek-gutter')!.textContent!.split('\n')).toHaveLength(40)
+    expect(block.textContent).toContain('… (21 more lines)')
+  })
+
+  it('shows the honest patch-only note when the hunk cuts the body off', async () => {
+    registerSymbolSource({
+      filename: 'src/util.ts',
+      status: 'modified',
+      patch: ['@@ -4,2 +4,2 @@', ' export function computeTotal(values: number[]): number {', '+  return values.reduce((t, v) => t + v, 0)'].join('\n'),
+    })
+    renderPopover()
+    await fireEvent.click(screen.getByRole('button', PEEK_TOGGLE))
+    const block = screen.getByTestId('definition-peek')
+    expect(block.querySelector('.peek-gutter')!.textContent).toBe('4\n5')
+    expect(block.textContent).toContain('Only the changed lines are available for this file.')
+  })
+
+  it('multiple definitions expand independently', async () => {
+    registerUtilSource()
+    registerSymbolSource({
+      filename: 'src/copy.ts',
+      status: 'modified',
+      contents: { before: null, after: 'export function computeTotal(): number {\n  return 0\n}' },
+    })
+    const secondDef: SymbolDefinition = { ...def, file: 'src/copy.ts', line: 1 }
+    renderPopover({ definitions: [def, secondDef] })
+    await fireEvent.click(screen.getByRole('button', PEEK_TOGGLE))
+    expect(screen.getAllByTestId('definition-peek')).toHaveLength(1)
+    expect(screen.getByRole('button', PEEK_TOGGLE)).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('button', { name: 'Definition body at src/copy.ts:1' })).toHaveAttribute('aria-expanded', 'false')
+    await fireEvent.click(screen.getByRole('button', { name: 'Definition body at src/copy.ts:1' }))
+    expect(screen.getAllByTestId('definition-peek')).toHaveLength(2)
+  })
+
+  it('references never get a peek toggle — definitions only', async () => {
+    registerUtilSource()
+    const { container } = renderPopover()
+    // Exactly one toggle: the single definition row. None on the ref rows.
+    expect(screen.getAllByRole('button', { name: /Definition body at/ })).toHaveLength(1)
+    expect(container.querySelectorAll('section.refs .peek-toggle')).toHaveLength(0)
+  })
+
+  it('repo-found definitions peek from the fetched head-SHA contents', async () => {
+    const repoFileContent = [
+      'export function computeTotal(values: number[]): number {', // 1
+      '  return values.length', // 2
+      '}', // 3
+    ].join('\n')
+    const withDef: RepoSearchOutcome = {
+      ok: true,
+      definitions: [
+        { name: 'computeTotal', kind: 'function', file: 'src/other.ts', line: 1, endLine: 3, side: 'new', snippet: 'export function computeTotal(values: number[]): number {', inDiff: false },
+      ],
+      references: [],
+      filesScanned: 1,
+      filesSkipped: 0,
+      contentsByPath: new Map([['src/other.ts', repoFileContent]]),
+    }
+    renderPopover({ definitions: [], onSearchRepo: vi.fn().mockResolvedValue(withDef) })
+    await fireEvent.click(screen.getByRole('button', { name: 'Search repo' }))
+    await screen.findByTestId('repo-definition')
+    const toggle = screen.getByRole('button', { name: 'Definition body at src/other.ts:1' })
+    await fireEvent.click(toggle)
+    const block = screen.getByTestId('definition-peek')
+    expect(block.textContent).toContain('return values.length')
+    expect(block.querySelector('.peek-gutter')!.textContent).toBe('1\n2\n3')
+    // Fetched full contents → complete, no patch-only note.
+    expect(block.textContent).not.toContain('Only the changed lines')
+  })
+
+  it('repo definitions without carried contents offer no peek (hand-built outcomes)', async () => {
+    const withDef: RepoSearchOutcome = {
+      ok: true,
+      definitions: [
+        { name: 'computeTotal', kind: 'function', file: 'src/other.ts', line: 1, side: 'new', snippet: 'export function computeTotal(values: number[]): number {', inDiff: false },
+      ],
+      references: [],
+      filesScanned: 1,
+      filesSkipped: 0,
+    }
+    renderPopover({ definitions: [], onSearchRepo: vi.fn().mockResolvedValue(withDef) })
+    await fireEvent.click(screen.getByRole('button', { name: 'Search repo' }))
+    await screen.findByTestId('repo-definition')
+    expect(screen.queryByRole('button', { name: /Definition body at/ })).not.toBeInTheDocument()
   })
 })
