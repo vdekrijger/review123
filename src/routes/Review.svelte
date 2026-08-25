@@ -482,6 +482,9 @@
         prKey,
         repo: repoStr,
         isPrivate: meta.private,
+        // PR title + body — the stated intent the intent check verifies
+        // the diff against (skip-when-empty handled inside the run).
+        meta: { title: meta.title, body: meta.body },
         pack: async () => {
           const contents = await getContents(files, meta)
           const ci = await getCi({ owner, repo, number }, meta.headSha)

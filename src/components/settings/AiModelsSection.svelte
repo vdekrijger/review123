@@ -48,6 +48,7 @@
     tests: 'Test insight',
     alternatives: 'Alternatives',
     verdict: 'Verdict',
+    intent: 'Intent check (matches diff against the PR description)',
     skills: 'My reviewers (skills)',
     story: 'Story walkthrough',
     riskJudge: 'Risk judge (review effort)',

@@ -60,6 +60,10 @@
   // Plan J: a task turned OFF in settings — a quiet muted "off" indicator
   // (not a spinner, not an error), mirroring the disabled section body.
   const disabled = $derived(status === 'disabled')
+  // Intent check only: the task deliberately did not run because there was
+  // nothing to check (empty PR description) — a quiet muted "n/a" indicator,
+  // distinct from "off" (a user setting) and never an error.
+  const skipped = $derived(status === 'skipped')
 
   // One quiet polite announcement per state. Empty while pending (the spinner is
   // visual; no need to announce "loading" repeatedly).
@@ -69,6 +73,7 @@
       : status === 'no-key' ? `${title} needs an API key`
       : status === 'declined' ? `${title} declined`
       : disabled ? `${title} disabled`
+      : skipped ? `${title} skipped — nothing to check`
       : ''
   )
 </script>
@@ -76,7 +81,7 @@
 <span
   class="section-status"
   class:is-problem={problem}
-  class:is-disabled={disabled}
+  class:is-disabled={disabled || skipped}
   class:has-error-detail={errorTooltip !== ''}
   title={errorTooltip !== '' ? errorTooltip : undefined}
   aria-label={errorTooltip !== '' ? `${title} unavailable: ${errorTooltip}` : undefined}
@@ -87,6 +92,8 @@
     <span class="section-status-ready" aria-hidden="true">✓</span>
   {:else if disabled}
     <span class="section-status-off" aria-hidden="true">off</span>
+  {:else if skipped}
+    <span class="section-status-off" aria-hidden="true">n/a</span>
   {:else if problem}
     <span class="section-status-hint" aria-hidden="true">·</span>
   {/if}

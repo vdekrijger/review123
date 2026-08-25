@@ -20,6 +20,7 @@ function makeRun(overrides: Partial<AiRun>): AiRun {
     verdict: { status: 'idle' },
     tests: { status: 'idle' },
     alternatives: { status: 'idle' },
+    intent: { status: 'idle' },
     story: { status: 'idle' },
     riskJudge: { status: 'idle' },
     skillReviews: [],
