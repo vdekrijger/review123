@@ -1824,6 +1824,184 @@ describe('ask() — focus parameter', () => {
 })
 
 // ---------------------------------------------------------------------------
+// expandComment() — terse note → full review comment, never cached
+// ---------------------------------------------------------------------------
+
+const EXPAND_FOCUS = { path: 'src/feature.ts', line: 42, side: 'RIGHT' as const }
+
+describe('expandComment() — gating (no-key / declined)', () => {
+  it('no-key: returns {ok:false, error} without calling gateAi or llm', async () => {
+    const deps = makeDeps({ hasKey: false })
+    const run = createAiRun(makeInput(), deps)
+
+    const result = await run.expandComment('too clever, simplify', () => {}, EXPAND_FOCUS)
+
+    expect(result.ok).toBe(false)
+    expect((result as { ok: false; error: string }).error).toContain('No DeepSeek API key')
+    expect(deps.gateAi).not.toHaveBeenCalled()
+    expect(deps.llmStream).not.toHaveBeenCalled()
+    expect(deps.llmStreamWithUsage).not.toHaveBeenCalled()
+  })
+
+  it('declined: returns {ok:false, error} without calling llm', async () => {
+    const deps = makeDeps({ gateResult: false })
+    const run = createAiRun(makeInput(), deps)
+
+    const result = await run.expandComment('too clever', () => {}, EXPAND_FOCUS)
+
+    expect(result.ok).toBe(false)
+    expect((result as { ok: false; error: string }).error.length).toBeGreaterThan(0)
+    expect(deps.llmStreamWithUsage).not.toHaveBeenCalled()
+  })
+})
+
+describe('expandComment() — happy path', () => {
+  it('streams deltas and returns {ok:true, comment} (trimmed)', async () => {
+    const deps = makeDeps()
+    deps.llmStream.mockImplementation(async (_opts: unknown, onDelta: (d: string) => void) => {
+      onDelta('This implementation ')
+      onDelta('is hard to follow.')
+      return 'This implementation is hard to follow.\n'
+    })
+
+    const deltas: string[] = []
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.expandComment('too clever', (t) => deltas.push(t), EXPAND_FOCUS)
+
+    expect(result.ok).toBe(true)
+    expect((result as { ok: true; comment: string }).comment).toBe('This implementation is hard to follow.')
+    expect(deltas).toEqual(['This implementation ', 'is hard to follow.'])
+  })
+
+  it('the prompt carries the note AND the code context from verifyCodeContext (buildCoachCodeContext source)', async () => {
+    const deps = makeDeps()
+    const captured: Array<{ system: string; user: string }> = []
+    deps.llmStream.mockImplementation(async (opts: unknown, _onDelta: (d: string) => void) => {
+      captured.push(opts as { system: string; user: string })
+      return 'expanded'
+    })
+
+    const verifyCodeContext = vi.fn().mockReturnValue([
+      { index: 0, path: 'src/feature.ts', line: 42, side: 'RIGHT', excerpt: '+const clever = 1', fileWindow: '42: const clever = 1' },
+    ])
+    const run = createAiRun({ ...makeInput(), verifyCodeContext }, deps)
+    await run.expandComment('too clever, simplify', () => {}, EXPAND_FOCUS)
+
+    expect(verifyCodeContext).toHaveBeenCalledWith([EXPAND_FOCUS])
+    expect(captured.length).toBe(1)
+    expect(captured[0].user).toContain("Reviewer's note: too clever, simplify")
+    expect(captured[0].user).toContain('src/feature.ts:42')
+    expect(captured[0].user).toContain('+const clever = 1')
+    expect(captured[0].user).toContain('42: const clever = 1')
+  })
+
+  it('a throwing verifyCodeContext is best-effort: expansion still succeeds on the note alone', async () => {
+    const deps = makeDeps()
+    deps.llmStream.mockImplementation(async (_opts: unknown, onDelta: (d: string) => void) => {
+      onDelta('expanded')
+      return 'expanded'
+    })
+    const verifyCodeContext = vi.fn().mockImplementation(() => { throw new Error('boom') })
+
+    const run = createAiRun({ ...makeInput(), verifyCodeContext }, deps)
+    const result = await run.expandComment('note', () => {}, EXPAND_FOCUS)
+
+    expect(result.ok).toBe(true)
+  })
+
+  it('never calls getCached or setCached (uncached one-shot)', async () => {
+    const deps = makeDeps()
+    deps.llmStream.mockImplementation(async (_opts: unknown, onDelta: (d: string) => void) => {
+      onDelta('expanded')
+      return 'expanded'
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    deps.getCached.mockClear()
+    deps.setCached.mockClear()
+    await run.expandComment('note', () => {}, EXPAND_FOCUS)
+
+    expect(deps.getCached).not.toHaveBeenCalled()
+    expect(deps.setCached).not.toHaveBeenCalled()
+  })
+
+  it('usage is counted: folds into totalUsage and appears as an Expand cost row', async () => {
+    const deps = makeDeps()
+    // makeDeps' llmStreamWithUsage returns usage {5,3,8} around llmStream.
+    deps.llmStream.mockImplementation(async (_opts: unknown, onDelta: (d: string) => void) => {
+      onDelta('expanded')
+      return 'expanded'
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    expect(run.totalUsage).toBeUndefined()
+    await run.expandComment('note', () => {}, EXPAND_FOCUS)
+
+    expect(run.totalUsage).toMatchObject({ total_tokens: 8 })
+    // Accumulates across expansions (each is an independent paid call).
+    await run.expandComment('another note', () => {}, EXPAND_FOCUS)
+    expect(run.totalUsage).toMatchObject({ total_tokens: 16 })
+
+    // The cost breakdown reconciles: one active-model row whose byTask carries Expand.
+    const rows = run.modelCostBreakdown
+    const serialized = JSON.stringify(rows)
+    expect(serialized).toContain('Expand')
+  })
+
+  it('tracks ai_task_completed with task:expand and tokens on success', async () => {
+    const deps = makeDeps()
+    deps.llmStream.mockImplementation(async (_opts: unknown, onDelta: (d: string) => void) => {
+      onDelta('expanded')
+      return 'expanded'
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.expandComment('note', () => {}, EXPAND_FOCUS)
+
+    const completed = (deps.track.mock.calls as [string, Record<string, unknown>][]).find(
+      ([event, props]) => event === 'ai_task_completed' && props.task === 'expand',
+    )
+    expect(completed).toBeDefined()
+    expect(completed![1]).toMatchObject({ task: 'expand', cached: false, tokens: 8 })
+  })
+})
+
+describe('expandComment() — error mapping', () => {
+  it('LlmError → {ok:false, error, errorDetail}, tracks ai_task_failed', async () => {
+    const deps = makeDeps()
+    deps.llmStream.mockRejectedValue(new LlmError('rate-limited', 'too many requests'))
+
+    const run = createAiRun(makeInput(), deps)
+    const result = await run.expandComment('note', () => {}, EXPAND_FOCUS)
+
+    expect(result.ok).toBe(false)
+    const failure = result as { ok: false; error: string; errorDetail?: string }
+    expect(failure.error).toContain('Rate limited')
+    // Concrete upstream detail rides along for the hover idiom.
+    expect(failure.errorDetail).toBeTruthy()
+
+    const failedCall = deps.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_failed' && (c[1] as Record<string, unknown>)['task'] === 'expand',
+    )
+    expect(failedCall).toBeTruthy()
+    expect((failedCall![1] as Record<string, unknown>)['reason']).toBe('rate-limited')
+  })
+
+  it('ai_task_failed for expand NEVER includes the note text', async () => {
+    const deps = makeDeps()
+    deps.llmStream.mockRejectedValue(new LlmError('server', 'error'))
+
+    const run = createAiRun(makeInput(), deps)
+    const SENSITIVE_NOTE = 'SENSITIVE_NOTE_TEXT_UNIQUE_67890'
+    await run.expandComment(SENSITIVE_NOTE, () => {}, EXPAND_FOCUS)
+
+    for (const call of deps.track.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain(SENSITIVE_NOTE)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Token usage propagation to track()
 // ---------------------------------------------------------------------------
 

@@ -62,6 +62,7 @@
     runSkillReviewsFn = null,
     onRetrySkill = null,
     askFn = null,
+    expandFn = null,
     askDisabledReason = null,
     replyFn = null,
     hideWhitespace = false,
@@ -130,6 +131,11 @@
      * "Comment | Ask AI" tab toggle. Threaded from Review via AiRun.ask.
      */
     askFn?: ((q: string, onDelta: (t: string) => void, focus?: AskFocus) => Promise<{ ok: true; answer: string } | { ok: false; error: string }>) | null
+    /**
+     * Optional terse-note expander — threaded from Review via AiRun.expandComment
+     * (mirrors askFn) down to DraftThread's "Expand" action.
+     */
+    expandFn?: ((note: string, onDelta: (t: string) => void, focus: { path: string; line: number; side: 'LEFT' | 'RIGHT' }) => Promise<{ ok: true; comment: string } | { ok: false; error: string; errorDetail?: string }>) | null
     /**
      * Optional disabled hint for Ask AI gating (e.g. "No API key configured.").
      */
@@ -1385,6 +1391,7 @@
     onAddSkillFindingDraft={(path, finding) => addFindingAsDraft({ findingPath: path, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName, side: finding.side, originalBody: finding.originalBody })}
     onDismissSkillFinding={(key) => dismissFinding(key)}
     {askFn}
+    {expandFn}
     {askDisabledReason}
     replyFn={replyFn}
     {diagrams}
@@ -1479,6 +1486,7 @@
             onToggleViewed={() => handleToggleViewed(file)}
             contents={contentsMap?.get(file.filename)}
             {askFn}
+            {expandFn}
             {askDisabledReason}
             onReply={replyFn}
             skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}

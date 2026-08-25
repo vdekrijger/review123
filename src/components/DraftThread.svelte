@@ -9,10 +9,20 @@
    * flow), "Ask AI" sends the SAME textarea text as a question (streams the answer below,
    * textarea stays for follow-ups), Cancel closes.
    *
-   * Keyboard: Ctrl/Cmd+Enter = Leave comment (Save).
+   * Expand (terse-note expander): "Expand" appears next to Ask AI when the composer has
+   * text. It streams an LLM-expanded version of the note into a PREVIEW panel with
+   * [Use] [Keep my note] — the composer text is never replaced without approval. "Use"
+   * puts the expanded text into the (still editable) composer; "Keep my note" (or Esc)
+   * dismisses the preview untouched. NOTE: the spec'd separate "Edit" action collapses
+   * into "Use" here — the composer is a single always-editable surface, so "use then
+   * edit" and "edit" are the same action.
    *
-   * Gating: when askDisabledReason is set, the Ask AI button is shown but disabled
-   * (the hint text is displayed below the textarea).
+   * Keyboard: Ctrl/Cmd+Enter = Leave comment (Save). Esc with the expand preview open =
+   * Keep my note.
+   *
+   * Gating: when askDisabledReason is set, the Ask AI and Expand buttons are shown but
+   * disabled (the hint text is displayed below the textarea) — same keyless handling
+   * for both.
    */
   import type { AskFocus } from '../lib/ai/tasks'
   import { renderMarkdown } from '../lib/markdown/render'
@@ -43,8 +53,15 @@
      */
     askFn?: ((q: string, onDelta: (t: string) => void, focus?: AskFocus) => Promise<{ ok: true; answer: string } | { ok: false; error: string }>) | null
     /**
+     * Optional terse-note expander — when provided the "Expand" action button
+     * appears while the composer has text. Mirrors AiRun.expandComment: streams
+     * the expanded comment via onDelta, grounded at this comment's anchor.
+     */
+    expandFn?: ((note: string, onDelta: (t: string) => void, focus: { path: string; line: number; side: 'LEFT' | 'RIGHT' }) => Promise<{ ok: true; comment: string } | { ok: false; error: string; errorDetail?: string }>) | null
+    /**
      * Optional disabled reason for Ask AI gating (e.g. "No API key configured.").
      * When set, the Ask AI button is shown but disabled and the hint is displayed.
+     * Gates the Expand button the same way (both need the same BYO key).
      */
     askDisabledReason?: string | null
     /**
@@ -70,11 +87,12 @@
     draft,
     path,
     line,
-    side: _side,
+    side,
     onsave,
     ondelete,
     oncancel,
     askFn = null,
+    expandFn = null,
     askDisabledReason = null,
     excerpt = '',
     startLine,
@@ -126,6 +144,8 @@
         editing = false
         editorValue = draft.body
       }
+      // A different draft loaded → any in-flight/preview expansion is stale.
+      resetExpand()
     }
   })
 
@@ -133,6 +153,7 @@
     if (editorValue.trim()) {
       onsave(editorValue)
       editing = false
+      resetExpand()
     }
   }
 
@@ -146,6 +167,7 @@
   }
 
   function handleCancel() {
+    resetExpand()
     if (draft === null) {
       // New draft cancelled: close the widget
       oncancel()
@@ -205,7 +227,95 @@
   function copyAnswer(answer: string) {
     void navigator.clipboard.writeText(answer)
   }
+
+  // ---------------------------------------------------------------------------
+  // Expand — terse note → full review comment (preview, user-approved)
+  // ---------------------------------------------------------------------------
+
+  let expandLoading = $state(false)
+  /** Completed expansion awaiting the user's Use / Keep-my-note decision. */
+  let expandPreview = $state<string | null>(null)
+  /** Text streamed so far while an expansion is in flight. */
+  let expandStreamText = $state('')
+  let expandError = $state<string | null>(null)
+  /** Concrete upstream failure detail — surfaced on hover (errorDetail idiom). */
+  let expandErrorDetail = $state<string | null>(null)
+
+  const hasExpandFn = $derived(expandFn !== null && expandFn !== undefined)
+  // Visible only when the composer has a note to expand; disabled while running
+  // or when keyless (same askDisabledReason gate as Ask AI).
+  const expandVisible = $derived(hasExpandFn && editorValue.trim().length > 0)
+  const expandDisabled = $derived(!!askDisabledReason || expandLoading)
+
+  /**
+   * Monotonic run id: resetExpand() bumps it so an in-flight expansion that
+   * resolves AFTER a save/cancel/draft-switch is discarded instead of
+   * resurrecting a stale preview.
+   */
+  let expandSeq = 0
+
+  function resetExpand() {
+    expandSeq++
+    expandLoading = false
+    expandPreview = null
+    expandStreamText = ''
+    expandError = null
+    expandErrorDetail = null
+  }
+
+  async function submitExpand() {
+    const note = editorValue.trim()
+    if (!note || expandLoading || !expandFn) return
+
+    // Composer text is PRESERVED — the result goes to the preview panel only.
+    const seq = ++expandSeq
+    expandLoading = true
+    expandPreview = null
+    expandStreamText = ''
+    expandError = null
+    expandErrorDetail = null
+
+    const result = await expandFn(note, (delta) => {
+      if (seq !== expandSeq) return
+      expandStreamText += delta
+    }, { path, line, side })
+
+    // Stale run (the user saved/cancelled/switched drafts meanwhile): drop it.
+    if (seq !== expandSeq) return
+
+    if (result.ok) {
+      expandPreview = result.comment
+    } else {
+      expandError = result.error
+      expandErrorDetail = result.errorDetail ?? null
+    }
+    expandStreamText = ''
+    expandLoading = false
+  }
+
+  /** Use: expanded text replaces the composer content — still editable before Save. */
+  function useExpanded() {
+    if (expandPreview !== null) {
+      editorValue = expandPreview
+    }
+    resetExpand()
+  }
+
+  /** Keep my note: dismiss the preview; the composer is untouched. */
+  function keepMyNote() {
+    resetExpand()
+  }
+
+  /** Esc with the preview (or an expand error) open = Keep my note. */
+  function handleExpandWindowKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Escape') return
+    if (expandPreview === null && expandError === null) return
+    e.stopPropagation()
+    keepMyNote()
+  }
 </script>
+
+<svelte:window onkeydown={handleExpandWindowKeydown} />
 
 <div class="draft-thread" data-testid="draft-thread" data-line={line}>
   <div class="thread-header">
@@ -269,12 +379,40 @@
       </div>
     {/if}
 
+    <!-- Expand: streaming/loading state, preview panel, or inline error -->
+    {#if expandLoading}
+      <div class="expand-preview" data-testid="expand-preview" aria-live="polite">
+        <div class="expand-preview-label">Expanding your note…</div>
+        {#if expandStreamText}
+          <div class="expand-streaming" data-testid="expand-streaming">{expandStreamText}<span class="ask-inline-cursor" aria-hidden="true"></span></div>
+        {/if}
+      </div>
+    {:else if expandPreview !== null}
+      <div class="expand-preview" data-testid="expand-preview">
+        <div class="expand-preview-label">Expanded comment</div>
+        <div class="expand-preview-body" data-testid="expand-preview-body">
+          <MarkdownView source={expandPreview} />
+        </div>
+        <div class="expand-preview-actions">
+          <button type="button" class="btn btn-primary" onclick={useExpanded} data-testid="expand-use">Use</button>
+          <button type="button" class="btn" onclick={keepMyNote} data-testid="expand-keep">Keep my note</button>
+        </div>
+      </div>
+    {:else if expandError}
+      <!-- Calm inline error: concrete upstream detail on hover (errorDetail idiom);
+           the composer is untouched and Retry re-runs with the same note. -->
+      <div class="expand-error" role="alert" title={expandErrorDetail ?? undefined} data-testid="expand-error">
+        <span>{expandError}</span>
+        <button type="button" class="btn" onclick={() => void submitExpand()} data-testid="expand-retry">Retry</button>
+      </div>
+    {/if}
+
     <!-- Ask disabled hint -->
     {#if askDisabledReason}
       <p class="ask-inline-hint" data-testid="ask-disabled-hint">{askDisabledReason}</p>
     {/if}
 
-    <!-- Bottom action row: Leave comment | [Ask AI] | Cancel -->
+    <!-- Bottom action row: Leave comment | [Ask AI] | [Expand] | Cancel -->
     <div class="thread-actions">
       <button
         type="button"
@@ -290,6 +428,17 @@
           disabled={askDisabled}
           aria-busy={askLoading}
         >Ask AI</button>
+      {/if}
+      {#if expandVisible}
+        <button
+          type="button"
+          class="btn btn-ask"
+          onclick={() => void submitExpand()}
+          disabled={expandDisabled}
+          aria-busy={expandLoading}
+          data-testid="expand-btn"
+          title="Expand this note into a full review comment (AI) — you approve before it replaces anything"
+        >{expandLoading ? 'Expanding…' : 'Expand'}</button>
       {/if}
       <button type="button" class="btn" onclick={handleCancel}>Cancel</button>
     </div>
@@ -461,6 +610,63 @@
     /* theme-aware error red (was hardcoded #cf222e — unreadable on dark surfaces) */
     color: var(--legend-removed-color, #cf222e);
     font-size: 0.78rem;
+  }
+
+  /* Expand preview panel (terse-note expander) */
+  .expand-preview {
+    margin-top: 0.4rem;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid #8884;
+    border-radius: 6px;
+    background: var(--surface-raised, #fff6df);
+  }
+
+  .expand-preview-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    opacity: 0.65;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 0.25rem;
+  }
+
+  .expand-preview-body {
+    font-size: 0.85rem;
+    line-height: 1.45;
+    word-break: break-word;
+  }
+
+  .expand-preview-body :global(p:first-child) { margin-top: 0; }
+  .expand-preview-body :global(p:last-child) { margin-bottom: 0; }
+  .expand-preview-body :global(code) { font-size: 0.85em; background: var(--surface, #fff); padding: 0.1em 0.3em; border-radius: 3px; }
+  .expand-preview-body :global(pre) { background: var(--surface, #fff); padding: 0.5rem; border-radius: 4px; overflow-x: auto; }
+  .expand-preview-body :global(pre code) { background: none; padding: 0; }
+
+  .expand-preview-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+    flex-wrap: wrap;
+  }
+
+  .expand-streaming {
+    font-size: 0.85rem;
+    line-height: 1.45;
+    word-break: break-word;
+    opacity: 0.85;
+    white-space: pre-wrap;
+  }
+
+  .expand-error {
+    /* same theme-aware error red as the ask inline error; concrete upstream
+       detail rides on the title attribute (hover) */
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    color: var(--legend-removed-color, #cf222e);
+    font-size: 0.78rem;
+    margin-top: 0.4rem;
   }
 
   .btn-ask {

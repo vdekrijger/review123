@@ -1201,6 +1201,99 @@ so if the excerpt doesn't contain enough to answer.`
 }
 
 // ---------------------------------------------------------------------------
+// expandCommentPrompt — terse reviewer note → full review comment (Expand)
+// ---------------------------------------------------------------------------
+
+/**
+ * Code context grounding one expansion: the ACTUAL code at the comment's
+ * file:line:side anchor. Produced by buildCoachCodeContext (the same source
+ * the coach and cross-model verification use) — a ±6-line hunk excerpt plus
+ * an optional wider file window.
+ */
+export interface ExpandCommentContext {
+  path: string
+  line: number
+  side: 'LEFT' | 'RIGHT'
+  /** ±6-line hunk excerpt around file:line. '' when the patch is unavailable. */
+  excerpt: string
+  /** Wider window of the file's contents around the line, when available. */
+  fileWindow?: string
+}
+
+/**
+ * Approximate word count above which the note is treated as an already-full
+ * comment: the prompt then directs the model to POLISH (tighten wording, keep
+ * every claim) rather than expand.
+ */
+export const EXPAND_POLISH_WORD_THRESHOLD = 40
+
+/**
+ * Build prompts for the EXPAND pass: turn a reviewer's terse inline note
+ * ("too clever, simplify") into a proper, calm review comment grounded in the
+ * REAL code at the commented line. On-demand and user-approved: the UI shows
+ * the result as a preview — the reviewer's note is never silently replaced.
+ *
+ * Style contract mirrors the simplify pass (busy-colleague voice): core
+ * problem first, 2–3 short sentences, preserve backticked identifiers, no
+ * AI-isms. The hard grounding rule: the comment must NOT claim anything the
+ * note + the provided code don't support.
+ *
+ * The system prompt's "expanding a reviewer's terse note" phrase is the e2e
+ * stubs' dispatch marker — keep it stable.
+ *
+ * NOTE: No PROMPT_VERSIONS entry — expansions are user-triggered one-shots and
+ * never cached (same policy as `ask` and `coach`).
+ */
+export function expandCommentPrompt(
+  note: string,
+  context: ExpandCommentContext,
+): { system: string; user: string } {
+  const system = `You are expanding a reviewer's terse note into a polished code-review comment. \
+The reviewer knows what they mean — your job is to say it properly, grounded in the code shown, \
+so the pull-request author understands the point without the reviewer typing a paragraph.
+
+Writing contract (every rule is binding):
+- Lead with the core problem in ONE sentence. Two to three short sentences total is the target; \
+add a fourth only when a concrete suggestion genuinely needs it.
+- Calm, plain, conversational English, active voice — a busy colleague explaining the issue, \
+not a report. Address the author directly and constructively.
+- Say what the issue is at THIS code and what to do about it. No restating the code, no context \
+recaps, no methodology narration.
+- Ground every claim in the reviewer's note and the code shown. NEVER invent facts, defects, \
+measurements, or intentions beyond what the note and the code support. If the note makes a claim \
+the code alone can't confirm, keep the claim as the reviewer's view — do not manufacture evidence \
+for it.
+- PRESERVE technical anchors exactly as written: backticked identifiers, file:line references, \
+and concrete values from the note must survive verbatim. Reference identifiers from the code in \
+backticks where it helps precision.
+- Match the note's intent and severity — do not soften a hard objection or harden a nit.
+- Banned phrasings (never emit them): "It's worth noting", "Additionally", "Furthermore", \
+"potential inconsistency wherein", "robust", "leverage", "It is important to", and stacked \
+hedges like "may potentially possibly".
+- If the note is already a full comment (roughly ${EXPAND_POLISH_WORD_THRESHOLD} words or more), \
+POLISH it instead of expanding: tighten the wording, keep every claim and its severity.
+
+Respond with the review comment text ONLY — no preamble, no quotation marks around it, no JSON, \
+no explanation of what you changed. Inline markdown (backticks, a short list, a fenced suggestion) \
+is allowed where the comment benefits from it.`
+
+  const parts: string[] = [
+    `Commented location: ${context.path}:${context.line} (${context.side === 'LEFT' ? 'old' : 'new'} side)`,
+  ]
+
+  if (context.excerpt) {
+    parts.push(`\nDiff excerpt around the commented line:\n\`\`\`\n${context.excerpt}\n\`\`\``)
+  }
+  if (context.fileWindow) {
+    parts.push(`\nWider file context (line-numbered):\n\`\`\`\n${context.fileWindow}\n\`\`\``)
+  }
+
+  parts.push(`\nReviewer's note: ${note}`)
+
+  return { system, user: parts.join('\n') }
+}
+
+// ---------------------------------------------------------------------------
 // skillReviewPrompt — JSON SkillReviewResult per reviewer persona
 // ---------------------------------------------------------------------------
 

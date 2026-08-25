@@ -98,6 +98,7 @@ export function createDemoRun(): AiRun {
     retry: async () => {},
     coach: async () => ({ error: 'demo' }),
     ask: async () => ({ ok: false as const, error: 'Ask AI is disabled in the demo.' }),
+    expandComment: async () => ({ ok: false as const, error: 'Expand is disabled in the demo.' }),
     runSkillReviews: async () => {},
     retrySkill: async () => {},
   }

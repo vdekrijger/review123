@@ -66,6 +66,7 @@ import {
   alternativesPrompt,
   storyOrderPrompt,
   askPrompt,
+  expandCommentPrompt,
   skillReviewPrompt,
   convergencePrompt,
   simplifyPrompt,
@@ -324,6 +325,14 @@ export interface AiRun {
   retry(task: TaskName): Promise<void>
   coach(drafts: Draft[], prComments?: string[], verdict?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'): Promise<CoachOutcome | { error: string; errorDetail?: string }>
   ask(question: string, onDelta: (t: string) => void, focus?: AskFocus): Promise<{ ok: true; answer: string } | { ok: false; error: string }>
+  /**
+   * Expand a terse inline-composer note into a proper review comment grounded
+   * in the code at the comment's anchor (focus). On-demand, never cached
+   * (like ask); streams via onDelta. The UI previews the result — the
+   * reviewer's note is never replaced without approval. errorDetail carries
+   * the concrete upstream failure for the hover idiom.
+   */
+  expandComment(note: string, onDelta: (t: string) => void, focus: { path: string; line: number; side: 'LEFT' | 'RIGHT' }): Promise<{ ok: true; comment: string } | { ok: false; error: string; errorDetail?: string }>
   /**
    * Run every enabled skill reviewer (batch). `opts.autoRetry` (default 0) adds
    * up to N extra rounds that re-attempt only the reviewers still in 'error'
@@ -2486,6 +2495,75 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   }
 
   // ---------------------------------------------------------------------------
+  // expandComment(note, onDelta, focus) — terse note → full review comment
+  //
+  // On-demand and never cached, like ask(). Streams via onDelta (same
+  // transport). Grounded in the REAL code at the comment's anchor through the
+  // verifyCodeContext input (buildCoachCodeContext — the same source the coach
+  // and cross-model verification use). The UI previews the result; the
+  // reviewer's note is never silently replaced.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Accumulated token usage across every expansion in this run. Folded into
+   * totalUsage (and the cost breakdown as 'Expand') so the per-PR total
+   * includes expansion cost — same idiom as coachUsage. Accumulates (not
+   * overwrites): each expansion is an independent paid call.
+   */
+  let expandUsage = $state<LlmUsage | undefined>(undefined)
+
+  async function expandComment(
+    note: string,
+    onDelta: (t: string) => void,
+    focus: { path: string; line: number; side: 'LEFT' | 'RIGHT' },
+  ): Promise<{ ok: true; comment: string } | { ok: false; error: string; errorDetail?: string }> {
+    // No-key check: same early-exit as ask()
+    if (!activeProviderHasKey()) {
+      return { ok: false, error: humanMessage('no-key') }
+    }
+
+    // Consent gate: same gateAi / shared ask
+    const allowed = await gateAi({ repo, isPrivate, ask: askConsent })
+    if (!allowed) {
+      return { ok: false, error: 'AI analysis was declined. Enable AI analysis to expand notes.' }
+    }
+
+    // Code at the comment's anchor — best-effort (a throwing/absent provider
+    // just means the expansion grounds on the note alone).
+    let codeCtx: CoachCodeContext | undefined
+    try {
+      codeCtx = verifyCodeContext?.([focus])?.[0]
+    } catch {
+      codeCtx = undefined
+    }
+
+    const prompts = expandCommentPrompt(note, {
+      path: focus.path,
+      line: focus.line,
+      side: focus.side,
+      excerpt: codeCtx?.excerpt ?? '',
+      ...(codeCtx?.fileWindow ? { fileWindow: codeCtx.fileWindow } : {}),
+    })
+    const t1 = performance.now()
+
+    try {
+      const streamResult = await llmStreamWithUsage(prompts, onDelta)
+      if (streamResult.usage) expandUsage = addUsage(expandUsage, streamResult.usage)
+      track('ai_task_completed', {
+        task: 'expand',
+        duration_ms: Math.round(performance.now() - t1),
+        cached: false,
+        ...(streamResult.usage?.total_tokens !== undefined ? { tokens: streamResult.usage.total_tokens } : {}),
+      })
+      return { ok: true, comment: streamResult.content.trim() }
+    } catch (err) {
+      const info = describeTaskError(err)
+      track('ai_task_failed', failureProps('expand', info))
+      return { ok: false, error: info.error, ...(info.errorDetail ? { errorDetail: info.errorDetail } : {}) }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // runSkillReviews() — on-demand, NOT called in start()
   //
   // For each enabled skill: isolated parallel run with content-hash cache key.
@@ -3104,9 +3182,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, storyState, riskJudgeState, convergenceState, simplifyState]
       for (const s of states) total = addUsage(total, s.usage)
       for (const e of skillReviewsState) total = addUsage(total, e.state.usage)
-      // Coach is on-demand (never one of the six core tasks); fold in its usage
-      // so the per-PR total reflects coaching cost too.
+      // Coach and expand are on-demand (never among the core tasks); fold in
+      // their usage so the per-PR total reflects their cost too.
       total = addUsage(total, coachUsage)
+      total = addUsage(total, expandUsage)
       return total
     },
     get verdictModels() { return verdictModelsState },
@@ -3201,6 +3280,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       if (storyState.usage) addSinglePass(storyState.usage, 'Story')
       if (riskJudgeState.usage) addSinglePass(riskJudgeState.usage, 'Risk judge')
       if (coachUsage) addSinglePass(coachUsage, 'Coach')
+      if (expandUsage) addSinglePass(expandUsage, 'Expand')
       if (convergenceState.usage) addSinglePass(convergenceState.usage, 'Convergence')
       if (simplifyState.usage) addSinglePass(simplifyState.usage, 'Simplify')
 
@@ -3223,6 +3303,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     retry,
     coach,
     ask,
+    expandComment,
     runSkillReviews,
     retrySkill,
   }
