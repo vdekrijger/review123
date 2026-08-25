@@ -11,6 +11,9 @@
   import { listDraftSummaries, clearDraftsForPr, type DraftSummary } from '../lib/drafts/drafts.svelte'
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import { activeProviderHasKey } from '../lib/llm/config'
+  import { getProvider as getLlmProvider } from '../lib/llm/providers'
+  import { prepareStore, preparePr, preparePrId, prepareProgress, isPreparedFor, preparedRecord } from '../lib/ai/prepare.svelte'
+  import { formatUsageLabel } from '../lib/ai/tokenCost'
   import { track } from '../lib/analytics/analytics'
   import ProviderIcon from '../components/ProviderIcon.svelte'
   import Skeleton from '../components/Skeleton.svelte'
@@ -270,6 +273,47 @@
     navigate(`/review/${item.ref.provider}/${item.ref.owner}/${item.ref.repo}/${item.ref.number}`)
   }
 
+  // ---- Prepare-ahead (per-row "Prepare" on the queue) ----------------------
+  // Runs the full auto AI pipeline for a PR in the background so opening it
+  // later hits warm caches. Explicit per-row action; one at a time.
+
+  function prepareIdOf(item: QueueItem): string {
+    return preparePrId(item.ref.provider, item.ref.owner, item.ref.repo, item.ref.number)
+  }
+
+  function handlePrepare(item: QueueItem) {
+    void preparePr({
+      providerId: item.ref.provider,
+      owner: item.ref.owner,
+      repo: item.ref.repo,
+      number: item.ref.number,
+      updatedAt: item.updatedAt,
+    })
+  }
+
+  // BYO-key gate — mirrors Ask AI's askDisabledReason pattern (names the
+  // active provider; reactive via settingsState so a key save updates it live).
+  const prepareDisabledReason = $derived.by(() => {
+    void settingsState.current // establish the reactive dependency
+    if (activeProviderHasKey()) return null
+    const providerName = getLlmProvider(settingsState.current.aiProvider)?.displayName ?? 'provider'
+    return `No API key configured. Add your ${providerName} key in Settings to prepare reviews.`
+  })
+
+  // Live "Preparing… (K/N)" label for a row (null-safe around missing progress).
+  function preparingLabel(prId: string): string {
+    const p = prepareProgress(prId)
+    return p && p.total > 0 ? `Preparing… (${p.done}/${p.total})` : 'Preparing…'
+  }
+
+  // "Ready ✓" cost suffix — honors the opt-in showTokenCost setting; usage
+  // comes from the live row when fresh, else the persisted record.
+  function readyCostLabel(prId: string): string | null {
+    if (!settingsState.current.showTokenCost) return null
+    const usage = prepareStore.rows[prId]?.usage ?? preparedRecord(prId)?.usage
+    return formatUsageLabel(usage ?? undefined)
+  }
+
   function handleClearHistory() {
     clearHistory()
     history = []
@@ -312,6 +356,52 @@
   {/if}
 {/snippet}
 
+<!--
+  prepareControl — the per-row Prepare-ahead affordance. States:
+    idle      → "Prepare" button (disabled while keyless or another prepare runs)
+    preparing → live "Preparing… (K/N)" status
+    ready     → "Ready ✓" chip (persisted per PR+updatedAt; · cost when
+                showTokenCost is on and usage was captured)
+    error     → calm retry button; the concrete detail rides the title (hover idiom)
+-->
+{#snippet prepareControl(item: QueueItem)}
+  {@const prId = prepareIdOf(item)}
+  {@const row = prepareStore.rows[prId]}
+  {#if row?.status === 'preparing'}
+    <span class="prepare-status preparing" data-testid="prepare-status">{preparingLabel(prId)}</span>
+  {:else if row?.status === 'error'}
+    <button
+      type="button"
+      class="prepare-btn prepare-error"
+      data-testid="prepare-btn"
+      onclick={() => handlePrepare(item)}
+      disabled={prepareStore.activeId !== null}
+      title={row.errorDetail ?? row.error}
+      aria-label="Retry preparing the AI review for pull request {item.ref.number} in {item.ref.owner}/{item.ref.repo}"
+    >Prepare failed — retry</button>
+  {:else if row?.status === 'ready' || isPreparedFor(prId, item.updatedAt)}
+    {@const cost = readyCostLabel(prId)}
+    <span
+      class="prepare-status ready"
+      data-testid="prepare-status"
+      title="AI review prepared — opening this PR starts warm"
+    >Ready ✓{#if cost}<span class="prepare-cost"> · {cost}</span>{/if}</span>
+  {:else}
+    <button
+      type="button"
+      class="prepare-btn"
+      data-testid="prepare-btn"
+      onclick={() => handlePrepare(item)}
+      disabled={prepareDisabledReason !== null || prepareStore.activeId !== null}
+      title={prepareDisabledReason ??
+        (prepareStore.activeId !== null
+          ? 'One prepare runs at a time — wait for the current one to finish'
+          : 'Run the AI review in the background so opening this PR starts instantly')}
+      aria-label="Prepare the AI review for pull request {item.ref.number} in {item.ref.owner}/{item.ref.repo}"
+    >Prepare</button>
+  {/if}
+{/snippet}
+
 {#snippet queueRows(items: QueueItem[])}
   {#each groupByRepo(items) as group (group.key)}
     <div class="repo-group-header">
@@ -333,6 +423,7 @@
             {@render queueSize(queueSizes[sizeKey(item)])}
             <span class="queue-time">{relativeTime(item.updatedAt)}</span>
           </button>
+          {@render prepareControl(item)}
         </li>
       {/each}
     </ul>
@@ -905,6 +996,64 @@
 
   .queue-size .stat-add { color: var(--diff-add); }
   .queue-size .stat-del { color: var(--diff-del); }
+
+  /* Prepare-ahead per-row control — a quiet side affordance, same register as
+     the inflight-discard button; the status chips echo the queue-size chip. */
+  .prepare-btn {
+    align-self: center;
+    background: none;
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    padding: 0.15rem 0.5rem;
+    flex-shrink: 0;
+    white-space: nowrap;
+    transition: color 150ms, background 100ms;
+  }
+
+  .prepare-btn:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--surface-raised);
+  }
+
+  .prepare-btn:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  .prepare-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .prepare-btn.prepare-error {
+    color: var(--legend-removed-color);
+    border-color: var(--legend-removed-color);
+  }
+
+  .prepare-status {
+    align-self: center;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    flex-shrink: 0;
+    white-space: nowrap;
+    padding: 0.15rem 0.25rem;
+  }
+
+  .prepare-status.preparing {
+    color: var(--text-muted);
+  }
+
+  .prepare-status.ready {
+    color: var(--diff-add);
+  }
+
+  .prepare-status .prepare-cost {
+    color: var(--text-muted);
+  }
 
   /* Recent reviews section */
   .recent-reviews {

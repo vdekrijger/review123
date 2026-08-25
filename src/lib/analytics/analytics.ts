@@ -170,6 +170,13 @@ const EVENTS = {
   // Carries only 'count' — the integer number of enabled reviewers kicked off.
   // Never a path, persona name, finding, or any code/diff content.
   reviewers_auto_started: ['count'],
+  // PRIVACY DECISION (Prepare-ahead): fired ONCE per landing-page "Prepare
+  // review" run when it settles. Carries only 'outcome' — an enum ('ready' |
+  // 'error' | 'cancelled' | 'declined' | 'load-failed') — plus 'tasks_run'
+  // (integer count of AI tasks that actually executed) and 'duration_ms'
+  // (same convention as ai_task_completed). Never a repo, PR number, title,
+  // finding, or any code/diff content.
+  review_prepared: ['outcome', 'tasks_run', 'duration_ms'],
 } as const
 
 export type EventName = keyof typeof EVENTS
