@@ -410,6 +410,160 @@ export function salvageIntentCheck(x: unknown): IntentCheckResult | null {
 }
 
 // ---------------------------------------------------------------------------
+// ExpectedOutcomesResult — expected-outcomes check (PROMPT_VERSIONS.outcomes)
+//
+// The task derives the concrete OBSERVABLE behavior changes the diff makes —
+// before → after pairs with in-diff evidence and the changed symbols each
+// claim hinges on (for the DETERMINISTIC symbol↔test cross-reference done
+// client-side, never by the LLM) — plus a "without this change" necessity
+// note.
+// ---------------------------------------------------------------------------
+
+/** Hard cap on outcome rows (the validator truncates; the prompt requests ≤8). */
+export const OUTCOMES_MAX_ITEMS = 8
+
+/** One piece of evidence for an outcome claim: a changed file (+ line). */
+export interface OutcomeEvidence {
+  path: string
+  line?: number
+}
+
+/** One observable behavior change: before → after, with evidence + symbols. */
+export interface OutcomeItem {
+  id: string
+  /** ONE plain sentence: the observable behavior BEFORE this change. */
+  before: string
+  /** ONE plain sentence: the observable behavior AFTER this change. */
+  after: string
+  /** Changed files (+ optional new-file line) grounding the claim. */
+  evidence: OutcomeEvidence[]
+  /**
+   * Changed function/class names this claim hinges on. Consumed by the
+   * deterministic test cross-reference (src/lib/ai/outcomeTests.ts) — the LLM
+   * never guesses test names; the panel resolves these symbols against the
+   * PR's changed test files via the #95 pairing machinery.
+   */
+  symbols: string[]
+}
+
+export interface ExpectedOutcomesResult {
+  /** Most significant first. EMPTY is legitimate (pure refactor/cosmetic). */
+  outcomes: OutcomeItem[]
+  /** 1–2 sentences: what stays broken/missing without this PR. */
+  withoutThis: string
+}
+
+function validateOutcomeEvidence(x: unknown): OutcomeEvidence | null {
+  if (!isObject(x)) return null
+  if (typeof x['path'] !== 'string' || x['path'].trim().length === 0) return null
+  const line = x['line']
+  const hasLine = typeof line === 'number' && Number.isFinite(line)
+  if (line !== undefined && line !== null && !hasLine) return null
+  return { path: x['path'], ...(hasLine ? { line: Math.round(line) } : {}) }
+}
+
+/**
+ * Validate an unknown value as ExpectedOutcomesResult (STRICT).
+ * Returns a NORMALIZED value or null if the shape is invalid.
+ *
+ * Strict rules (any violation → null; the caller then tries the salvage):
+ * - outcomes must be an array (EMPTY is valid — the auto-suppress signal for
+ *   pure refactors; the panel renders the calm "no observable changes" note).
+ * - each outcome: id/before/after non-empty strings; evidence an array of
+ *   valid entries (non-empty path, optional finite line → rounded); symbols
+ *   an array of strings.
+ * - withoutThis must be a string.
+ * The outcomes list is capped at OUTCOMES_MAX_ITEMS entries (truncated, not
+ * rejected — mirrors validateIntentCheck's collection caps).
+ */
+export function validateExpectedOutcomes(x: unknown): ExpectedOutcomesResult | null {
+  if (!isObject(x)) return null
+  if (!Array.isArray(x['outcomes'])) return null
+  if (typeof x['withoutThis'] !== 'string') return null
+
+  const outcomes: OutcomeItem[] = []
+  for (const raw of x['outcomes']) {
+    if (!isObject(raw)) return null
+    if (typeof raw['id'] !== 'string' || raw['id'].trim().length === 0) return null
+    if (typeof raw['before'] !== 'string' || raw['before'].trim().length === 0) return null
+    if (typeof raw['after'] !== 'string' || raw['after'].trim().length === 0) return null
+    if (!Array.isArray(raw['evidence'])) return null
+    const evidence: OutcomeEvidence[] = []
+    for (const ev of raw['evidence']) {
+      const validated = validateOutcomeEvidence(ev)
+      if (validated === null) return null
+      evidence.push(validated)
+    }
+    if (!Array.isArray(raw['symbols'])) return null
+    for (const s of raw['symbols']) {
+      if (typeof s !== 'string') return null
+    }
+    outcomes.push({
+      id: raw['id'],
+      before: raw['before'],
+      after: raw['after'],
+      evidence,
+      symbols: raw['symbols'] as string[],
+    })
+  }
+
+  return { outcomes: outcomes.slice(0, OUTCOMES_MAX_ITEMS), withoutThis: x['withoutThis'] }
+}
+
+/**
+ * Best-effort PER-ELEMENT salvage of a malformed expected-outcomes payload
+ * (mirrors salvageIntentCheck): each outcome that carries the substance is
+ * KEPT — one truncated/garbled entry no longer nukes the whole result.
+ *
+ * Per-item rules (violation → that ITEM is dropped, the rest kept):
+ * - before + after (non-empty strings) are the substance — required.
+ * - a missing/blank id is SYNTHESIZED positionally ("o1"…) — nothing
+ *   cross-references outcome ids, so the substance survives.
+ * - malformed evidence entries are dropped individually; a missing evidence
+ *   array degrades to [].
+ * - non-string symbols are dropped individually; missing array degrades to [].
+ * - a missing/invalid withoutThis degrades to '' (the panel hides the footer).
+ *
+ * Returns null when nothing usable survives: the value isn't an object,
+ * `outcomes` isn't an array at all, or a NON-EMPTY outcomes array salvages to
+ * zero items (an all-garbage list must not masquerade as the legitimate
+ * "no observable changes" empty result) — the caller then takes the error path.
+ */
+export function salvageExpectedOutcomes(x: unknown): ExpectedOutcomesResult | null {
+  if (!isObject(x)) return null
+  if (!Array.isArray(x['outcomes'])) return null
+
+  const outcomes: OutcomeItem[] = []
+  for (const raw of x['outcomes']) {
+    if (!isObject(raw)) continue
+    if (typeof raw['before'] !== 'string' || raw['before'].trim().length === 0) continue
+    if (typeof raw['after'] !== 'string' || raw['after'].trim().length === 0) continue
+    const id =
+      typeof raw['id'] === 'string' && raw['id'].trim().length > 0
+        ? raw['id']
+        : `o${outcomes.length + 1}`
+    const evidence: OutcomeEvidence[] = []
+    if (Array.isArray(raw['evidence'])) {
+      for (const ev of raw['evidence']) {
+        const validated = validateOutcomeEvidence(ev)
+        if (validated !== null) evidence.push(validated)
+      }
+    }
+    const symbols = Array.isArray(raw['symbols'])
+      ? raw['symbols'].filter((s): s is string => typeof s === 'string')
+      : []
+    outcomes.push({ id, before: raw['before'], after: raw['after'], evidence, symbols })
+  }
+
+  // A non-empty raw list that salvages to nothing is garbage, not a legitimate
+  // empty result — refuse rather than render a false "no observable changes".
+  if (x['outcomes'].length > 0 && outcomes.length === 0) return null
+
+  const withoutThis = typeof x['withoutThis'] === 'string' ? x['withoutThis'] : ''
+  return { outcomes: outcomes.slice(0, OUTCOMES_MAX_ITEMS), withoutThis }
+}
+
+// ---------------------------------------------------------------------------
 // GraphResult
 // ---------------------------------------------------------------------------
 

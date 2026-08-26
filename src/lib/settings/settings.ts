@@ -122,8 +122,10 @@ export type AiTaskMode = 'off' | 'standard' | 'deep'
  * matrix later: `story` (Plan H narrative ordering), `riskJudge` (the
  * single-pass LLM risk judge, #203), `simplify` (the post-review pass
  * that rewrites finding bodies into plain English — off|standard only,
- * default ON), and `intent` (the intent-vs-implementation check that reads
+ * default ON), `intent` (the intent-vs-implementation check that reads
  * the PR description as the stated intent and verifies the diff against it —
+ * off|standard only), and `outcomes` (the expected-outcomes check that
+ * derives the observable before → after behavior changes from the diff —
  * off|standard only). Only `coach` and `ask` remain outside user control
  * (on-demand, never auto-run).
  */
@@ -135,6 +137,7 @@ export type AiTaskId =
   | 'alternatives'
   | 'verdict'
   | 'intent'
+  | 'outcomes'
   | 'skills'
   | 'story'
   | 'riskJudge'
@@ -149,6 +152,7 @@ export const AI_TASK_IDS: readonly AiTaskId[] = [
   'alternatives',
   'verdict',
   'intent',
+  'outcomes',
   'skills',
   'story',
   'riskJudge',
@@ -173,11 +177,11 @@ const ORIGINAL_AUTO_TASKS = [
  * Tasks that support the deep (agentic) harness. `summary` is pure description
  * (no harness), `riskJudge` is single-pass BY DESIGN (#203 — a cheap triage
  * read, never the harness), `simplify` is a pure text rewrite (nothing for
- * tools to verify), and `intent` is off|standard-only in v1 (a tool-verified
- * deep mode — confirming matched/unfulfilled intents by reading the repo — is
- * a natural FUTURE candidate, but v1 stays a cheap single pass), so those only
- * support off/standard — 'deep' is never valid for them. `story` runs through
- * the harness when deep (Plan H).
+ * tools to verify), and `intent` and `outcomes` are off|standard-only in v1
+ * (tool-verified deep modes — confirming matched/unfulfilled intents, or
+ * outcome claims, by reading the repo — are natural FUTURE candidates, but v1
+ * stays a cheap single pass), so those only support off/standard — 'deep' is
+ * never valid for them. `story` runs through the harness when deep (Plan H).
  */
 export const DEEP_CAPABLE_TASKS: readonly AiTaskId[] = [
   'attention',
@@ -189,9 +193,9 @@ export const DEEP_CAPABLE_TASKS: readonly AiTaskId[] = [
   'story',
 ] as const
 
-/** Whether a task supports 'deep'. (Everything except summary + riskJudge + simplify + intent.) */
+/** Whether a task supports 'deep'. (Everything except summary + riskJudge + simplify + intent + outcomes.) */
 export function taskSupportsDeep(task: AiTaskId): boolean {
-  return task !== 'summary' && task !== 'riskJudge' && task !== 'simplify' && task !== 'intent'
+  return task !== 'summary' && task !== 'riskJudge' && task !== 'simplify' && task !== 'intent' && task !== 'outcomes'
 }
 
 export interface Settings {
@@ -311,6 +315,7 @@ export function defaultTaskModes(): Record<AiTaskId, AiTaskMode> {
     alternatives: 'standard',
     verdict: 'standard',
     intent: 'standard',
+    outcomes: 'standard',
     skills: 'standard',
     story: 'standard',
     riskJudge: 'standard',
@@ -538,6 +543,12 @@ function coerceTaskModes(obj: Record<string, unknown>): Record<AiTaskId, AiTaskM
     // out of nowhere → 'off'. Same idiom as story/riskJudge/simplify above.
     if (!isValidModeFor('intent', src['intent'])) {
       result.intent = allAutoOff ? 'off' : 'standard'
+    }
+    // outcomes joined the matrix after intent (#224): same idiom — a stored
+    // matrix without it derives 'standard' (auto task, default on), EXCEPT
+    // the minimal-token posture (all six original auto tasks off) → 'off'.
+    if (!isValidModeFor('outcomes', src['outcomes'])) {
+      result.outcomes = allAutoOff ? 'off' : 'standard'
     }
     return result
   }
@@ -865,7 +876,7 @@ export const setAllTasksDeep = () => save({ aiTaskModes: allDeepTaskModes() })
 export const setAllTasksStandard = () => save({ aiTaskModes: defaultTaskModes() })
 /**
  * Quick-set: keep summary + verdict on, turn the rest (incl. story, the risk
- * judge and the intent check) off (minimal tokens).
+ * judge, the intent check and the outcomes check) off (minimal tokens).
  */
 export function setOffAllExtras(): void {
   const modes = defaultTaskModes()

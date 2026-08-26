@@ -619,6 +619,34 @@ describe('AiModelsSection — per-task modes (Plan J)', () => {
     await userEvent.click(screen.getByRole('button', { name: /Off-all-extras/i }))
     expect(getSettings().aiTaskModes.intent).toBe('off')
   })
+
+  it('renders an Expected outcomes row with Off + Standard but NO Deep (off|standard only in v1)', () => {
+    render(AiModelsSection)
+    const outcomesGroup = within(screen.getByRole('radiogroup', { name: /Expected outcomes/i }))
+    expect(outcomesGroup.getByRole('radio', { name: /Off/i })).toBeInTheDocument()
+    expect(outcomesGroup.getByRole('radio', { name: /Standard/i })).toBeInTheDocument()
+    expect(outcomesGroup.queryByRole('radio', { name: /Deep/i })).toBeNull()
+  })
+
+  it('the Expected outcomes row defaults to Standard and persists Off immediately', async () => {
+    render(AiModelsSection)
+    const outcomesGroup = within(screen.getByRole('radiogroup', { name: /Expected outcomes/i }))
+    expect(outcomesGroup.getByRole('radio', { name: /Standard/i })).toBeChecked()
+    await userEvent.click(outcomesGroup.getByRole('radio', { name: /Off/i }))
+    expect(getSettings().aiTaskModes.outcomes).toBe('off')
+  })
+
+  it('quick-set All (deep) keeps outcomes standard — never deep', async () => {
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /^All$/i }))
+    expect(getSettings().aiTaskModes.outcomes).toBe('standard')
+  })
+
+  it('quick-set Off-all-extras turns outcomes off (an extra, not summary/verdict)', async () => {
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /Off-all-extras/i }))
+    expect(getSettings().aiTaskModes.outcomes).toBe('off')
+  })
 })
 
 describe('AiModelsSection — show/hide key toggle', () => {

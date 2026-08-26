@@ -58,6 +58,7 @@ describe('PROMPT_VERSIONS map', () => {
         'alternatives',
         'verdict',
         'intent',
+        'outcomes',
         'skills',
         'story',
         'riskJudge',
@@ -79,9 +80,10 @@ describe('PROMPT_VERSIONS map', () => {
     }
   })
 
-  it('post-migration tasks start at ≥1 (simplify and intent have their own version history)', () => {
+  it('post-migration tasks start at ≥1 (simplify, intent and outcomes have their own version history)', () => {
     expect(PROMPT_VERSIONS.simplify).toBeGreaterThanOrEqual(1)
     expect(PROMPT_VERSIONS.intent).toBeGreaterThanOrEqual(1)
+    expect(PROMPT_VERSIONS.outcomes).toBeGreaterThanOrEqual(1)
   })
 })
 
@@ -181,6 +183,18 @@ describe('cache-key stability (migration: global v26 → per-task map)', () => {
     expect(cacheKey(PR, 'simplify:' + hash, promptVersionFor('simplify'))).toBe(
       `owner/repo#1@abc123|simplify:${hash}|v1`,
     )
+  })
+
+  it('outcomes (title hash composes with its OWN v1 history; a title edit changes the key)', () => {
+    const title = 'feat: add feature'
+    const hash = djb2(title)
+    expect(cacheKey(PR, 'outcomes:' + hash, promptVersionFor('outcomes'))).toBe(
+      `owner/repo#1@abc123|outcomes:${hash}|v1`,
+    )
+    // A title edit changes the folded hash → the cached check re-runs. (The
+    // diff side is covered by the PR key's head SHA, like every sibling.)
+    const editedHash = djb2('feat: add feature v2')
+    expect(editedHash).not.toBe(hash)
   })
 
   it('intent (title+body hash composes with its OWN v1 history; a body edit changes the key)', () => {

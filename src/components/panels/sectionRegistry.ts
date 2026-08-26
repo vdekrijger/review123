@@ -2,8 +2,9 @@
  * sectionRegistry.ts — single source of truth for the UnderstandStep / ContextRail section list.
  *
  * Both UnderstandStep and ContextRail render from this registry, guaranteeing:
- *   • Identical ORDER everywhere (summary → intent → diagrams → file-structure →
- *     test-insight → alternatives → verdict-evidence → ci-details → pr-description).
+ *   • Identical ORDER everywhere (summary → intent → outcomes → diagrams →
+ *     file-structure → test-insight → alternatives → verdict-evidence →
+ *     ci-details → pr-description).
  *   • Consistent show/hide rules per context (page vs rail).
  *   • defaultOpen for the page context (all page panels start closed).
  *
@@ -50,6 +51,7 @@ export interface SectionDescriptor {
 export type SectionId =
   | 'summary'
   | 'intent'
+  | 'outcomes'
   | 'diagrams'
   | 'file-structure'
   | 'test-insight'
@@ -72,9 +74,10 @@ export type SectionId =
  * `run[AI_SECTION_TASK[id]].status` and feed it to <SectionStatus>. This is the
  * SAME per-task state AiProgress consumes — not a parallel source.
  */
-export const AI_SECTION_TASK: Partial<Record<SectionId, 'summary' | 'intent' | 'diagrams' | 'tests' | 'alternatives' | 'verdict'>> = {
+export const AI_SECTION_TASK: Partial<Record<SectionId, 'summary' | 'intent' | 'outcomes' | 'diagrams' | 'tests' | 'alternatives' | 'verdict'>> = {
   summary: 'summary',
   intent: 'intent',
+  outcomes: 'outcomes',
   diagrams: 'diagrams',
   'test-insight': 'tests',
   alternatives: 'alternatives',
@@ -183,6 +186,15 @@ export const SECTION_REGISTRY: readonly SectionDescriptor[] = [
     // the rail keeps its current section set; ContextRail never renders it.
     id: 'intent',
     title: 'Intent check (AI)',
+    defaultOpen: { page: false },
+    show: { page: true, rail: false },
+  },
+  {
+    // Expected-outcomes check. Slots right after intent so the validation
+    // story reads top-down: intent = promised, outcomes = actually changes,
+    // tests (further down) = proven. Page-only in v1, like intent.
+    id: 'outcomes',
+    title: 'Expected outcomes (AI)',
     defaultOpen: { page: false },
     show: { page: true, rail: false },
   },

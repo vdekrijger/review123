@@ -71,6 +71,7 @@ import {
   storyOrderPrompt,
   intentPrompt,
   hasMeaningfulIntent,
+  outcomesPrompt,
   askPrompt,
   expandCommentPrompt,
   skillReviewPrompt,
@@ -96,10 +97,10 @@ import {
 export type { ConvergenceValue }
 export type { SimplifyValue }
 export type { AskFocus }
-import { validateAttention, validateVerdict, validateRiskJudge, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, salvageAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, sinkGeneratedSteps, STORY_MAX_STEPS, validateIntentCheck, salvageIntentCheck } from './schemas'
+import { validateAttention, validateVerdict, validateRiskJudge, validateGraphResult, validateTestInsight, validateCoachResult, validateAlternativesResult, salvageAlternativesResult, validateStoryOrder, validateSkillReviewResult, salvageStoryOrder, dedupeStorySteps, sinkGeneratedSteps, STORY_MAX_STEPS, validateIntentCheck, salvageIntentCheck, validateExpectedOutcomes, salvageExpectedOutcomes } from './schemas'
 import { buildDeterministicStory } from './storyFallback'
 import { matchStoryPath } from './schemas'
-import type { AttentionResult, VerdictResult, RiskJudgeResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, SkillReviewResult, IntentCheckResult } from './schemas'
+import type { AttentionResult, VerdictResult, RiskJudgeResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, SkillReviewResult, IntentCheckResult, ExpectedOutcomesResult } from './schemas'
 import type { Draft } from '../drafts/drafts.svelte'
 import type { CoachCodeContext } from './coachContext'
 import {
@@ -226,7 +227,7 @@ export interface VerdictModelBreakdown {
 // Task names (used as cache key discriminants + analytics)
 // ---------------------------------------------------------------------------
 
-type TaskName = 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests' | 'alternatives' | 'story' | 'riskJudge' | 'intent'
+type TaskName = 'summary' | 'attention' | 'diagrams' | 'verdict' | 'tests' | 'alternatives' | 'story' | 'riskJudge' | 'intent' | 'outcomes'
 
 // ---------------------------------------------------------------------------
 // SkillReviewEntry — reactive entry per skill in skillReviews array
@@ -291,6 +292,15 @@ export interface AiRun {
    * ran (zero tokens; the panel shows the calm "nothing to check" state).
    */
   readonly intent: PanelState<IntentCheckResult>
+  /**
+   * Expected-outcomes check: derives the concrete OBSERVABLE before → after
+   * behavior changes from the diff — each with in-diff evidence and the
+   * changed symbols it hinges on (consumed by the panel's DETERMINISTIC
+   * symbol↔test cross-reference) — plus a "without this change" necessity
+   * note. Single-pass on the active model (off|standard). An EMPTY outcomes
+   * list is legitimate (pure refactors) and renders a calm note.
+   */
+  readonly outcomes: PanelState<ExpectedOutcomesResult>
   readonly story: PanelState<StoryOrderResult>
   readonly skillReviews: SkillReviewEntry[]
   /**
@@ -639,6 +649,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   const testsState = $state<PanelState<TestInsight>>({ status: 'idle' })
   const alternativesState = $state<PanelState<AlternativesResult>>({ status: 'idle' })
   const intentState = $state<PanelState<IntentCheckResult>>({ status: 'idle' })
+  const outcomesState = $state<PanelState<ExpectedOutcomesResult>>({ status: 'idle' })
   const storyState = $state<PanelState<StoryOrderResult>>({ status: 'idle' })
 
   // Skill review entries — populated on-demand by runSkillReviews()
@@ -2016,6 +2027,67 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     }
   }
 
+  // Outcomes post-process: strict-validate → per-element salvage (bad outcome
+  // dropped, the rest kept; malformed evidence/symbols entries dropped
+  // individually; a missing withoutThis degrades to ''). Returns null only
+  // when nothing usable survives — the caller then takes the error path.
+  // Mirrors shapeIntentCheck: passed as the validator to the transport so the
+  // salvage applies on every parse, including the repair pass.
+  function shapeExpectedOutcomes(x: unknown): ExpectedOutcomesResult | null {
+    return validateExpectedOutcomes(x) ?? salvageExpectedOutcomes(x)
+  }
+
+  async function runOutcomesTask(ctx: PackedContext): Promise<void> {
+    // Expected-outcomes check: derives the observable before → after behavior
+    // changes from the diff. In the user-facing task matrix with off|standard
+    // only — always single-pass on the active model (a tool-verified deep mode
+    // is a future candidate, not built). Mode-gated (#113/#219 idiom): off →
+    // 'disabled', zero tokens, no cache read.
+    if (!resolveTaskMode('outcomes', deepReview).run) {
+      outcomesState.status = 'disabled'
+      return
+    }
+
+    // Cache key folds a hash of the PR TITLE (the only prompt input beyond the
+    // packed diff — a title edit re-keys) into the task segment, mirroring the
+    // intent key's content-hash idiom. The diff side is covered by prKey (it
+    // carries the head SHA): "<pr>|outcomes:<djb2>|v<N>".
+    const title = meta?.title ?? ''
+    const key = cacheKey(prKey, 'outcomes:' + djb2(title), promptVersionFor('outcomes'))
+
+    const t0 = performance.now()
+    const hit = await getCached<ExpectedOutcomesResult>(key)
+    if (hit !== null) {
+      outcomesState.status = 'done'
+      outcomesState.value = hit
+      track('ai_task_completed', { task: 'outcomes', duration_ms: Math.round(performance.now() - t0), cached: true })
+      return
+    }
+
+    outcomesState.status = 'loading'
+    const t1 = performance.now()
+    const prompts = outcomesPrompt(ctx, { title })
+
+    try {
+      const singlePass = await llmJsonWithRepairWithUsage<ExpectedOutcomesResult>(
+        jsonTaskOpts(prompts),
+        shapeExpectedOutcomes,
+      )
+      await setCached<ExpectedOutcomesResult>(key, singlePass.result)
+      outcomesState.status = 'done'
+      outcomesState.value = singlePass.result
+      outcomesState.usage = singlePass.usage
+      track('ai_task_completed', {
+        task: 'outcomes',
+        duration_ms: Math.round(performance.now() - t1),
+        cached: false,
+        ...(singlePass.usage?.total_tokens !== undefined ? { tokens: singlePass.usage.total_tokens } : {}),
+      })
+    } catch (err) {
+      failTask(outcomesState, 'outcomes', err)
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Deep review helpers (Plan G part 2)
   //
@@ -2364,6 +2436,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     apply('tests', testsState)
     apply('alternatives', alternativesState)
     apply('intent', intentState)
+    apply('outcomes', outcomesState)
     apply('story', storyState)
     apply('riskJudge', riskJudgeState)
   }
@@ -2418,6 +2491,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       modes.alternatives === 'off' &&
       modes.verdict === 'off' &&
       modes.intent === 'off' &&
+      modes.outcomes === 'off' &&
       modes.story === 'off' &&
       modes.riskJudge === 'off'
     if (allAutoOff) {
@@ -2428,6 +2502,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       alternativesState.status = 'disabled'
       verdictState.status = 'disabled'
       intentState.status = 'disabled'
+      outcomesState.status = 'disabled'
       storyState.status = 'disabled'
       riskJudgeState.status = 'disabled'
       return
@@ -2453,6 +2528,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       runTestsTask(ctx),
       runAlternativesTask(ctx),
       runIntentTask(ctx),
+      runOutcomesTask(ctx),
       runStoryOrderTask(ctx),
       runRiskJudgeTask(ctx),
       runVerdictTask(ctx, ciData),
@@ -2479,6 +2555,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     if (task === 'tests') return runTestsTask(ctx)
     if (task === 'alternatives') return runAlternativesTask(ctx)
     if (task === 'intent') return runIntentTask(ctx)
+    if (task === 'outcomes') return runOutcomesTask(ctx)
     if (task === 'story') return runStoryOrderTask(ctx)
     if (task === 'riskJudge') return runRiskJudgeTask(ctx)
   }
@@ -3381,6 +3458,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     get tests() { return testsState },
     get alternatives() { return alternativesState },
     get intent() { return intentState },
+    get outcomes() { return outcomesState },
     get story() { return storyState },
     get skillReviews() { return skillReviewsState },
     get convergence() { return convergenceState },
@@ -3389,7 +3467,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // Sum every task's captured usage for this PR run. Tasks with no usage
       // (cached pre-usage results / errors) contribute nothing.
       let total: LlmUsage | undefined
-      const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, intentState, storyState, riskJudgeState, convergenceState, simplifyState]
+      const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, intentState, outcomesState, storyState, riskJudgeState, convergenceState, simplifyState]
       for (const s of states) total = addUsage(total, s.usage)
       for (const e of skillReviewsState) total = addUsage(total, e.state.usage)
       // Coach and expand are on-demand (never among the core tasks); fold in
@@ -3488,6 +3566,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       if (testsState.usage) addSinglePass(testsState.usage, 'Tests')
       if (alternativesState.usage) addSinglePass(alternativesState.usage, 'Alternatives')
       if (intentState.usage) addSinglePass(intentState.usage, 'Intent check')
+      if (outcomesState.usage) addSinglePass(outcomesState.usage, 'Expected outcomes')
       if (storyState.usage) addSinglePass(storyState.usage, 'Story')
       if (riskJudgeState.usage) addSinglePass(riskJudgeState.usage, 'Risk judge')
       if (coachUsage) addSinglePass(coachUsage, 'Coach')

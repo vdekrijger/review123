@@ -16,7 +16,7 @@
  * All GitHub + DeepSeek traffic is intercepted (review-flow idiom); PostHog is
  * blocked. Skills are absent (fresh storage) so the reviewer phase is a no-op;
  * the auto tasks (summary, hotspots, diagrams, tests, alternatives, verdict,
- * intent, story, risk judge) are the pipeline being proven warm.
+ * intent, outcomes, story, risk judge) are the pipeline being proven warm.
  */
 
 import { test, expect } from '@playwright/test'
@@ -115,6 +115,19 @@ const INTENT_RESULT = {
   ],
   unrequested: [],
   unfulfilled: [],
+}
+
+const OUTCOMES_RESULT = {
+  outcomes: [
+    {
+      id: 'o1',
+      before: 'The feature emitted the old lines.',
+      after: 'The feature emits the added lines.',
+      evidence: [{ path: 'src/feature.ts', line: 3 }],
+      symbols: [],
+    },
+  ],
+  withoutThis: 'The feature keeps emitting the old lines.',
 }
 
 const STORY_RESULT = {
@@ -226,6 +239,8 @@ async function setupRoutes(page: import('@playwright/test').Page): Promise<{ llm
     let result: unknown
     if (system.includes('checking the implementation against the stated intent')) {
       result = INTENT_RESULT
+    } else if (system.includes('deriving the observable behavior changes')) {
+      result = OUTCOMES_RESULT
     } else if (/guided narrative walkthrough/.test(system)) {
       result = STORY_RESULT
     } else if (system.includes('hotspot') || system.includes('readingorder')) {
@@ -281,8 +296,8 @@ test('prepare on a queue row → Ready → opening the PR renders from cache wit
   await expect(page.getByTestId('prepare-status')).toContainText('Ready ✓', { timeout: 30_000 })
 
   const callsAfterPrepare = counters.llmCalls()
-  // The full auto pipeline ran: summary (stream) + 8 JSON tasks.
-  expect(callsAfterPrepare).toBeGreaterThanOrEqual(9)
+  // The full auto pipeline ran: summary (stream) + 9 JSON tasks.
+  expect(callsAfterPrepare).toBeGreaterThanOrEqual(10)
 
   // Open the PR — panels must render from the caches the prepare populated.
   await queueRow.click()

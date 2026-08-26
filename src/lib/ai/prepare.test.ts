@@ -44,6 +44,7 @@ import type {
   StoryOrderResult,
   RiskJudgeResult,
   SkillReviewResult,
+  ExpectedOutcomesResult,
 } from './schemas'
 
 // ---------------------------------------------------------------------------
@@ -58,7 +59,7 @@ const META: PrMeta = {
   state: 'open',
   merged: false,
   // null body → the intent task SKIPS itself (zero tokens) — keeps the
-  // default fixture at 8 executing auto tasks.
+  // default fixture at 9 executing auto tasks (summary + 8 JSON).
   body: null,
   baseSha: BASE_SHA,
   headSha: HEAD_SHA,
@@ -95,6 +96,10 @@ const STORY_RESULT: StoryOrderResult = {
   steps: [{ index: 0, files: ['src/foo.ts'], caption: 'Foo changes.', layer: 'logic', relatedTests: [] }],
 }
 const RISK_JUDGE_RESULT: RiskJudgeResult = { score: 1, rationale: 'small', snippets: [] }
+const OUTCOMES_RESULT: ExpectedOutcomesResult = {
+  outcomes: [{ id: 'o1', before: 'b', after: 'a', evidence: [{ path: 'src/foo.ts' }], symbols: [] }],
+  withoutThis: 'The change never lands.',
+}
 const SKILL_RESULT: SkillReviewResult = { skillName: 'Security reviewer', findings: [] }
 
 type ValidateFn = (x: unknown) => unknown
@@ -107,6 +112,7 @@ function dispatchByValidator(validate: ValidateFn): unknown {
     GRAPH_RESULT,
     TEST_INSIGHT_RESULT,
     ALTERNATIVES_RESULT,
+    OUTCOMES_RESULT,
     SKILL_RESULT,
     VERDICT_RESULT,
     RISK_JUDGE_RESULT,
@@ -222,10 +228,10 @@ describe('preparePr — happy path', () => {
     expect(prepareStore.rows[PR_ID]?.status).toBe('ready')
     expect(prepareStore.activeId).toBeNull()
 
-    // Summary streamed once; the 7 JSON tasks each called once (intent skipped
+    // Summary streamed once; the 8 JSON tasks each called once (intent skipped
     // on the null body; skills off).
     expect(d.llmStreamWithUsage).toHaveBeenCalledTimes(1)
-    expect(d.llmJsonWithRepairWithUsage).toHaveBeenCalledTimes(7)
+    expect(d.llmJsonWithRepairWithUsage).toHaveBeenCalledTimes(8)
 
     // Every cached key carries the ROUTE's prKey (provider:owner/repo#n@head).
     const keys = [...d.cache.keys()]
@@ -240,14 +246,14 @@ describe('preparePr — happy path', () => {
     expect(rec).not.toBeNull()
     expect(rec!.headSha).toBe(HEAD_SHA)
     expect(rec!.updatedAt).toBe(TARGET.updatedAt)
-    expect(rec!.tasksRun).toBe(8) // 7 JSON + summary
-    expect(rec!.usage?.total_tokens).toBe(7 * 15 + 8)
+    expect(rec!.tasksRun).toBe(9) // 8 JSON + summary
+    expect(rec!.usage?.total_tokens).toBe(8 * 15 + 8)
     expect(isPreparedFor(PR_ID, TARGET.updatedAt)).toBe(true)
 
     // Analytics: one review_prepared with outcome/tasks_run/duration.
     expect(d.track).toHaveBeenCalledWith('review_prepared', {
       outcome: 'ready',
-      tasks_run: 8,
+      tasks_run: 9,
       duration_ms: expect.any(Number),
     })
   })
@@ -346,7 +352,7 @@ describe('preparePr — cancel-on-navigate', () => {
     const p = preparePr(TARGET, d.asPrepareDeps())
     // Wait until every task has DISPATCHED its (held) LLM call.
     await vi.waitFor(() => {
-      expect(releases.length).toBe(8)
+      expect(releases.length).toBe(9)
     })
     expect(prepareStore.rows[PR_ID]?.status).toBe('preparing')
 
@@ -407,12 +413,12 @@ describe('prepareProgress', () => {
 
     const p = preparePr(TARGET, d.asPrepareDeps())
     await vi.waitFor(() => {
-      expect(releases.length).toBe(8)
+      expect(releases.length).toBe(9)
     })
 
-    // 8 pending tasks + the skipped intent (settled at zero tokens) = 9 total.
+    // 9 pending tasks + the skipped intent (settled at zero tokens) = 10 total.
     const before = prepareProgress(PR_ID)
-    expect(before).toEqual({ done: 1, total: 9 })
+    expect(before).toEqual({ done: 1, total: 10 })
 
     releases[0]()
     await vi.waitFor(() => {
@@ -444,7 +450,7 @@ describe('preparePr — error isolation', () => {
     expect(first).toEqual({ started: true, outcome: 'error' })
     const row = prepareStore.rows[PR_ID]
     expect(row?.status).toBe('error')
-    expect(row?.error).toBe('1 of 8 AI tasks failed')
+    expect(row?.error).toBe('1 of 9 AI tasks failed')
     expect(row?.errorDetail).toContain('DeepSeek exploded')
     // Failure never blocks anything: the siblings all cached (7 of 8 entries;
     // errors are never cached), and no prepared record was written.
@@ -566,7 +572,7 @@ describe('preparePr — skill reviewers', () => {
     expect(provider.getComments).toHaveBeenCalledTimes(1)
     // Exactly one ENABLED reviewer ran and cached under its content hash.
     expect([...d.cache.keys()].some((k) => k.includes('|skill:'))).toBe(true)
-    expect(preparedRecord(PR_ID)?.tasksRun).toBe(9) // 8 auto + 1 reviewer
+    expect(preparedRecord(PR_ID)?.tasksRun).toBe(10) // 9 auto + 1 reviewer
   })
 
   it('skills mode off → no reviewer phase, no comment fetch', async () => {

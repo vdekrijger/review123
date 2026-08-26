@@ -59,8 +59,8 @@ function makePrMeta() {
   }
 }
 
-function makePrFiles() {
-  return [
+function makePrFiles(withTestFile = false) {
+  const files = [
     {
       filename: 'src/feature.ts',
       status: 'modified',
@@ -76,7 +76,29 @@ function makePrFiles() {
       deletions: 0,
     },
   ]
+  if (withTestFile) {
+    // Only the expected-outcomes tests add this: a changed TEST file whose
+    // contents NAME `greetUser`, so the deterministic outcome↔test join can
+    // resolve a real chip. Default fixtures stay byte-identical.
+    files.push({
+      filename: 'src/feature.test.ts',
+      status: 'added',
+      patch: '@@ -0,0 +1,5 @@\n+describe(\'greetUser\', () => {\n+  it(\'greets politely\', () => {\n+    expect(greetUser(\'x\')).toBe(\'hi x\')\n+  })\n+})',
+      additions: 5,
+      deletions: 0,
+    })
+  }
+  return files
 }
+
+/** New-side content of the fixture test file (withTestFile option). */
+const TEST_FILE_CONTENT = [
+  "describe('greetUser', () => {",
+  "  it('greets politely', () => {",
+  "    expect(greetUser('x')).toBe('hi x')",
+  '  })',
+  '})',
+].join('\n')
 
 function makeFileContent(text: string) {
   // GitHub contents API returns base64-encoded content
@@ -355,6 +377,30 @@ const INTENT_RESULT = {
   unfulfilled: [],
 }
 
+// Expected-outcomes fixture: two observable before → after changes. o1's
+// symbols name `greetUser` — with the withTestFile fixture the DETERMINISTIC
+// join (no LLM) resolves it to src/feature.test.ts (named → no "likely").
+// o2's symbol matches no test → the honest "no test asserts this outcome".
+const OUTCOMES_RESULT = {
+  outcomes: [
+    {
+      id: 'o1',
+      before: 'Calling the feature returned a plain greeting.',
+      after: 'Calling the feature returns the formatted greeting.',
+      evidence: [{ path: 'src/feature.ts', line: 3 }],
+      symbols: ['greetUser'],
+    },
+    {
+      id: 'o2',
+      before: 'Imports resolved through the old utils path.',
+      after: 'Imports resolve through src/old-utils.ts.',
+      evidence: [{ path: 'src/old-utils.ts' }],
+      symbols: ['legacyHelper'],
+    },
+  ],
+  withoutThis: 'Greetings stay unformatted without this change.',
+}
+
 // Intent drift fixture: one unfulfilled promise + one notable unrequested
 // change — exercises the grouped drift rendering (unfulfilled first).
 const INTENT_RESULT_DRIFT = {
@@ -476,6 +522,11 @@ async function setupRoutes(
     emptyFlow?: boolean
     /** Intent check: return the DRIFT fixture (unfulfilled + notable unrequested). */
     intentDrift?: boolean
+    /**
+     * Expected outcomes: add the changed src/feature.test.ts fixture (files +
+     * contents) so the deterministic outcome↔test join can resolve a chip.
+     */
+    withTestFile?: boolean
   } = {},
 ) {
   // Block PostHog analytics
@@ -494,7 +545,7 @@ async function setupRoutes(
 
     // PR files: /repos/:owner/:repo/pulls/:number/files
     if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) {
-      return route.fulfill({ json: makePrFiles() })
+      return route.fulfill({ json: makePrFiles(opts.withTestFile) })
     }
 
     // Check runs: /repos/:owner/:repo/commits/:sha/check-runs
@@ -529,6 +580,9 @@ async function setupRoutes(
       }
       if (filePath === 'src/old-utils.ts') {
         return route.fulfill({ json: makeFileContent('export {}') })
+      }
+      if (opts.withTestFile && filePath === 'src/feature.test.ts' && ref === HEAD_SHA) {
+        return route.fulfill({ json: makeFileContent(TEST_FILE_CONTENT) })
       }
       // 404 for unknown files
       return route.fulfill({ status: 404, json: { message: 'Not Found' } })
@@ -672,6 +726,9 @@ async function setupRoutes(
       // Intent-vs-implementation check. Dispatched FIRST among the JSON tasks
       // (before the 'covered'/'gaps' substring checks) on its stable phrase.
       result = opts.intentDrift ? INTENT_RESULT_DRIFT : INTENT_RESULT
+    } else if (systemContent.includes('deriving the observable behavior changes')) {
+      // Expected-outcomes check — its own stable dispatch phrase.
+      result = OUTCOMES_RESULT
     } else if (systemContent.includes('consolidating overlapping code-review findings')) {
       // Convergence pass (PROMPT_VERSION 26): no overlaps — a valid empty
       // cluster set, so the flow renders findings unmerged (loss-proof path).
@@ -2654,4 +2711,54 @@ test('intent check: drift renders the Unfulfilled group first, then notable unre
 
   // The aligned line never renders in the drift state.
   await expect(intentPanel.getByText(/Implementation matches the stated intent/)).toHaveCount(0)
+})
+
+// ---------------------------------------------------------------------------
+// Expected outcomes: before → after rows, deterministic test chip, no-test note
+// ---------------------------------------------------------------------------
+
+test('expected outcomes: rows render with a deterministic test chip, the no-test note, and the withoutThis footer', async ({ page }) => {
+  // withTestFile adds src/feature.test.ts (files + contents) so the
+  // DETERMINISTIC join can resolve o1's `greetUser` to a real chip.
+  await setupRoutes(page, { withTestFile: true })
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_UNDERSTAND)
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // The Expected outcomes section renders in the Understand step; open it.
+  const outcomesPanel = page.locator('details.detail-panel.outcomes-panel')
+  await expect(outcomesPanel).toBeVisible({ timeout: 10_000 })
+  await outcomesPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+
+  // Both outcome rows render as before → after pairs.
+  await expect(
+    outcomesPanel.getByText('Calling the feature returns the formatted greeting.'),
+  ).toBeVisible({ timeout: 15_000 })
+  await expect(
+    outcomesPanel.getByText('Calling the feature returned a plain greeting.'),
+  ).toBeVisible()
+  await expect(
+    outcomesPanel.getByText('Imports resolve through src/old-utils.ts.'),
+  ).toBeVisible()
+
+  // Evidence link renders as path:line.
+  await expect(outcomesPanel.getByRole('button', { name: 'src/feature.ts:3' })).toBeVisible()
+
+  // Deterministic test chip: greetUser is NAMED in src/feature.test.ts —
+  // "asserted by" with the test file, and no "(likely)" qualifier.
+  await expect(outcomesPanel.getByText('asserted by')).toBeVisible({ timeout: 15_000 })
+  await expect(outcomesPanel.getByRole('button', { name: 'src/feature.test.ts' })).toBeVisible()
+  await expect(outcomesPanel.getByText('(likely)')).toHaveCount(0)
+
+  // The unmatched outcome gets the honest, calm no-test note.
+  await expect(outcomesPanel.getByText('no test asserts this outcome')).toBeVisible()
+
+  // The necessity footer renders quietly at the bottom.
+  await expect(outcomesPanel.getByText('Without this change:')).toBeVisible()
+  await expect(outcomesPanel.getByText('Greetings stay unformatted without this change.')).toBeVisible()
 })

@@ -213,6 +213,7 @@ function autoPanels(run: AiRun): PanelState<unknown>[] {
     run.alternatives,
     run.verdict,
     run.intent,
+    run.outcomes,
     run.story,
     run.riskJudge,
   ]

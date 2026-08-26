@@ -20,9 +20,12 @@ import {
   validateRiskJudge,
   validateIntentCheck,
   salvageIntentCheck,
+  validateExpectedOutcomes,
+  salvageExpectedOutcomes,
   IMPACT_MAX_PER_GROUP,
   RISK_JUDGE_MAX_SNIPPETS,
   INTENT_MAX_ITEMS,
+  OUTCOMES_MAX_ITEMS,
 } from './schemas'
 
 // ---------------------------------------------------------------------------
@@ -1918,5 +1921,148 @@ describe('salvageIntentCheck', () => {
     const out = salvageIntentCheck({ intents, unfulfilled })
     expect(out!.intents).toHaveLength(INTENT_MAX_ITEMS)
     expect(out!.unfulfilled).toHaveLength(INTENT_MAX_ITEMS)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// validateExpectedOutcomes / salvageExpectedOutcomes (expected-outcomes check)
+// ---------------------------------------------------------------------------
+
+describe('validateExpectedOutcomes', () => {
+  const valid = {
+    outcomes: [
+      {
+        id: 'o1',
+        before: 'An off-diff comment failed the whole review.',
+        after: 'It posts as a file-level comment.',
+        evidence: [{ path: 'src/review.ts', line: 42 }, { path: 'src/api.ts' }],
+        symbols: ['postReview', 'anchorComment'],
+      },
+    ],
+    withoutThis: 'Reviews with off-diff comments keep failing outright.',
+  }
+
+  it('accepts a fully valid result (normalized copy)', () => {
+    const out = validateExpectedOutcomes(valid)
+    expect(out).not.toBeNull()
+    expect(out!.outcomes).toHaveLength(1)
+    expect(out!.outcomes[0].evidence).toEqual([{ path: 'src/review.ts', line: 42 }, { path: 'src/api.ts' }])
+    expect(out!.outcomes[0].symbols).toEqual(['postReview', 'anchorComment'])
+    expect(out!.withoutThis).toBe('Reviews with off-diff comments keep failing outright.')
+  })
+
+  it('accepts an EMPTY outcomes array (pure refactor — the auto-suppress signal)', () => {
+    const out = validateExpectedOutcomes({ outcomes: [], withoutThis: 'Nothing user-visible changes.' })
+    expect(out).toEqual({ outcomes: [], withoutThis: 'Nothing user-visible changes.' })
+  })
+
+  it('rejects non-objects, missing collections, and a missing withoutThis', () => {
+    expect(validateExpectedOutcomes(null)).toBeNull()
+    expect(validateExpectedOutcomes('x')).toBeNull()
+    expect(validateExpectedOutcomes([])).toBeNull()
+    expect(validateExpectedOutcomes({})).toBeNull()
+    expect(validateExpectedOutcomes({ outcomes: 'nope', withoutThis: 'w' })).toBeNull()
+    expect(validateExpectedOutcomes({ outcomes: [] })).toBeNull()
+    expect(validateExpectedOutcomes({ outcomes: [], withoutThis: 42 })).toBeNull()
+  })
+
+  it('STRICT: rejects blank id/before/after, malformed evidence, and non-string symbols', () => {
+    expect(validateExpectedOutcomes({ ...valid, outcomes: [{ ...valid.outcomes[0], id: ' ' }] })).toBeNull()
+    expect(validateExpectedOutcomes({ ...valid, outcomes: [{ ...valid.outcomes[0], before: '' }] })).toBeNull()
+    expect(validateExpectedOutcomes({ ...valid, outcomes: [{ ...valid.outcomes[0], after: '  ' }] })).toBeNull()
+    expect(validateExpectedOutcomes({ ...valid, outcomes: [{ ...valid.outcomes[0], evidence: [{ path: '' }] }] })).toBeNull()
+    expect(validateExpectedOutcomes({ ...valid, outcomes: [{ ...valid.outcomes[0], evidence: [{ path: 'a.ts', line: 'x' }] }] })).toBeNull()
+    expect(validateExpectedOutcomes({ ...valid, outcomes: [{ ...valid.outcomes[0], symbols: ['ok', 7] }] })).toBeNull()
+    expect(validateExpectedOutcomes({ ...valid, outcomes: [{ ...valid.outcomes[0], symbols: 'postReview' }] })).toBeNull()
+  })
+
+  it('rounds fractional evidence lines and tolerates line: null', () => {
+    const out = validateExpectedOutcomes({
+      ...valid,
+      outcomes: [{ ...valid.outcomes[0], evidence: [{ path: 'a.ts', line: 3.7 }, { path: 'b.ts', line: null }] }],
+    })
+    expect(out!.outcomes[0].evidence).toEqual([{ path: 'a.ts', line: 4 }, { path: 'b.ts' }])
+  })
+
+  it('caps outcomes at OUTCOMES_MAX_ITEMS (truncated, not rejected)', () => {
+    const outcomes = Array.from({ length: OUTCOMES_MAX_ITEMS + 4 }, (_, i) => ({
+      id: `o${i}`, before: `b${i}`, after: `a${i}`, evidence: [], symbols: [],
+    }))
+    const out = validateExpectedOutcomes({ outcomes, withoutThis: 'w' })
+    expect(out!.outcomes).toHaveLength(OUTCOMES_MAX_ITEMS)
+  })
+
+  it('tolerates extra keys on the root and elements', () => {
+    const out = validateExpectedOutcomes({
+      ...valid,
+      extra: true,
+      outcomes: [{ ...valid.outcomes[0], confidence: 0.9 }],
+    })
+    expect(out).not.toBeNull()
+    expect(out!.outcomes[0]).toEqual(valid.outcomes[0])
+  })
+})
+
+describe('salvageExpectedOutcomes', () => {
+  it('drops malformed outcomes and keeps the rest; bad evidence/symbols entries dropped individually', () => {
+    const out = salvageExpectedOutcomes({
+      outcomes: [
+        {
+          id: 'o1',
+          before: 'The endpoint returned 500 on empty input.',
+          after: 'It returns 422 with a field error.',
+          evidence: [{ path: 'src/api.ts', line: 9 }, { path: 42 }, 'junk'],
+          symbols: ['validateInput', 7, null],
+        },
+        { id: 'o2', before: 'only half a claim' }, // missing after — dropped
+        'garbage',
+      ],
+      withoutThis: 'Empty input keeps crashing the endpoint.',
+    })
+    expect(out).not.toBeNull()
+    expect(out!.outcomes).toHaveLength(1)
+    expect(out!.outcomes[0].evidence).toEqual([{ path: 'src/api.ts', line: 9 }])
+    expect(out!.outcomes[0].symbols).toEqual(['validateInput'])
+    expect(out!.withoutThis).toBe('Empty input keeps crashing the endpoint.')
+  })
+
+  it('synthesizes a positional id when missing/blank (nothing cross-references outcome ids)', () => {
+    const out = salvageExpectedOutcomes({
+      outcomes: [
+        { before: 'b1', after: 'a1', evidence: [], symbols: [] },
+        { id: '  ', before: 'b2', after: 'a2' },
+      ],
+      withoutThis: 'w',
+    })
+    expect(out!.outcomes.map((o) => o.id)).toEqual(['o1', 'o2'])
+  })
+
+  it('missing evidence/symbols arrays degrade to []; missing withoutThis degrades to empty string', () => {
+    const out = salvageExpectedOutcomes({ outcomes: [{ id: 'o1', before: 'b', after: 'a' }] })
+    expect(out).toEqual({ outcomes: [{ id: 'o1', before: 'b', after: 'a', evidence: [], symbols: [] }], withoutThis: '' })
+  })
+
+  it('a genuinely EMPTY outcomes array salvages to the legitimate empty result', () => {
+    const out = salvageExpectedOutcomes({ outcomes: [], withoutThis: 'Nothing changes.' })
+    expect(out).toEqual({ outcomes: [], withoutThis: 'Nothing changes.' })
+  })
+
+  it('a NON-EMPTY list that salvages to zero items returns null — garbage must not fake the empty state', () => {
+    expect(salvageExpectedOutcomes({ outcomes: ['junk', { id: 'o1' }], withoutThis: 'w' })).toBeNull()
+  })
+
+  it('whole-result garbage returns null (task error path)', () => {
+    expect(salvageExpectedOutcomes(null)).toBeNull()
+    expect(salvageExpectedOutcomes('x')).toBeNull()
+    expect(salvageExpectedOutcomes({})).toBeNull()
+    expect(salvageExpectedOutcomes({ outcomes: 'nope' })).toBeNull()
+  })
+
+  it('caps outcomes at OUTCOMES_MAX_ITEMS', () => {
+    const outcomes = Array.from({ length: OUTCOMES_MAX_ITEMS + 3 }, (_, i) => ({
+      id: `o${i}`, before: `b${i}`, after: `a${i}`,
+    }))
+    const out = salvageExpectedOutcomes({ outcomes, withoutThis: 'w' })
+    expect(out!.outcomes).toHaveLength(OUTCOMES_MAX_ITEMS)
   })
 })

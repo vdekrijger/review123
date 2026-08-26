@@ -37,6 +37,7 @@ describe('SECTION_REGISTRY — required sections present', () => {
   const required: SectionId[] = [
     'summary',
     'intent',
+    'outcomes',
     'diagrams',
     'file-structure',
     'test-insight',
@@ -78,6 +79,11 @@ describe('SECTION_REGISTRY — canonical order', () => {
   it('intent sits between summary and diagrams', () => {
     expect(ids.indexOf('summary')).toBeLessThan(ids.indexOf('intent'))
     expect(ids.indexOf('intent')).toBeLessThan(ids.indexOf('diagrams'))
+  })
+
+  it('outcomes sits between intent and diagrams (intent = promised, outcomes = actually changes)', () => {
+    expect(ids.indexOf('intent')).toBeLessThan(ids.indexOf('outcomes'))
+    expect(ids.indexOf('outcomes')).toBeLessThan(ids.indexOf('diagrams'))
   })
 
   it('diagrams comes before file-structure', () => {
@@ -125,6 +131,12 @@ describe('SECTION_REGISTRY — show flags', () => {
     const intent = SECTION_REGISTRY.find((s) => s.id === 'intent')!
     expect(intent.show.rail).toBe(false)
     expect(intent.title).toBe('Intent check (AI)')
+  })
+
+  it('outcomes is page-only in v1 (show.rail false — like intent)', () => {
+    const outcomes = SECTION_REGISTRY.find((s) => s.id === 'outcomes')!
+    expect(outcomes.show.rail).toBe(false)
+    expect(outcomes.title).toBe('Expected outcomes (AI)')
   })
 
   const railSections: SectionId[] = [
@@ -227,15 +239,25 @@ describe('resolveUnderstandSections', () => {
 
   it('forward-compat merge inserts a missing section in its registry-relative position', () => {
     // Omit 'diagrams'. The remaining stored sections are in registry order, so
-    // diagrams should land back right after its registry predecessor (intent)
+    // diagrams should land back right after its registry predecessor (outcomes)
     // and before file-structure.
     const stored = PAGE_IDS.filter((id) => id !== 'diagrams').map((id) => ({ id, enabled: true }))
     const resolved = resolveUnderstandSections(stored).map((r) => r.descriptor.id)
-    const intentIdx = resolved.indexOf('intent')
+    const outcomesIdx = resolved.indexOf('outcomes')
     const diagramsIdx = resolved.indexOf('diagrams')
     const fileStructureIdx = resolved.indexOf('file-structure')
-    expect(diagramsIdx).toBe(intentIdx + 1)
+    expect(diagramsIdx).toBe(outcomesIdx + 1)
     expect(diagramsIdx).toBeLessThan(fileStructureIdx)
+  })
+
+  it('forward-compat merge surfaces the NEW outcomes section for a stored pre-outcomes layout', () => {
+    // A user who saved their layout before the outcomes section existed gets
+    // it back in its registry slot (right after intent), enabled.
+    const stored = PAGE_IDS.filter((id) => id !== 'outcomes').map((id) => ({ id, enabled: true }))
+    const resolved = resolveUnderstandSections(stored)
+    const ids = resolved.map((r) => r.descriptor.id)
+    expect(ids.indexOf('outcomes')).toBe(ids.indexOf('intent') + 1)
+    expect(resolved.find((r) => r.descriptor.id === 'outcomes')!.enabled).toBe(true)
   })
 
   it('non-page sections never appear (rail-only/hidden ids ignored)', () => {
