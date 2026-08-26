@@ -20,6 +20,7 @@ import { getPrCommits } from '../github/commits'
 import { compareCommits } from '../github/compare'
 import { submitReview } from '../github/review'
 import { replyToReviewComment, type ReplyOutcome } from '../github/replies'
+import { getGithubPreviewDeployments, type PreviewDeployment } from '../preview/preview'
 import { ghFetch } from '../github/client'
 import { GithubApiError } from '../github/types'
 import { getSettings } from '../settings/settings'
@@ -322,6 +323,12 @@ export const githubProvider: ReviewProvider = {
 
   getCiSummary(ref: PrRefX, headSha: string): Promise<CiSummary> {
     return getCiSummary(toRef(ref), headSha)
+  },
+
+  // Deploy-preview detection (deterministic; ladder + caching live in
+  // lib/preview/preview.ts — this stays a thin adapter).
+  getPreviewDeployments(ref: PrRefX, headSha: string): Promise<PreviewDeployment[]> {
+    return getGithubPreviewDeployments({ owner: ref.owner, repo: ref.repo }, headSha)
   },
 
   getComments(ref: PrRefX): Promise<PrComment[]> {

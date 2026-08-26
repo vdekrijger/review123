@@ -42,6 +42,14 @@
   import { providerFor } from '../lib/provider/registry'
   import type { PrRefX, ReplyOutcome } from '../lib/provider/types'
   import { track } from '../lib/analytics/analytics'
+  import PreviewButton from '../components/PreviewButton.svelte'
+  import PreviewPanel from '../components/PreviewPanel.svelte'
+  import {
+    pickBestPreview,
+    loadPreviewPanelOpen,
+    savePreviewPanelOpen,
+    type PreviewDeployment,
+  } from '../lib/preview/preview'
 
   const RETURN_KEY = 'review123:returnTo'
 
@@ -511,6 +519,37 @@
     }
   })
 
+  // ---- Deploy-preview surfacing (deterministic, zero LLM) ----
+  // Detected once per loaded PR head (the module caches per sha). Best-effort:
+  // absence keeps previewBest null and no affordance renders — zero cost.
+  // Providers without getPreviewDeployments (GitLab/Bitbucket for now) skip
+  // detection entirely via the optional-method check.
+  let previewBest: PreviewDeployment | null = $state(null)
+  let previewPanelOpen = $state(loadPreviewPanelOpen())
+  let previewInitialized = false
+  $effect(() => {
+    if (load.state.status === 'ready' && !previewInitialized) {
+      previewInitialized = true
+      activeProvider.getPreviewDeployments?.(prRefX, load.state.meta.headSha).then(
+        (list) => { previewBest = pickBestPreview(list) },
+        () => { /* best-effort — no preview affordance on failure */ },
+      )
+    }
+  })
+
+  function togglePreviewPanel() {
+    previewPanelOpen = !previewPanelOpen
+    savePreviewPanelOpen(previewPanelOpen)
+  }
+
+  // Panel is only meaningful for a READY preview (there's nothing to frame
+  // while building/failed) — the toggle button only renders in that state too.
+  // Local const re-narrows previewBest for TS (same idiom as aiRun above).
+  const previewPanelVisible = $derived.by(() => {
+    const p = previewBest
+    return previewPanelOpen && p !== null && p.state === 'ready'
+  })
+
   // Fetch PR comments + resolved thread state once when PR is ready (non-blocking, silent on failure)
   let commentsInitialized = false
   $effect(() => {
@@ -703,7 +742,7 @@
   <ConsentDialog repo={consentDialogRepo} onresult={handleConsentResult} />
 {/if}
 
-<section class="review" data-rail-collapsed={String(railCollapsed)}>
+<section class="review" data-rail-collapsed={String(railCollapsed)} data-preview-open={String(previewPanelVisible)}>
   {#if load.state.status === 'loading'}
     <div class="pr-loading" aria-busy="true" aria-label="Loading pull request">
       <CraftedLoader />
@@ -729,18 +768,26 @@
   {:else}
     <div class="pr-header">
       <h1>{load.state.meta.title} <small>{owner}/{repo}#{number}</small></h1>
-      <a
-        class="view-on-provider"
-        href={activeProvider.prWebUrl(prRefX)}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label={`View on ${activeProvider.displayName} (opens in a new tab)`}
-        onclick={() => track('original_pr_opened', { provider: providerId })}
-      >
-        <ProviderIcon provider={providerId as PrRefX['provider']} size={13} />
-        <span>View on {activeProvider.displayName}</span>
-        <span class="ext" aria-hidden="true">↗</span>
-      </a>
+      <div class="pr-header-actions">
+        <PreviewButton
+          preview={previewBest}
+          headSha={load.state.meta.headSha}
+          panelOpen={previewPanelOpen}
+          onTogglePanel={togglePreviewPanel}
+        />
+        <a
+          class="view-on-provider"
+          href={activeProvider.prWebUrl(prRefX)}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`View on ${activeProvider.displayName} (opens in a new tab)`}
+          onclick={() => track('original_pr_opened', { provider: providerId })}
+        >
+          <ProviderIcon provider={providerId as PrRefX['provider']} size={13} />
+          <span>View on {activeProvider.displayName}</span>
+          <span class="ext" aria-hidden="true">↗</span>
+        </a>
+      </div>
     </div>
     <Stepper {step} onstep={(s) => goStep(s)} />
 
@@ -910,6 +957,17 @@
   {/if}
 </section>
 
+<!-- Embedded deploy-preview panel — fixed right-side mount at the ROUTE level
+     (never inside InspectStep); side-by-side layout comes from the section's
+     data-preview-open padding. -->
+{#if previewPanelVisible && previewBest !== null}
+  <PreviewPanel
+    url={previewBest.url}
+    providerName={previewBest.providerName}
+    onclose={togglePreviewPanel}
+  />
+{/if}
+
 <!-- EC-07i: Sticky bottom bar — shown once the PR is loaded -->
 {#if load.state.status === 'ready'}
   <div class="draft-bar">
@@ -971,6 +1029,16 @@
     min-width: 0;
   }
 
+  /* Header action cluster: preview affordance + "View on <Provider>" link */
+  .pr-header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+    align-self: center;
+  }
+
   /* Utility/secondary link — muted, not a primary action */
   .view-on-provider {
     display: inline-flex;
@@ -1009,6 +1077,22 @@
   @media (max-width: 1443px) and (min-width: 1100px) {
     .review:not([data-rail-collapsed="true"]) {
       padding-right: calc(300px + 1rem);
+    }
+  }
+
+  /*
+   * Side-by-side embedded preview: at rail-capable widths (≥1100px) the fixed
+   * right panel claims layout width — content gives up the centered 70rem cap
+   * and flows in the remaining left space. Declared AFTER the medium-regime
+   * rail rule so the (wider) panel padding wins when both would apply. Below
+   * 1100px the panel is an overlay drawer (PreviewPanel's own media query) and
+   * content keeps its normal layout.
+   */
+  @media (min-width: 1100px) {
+    .review[data-preview-open="true"] {
+      max-width: none;
+      margin: 0;
+      padding-right: calc(min(40vw, 560px) + 2rem);
     }
   }
   .muted { opacity: 0.6; }
