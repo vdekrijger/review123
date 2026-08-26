@@ -13,8 +13,10 @@ export type { PrComment } from '../github/comments'
 export type { PrCommit } from '../github/commits'
 export type { Verdict, SubmitOutcome } from '../github/review'
 export type { ReplyOutcome } from '../github/replies'
+export type { PreviewDeployment } from '../preview/preview'
 
 import type { PrMeta, PrFile } from '../github/types'
+import type { PreviewDeployment } from '../preview/preview'
 import type { CiSummary } from '../github/checks'
 import type { PrComment } from '../github/comments'
 import type { PrCommit } from '../github/commits'
@@ -262,6 +264,19 @@ export interface ReviewProvider {
    * Returns [] when unauthenticated.
    */
   getMyQueue?(): Promise<QueueItem[]>
+
+  /**
+   * Detect deploy-preview deployments (Vercel / Netlify / Cloudflare Pages …)
+   * for a PR head. Deterministic — deployments API first, check-runs/commit-
+   * statuses fallback. Returns deduped candidates; the UI picks the best via
+   * pickBestPreview(). Best-effort: implementations never throw — an empty
+   * list is the quiet default and the affordance simply doesn't render.
+   *
+   * Optional — capability by method presence (GitHub-only in v1). GitLab
+   * (Environments / Review Apps) and Bitbucket (Deployments API) can be added
+   * additively later; while absent, callers get no preview affordance.
+   */
+  getPreviewDeployments?(ref: PrRefX, headSha: string): Promise<PreviewDeployment[]>
 
   /**
    * Resolve the authenticated viewer's provider-canonical identity — the same

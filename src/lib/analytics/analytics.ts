@@ -165,6 +165,16 @@ const EVENTS = {
   // Fired when the user opens the bundled "Try a live demo" onboarding path from
   // the landing page. No props — it's a pure navigation signal.
   demo_opened: [],
+  // PRIVACY DECISION (deploy-preview surfacing): fired when the user opens a
+  // detected deploy preview — in a new tab or the embedded panel. Carries only
+  //   - 'method'        : 'tab' | 'panel' — fixed enum.
+  //   - 'provider_name' : the deploy PLATFORM enum ('vercel' | 'netlify' |
+  //                       'cloudflare-pages' | 'deploy') — the detection module
+  //                       guarantees a fixed enum, never a raw environment name.
+  //   - 'state'         : 'ready' | 'building' | 'failed' — fixed enum.
+  // NEVER the preview URL, environment name, sha, owner/repo, or any other
+  // identifier that could locate the deployment.
+  preview_opened: ['method', 'provider_name', 'state'],
   // PRIVACY DECISION: fired ONCE per loaded PR when the skill reviewers are
   // auto-started early (opt-out setting on, while the user is still on step 1).
   // Carries only 'count' — the integer number of enabled reviewers kicked off.
