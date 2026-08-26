@@ -3,9 +3,11 @@
  *
  * Two providers configured (DeepSeek active generator + Anthropic verifier).
  * The skill reviewer raises two findings. The Anthropic verifier CONFIRMS the
- * first and REFUTES the second. Expectation:
- *   - the confirmed finding shows a "✓ confirmed by N/M models" chip,
- *   - the refuted finding is moved into the collapsed "Lower confidence" group.
+ * first and REFUTES the second. Expectation (finding-triage):
+ *   - the confirmed finding renders INLINE with the single "✓ verified" chip,
+ *   - the refuted (demoted) finding collapses into the per-file
+ *     "N more findings" group — no inline card, no "lower confidence" chrome —
+ *     and the review-level triage line offers the "Show all" escape hatch.
  *
  * A single-key control (no Anthropic key) shows NO cross-verify UI.
  */
@@ -177,7 +179,7 @@ async function seedAll(page: import('@playwright/test').Page, settings: Record<s
   await page.addInitScript(() => { localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false })) })
 }
 
-test('cross-model verify: confirmed finding shows chip, refuted finding renders inline as lower-confidence', async ({ page }) => {
+test('cross-model verify triage: confirmed finding inline with "✓ verified", refuted finding collapsed; Show all restores it', async ({ page }) => {
   await setupGithub(page)
   await setupDeepseek(page)
   await setupAnthropicVerifier(page)
@@ -193,23 +195,48 @@ test('cross-model verify: confirmed finding shows chip, refuted finding renders 
 
   await page.getByRole('button', { name: /run my reviewers/i }).click()
 
-  // The confirmed finding is visible with a verify chip.
+  // The confirmed (high, 3/3-confirmed) finding renders INLINE with the single
+  // "✓ verified" trust chip — the vote detail lives in the accessible name.
   await expect(page.getByText(/Confirmed real bug/i)).toBeVisible({ timeout: 15_000 })
-  const confirmedCard = page.locator('.skill-finding', { hasText: 'Confirmed real bug' })
-  await expect(confirmedCard.locator('.skill-verify-chip')).toBeVisible({ timeout: 10_000 })
-  await expect(confirmedCard.locator('.skill-verify-chip')).toContainText(/confirmed by \d+\/\d+ models/i)
+  const confirmedCard = page.locator('.line-findings .skill-finding', { hasText: 'Confirmed real bug' })
+  await expect(confirmedCard).toBeVisible({ timeout: 10_000 })
+  const verifyChip = confirmedCard.locator('.skill-verify-chip')
+  await expect(verifyChip).toBeVisible({ timeout: 10_000 })
+  await expect(verifyChip).toHaveText('✓ verified')
+  await expect(verifyChip).toHaveAttribute('aria-label', /confirmed by \d+ of \d+ models/i)
 
-  // The refuted (demoted) finding is NO LONGER hidden in a collapsed group — it
-  // renders inline at its line (line 4 is in the visible diff), dimmed, with a
-  // lower-confidence badge. Nothing is hidden.
-  await expect(page.locator('.lower-confidence-group')).toHaveCount(0)
-  const refutedCard = page.locator('.skill-finding', { hasText: 'Refuted style nit' })
-  await expect(refutedCard).toBeVisible({ timeout: 10_000 })
-  await expect(refutedCard).toHaveClass(/lower-confidence/)
-  await expect(refutedCard.locator('.skill-lower-confidence-chip')).toContainText(/flagged by \d+\/\d+ · lower confidence/i)
-  // It renders in the inline diff flow (an extend row), exactly once.
+  // The refuted (demoted, low) finding does NOT render inline — a
+  // failed-verification low card sitting full-size mid-diff is impossible by
+  // construction. No "lower confidence" chrome exists anywhere.
+  await expect(page.locator('.line-findings .skill-finding', { hasText: 'Refuted style nit' })).toHaveCount(0)
+  await expect(page.locator('.skill-lower-confidence-chip')).toHaveCount(0)
+  await expect(page.getByText(/lower confidence/i)).toHaveCount(0)
+
+  // It collapses into the per-file group; the review-level line reports it.
+  const group = page.getByTestId('secondary-findings')
+  await expect(group).toBeVisible()
+  await expect(group.locator('summary')).toContainText('1 more finding — low confidence or minor')
+  const triageLine = page.getByTestId('findings-triage-line')
+  await expect(triageLine).toContainText('Showing 1 of 2 findings')
+  await expect(triageLine).toContainText('1 minor or low-confidence collapsed')
+
+  // Expanding the group discloses the FULL card — body + working actions.
+  await group.locator('summary').click()
+  const collapsedCard = group.locator('.skill-finding', { hasText: 'Refuted style nit' })
+  await expect(collapsedCard).toBeVisible()
+  await expect(collapsedCard.getByRole('button', { name: /add as draft/i })).toBeVisible()
+  await expect(collapsedCard.getByRole('button', { name: /dismiss/i })).toBeVisible()
+
+  // "Show all" renders every finding inline again (the escape hatch).
+  await page.getByTestId('findings-show-all').click()
   await expect(page.locator('.line-findings .skill-finding', { hasText: 'Refuted style nit' })).toHaveCount(1)
-  await expect(page.locator('.skill-finding', { hasText: 'Refuted style nit' })).toHaveCount(1)
+  await expect(page.getByTestId('secondary-findings')).toHaveCount(0)
+  await expect(triageLine).toContainText('Showing all 2 findings')
+
+  // And back: collapsing restores the triaged view.
+  await page.getByTestId('findings-show-all').click()
+  await expect(page.getByTestId('secondary-findings')).toBeVisible()
+  await expect(page.locator('.line-findings .skill-finding', { hasText: 'Refuted style nit' })).toHaveCount(0)
 })
 
 // NOTE: the per-REVIEWER per-model cost/impact breakdown (`.skill-model-breakdowns`,
@@ -304,15 +331,17 @@ test('fusion generate: a finding only one model raised surfaces with "raised by"
 
   // The Anthropic-only finding (which DeepSeek missed) SURFACES — the recall win.
   await expect(page.getByText(/Anthropic-only bug/i)).toBeVisible({ timeout: 15_000 })
-  // It carries "raised by Anthropic" provenance and a confirmed-by chip.
+  // It carries "raised by Anthropic" provenance and the "✓ verified" trust chip
+  // (majority-confirmed; vote detail in the accessible name).
   const uniqueCard = page.locator('.skill-finding', { hasText: 'Anthropic-only bug' })
   await expect(uniqueCard.locator('.skill-raised-chip')).toContainText(/raised by/i)
-  await expect(uniqueCard.locator('.skill-verify-chip')).toContainText(/confirmed by \d+\/\d+ models/i)
+  await expect(uniqueCard.locator('.skill-verify-chip')).toHaveText('✓ verified')
+  await expect(uniqueCard.locator('.skill-verify-chip')).toHaveAttribute('aria-label', /confirmed by \d+ of \d+ models/i)
   // The shared finding is also present.
   await expect(page.getByText(/Shared bug/i)).toBeVisible()
 })
 
-test('single-key control: no cross-verify UI (no chip, no lower-confidence group)', async ({ page }) => {
+test('single-key control: no cross-verify UI; severity alone drives the triage', async ({ page }) => {
   await setupGithub(page)
   await setupDeepseek(page)
   await setupAnthropicVerifier(page) // routed but should never be called
@@ -326,19 +355,25 @@ test('single-key control: no cross-verify UI (no chip, no lower-confidence group
 
   await page.getByRole('button', { name: /run my reviewers/i }).click()
 
-  // Both findings are shown unverified, in the normal flow.
+  // The unverified HIGH renders inline (single-model setups are not punished);
+  // no verify chip anywhere (verification never ran).
   await expect(page.getByText(/Confirmed real bug/i)).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByText(/Refuted style nit/i)).toBeVisible()
-  // No verify chip, no lower-confidence group.
   await expect(page.locator('.skill-verify-chip')).toHaveCount(0)
-  await expect(page.locator('.lower-confidence-group')).toHaveCount(0)
+
+  // The lone unverified LOW is minor → collapses into the per-file group.
+  const group = page.getByTestId('secondary-findings')
+  await expect(group).toBeVisible({ timeout: 10_000 })
+  await expect(group.locator('summary')).toContainText('1 more finding')
+  await group.locator('summary').click()
+  await expect(group.locator('.skill-finding', { hasText: 'Refuted style nit' })).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
-// Story mode: a DEMOTED reviewer finding still renders a visible, clickable card
-// and chip navigation lands on it. Regression for the bug where demoted (and
-// null-line) findings rendered nowhere in Story mode, so the reviewer chip said
-// "N findings" but clicking a finding was a silent no-op (no jump target in DOM).
+// Story mode: a DEMOTED reviewer finding still has a real card in the DOM
+// (inside the collapsed secondary group) and chip navigation opens the group
+// and lands on it. Regression for the bug where demoted (and null-line)
+// findings rendered nowhere in Story mode, so the reviewer chip said
+// "N findings" but clicking a finding was a silent no-op (no jump target).
 // ---------------------------------------------------------------------------
 
 // A story whose single step covers src/feature.ts, so the reviewer's findings on
@@ -390,12 +425,12 @@ test('story mode: a demoted finding renders a visible, clickable card and chip n
 
   await page.getByRole('button', { name: /run my reviewers/i }).click()
 
-  // The demoted finding renders INLINE in the story slide (not hidden / nowhere),
-  // dimmed with the lower-confidence badge — a real, visible card.
+  // The demoted finding collapses into the story slide's per-file secondary
+  // group — present in the DOM (a real jump target), not full-size mid-diff.
+  const storyGroup = page.locator('.story [data-testid="secondary-findings"]')
+  await expect(storyGroup).toBeVisible({ timeout: 15_000 })
+  await expect(storyGroup.locator('summary')).toContainText('1 more finding')
   const demotedCard = page.locator('.story .skill-finding', { hasText: 'Refuted style nit' })
-  await expect(demotedCard).toBeVisible({ timeout: 15_000 })
-  await expect(demotedCard).toHaveClass(/lower-confidence/)
-  await expect(demotedCard.locator('.skill-lower-confidence-chip')).toContainText(/lower confidence/i)
 
   // The reviewer chip counts BOTH findings; clicking the chip opens the popover.
   const chip = page.getByRole('button', { name: /Show 2 findings from Security Reviewer/i })
@@ -404,11 +439,13 @@ test('story mode: a demoted finding renders a visible, clickable card and chip n
   const menu = page.locator('.findings-popover[role="menu"]')
   await expect(menu).toBeVisible()
 
-  // Click the demoted finding's entry → navigation lands on the real card (it's
-  // scrolled into view + flashes), proving the jump target exists in story mode.
+  // Click the demoted finding's entry → navigation OPENS the collapsed group and
+  // lands on the real card (scrolled into view), proving the jump target exists
+  // in story mode even while triaged into the group.
   const entry = menu.locator('[role="menuitem"]', { hasText: 'Refuted style nit' })
   await expect(entry).toHaveCount(1)
   await entry.click()
   await expect(page.locator('.findings-popover')).toHaveCount(0)
+  await expect(demotedCard).toBeVisible({ timeout: 10_000 })
   await expect(demotedCard).toBeInViewport()
 })

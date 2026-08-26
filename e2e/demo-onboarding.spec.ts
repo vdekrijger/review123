@@ -65,18 +65,27 @@ test('landing CTA opens the demo with banner, summary, verdict, finding — no e
   await expect(diagramsPanel.locator('.diagram-container svg').first()).toBeVisible()
   await expect(diagramsPanel.locator('.ai-panel-disabled')).toHaveCount(0)
 
-  // Inspect step: MULTIPLE reviewer personas render, and the cross-model
-  // verification chips (confirmed + demoted) + the multi-generator "raised by"
-  // provenance show — the demo's differentiator showcase.
+  // Inspect step: MULTIPLE reviewer personas render, the confirmed finding
+  // carries the "✓ verified" trust chip + multi-generator "raised by"
+  // provenance, and the weak findings are TRIAGED into collapsed per-file
+  // groups with a review-level line — the demo's differentiator showcase.
   await page.getByRole('button', { name: /next step/i }).click()
   await expect(page.getByText(/Security Reviewer \(OWASP-minded\)/i).first()).toBeVisible()
   await expect(page.getByText(/Performance Reviewer/i).first()).toBeVisible()
   await expect(page.getByText(/Resiliency & SRE Reviewer/i).first()).toBeVisible()
-  // CONFIRMED cross-model finding chip + multi-generator provenance.
-  await expect(page.getByText(/confirmed by 3\/4 models/i).first()).toBeVisible()
+  // CONFIRMED cross-model finding: single trust chip, detail in the aria-label.
+  const verifiedChip = page.locator('.skill-verify-chip').first()
+  await expect(verifiedChip).toBeVisible()
+  await expect(verifiedChip).toHaveText('✓ verified')
+  await expect(verifiedChip).toHaveAttribute('aria-label', /confirmed by 3 of 4 models/i)
   await expect(page.getByText(/raised by GPT-5\.5, DeepSeek V4 Pro/i).first()).toBeVisible()
-  // DEMOTED / lower-confidence cross-model finding chip.
-  await expect(page.getByText(/flagged by 1\/5 · lower confidence/i).first()).toBeVisible()
+  // DEMOTED / minor findings: no per-card "lower confidence" chrome — they
+  // collapse into per-file groups, reported by the review-level triage line.
+  await expect(page.getByText(/lower confidence/i)).toHaveCount(0)
+  const triageLine = page.getByTestId('findings-triage-line')
+  await expect(triageLine).toContainText('Showing 1 of 3 findings')
+  await expect(triageLine).toContainText('2 minor or low-confidence collapsed')
+  await expect(page.getByTestId('secondary-findings')).toHaveCount(2)
 
   // Story mode: the Inspect step exposes a Story|Files flow toggle (the demo
   // ships a canned multi-layer walkthrough). Switching to Story renders the
@@ -121,16 +130,17 @@ test('cross-model verify tooltip escapes clipping ancestors (top layer, fully on
   await page.goto('/demo')
   await expect(page).toHaveURL(/\/demo$/)
 
-  // Inspect step hosts the DEMOTED "flagged by 1/5 · lower confidence" finding
-  // chip (Performance reviewer) whose tooltip previously got clipped by the
-  // panel's overflow:hidden. It now renders in the browser top layer (Popover
-  // API) so it can't be cropped.
+  // Inspect step hosts the Security reviewer's "✓ verified" trust chip whose
+  // per-vote tooltip previously got clipped by the panel's overflow:hidden.
+  // It now renders in the browser top layer (Popover API) so it can't be
+  // cropped. (The demoted finding no longer shows a chip — it is triaged into
+  // the collapsed group — so the verified chip is the tooltip trigger.)
   await page.getByRole('button', { name: /next step/i }).click()
-  const demotedChip = page.getByText(/flagged by 1\/5 · lower confidence/i).first()
-  await expect(demotedChip).toBeVisible()
+  const verifiedChip = page.locator('.skill-verify-chip').first()
+  await expect(verifiedChip).toBeVisible()
 
   // The tooltip is a popover sibling inside the same .skill-verify-tip-anchor.
-  const anchor = page.locator('.skill-verify-tip-anchor', { has: demotedChip })
+  const anchor = page.locator('.skill-verify-tip-anchor', { has: verifiedChip })
   const tip = anchor.locator('.skill-verify-tip')
 
   async function assertFullyOnScreenAndTopLayer() {
@@ -149,7 +159,7 @@ test('cross-model verify tooltip escapes clipping ancestors (top layer, fully on
   }
 
   // 1) HOVER shows it, fully visible.
-  await demotedChip.hover()
+  await verifiedChip.hover()
   await assertFullyOnScreenAndTopLayer()
 
   // Move away → it hides again.
@@ -157,6 +167,6 @@ test('cross-model verify tooltip escapes clipping ancestors (top layer, fully on
   await expect(tip).toBeHidden()
 
   // 2) Keyboard FOCUS shows it too (keyboard-reachable), fully visible.
-  await demotedChip.focus()
+  await verifiedChip.focus()
   await assertFullyOnScreenAndTopLayer()
 })
