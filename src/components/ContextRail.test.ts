@@ -32,6 +32,7 @@ function makeRun(attn?: AttentionResult): AiRun {
     tests: { status: 'idle' },
     alternatives: { status: 'idle' },
     intent: { status: 'idle' },
+    outcomes: { status: 'idle' },
     story: { status: 'idle' },
     riskJudge: { status: 'idle' },
     skillReviews: [],

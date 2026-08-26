@@ -13,7 +13,7 @@ import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import type { AiTaskId } from '../settings/settings'
 import type { CoachCodeContext } from './coachContext'
-import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS, INTENT_MAX_ITEMS } from './schemas'
+import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS, INTENT_MAX_ITEMS, OUTCOMES_MAX_ITEMS } from './schemas'
 
 // PROMPT_VERSIONS skills 29 (dismissal calibration): the skill-review prompt
 // TEMPLATE gains an optional per-reviewer calibration section — when the user
@@ -117,13 +117,13 @@ import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNI
 // flow-of-execution (GraphResult.flow) — now retired.
 
 /**
- * Every task whose result is cached under a prompt-versioned key — the eleven
+ * Every task whose result is cached under a prompt-versioned key — the twelve
  * user-controllable tasks (AiTaskId — the Plan J matrix, which now includes
- * story, riskJudge, simplify and intent) plus `convergence` (convergencePrompt), the
- * one cached task that stays OUTSIDE the mode matrix by design: it runs only
- * as a cheap follow-up to the reviewers the user already enabled, so it has
- * no mode of its own. `coach` and `ask` are not cached, so they are
- * deliberately absent.
+ * story, riskJudge, simplify, intent and outcomes) plus `convergence`
+ * (convergencePrompt), the one cached task that stays OUTSIDE the mode matrix
+ * by design: it runs only as a cheap follow-up to the reviewers the user
+ * already enabled, so it has no mode of its own. `coach` and `ask` are not
+ * cached, so they are deliberately absent.
  */
 export type PromptVersionedTaskId = AiTaskId | 'convergence'
 
@@ -144,8 +144,9 @@ export type PromptVersionedTaskId = AiTaskId | 'convergence'
  *
  * Tasks added AFTER the migration start their own version history at 1 (a
  * brand-new cache segment has nothing to invalidate): `simplify` (the
- * post-review plain-English rewrite pass, simplifyPrompt) starts at 1, and
- * `intent` (the intent-vs-implementation check, intentPrompt) starts at 1.
+ * post-review plain-English rewrite pass, simplifyPrompt) starts at 1,
+ * `intent` (the intent-vs-implementation check, intentPrompt) starts at 1,
+ * and `outcomes` (the expected-outcomes check, outcomesPrompt) starts at 1.
  */
 export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   summary: 26,
@@ -155,6 +156,7 @@ export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   alternatives: 26,
   verdict: 28,
   intent: 1,
+  outcomes: 1,
   skills: 29,
   story: 26,
   riskJudge: 26,
@@ -1054,6 +1056,97 @@ ${meta.title}
 ## Pull request description (the stated intent)
 
 ${cappedBody}
+
+## Code changes
+
+${ctx.text}`
+
+  return { system, user }
+}
+
+// ---------------------------------------------------------------------------
+// outcomesPrompt — JSON ExpectedOutcomesResult (expected-outcomes check)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build prompts for the expected-outcomes check.
+ *
+ * Input: the SAME packed diff context every other auto task uses (ctx.text)
+ * plus the PR title for orientation — deliberately NOT the description (the
+ * intent check owns promised-vs-actual; this task derives what the diff
+ * ACTUALLY changes, so the two compose instead of overlapping: intent =
+ * promised, outcomes = actually changes, tests = proven).
+ *
+ * Output must be JSON-only, matching ExpectedOutcomesResult:
+ *   {
+ *     outcomes: [{ id, before, after, evidence: [{path, line?}], symbols }],
+ *     withoutThis: string
+ *   }
+ *
+ * The `symbols` field feeds the DETERMINISTIC test cross-reference
+ * (src/lib/ai/outcomeTests.ts): the panel resolves each claim's symbols
+ * against the PR's changed test files through the #95 pairing machinery — the
+ * LLM never guesses test names.
+ *
+ * The system prompt's "deriving the observable behavior changes" phrase is
+ * the e2e stubs' dispatch marker — keep it stable.
+ */
+export function outcomesPrompt(
+  ctx: PackedContext,
+  meta: { title: string },
+): { system: string; user: string } {
+  const system = `You are deriving the observable behavior changes this pull request makes — the \
+concrete before → after differences someone could OBSERVE when running the software, derived \
+from the code changes alone. Respond with JSON ONLY — no explanation, no markdown, no code \
+fences. Your response must be valid JSON that exactly matches this shape:
+
+{
+  "outcomes": [
+    {
+      "id": "o1",
+      "before": "<one sentence: the observable behavior BEFORE this change>",
+      "after": "<one sentence: the observable behavior AFTER this change>",
+      "evidence": [ { "path": "<changed-file path>", "line": <line in the new file, optional> } ],
+      "symbols": ["<changed function/class name the claim hinges on>", ...]
+    }
+  ],
+  "withoutThis": "<1-2 sentences: what stays broken or missing if this change never lands>"
+}
+
+Field rules:
+- outcomes: OBSERVABLE behavior changes ONLY — differences a user, caller, or operator could \
+  see: outputs and return values, API responses and status codes, UI states, error messages \
+  and error handling, performance characteristics. Code-structure narration is NOT an outcome: \
+  "moved function X", "renamed Y", "extracted a helper" describe the code, not its behavior — \
+  omit them.
+- before / after: ONE plain sentence each, concrete and specific to THIS change — calm plain \
+  English, active voice, a busy colleague, not a report. Banned phrasings (never emit them): \
+  "It's worth noting", "Additionally", "Furthermore", "robust", "leverage", "It is important to".
+- evidence: the changed file(s) that make the claim true (path exactly as it appears in the \
+  code changes; line in the NEW file when you can). NEVER cite a file that is not in the changes.
+- symbols: the bare names of the changed functions/classes this claim hinges on, exactly as \
+  written in the code (e.g. "handleSubmit", never "the handleSubmit function"). They are \
+  cross-referenced against tests deterministically downstream. Empty array when no named \
+  symbol applies.
+- id: short unique strings ("o1", "o2", …).
+- At most ${OUTCOMES_MAX_ITEMS} outcomes, MOST SIGNIFICANT first. Merge near-duplicates \
+  rather than splitting hairs.
+- withoutThis: 1–2 sentences stating what stays broken, missing, or unchanged if this pull \
+  request never merges — the necessity case, grounded in the same changes.
+
+Judgment discipline (IMPORTANT):
+- NEVER invent: every outcome must be grounded in the shown changes — no speculation about \
+  behavior you cannot derive from the diff.
+- An EMPTY outcomes array is a GOOD, expected result for a pure refactor, rename, or cosmetic \
+  change that alters no observable behavior — return it honestly rather than narrating code \
+  structure.
+- Do not restate the diff, no praise padding, no methodology narration.
+
+Do not include any text outside the JSON object.`
+
+  const user = `## Pull request title
+
+${meta.title}
 
 ## Code changes
 

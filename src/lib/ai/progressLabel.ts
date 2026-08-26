@@ -20,6 +20,7 @@ export type AiProgressTask =
   | 'alternatives'
   | 'verdict'
   | 'intent'
+  | 'outcomes'
   | 'story'
   | 'coach'
   | 'mining'
@@ -34,6 +35,7 @@ const STATIC_LABELS: Record<Exclude<AiProgressTask, 'skill'>, string> = {
   alternatives: 'Weighing alternatives…',
   verdict: 'Forming a verdict…',
   intent: 'Checking the diff against the stated intent…',
+  outcomes: 'Deriving the observable behavior changes…',
   story: 'Ordering the walkthrough…',
   coach: 'Coaching your comments…',
   mining: 'Reading your past reviews…',

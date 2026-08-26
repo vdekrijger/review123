@@ -86,6 +86,8 @@ export function createDemoRun(): AiRun {
     // Intent check joins alternatives in the settled 'disabled' state (compact
     // muted panel, no skeleton/spinner) — the demo bundles no intent fixture.
     intent: { status: 'disabled' },
+    // Expected outcomes likewise 'disabled' — no bundled outcomes fixture.
+    outcomes: { status: 'disabled' },
     story: done(demoStory),
     skillReviews,
     // No convergence pass in the demo (the canned reviewers don't overlap) —

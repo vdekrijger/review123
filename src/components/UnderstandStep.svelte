@@ -24,6 +24,7 @@
   import FileTree from './FileTree.svelte'
   import SummaryPanel from './panels/SummaryPanel.svelte'
   import IntentPanel from './panels/IntentPanel.svelte'
+  import OutcomesPanel from './panels/OutcomesPanel.svelte'
   import DiagramsSection from './panels/DiagramsSection.svelte'
   import TestInsightPanel from './panels/TestInsightPanel.svelte'
   import AlternativesPanel from './panels/AlternativesPanel.svelte'
@@ -53,9 +54,16 @@
     onRefreshCi?: () => void
     /** True while a CI refresh is in flight. */
     ciRefreshing?: boolean
+    /**
+     * Already-fetched full file contents (the Review route's shared map) —
+     * the OutcomesPanel's deterministic test cross-reference reads changed
+     * test files' NEW contents from it. null/absent = not yet fetched (the
+     * panel then renders no test chips rather than a false claim).
+     */
+    contentsMap?: Map<string, { before: string | null; after: string | null }> | null
   }
 
-  let { meta, files, ci, ciError, run, onhotspot, onRefreshCi, ciRefreshing = false }: Props = $props()
+  let { meta, files, ci, ciError, run, onhotspot, onRefreshCi, ciRefreshing = false, contentsMap = null }: Props = $props()
 
   // --- Page sections: resolved from the user's per-browser Understand-step
   // layout preference (order + enable/disable) against the canonical registry.
@@ -558,6 +566,17 @@
         </summary>
         <div class="detail-body">
           <IntentPanel {run} {onhotspot} />
+        </div>
+      </details>
+
+    {:else if section.id === 'outcomes'}
+      <details class="detail-panel outcomes-panel" bind:open={openState[section.id]} ontoggle={(e) => handleSectionToggle(e, section.id)}>
+        <summary class="detail-summary">
+          <span class="detail-summary-title">{section.title}</span>
+          <SectionStatus status={run.outcomes.status} error={run.outcomes.error} errorDetail={run.outcomes.errorDetail} title={section.title} />
+        </summary>
+        <div class="detail-body">
+          <OutcomesPanel {run} {files} {contentsMap} {onhotspot} />
         </div>
       </details>
 
