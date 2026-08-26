@@ -47,6 +47,12 @@ export interface VerifiableFinding {
   /** Wider numbered file window around the line, when available. */
   fileWindow?: string
   /**
+   * The finding's concrete fix (solutions-required). Shipped to verifiers so
+   * the worth axis can judge the proposed ACTION, not just the complaint.
+   * Absent on old cached findings and verdict evidence rows.
+   */
+  suggestedFix?: string
+  /**
    * External-evidence classification (Part B). Optional — when omitted the
    * caller may classify on the fly with classifyClaim(body). 'needs-external'
    * findings are demoted unless their absence is positively verified.
@@ -113,6 +119,12 @@ export interface VerifierVerdict {
   id: string
   verdict: 'confirm' | 'refute' | 'uncertain'
   reason: string
+  /**
+   * Worth axis (mootness gate): would a busy senior reviewer act on this?
+   * Judged INDEPENDENTLY of the reality verdict. Optional — verifier models
+   * or stubs predating the axis omit it; absence is tolerated (no signal).
+   */
+  worth?: boolean
 }
 
 /** Validated verifier response: a verdict per finding id. */
@@ -231,17 +243,27 @@ not showing it is not proof; return "refute" or "uncertain", never "confirm";
 You are scoring whether a tired reviewer would thank you for surfacing it. Be strict: a false \
 positive wastes their attention.
 
+WORTH AXIS (a SECOND, independent judgment — answer it for EVERY finding, even ones you \
+confirm): after judging whether the finding is REAL, independently judge whether it is worth a \
+busy senior reviewer's time: would they ACT on it — request a change, leave a comment, or block \
+the merge? Style preferences, speculative concerns without concrete harm, and issues a linter \
+or formatter would catch are NOT worth their time — set "worth": false for those even when they \
+are technically real. When a suggestedFix is provided, weigh whether making THAT change is \
+genuinely worth the author's and reviewer's attention. "worth": true is reserved for findings a \
+busy reviewer would thank you for surfacing.
+
 Respond with JSON ONLY — no markdown, no fences, no prose outside the object:
 
 {
   "verdicts": [
-    { "id": "<finding id>", "verdict": "confirm" | "refute" | "uncertain", "reason": "<≤1 sentence>" }
+    { "id": "<finding id>", "verdict": "confirm" | "refute" | "uncertain", "worth": true | false, "reason": "<≤1 sentence>" }
   ]
 }
 
 Rules:
 - One verdict per finding id provided. Do not invent ids.
-- reason: at most one sentence; for "refute"/"uncertain" say briefly why.`
+- worth: REQUIRED for every verdict — your independent worth-axis judgment (see above).
+- reason: at most one sentence; for "refute"/"uncertain"/"worth": false say briefly why.`
 
   const payload = {
     findings: findings.map((f) => ({
@@ -250,6 +272,7 @@ Rules:
       line: f.line,
       severity: f.severity,
       body: f.body,
+      ...(f.suggestedFix ? { suggestedFix: f.suggestedFix } : {}),
       ...(f.excerpt ? { excerpt: f.excerpt } : {}),
       ...(f.fileWindow ? { fileWindow: f.fileWindow } : {}),
     })),
@@ -274,7 +297,16 @@ export function validateVerifierResponse(x: unknown): VerifierResponse | null {
     if (typeof vo['id'] !== 'string') return null
     if (typeof vo['verdict'] !== 'string' || !VERDICT_VALUES.has(vo['verdict'])) return null
     const reason = typeof vo['reason'] === 'string' ? vo['reason'] : ''
-    verdicts.push({ id: vo['id'], verdict: vo['verdict'] as VerifierVerdict['verdict'], reason })
+    // worth (mootness axis) — optional-tolerant: only an explicit boolean is
+    // kept; absent/garbage → omitted (no signal), never a whole-response reject
+    // (a verifier's reality verdicts stay valuable without the worth axis).
+    const worth = typeof vo['worth'] === 'boolean' ? vo['worth'] : undefined
+    verdicts.push({
+      id: vo['id'],
+      verdict: vo['verdict'] as VerifierVerdict['verdict'],
+      reason,
+      ...(worth !== undefined ? { worth } : {}),
+    })
   }
   return { verdicts }
 }
@@ -293,6 +325,8 @@ type VerifierVote = {
   verdict: 'confirm' | 'refute' | 'uncertain'
   reason: string
   model?: string
+  /** Worth-axis judgment (mootness gate). Absent = the verifier expressed none. */
+  worth?: boolean
 }
 
 /** Numeric weight of a vote: confirm = 1, uncertain = 0.5 (neutral), refute = 0. */
@@ -300,6 +334,33 @@ function voteWeight(verdict: 'confirm' | 'refute' | 'uncertain'): number {
   if (verdict === 'confirm') return 1
   if (verdict === 'uncertain') return 0.5
   return 0
+}
+
+/**
+ * Aggregate the WORTH axis (mootness gate) for one finding. Mirrors the
+ * reality-axis quorum: each raiser counts as an implicit "worth" (raising IS
+ * the claim it deserves attention), an explicit verifier worth vote counts
+ * 1 (true) / 0 (false), and a verifier that expressed NO worth judgment
+ * (older model output, stubs predating the axis) counts as a neutral 0.5 —
+ * the same treatment the reality axis gives an omitted verdict.
+ *
+ * Returns undefined when NO verifier expressed a worth judgment at all: no
+ * signal — a finding is never demoted on silence (old caches keep pre-gate
+ * behavior).
+ *
+ * Threshold: WORTH iff score >= polledModels / 2 — ties keep the finding
+ * worth (one dissenting verifier never demotes on its own), exactly like the
+ * reality axis's tie-goes-to-surface.
+ */
+function aggregateWorth(
+  raiserCount: number,
+  votes: VerifierVote[],
+  polledModels: number,
+): boolean | undefined {
+  if (!votes.some((v) => v.worth !== undefined)) return undefined
+  let score = raiserCount
+  for (const v of votes) score += v.worth === true ? 1 : v.worth === false ? 0 : 0.5
+  return score >= polledModels / 2
 }
 
 /**
@@ -353,13 +414,21 @@ export function aggregateFinding(
       verdict: v.verdict,
       reason: v.reason,
       ...(v.model ? { model: v.model } : {}),
+      ...(v.worth !== undefined ? { worth: v.worth } : {}),
     })
     score += voteWeight(v.verdict)
     if (v.verdict === 'confirm') confirmedBy += 1
   }
   const polledModels = 1 + verifierVotes.length
   const surfaced = applyAbsenceFloor(score >= polledModels / 2, absence)
-  return { confirmedBy, polledModels, surfaced, perModel }
+  const worthFlagging = aggregateWorth(1, verifierVotes, polledModels)
+  return {
+    confirmedBy,
+    polledModels,
+    surfaced,
+    perModel,
+    ...(worthFlagging !== undefined ? { worthFlagging } : {}),
+  }
 }
 
 /**
@@ -402,13 +471,21 @@ export function aggregateMultiRaiser(
       verdict: v.verdict,
       reason: v.reason,
       ...(v.model ? { model: v.model } : {}),
+      ...(v.worth !== undefined ? { worth: v.worth } : {}),
     })
     score += voteWeight(v.verdict)
     if (v.verdict === 'confirm') confirmedBy += 1
   }
   const polledModels = Math.max(totalParticipants, raisers.length + verifierVotes.length)
   const surfaced = applyAbsenceFloor(score >= polledModels / 2, absence)
-  return { confirmedBy, polledModels, surfaced, perModel }
+  const worthFlagging = aggregateWorth(raisers.length, verifierVotes, polledModels)
+  return {
+    confirmedBy,
+    polledModels,
+    surfaced,
+    perModel,
+    ...(worthFlagging !== undefined ? { worthFlagging } : {}),
+  }
 }
 
 /** The surface decision for a vote set (generator + given verifier votes). */
@@ -544,6 +621,9 @@ export async function crossVerify(
         verdict,
         reason,
         model: cfg.model.id,
+        // Worth axis: only an explicit judgment counts; an omitted finding
+        // (or a verifier predating the axis) contributes no worth signal.
+        ...(v?.worth !== undefined ? { worth: v.worth } : {}),
       })
     }
   })
@@ -808,6 +888,8 @@ export async function fuseConfirm(
         verdict,
         reason,
         model: p.cfg.model.id,
+        // Worth axis: only an explicit judgment counts (see crossVerify above).
+        ...(v?.worth !== undefined ? { worth: v.worth } : {}),
       })
     }
   })

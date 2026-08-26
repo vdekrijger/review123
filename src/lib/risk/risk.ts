@@ -101,6 +101,10 @@ const SEVERITY_WEIGHT: Record<RiskFinding['severity'], number> = {
  * Verification-adjusted weight of one finding.
  * - No verification ran → severity weight as-is.
  * - Demoted (surfaced: false) → counts at a quarter (much less, not zero).
+ * - Judged moot (worthFlagging: false — the mootness gate) → the SAME quarter
+ *   weight as a failed verification: the panel judged it not worth a busy
+ *   reviewer's time, so it must not drive the review-effort score either.
+ *   Absent worth data (old cached findings) leaves the weight untouched.
  * - Verified → scaled by quorum: 0.5 + confirmedBy/polledModels, so a
  *   high-severity finding confirmed by most polled models dominates
  *   (3 × ~1.5 ≈ 4.5) while a barely-confirmed one contributes less.
@@ -110,6 +114,7 @@ export function findingWeight(f: RiskFinding): number {
   const v = f.verification
   if (!v) return base
   if (!v.surfaced) return base * 0.25
+  if (v.worthFlagging === false) return base * 0.25
   const quorum = v.polledModels > 0 ? v.confirmedBy / v.polledModels : 0
   return base * (0.5 + quorum)
 }

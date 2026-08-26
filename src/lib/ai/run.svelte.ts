@@ -687,6 +687,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     severity: 'high' | 'medium' | 'low'
     body: string
     side: 'LEFT' | 'RIGHT'
+    /** Concrete fix (solutions-required) — shown to verifiers for the worth axis. */
+    suggestedFix?: string
   }
 
   /** Real per-verifier call: comprehensive adversarial JSON judgement. */
@@ -842,6 +844,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         // Classify in the verify step (Part B): an absence/external-evidence
         // claim is demoted unless its absence is positively (tool-)confirmed.
         claimType: classifyClaim(f.body),
+        ...(f.suggestedFix ? { suggestedFix: f.suggestedFix } : {}),
         ...(cc?.excerpt ? { excerpt: cc.excerpt } : {}),
         ...(cc?.fileWindow ? { fileWindow: cc.fileWindow } : {}),
       }
@@ -1073,6 +1076,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
             line: f.line,
             severity: f.severity,
             body: f.body,
+            ...(f.suggestedFix ? { suggestedFix: f.suggestedFix } : {}),
           }))
           return { findings, usage }
         },
@@ -1104,6 +1108,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         line: m.merged.finding.line,
         severity: m.merged.finding.severity,
         body: m.merged.finding.body,
+        ...(m.merged.finding.suggestedFix ? { suggestedFix: m.merged.finding.suggestedFix } : {}),
         verification: m.verification,
         raisedBy: m.merged.raisedBy,
       }))
@@ -2813,6 +2818,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           severity: f.severity,
           body: f.body,
           side: 'RIGHT' as const,
+          ...(f.suggestedFix ? { suggestedFix: f.suggestedFix } : {}),
         })),
         (line) => {
           const entry = skillReviewsState[idx]

@@ -125,26 +125,32 @@ describe('cache-key stability (migration: global v26 → per-task map)', () => {
     expect(cacheKey(PR, 'risk-judge', promptVersionFor('riskJudge'))).toBe('owner/repo#1@abc123|risk-judge|v26')
   })
 
-  it('verdict (single-pass + deep + |models companions)', () => {
-    expect(cacheKey(PR, 'verdict', promptVersionFor('verdict'))).toBe('owner/repo#1@abc123|verdict|v26')
-    expect(cacheKey(PR, 'verdict|deep', promptVersionFor('verdict'))).toBe('owner/repo#1@abc123|verdict|deep|v26')
+  it('verdict (single-pass + deep + |models companions) — v27: solutions + mootness gate', () => {
+    // Bumped 26 → 27: the shared verifier rubric (crossVerify buildVerifyPrompt)
+    // gained the WORTH axis, and verdict evidence rows run that same rubric —
+    // cached verified verdicts re-run under the new framing.
+    expect(cacheKey(PR, 'verdict', promptVersionFor('verdict'))).toBe('owner/repo#1@abc123|verdict|v27')
+    expect(cacheKey(PR, 'verdict|deep', promptVersionFor('verdict'))).toBe('owner/repo#1@abc123|verdict|deep|v27')
     expect(cacheKey(PR, 'verdict' + '|models', promptVersionFor('verdict'))).toBe(
-      'owner/repo#1@abc123|verdict|models|v26',
+      'owner/repo#1@abc123|verdict|models|v27',
     )
     expect(cacheKey(PR, 'verdict|deep' + '|models', promptVersionFor('verdict'))).toBe(
-      'owner/repo#1@abc123|verdict|deep|models|v26',
+      'owner/repo#1@abc123|verdict|deep|models|v27',
     )
   })
 
-  it('skill reviews (content-hashed segment composes with the version)', () => {
+  it('skill reviews (content-hashed segment composes with the version) — v27: solutions + mootness gate', () => {
+    // Bumped 26 → 27: the skill-review prompt now REQUIRES suggestedFix, and
+    // its cross-verification runs the worth-axis rubric — cached skill results
+    // re-run so findings carry fixes + worth judgments.
     const content = '# Persona\nYou review for security.'
     const hash = djb2(content)
-    expect(cacheKey(PR, 'skill:' + hash, promptVersionFor('skills'))).toBe(`owner/repo#1@abc123|skill:${hash}|v26`)
+    expect(cacheKey(PR, 'skill:' + hash, promptVersionFor('skills'))).toBe(`owner/repo#1@abc123|skill:${hash}|v27`)
     expect(cacheKey(PR, 'skill:' + hash + '|deep', promptVersionFor('skills'))).toBe(
-      `owner/repo#1@abc123|skill:${hash}|deep|v26`,
+      `owner/repo#1@abc123|skill:${hash}|deep|v27`,
     )
     expect(cacheKey(PR, 'skill:' + hash + '|models', promptVersionFor('skills'))).toBe(
-      `owner/repo#1@abc123|skill:${hash}|models|v26`,
+      `owner/repo#1@abc123|skill:${hash}|models|v27`,
     )
   })
 

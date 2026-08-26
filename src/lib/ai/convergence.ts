@@ -344,16 +344,33 @@ export function applyConvergence(
       }
     }
 
-    // Absorbed findings preserved verbatim (reviewer + path:line + body).
+    // Absorbed findings preserved verbatim (reviewer + path:line + body +
+    // their own suggestedFix — the merge destroys nothing, fixes included).
     const mergedFrom: AbsorbedFinding[] = absorbedIds.map((id) => {
       const pos = byId.get(id)!
       const f = reviewers[pos.r].findings[pos.f]
-      return { reviewer: reviewers[pos.r].name, path: f.path, line: f.line, severity: f.severity, body: f.body }
+      return {
+        reviewer: reviewers[pos.r].name,
+        path: f.path,
+        line: f.line,
+        severity: f.severity,
+        body: f.body,
+        ...(f.suggestedFix ? { suggestedFix: f.suggestedFix } : {}),
+      }
     })
+
+    // suggestedFix: the PRIMARY's wins (its path/line/body already anchor the
+    // card). When the primary arrived without one, adopt the first member's
+    // fix (cluster order) so the merged card still carries a fix; the absorbed
+    // fixes are preserved verbatim in mergedFrom either way.
+    const suggestedFix =
+      primaryFinding.suggestedFix ??
+      memberFindings.find((m) => m.finding.suggestedFix)?.finding.suggestedFix
 
     replace.set(cluster.primary, {
       ...primaryFinding,
       severity,
+      ...(suggestedFix ? { suggestedFix } : {}),
       ...(raisedBy.length > 0 ? { raisedBy } : {}),
       ...(verification ? { verification } : {}),
       mergedFrom,

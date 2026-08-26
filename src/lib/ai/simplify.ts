@@ -24,6 +24,14 @@
  *     toggle, and every non-display consumer keeps reading `body`.
  *
  * No LLM, no network, no Svelte state — unit-testable in isolation.
+ *
+ * DECISION — `suggestedFix` is deliberately UNTOUCHED by this pass: the fix is
+ * already required-concrete (1–3 sentences or a code sketch, by the skill
+ * prompt's contract), and "simplifying" a prescription risks breaking a code
+ * sketch or blunting the exact change it names. Only `body` is enumerated,
+ * rewritten, and toggled; the Fix block always renders the original
+ * suggestedFix verbatim. The simplify prompt and PROMPT_VERSIONS.simplify are
+ * unchanged by the solutions pass for the same reason.
  */
 
 import { enumerateFindings, type ReviewerFindings } from './convergence'

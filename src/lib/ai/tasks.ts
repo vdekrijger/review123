@@ -15,6 +15,18 @@ import type { AiTaskId } from '../settings/settings'
 import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS, INTENT_MAX_ITEMS } from './schemas'
 
+// PROMPT_VERSIONS skills/verdict 27 (solutions + mootness gate): every skill
+// finding must now carry a `suggestedFix` — a concrete 1–3 sentence
+// prescription or small code sketch, or an explicit "No clean fix — <tradeoff>"
+// (required by prompt, tolerated-absent by the validator so old cached results
+// still render). And the cross-model verify prompt (crossVerify.ts) gains a
+// second WORTH axis: after the reality check each verifier independently judges
+// whether a busy senior reviewer would act on the finding; the aggregated
+// `worthFlagging` demotes real-but-moot findings into the collapsed secondary
+// tier (findingRank) and down-weights them in risk. Only the two tasks whose
+// prompt bytes change bump: `skills` (skill-review prompt + its verification)
+// and `verdict` (its evidence rows run the same verifier rubric). Every other
+// task's prompt is byte-identical — no other entry moves.
 // PROMPT_VERSION 26 (finding convergence): NEW single-pass task
 // (convergencePrompt) that runs ONCE after all skill reviewers settle: it
 // clusters surfaced findings that describe the SAME underlying issue — across
@@ -118,9 +130,9 @@ export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   diagrams: 26,
   tests: 26,
   alternatives: 26,
-  verdict: 26,
+  verdict: 27,
   intent: 1,
-  skills: 26,
+  skills: 27,
   story: 26,
   riskJudge: 26,
   convergence: 26,
@@ -1514,6 +1526,10 @@ Your findings must be:
   "(N lower-confidence observations omitted)" to the LAST finding's body — one line, \
   no list of what was cut.
 - Severity must be rated according to THIS persona's own standards: "high", "medium", or "low".
+- ACTIONABLE (solutions required): every finding MUST carry a concrete fix in its \
+  suggestedFix field — the specific change to make (1–3 sentences or a short code sketch). \
+  If no clean fix exists, say "No clean fix —" and name the tradeoff. A finding you cannot \
+  suggest a fix for is usually not worth raising.
 
 ${ANTI_FATIGUE_RULES}
 
@@ -1530,7 +1546,8 @@ Your response must be valid JSON that exactly matches this shape:
       "path": "<file path from the PR context>",
       "line": <line number as integer, or null for file-level findings>,
       "severity": "high" | "medium" | "low",
-      "body": "<concrete finding text>"
+      "body": "<concrete finding text>",
+      "suggestedFix": "<the concrete fix — see the field rules>"
     }
   ]
 }
@@ -1542,8 +1559,13 @@ Field rules:
 - line: the specific line number (integer) the finding applies to, or null if it is a file-level concern.
 - severity: exactly one of "high", "medium", "low" — rated by this persona's own standards. \
   Nits are nits: label them "low"; never inflate.
-- body: one sentence of WHAT + WHERE, one sentence of WHY IT MATTERS (the concrete harm), \
-  optionally a fix suggestion in at most one sentence or a small code block.
+- body: one sentence of WHAT + WHERE, one sentence of WHY IT MATTERS (the concrete harm). \
+  The fix lives in suggestedFix, not here.
+- suggestedFix: REQUIRED for every finding — the concrete fix: the SPECIFIC change to make, in \
+  1–3 sentences or a short code sketch (inline markdown / a small fenced code block is \
+  encouraged where it makes the change unambiguous). If no clean fix exists, write \
+  "No clean fix —" followed by the tradeoff the author must weigh. State the change; never \
+  restate the finding.
 
 Do not include any text outside the JSON object.`
 

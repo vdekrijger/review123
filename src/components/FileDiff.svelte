@@ -57,6 +57,8 @@
     coveredByDraft?: { path: string; line: number }
     /** Simplify pass: plain-English rewrite shown by default ("Show original" toggles). */
     simpleBody?: string
+    /** Solutions-required: the finding's concrete fix — rendered as the card's Fix block. */
+    suggestedFix?: string
     /**
      * Finding-triage tier (src/lib/ai/findingRank, computed by the parent):
      * 'secondary' findings NEVER enter the inline extendData — they collapse
@@ -1134,6 +1136,7 @@
                 severity={finding.severity}
                 body={finding.body}
                 simpleBody={finding.simpleBody}
+                suggestedFix={finding.suggestedFix}
                 verification={finding.verification}
                 raisedBy={finding.raisedBy}
                 mergedFrom={finding.mergedFrom}
@@ -1233,6 +1236,7 @@
             severity={finding.severity}
             body={finding.body}
             simpleBody={finding.simpleBody}
+            suggestedFix={finding.suggestedFix}
             verification={finding.verification}
             raisedBy={finding.raisedBy}
             mergedFrom={finding.mergedFrom}
@@ -1271,6 +1275,7 @@
               severity={finding.severity}
               body={finding.body}
               simpleBody={finding.simpleBody}
+              suggestedFix={finding.suggestedFix}
               verification={finding.verification}
               raisedBy={finding.raisedBy}
               mergedFrom={finding.mergedFrom}
