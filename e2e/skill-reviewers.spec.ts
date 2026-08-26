@@ -743,9 +743,11 @@ test('skill-reviewers: dismissal with reason feeds the next run prompt (calibrat
   await expect(
     page.getByRole('heading', { name: /Test PR: add feature/i }),
   ).toBeVisible({ timeout: 10_000 })
-  await page.getByRole('button', { name: 'Next step' }).click()
-  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
-  await page.getByRole('button', { name: /run my reviewers/i }).click()
+  // The reload restores step 2 (persisted step state) — the run button is
+  // already on screen; clicking "Next step" again would be ambiguous.
+  const runBtn = page.getByRole('button', { name: /run my reviewers/i })
+  await expect(runBtn).toBeVisible({ timeout: 10_000 })
+  await runBtn.click()
 
   await expect.poll(() => personaPrompts.length, { timeout: 15_000 }).toBeGreaterThanOrEqual(1)
   const calibrated = personaPrompts.find((p) => p.includes('PAST DISMISSED FINDINGS'))
