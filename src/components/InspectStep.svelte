@@ -28,6 +28,7 @@
   import type { SkillReviewResult, SkillFinding as SchemaSkillFinding } from '../lib/ai/schemas'
   import { applyConvergence, mergedReviewerLabel, type ReviewerFindings } from '../lib/ai/convergence'
   import { applySimplify } from '../lib/ai/simplify'
+  import { rankFindings, getFindingsShowAll, setFindingsShowAll } from '../lib/ai/findingRank'
   import { listSkills } from '../lib/skills/skills'
   import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
   import { computeFileRisk, type RiskLevel } from '../lib/risk/risk'
@@ -599,7 +600,7 @@
   // Split into two maps: file-level (null line) stays above the file in InspectStep;
   // line-bearing findings are passed into FileDiff via skillFindings prop.
   // Shape: Map<path, entry[]>
-  type SuggestionEntry = { skillName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string; verification?: import('../lib/ai/schemas').FindingVerification; raisedBy?: string[]; mergedFrom?: import('../lib/ai/schemas').AbsorbedFinding[]; mergedReason?: string; coveredByDraft?: { path: string; line: number }; simpleBody?: string }
+  type SuggestionEntry = { skillName: string; reviewerName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string; verification?: import('../lib/ai/schemas').FindingVerification; raisedBy?: string[]; mergedFrom?: import('../lib/ai/schemas').AbsorbedFinding[]; mergedReason?: string; coveredByDraft?: { path: string; line: number }; simpleBody?: string }
 
   const skillSuggestionsByPath = $derived.by(() => {
     const map = new Map<string, SuggestionEntry[]>()
@@ -611,6 +612,7 @@
         const arr = map.get(finding.path) ?? []
         arr.push({
           skillName: findingLabel(review.name, finding),
+          reviewerName: review.name,
           findingPath: finding.path,
           line: finding.line,
           severity: finding.severity,
@@ -649,13 +651,12 @@
     pruneAnchorOverrides(live)
   })
 
-  // File-level (null-line) suggestions — rendered above the FileDiff (Files mode)
-  // and per-file in Story mode. Cross-model demoted findings (Plan M) are NO
-  // LONGER pulled out into a separate collapsed group: they render alongside the
-  // rest, carrying their `verification` so the card shows the lower-confidence
-  // treatment. Only findings the reviewer has DISMISSED or ADDED-as-draft are
-  // hidden — adding auto-cleans up the card (its draft now lives in the diff);
-  // this is a visual hide, the decision is still recorded as 'accepted'.
+  // File-level (null-line) suggestions — rendered per-file in Story mode (in
+  // Files mode they live only in the reviewer-chip popover). Not part of the
+  // finding-triage ranking (they are never inline diff cards). Only findings
+  // the reviewer has DISMISSED or ADDED-as-draft are hidden — adding
+  // auto-cleans up the card (its draft now lives in the diff); this is a
+  // visual hide, the decision is still recorded as 'accepted'.
   const fileLevelSuggestionsByPath = $derived.by(() => {
     const map = new Map<string, SuggestionEntry[]>()
     for (const [path, suggestions] of skillSuggestionsByPath) {
@@ -665,9 +666,46 @@
     return map
   })
 
-  // Line-bearing suggestions — passed to FileDiff as skillFindings prop. Demoted
-  // findings flow through too (carrying `verification`); the card renders them
-  // dimmer with a "lower confidence" badge rather than hiding them.
+  // -------------------------------------------------------------------------
+  // Finding triage (src/lib/ai/findingRank) — deterministic inline-vs-collapsed
+  // ranking over EVERY visible line-bearing finding across the whole review
+  // (the inline budget is per-review, so ranking must see the full set).
+  // Dismissed/added findings are excluded BEFORE ranking, so dismissing an
+  // inline finding can promote a budget-spilled one back inline. Null-line
+  // findings live only in the reviewer-chip popover and are not ranked. The
+  // risk score keeps reading RAW findings (skillSuggestionsByPath) — triage is
+  // presentation only.
+  // -------------------------------------------------------------------------
+  const findingTriage = $derived.by(() => {
+    const entries: (SuggestionEntry & { path: string })[] = []
+    for (const suggestions of skillSuggestionsByPath.values()) {
+      for (const s of suggestions) {
+        if (s.line === null) continue
+        if (dismissedKeys.has(s.key) || addedDraftKeys.has(s.key)) continue
+        entries.push({ ...s, path: s.findingPath })
+      }
+    }
+    return rankFindings(entries)
+  })
+
+  const secondaryFindingKeys = $derived(new Set(findingTriage.secondary.map((s) => s.key)))
+  const triagePrimaryCount = $derived(findingTriage.primary.length)
+  const triageSecondaryCount = $derived(findingTriage.secondary.length)
+  const triageTotalCount = $derived(triagePrimaryCount + triageSecondaryCount)
+
+  // Global "Show all" escape hatch — persisted per-browser (localStorage,
+  // review123:findings-show-all). When ON, every finding renders inline as
+  // before triage existed (all tiers 'primary').
+  let findingsShowAll = $state(getFindingsShowAll())
+
+  function toggleFindingsShowAll(): void {
+    findingsShowAll = !findingsShowAll
+    setFindingsShowAll(findingsShowAll)
+  }
+
+  // Line-bearing suggestions — passed to FileDiff as skillFindings prop, each
+  // carrying its triage tier: secondary findings collapse into the per-file
+  // "N more findings" group inside FileDiff instead of rendering inline.
   const lineSkillFindingsByPath = $derived.by(() => {
     const map = new Map<string, SkillFinding[]>()
     for (const [path, suggestions] of skillSuggestionsByPath) {
@@ -685,6 +723,7 @@
           mergedReason: s.mergedReason,
           coveredByDraft: s.coveredByDraft,
           simpleBody: s.simpleBody,
+          tier: (findingsShowAll || !secondaryFindingKeys.has(s.key) ? 'primary' : 'secondary') as 'primary' | 'secondary',
         }))
       if (lineOnly.length > 0) map.set(path, lineOnly)
     }
@@ -1514,6 +1553,30 @@
     </div>
   {/if}
 
+  <!-- FINDING-TRIAGE line: how many findings render inline vs collapsed into
+       the per-file "N more findings" groups, plus the global "Show all" escape
+       hatch (persisted per-browser). Nothing collapsed → no line at all. -->
+  {#if triageSecondaryCount > 0}
+    <p class="findings-triage-line" role="status" data-testid="findings-triage-line">
+      {#if findingsShowAll}
+        Showing all {triageTotalCount} finding{triageTotalCount === 1 ? '' : 's'} · {triageSecondaryCount} minor or low-confidence
+      {:else}
+        Showing {triagePrimaryCount} of {triageTotalCount} finding{triageTotalCount === 1 ? '' : 's'} · {triageSecondaryCount} minor or low-confidence collapsed
+      {/if}
+      <button
+        type="button"
+        class="findings-show-all-btn"
+        class:show-all-active={findingsShowAll}
+        aria-pressed={findingsShowAll}
+        data-testid="findings-show-all"
+        title={findingsShowAll
+          ? 'Collapse minor and low-confidence findings back into per-file groups'
+          : 'Render every finding inline, including minor and low-confidence ones'}
+        onclick={toggleFindingsShowAll}
+      >Show all</button>
+    </p>
+  {/if}
+
 {/if}
 
 {#if files.length < changedFiles}
@@ -2090,6 +2153,41 @@
     font-size: 0.78rem;
     color: var(--text-muted);
     opacity: 0.85;
+  }
+
+  /* FINDING-TRIAGE line — inline-vs-collapsed counts + the Show-all toggle. */
+  .findings-triage-line {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.2rem 0 0.4rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+
+  .findings-show-all-btn {
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .findings-show-all-btn:hover {
+    background: var(--surface-raised);
+  }
+
+  .findings-show-all-btn.show-all-active {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .findings-show-all-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   /* WAITING region — queued reviewers that have NOT started their LLM call.

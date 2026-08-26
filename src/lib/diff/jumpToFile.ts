@@ -86,6 +86,14 @@ export function jumpToFinding(path: string, findingKey: string): void {
   const tryFlash = (): boolean => {
     const el = document.querySelector(selector) as HTMLElement | null
     if (!el) return false
+    // A secondary (triaged) finding lives inside a collapsed <details> group
+    // (FileDiff's "N more findings"; risk-first's low-attention tail likewise) —
+    // open every closed ancestor so the card is actually rendered before we
+    // scroll to and flash it. The popover is a navigation surface for ALL
+    // findings, so a jump must never dead-end on a closed group.
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      if (p instanceof HTMLDetailsElement && !p.open) p.open = true
+    }
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     el.classList.add('finding-flash')
     window.setTimeout(() => el.classList.remove('finding-flash'), FINDING_FLASH_MS)
