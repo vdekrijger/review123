@@ -135,6 +135,114 @@ describe('validateSkillReviewResult', () => {
 })
 
 // ---------------------------------------------------------------------------
+// validateSkillReviewResult — suggestedFix (required by PROMPT, tolerated here)
+// ---------------------------------------------------------------------------
+
+describe('validateSkillReviewResult — suggestedFix tolerance', () => {
+  const base = { path: 'a.ts', line: 1, severity: 'high', body: 'issue' }
+
+  it('keeps a non-empty string suggestedFix on the finding', () => {
+    const r = validateSkillReviewResult({
+      skillName: 'X',
+      findings: [{ ...base, suggestedFix: 'Wrap the call in `try/catch`.' }],
+    })
+    expect(r).not.toBeNull()
+    expect(r!.findings[0].suggestedFix).toBe('Wrap the call in `try/catch`.')
+  })
+
+  it('a finding WITHOUT a fix is kept — never dropped over a missing fix', () => {
+    const r = validateSkillReviewResult({ skillName: 'X', findings: [{ ...base }] })
+    expect(r).not.toBeNull()
+    expect(r!.findings[0].suggestedFix).toBeUndefined()
+  })
+
+  it('a null suggestedFix is stripped, the finding kept', () => {
+    const r = validateSkillReviewResult({
+      skillName: 'X',
+      findings: [{ ...base, suggestedFix: null }],
+    })
+    expect(r).not.toBeNull()
+    expect('suggestedFix' in r!.findings[0]).toBe(false)
+  })
+
+  it('an empty/whitespace suggestedFix is stripped, the finding kept', () => {
+    const r = validateSkillReviewResult({
+      skillName: 'X',
+      findings: [{ ...base, suggestedFix: '   ' }],
+    })
+    expect(r).not.toBeNull()
+    expect('suggestedFix' in r!.findings[0]).toBe(false)
+  })
+
+  it('a wrong-typed suggestedFix (number/object) is stripped, the finding kept', () => {
+    for (const bad of [42, { text: 'fix' }, ['fix']]) {
+      const r = validateSkillReviewResult({
+        skillName: 'X',
+        findings: [{ ...base, suggestedFix: bad }],
+      })
+      expect(r, String(bad)).not.toBeNull()
+      expect('suggestedFix' in r!.findings[0]).toBe(false)
+    }
+  })
+
+  it('a mixed result keeps per-finding fixes independently', () => {
+    const r = validateSkillReviewResult({
+      skillName: 'X',
+      findings: [
+        { ...base, suggestedFix: 'Do the thing.' },
+        { ...base, body: 'other issue' },
+      ],
+    })
+    expect(r!.findings[0].suggestedFix).toBe('Do the thing.')
+    expect(r!.findings[1].suggestedFix).toBeUndefined()
+  })
+
+  it('the "No clean fix — tradeoff" form is an ordinary valid fix string', () => {
+    const r = validateSkillReviewResult({
+      skillName: 'X',
+      findings: [{ ...base, suggestedFix: 'No clean fix — batching adds latency; accept the N+1 here.' }],
+    })
+    expect(r!.findings[0].suggestedFix).toMatch(/^No clean fix —/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// skillReviewPrompt — solutions required (v27)
+// ---------------------------------------------------------------------------
+
+describe('skillReviewPrompt — solutions required (v27)', () => {
+  const prompt = () => skillReviewPrompt(makeCtx(), { name: 'S', content: 'persona' })
+
+  it('the JSON shape includes the suggestedFix field', () => {
+    const { system } = prompt()
+    expect(system).toContain('"suggestedFix"')
+  })
+
+  it('requires a concrete fix on every finding (1–3 sentences or a code sketch)', () => {
+    const { system } = prompt()
+    expect(system).toMatch(/suggestedFix: REQUIRED for every finding/i)
+    expect(system).toMatch(/1–3 sentences or a short code sketch/i)
+    expect(system).toMatch(/SPECIFIC change to make/i)
+  })
+
+  it('carries the honest no-clean-fix escape hatch with a named tradeoff', () => {
+    const { system } = prompt()
+    expect(system).toMatch(/No clean fix —/)
+    expect(system).toMatch(/tradeoff/i)
+  })
+
+  it('states the calibration link: an unfixable finding is usually not worth raising', () => {
+    const { system } = prompt()
+    expect(system).toMatch(/cannot\s+suggest a fix for is usually not worth raising/i)
+  })
+
+  it('directs the fix into suggestedFix, not the body', () => {
+    const { system } = prompt()
+    expect(system).toMatch(/The fix lives in suggestedFix, not here/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // skillReviewPrompt
 // ---------------------------------------------------------------------------
 

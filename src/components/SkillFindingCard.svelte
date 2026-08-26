@@ -21,7 +21,7 @@
   import AskBox from './AskBox.svelte'
   import type { FindingVerification, AbsorbedFinding } from '../lib/ai/schemas'
   import type { AskFocus } from '../lib/ai/tasks'
-  import { isMajorityVerified } from '../lib/ai/findingRank'
+  import { isMajorityVerified, isJudgedMoot, MOOT_SECONDARY_LABEL } from '../lib/ai/findingRank'
   import { reanchorDrag, REANCHOR_DND_MIME } from '../lib/findings/reanchor.svelte'
 
   interface Props {
@@ -36,6 +36,15 @@
      * whichever text is currently DISPLAYED (see onAdd).
      */
     simpleBody?: string
+    /**
+     * The finding's concrete fix (solutions-required): a 1–3 sentence
+     * prescription or small code sketch, or an explicit "No clean fix — …"
+     * naming the tradeoff. Rendered as a distinct, calm "Fix" block below the
+     * body (code-capable markdown), and included in the Add-as-draft body.
+     * Absent (old cached findings, a model ignoring the requirement) → no Fix
+     * block, no draft suffix — the card renders exactly as before.
+     */
+    suggestedFix?: string
     /** Cross-model verification (Plan M) — drives the "confirmed by N/M" chip. */
     verification?: FindingVerification
     /**
@@ -120,15 +129,24 @@
     onMoveToLine?: ((line: number) => boolean) | null
   }
 
-  let { skillName, severity, body, simpleBody = undefined, verification = undefined, raisedBy = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss, askFn = null, askPath = undefined, askExcerpt = undefined, mergedFrom = undefined, mergedReason = undefined, coveredByDraft = undefined, anchorHash = null, movedFrom = null, onUndoMove = null, onMoveToLine = null }: Props = $props()
+  let { skillName, severity, body, simpleBody = undefined, suggestedFix = undefined, verification = undefined, raisedBy = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss, askFn = null, askPath = undefined, askExcerpt = undefined, mergedFrom = undefined, mergedReason = undefined, coveredByDraft = undefined, anchorHash = null, movedFrom = null, onUndoMove = null, onMoveToLine = null }: Props = $props()
 
   // ---- Simplify pass: simplified-vs-original body (per-card state) ---------
   // A toggle exists only when a rewrite is present AND actually differs from
   // the original (an unchanged "already minimal" body gets no toggle).
   const hasSimple = $derived(simpleBody !== undefined && simpleBody !== '' && simpleBody !== body)
   let showOriginal = $state(false)
-  /** The body text currently displayed — and what Add-as-draft will use. */
+  /** The body text currently displayed. */
   const displayBody = $derived(hasSimple && !showOriginal ? simpleBody! : body)
+
+  // ---- Solutions-required: the Fix block + draft composition ---------------
+  const hasFix = $derived(suggestedFix !== undefined && suggestedFix.trim() !== '')
+  /**
+   * What Add-as-draft sends: the currently-DISPLAYED body (simplified by
+   * default when a rewrite exists) plus the fix as a "**Fix:**" suffix when
+   * one is present — the draft carries the prescription the user read.
+   */
+  const draftBody = $derived(hasFix ? `${displayBody}\n\n**Fix:** ${suggestedFix}` : displayBody)
 
   // ---- Re-anchor: drag handle + "Move to line…" keyboard path --------------
   // Only never-added findings offer move affordances: adding turns the finding
@@ -234,6 +252,13 @@
   // per-card "flagged by X/Y · lower confidence" metadata the reviewer had to
   // decode. The full vote detail stays one hover away (VerifyVotesTooltip).
   const showVerifiedChip = $derived(isMajorityVerified(verification))
+
+  // Mootness gate: the panel judged this finding not worth a busy reviewer's
+  // time (worthFlagging false). A muted chip names the reason — on collapsed
+  // cards it explains WHY they were demoted, and on the one carve-out that
+  // stays inline (a majority-verified high) it stays honest about the panel's
+  // worth judgment. Absent worth data (old cache) → no chip.
+  const judgedMoot = $derived(isJudgedMoot(verification))
 </script>
 
 {#if coveredByDraft && !coveredExpanded}
@@ -313,6 +338,13 @@
         >✓ verified</span>
       </VerifyVotesTooltip>
     {/if}
+    {#if judgedMoot}
+      <span
+        class="skill-moot-chip"
+        data-testid="finding-moot-chip"
+        title="The cross-model panel judged this finding not worth a busy reviewer's time"
+      >{MOOT_SECONDARY_LABEL}</span>
+    {/if}
     <span class="skill-severity-chip severity-chip-{severity}">{severity}</span>
   </div>
   <!-- Full block markdown (paragraphs, fenced code, lists, inline code/bold/links).
@@ -331,6 +363,18 @@
       data-testid="finding-simple-toggle"
       onclick={() => (showOriginal = !showOriginal)}
     >{showOriginal ? 'Show simplified' : 'Show original'}</button>
+  {/if}
+  {#if hasFix}
+    <!-- Solutions-required Fix block: the finding's concrete prescription (or
+         its honest "No clean fix — …" tradeoff), rendered as code-capable
+         markdown. Deliberately calm — a labeled block below the body, not a
+         second severity surface. Untouched by the simplify toggle. -->
+    <div class="skill-finding-fix" data-testid="finding-fix">
+      <span class="fix-label" aria-hidden="true">Fix</span>
+      <div class="fix-body">
+        <MarkdownView source={suggestedFix ?? ''} />
+      </div>
+    </div>
   {/if}
   {#if mergedFrom && mergedFrom.length > 0}
     <!-- Convergence disclosure: every absorbed sibling finding stays readable
@@ -352,7 +396,7 @@
     <button
       class="skill-add-draft-btn"
       class:added
-      onclick={() => onAdd(displayBody)}
+      onclick={() => onAdd(draftBody)}
       disabled={added}
       aria-label={added ? 'Added to drafts' : 'Add as draft comment'}
     >{added ? '✓ Added' : 'Add as draft'}</button>
@@ -544,6 +588,78 @@
   .skill-verify-chip:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
+  }
+
+  /* ---- Moot chip: "judged minor by verification" (mootness gate) ----
+     Muted, labeled, dashed — the same visual family as the covered chip: a
+     de-emphasis reason, never an alarm. */
+  .skill-moot-chip {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    background: var(--surface-raised);
+    color: var(--text-muted);
+    border: 1px dashed var(--border-subtle);
+    white-space: nowrap;
+    cursor: help;
+  }
+
+  /* ---- Fix block (solutions-required): calm labeled prescription ---- */
+  .skill-finding-fix {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin: 0 0 0.45rem;
+    padding: 0.35rem 0.5rem;
+    border-left: 2px solid var(--border-subtle);
+    background: var(--surface-raised);
+    border-radius: 0 4px 4px 0;
+    font-size: 0.82rem;
+  }
+
+  .fix-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    line-height: 1.6;
+    flex-shrink: 0;
+  }
+
+  .fix-body {
+    min-width: 0;
+    line-height: 1.4;
+  }
+
+  .fix-body :global(p:first-child) {
+    margin-top: 0;
+  }
+
+  .fix-body :global(p:last-child) {
+    margin-bottom: 0;
+  }
+
+  .fix-body :global(code) {
+    font-size: 0.85em;
+    background: var(--surface, transparent);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+  }
+
+  .fix-body :global(pre) {
+    background: var(--surface, transparent);
+    border: 1px solid var(--border-subtle);
+    padding: 0.5rem;
+    border-radius: 4px;
+    overflow-x: auto;
+  }
+
+  .fix-body :global(pre code) {
+    background: none;
+    border: none;
+    padding: 0;
   }
 
   /* ---- Covered-by-draft (convergence): collapsed, de-emphasized ---- */

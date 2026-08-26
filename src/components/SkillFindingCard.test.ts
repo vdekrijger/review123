@@ -670,3 +670,121 @@ describe('SkillFindingCard — simplified body (simplify pass)', () => {
     expect(code!.textContent).toBe('cache')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Fix block (solutions-required pass)
+// ---------------------------------------------------------------------------
+
+describe('SkillFindingCard — Fix block (solutions required)', () => {
+  it('renders a labeled Fix block below the body when suggestedFix is present', () => {
+    renderCard({ suggestedFix: 'Extract the branch into a named helper.' })
+    const fix = screen.getByTestId('finding-fix')
+    expect(fix).toBeInTheDocument()
+    expect(fix.textContent).toContain('Fix')
+    expect(fix.textContent).toContain('Extract the branch into a named helper.')
+  })
+
+  it('renders NOTHING without a fix — absent and empty alike (old cached findings)', () => {
+    renderCard()
+    expect(screen.queryByTestId('finding-fix')).toBeNull()
+    renderCard({ suggestedFix: '   ' })
+    expect(screen.queryByTestId('finding-fix')).toBeNull()
+  })
+
+  it('the fix is code-capable markdown: inline code and fenced blocks render', () => {
+    const { container } = renderCard({
+      suggestedFix: 'Guard the call:\n\n```ts\nif (!user) return\n```\nthen drop the `!` assertion.',
+    })
+    const fix = container.querySelector('[data-testid="finding-fix"]')!
+    const pre = fix.querySelector('pre code')
+    expect(pre).not.toBeNull()
+    expect(pre!.textContent).toContain('if (!user) return')
+    const inline = [...fix.querySelectorAll('code')].find((c) => c.textContent === '!')
+    expect(inline).toBeTruthy()
+    expect(fix.textContent).not.toContain('```')
+  })
+
+  it('the honest "No clean fix — tradeoff" form renders in the same block', () => {
+    renderCard({ suggestedFix: 'No clean fix — batching adds latency; accept the extra query here.' })
+    expect(screen.getByTestId('finding-fix').textContent).toContain('No clean fix —')
+  })
+
+  it('Add-as-draft appends the fix to the displayed body', async () => {
+    const onAdd = vi.fn()
+    renderCard({ body: 'The check is inverted.', suggestedFix: 'Flip the condition to `if (ok)`.', onAdd })
+    await userEvent.click(screen.getByRole('button', { name: /add as draft/i }))
+    expect(onAdd).toHaveBeenLastCalledWith('The check is inverted.\n\n**Fix:** Flip the condition to `if (ok)`.')
+  })
+
+  it('Add-as-draft without a fix keeps the plain displayed body (unchanged contract)', async () => {
+    const onAdd = vi.fn()
+    renderCard({ body: 'The check is inverted.', onAdd })
+    await userEvent.click(screen.getByRole('button', { name: /add as draft/i }))
+    expect(onAdd).toHaveBeenLastCalledWith('The check is inverted.')
+  })
+
+  it('composes with the simplify toggle: the fix rides the DISPLAYED body on both sides', async () => {
+    const onAdd = vi.fn()
+    renderCard({
+      body: 'Original wording of the issue.',
+      simpleBody: 'Plain wording.',
+      suggestedFix: 'Rename `x` to `retryCount`.',
+      onAdd,
+    })
+    // Default: simplified body + fix suffix.
+    await userEvent.click(screen.getByRole('button', { name: /add as draft/i }))
+    expect(onAdd).toHaveBeenLastCalledWith('Plain wording.\n\n**Fix:** Rename `x` to `retryCount`.')
+    // The Fix block itself is untouched by the toggle.
+    await userEvent.click(screen.getByTestId('finding-simple-toggle'))
+    expect(screen.getByTestId('finding-fix').textContent).toContain('Rename')
+  })
+
+  it('after "Show original", Add-as-draft carries the original body + fix', async () => {
+    const onAdd = vi.fn()
+    renderCard({
+      body: 'Original wording of the issue.',
+      simpleBody: 'Plain wording.',
+      suggestedFix: 'Rename `x` to `retryCount`.',
+      onAdd,
+    })
+    await userEvent.click(screen.getByTestId('finding-simple-toggle'))
+    await userEvent.click(screen.getByRole('button', { name: /add as draft/i }))
+    expect(onAdd).toHaveBeenLastCalledWith('Original wording of the issue.\n\n**Fix:** Rename `x` to `retryCount`.')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Moot chip (mootness gate — the new secondary reason)
+// ---------------------------------------------------------------------------
+
+describe('SkillFindingCard — "judged minor by verification" chip (mootness gate)', () => {
+  const verification = (worthFlagging?: boolean) => ({
+    confirmedBy: 3,
+    polledModels: 3,
+    surfaced: true,
+    ...(worthFlagging !== undefined ? { worthFlagging } : {}),
+    perModel: [],
+  })
+
+  it('renders the muted reason chip when the panel judged the finding moot', () => {
+    renderCard({ verification: verification(false) })
+    const chip = screen.getByTestId('finding-moot-chip')
+    expect(chip).toBeInTheDocument()
+    expect(chip.textContent).toBe('judged minor by verification')
+  })
+
+  it('renders no chip when judged worth attention, or without worth data (old cache), or unverified', () => {
+    renderCard({ verification: verification(true) })
+    expect(screen.queryByTestId('finding-moot-chip')).toBeNull()
+    renderCard({ verification: verification(undefined) })
+    expect(screen.queryByTestId('finding-moot-chip')).toBeNull()
+    renderCard()
+    expect(screen.queryByTestId('finding-moot-chip')).toBeNull()
+  })
+
+  it('a moot majority-verified high shows BOTH the verified chip and the moot chip (honest carve-out)', () => {
+    renderCard({ severity: 'high', verification: verification(false) })
+    expect(screen.getByText('✓ verified')).toBeInTheDocument()
+    expect(screen.getByTestId('finding-moot-chip')).toBeInTheDocument()
+  })
+})

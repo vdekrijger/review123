@@ -600,7 +600,7 @@
   // Split into two maps: file-level (null line) stays above the file in InspectStep;
   // line-bearing findings are passed into FileDiff via skillFindings prop.
   // Shape: Map<path, entry[]>
-  type SuggestionEntry = { skillName: string; reviewerName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string; verification?: import('../lib/ai/schemas').FindingVerification; raisedBy?: string[]; mergedFrom?: import('../lib/ai/schemas').AbsorbedFinding[]; mergedReason?: string; coveredByDraft?: { path: string; line: number }; simpleBody?: string }
+  type SuggestionEntry = { skillName: string; reviewerName: string; findingPath: string; line: number | null; severity: 'high' | 'medium' | 'low'; body: string; key: string; verification?: import('../lib/ai/schemas').FindingVerification; raisedBy?: string[]; mergedFrom?: import('../lib/ai/schemas').AbsorbedFinding[]; mergedReason?: string; coveredByDraft?: { path: string; line: number }; simpleBody?: string; suggestedFix?: string }
 
   const skillSuggestionsByPath = $derived.by(() => {
     const map = new Map<string, SuggestionEntry[]>()
@@ -624,6 +624,7 @@
           mergedReason: finding.mergedReason,
           coveredByDraft: finding.coveredByDraft,
           simpleBody: finding.simpleBody,
+          suggestedFix: finding.suggestedFix,
         })
         map.set(finding.path, arr)
       }
@@ -723,6 +724,7 @@
           mergedReason: s.mergedReason,
           coveredByDraft: s.coveredByDraft,
           simpleBody: s.simpleBody,
+          suggestedFix: s.suggestedFix,
           tier: (findingsShowAll || !secondaryFindingKeys.has(s.key) ? 'primary' : 'secondary') as 'primary' | 'secondary',
         }))
       if (lineOnly.length > 0) map.set(path, lineOnly)

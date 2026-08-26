@@ -134,6 +134,24 @@ export function isConvergent(f: RankableFinding): boolean {
   return convergedReviewerCount(f) >= CONVERGENT_MIN_REVIEWERS
 }
 
+/**
+ * Judged MOOT by verification (the mootness gate): verification ran and the
+ * panel's aggregate worth judgment came back false — real or not, a majority
+ * of the polled models judged this not worth a busy reviewer's time. Absent
+ * worth data (old cached findings, verifiers predating the worth axis) →
+ * false: no signal, never demote on silence.
+ */
+export function isJudgedMoot(v: FindingVerification | undefined): boolean {
+  return !!v && v.polledModels > 0 && v.worthFlagging === false
+}
+
+/**
+ * The label for the moot demotion — the secondary-tier reason shown on a card
+ * the panel judged not worth attention. One definition, shared by the card
+ * chip and any copy that names the reason.
+ */
+export const MOOT_SECONDARY_LABEL = 'judged minor by verification'
+
 // ---------------------------------------------------------------------------
 // Tier decision
 // ---------------------------------------------------------------------------
@@ -144,7 +162,14 @@ export function isConvergent(f: RankableFinding): boolean {
  *   coveredByDraft        → SECONDARY, always — the user already made the point;
  *                           strength is irrelevant (the #206 collapsed treatment
  *                           composes with the group).
- *   high severity         → PRIMARY, always — never hide a high, even demoted.
+ *   judged moot           → SECONDARY for ANY severity — the whole point of the
+ *                           mootness gate is trusting it (a real-but-moot point
+ *                           still costs attention). ONE carve-out: a HIGH that
+ *                           is ALSO majority-verified-real stays inline —
+ *                           hiding a high the panel confirmed real would be
+ *                           triage malpractice.
+ *   high severity         → PRIMARY otherwise — never hide a non-moot high,
+ *                           even one demoted on the reality axis.
  *   medium severity       → PRIMARY when majority-verified, OR convergent, OR
  *                           verification never ran (single-model setups are NOT
  *                           punished: severity is the only signal there, and
@@ -155,10 +180,32 @@ export function isConvergent(f: RankableFinding): boolean {
  *                           verification signal (majority-verified, or never
  *                           ran). A lone low finding — or a low the verifiers
  *                           demoted — is exactly the noise this pass collapses.
+ *
+ * Moot-demotion matrix (worth axis × severity × reality axis):
+ *
+ *   severity | majority-moot | majority-verified-real | tier
+ *   ---------|---------------|------------------------|--------------------
+ *   high     | no / no data  | (any)                  | primary (unchanged)
+ *   high     | yes           | yes                    | primary (real high wins)
+ *   high     | yes           | no                     | secondary
+ *   med/low  | yes           | (any)                  | secondary (trust the gate)
+ *   med/low  | no / no data  | (any)                  | pre-gate rules above
+ *
+ * Old cached findings carry no worth data → isJudgedMoot is false → the whole
+ * matrix degrades to the pre-gate behavior.
  */
 export function findingTier(f: RankableFinding): 'primary' | 'secondary' {
   if (f.coveredByDraft) return 'secondary'
-  if (f.severity === 'high') return 'primary'
+
+  const moot = isJudgedMoot(f.verification)
+  if (f.severity === 'high') {
+    // Mootness-gate carve-out: a moot high stays inline ONLY when the panel
+    // also confirmed it real (majority-verified). A moot high without that
+    // backing trusts the gate and collapses like everything else.
+    if (moot && !isMajorityVerified(f.verification)) return 'secondary'
+    return 'primary'
+  }
+  if (moot) return 'secondary'
 
   const ran = verificationRan(f.verification)
   const majority = isMajorityVerified(f.verification)

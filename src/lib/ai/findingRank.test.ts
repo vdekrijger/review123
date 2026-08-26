@@ -19,6 +19,8 @@ import {
   findingTier,
   isMajorityVerified,
   isConvergent,
+  isJudgedMoot,
+  MOOT_SECONDARY_LABEL,
   convergedReviewerCount,
   rankWeight,
   getFindingsShowAll,
@@ -346,5 +348,117 @@ describe('findings show-all persistence', () => {
     localStorage.setItem('review123:findings-show-all', JSON.stringify(['showAll']))
     expect(getFindingsShowAll()).toBe(false)
     localStorage.removeItem('review123:findings-show-all')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Mootness gate (worth axis) — isJudgedMoot + the moot-demotion matrix
+// ---------------------------------------------------------------------------
+
+/** Verification with an explicit worth-axis outcome. */
+function worthVerification(
+  confirmedBy: number,
+  polledModels: number,
+  surfaced: boolean,
+  worthFlagging: boolean,
+): FindingVerification {
+  return { confirmedBy, polledModels, surfaced, worthFlagging, perModel: [] }
+}
+
+describe('isJudgedMoot — worth-axis signal', () => {
+  it('true only when verification ran AND worthFlagging is explicitly false', () => {
+    expect(isJudgedMoot(worthVerification(3, 3, true, false))).toBe(true)
+  })
+
+  it('false when the panel judged it worth attention', () => {
+    expect(isJudgedMoot(worthVerification(3, 3, true, true))).toBe(false)
+  })
+
+  it('false without worth data — old cached findings never demote on silence', () => {
+    expect(isJudgedMoot(verification(3, 3, true))).toBe(false)
+    expect(isJudgedMoot(undefined)).toBe(false)
+  })
+
+  it('false when verification never actually polled anyone (polled=0)', () => {
+    expect(isJudgedMoot({ confirmedBy: 0, polledModels: 0, surfaced: true, worthFlagging: false, perModel: [] })).toBe(false)
+  })
+})
+
+describe('findingTier — moot-demotion matrix', () => {
+  it('a majority-moot MEDIUM collapses even when majority-verified-real (real-but-moot is the target)', () => {
+    const f = finding({
+      severity: 'medium',
+      verification: worthVerification(3, 3, true, false),
+    })
+    expect(findingTier(f)).toBe('secondary')
+  })
+
+  it('a majority-moot LOW collapses (trust the gate)', () => {
+    const f = finding({ severity: 'low', verification: worthVerification(3, 3, true, false) })
+    expect(findingTier(f)).toBe('secondary')
+  })
+
+  it('a majority-moot CONVERGENT medium still collapses — the gate outranks convergence', () => {
+    const f = finding({
+      severity: 'medium',
+      reviewerName: 'Security',
+      mergedFrom: [{ reviewer: 'Performance', path: 'src/a.ts', line: 11, severity: 'medium', body: 'sibling' }],
+      verification: worthVerification(3, 3, true, false),
+    })
+    expect(findingTier(f)).toBe('secondary')
+  })
+
+  it('HIGH + majority-moot + majority-verified-real stays INLINE (the one carve-out)', () => {
+    const f = finding({ severity: 'high', verification: worthVerification(3, 3, true, false) })
+    expect(findingTier(f)).toBe('primary')
+  })
+
+  it('HIGH + majority-moot WITHOUT majority verification collapses (trust the gate)', () => {
+    // Surfaced on uncertains (1 confirm / 3 polled < 0.5) but judged moot.
+    const f = finding({ severity: 'high', verification: worthVerification(1, 3, true, false) })
+    expect(findingTier(f)).toBe('secondary')
+  })
+
+  it('HIGH judged worth (or without worth data) keeps the pre-gate always-inline rule', () => {
+    expect(findingTier(finding({ severity: 'high', verification: worthVerification(3, 3, true, true) }))).toBe('primary')
+    expect(findingTier(finding({ severity: 'high', verification: verification(1, 3, false) }))).toBe('primary')
+    expect(findingTier(finding({ severity: 'high' }))).toBe('primary')
+  })
+
+  it('worthFlagging true changes nothing — the pre-gate rules decide', () => {
+    // Majority-verified medium stays primary.
+    expect(findingTier(finding({ severity: 'medium', verification: worthVerification(3, 3, true, true) }))).toBe('primary')
+    // A lone below-majority medium stays secondary (pre-gate rule, not mootness).
+    expect(findingTier(finding({ severity: 'medium', verification: worthVerification(1, 3, true, true) }))).toBe('secondary')
+  })
+
+  it('coveredByDraft still wins over everything, moot or not', () => {
+    const f = finding({
+      severity: 'high',
+      coveredByDraft: { path: 'src/a.ts', line: 2 },
+      verification: worthVerification(3, 3, true, true),
+    })
+    expect(findingTier(f)).toBe('secondary')
+  })
+
+  it('old cached findings (no worth data) keep their exact pre-gate tiers', () => {
+    // The pre-gate contract, re-asserted through the new code path.
+    expect(findingTier(finding({ severity: 'medium', verification: verification(3, 3, true) }))).toBe('primary')
+    expect(findingTier(finding({ severity: 'medium', verification: verification(1, 3, true) }))).toBe('secondary')
+    expect(findingTier(finding({ severity: 'medium' }))).toBe('primary')
+    expect(findingTier(finding({ severity: 'low' }))).toBe('secondary')
+  })
+})
+
+describe('mootness gate — rank weight + the secondary reason label', () => {
+  it('a moot finding rank-weights like a demoted one (findingWeight ×0.25 flows through)', () => {
+    const moot = finding({ severity: 'medium', verification: worthVerification(3, 3, true, false) })
+    const worth = finding({ severity: 'medium', verification: worthVerification(3, 3, true, true) })
+    expect(rankWeight(moot)).toBeLessThan(rankWeight(worth))
+    expect(rankWeight(moot)).toBe(2 * 0.25)
+  })
+
+  it('exports the moot secondary-reason label (one definition for card + copy)', () => {
+    expect(MOOT_SECONDARY_LABEL).toBe('judged minor by verification')
   })
 })

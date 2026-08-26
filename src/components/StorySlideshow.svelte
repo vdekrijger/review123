@@ -61,6 +61,8 @@
     coveredByDraft?: { path: string; line: number }
     /** Simplify pass: plain-English rewrite shown by default on the card. */
     simpleBody?: string
+    /** Solutions-required: the finding's concrete fix (the card's Fix block). */
+    suggestedFix?: string
     /** Set when adding a simplified body as a draft: the raw finding text. */
     originalBody?: string
   }
@@ -491,6 +493,7 @@
                       severity={suggestion.severity}
                       body={suggestion.body}
                       simpleBody={suggestion.simpleBody}
+                      suggestedFix={suggestion.suggestedFix}
                       verification={suggestion.verification}
                       raisedBy={suggestion.raisedBy}
                       mergedFrom={suggestion.mergedFrom}

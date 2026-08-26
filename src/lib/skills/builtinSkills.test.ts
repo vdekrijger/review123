@@ -260,6 +260,15 @@ describe('BUILTIN_SKILLS — shared calibration (v10)', () => {
     expect(SHARED_CALIBRATION).toMatch(/never inflate/i)
   })
 
+  it('shared calibration requires a concrete fix on every finding (solutions required)', async () => {
+    const { SHARED_CALIBRATION } = await import('./builtinSkills')
+    expect(SHARED_CALIBRATION).toMatch(/Solutions required/i)
+    expect(SHARED_CALIBRATION).toMatch(/MUST carry a concrete fix/i)
+    expect(SHARED_CALIBRATION).toMatch(/1–3 sentences or a short code sketch/i)
+    expect(SHARED_CALIBRATION).toMatch(/No clean fix —/)
+    expect(SHARED_CALIBRATION).toMatch(/cannot suggest a fix for is usually not worth raising/i)
+  })
+
   it('encodes the absence-claim fail-closed rule (v23)', async () => {
     const { SHARED_CALIBRATION } = await import('./builtinSkills')
     expect(SHARED_CALIBRATION).toMatch(/Absence\/existence claims/i)

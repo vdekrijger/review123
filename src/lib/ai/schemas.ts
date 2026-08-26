@@ -1175,6 +1175,13 @@ export interface FindingVerdict {
    * indicator. Optional/absent for verifier rows and old cached findings.
    */
   raised?: boolean
+  /**
+   * Worth axis (mootness gate): this verifier's independent judgment on whether
+   * a busy senior reviewer would ACT on the finding — separate from whether it
+   * is real. Absent for raiser rows (raising IS the implicit worth vote), for
+   * old cached findings, and for verifiers predating the worth axis.
+   */
+  worth?: boolean
 }
 
 /**
@@ -1189,6 +1196,17 @@ export interface FindingVerification {
   polledModels: number
   /** Decision: true = surface normally, false = demote to lower-confidence group. */
   surfaced: boolean
+  /**
+   * Worth axis (mootness gate): the panel's AGGREGATE judgment on whether this
+   * finding is worth a busy reviewer's time, independent of whether it is real.
+   * false = judged moot — a majority of the poll judged it not worth attention
+   * (raisers count as implicit "worth", a verifier without an explicit worth
+   * vote as a neutral 0.5; ties keep the finding worth) — ranking demotes it
+   * to the collapsed secondary tier and risk down-weights it. Absent when NO
+   * verifier expressed a worth judgment (old cached findings, verifiers
+   * predating the worth axis): no signal, never demote.
+   */
+  worthFlagging?: boolean
   /** Per-model verdicts (generator first), for the tooltip. */
   perModel: FindingVerdict[]
 }
@@ -1204,6 +1222,8 @@ export interface AbsorbedFinding {
   line: number | null
   severity: 'high' | 'medium' | 'low'
   body: string
+  /** The absorbed finding's own concrete fix, preserved verbatim by the merge. */
+  suggestedFix?: string
 }
 
 export interface SkillFinding {
@@ -1211,6 +1231,15 @@ export interface SkillFinding {
   line: number | null
   severity: 'high' | 'medium' | 'low'
   body: string
+  /**
+   * The finding's concrete fix (solutions-required): a 1–3 sentence
+   * prescription or small code sketch, or an explicit "No clean fix — …"
+   * naming the tradeoff. REQUIRED by the skill-review prompt, TOLERATED by the
+   * validator: a finding arriving without one (old cached results, a model
+   * ignoring the requirement) is kept and simply renders without the Fix
+   * block — a missing fix must never drop a real finding.
+   */
+  suggestedFix?: string
   /** Cross-model verification result (Plan M), attached post-generation. */
   verification?: FindingVerification
   /**
@@ -1260,6 +1289,10 @@ const SKILL_FINDINGS_CAP = 15
  * - element-checked: each finding must have path (string), line (number|null),
  *   severity (high|medium|low), body (string)
  * - findings capped at 15; more than 15 → null
+ * - suggestedFix is REQUIRED-BY-PROMPT but TOLERATED here: a non-empty string
+ *   is kept; anything else (absent, null, empty, wrong type) is stripped from
+ *   the finding — the finding itself is NEVER dropped over a missing fix (it
+ *   just renders without the Fix block).
  */
 export function validateSkillReviewResult(x: unknown): SkillReviewResult | null {
   if (!isObject(x)) return null
@@ -1287,6 +1320,14 @@ export function validateSkillReviewResult(x: unknown): SkillReviewResult | null 
 
     // body — required string
     if (typeof finding['body'] !== 'string') return null
+
+    // suggestedFix — optional-tolerant normalization: keep only a usable
+    // non-empty string; strip anything else (null/empty/wrong type) rather
+    // than rejecting the finding or the result.
+    const fix = finding['suggestedFix']
+    if (fix !== undefined && (typeof fix !== 'string' || fix.trim().length === 0)) {
+      delete finding['suggestedFix']
+    }
   }
 
   return x as unknown as SkillReviewResult

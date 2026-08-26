@@ -198,4 +198,22 @@ describe('applySimplify', () => {
     expect(f.mergedReason).toBe('same root cause')
     expect(f.severity).toBe('medium')
   })
+
+  it('leaves suggestedFix UNTOUCHED — the pass rewrites only the body (documented decision)', () => {
+    const input: ReviewerFindings[] = [
+      {
+        skillId: 'sec',
+        name: 'Security',
+        findings: [
+          finding({ suggestedFix: 'Wrap in `try/catch` and log via `reportError(err)`.' }),
+        ],
+      },
+    ]
+    const { fingerprint, inputs } = enumerateForSimplify(input)
+    // The prompt inputs carry only id + body — a fix is never enumerated for rewriting.
+    expect(Object.keys(inputs[0])).toEqual(['id', 'body'])
+    const out = applySimplify(input, { fingerprint, rewrites: [{ id: 'f0', simple: 'Plainer.' }] })
+    expect(out[0].findings[0].simpleBody).toBe('Plainer.')
+    expect(out[0].findings[0].suggestedFix).toBe('Wrap in `try/catch` and log via `reportError(err)`.')
+  })
 })

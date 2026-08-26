@@ -113,6 +113,26 @@ describe('verified findings factor', () => {
     expect(factor(computePrRisk({ files: smallFiles, findings: [demoted] }), 'verified-findings').score).toBe(1)
   })
 
+  it('a majority-moot finding (worthFlagging: false) down-weights like a failed verification (×0.25)', () => {
+    // Real (fully confirmed) but judged not worth attention — the mootness gate.
+    const moot: RiskFinding = {
+      severity: 'high',
+      verification: { ...verified(4, 4, true), worthFlagging: false },
+    }
+    const demoted: RiskFinding = { severity: 'high', verification: verified(1, 4, false) }
+    expect(findingWeight(moot)).toBe(3 * 0.25)
+    expect(findingWeight(moot)).toBe(findingWeight(demoted))
+    // Absent worth data leaves the verified weight untouched (old cache).
+    const noSignal: RiskFinding = { severity: 'high', verification: verified(4, 4, true) }
+    expect(findingWeight(noSignal)).toBe(3 * 1.5)
+    // Explicit worthFlagging true also leaves the weight untouched.
+    const worth: RiskFinding = {
+      severity: 'high',
+      verification: { ...verified(4, 4, true), worthFlagging: true },
+    }
+    expect(findingWeight(worth)).toBe(3 * 1.5)
+  })
+
   it('a single low-severity finding scores 1', () => {
     expect(factor(computePrRisk({ files: smallFiles, findings: [{ severity: 'low' }] }), 'verified-findings').score).toBe(1)
   })
