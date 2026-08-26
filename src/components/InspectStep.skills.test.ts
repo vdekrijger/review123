@@ -366,7 +366,9 @@ describe('InspectStep — no-findings all-clear state (v10)', () => {
       },
     })
     expect(screen.getByText(/no significant issues/i)).toBeInTheDocument()
-    expect(screen.getByText(/1 finding/i)).toBeInTheDocument()
+    // The counted chip names the reviewer (the triage line may also mention
+    // "1 finding", so target the chip's accessible name, not bare text).
+    expect(screen.getByRole('button', { name: /Show 1 finding from Performance Reviewer/i })).toBeInTheDocument()
   })
 
   it('findings outside the PR collapse to the all-clear chip too (filtered count is 0)', () => {

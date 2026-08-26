@@ -150,11 +150,24 @@ describe('SkillFindingCard — cross-model verification chip (Plan M)', () => {
     ],
   }
 
-  it('renders a "✓ confirmed by N/M models" chip when surfaced', () => {
+  it('renders the single "✓ verified" trust chip when majority-confirmed', () => {
     const { container } = renderCard({ verification: surfaced })
     const chip = container.querySelector('.skill-verify-chip')
     expect(chip).toBeTruthy()
-    expect(chip?.textContent).toContain('confirmed by 2/3 models')
+    expect(chip?.textContent).toBe('✓ verified')
+    // The vote detail moved out of the chip text into the accessible name /
+    // hover detail — the chip itself stays a single calm word.
+    expect(chip?.textContent).not.toContain('2/3')
+    expect(chip?.getAttribute('aria-label')).toContain('confirmed by 2 of 3 models')
+  })
+
+  it('NO chip for a surfaced-but-below-majority verification (weak signal ≠ verified)', () => {
+    // 1 explicit confirm of 3 polled — surfaced by the vote threshold
+    // (uncertains count 0.5 there) but not a real majority of confirms.
+    const { container } = renderCard({
+      verification: { ...surfaced, confirmedBy: 1 },
+    })
+    expect(container.querySelector('.skill-verify-chip')).toBeNull()
   })
 
   it('the chip is keyboard-focusable (tabindex + role)', () => {
@@ -231,7 +244,11 @@ describe('SkillFindingCard — cross-model verification chip (Plan M)', () => {
   })
 })
 
-describe('SkillFindingCard — lower-confidence (cross-model demoted, Plan M)', () => {
+describe('SkillFindingCard — demoted verification renders NO chip chrome (finding-triage)', () => {
+  // The old "flagged by X/Y · lower confidence" chip + dimmed treatment are
+  // GONE: a demoted finding's weakness is communicated by its triage tier
+  // (the collapsed per-file group), not by per-card metadata the reviewer
+  // must decode. The verification DATA stays on the finding object.
   const demoted = {
     confirmedBy: 1,
     polledModels: 3,
@@ -243,53 +260,28 @@ describe('SkillFindingCard — lower-confidence (cross-model demoted, Plan M)', 
     ],
   }
 
-  it('renders the card DIMMED with a lower-confidence badge when surfaced=false', () => {
+  it('surfaced=false: no verification chip of any kind, no dimming class, no "flagged by" text', () => {
     const { container } = renderCard({ verification: demoted })
-    const card = container.querySelector('.skill-finding')
-    expect(card?.classList.contains('lower-confidence')).toBe(true)
-    const chip = container.querySelector('.skill-lower-confidence-chip')
-    expect(chip).toBeTruthy()
-    expect(chip?.textContent).toContain('flagged by 1/3')
-    expect(chip?.textContent).toContain('lower confidence')
-  })
-
-  it('the lower-confidence chip still carries the per-model styled tooltip', () => {
-    const { container } = renderCard({ verification: demoted })
-    const chip = container.querySelector('.skill-lower-confidence-chip')
-    expect(chip?.getAttribute('tabindex')).toBe('0')
-    const tip = container.querySelector('.skill-verify-tip')
-    expect(tip?.querySelector('.skill-verify-tip-heading')?.textContent).toContain('Flagged by 1/3')
-    const rows = container.querySelectorAll('.skill-verify-tip-row')
-    // No lens tag anywhere.
-    expect(container.querySelector('.skill-verify-tip-lens')).toBeNull()
-    // Generator row: model + "raised it" tag.
-    expect(rows[0].querySelector('.skill-verify-tip-model')?.textContent).toBe('deepseek-v4-flash')
-    expect(rows[0].querySelector('.skill-verify-tip-raised')?.textContent).toContain('raised it')
-    // Refuting verifier: model + refute indicator + reason, no "raised it" tag.
-    expect(rows[1].querySelector('.skill-verify-tip-model')?.textContent).toBe('gpt-5-mini')
-    expect(rows[1].querySelector('.skill-verify-tip-raised')).toBeNull()
-    expect(rows[1].querySelector('.skill-verify-tip-glyph.verdict-refute')).toBeTruthy()
-    expect(rows[1].querySelector('.skill-verify-tip-reason')?.textContent).toContain('not a real issue')
-  })
-
-  it('a surfaced finding is NOT dimmed and shows no lower-confidence chip', () => {
-    const { container } = renderCard({
-      verification: { ...demoted, surfaced: true, confirmedBy: 2 },
-    })
-    expect(container.querySelector('.skill-finding.lower-confidence')).toBeNull()
+    expect(container.querySelector('.skill-verify-chip')).toBeNull()
     expect(container.querySelector('.skill-lower-confidence-chip')).toBeNull()
-  })
-
-  it('no verification → no lower-confidence treatment at all', () => {
-    const { container } = renderCard({})
     expect(container.querySelector('.skill-finding.lower-confidence')).toBeNull()
-    expect(container.querySelector('.skill-lower-confidence-chip')).toBeNull()
+    expect(container.textContent).not.toContain('flagged by')
+    expect(container.textContent).not.toContain('lower confidence')
   })
 
-  it('the demoted card still renders inline (anchored) with the badge', () => {
+  it('the demoted card still renders as a normal card (severity border + body + actions)', () => {
     const { container } = renderCard({ verification: demoted, line: 12, anchored: true, compact: true })
-    expect(container.querySelector('.skill-finding.lower-confidence.compact')).toBeTruthy()
-    expect(container.querySelector('.skill-lower-confidence-chip')).toBeTruthy()
+    const card = container.querySelector('.skill-finding.severity-medium.compact')
+    expect(card).toBeTruthy()
+    expect(screen.getByText('Consider extracting this into a helper')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /add as draft/i })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument()
+  })
+
+  it('no verification → equally chip-free', () => {
+    const { container } = renderCard({})
+    expect(container.querySelector('.skill-verify-chip')).toBeNull()
+    expect(container.querySelector('.skill-lower-confidence-chip')).toBeNull()
   })
 })
 

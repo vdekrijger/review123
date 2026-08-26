@@ -57,6 +57,13 @@
     coveredByDraft?: { path: string; line: number }
     /** Simplify pass: plain-English rewrite shown by default ("Show original" toggles). */
     simpleBody?: string
+    /**
+     * Finding-triage tier (src/lib/ai/findingRank, computed by the parent):
+     * 'secondary' findings NEVER enter the inline extendData — they collapse
+     * into ONE per-file "N more findings" group below the diff. Absent /
+     * 'primary' → the classic inline/fallback placement.
+     */
+    tier?: 'primary' | 'secondary'
   }
 
   interface Props {
@@ -608,6 +615,21 @@
     })
   })
 
+  // ---- Finding triage split (src/lib/ai/findingRank, tier from the parent) --
+  // PRIMARY findings keep the classic placement: inline at their line via
+  // extendData, or the per-file fallback block when off-diff. SECONDARY
+  // findings NEVER enter extendData — they collapse into ONE per-file
+  // "N more findings" details group below the diff (full cards inside, all
+  // actions live). This makes a weak card sitting full-size mid-diff
+  // impossible by construction.
+  const primarySkillFindings = $derived(placedSkillFindings.filter((f) => f.tier !== 'secondary'))
+  const secondarySkillFindings = $derived(placedSkillFindings.filter((f) => f.tier === 'secondary'))
+
+  /** Whether a placed finding's EFFECTIVE anchor is a real diff line. */
+  function isPlacedFindingAnchored(f: PlacedSkillFinding): boolean {
+    return (f.anchorSide === 'LEFT' ? leftAnchorLines : rightAnchorLines).has(f.line)
+  }
+
   /** Hashes renderable in THIS FileDiff — only these accept drops here. */
   const reanchorableHashes = $derived(new Set(placedSkillFindings.map((f) => f.anchorHash)))
 
@@ -821,9 +843,10 @@
         map[key].data.drafts.sort((a, b) => (a.n ?? 0) - (b.n ?? 0))
       }
     }
-    for (const f of placedSkillFindings) {
+    for (const f of primarySkillFindings) {
       // Findings anchor to the new (RIGHT) side unless a user re-anchor moved
-      // one onto a deleted (LEFT) line. f.line is the EFFECTIVE anchor.
+      // one onto a deleted (LEFT) line. f.line is the EFFECTIVE anchor. Only
+      // PRIMARY findings render inline — secondaries live in the collapsed group.
       const lines = f.anchorSide === 'LEFT' ? leftAnchorLines : rightAnchorLines
       if (!lines.has(f.line)) continue
       entryAt(f.anchorSide === 'LEFT' ? oldFile : newFile, f.line).findings.push(f)
@@ -881,11 +904,12 @@
     onRemoveDraft?.(line, sideStr, n)
   }
 
-  // Skill findings whose EFFECTIVE anchor is NOT in the current diff — fallback
-  // block. A re-anchored finding leaves this block the moment its override
-  // lands on a real diff line (that's the off-diff rescue path).
+  // PRIMARY skill findings whose EFFECTIVE anchor is NOT in the current diff —
+  // fallback block. A re-anchored finding leaves this block the moment its
+  // override lands on a real diff line (that's the off-diff rescue path).
+  // Secondary findings never render here — they live in the collapsed group.
   const unanchoredSkillFindings = $derived(
-    placedSkillFindings.filter(f => !(f.anchorSide === 'LEFT' ? leftAnchorLines : rightAnchorLines).has(f.line)),
+    primarySkillFindings.filter(f => !isPlacedFindingAnchored(f)),
   )
 
   // ---- Symbol click-through (Tier 1) ---------------------------------------
@@ -1229,6 +1253,48 @@
       </div>
     {/if}
 
+    <!-- Collapsed secondary findings (finding-triage): weak or minor findings
+         — failed/below-majority verification, lone lows, covered-by-draft,
+         budget spill — collapse into ONE per-file details group instead of
+         rendering full-size in or below the diff. Expanding discloses the FULL
+         cards: Add as draft, Dismiss, Move, Ask AI all work; nothing is lost. -->
+    {#if secondarySkillFindings.length > 0}
+      <details class="secondary-findings" data-testid="secondary-findings">
+        <summary class="secondary-findings-summary">
+          {secondarySkillFindings.length} more finding{secondarySkillFindings.length === 1 ? '' : 's'} — low confidence or minor
+        </summary>
+        <div class="secondary-findings-list" aria-label="Collapsed lower-priority findings for this file">
+          {#each secondarySkillFindings as finding (finding.key)}
+            {@const anchoredHere = isPlacedFindingAnchored(finding)}
+            <SkillFindingCard
+              skillName={finding.skillName}
+              severity={finding.severity}
+              body={finding.body}
+              simpleBody={finding.simpleBody}
+              verification={finding.verification}
+              raisedBy={finding.raisedBy}
+              mergedFrom={finding.mergedFrom}
+              mergedReason={finding.mergedReason}
+              coveredByDraft={finding.coveredByDraft}
+              line={finding.line}
+              anchored={anchoredHere}
+              findingKey={finding.key}
+              added={addedSkillKeys.has(finding.key)}
+              onAdd={(displayedBody) => handleAddSkillFindingDraft(finding, displayedBody)}
+              onDismiss={() => dismissSkillFinding(finding.key)}
+              anchorHash={finding.anchorHash}
+              movedFrom={finding.movedFrom ?? null}
+              onUndoMove={finding.movedFrom ? () => undoMoveFinding(finding) : null}
+              onMoveToLine={(line) => moveFindingToLine(finding, line)}
+              {askFn}
+              askPath={file.filename}
+              askExcerpt={anchoredHere && file.patch ? excerptAround(file.patch, finding.line, finding.anchorSide, 6) : ''}
+            />
+          {/each}
+        </div>
+      </details>
+    {/if}
+
     <!-- Bottom-of-file existing comments: ONLY file-level / unanchorable
          threads (root line null or not present in the patch hunks).
          Anchored threads render inline at their line via extendData. -->
@@ -1485,6 +1551,33 @@
     gap: 0.4rem;
     padding: 0.5rem;
     border-top: 1px solid var(--border-draft, var(--hairline));
+  }
+
+  /* ---- Collapsed secondary findings group (finding-triage) ----
+     Deliberately quiet: a one-line muted summary; the full cards only render
+     once the reviewer opts in by expanding. */
+  .secondary-findings {
+    border-top: 1px solid var(--hairline);
+    padding: 0.35rem 0.5rem;
+  }
+
+  .secondary-findings-summary {
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    user-select: none;
+  }
+
+  .secondary-findings-summary:hover {
+    color: var(--text, inherit);
+  }
+
+  .secondary-findings-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.4rem 0 0.15rem;
   }
 
   /* ---- Inline (at-line) annotation containers inside extend rows ---- */

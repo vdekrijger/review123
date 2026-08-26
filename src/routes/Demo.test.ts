@@ -141,21 +141,40 @@ describe('Demo route', () => {
     await fireEvent.click(screen.getByRole('button', { name: /next step/i }))
 
     // The Security reviewer's inline finding carries cross-model verification:
-    // a "✓ confirmed by 3/4 models" chip + the multi-generator provenance chip.
-    // (Inline + side-by-side rendering can repeat it → match all occurrences.)
-    expect((await screen.findAllByText(/confirmed by 3\/4 models/i)).length).toBeGreaterThan(0)
+    // the single "✓ verified" trust chip (vote detail in the accessible name /
+    // hover tooltip) + the multi-generator provenance chip.
+    const chips = await screen.findAllByText('✓ verified')
+    expect(chips.length).toBeGreaterThan(0)
+    expect(chips[0].getAttribute('aria-label')).toContain('confirmed by 3 of 4 models')
     expect(screen.getAllByText(/raised by GPT-5\.5, DeepSeek V4 Pro/i).length).toBeGreaterThan(0)
 
     expect(externalFetchCalls()).toEqual([])
   })
 
-  it('shows a DEMOTED / lower-confidence cross-model finding', async () => {
+  it('collapses DEMOTED / minor findings into per-file groups with a review-level triage line', async () => {
     render(Demo)
     await fireEvent.click(screen.getByRole('button', { name: /next step/i }))
+    await screen.findAllByText('✓ verified') // reviewers rendered
 
-    // The Performance reviewer's inline finding was flagged by only one model and
-    // refuted by the rest → the dimmed "flagged by 1/5 · lower confidence" chip.
-    expect((await screen.findAllByText(/flagged by 1\/5 · lower confidence/i)).length).toBeGreaterThan(0)
+    // The Performance reviewer's demoted finding (flagged by 1/5, refuted) and
+    // the Pragmatic reviewer's lone low note collapse into per-file secondary
+    // groups — the old inline "flagged by 1/5 · lower confidence" chrome is gone.
+    expect(screen.queryByText(/flagged by 1\/5/i)).toBeNull()
+    expect(screen.queryByText(/lower confidence/i)).toBeNull()
+    const groups = document.querySelectorAll('[data-testid="secondary-findings"]')
+    expect(groups.length).toBe(2)
+    for (const group of groups) {
+      expect(group.querySelector('summary')?.textContent).toContain('1 more finding — low confidence or minor')
+    }
+    // The demoted card lives INSIDE a group (full card, actions intact).
+    const demoted = screen.getByText(/A fixed 250ms debounce may feel sluggish/i)
+    expect(demoted.closest('[data-testid="secondary-findings"]')).not.toBeNull()
+
+    // Review-level triage line: 1 of 3 line-bearing findings inline + Show all.
+    const line = document.querySelector('[data-testid="findings-triage-line"]')
+    expect(line?.textContent).toContain('Showing 1 of 3 findings')
+    expect(line?.textContent).toContain('2 minor or low-confidence collapsed')
+    expect(line?.querySelector('[data-testid="findings-show-all"]')).not.toBeNull()
 
     expect(externalFetchCalls()).toEqual([])
   })
