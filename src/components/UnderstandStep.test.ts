@@ -1783,3 +1783,61 @@ describe('UnderstandStep intent check section', () => {
     expect(onhotspot).toHaveBeenCalledWith('src/feature.ts')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Expected outcomes section (before → after behavior changes)
+// ---------------------------------------------------------------------------
+
+import type { ExpectedOutcomesResult } from '../lib/ai/schemas'
+
+describe('UnderstandStep expected outcomes section', () => {
+  const OUTCOMES: ExpectedOutcomesResult = {
+    outcomes: [{
+      id: 'o1',
+      before: 'The endpoint returned 500 on empty input.',
+      after: 'It returns 422 with a field error.',
+      evidence: [{ path: 'src/a.ts', line: 3 }],
+      symbols: ['validateInput'],
+    }],
+    withoutThis: 'Empty input keeps crashing the endpoint.',
+  }
+
+  it('renders the Expected outcomes panel (after intent) with the run state', () => {
+    const run = makeRun({ outcomes: { status: 'done', value: OUTCOMES } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(screen.getByText('Expected outcomes (AI)')).toBeInTheDocument()
+    expect(screen.getByText('The endpoint returned 500 on empty input.')).toBeInTheDocument()
+    expect(screen.getByText('It returns 422 with a field error.')).toBeInTheDocument()
+    // Registry order: the outcomes panel directly follows the intent panel.
+    const panels = [...container.querySelectorAll('.detail-panel')]
+    const intentIdx = panels.findIndex((p) => p.classList.contains('intent-panel'))
+    const outcomesIdx = panels.findIndex((p) => p.classList.contains('outcomes-panel'))
+    expect(outcomesIdx).toBe(intentIdx + 1)
+  })
+
+  it('shows the section-status error dot + detail on a failed outcomes task', () => {
+    const run = makeRun({ outcomes: { status: 'error', error: 'Server error.', errorDetail: 'HTTP 500: boom' } })
+    const { container } = render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    const header = container.querySelector('.detail-panel.outcomes-panel .detail-summary')
+    expect(header).not.toBeNull()
+    expect(header!.textContent).toContain('Expected outcomes (AI)')
+  })
+
+  it('outcome evidence links jump to the file diff via onhotspot', async () => {
+    const onhotspot = vi.fn()
+    const run = makeRun({ outcomes: { status: 'done', value: OUTCOMES } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run, onhotspot } })
+    openAllDetails()
+    await userEvent.click(screen.getByRole('button', { name: 'src/a.ts:3' }))
+    expect(onhotspot).toHaveBeenCalledWith('src/a.ts')
+  })
+
+  it('renders the withoutThis necessity footer', () => {
+    const run = makeRun({ outcomes: { status: 'done', value: OUTCOMES } })
+    render(UnderstandStep, { props: { meta, files, ci: null, ciError: false, run } })
+    openAllDetails()
+    expect(screen.getByText('Without this change:')).toBeInTheDocument()
+    expect(screen.getByText('Empty input keeps crashing the endpoint.')).toBeInTheDocument()
+  })
+})
