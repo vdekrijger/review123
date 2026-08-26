@@ -531,7 +531,13 @@
     if (load.state.status === 'ready' && !previewInitialized) {
       previewInitialized = true
       activeProvider.getPreviewDeployments?.(prRefX, load.state.meta.headSha).then(
-        (list) => { previewBest = pickBestPreview(list) },
+        (list) => {
+          previewBest = pickBestPreview(list)
+          // Panel restored open from a previous session: the panel owns the
+          // right edge, so collapse the rail (transient — not persisted, same
+          // idiom as the narrow-viewport auto-collapse).
+          if (previewPanelOpen && previewBest?.state === 'ready') railCollapsed = true
+        },
         () => { /* best-effort — no preview affordance on failure */ },
       )
     }
@@ -540,6 +546,10 @@
   function togglePreviewPanel() {
     previewPanelOpen = !previewPanelOpen
     savePreviewPanelOpen(previewPanelOpen)
+    // Rail and panel share the right edge — an explicit panel open collapses
+    // the rail (transient, like narrow viewports; the user can't use both at
+    // once and the panel was the explicit ask).
+    if (previewPanelOpen) railCollapsed = true
   }
 
   // Panel is only meaningful for a READY preview (there's nothing to frame
@@ -970,7 +980,7 @@
 
 <!-- EC-07i: Sticky bottom bar — shown once the PR is loaded -->
 {#if load.state.status === 'ready'}
-  <div class="draft-bar">
+  <div class="draft-bar" data-preview-open={String(previewPanelVisible)}>
     <div class="draft-bar-inner">
       <span role="status" aria-live="polite" class="draft-status">
         {#if draftStore && !draftStore.persistent}
@@ -1216,6 +1226,18 @@
     display: flex;
     align-items: center;
     gap: 1rem;
+  }
+
+  /* With the preview panel open (≥1100px), keep the bar's controls (Prev/Next)
+     left of the panel — the panel sits above the bar (z-index 110 vs 100). */
+  @media (min-width: 1100px) {
+    .draft-bar[data-preview-open="true"] {
+      padding-right: calc(min(40vw, 560px) + 1rem);
+    }
+    .draft-bar[data-preview-open="true"] .draft-bar-inner {
+      max-width: none;
+      margin: 0;
+    }
   }
 
   .draft-status {

@@ -69,18 +69,20 @@
 <style>
   .preview-panel {
     position: fixed;
-    top: 0;
+    /* Below the sticky topbar (same idiom as the context rail) so the app's
+       navigation stays visible and clickable above the panel. */
+    top: var(--topbar-h, 2.75rem);
     right: 0;
     bottom: 0;
-    /* Under the sticky draft bar (z-index 100) so Prev/Next stay clickable. */
-    z-index: 90;
+    /* Above the context rail (100) and the sticky draft bar (100): the panel
+       owns the right edge while open — Review collapses the rail on open and
+       pads the draft bar so Prev/Next slide left of the panel. */
+    z-index: 110;
     width: min(40vw, 560px);
     display: flex;
     flex-direction: column;
     background: var(--surface, #0e1420);
     border-left: 1px solid var(--hairline);
-    /* Keep the frame's bottom edge clear of the sticky draft bar. */
-    padding-bottom: 3.4rem;
     box-sizing: border-box;
   }
 
