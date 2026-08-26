@@ -30,6 +30,7 @@
   import { applySimplify } from '../lib/ai/simplify'
   import { rankFindings, getFindingsShowAll, setFindingsShowAll } from '../lib/ai/findingRank'
   import { listSkills } from '../lib/skills/skills'
+  import { recordDismissal, type DismissReason } from '../lib/skills/calibration'
   import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
   import { computeFileRisk, type RiskLevel } from '../lib/risk/risk'
   import { classifyFile } from '../lib/diff/diffFile'
@@ -906,6 +907,10 @@
     reviewer: string
     severity: 'high' | 'medium' | 'low'
     verificationContext: DecisionVerificationContext
+    /** Finding anchor + text — the calibration ledger derives its compact
+     *  pattern from these (LOCAL only; analytics never sees them). */
+    path: string
+    body: string
   }
 
   // Run-level verification context shared by every finding this run.
@@ -925,6 +930,8 @@
         map.set(key, {
           reviewer: review.skillId,
           severity: finding.severity,
+          path: finding.path,
+          body: finding.body,
           verificationContext: {
             deep: runDeep,
             crossVerified: !!v,
@@ -941,7 +948,7 @@
 
   // Record a finding's accept/dismiss decision: fire the (content-free) analytics
   // event AND persist the durable local decision row. Invisible — no UI change.
-  function recordDecision(key: string, decision: 'accepted' | 'dismissed'): void {
+  function recordDecision(key: string, decision: 'accepted' | 'dismissed', reason?: DismissReason): void {
     const meta = decisionMetaByKey.get(key)
     if (!meta) return
     const vc = meta.verificationContext
@@ -954,6 +961,8 @@
       polledModels: vc.polledModels,
       ...(vc.fusionMode ? { fusionMode: vc.fusionMode } : {}),
       raisedByCount: vc.raisedByCount,
+      // Dismissal-calibration reason — a fixed enum, never content.
+      ...(decision === 'dismissed' ? { reason: reason ?? 'none' } : {}),
     })
     void decisionStore?.record({
       findingKey: key,
@@ -966,9 +975,16 @@
   // Session-only dismissed finding keys
   let dismissedKeys = $state<Set<string>>(new Set())
 
-  function dismissFinding(key: string) {
+  function dismissFinding(key: string, reason?: DismissReason) {
     dismissedKeys = new Set([...dismissedKeys, key])
-    recordDecision(key, 'dismissed')
+    recordDecision(key, 'dismissed', reason)
+    // Dismissal calibration: a REASONED dismissal teaches this reviewer — the
+    // ledger entry joins its prompt (and cache key) on the next run. A plain
+    // dismiss (no reason) records nothing, keeping today's behavior.
+    if (reason) {
+      const meta = decisionMetaByKey.get(key)
+      if (meta) recordDismissal(meta.reviewer, { path: meta.path, body: meta.body }, reason)
+    }
   }
 
   // Add-as-draft confirmation: track which finding keys have been "added" (session-only)
@@ -1274,7 +1290,7 @@
       onReply={replyFn}
       skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
       onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName, side: finding.side, originalBody: finding.originalBody })}
-      onDismissSkillFinding={(key) => dismissFinding(key)}
+      onDismissSkillFinding={(key, reason) => dismissFinding(key, reason)}
       whitespace={whitespaceByPath.get(file.filename) ?? null}
     />
   </div>
@@ -1616,9 +1632,9 @@
     onAddDraft={handleAddDraft}
     onRemoveDraft={handleRemoveDraft}
     onAddFileLevelDraft={(suggestion) => addFindingAsDraft(suggestion)}
-    onDismissFileLevelFinding={(key) => dismissFinding(key)}
+    onDismissFileLevelFinding={(key, reason) => dismissFinding(key, reason)}
     onAddSkillFindingDraft={(path, finding) => addFindingAsDraft({ findingPath: path, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName, side: finding.side, originalBody: finding.originalBody })}
-    onDismissSkillFinding={(key) => dismissFinding(key)}
+    onDismissSkillFinding={(key, reason) => dismissFinding(key, reason)}
     {askFn}
     {expandFn}
     {askDisabledReason}

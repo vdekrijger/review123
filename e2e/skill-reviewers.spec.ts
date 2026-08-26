@@ -655,15 +655,17 @@ test('skill-reviewers: dismiss hides inline and block findings without affecting
   const inlineCard = page.locator('.diff-line-extend .line-findings .skill-finding')
   await expect(inlineCard).toBeVisible({ timeout: 15_000 })
 
-  // Dismiss the inline finding
+  // Dismiss the inline finding (two-step: reveal reasons → plain Dismiss)
+  await inlineCard.getByRole('button', { name: /dismiss/i }).click()
   await inlineCard.getByRole('button', { name: /dismiss/i }).click()
   await expect(
     page.getByText(/Potential XSS vulnerability/i),
   ).not.toBeVisible({ timeout: 3_000 })
 
-  // Dismiss the fallback-block finding too
+  // Dismiss the fallback-block finding too (same two-step flow)
   const blockCard = page.locator('.skill-findings-annotations .skill-finding')
   await expect(blockCard).toBeVisible()
+  await blockCard.getByRole('button', { name: /dismiss/i }).click()
   await blockCard.getByRole('button', { name: /dismiss/i }).click()
   await expect(
     page.getByText(/Hardcoded credential/i),
@@ -671,6 +673,90 @@ test('skill-reviewers: dismiss hides inline and block findings without affecting
 
   // Draft count stays at 0 (use class selector to avoid ambiguity with skill-run-status-bar)
   await expect(page.locator('.draft-status')).toContainText('0 comments')
+})
+
+// ---------------------------------------------------------------------------
+// Test: dismissal calibration — dismissing WITH a reason writes the per-
+//       reviewer ledger, and the NEXT run of that reviewer (its cache is
+//       re-keyed by the ledger) sends a prompt carrying the
+//       "PAST DISMISSED FINDINGS" calibration section.
+// ---------------------------------------------------------------------------
+
+test('skill-reviewers: dismissal with reason feeds the next run prompt (calibration loop)', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+
+  // Capture every skill-persona SYSTEM prompt the app sends. Registered AFTER
+  // setupRoutes so it takes precedence; route.fallback() hands the request to
+  // the standard stub for fulfillment (same idiom as the simplify override).
+  const personaPrompts: string[] = []
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    try {
+      const body = route.request().postDataJSON() as { messages?: Array<{ role: string; content: string }> }
+      const sys = body?.messages?.find((m) => m.role === 'system')?.content ?? ''
+      if (sys.includes('reviewer persona defined below')) personaPrompts.push(sys)
+    } catch {
+      // non-JSON body — not a persona call
+    }
+    return route.fallback()
+  })
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings())
+  await page.addInitScript(seedSkillScript())
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // FIRST run: the ledger is empty → NO calibration section in the prompt.
+  await page.getByRole('button', { name: /run my reviewers/i }).click()
+  const inlineCard = page.locator('.diff-line-extend .line-findings .skill-finding')
+  await expect(inlineCard).toBeVisible({ timeout: 15_000 })
+  expect(personaPrompts.length).toBeGreaterThanOrEqual(1)
+  expect(personaPrompts.some((p) => p.includes('PAST DISMISSED FINDINGS'))).toBe(false)
+
+  // Dismiss the inline finding WITH a reason ("Not real") → ledger entry.
+  await inlineCard.getByRole('button', { name: /dismiss/i }).click()
+  await inlineCard.getByRole('button', { name: 'Not real' }).click()
+  await expect(page.getByText(/Potential XSS vulnerability/i)).not.toBeVisible({ timeout: 3_000 })
+
+  // The per-reviewer ledger is written under the seeded skill's id.
+  const ledger = await page.evaluate(() => localStorage.getItem('review123:skill-calibration'))
+  expect(ledger).toContain('skill-e2e-test')
+  expect(ledger).toContain('not-real')
+
+  // SECOND run on a fresh page load: the ledger joins the reviewer's content
+  // hash, so its cached first-run result no longer matches → the app re-hits
+  // the stub with the calibrated prompt. (The dismissed finding itself stays
+  // suppressed by the decision store, so we assert on the captured prompt.)
+  personaPrompts.length = 0
+  await page.reload()
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+  // The reload restores step 2 (persisted step state) — the run button is
+  // already on screen; clicking "Next step" again would be ambiguous.
+  const runBtn = page.getByRole('button', { name: /run my reviewers/i })
+  await expect(runBtn).toBeVisible({ timeout: 10_000 })
+  await runBtn.click()
+
+  await expect.poll(() => personaPrompts.length, { timeout: 15_000 }).toBeGreaterThanOrEqual(1)
+  const calibrated = personaPrompts.find((p) => p.includes('PAST DISMISSED FINDINGS'))
+  expect(calibrated).toBeTruthy()
+  // 'not-real' entries are phrased as false positives and carry the compact
+  // pattern derived from the dismissed finding (body excerpt + file hint).
+  expect(calibrated!).toContain('[false positive]')
+  expect(calibrated!).toContain('Potential XSS vulnerability')
+  expect(calibrated!).toContain('(in feature.ts)')
 })
 
 // ---------------------------------------------------------------------------

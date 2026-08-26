@@ -37,6 +37,7 @@
   import type { StoryStep, StoryOrderResult, GraphResult } from '../lib/ai/schemas'
   import { STORY_LAYERS, matchStoryPath, dedupeStorySteps, sinkGeneratedSteps, appendCatchAllStep } from '../lib/ai/schemas'
   import type { WhitespaceDisplay } from '../lib/diff/whitespace'
+  import type { DismissReason } from '../lib/skills/calibration'
   import { slugify } from '../lib/slug'
   import { track } from '../lib/analytics/analytics'
   import { renderInlineMarkdown } from '../lib/markdown/render'
@@ -125,12 +126,12 @@
      * verbatim — nothing story-specific to degrade).
      */
     onAddSkillFindingDraft: (path: string, finding: { body: string; line: number; key: string; skillName: string; side?: 'LEFT' | 'RIGHT'; originalBody?: string }) => Promise<void>
-    /** Records a dismiss decision for the accept/dismiss telemetry loop. */
-    onDismissSkillFinding?: (key: string) => void
+    /** Records a dismiss decision (with the optional calibration reason). */
+    onDismissSkillFinding?: (key: string, reason?: DismissReason) => void
     /** Add a file-level (null-line) finding as a draft comment. */
     onAddFileLevelDraft?: (suggestion: FileLevelSuggestion) => void
-    /** Dismiss a file-level (null-line) finding. */
-    onDismissFileLevelFinding?: (key: string) => void
+    /** Dismiss a file-level (null-line) finding (with the optional reason). */
+    onDismissFileLevelFinding?: (key: string, reason?: DismissReason) => void
     askFn?: ((q: string, onDelta: (t: string) => void, focus?: AskFocus) => Promise<{ ok: true; answer: string } | { ok: false; error: string }>) | null
     /** Terse-note expander threaded to FileDiff → DraftThread (mirrors askFn). */
     expandFn?: ((note: string, onDelta: (t: string) => void, focus: { path: string; line: number; side: 'LEFT' | 'RIGHT' }) => Promise<{ ok: true; comment: string } | { ok: false; error: string; errorDetail?: string }>) | null
@@ -509,7 +510,7 @@
                             ? { ...suggestion, body: displayedBody, originalBody: suggestion.body }
                             : suggestion,
                         )}
-                      onDismiss={() => onDismissFileLevelFinding?.(suggestion.key)}
+                      onDismiss={(reason) => onDismissFileLevelFinding?.(suggestion.key, reason)}
                       {askFn}
                       askPath={path}
                       askExcerpt={fileLevelExcerpt(path, suggestion.line)}

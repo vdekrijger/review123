@@ -15,6 +15,16 @@ import type { AiTaskId } from '../settings/settings'
 import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS, INTENT_MAX_ITEMS } from './schemas'
 
+// PROMPT_VERSIONS skills 29 (dismissal calibration): the skill-review prompt
+// TEMPLATE gains an optional per-reviewer calibration section — when the user
+// has dismissed findings WITH a reason ("Not real" / "Not worth flagging"),
+// the reviewer's ledger (src/lib/skills/calibration.ts) is injected as a
+// "PAST DISMISSED FINDINGS" block instructing the persona not to re-raise the
+// same pattern unless the case materially differs. Only the `skills` entry
+// bumps — no other task's prompt bytes change. (The ledger content ALSO joins
+// the per-reviewer content hash in run.svelte.ts, so a new dismissal-with-
+// reason re-keys only that one reviewer; the version bump covers the template
+// change itself.)
 // PROMPT_VERSIONS skills/verdict 28 (grounded verification): every cross-model
 // verifier call now runs THROUGH the tool loop with repo lookups available
 // (read_file / read_file_at_base / search_code / find_references) — ALWAYS ON
@@ -145,7 +155,7 @@ export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   alternatives: 26,
   verdict: 28,
   intent: 1,
-  skills: 28,
+  skills: 29,
   story: 26,
   riskJudge: 26,
   convergence: 26,
@@ -1497,14 +1507,23 @@ is allowed where the comment benefits from it.`
  * remains as a parse-side backstop only), evidence gate, brevity format,
  * silence-is-valid, severity honesty.
  *
+ * calibration (v29 — dismissal calibration): the reviewer's pre-built
+ * "PAST DISMISSED FINDINGS" block (src/lib/skills/calibration.ts
+ * buildCalibrationBlock — already sanitized + capped). When present and
+ * non-empty it is appended as its own section, teaching the persona the
+ * user's personal mootness taste. Absent/empty → the prompt is byte-identical
+ * to the uncalibrated template.
+ *
  * NOTE: The orchestrator's cache key combines PROMPT_VERSIONS.skills with a
- * content-hash (djb2 of skill content), so both prompt and skill edits
- * invalidate the cache.
+ * content-hash (djb2 of skill content + calibration block), so prompt edits,
+ * skill edits AND new reasoned dismissals each invalidate the cache — the
+ * latter for that one reviewer only.
  */
 export function skillReviewPrompt(
   ctx: PackedContext,
   skill: { name: string; content: string },
   existingComments?: string[],
+  calibration?: string,
 ): { system: string; user: string } {
   // Same cap/truncation policy as coachPrompt: ≤30 comments, ≤200 chars each.
   const cappedComments = (existingComments ?? []).slice(0, 30).map((c) => c.slice(0, 200))
@@ -1519,6 +1538,20 @@ ${cappedComments.map((c) => `- ${c.replace(/\n/g, ' ')}`).join('\n')}
 Never repeat a point an existing comment already makes — duplicated feedback wastes the \
 author's attention. If your only candidate findings are already covered above, return an \
 empty findings array.`
+      : ''
+
+  // Dismissal calibration (v29): the user's per-reviewer ledger of dismissed-
+  // with-reason findings. The block arrives pre-built (header + "- [false
+  // positive] …" / "- [noise] …" lines), sanitized and capped by
+  // buildCalibrationBlock. Empty/absent → no section, byte-identical prompt.
+  const calibrationSection =
+    calibration && calibration.trim() !== ''
+      ? `
+
+${calibration}
+These reflect the reviewer's judgment about what is worth their attention in THIS codebase. \
+Do not re-raise a finding matching one of these patterns unless the new case MATERIALLY \
+differs (different root cause, or concrete new evidence of harm).`
       : ''
 
   const system = `You are the reviewer persona defined below. Your job is to review the pull \
@@ -1547,7 +1580,7 @@ Your findings must be:
 ${ANTI_FATIGUE_RULES}
 
 Silence from this lens: an empty findings array means "No significant issues from this lens." \
-That is a GOOD and expected outcome on clean code — never pad the list to look thorough.${existingCommentsSection}
+That is a GOOD and expected outcome on clean code — never pad the list to look thorough.${existingCommentsSection}${calibrationSection}
 
 Respond with JSON ONLY — no explanation, no markdown outside the JSON, no code fences. \
 Your response must be valid JSON that exactly matches this shape:

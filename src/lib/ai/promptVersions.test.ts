@@ -140,18 +140,29 @@ describe('cache-key stability (migration: global v26 → per-task map)', () => {
     )
   })
 
-  it('skill reviews (content-hashed segment composes with the version) — v28: grounded verification', () => {
-    // Bumped 27 → 28: skill-review cross-verification now runs the grounded
-    // verifier rubric (repo lookups + groundedNote) — cached skill results
-    // re-run so hedged absence votes become grounded confirmations/refutations.
+  it('skill reviews (content-hashed segment composes with the version) — v29: dismissal calibration', () => {
+    // Bumped 28 → 29: the skill-review prompt TEMPLATE gained the optional
+    // per-reviewer "PAST DISMISSED FINDINGS" calibration section (dismissal
+    // calibration). Only `skills` bumps; verdict stays at 28.
+    // The content hash is djb2(skill.content + calibrationBlock) — an EMPTY
+    // ledger contributes '' so the hash below equals djb2(content) exactly.
     const content = '# Persona\nYou review for security.'
-    const hash = djb2(content)
-    expect(cacheKey(PR, 'skill:' + hash, promptVersionFor('skills'))).toBe(`owner/repo#1@abc123|skill:${hash}|v28`)
+    const emptyCalibration = ''
+    const hash = djb2(content + emptyCalibration)
+    expect(hash).toBe(djb2(content))
+    expect(cacheKey(PR, 'skill:' + hash, promptVersionFor('skills'))).toBe(`owner/repo#1@abc123|skill:${hash}|v29`)
     expect(cacheKey(PR, 'skill:' + hash + '|deep', promptVersionFor('skills'))).toBe(
-      `owner/repo#1@abc123|skill:${hash}|deep|v28`,
+      `owner/repo#1@abc123|skill:${hash}|deep|v29`,
     )
     expect(cacheKey(PR, 'skill:' + hash + '|models', promptVersionFor('skills'))).toBe(
-      `owner/repo#1@abc123|skill:${hash}|models|v28`,
+      `owner/repo#1@abc123|skill:${hash}|models|v29`,
+    )
+    // A non-empty calibration block re-keys THIS reviewer (same mechanism as a
+    // persona edit): the joined hash — and therefore the key — diverges.
+    const calibrated = djb2(content + 'PAST DISMISSED FINDINGS — …\n- [noise] nitpick (in a.ts)')
+    expect(calibrated).not.toBe(hash)
+    expect(cacheKey(PR, 'skill:' + calibrated, promptVersionFor('skills'))).not.toBe(
+      cacheKey(PR, 'skill:' + hash, promptVersionFor('skills')),
     )
   })
 

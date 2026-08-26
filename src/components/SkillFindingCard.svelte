@@ -16,6 +16,7 @@
    *       unresolvable anchor → muted "line N — not in this diff" note
    */
 
+  import { tick } from 'svelte'
   import MarkdownView from './MarkdownView.svelte'
   import VerifyVotesTooltip from './VerifyVotesTooltip.svelte'
   import AskBox from './AskBox.svelte'
@@ -23,6 +24,7 @@
   import type { AskFocus } from '../lib/ai/tasks'
   import { isMajorityVerified, isJudgedMoot, MOOT_SECONDARY_LABEL } from '../lib/ai/findingRank'
   import { reanchorDrag, REANCHOR_DND_MIME } from '../lib/findings/reanchor.svelte'
+  import type { DismissReason } from '../lib/skills/calibration'
 
   interface Props {
     skillName: string
@@ -74,7 +76,15 @@
      * argument keep the original-body behavior.
      */
     onAdd: (displayedBody?: string) => void
-    onDismiss: () => void
+    /**
+     * Dismiss the finding. Clicking "Dismiss" first reveals two compact
+     * one-click reasons — "Not real" (false positive) and "Not worth flagging"
+     * (noise) — alongside a plain "Dismiss". A reason click passes it here so
+     * the parent can record a calibration-ledger entry teaching the reviewer
+     * not to re-raise the pattern; plain Dismiss passes undefined (no ledger
+     * entry — today's behavior).
+     */
+    onDismiss: (reason?: DismissReason) => void
     /**
      * Optional streaming grounded Q&A function (mirrors FileDiff's / AiRun.ask).
      * When provided, an "Ask AI" button appears alongside Add/Dismiss; clicking it
@@ -205,6 +215,35 @@
       e.stopPropagation()
       moveOpen = false
       moveError = null
+    }
+  }
+
+  // ---- Dismiss with reason (dismissal calibration) -------------------------
+  // First click on "Dismiss" reveals the reason row (one extra click max);
+  // choosing a reason OR the plain "Dismiss" dismisses. Escape cancels and
+  // returns focus to the Dismiss toggle for keyboard users.
+  let dismissChoiceOpen = $state(false)
+  let dismissToggleEl = $state<HTMLButtonElement | null>(null)
+  let firstReasonEl = $state<HTMLButtonElement | null>(null)
+
+  // Keyboard path: the Dismiss toggle is replaced by the reason row when it
+  // opens, so focus must move INTO the row (deterministic — the autofocus
+  // attribute doesn't fire on dynamic insertion everywhere).
+  $effect(() => {
+    if (dismissChoiceOpen) firstReasonEl?.focus()
+  })
+
+  function chooseDismiss(reason?: DismissReason) {
+    dismissChoiceOpen = false
+    onDismiss(reason)
+  }
+
+  function handleDismissRowKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.stopPropagation()
+      dismissChoiceOpen = false
+      // The toggle re-renders after the state flips — refocus it then.
+      void tick().then(() => dismissToggleEl?.focus())
     }
   }
 
@@ -404,7 +443,52 @@
       disabled={added}
       aria-label={added ? 'Added to drafts' : 'Add as draft comment'}
     >{added ? '✓ Added' : 'Add as draft'}</button>
-    <button class="skill-dismiss-btn" onclick={onDismiss}>Dismiss</button>
+    {#if !dismissChoiceOpen}
+      <button
+        class="skill-dismiss-btn"
+        bind:this={dismissToggleEl}
+        aria-label="Dismiss this finding — choose an optional reason"
+        onclick={() => (dismissChoiceOpen = true)}
+      >Dismiss</button>
+    {:else}
+      <!-- Dismissal-calibration reason row (one extra click max): a reason
+           click records a ledger entry for THIS reviewer AND dismisses; the
+           plain Dismiss keeps today's no-ledger behavior. Esc cancels. -->
+      <!-- The keydown only catches Escape bubbling from the buttons (cancel);
+           the row itself is a passive container, not interactive. -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <span
+        class="dismiss-reason-row"
+        role="group"
+        aria-label="Why dismiss? Optional — teaches this reviewer"
+        data-testid="dismiss-reasons"
+        onkeydown={handleDismissRowKeydown}
+      >
+        <button
+          type="button"
+          class="dismiss-reason-btn"
+          data-testid="dismiss-not-real"
+          title="False positive — teach this reviewer not to raise it again"
+          bind:this={firstReasonEl}
+          onclick={() => chooseDismiss('not-real')}
+        >Not real</button>
+        <button
+          type="button"
+          class="dismiss-reason-btn"
+          data-testid="dismiss-not-worth"
+          title="Real but noise — teach this reviewer not to raise it again"
+          onclick={() => chooseDismiss('not-worth')}
+        >Not worth flagging</button>
+        <button
+          type="button"
+          class="skill-dismiss-btn"
+          data-testid="dismiss-plain"
+          title="Dismiss without teaching the reviewer"
+          onclick={() => chooseDismiss()}
+        >Dismiss</button>
+      </span>
+    {/if}
     {#if canMoveToLine}
       <button
         type="button"
@@ -971,6 +1055,34 @@
 
   .skill-dismiss-btn:hover {
     opacity: 1;
+    background: var(--surface-raised);
+  }
+
+  /* ---- Dismiss-with-reason row (dismissal calibration) ----
+     Compact inline group revealed by the Dismiss toggle: two reason buttons
+     (they teach the reviewer) + the plain Dismiss. Same size family as the
+     other action buttons — a choice, not an alarm. */
+  .dismiss-reason-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+
+  .dismiss-reason-btn {
+    font-size: 0.78rem;
+    padding: 0.18rem 0.55rem;
+    border-radius: 4px;
+    border: 1px dashed var(--border-subtle);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .dismiss-reason-btn:hover,
+  .dismiss-reason-btn:focus-visible {
+    color: inherit;
+    border-style: solid;
     background: var(--surface-raised);
   }
 

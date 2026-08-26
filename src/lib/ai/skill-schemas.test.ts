@@ -393,3 +393,51 @@ describe('no-findings fixture parses cleanly', () => {
     expect(parsed?.findings).toEqual([])
   })
 })
+
+// ---------------------------------------------------------------------------
+// skillReviewPrompt — dismissal calibration (v29)
+// ---------------------------------------------------------------------------
+
+describe('skillReviewPrompt — dismissal calibration (v29)', () => {
+  const CALIBRATION_BLOCK =
+    'PAST DISMISSED FINDINGS — the user judged these not worth raising; do not ' +
+    're-raise the same pattern unless the case materially differs:\n' +
+    '- [false positive] Claimed missing null check that exists (in foo.ts)\n' +
+    '- [noise] Nitpick about test naming (in bar.test.ts)'
+
+  it('appends the calibration section when a non-empty block is passed', () => {
+    const { system } = skillReviewPrompt(
+      makeCtx(),
+      { name: 'S', content: 'persona' },
+      undefined,
+      CALIBRATION_BLOCK,
+    )
+    expect(system).toContain('PAST DISMISSED FINDINGS')
+    expect(system).toContain('- [false positive] Claimed missing null check that exists (in foo.ts)')
+    expect(system).toContain('- [noise] Nitpick about test naming (in bar.test.ts)')
+    // The follow-up discipline sentence rides along with the block.
+    expect(system).toMatch(/MATERIALLY\s+differs/i)
+  })
+
+  it('omits the section entirely when no calibration is passed — byte-identical prompt', () => {
+    const without = skillReviewPrompt(makeCtx(), { name: 'S', content: 'persona' })
+    expect(without.system).not.toContain('PAST DISMISSED FINDINGS')
+    // undefined and '' behave identically (empty ledger → no section).
+    const withEmpty = skillReviewPrompt(makeCtx(), { name: 'S', content: 'persona' }, undefined, '')
+    expect(withEmpty.system).toBe(without.system)
+    const withBlank = skillReviewPrompt(makeCtx(), { name: 'S', content: 'persona' }, undefined, '   ')
+    expect(withBlank.system).toBe(without.system)
+  })
+
+  it('composes with existingComments (both sections present, calibration after)', () => {
+    const { system } = skillReviewPrompt(
+      makeCtx(),
+      { name: 'S', content: 'persona' },
+      ['an existing comment'],
+      CALIBRATION_BLOCK,
+    )
+    expect(system).toContain('Existing PR comments')
+    expect(system).toContain('PAST DISMISSED FINDINGS')
+    expect(system.indexOf('Existing PR comments')).toBeLessThan(system.indexOf('PAST DISMISSED FINDINGS'))
+  })
+})

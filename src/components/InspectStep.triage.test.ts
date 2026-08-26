@@ -211,6 +211,9 @@ describe('InspectStep triage — inline budget across the review', () => {
     const firstInline = container.querySelector('.line-findings .skill-finding')!
     const dismiss = [...firstInline.querySelectorAll('button')].find((b) => b.textContent === 'Dismiss')!
     await userEvent.click(dismiss)
+    // Two-step dismiss (dismissal calibration): the reveal shows the plain Dismiss.
+    const plainDismiss = [...firstInline.querySelectorAll('button')].find((b) => b.textContent === 'Dismiss')!
+    await userEvent.click(plainDismiss)
     await waitFor(() => {
       expect(container.querySelector('[data-testid="secondary-findings"]')).toBeNull()
     })
@@ -242,6 +245,9 @@ describe('InspectStep triage — actions inside the collapsed group', () => {
     const card = [...group.querySelectorAll('.skill-finding')].find((el) => el.textContent?.includes('Lone low note'))!
     const dismiss = [...card.querySelectorAll('button')].find((b) => b.textContent === 'Dismiss')!
     await userEvent.click(dismiss)
+    // Two-step dismiss (dismissal calibration): the reveal shows the plain Dismiss.
+    const plainDismiss = [...card.querySelectorAll('button')].find((b) => b.textContent === 'Dismiss')!
+    await userEvent.click(plainDismiss)
     await waitFor(() => {
       expect(screen.queryByText('Lone low note')).not.toBeInTheDocument()
     })
