@@ -177,6 +177,20 @@ describe('SkillFindingCard — cross-model verification chip (Plan M)', () => {
     expect(chip?.getAttribute('role')).toBe('button')
   })
 
+  it('grounded verification: the chip hover title carries the groundedNote', () => {
+    const { container } = renderCard({
+      verification: { ...surfaced, groundedNote: 'searched repo for parseConfig callers: 2 found' },
+    })
+    const chip = container.querySelector('.skill-verify-chip')
+    expect(chip?.getAttribute('title')).toBe('searched repo for parseConfig callers: 2 found')
+  })
+
+  it('no groundedNote (ungrounded / old cached verification) → no title attribute', () => {
+    const { container } = renderCard({ verification: surfaced })
+    const chip = container.querySelector('.skill-verify-chip')
+    expect(chip?.hasAttribute('title')).toBe(false)
+  })
+
   it('the styled tooltip lists per-vote MODEL + verdict indicator + reason (no lens tag)', () => {
     const { container } = renderCard({ verification: surfaced })
     const tip = container.querySelector('.skill-verify-tip')

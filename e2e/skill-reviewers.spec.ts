@@ -1302,3 +1302,149 @@ test('skill-reviewers: mootness gate — real-but-moot medium collapses; verifie
   await expect(page.locator('.line-findings .skill-finding', { hasText: 'Real but moot medium' })).toHaveCount(1)
   await expect(page.getByTestId('secondary-findings')).toHaveCount(0)
 })
+
+// ---------------------------------------------------------------------------
+// Test: GROUNDED VERIFICATION — the Anthropic verifier USES a repo lookup
+//       (search_code, answered by the stubbed GitHub /search/code endpoint)
+//       before confirming, and reports what it checked in groundedNote. The
+//       "✓ verified" chip's hover title carries that note.
+// ---------------------------------------------------------------------------
+
+// One finding, anchored in the diff (line 2). Body deliberately avoids the
+// absence-claim phrasings so the Part B absence gate stays out of this test.
+const GROUNDED_REVIEW_RESULT = {
+  skillName: 'Security Reviewer',
+  findings: [
+    {
+      path: 'src/feature.ts',
+      line: 2,
+      severity: 'high',
+      body: 'Unsafe HTML built from user input in renderCard',
+      suggestedFix: 'Escape with sanitizeHtml() before insertion.',
+    },
+  ],
+}
+
+const GROUNDED_NOTE_E2E = 'searched repo for sanitizeHtml: 2 consumers found'
+
+test('skill-reviewers: grounded verification — verifier searches the repo (stubbed) and the verified chip hover carries the note', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+
+  // Positive /search/code hits (registered AFTER setupRoutes so it wins over
+  // the base GitHub catch-all). Counts calls so we can assert the verifier
+  // really USED the tool.
+  let searchCalls = 0
+  await page.route('**/api.github.com/search/code**', async (route) => {
+    searchCalls += 1
+    return route.fulfill({
+      json: {
+        total_count: 2,
+        items: [
+          { path: 'src/render.ts', text_matches: [{ fragment: 'sanitizeHtml(input)' }] },
+          { path: 'src/preview.ts', text_matches: [{ fragment: 'sanitizeHtml(body)' }] },
+        ],
+      },
+    })
+  })
+
+  // Override the persona branch with the grounded fixture; everything else
+  // falls back to the base handler.
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string }> } = {}
+    try {
+      body = route.request().postDataJSON() as typeof body
+    } catch {
+      // non-JSON body
+    }
+    const systemContent = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
+    if (body?.stream !== true && (systemContent.includes('reviewer persona') || systemContent.includes('security reviewer'))) {
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify(GROUNDED_REVIEW_RESULT) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
+    return route.fallback()
+  })
+
+  // Anthropic verifier — a real (stubbed) TOOL LOOP: the first round answers
+  // with a search_code tool_use; once the transport feeds back a tool_result,
+  // the second round returns the grounded verdicts with a groundedNote.
+  await page.route('**/api.anthropic.com/**', async (route) => {
+    let body: {
+      system?: string
+      messages?: Array<{ role: string; content: string | Array<{ type?: string }> }>
+    } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* non-JSON */ }
+    const messages = body?.messages ?? []
+    const hasToolResult = messages.some(
+      (m) => Array.isArray(m.content) && m.content.some((c) => c?.type === 'tool_result'),
+    )
+    const firstUser = messages.find((m) => m.role === 'user')
+    const userText = typeof firstUser?.content === 'string' ? firstUser.content : ''
+    const ids = [...userText.matchAll(/"id":\s*"([^"]+)"/g)].map((m) => m[1])
+
+    if (!hasToolResult) {
+      // Round 1: the verifier decides it needs to SEE the repo before voting.
+      return route.fulfill({
+        status: 200,
+        json: {
+          content: [
+            { type: 'text', text: 'Checking whether sanitizeHtml is actually used elsewhere.' },
+            { type: 'tool_use', id: 'toolu_e2e_1', name: 'search_code', input: { query: 'sanitizeHtml' } },
+          ],
+          usage: { input_tokens: 12, output_tokens: 6 },
+        },
+      })
+    }
+    // Round 2: grounded confirmation, reporting what was looked up.
+    const verdicts = ids.map((id) => ({
+      id,
+      verdict: 'confirm',
+      worth: true,
+      reason: 'real: the sink is unescaped',
+      groundedNote: GROUNDED_NOTE_E2E,
+    }))
+    return route.fulfill({
+      status: 200,
+      json: {
+        content: [{ type: 'text', text: JSON.stringify({ verdicts }) }],
+        usage: { input_tokens: 20, output_tokens: 10 },
+      },
+    })
+  })
+
+  // Two keys → DeepSeek generates, Anthropic verifies (grounded, always on).
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, { ...seedSettings(), aiProvider: 'deepseek', anthropicKey: 'sk-ant-test-key' })
+  await page.addInitScript(seedSkillScript())
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  await page.getByRole('button', { name: /run my reviewers \(1\)/i }).click()
+
+  // The finding surfaces inline, majority-confirmed → the "✓ verified" chip.
+  const card = page.locator('.line-findings .skill-finding', { hasText: 'Unsafe HTML built from user input' })
+  await expect(card).toBeVisible({ timeout: 15_000 })
+  const chip = card.locator('.skill-verify-chip')
+  await expect(chip).toBeVisible({ timeout: 10_000 })
+  await expect(chip).toHaveText('✓ verified')
+
+  // GROUNDED evidence: the hover title carries WHAT the verifier looked up.
+  await expect(chip).toHaveAttribute('title', GROUNDED_NOTE_E2E)
+
+  // And the lookup really happened: the stubbed GitHub code search was hit.
+  expect(searchCalls).toBeGreaterThanOrEqual(1)
+})

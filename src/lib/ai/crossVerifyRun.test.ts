@@ -15,6 +15,7 @@ import {
   setAnthropicKey,
   setOpenaiKey,
   setGeminiKey,
+  setOpenrouterKey,
   setAiProvider,
   setAiPanel,
 } from '../settings/settings'
@@ -859,5 +860,186 @@ describe('active/narration model labelling in modelCostBreakdown', () => {
     // The configured generators (deepseek, anthropic) are the generator rows.
     const genProviders = rows.filter((r) => r.role === 'generator').map((r) => r.providerId).sort()
     expect(genProviders).toEqual(['anthropic', 'deepseek'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GROUNDED verification (repo lookups for verifiers) — run wiring
+//
+// With a repo source wired, EVERY verifier call runs through the tool loop
+// (always on — NOT gated behind deep mode): grounded prompt, per-verifier
+// provider override, budget caps. Fallbacks: no source → single-pass
+// (byte-identical, covered by the earlier suites, which pass no deepReview);
+// a verifier model without function calling → single-pass for THAT verifier.
+// ---------------------------------------------------------------------------
+
+describe('grounded verification in runSkillReviews', () => {
+  function groundedDeepSource() {
+    return {
+      getFileAtHead: vi.fn(async () => 'file contents'),
+      getFileAtBase: vi.fn(async () => null),
+      searchCode: vi.fn(async () => 'no hits'),
+      findReferences: vi.fn(async () => 'no refs'),
+    }
+  }
+
+  it('verifier call runs THROUGH the tool loop (grounded prompt, override, budget) and groundedNote + lookups land on the finding', async () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    const llmJsonWithRepairFor = vi.fn() // must NOT be called (loop answers parse fine)
+    const llmToolLoop = vi.fn().mockImplementation(async (opts: {
+      system: string
+      tools: { name: string }[]
+      maxToolCalls?: number
+      override?: { provider: { id: string } }
+    }) => {
+      // The verifier loop carries the GROUNDED prompt + the repo toolkit +
+      // the per-verifier budget + the verifier's own provider override.
+      expect(opts.system).toContain('GROUNDED VERIFICATION')
+      expect(opts.tools.map((t) => t.name)).toContain('read_file')
+      expect(opts.tools.map((t) => t.name)).toContain('search_code')
+      expect(opts.maxToolCalls).toBe(4)
+      expect(opts.override?.provider.id).toBe('anthropic')
+      return {
+        content: JSON.stringify({
+          verdicts: [
+            { id: 'src/foo.ts:10:' + djb2('a real bug here'), verdict: 'confirm', reason: 'verified', worth: true, groundedNote: 'searched repo for consumers: 2 found' },
+            { id: 'src/foo.ts:20:' + djb2('a style nit there'), verdict: 'refute', reason: 'nit', worth: false },
+          ],
+        }),
+        usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
+        toolCallsUsed: 2,
+      }
+    })
+
+    const run = createAiRun(
+      { ...makeInput(), deepReview: groundedDeepSource() },
+      makeDeps({ llmJsonWithRepairFor, llmToolLoop }),
+    )
+    await run.runSkillReviews()
+
+    // ONE grounded verifier loop; the single-pass verify path never ran.
+    expect(llmToolLoop).toHaveBeenCalledTimes(1)
+    expect(llmJsonWithRepairFor).not.toHaveBeenCalled()
+
+    const result = run.skillReviews[0].state.value as SkillReviewResult
+    const bug = result.findings.find((f) => f.line === 10)!
+    expect(bug.verification!.groundedNote).toBe('searched repo for consumers: 2 found')
+    expect(bug.verification!.toolCallsUsed).toBe(2)
+    expect(bug.verification!.surfaced).toBe(true)
+    // The nit carried no note of its own → no groundedNote on ITS verification.
+    const nit = result.findings.find((f) => f.line === 20)!
+    expect('groundedNote' in nit.verification!).toBe(false)
+    // Worth axis intact through the grounded path.
+    expect(bug.verification!.worthFlagging).toBe(true)
+
+    // Usage accrual: generation (15) + the verifier loop (30).
+    expect(run.skillReviews[0].state.usage).toEqual({ prompt_tokens: 30, completion_tokens: 15, total_tokens: 45 })
+  })
+
+  it('streams the "grounded with N lookups" activity line while verifying', async () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    const llmToolLoop = vi.fn().mockResolvedValue({
+      content: JSON.stringify({ verdicts: [{ id: 'src/foo.ts:10:' + djb2('a real bug here'), verdict: 'confirm', reason: 'ok' }] }),
+      usage: undefined,
+      toolCallsUsed: 2,
+    })
+
+    const run = createAiRun(
+      { ...makeInput(), deepReview: groundedDeepSource() },
+      makeDeps({ llmJsonWithRepairFor: vi.fn(), llmToolLoop }),
+    )
+    const seen = new Set<string>()
+    await run.runSkillReviews(() => {
+      for (const line of run.skillReviews[0]?.state.activity ?? []) seen.add(line)
+    })
+    expect([...seen].some((l) => /grounded with 2 lookups/.test(l))).toBe(true)
+    // The line names the verifier provider, not the generator.
+    expect([...seen].some((l) => /^Anthropic: grounded/.test(l))).toBe(true)
+  })
+
+  it('a verifier model WITHOUT function calling falls back to the single-pass call (vote counts as today)', async () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setOpenrouterKey('o')
+    const { getProvider: getP } = await import('../llm/providers')
+    const or = getP('openrouter')!
+    const nonFc = or.models.find((m) => m.supportsTools === false)
+    expect(nonFc, 'openrouter catalog should carry a non-function-calling model').toBeDefined()
+    setAiPanel({ participants: [
+      { provider: 'deepseek', model: 'deepseek-v4-flash', role: 'generator' },
+      { provider: 'openrouter', model: nonFc!.id, role: 'verifier' },
+    ] })
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    const llmToolLoop = vi.fn() // must NOT be called: the verifier can't call tools
+    const llmJsonWithRepairFor = vi.fn().mockImplementation(async (_cfg, _opts, validate) => {
+      const resp = { verdicts: [{ id: 'src/foo.ts:10:' + djb2('a real bug here'), verdict: 'confirm', reason: 'real' }] }
+      return { result: validate(resp), usage: undefined }
+    })
+
+    const run = createAiRun(
+      { ...makeInput(), deepReview: groundedDeepSource() },
+      makeDeps({ llmJsonWithRepairFor, llmToolLoop }),
+    )
+    await run.runSkillReviews()
+
+    expect(llmToolLoop).not.toHaveBeenCalled()
+    expect(llmJsonWithRepairFor).toHaveBeenCalled()
+    // The single-pass prompt is the UNGROUNDED one (no tool talk to a model without tools).
+    const opts = llmJsonWithRepairFor.mock.calls[0][1] as { system: string }
+    expect(opts.system).not.toContain('GROUNDED VERIFICATION')
+    const result = run.skillReviews[0].state.value as SkillReviewResult
+    const bug = result.findings.find((f) => f.line === 10)!
+    expect(bug.verification).toBeDefined()
+    expect('groundedNote' in bug.verification!).toBe(false)
+  })
+
+  it('an unparseable loop answer gets ONE reformat repair on the SAME verifier provider; lookups preserved', async () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    const llmToolLoop = vi.fn().mockResolvedValue({
+      content: 'I checked the repo and the bug is real (not JSON)',
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      toolCallsUsed: 1,
+    })
+    const llmJsonWithRepairFor = vi.fn().mockImplementation(async (cfg, opts: { user: string }, validate) => {
+      expect(cfg.providerId).toBe('anthropic') // repair runs on the verifier's provider
+      expect(opts.user).toContain('Reformat that answer')
+      const resp = { verdicts: [{ id: 'src/foo.ts:10:' + djb2('a real bug here'), verdict: 'confirm', reason: 'real', groundedNote: 'read src/foo.ts: bug confirmed' }] }
+      return { result: validate(resp), usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }
+    })
+
+    const run = createAiRun(
+      { ...makeInput(), deepReview: groundedDeepSource() },
+      makeDeps({ llmJsonWithRepairFor, llmToolLoop }),
+    )
+    await run.runSkillReviews()
+
+    expect(llmJsonWithRepairFor).toHaveBeenCalledTimes(1)
+    const result = run.skillReviews[0].state.value as SkillReviewResult
+    const bug = result.findings.find((f) => f.line === 10)!
+    expect(bug.verification!.groundedNote).toBe('read src/foo.ts: bug confirmed')
+    expect(bug.verification!.toolCallsUsed).toBe(1)
+    // Loop + repair usage both accrue (generation 15 + loop 15 + repair 6).
+    expect(run.skillReviews[0].state.usage).toEqual({ prompt_tokens: 24, completion_tokens: 12, total_tokens: 36 })
   })
 })
