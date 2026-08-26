@@ -103,9 +103,8 @@
     /**
      * File-level (null-line) reviewer findings per path — rendered as cards above
      * each file's diff (parity with Files mode), so a reviewer chip that counts a
-     * null-line finding always has a visible jump target here too. Demoted findings
-     * are included (carrying `verification`) and render with the lower-confidence
-     * treatment, not hidden.
+     * null-line finding always has a visible jump target here too. Demoted
+     * findings are included (carrying `verification`), not hidden.
      */
     fileLevelSuggestionsByPath?: Map<string, FileLevelSuggestion[]>
     /** Keys the user has dismissed — file-level cards for these are skipped. */

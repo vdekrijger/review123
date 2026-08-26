@@ -651,13 +651,12 @@
     pruneAnchorOverrides(live)
   })
 
-  // File-level (null-line) suggestions — rendered above the FileDiff (Files mode)
-  // and per-file in Story mode. Cross-model demoted findings (Plan M) are NO
-  // LONGER pulled out into a separate collapsed group: they render alongside the
-  // rest, carrying their `verification` so the card shows the lower-confidence
-  // treatment. Only findings the reviewer has DISMISSED or ADDED-as-draft are
-  // hidden — adding auto-cleans up the card (its draft now lives in the diff);
-  // this is a visual hide, the decision is still recorded as 'accepted'.
+  // File-level (null-line) suggestions — rendered per-file in Story mode (in
+  // Files mode they live only in the reviewer-chip popover). Not part of the
+  // finding-triage ranking (they are never inline diff cards). Only findings
+  // the reviewer has DISMISSED or ADDED-as-draft are hidden — adding
+  // auto-cleans up the card (its draft now lives in the diff); this is a
+  // visual hide, the decision is still recorded as 'accepted'.
   const fileLevelSuggestionsByPath = $derived.by(() => {
     const map = new Map<string, SuggestionEntry[]>()
     for (const [path, suggestions] of skillSuggestionsByPath) {
