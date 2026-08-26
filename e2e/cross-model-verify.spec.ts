@@ -210,7 +210,9 @@ test('cross-model verify triage: confirmed finding inline with "✓ verified", r
   // construction. No "lower confidence" chrome exists anywhere.
   await expect(page.locator('.line-findings .skill-finding', { hasText: 'Refuted style nit' })).toHaveCount(0)
   await expect(page.locator('.skill-lower-confidence-chip')).toHaveCount(0)
-  await expect(page.getByText(/lower confidence/i)).toHaveCount(0)
+  // No finding CARD carries "lower confidence" chrome (the verdict panel's own
+  // evidence grouping is a separate, untouched surface).
+  await expect(page.locator('.skill-finding').getByText(/lower confidence/i)).toHaveCount(0)
 
   // It collapses into the per-file group; the review-level line reports it.
   const group = page.getByTestId('secondary-findings')

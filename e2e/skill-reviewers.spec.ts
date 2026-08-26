@@ -936,14 +936,20 @@ test('skill-reviewers: queue caps running reviewers at 4, rest show in Waiting r
 //       "N more findings" group; the review-level line + "Show all" work.
 // ---------------------------------------------------------------------------
 
-// Enumerated f0..f3 (single reviewer, finding order). Lines 2 and 3 are in the
-// patch hunks; line 4 is the trailing context row (also anchorable).
-const TRIAGE_REVIEW_RESULT = {
+// TWO reviewers (the convergence pass only runs when ≥2 reviewers produce
+// findings). Enumerated in seeding order: Security f0..f2, Duplication f3.
+// Lines 2/3 are added lines in the patch; line 4 is trailing context (anchorable).
+const TRIAGE_SECURITY_RESULT = {
   skillName: 'Security Reviewer',
   findings: [
     { path: 'src/feature.ts', line: 2, severity: 'high', body: 'Definite injection risk on the added line' },
     { path: 'src/feature.ts', line: 3, severity: 'medium', body: 'Unverified medium concern here' },
     { path: 'src/feature.ts', line: 4, severity: 'low', body: 'Minor style nit on trailing context' },
+  ],
+}
+const TRIAGE_DUPLICATION_RESULT = {
+  skillName: 'Duplication Reviewer',
+  findings: [
     { path: 'src/feature.ts', line: 2, severity: 'medium', body: 'Duplicate of your own line-2 comment' },
   ],
 }
@@ -981,13 +987,23 @@ test('skill-reviewers: finding triage — strong findings inline, weak + covered
         },
       })
     }
+    if (body?.stream !== true && systemContent.includes('duplication reviewer')) {
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify(TRIAGE_DUPLICATION_RESULT) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
     if (body?.stream !== true && (systemContent.includes('reviewer persona') || systemContent.includes('security reviewer'))) {
       return route.fulfill({
         status: 200,
         json: {
           id: 'chatcmpl-test',
           object: 'chat.completion',
-          choices: [{ message: { role: 'assistant', content: JSON.stringify(TRIAGE_REVIEW_RESULT) }, finish_reason: 'stop', index: 0 }],
+          choices: [{ message: { role: 'assistant', content: JSON.stringify(TRIAGE_SECURITY_RESULT) }, finish_reason: 'stop', index: 0 }],
         },
       })
     }
@@ -997,7 +1013,15 @@ test('skill-reviewers: finding triage — strong findings inline, weak + covered
   await page.addInitScript((settings) => {
     localStorage.setItem('review123:settings', JSON.stringify(settings))
   }, seedSettings())
-  await page.addInitScript(seedSkillScript())
+  // Seed TWO reviewers — Security (3 findings) + Duplication (1 finding) — so
+  // the convergence pass runs (it needs ≥2 reviewers with findings).
+  await page.addInitScript(() => {
+    const skills = [
+      { id: 'skill-e2e-test', name: 'Security Reviewer', content: '## Security\nCheck for XSS.', enabled: true, addedAt: 1700000000000 },
+      { id: 'skill-e2e-dup', name: 'Duplication Reviewer', content: '## Duplication\nFlag repeats.', enabled: true, addedAt: 1700000000001 },
+    ]
+    localStorage.setItem('review123:reviewer-skills', JSON.stringify(skills))
+  })
   await page.addInitScript(() => {
     localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
   })
@@ -1014,7 +1038,7 @@ test('skill-reviewers: finding triage — strong findings inline, weak + covered
   // (enumerated as draft-0) for the covered-by-draft cluster to apply.
   await expect(page.locator('.draft-status')).toContainText('1 comment', { timeout: 5_000 })
 
-  await page.getByRole('button', { name: /run my reviewers \(1\)/i }).click()
+  await page.getByRole('button', { name: /run my reviewers \(2\)/i }).click()
 
   // INLINE: exactly the high and the unverified medium (severity is the signal
   // in a single-model setup) — the lone low and the covered finding do NOT
