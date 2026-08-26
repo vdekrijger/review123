@@ -505,7 +505,7 @@ describe('InspectStep — demoted + file-level findings visible in both modes', 
     _resetSettingsStateForTest()
   })
 
-  it('a demoted line-anchored finding renders inline (no collapsed lower-confidence group)', () => {
+  it('a demoted line-anchored finding collapses into the per-file secondary group (finding-triage)', () => {
     const files = makeFiles(['a.ts'])
     const body = 'Possible race condition here'
     const skillReviews = [reviewEntry([{ path: 'a.ts', line: 1, body, verification: demotedVerification(1, 3) }])]
@@ -513,15 +513,23 @@ describe('InspectStep — demoted + file-level findings visible in both modes', 
       props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews },
     })
 
-    // The retired collapsed group must be gone.
-    expect(container.querySelector('.lower-confidence-group')).toBeNull()
-
-    // The finding renders as a visible card with the matching jump-target key,
-    // dimmed with the lower-confidence badge.
-    const card = container.querySelector(`[data-finding-key="${keyOf('a.ts', 1, body)}"]`)
+    // The demoted (secondary-tier) finding does NOT render inline in the diff…
+    expect(container.querySelector('.line-findings')).toBeNull()
+    // …it renders as a full card INSIDE the collapsed per-file group, still
+    // carrying its jump-target key (chip navigation opens the group and lands).
+    const group = container.querySelector('[data-testid="secondary-findings"]')
+    expect(group).not.toBeNull()
+    expect(group!.querySelector('summary')?.textContent).toContain('1 more finding — low confidence or minor')
+    const card = group!.querySelector(`[data-finding-key="${keyOf('a.ts', 1, body)}"]`)
     expect(card).not.toBeNull()
-    expect(card!.classList.contains('lower-confidence')).toBe(true)
-    expect(card!.querySelector('.skill-lower-confidence-chip')?.textContent).toContain('flagged by 1/3')
+    // The old per-card demoted chrome is gone: no dimming, no "flagged by" chip.
+    expect(card!.classList.contains('lower-confidence')).toBe(false)
+    expect(card!.querySelector('.skill-lower-confidence-chip')).toBeNull()
+    // The review-level triage line reports the collapse, with the escape hatch.
+    const line = container.querySelector('[data-testid="findings-triage-line"]')
+    expect(line?.textContent).toContain('Showing 0 of 1 finding')
+    expect(line?.textContent).toContain('1 minor or low-confidence collapsed')
+    expect(line?.querySelector('[data-testid="findings-show-all"]')).not.toBeNull()
   })
 
   it('a demoted null-line finding is reachable via the chip popover (no bottom card)', async () => {

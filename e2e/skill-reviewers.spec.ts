@@ -930,6 +930,152 @@ test('skill-reviewers: queue caps running reviewers at 4, rest show in Waiting r
 })
 
 // ---------------------------------------------------------------------------
+// Test: FINDING TRIAGE — a mixed set (high unverified, medium unverified, lone
+//       low, and one the convergence pass marks covered-by-draft) renders
+//       exactly the strong findings inline; the rest collapse into the per-file
+//       "N more findings" group; the review-level line + "Show all" work.
+// ---------------------------------------------------------------------------
+
+// TWO reviewers (the convergence pass only runs when ≥2 reviewers produce
+// findings). Enumerated in seeding order: Security f0..f2, Duplication f3.
+// Lines 2/3 are added lines in the patch; line 4 is trailing context (anchorable).
+const TRIAGE_SECURITY_RESULT = {
+  skillName: 'Security Reviewer',
+  findings: [
+    { path: 'src/feature.ts', line: 2, severity: 'high', body: 'Definite injection risk on the added line' },
+    { path: 'src/feature.ts', line: 3, severity: 'medium', body: 'Unverified medium concern here' },
+    { path: 'src/feature.ts', line: 4, severity: 'low', body: 'Minor style nit on trailing context' },
+  ],
+}
+const TRIAGE_DUPLICATION_RESULT = {
+  skillName: 'Duplication Reviewer',
+  findings: [
+    { path: 'src/feature.ts', line: 2, severity: 'medium', body: 'Duplicate of your own line-2 comment' },
+  ],
+}
+
+test('skill-reviewers: finding triage — strong findings inline, weak + covered collapsed, Show all restores', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+
+  // Override the persona branch (mixed 4-finding set) and the convergence
+  // branch (clusters f3 with the user's seeded draft → covered-by-draft).
+  // Everything else falls back to the base handler.
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string }> } = {}
+    try {
+      body = route.request().postDataJSON() as typeof body
+    } catch {
+      // non-JSON body
+    }
+    const systemContent = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
+    if (body?.stream !== true && systemContent.includes('consolidating overlapping code-review findings')) {
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: JSON.stringify({ clusters: [{ members: ['f3', 'draft-0'], primary: 'f3', reason: 'same point as the draft' }] }),
+            },
+            finish_reason: 'stop',
+            index: 0,
+          }],
+        },
+      })
+    }
+    if (body?.stream !== true && systemContent.includes('duplication reviewer')) {
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify(TRIAGE_DUPLICATION_RESULT) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
+    if (body?.stream !== true && (systemContent.includes('reviewer persona') || systemContent.includes('security reviewer'))) {
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify(TRIAGE_SECURITY_RESULT) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
+    return route.fallback()
+  })
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings())
+  // Seed TWO reviewers — Security (3 findings) + Duplication (1 finding) — so
+  // the convergence pass runs (it needs ≥2 reviewers with findings).
+  await page.addInitScript(() => {
+    const skills = [
+      { id: 'skill-e2e-test', name: 'Security Reviewer', content: '## Security\nCheck for XSS.', enabled: true, addedAt: 1700000000000 },
+      { id: 'skill-e2e-dup', name: 'Duplication Reviewer', content: '## Duplication\nFlag repeats.', enabled: true, addedAt: 1700000000001 },
+    ]
+    localStorage.setItem('review123:reviewer-skills', JSON.stringify(skills))
+  })
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+  // Seed the user's own draft at line 2 — the convergence cluster marks f3 as
+  // covered by it (enumerated draft-0).
+  await page.addInitScript(seedLine2DraftScript())
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  // Wait for the seeded draft to load — the convergence pass must see it
+  // (enumerated as draft-0) for the covered-by-draft cluster to apply.
+  await expect(page.locator('.draft-status')).toContainText('1 comment', { timeout: 5_000 })
+
+  await page.getByRole('button', { name: /run my reviewers \(2\)/i }).click()
+
+  // INLINE: exactly the high and the unverified medium (severity is the signal
+  // in a single-model setup) — the lone low and the covered finding do NOT
+  // render inline. The screenshot bug — a weak card full-size mid-diff — is
+  // impossible by construction.
+  const inlineCards = page.locator('.line-findings .skill-finding')
+  await expect(inlineCards.filter({ hasText: 'Definite injection risk' })).toHaveCount(1, { timeout: 15_000 })
+  await expect(inlineCards.filter({ hasText: 'Unverified medium concern' })).toHaveCount(1)
+  await expect(inlineCards).toHaveCount(2)
+
+  // COLLAPSED: one per-file group holding the lone low + the covered finding.
+  const group = page.getByTestId('secondary-findings')
+  await expect(group).toBeVisible({ timeout: 10_000 })
+  await expect(group.locator('summary')).toContainText('2 more findings — low confidence or minor')
+
+  // Review-level line with the escape hatch.
+  const triageLine = page.getByTestId('findings-triage-line')
+  await expect(triageLine).toContainText('Showing 2 of 4 findings')
+  await expect(triageLine).toContainText('2 minor or low-confidence collapsed')
+
+  // Expanding the group discloses full, functional cards — including the
+  // covered one in its collapsed "covered by your comment" state (#206).
+  await group.locator('summary').click()
+  const lowCard = group.locator('.skill-finding', { hasText: 'Minor style nit' })
+  await expect(lowCard).toBeVisible()
+  await expect(lowCard.getByRole('button', { name: /add as draft/i })).toBeVisible()
+  await expect(lowCard.getByRole('button', { name: /dismiss/i })).toBeVisible()
+  await expect(group.getByText(/covered by your comment on src\/feature\.ts:2/)).toBeVisible()
+
+  // "Show all" renders every finding inline again; the group disappears.
+  await page.getByTestId('findings-show-all').click()
+  await expect(page.locator('.line-findings .skill-finding')).toHaveCount(4)
+  await expect(page.getByTestId('secondary-findings')).toHaveCount(0)
+  await expect(triageLine).toContainText('Showing all 4 findings')
+})
+
+// ---------------------------------------------------------------------------
 // Test: with autoRunReviewers ON (default), the reviewers auto-start on step 1
 //       (Understand) so by the time the user reaches Inspect the findings are
 //       already there — NO manual "Run my reviewers" click needed.

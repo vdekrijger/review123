@@ -21,6 +21,7 @@
   import AskBox from './AskBox.svelte'
   import type { FindingVerification, AbsorbedFinding } from '../lib/ai/schemas'
   import type { AskFocus } from '../lib/ai/tasks'
+  import { isMajorityVerified } from '../lib/ai/findingRank'
   import { reanchorDrag, REANCHOR_DND_MIME } from '../lib/findings/reanchor.svelte'
 
   interface Props {
@@ -226,17 +227,13 @@
     return `raised by ${raisedBy.join(', ')}`
   })
 
-  // Cross-model DEMOTED state (Plan M): one model flagged it, the others didn't
-  // confirm (verification present but surfaced=false). The card stays visible —
-  // dimmed, with a "lower confidence" badge — rather than being hidden in a
-  // collapsed group. Distinct from "no verification" (single-key / off), where no
-  // chip shows at all.
-  const isLowerConfidence = $derived(!!verification && !verification.surfaced)
-  const lowerConfidenceLabel = $derived(
-    verification
-      ? `flagged by ${verification.confirmedBy}/${verification.polledModels} · lower confidence`
-      : '',
-  )
+  // ONE trust chip (finding-triage): "✓ verified" ONLY when the cross-model
+  // poll produced a real majority of confirms. Anything weaker — demoted,
+  // below-majority, or no verification at all — renders NO verification chip;
+  // the triage tier (inline vs collapsed group) carries that signal instead of
+  // per-card "flagged by X/Y · lower confidence" metadata the reviewer had to
+  // decode. The full vote detail stays one hover away (VerifyVotesTooltip).
+  const showVerifiedChip = $derived(isMajorityVerified(verification))
 </script>
 
 {#if coveredByDraft && !coveredExpanded}
@@ -256,7 +253,7 @@
     </button>
   </div>
 {:else}
-<div bind:this={cardEl} class="skill-finding severity-{severity}" class:compact class:lower-confidence={isLowerConfidence} class:covered-by-draft={!!coveredByDraft} role="note" aria-label="{skillName} finding, severity {severity}" data-finding-key={findingKey ?? undefined}>
+<div bind:this={cardEl} class="skill-finding severity-{severity}" class:compact class:covered-by-draft={!!coveredByDraft} role="note" aria-label="{skillName} finding, severity {severity}" data-finding-key={findingKey ?? undefined}>
   <div class="skill-finding-header">
     {#if canDrag}
       <!-- Mouse-only affordance (HTML5 DnD); the keyboard path is the
@@ -306,23 +303,14 @@
     {#if raisedByLabel}
       <span class="skill-raised-chip" aria-label={raisedByLabel}>{raisedByLabel}</span>
     {/if}
-    {#if verification && verification.surfaced}
+    {#if showVerifiedChip && verification}
       <VerifyVotesTooltip {verification}>
         <span
           class="skill-verify-chip"
           tabindex="0"
           role="button"
-          aria-label="Confirmed by {verification.confirmedBy} of {verification.polledModels} models"
-        >✓ confirmed by {verification.confirmedBy}/{verification.polledModels} models</span>
-      </VerifyVotesTooltip>
-    {:else if isLowerConfidence && verification}
-      <VerifyVotesTooltip {verification}>
-        <span
-          class="skill-lower-confidence-chip"
-          tabindex="0"
-          role="button"
-          aria-label={lowerConfidenceLabel}
-        >{lowerConfidenceLabel}</span>
+          aria-label="Verified — confirmed by {verification.confirmedBy} of {verification.polledModels} models"
+        >✓ verified</span>
       </VerifyVotesTooltip>
     {/if}
     <span class="skill-severity-chip severity-chip-{severity}">{severity}</span>
@@ -441,21 +429,6 @@
     border-radius: 3px;
   }
 
-  /* ---- Lower-confidence (cross-model demoted, Plan M) ----
-     One model flagged it, the others didn't confirm. Still shown (never hidden),
-     but dimmed and muted so it reads as a weaker signal than a surfaced finding.
-     Severity still drives the chip; the muted overlay just lowers the emphasis. */
-  .skill-finding.lower-confidence {
-    border-style: dashed;
-    border-color: var(--border-subtle);
-    background: var(--surface-raised);
-    opacity: 0.72;
-  }
-  .skill-finding.lower-confidence:hover,
-  .skill-finding.lower-confidence:focus-within {
-    opacity: 1;
-  }
-
   /* Transient highlight when a reviewer chip jumps to this finding. Themed
      light/dark via the same changed-bg token the draft flash uses. The class is
      toggled imperatively by jumpToFinding (added on jump, removed after 1.5s). */
@@ -555,7 +528,7 @@
     white-space: nowrap;
   }
 
-  /* ---- Verification chip: cross-model "confirmed by N/M" (Plan M) ---- */
+  /* ---- Trust chip: "✓ verified" (majority cross-model confirmation) ---- */
   .skill-verify-chip {
     font-size: 0.7rem;
     font-weight: 600;
@@ -568,21 +541,7 @@
     cursor: help;
   }
 
-  /* ---- Lower-confidence chip: cross-model demoted "flagged by N/M" (Plan M) ---- */
-  .skill-lower-confidence-chip {
-    font-size: 0.7rem;
-    font-weight: 600;
-    padding: 0.1rem 0.45rem;
-    border-radius: 999px;
-    background: var(--surface-raised);
-    color: var(--text-muted);
-    border: 1px dashed var(--border-subtle);
-    white-space: nowrap;
-    cursor: help;
-  }
-
-  .skill-verify-chip:focus-visible,
-  .skill-lower-confidence-chip:focus-visible {
+  .skill-verify-chip:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
   }

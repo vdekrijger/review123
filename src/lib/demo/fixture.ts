@@ -500,10 +500,10 @@ export const demoSkillFindings: SkillReviewResult = {
  *   1. Security Reviewer — a CONFIRMED finding (cross-model verification
  *      surfaced=true, confirmed by 3/4) anchored INLINE in the diff, carrying
  *      multi-generator provenance (`raisedBy` → "raised by GPT-5.5, DeepSeek V4
- *      Pro"). Drives the "✓ confirmed by 3/4 models" chip + per-vote tooltip.
- *   2. Performance Reviewer — a DEMOTED / lower-confidence finding (surfaced=false,
- *      flagged by 1/5) anchored INLINE, showing the dimmed treatment + the
- *      adversarial-disagreement tooltip.
+ *      Pro"). Drives the "✓ verified" trust chip + per-vote tooltip.
+ *   2. Performance Reviewer — a DEMOTED finding (surfaced=false, flagged by
+ *      1/5): finding-triage collapses it into the per-file "N more findings"
+ *      group instead of an inline card.
  *   3. Pragmatic Senior Reviewer — a confirmed FILE-LEVEL (null-line) finding so
  *      the popover/fallback placement renders, plus a plain low inline note.
  *   4. Resiliency & SRE Reviewer — NO findings, so the "✓ no significant issues"
@@ -542,7 +542,7 @@ export const demoReviewers: SkillReviewResult[] = [
     skillName: 'Performance Reviewer',
     findings: [
       {
-        // DEMOTED / lower-confidence + inline (anchored on the config constant).
+        // DEMOTED (surfaced=false) — triaged into the collapsed per-file group.
         path: 'src/search/config.ts',
         line: 2,
         severity: 'low',
