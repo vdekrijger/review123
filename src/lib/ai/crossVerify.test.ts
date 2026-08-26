@@ -922,3 +922,259 @@ describe('fuseConfirm — worth flows through fusion', () => {
     expect(v.surfaced).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Grounded verification (repo lookups for verifiers)
+// ---------------------------------------------------------------------------
+
+import {
+  buildVerifyPrompt as buildVerifyPromptG,
+  composeGroundedNote,
+  createGroundedRoundBudget,
+  wrapGroundedExecutor,
+  GROUNDED_NOTE_MAX_CHARS,
+  GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_ROUND,
+  GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND,
+  GROUNDED_VERIFY_MAX_FETCHED_BYTES,
+  GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_VERIFIER,
+} from './crossVerify'
+
+describe('validateVerifierResponse — groundedNote (optional-tolerant)', () => {
+  it('keeps a non-empty groundedNote, trimmed', () => {
+    const r = validateVerifierResponse({
+      verdicts: [{ id: 'f1', verdict: 'confirm', reason: 'ok', groundedNote: '  searched repo for foo: 2 found  ' }],
+    })
+    expect(r!.verdicts[0].groundedNote).toBe('searched repo for foo: 2 found')
+  })
+
+  it('caps a runaway groundedNote at GROUNDED_NOTE_MAX_CHARS', () => {
+    const r = validateVerifierResponse({
+      verdicts: [{ id: 'f1', verdict: 'confirm', reason: 'ok', groundedNote: 'x'.repeat(999) }],
+    })
+    expect(r!.verdicts[0].groundedNote).toHaveLength(GROUNDED_NOTE_MAX_CHARS)
+  })
+
+  it('drops absent / empty / non-string groundedNote without rejecting the response', () => {
+    for (const bad of [undefined, '', '   ', 42, null, { a: 1 }]) {
+      const r = validateVerifierResponse({
+        verdicts: [{ id: 'f1', verdict: 'refute', reason: 'no', groundedNote: bad }],
+      })
+      expect(r).not.toBeNull()
+      expect('groundedNote' in r!.verdicts[0]).toBe(false)
+    }
+  })
+})
+
+describe('buildVerifyPrompt — grounded variant', () => {
+  it('grounded: true adds the lookup instructions + the groundedNote schema field', () => {
+    const { system } = buildVerifyPromptG([finding('f1')], { grounded: true })
+    expect(system).toContain('GROUNDED VERIFICATION')
+    expect(system).toMatch(/answer directly from the provided context/i)
+    expect(system).toMatch(/ONLY when a verdict depends on code you cannot see/i)
+    expect(system).toContain('"groundedNote"')
+    expect(system).toMatch(/budget exhausted/i)
+    // Absence claims: a real search that finds nothing MAY now confirm.
+    expect(system).toMatch(/MAY "confirm" the absence/)
+  })
+
+  it('ungrounded (default) prompt carries NO grounded instructions — the single-pass fallback is unchanged', () => {
+    const { system } = buildVerifyPromptG([finding('f1')])
+    expect(system).not.toContain('GROUNDED VERIFICATION')
+    expect(system).not.toContain('groundedNote')
+    // And explicit false behaves like the default.
+    const { system: sysOff } = buildVerifyPromptG([finding('f1')], { grounded: false })
+    expect(sysOff).toBe(system)
+  })
+})
+
+describe('composeGroundedNote', () => {
+  it('joins distinct verifier notes with "; " and caps the total', () => {
+    expect(
+      composeGroundedNote([
+        { groundedNote: 'searched foo: 2 found' },
+        {},
+        { groundedNote: 'read src/a.ts: guard present' },
+        { groundedNote: 'searched foo: 2 found' }, // duplicate → once
+      ]),
+    ).toBe('searched foo: 2 found; read src/a.ts: guard present')
+    expect(composeGroundedNote([{ groundedNote: 'a'.repeat(150) }, { groundedNote: 'b'.repeat(150) }])!.length).toBe(
+      GROUNDED_NOTE_MAX_CHARS,
+    )
+  })
+
+  it('returns undefined when no vote carried a note', () => {
+    expect(composeGroundedNote([{}, { groundedNote: '   ' }])).toBeUndefined()
+  })
+})
+
+describe('wrapGroundedExecutor — budget caps', () => {
+  const okExec = vi.fn(async (_name: string, _args: Record<string, unknown>) => ({ ok: true, content: 'result' }))
+
+  it('per-ROUND cap: refuses the call after GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_ROUND, honestly, without executing', async () => {
+    const round = createGroundedRoundBudget()
+    const exec = vi.fn(async () => ({ ok: true, content: 'r' }))
+    const wrapped = wrapGroundedExecutor(exec, round)
+    for (let i = 0; i < GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_ROUND; i++) {
+      expect((await wrapped('read_file', { path: 'a' })).ok).toBe(true)
+    }
+    const refused = await wrapped('read_file', { path: 'a' })
+    expect(refused.ok).toBe(false)
+    expect(refused.content).toMatch(/budget.*exhausted|exhausted/i)
+    expect(refused.content).toMatch(/vote on what you have/i)
+    expect(exec).toHaveBeenCalledTimes(GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_ROUND)
+    // A refusal does not consume budget.
+    expect(round.toolCalls).toBe(GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_ROUND)
+  })
+
+  it('the round budget is SHARED across wrappers (one per verifier call)', async () => {
+    const round = createGroundedRoundBudget()
+    const a = wrapGroundedExecutor(okExec, round)
+    const b = wrapGroundedExecutor(okExec, round)
+    for (let i = 0; i < GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_ROUND / 2; i++) {
+      await a('read_file', { path: 'x' })
+      await b('read_file', { path: 'x' })
+    }
+    expect((await a('read_file', { path: 'x' })).ok).toBe(false)
+    expect((await b('read_file', { path: 'x' })).ok).toBe(false)
+  })
+
+  it('search cap: search_code AND find_references share the per-round search budget; read_file stays allowed', async () => {
+    const round = createGroundedRoundBudget()
+    const exec = vi.fn(async () => ({ ok: true, content: 'hits' }))
+    const wrapped = wrapGroundedExecutor(exec, round)
+    expect((await wrapped('search_code', { query: 'foo' })).ok).toBe(true)
+    expect((await wrapped('find_references', { symbol: 'bar' })).ok).toBe(true)
+    expect(round.searchCalls).toBe(GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND)
+    const refused = await wrapped('search_code', { query: 'baz' })
+    expect(refused.ok).toBe(false)
+    expect(refused.content).toMatch(/search|quota/i)
+    // Non-search lookups still run under the remaining round budget.
+    expect((await wrapped('read_file', { path: 'src/a.ts' })).ok).toBe(true)
+  })
+
+  it('per-verifier BYTE cap: a fresh wrapper on the same round has its own byte budget', async () => {
+    const round = createGroundedRoundBudget()
+    const big = 'x'.repeat(GROUNDED_VERIFY_MAX_FETCHED_BYTES)
+    const exec = vi.fn(async () => ({ ok: true, content: big }))
+    const a = wrapGroundedExecutor(exec, round)
+    expect((await a('read_file', { path: 'a' })).ok).toBe(true)
+    // a's byte budget is spent → refused without executing.
+    const refused = await a('read_file', { path: 'b' })
+    expect(refused.ok).toBe(false)
+    expect(refused.content).toMatch(/fetch budget exhausted/i)
+    // A DIFFERENT verifier call (new wrapper, same round) fetches fine.
+    const b = wrapGroundedExecutor(exec, round)
+    expect((await b('read_file', { path: 'c' })).ok).toBe(true)
+  })
+
+  it('failed (ok:false) tool results consume a round call but no bytes', async () => {
+    const round = createGroundedRoundBudget()
+    const exec = vi.fn(async () => ({ ok: false, content: 'File not found at head ref: nope.ts' }))
+    const wrapped = wrapGroundedExecutor(exec, round)
+    const r = await wrapped('read_file', { path: 'nope.ts' })
+    expect(r.ok).toBe(false)
+    expect(round.toolCalls).toBe(1)
+    // Byte budget untouched → a subsequent successful call is not byte-refused.
+    expect((await wrapped('read_file', { path: 'ok.ts' })).ok).toBe(false) // still the failing exec
+    expect(round.toolCalls).toBe(2)
+  })
+
+  it('per-verifier call cap is the loop-level constant (4) and below the round cap', () => {
+    expect(GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_VERIFIER).toBeLessThanOrEqual(
+      GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_ROUND,
+    )
+  })
+})
+
+describe('aggregation — groundedNote on FindingVerification', () => {
+  it('aggregateFinding composes votes\' groundedNotes; absent when none', () => {
+    const withNote = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'confirm', reason: 'real', groundedNote: 'searched foo: 2 found' },
+      { provider: 'anthropic', verdict: 'confirm', reason: 'real' },
+    ])
+    expect(withNote.groundedNote).toBe('searched foo: 2 found')
+    const without = aggregateFinding('deepseek', [{ provider: 'openai', verdict: 'confirm', reason: 'real' }])
+    expect('groundedNote' in without).toBe(false)
+  })
+
+  it('aggregateMultiRaiser composes votes\' groundedNotes too', () => {
+    const v = aggregateMultiRaiser(
+      ['A'],
+      [{ provider: 'B', verdict: 'refute', reason: 'found it', groundedNote: 'searched bar: caller exists' }],
+      2,
+    )
+    expect(v.groundedNote).toBe('searched bar: caller exists')
+  })
+})
+
+describe('crossVerify — grounded evidence flows end-to-end', () => {
+  it('verifier groundedNotes + toolCallsUsed land on FindingVerification (round total)', async () => {
+    const verify: VerifyFn = async (c) => ({
+      result: {
+        verdicts: [
+          {
+            id: 'f1',
+            verdict: 'confirm',
+            reason: 'verified',
+            ...(c.providerId === 'openai' ? { groundedNote: 'searched repo for consumers: 2 found' } : {}),
+          },
+        ],
+      },
+      toolCallsUsed: c.providerId === 'openai' ? 2 : 1,
+    })
+    const out = await crossVerify([finding('f1')], 'deepseek', [cfg('openai'), cfg('anthropic')], verify)
+    const v = out.byId.get('f1')!
+    expect(v.groundedNote).toBe('searched repo for consumers: 2 found')
+    // Round total: 2 (openai) + 1 (anthropic).
+    expect(v.toolCallsUsed).toBe(3)
+    // Reality + worth aggregation untouched by the grounded fields.
+    expect(v.surfaced).toBe(true)
+    expect(v.confirmedBy).toBe(3)
+    expect(v.polledModels).toBe(3)
+  })
+
+  it('zero lookups → NO toolCallsUsed and NO groundedNote (old shape preserved)', async () => {
+    const verify: VerifyFn = async () => ({
+      result: { verdicts: [{ id: 'f1', verdict: 'confirm', reason: 'clear from context' }] },
+    })
+    const out = await crossVerify([finding('f1')], 'deepseek', [cfg('openai')], verify)
+    const v = out.byId.get('f1')!
+    expect('toolCallsUsed' in v).toBe(false)
+    expect('groundedNote' in v).toBe(false)
+  })
+
+  it('a VerifyFn without toolCallsUsed (single-pass fallback / old stubs) is treated as zero', async () => {
+    const verify: VerifyFn = async () => ({
+      result: { verdicts: [{ id: 'f1', verdict: 'confirm', reason: 'ok' }] },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    })
+    const out = await crossVerify([finding('f1')], 'deepseek', [cfg('openai')], verify)
+    expect('toolCallsUsed' in out.byId.get('f1')!).toBe(false)
+  })
+})
+
+describe('fuseConfirm — grounded evidence flows through fusion', () => {
+  it('non-raiser groundedNote + round toolCallsUsed land on the merged verification', async () => {
+    const gens: GeneratorFindings[] = [
+      { generator: 'A', cfg: cfg('deepseek'), findings: [vf('f1', 'src/a.ts', 5, 'issue one')] },
+    ]
+    const merged = mergeGeneratorFindings(gens)
+    const participants = [
+      { generator: 'A', cfg: cfg('deepseek') },
+      { generator: 'B', cfg: cfg('openai') },
+    ]
+    const verify: VerifyFn = async (c) => ({
+      result: {
+        verdicts: [
+          { id: 'f1', verdict: 'refute', reason: 'found the caller', groundedNote: 'searched repo: caller exists in src/b.ts' },
+        ],
+      },
+      toolCallsUsed: c.providerId === 'openai' ? 1 : 0,
+    })
+    const outcome = await fuseConfirm(merged, participants, verify)
+    const v = outcome.merged[0].verification
+    // Only B's vote counts (A raised it) — its grounded note carries through.
+    expect(v.groundedNote).toBe('searched repo: caller exists in src/b.ts')
+    expect(v.toolCallsUsed).toBe(1)
+  })
+})

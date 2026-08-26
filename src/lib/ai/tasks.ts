@@ -15,6 +15,19 @@ import type { AiTaskId } from '../settings/settings'
 import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS, INTENT_MAX_ITEMS } from './schemas'
 
+// PROMPT_VERSIONS skills/verdict 28 (grounded verification): every cross-model
+// verifier call now runs THROUGH the tool loop with repo lookups available
+// (read_file / read_file_at_base / search_code / find_references) — ALWAYS ON
+// when a repo source is wired, NOT gated behind deep mode. The verify prompt
+// (crossVerify.ts buildVerifyPrompt, grounded variant) instructs verifiers to
+// answer directly when the provided context suffices and to look up code
+// outside the diff ONLY when a verdict depends on it, reporting what they
+// checked in a per-verdict `groundedNote` (aggregated onto
+// FindingVerification.groundedNote for the verified chip's hover). Hedged
+// "can't see other consumers" votes become real confirmations/refutations.
+// Only the two tasks whose verifications run this rubric bump: `skills` and
+// `verdict` (its evidence rows share the verifier prompt). Every other task's
+// prompt is byte-identical — no other entry moves.
 // PROMPT_VERSIONS skills/verdict 27 (solutions + mootness gate): every skill
 // finding must now carry a `suggestedFix` — a concrete 1–3 sentence
 // prescription or small code sketch, or an explicit "No clean fix — <tradeoff>"
@@ -130,9 +143,9 @@ export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   diagrams: 26,
   tests: 26,
   alternatives: 26,
-  verdict: 27,
+  verdict: 28,
   intent: 1,
-  skills: 27,
+  skills: 28,
   story: 26,
   riskJudge: 26,
   convergence: 26,

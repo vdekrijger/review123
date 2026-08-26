@@ -330,10 +330,14 @@
     {/if}
     {#if showVerifiedChip && verification}
       <VerifyVotesTooltip {verification}>
+        <!-- Grounded verification: the hover title carries WHAT the verifiers
+             looked up in the repo ("searched repo for X: 2 found"). Absent on
+             ungrounded / old cached verifications → no title attribute. -->
         <span
           class="skill-verify-chip"
           tabindex="0"
           role="button"
+          title={verification.groundedNote}
           aria-label="Verified — confirmed by {verification.confirmedBy} of {verification.polledModels} models"
         >✓ verified</span>
       </VerifyVotesTooltip>
