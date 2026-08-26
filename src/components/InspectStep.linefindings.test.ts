@@ -233,6 +233,8 @@ describe('Finding actions — Add as draft / Dismiss', () => {
   it('Dismiss from an inline (anchored) finding hides it', async () => {
     renderInspect([makeLineReview(2, 'Finding to dismiss from inside diff')])
     expect(screen.getByText('Finding to dismiss from inside diff')).toBeInTheDocument()
+    // Two-step dismiss (dismissal calibration): reveal reasons, then plain Dismiss.
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     await waitFor(() => {
       expect(screen.queryByText('Finding to dismiss from inside diff')).not.toBeInTheDocument()
@@ -242,6 +244,8 @@ describe('Finding actions — Add as draft / Dismiss', () => {
   it('Dismiss from a fallback-block (unanchored) finding hides it', async () => {
     renderInspect([makeLineReview(999, 'Dismiss the fallback finding')])
     expect(screen.getByText('Dismiss the fallback finding')).toBeInTheDocument()
+    // Two-step dismiss (dismissal calibration): reveal reasons, then plain Dismiss.
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     await waitFor(() => {
       expect(screen.queryByText('Dismiss the fallback finding')).not.toBeInTheDocument()
@@ -314,6 +318,8 @@ describe('FileDiff — skillFindings prop placement', () => {
       props: { file, mode: 'unified', skillFindings: [finding(2, 'Dismiss me in FileDiff')] },
     })
     expect(screen.getByText('Dismiss me in FileDiff')).toBeInTheDocument()
+    // Two-step dismiss (dismissal calibration): reveal reasons, then plain Dismiss.
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     await waitFor(() => {
       expect(screen.queryByText('Dismiss me in FileDiff')).not.toBeInTheDocument()
@@ -390,5 +396,50 @@ describe('FileDiff — draft annotation placement parity', () => {
       el => el.textContent?.includes('Single placement draft'),
     )
     expect(threads.length).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Dismissal calibration — a REASONED dismiss writes the per-reviewer ledger;
+// a plain dismiss writes nothing (today's behavior).
+// ---------------------------------------------------------------------------
+
+describe('Dismiss with reason — calibration ledger', () => {
+  it('"Not real" records a not-real ledger entry for the dismissing reviewer', async () => {
+    const { listCalibration } = await import('../lib/skills/calibration')
+    renderInspect([makeLineReview(2, 'A finding the user judges false')])
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Not real' }))
+    // Card hides (normal dismiss behavior)…
+    await waitFor(() => {
+      expect(screen.queryByText('A finding the user judges false')).not.toBeInTheDocument()
+    })
+    // …and the ledger holds the pattern under THIS reviewer's skill id.
+    const entries = listCalibration('skill-line')
+    expect(entries).toHaveLength(1)
+    expect(entries[0].reason).toBe('not-real')
+    expect(entries[0].pattern).toContain('A finding the user judges false')
+    expect(entries[0].pattern).toContain('foo.ts')
+  })
+
+  it('"Not worth flagging" records a not-worth entry', async () => {
+    const { listCalibration } = await import('../lib/skills/calibration')
+    renderInspect([makeLineReview(2, 'Real but noisy nit')])
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Not worth flagging' }))
+    const entries = listCalibration('skill-line')
+    expect(entries).toHaveLength(1)
+    expect(entries[0].reason).toBe('not-worth')
+  })
+
+  it('a plain Dismiss (no reason) writes NO ledger entry', async () => {
+    const { listAllCalibration } = await import('../lib/skills/calibration')
+    renderInspect([makeLineReview(2, 'Dismissed without a reason')])
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    await waitFor(() => {
+      expect(screen.queryByText('Dismissed without a reason')).not.toBeInTheDocument()
+    })
+    expect(listAllCalibration()).toEqual({})
   })
 })

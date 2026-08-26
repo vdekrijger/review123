@@ -447,3 +447,75 @@ describe('runSkillReviews — existing PR comments threading (v10)', () => {
     removeSkill(skill.id)
   })
 })
+
+// ---------------------------------------------------------------------------
+// runSkillReviews — dismissal calibration (v29): ledger → prompt + cache key
+// ---------------------------------------------------------------------------
+
+describe('runSkillReviews — dismissal calibration', () => {
+  it('injects the reviewer\'s calibration block into ITS prompt only', async () => {
+    const { recordDismissal } = await import('../skills/calibration')
+    const deps = makeDeps()
+    const security = addSkill('Security Reviewer', 'check for XSS')
+    const perf = addSkill('Performance Reviewer', 'check for N+1')
+    // Only the SECURITY reviewer has a ledger entry.
+    recordDismissal(security.id, { path: 'src/foo.ts', body: 'Claimed unsanitized input that is sanitized upstream' }, 'not-real')
+
+    const run = createAiRun(makeInput(), deps)
+    await run.runSkillReviews()
+
+    const systems = deps.llmJsonWithRepairWithUsage.mock.calls.map((c: unknown[]) => (c[0] as { system: string }).system)
+    const securitySystem = systems.find((s: string) => s.includes('check for XSS'))!
+    const perfSystem = systems.find((s: string) => s.includes('check for N+1'))!
+    expect(securitySystem).toContain('PAST DISMISSED FINDINGS')
+    expect(securitySystem).toContain('[false positive] Claimed unsanitized input that is sanitized upstream (in foo.ts)')
+    // Per-reviewer isolation: the other reviewer's prompt carries NO section.
+    expect(perfSystem).not.toContain('PAST DISMISSED FINDINGS')
+
+    listSkills().forEach(s => removeSkill(s.id))
+  })
+
+  it('no calibration section when the ledger is empty', async () => {
+    const deps = makeDeps()
+    const skill = addSkill('Security Reviewer', 'check for XSS')
+    const run = createAiRun(makeInput(), deps)
+    await run.runSkillReviews()
+    const opts = deps.llmJsonWithRepairWithUsage.mock.calls[0][0] as { system: string }
+    expect(opts.system).not.toContain('PAST DISMISSED FINDINGS')
+    removeSkill(skill.id)
+  })
+
+  it('a new reasoned dismissal re-keys ONLY that reviewer\'s cache (same mechanism as a persona edit)', async () => {
+    const { recordDismissal } = await import('../skills/calibration')
+    const deps = makeDeps()
+    const collectedKeys: string[] = []
+    deps.getCached.mockImplementation(async (key: string) => {
+      collectedKeys.push(key)
+      return null
+    })
+
+    const security = addSkill('Security Reviewer', 'check for XSS')
+    const perf = addSkill('Performance Reviewer', 'check for N+1')
+    const run = createAiRun(makeInput(), deps)
+    await run.runSkillReviews()
+    const firstKeys = collectedKeys.filter(k => k.includes('skill:') && !k.includes('|models'))
+    expect(firstKeys).toHaveLength(2)
+
+    // Dismiss-with-reason against the security reviewer → its ledger grows.
+    recordDismissal(security.id, { path: 'src/foo.ts', body: 'noise finding' }, 'not-worth')
+
+    collectedKeys.length = 0
+    await run.runSkillReviews()
+    const secondKeys = collectedKeys.filter(k => k.includes('skill:') && !k.includes('|models'))
+    expect(secondKeys).toHaveLength(2)
+
+    // Exactly ONE reviewer's key diverges; the other's stays byte-identical.
+    const changed = secondKeys.filter(k => !firstKeys.includes(k))
+    const unchanged = secondKeys.filter(k => firstKeys.includes(k))
+    expect(changed).toHaveLength(1)
+    expect(unchanged).toHaveLength(1)
+
+    void perf
+    listSkills().forEach(s => removeSkill(s.id))
+  })
+})

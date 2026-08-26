@@ -20,6 +20,7 @@
   import type { ReplyOutcome } from '../lib/github/replies'
   import type { AskFocus } from '../lib/ai/tasks'
   import type { WhitespaceDisplay } from '../lib/diff/whitespace'
+  import type { DismissReason } from '../lib/skills/calibration'
   import { excerptAround } from '../lib/diff/excerpt'
   import { track } from '../lib/analytics/analytics'
   import SymbolPopover from './SymbolPopover.svelte'
@@ -136,9 +137,11 @@
     /**
      * Called when the user DISMISSES a skill finding inside FileDiff (the accept
      * path flows through onAddSkillFindingDraft). Lets the parent record the
-     * accept/dismiss telemetry. Receives only the finding's stable key.
+     * accept/dismiss telemetry. Receives the finding's stable key plus the
+     * optional dismissal reason (dismissal calibration — a reasoned dismissal
+     * teaches the reviewer via the per-skill ledger).
      */
-    onDismissSkillFinding?: (key: string) => void
+    onDismissSkillFinding?: (key: string, reason?: DismissReason) => void
     /**
      * Posts a reply to an existing comment thread IMMEDIATELY (not queued
      * with the review). null → no Reply affordance (provider unsupported).
@@ -542,9 +545,9 @@
     }
   })
 
-  function dismissSkillFinding(key: string) {
+  function dismissSkillFinding(key: string, reason?: DismissReason) {
     dismissedSkillKeys = new Set([...dismissedSkillKeys, key])
-    onDismissSkillFinding?.(key)
+    onDismissSkillFinding?.(key, reason)
   }
 
   async function handleAddSkillFindingDraft(finding: PlacedSkillFinding, displayedBody?: string) {
@@ -1148,7 +1151,7 @@
                 findingKey={finding.key}
                 added={addedSkillKeys.has(finding.key)}
                 onAdd={(displayedBody) => handleAddSkillFindingDraft(finding, displayedBody)}
-                onDismiss={() => dismissSkillFinding(finding.key)}
+                onDismiss={(reason) => dismissSkillFinding(finding.key, reason)}
                 anchorHash={finding.anchorHash}
                 movedFrom={finding.movedFrom ?? null}
                 onUndoMove={finding.movedFrom ? () => undoMoveFinding(finding) : null}
@@ -1247,7 +1250,7 @@
             findingKey={finding.key}
             added={addedSkillKeys.has(finding.key)}
             onAdd={(displayedBody) => handleAddSkillFindingDraft(finding, displayedBody)}
-            onDismiss={() => dismissSkillFinding(finding.key)}
+            onDismiss={(reason) => dismissSkillFinding(finding.key, reason)}
             anchorHash={finding.anchorHash}
             movedFrom={finding.movedFrom ?? null}
             onUndoMove={finding.movedFrom ? () => undoMoveFinding(finding) : null}
@@ -1286,7 +1289,7 @@
               findingKey={finding.key}
               added={addedSkillKeys.has(finding.key)}
               onAdd={(displayedBody) => handleAddSkillFindingDraft(finding, displayedBody)}
-              onDismiss={() => dismissSkillFinding(finding.key)}
+              onDismiss={(reason) => dismissSkillFinding(finding.key, reason)}
               anchorHash={finding.anchorHash}
               movedFrom={finding.movedFrom ?? null}
               onUndoMove={finding.movedFrom ? () => undoMoveFinding(finding) : null}

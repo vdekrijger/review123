@@ -4,6 +4,10 @@
     SKILLS_CAP, SKILL_CONTENT_CAP, type ReviewerSkill,
   } from '../../lib/skills/skills'
   import { BUILTIN_SKILLS } from '../../lib/skills/builtinSkills'
+  import {
+    listAllCalibration, clearCalibration, removeCalibrationEntry,
+    type CalibrationEntry,
+  } from '../../lib/skills/calibration'
   import { mineSkillPipeline } from '../../lib/skills/mineSkill'
   import { llmJsonWithRepair } from '../../lib/llm/llm'
   import { githubProvider } from '../../lib/provider/github'
@@ -133,6 +137,31 @@
     skills = listSkills()
   }
 
+  // ---- Dismissal-calibration ledger (per-skill visibility surface) ----
+  // What the user's reasoned Dismiss clicks have taught each reviewer. Local
+  // snapshot refreshed after every mutation (localStorage is not reactive).
+  let calibration = $state<Record<string, CalibrationEntry[]>>(listAllCalibration())
+  let calibrationOpenId = $state<string | null>(null)
+
+  function refreshCalibration() {
+    calibration = listAllCalibration()
+  }
+
+  function calibrationEntries(skillId: string): CalibrationEntry[] {
+    return calibration[skillId] ?? []
+  }
+
+  function handleClearCalibration(skillId: string) {
+    clearCalibration(skillId)
+    if (calibrationOpenId === skillId) calibrationOpenId = null
+    refreshCalibration()
+  }
+
+  function handleRemoveCalibrationEntry(skillId: string, digest: string) {
+    removeCalibrationEntry(skillId, digest)
+    refreshCalibration()
+  }
+
   // Set of installed skill names for O(1) lookup
   const installedSkillNames = $derived(new Set(skills.map(s => s.name)))
 
@@ -149,6 +178,9 @@
   function handleRemoveSkill(id: string) {
     if (editingId === id) editingId = null
     removeSkill(id)
+    // A deleted skill's calibration ledger would be orphaned (re-adding — even
+    // the same builtin — mints a NEW id via djb2(name + addedAt)), so clear it.
+    handleClearCalibration(id)
     refreshSkills()
   }
 
@@ -233,6 +265,45 @@
                 <button class="btn-sm" onclick={cancelEdit}>Cancel</button>
               </div>
             </div>
+          {/if}
+
+          {#if calibrationEntries(skill.id).length > 0}
+            {@const entries = calibrationEntries(skill.id)}
+            <!-- Dismissal-calibration surface: what reasoned Dismiss clicks
+                 have taught this reviewer. Quiet one-liner; view discloses
+                 the entries with per-entry delete. -->
+            <div class="calibration-line" data-testid="calibration-line">
+              <span class="calibration-count">{entries.length} calibration entr{entries.length === 1 ? 'y' : 'ies'}</span>
+              <button
+                type="button"
+                class="calibration-action"
+                aria-expanded={calibrationOpenId === skill.id}
+                aria-label="View calibration entries for {skill.name}"
+                onclick={() => (calibrationOpenId = calibrationOpenId === skill.id ? null : skill.id)}
+              >view</button>
+              <button
+                type="button"
+                class="calibration-action"
+                aria-label="Clear calibration entries for {skill.name}"
+                onclick={() => handleClearCalibration(skill.id)}
+              >clear</button>
+            </div>
+            {#if calibrationOpenId === skill.id}
+              <ul class="calibration-list" aria-label="Calibration entries for {skill.name}">
+                {#each entries as entry (entry.findingDigest)}
+                  <li class="calibration-entry">
+                    <span class="calibration-reason">{entry.reason === 'not-real' ? 'not real' : 'not worth flagging'}</span>
+                    <span class="calibration-pattern">{entry.pattern}</span>
+                    <button
+                      type="button"
+                      class="calibration-delete"
+                      aria-label="Delete calibration entry"
+                      onclick={() => handleRemoveCalibrationEntry(skill.id, entry.findingDigest)}
+                    >✕</button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
           {/if}
         </li>
       {/each}
@@ -772,5 +843,83 @@
   .builtin-add-btn:disabled {
     opacity: 0.45;
     cursor: not-allowed;
+  }
+
+  /* ---- Dismissal-calibration surface (quiet per-skill line + list) ---- */
+  .calibration-line {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.1rem 0 0.1rem 1.5rem;
+    font-size: 0.78em;
+    color: var(--text-muted);
+  }
+
+  .calibration-action {
+    border: none;
+    background: transparent;
+    padding: 0;
+    font-size: 1em;
+    color: var(--text-muted);
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+  }
+
+  .calibration-action:hover,
+  .calibration-action:focus-visible {
+    color: var(--text);
+  }
+
+  .calibration-list {
+    list-style: none;
+    margin: 0.2rem 0 0.4rem 1.5rem;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--surface-raised);
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .calibration-entry {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-size: 0.8em;
+    line-height: 1.35;
+  }
+
+  .calibration-reason {
+    flex-shrink: 0;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    font-size: 0.85em;
+    letter-spacing: 0.04em;
+  }
+
+  .calibration-pattern {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .calibration-delete {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.9em;
+    line-height: 1;
+    padding: 0 0.15rem;
+    cursor: pointer;
+    opacity: 0.7;
+    flex-shrink: 0;
+  }
+
+  .calibration-delete:hover {
+    opacity: 1;
+    color: var(--legend-removed-color);
   }
 </style>

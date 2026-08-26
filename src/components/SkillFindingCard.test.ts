@@ -307,11 +307,13 @@ describe('SkillFindingCard — actions', () => {
     expect(onAdd).toHaveBeenCalledOnce()
   })
 
-  it('Dismiss calls onDismiss', async () => {
+  it('Dismiss dismisses via the two-step flow (reveal → plain Dismiss), passing no reason', async () => {
     const onDismiss = vi.fn()
     renderCard({ onDismiss })
     await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     expect(onDismiss).toHaveBeenCalledOnce()
+    expect(onDismiss).toHaveBeenCalledWith(undefined)
   })
 
   it('disabled Add button does not call onAdd when added', async () => {
@@ -319,6 +321,70 @@ describe('SkillFindingCard — actions', () => {
     renderCard({ onAdd, added: true })
     await userEvent.click(screen.getByRole('button', { name: /added to drafts/i }))
     expect(onAdd).not.toHaveBeenCalled()
+  })
+})
+
+describe('SkillFindingCard — dismiss with reason (dismissal calibration)', () => {
+  it('the first Dismiss click reveals the reason row and does NOT dismiss', async () => {
+    const onDismiss = vi.fn()
+    renderCard({ onDismiss })
+    expect(screen.queryByTestId('dismiss-reasons')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    expect(onDismiss).not.toHaveBeenCalled()
+    expect(screen.getByTestId('dismiss-reasons')).toBeInTheDocument()
+    // Two one-click reasons plus the plain Dismiss — one extra click max.
+    expect(screen.getByRole('button', { name: 'Not real' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Not worth flagging' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument()
+  })
+
+  it('"Not real" dismisses with reason not-real', async () => {
+    const onDismiss = vi.fn()
+    renderCard({ onDismiss })
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Not real' }))
+    expect(onDismiss).toHaveBeenCalledOnce()
+    expect(onDismiss).toHaveBeenCalledWith('not-real')
+  })
+
+  it('"Not worth flagging" dismisses with reason not-worth', async () => {
+    const onDismiss = vi.fn()
+    renderCard({ onDismiss })
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Not worth flagging' }))
+    expect(onDismiss).toHaveBeenCalledOnce()
+    expect(onDismiss).toHaveBeenCalledWith('not-worth')
+  })
+
+  it('plain Dismiss in the row dismisses with NO reason (no ledger entry)', async () => {
+    const onDismiss = vi.fn()
+    renderCard({ onDismiss })
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    await userEvent.click(screen.getByTestId('dismiss-plain'))
+    expect(onDismiss).toHaveBeenCalledWith(undefined)
+  })
+
+  it('is keyboard accessible: focus lands in the row on open; Enter picks a reason', async () => {
+    const onDismiss = vi.fn()
+    renderCard({ onDismiss })
+    const toggle = screen.getByRole('button', { name: /dismiss/i })
+    toggle.focus()
+    await userEvent.keyboard('{Enter}')
+    // The toggle is replaced by the row — focus moves to the first reason.
+    expect(screen.getByTestId('dismiss-not-real')).toHaveFocus()
+    await userEvent.keyboard('{Enter}')
+    expect(onDismiss).toHaveBeenCalledWith('not-real')
+  })
+
+  it('Escape cancels the reason row without dismissing and restores the toggle', async () => {
+    const onDismiss = vi.fn()
+    renderCard({ onDismiss })
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    expect(screen.getByTestId('dismiss-reasons')).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByTestId('dismiss-reasons')).toBeNull()
+    expect(onDismiss).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument()
   })
 })
 

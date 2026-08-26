@@ -281,6 +281,8 @@ describe('InspectStep — skill suggestion annotations', () => {
       },
     })
     expect(screen.getByText('Potential XSS vulnerability here')).toBeInTheDocument()
+    // Two-step dismiss (dismissal calibration): reveal reasons, then plain Dismiss.
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     await waitFor(() => {
       expect(screen.queryByText('Potential XSS vulnerability here')).not.toBeInTheDocument()

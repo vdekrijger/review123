@@ -112,6 +112,7 @@ import {
   type ChunkOutcome,
 } from './coachBatch'
 import { listSkills } from '../skills/skills'
+import { buildCalibrationBlock } from '../skills/calibration'
 import { djb2 } from '../viewed/viewed.svelte'
 import { addUsage } from './tokenCost'
 import { aggregateModelPerformance } from './modelPerformance'
@@ -2792,15 +2793,25 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   ): Promise<void> {
     // Fresh attempt: any Retry-After from a PRIOR attempt is stale.
     reviewerRetryAfterMs.delete(idx)
-    // Content-addressed cache key: includes djb2(skill.content).
-    // Deep runs carry a '|deep' marker so they never collide with
-    // single-pass results for the same skill content.
-    const key = cacheKey(prKey, 'skill:' + djb2(skill.content) + (deep.enabled ? '|deep' : ''), promptVersionFor('skills'))
+    // Dismissal calibration: this reviewer's ledger of dismissed-with-reason
+    // findings, pre-built as the prompt's "PAST DISMISSED FINDINGS" section
+    // (sanitized + capped in buildCalibrationBlock). '' when the ledger is
+    // empty.
+    const calibration = buildCalibrationBlock(skill.id)
+    // Content-addressed cache key: includes djb2(skill.content + calibration
+    // block) — the SAME mechanism that re-keys on a persona edit re-keys on a
+    // new reasoned dismissal, so ONLY this reviewer's cache cold-invalidates.
+    // An empty ledger contributes nothing: the hash equals djb2(skill.content),
+    // byte-identical to the pre-calibration key. Deep runs carry a '|deep'
+    // marker so they never collide with single-pass results for the same
+    // skill content.
+    const contentHash = djb2(skill.content + calibration)
+    const key = cacheKey(prKey, 'skill:' + contentHash + (deep.enabled ? '|deep' : ''), promptVersionFor('skills'))
     // Companion entry holding this reviewer's per-model breakdown (Plan N),
     // keyed off the SAME content hash with a '|models' discriminant. Persisted
     // alongside the skill result and restored on a cache hit so the Step-3 cost+
     // performance table is repopulated for a previously-reviewed PR.
-    const skillModelsKey = cacheKey(prKey, 'skill:' + djb2(skill.content) + (deep.enabled ? '|deep' : '') + '|models', promptVersionFor('skills'))
+    const skillModelsKey = cacheKey(prKey, 'skill:' + contentHash + (deep.enabled ? '|deep' : '') + '|models', promptVersionFor('skills'))
 
     const t0 = performance.now()
 
@@ -2842,7 +2853,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       }
     }
 
-    const prompts = skillReviewPrompt(ctx, { name: skill.name, content: skill.content }, existingComments)
+    const prompts = skillReviewPrompt(ctx, { name: skill.name, content: skill.content }, existingComments, calibration || undefined)
 
     try {
       let skillResult: SkillReviewResult = { skillName: skill.name, findings: [] }

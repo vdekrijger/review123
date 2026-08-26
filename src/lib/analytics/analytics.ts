@@ -60,8 +60,13 @@ const EVENTS = {
   //   - 'fusionMode'    : 'verify' | 'generate' — the ensemble mode, when known.
   //   - 'raisedByCount' : integer count of models that independently RAISED it.
   // None of these can reconstruct the finding's content, the diff, or repo data.
+  // PRIVACY DECISION (dismissal calibration): ai_finding_dismissed also carries
+  //   - 'reason' : 'not-real' | 'not-worth' | 'none' — the one-click dismissal
+  //                reason (or 'none' for a plain dismiss). A fixed enum only;
+  //                the calibration LEDGER (finding patterns) stays local and is
+  //                never sent.
   ai_finding_accepted: ['reviewer', 'severity', 'deep', 'crossVerified', 'confirmedBy', 'polledModels', 'fusionMode', 'raisedByCount'],
-  ai_finding_dismissed: ['reviewer', 'severity', 'deep', 'crossVerified', 'confirmedBy', 'polledModels', 'fusionMode', 'raisedByCount'],
+  ai_finding_dismissed: ['reviewer', 'severity', 'deep', 'crossVerified', 'confirmedBy', 'polledModels', 'fusionMode', 'raisedByCount', 'reason'],
   // PRIVACY DECISION (finding re-anchor): fired when the user MOVES an AI
   // finding to a corrected diff line (drag or the "Move to line…" keyboard
   // path). Props are enums / booleans / a line DELTA only:

@@ -550,3 +550,76 @@ describe('SkillsSection — auto-start reviewers toggle', () => {
     await waitFor(() => expect(autoToggle().checked).toBe(false))
   })
 })
+
+describe('SkillsSection — dismissal-calibration surface', () => {
+  async function seedSkillWithEntries(n: number) {
+    const { recordDismissal } = await import('../../lib/skills/calibration')
+    const skill = addSkill('Security', 'check for XSS')
+    for (let i = 0; i < n; i++) {
+      recordDismissal(skill.id, { path: `src/f${i}.ts`, body: `dismissed pattern ${i}` }, i % 2 ? 'not-worth' : 'not-real')
+    }
+    return skill
+  }
+
+  it('shows no calibration line for a skill with an empty ledger', () => {
+    addSkill('Security', 'check for XSS')
+    render(SkillsSection)
+    expect(screen.queryByTestId('calibration-line')).toBeNull()
+  })
+
+  it('shows the quiet per-skill count line when entries exist', async () => {
+    await seedSkillWithEntries(2)
+    render(SkillsSection)
+    const line = screen.getByTestId('calibration-line')
+    expect(line.textContent).toContain('2 calibration entries')
+  })
+
+  it('uses the singular form for one entry', async () => {
+    const { recordDismissal } = await import('../../lib/skills/calibration')
+    const skill = addSkill('Solo', 'p')
+    recordDismissal(skill.id, { path: 'a.ts', body: 'one' }, 'not-real')
+    render(SkillsSection)
+    expect(screen.getByTestId('calibration-line').textContent).toContain('1 calibration entry')
+  })
+
+  it('view discloses the entry list with reason labels and patterns', async () => {
+    await seedSkillWithEntries(2)
+    render(SkillsSection)
+    await userEvent.click(screen.getByRole('button', { name: /view calibration entries/i }))
+    const list = screen.getByRole('list', { name: /calibration entries for Security/i })
+    expect(list.textContent).toContain('dismissed pattern 0')
+    expect(list.textContent).toContain('dismissed pattern 1')
+    expect(list.textContent).toContain('not real')
+    expect(list.textContent).toContain('not worth flagging')
+  })
+
+  it('per-entry delete removes exactly that entry from the ledger', async () => {
+    const { listCalibration } = await import('../../lib/skills/calibration')
+    const skill = await seedSkillWithEntries(2)
+    render(SkillsSection)
+    await userEvent.click(screen.getByRole('button', { name: /view calibration entries/i }))
+    const deleteBtns = screen.getAllByRole('button', { name: 'Delete calibration entry' })
+    expect(deleteBtns).toHaveLength(2)
+    await userEvent.click(deleteBtns[0])
+    expect(listCalibration(skill.id)).toHaveLength(1)
+    expect(screen.getByTestId('calibration-line').textContent).toContain('1 calibration entry')
+  })
+
+  it('clear wipes the skill\'s ledger and hides the line', async () => {
+    const { calibrationCount } = await import('../../lib/skills/calibration')
+    const skill = await seedSkillWithEntries(3)
+    render(SkillsSection)
+    await userEvent.click(screen.getByRole('button', { name: /clear calibration entries/i }))
+    expect(calibrationCount(skill.id)).toBe(0)
+    expect(screen.queryByTestId('calibration-line')).toBeNull()
+  })
+
+  it('deleting the SKILL also clears its ledger (a re-add mints a new id — no orphans)', async () => {
+    const { listAllCalibration } = await import('../../lib/skills/calibration')
+    await seedSkillWithEntries(2)
+    render(SkillsSection)
+    await userEvent.click(screen.getByRole('button', { name: /delete security/i }))
+    expect(listSkills()).toHaveLength(0)
+    expect(listAllCalibration()).toEqual({})
+  })
+})

@@ -169,6 +169,8 @@ describe('FIX 2 — retry after dismiss: a fresh re-run is not pre-suppressed', 
     })
 
     // Dismiss it (session-only suppression keyed by the finding key).
+    // Two-step dismiss (dismissal calibration): reveal reasons, then plain Dismiss.
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     await waitFor(() => {
       expect(screen.queryByText(body)).not.toBeInTheDocument()
@@ -201,6 +203,8 @@ describe('FIX 2 — retry after dismiss: a fresh re-run is not pre-suppressed', 
     await waitFor(() => {
       expect(screen.getByText(body)).toBeInTheDocument()
     })
+    // Two-step dismiss (dismissal calibration): reveal reasons, then plain Dismiss.
+    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
     await waitFor(() => {
       expect(screen.queryByText(body)).not.toBeInTheDocument()

@@ -73,7 +73,7 @@ describe('analytics privacy choke-point', () => {
     expect(props).not.toHaveProperty('code')
   })
 
-  it('ai_finding_dismissed carries reviewer/severity/verification context only', () => {
+  it('ai_finding_dismissed carries reviewer/severity/verification context + reason enum only', () => {
     track('ai_finding_dismissed', {
       reviewer: 'builtin:attention',
       severity: 'low',
@@ -82,6 +82,10 @@ describe('analytics privacy choke-point', () => {
       confirmedBy: 0,
       polledModels: 0,
       raisedByCount: 0,
+      // Dismissal calibration: the reason ENUM is allowed…
+      reason: 'not-real',
+      // …but the ledger pattern / finding text must be stripped.
+      pattern: 'leaky calibration pattern',
       description: 'leaky finding text',
     } as never)
     const props = capture.mock.calls[0][1]
@@ -93,8 +97,10 @@ describe('analytics privacy choke-point', () => {
       confirmedBy: 0,
       polledModels: 0,
       raisedByCount: 0,
+      reason: 'not-real',
     })
     expect(props).not.toHaveProperty('description')
+    expect(props).not.toHaveProperty('pattern')
   })
 
   it('symbol_repo_searched carries outcome/counts/duration only — never the symbol or paths', () => {
