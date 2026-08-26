@@ -64,6 +64,9 @@ function makeFileContent(text: string) {
 // Two findings exercise both placements:
 //  - line 2 IS in the patch hunks → renders INLINE at the line (extend row)
 //  - line 999 is NOT in the diff → falls back to the per-file block
+// The line-2 finding carries a suggestedFix (solutions-required) → its card
+// renders the Fix block; the line-999 finding has NONE → no Fix block
+// (absence-graceful, the old-cache shape).
 const SKILL_REVIEW_RESULT = {
   skillName: 'Security Reviewer',
   findings: [
@@ -72,6 +75,7 @@ const SKILL_REVIEW_RESULT = {
       line: 2,
       severity: 'high',
       body: 'Potential XSS vulnerability: user input is not sanitized',
+      suggestedFix: 'Escape it with `sanitizeHtml(input)` before rendering.',
     },
     {
       path: 'src/feature.ts',
@@ -341,6 +345,16 @@ test('skill-reviewers: anchored finding inline at line, unanchored in per-file b
   // Card severity classes match the chips (border/badge consistency)
   await expect(inlineCard).toHaveClass(/severity-high/)
   await expect(blockCard).toHaveClass(/severity-medium/)
+
+  // --- Fix block (solutions required) ---
+  // The finding WITH a suggestedFix renders the labeled Fix block, with the
+  // backticked call rendered as <code> (code-capable markdown).
+  const fixBlock = inlineCard.getByTestId('finding-fix')
+  await expect(fixBlock).toBeVisible()
+  await expect(fixBlock).toContainText('Escape it with')
+  await expect(fixBlock.locator('code')).toHaveText('sanitizeHtml(input)')
+  // The finding WITHOUT one renders no Fix block (absence-graceful).
+  await expect(blockCard.getByTestId('finding-fix')).toHaveCount(0)
 
   // Initial draft count from sticky bar (filter to the draft-count status element)
   const draftStatus = page.locator('.draft-status')
@@ -1147,4 +1161,144 @@ test('skill-reviewers: opt-out — no auto-start, manual button still works', as
   // The manual button still works.
   await runBtn.click()
   await expect(page.getByText(/Potential XSS vulnerability/i)).toBeVisible({ timeout: 15_000 })
+})
+
+// ---------------------------------------------------------------------------
+// Test: MOOTNESS GATE — verifiers CONFIRM both findings as real but judge both
+//       NOT worth a busy reviewer's time (worth: false ×2 → majority-moot).
+//       The real-but-moot MEDIUM lands in the collapsed secondary group (never
+//       inline); the majority-verified-real HIGH keeps its inline slot (the one
+//       carve-out) and wears the honest "judged minor by verification" chip.
+// ---------------------------------------------------------------------------
+
+const MOOT_REVIEW_RESULT = {
+  skillName: 'Security Reviewer',
+  findings: [
+    {
+      path: 'src/feature.ts',
+      line: 2,
+      severity: 'high',
+      body: 'Real high issue the panel judges moot',
+      suggestedFix: 'Guard the call with a null check.',
+    },
+    {
+      path: 'src/feature.ts',
+      line: 3,
+      severity: 'medium',
+      body: 'Real but moot medium point',
+      suggestedFix: 'Rename the variable for clarity.',
+    },
+  ],
+}
+
+/** Verdicts for the verify payload: confirm reality, judge NOT worth (moot). */
+function mootVerdictsFor(user: string) {
+  const ids = [...user.matchAll(/"id":\s*"([^"]+)"/g)].map((m) => m[1])
+  return ids.map((id) => ({ id, verdict: 'confirm', reason: 'real but minor', worth: false }))
+}
+
+// Anthropic verifier: confirms everything as real, worth: false on everything.
+async function setupAnthropicMootVerifier(page: import('@playwright/test').Page) {
+  await page.route('**/api.anthropic.com/**', async (route) => {
+    let body: { system?: string; messages?: Array<{ role: string; content: string }> } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* non-JSON */ }
+    const user = body?.messages?.find((m) => m.role === 'user')?.content ?? ''
+    return route.fulfill({
+      status: 200,
+      json: {
+        content: [{ type: 'text', text: JSON.stringify({ verdicts: mootVerdictsFor(user) }) }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    })
+  })
+}
+
+// OpenAI verifier (via the serverless proxy): same confirm-but-moot verdicts.
+async function setupOpenAiMootVerifier(page: import('@playwright/test').Page) {
+  await page.route('**/api/llm/openai/**', async (route) => {
+    let body: { messages?: Array<{ role: string; content: string }> } = {}
+    try { body = route.request().postDataJSON() as typeof body } catch { /* non-JSON */ }
+    const user = body?.messages?.find((m) => m.role === 'user')?.content ?? ''
+    return route.fulfill({
+      status: 200,
+      json: { choices: [{ message: { role: 'assistant', content: JSON.stringify({ verdicts: mootVerdictsFor(user) }) }, finish_reason: 'stop', index: 0 }] },
+    })
+  })
+}
+
+test('skill-reviewers: mootness gate — real-but-moot medium collapses; verified-real high stays inline with the moot chip', async ({
+  page,
+}) => {
+  await setupRoutes(page)
+  await setupAnthropicMootVerifier(page)
+  await setupOpenAiMootVerifier(page)
+
+  // Override the persona branch with the two-finding moot fixture; everything
+  // else (convergence/simplify/verdict/summary) falls back to the base handler.
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string }> } = {}
+    try {
+      body = route.request().postDataJSON() as typeof body
+    } catch {
+      // non-JSON body
+    }
+    const systemContent = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
+    if (body?.stream !== true && (systemContent.includes('reviewer persona') || systemContent.includes('security reviewer'))) {
+      return route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify(MOOT_REVIEW_RESULT) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+    }
+    return route.fallback()
+  })
+
+  // Three keys → DeepSeek generates, Anthropic + OpenAI verify. Both verifiers
+  // confirm reality but judge worth=false → worth score 1 (raiser) + 0 + 0 = 1
+  // < 1.5 (polled 3 / 2) → both findings are majority-moot.
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, { ...seedSettings(), aiProvider: 'deepseek', anthropicKey: 'sk-ant-test-key', openaiKey: 'sk-openai-test-key' })
+  await page.addInitScript(seedSkillScript())
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  await page.getByRole('button', { name: /run my reviewers \(1\)/i }).click()
+
+  // The HIGH is majority-verified-real (3/3 confirms) → the carve-out keeps it
+  // INLINE, wearing BOTH the verified chip and the honest moot chip.
+  const highCard = page.locator('.line-findings .skill-finding', { hasText: 'Real high issue' })
+  await expect(highCard).toBeVisible({ timeout: 15_000 })
+  await expect(highCard.locator('.skill-verify-chip')).toHaveText('✓ verified')
+  await expect(highCard.getByTestId('finding-moot-chip')).toHaveText('judged minor by verification')
+  // Its fix still renders — demotion signals never eat the solution.
+  await expect(highCard.getByTestId('finding-fix')).toContainText('Guard the call with a null check.')
+
+  // The real-but-moot MEDIUM never renders inline — it lands in the collapsed
+  // secondary group (the mootness gate's whole point).
+  await expect(page.locator('.line-findings .skill-finding', { hasText: 'Real but moot medium' })).toHaveCount(0)
+  const group = page.getByTestId('secondary-findings')
+  await expect(group).toBeVisible({ timeout: 10_000 })
+  await expect(group.locator('summary')).toContainText('1 more finding')
+
+  // Expanding discloses the full card, carrying the moot chip as its reason.
+  await group.locator('summary').click()
+  const mootCard = group.locator('.skill-finding', { hasText: 'Real but moot medium' })
+  await expect(mootCard).toBeVisible()
+  await expect(mootCard.getByTestId('finding-moot-chip')).toBeVisible()
+  await expect(mootCard.getByRole('button', { name: /add as draft/i })).toBeVisible()
+
+  // "Show all" restores it inline (the escape hatch still wins).
+  await page.getByTestId('findings-show-all').click()
+  await expect(page.locator('.line-findings .skill-finding', { hasText: 'Real but moot medium' })).toHaveCount(1)
+  await expect(page.getByTestId('secondary-findings')).toHaveCount(0)
 })

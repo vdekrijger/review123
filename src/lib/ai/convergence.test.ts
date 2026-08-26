@@ -284,3 +284,60 @@ describe('mergedReviewerLabel', () => {
     ).toBe('2 reviewers')
   })
 })
+
+// ---------------------------------------------------------------------------
+// applyConvergence — suggestedFix (solutions-required pass)
+// ---------------------------------------------------------------------------
+
+describe('applyConvergence — suggestedFix handling', () => {
+  function valueFor(reviewers: ReviewerFindings[], clusters: ConvergenceValue['clusters']): ConvergenceValue {
+    return { fingerprint: enumerateFindings(reviewers).fingerprint, clusters }
+  }
+
+  it("the primary's suggestedFix wins; the absorbed fix is preserved verbatim in mergedFrom", () => {
+    const reviewers = twoReviewers()
+    reviewers[0].findings[0].suggestedFix = 'Use timezone-aware datetimes everywhere.'
+    reviewers[1].findings[0].suggestedFix = 'Convert both sides with `astimezone(utc)`.'
+
+    const out = applyConvergence(reviewers, valueFor(reviewers, [{ members: ['f0', 'f2'], primary: 'f0', reason: '' }]))
+    const merged = out[0].findings[0]
+    expect(merged.suggestedFix).toBe('Use timezone-aware datetimes everywhere.')
+    expect(merged.mergedFrom).toEqual([
+      {
+        reviewer: 'Resiliency & SRE',
+        path: 'src/a.ts',
+        line: 12,
+        severity: 'high',
+        body: 'comparing naive datetime raises TypeError',
+        suggestedFix: 'Convert both sides with `astimezone(utc)`.',
+      },
+    ])
+  })
+
+  it("a primary WITHOUT a fix adopts the first member's fix (the merged card still shows one)", () => {
+    const reviewers = twoReviewers()
+    reviewers[1].findings[0].suggestedFix = 'Convert both sides with `astimezone(utc)`.'
+
+    const out = applyConvergence(reviewers, valueFor(reviewers, [{ members: ['f0', 'f2'], primary: 'f0', reason: '' }]))
+    expect(out[0].findings[0].suggestedFix).toBe('Convert both sides with `astimezone(utc)`.')
+  })
+
+  it('no member carries a fix → the merged finding carries none (absence-graceful)', () => {
+    const reviewers = twoReviewers()
+    const out = applyConvergence(reviewers, valueFor(reviewers, [{ members: ['f0', 'f2'], primary: 'f0', reason: '' }]))
+    expect('suggestedFix' in out[0].findings[0]).toBe(false)
+    expect(out[0].findings[0].mergedFrom![0]).not.toHaveProperty('suggestedFix')
+  })
+
+  it('a covered-by-draft cluster keeps each finding intact, fix included', () => {
+    const reviewers = twoReviewers()
+    reviewers[0].findings[0].suggestedFix = 'Use timezone-aware datetimes everywhere.'
+    const value: ConvergenceValue = {
+      fingerprint: enumerateFindings(reviewers).fingerprint,
+      clusters: [{ members: ['f0'], primary: 'f0', reason: '', coveredBy: { path: 'src/a.ts', line: 10 } }],
+    }
+    const out = applyConvergence(reviewers, value)
+    expect(out[0].findings[0].coveredByDraft).toEqual({ path: 'src/a.ts', line: 10 })
+    expect(out[0].findings[0].suggestedFix).toBe('Use timezone-aware datetimes everywhere.')
+  })
+})

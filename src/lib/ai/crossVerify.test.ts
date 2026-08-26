@@ -692,3 +692,233 @@ describe('crossVerify — tool-backed absence verification + demotion', () => {
     expect(out.byId.get('a1')!.surfaced).toBe(false)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Worth axis (mootness gate) — solutions-mootness pass
+// ---------------------------------------------------------------------------
+
+describe('validateVerifierResponse — worth axis (optional-tolerant)', () => {
+  it('keeps an explicit boolean worth', () => {
+    const r = validateVerifierResponse({
+      verdicts: [
+        { id: 'f1', verdict: 'confirm', reason: 'real', worth: false },
+        { id: 'f2', verdict: 'confirm', reason: 'real', worth: true },
+      ],
+    })
+    expect(r!.verdicts[0].worth).toBe(false)
+    expect(r!.verdicts[1].worth).toBe(true)
+  })
+
+  it('an absent worth stays absent (old models / stubs predating the axis)', () => {
+    const r = validateVerifierResponse({ verdicts: [{ id: 'f1', verdict: 'confirm', reason: 'ok' }] })
+    expect(r).not.toBeNull()
+    expect(r!.verdicts[0].worth).toBeUndefined()
+    expect('worth' in r!.verdicts[0]).toBe(false)
+  })
+
+  it('a non-boolean worth is dropped, never a whole-response reject', () => {
+    const r = validateVerifierResponse({
+      verdicts: [{ id: 'f1', verdict: 'refute', reason: 'no', worth: 'nope' }],
+    })
+    expect(r).not.toBeNull()
+    expect(r!.verdicts[0].worth).toBeUndefined()
+  })
+})
+
+describe('buildVerifyPrompt — worth axis rubric', () => {
+  it('carries the independent worth judgment after the reality check', () => {
+    const { system } = buildVerifyPrompt([finding('f1')])
+    expect(system).toMatch(/WORTH AXIS/i)
+    expect(system).toMatch(/busy senior reviewer/i)
+    expect(system).toMatch(/would they ACT on it/i)
+    // The explicit not-worth categories.
+    expect(system).toMatch(/Style preferences/i)
+    expect(system).toMatch(/speculative concerns without concrete harm/i)
+    expect(system).toMatch(/linter\s+or formatter would catch/i)
+  })
+
+  it('output shape + rules require a worth verdict per finding', () => {
+    const { system } = buildVerifyPrompt([finding('f1')])
+    expect(system).toContain('"worth": true | false')
+    expect(system).toMatch(/worth: REQUIRED for every verdict/i)
+  })
+
+  it('ships the suggestedFix to verifiers when present; omits the key when absent', () => {
+    const withFix = buildVerifyPrompt([{ ...finding('f1'), suggestedFix: 'Use `sanitize(x)` here.' }])
+    expect(withFix.user).toContain('suggestedFix')
+    expect(withFix.user).toContain('Use `sanitize(x)` here.')
+    const without = buildVerifyPrompt([finding('f1')])
+    expect(without.user).not.toContain('suggestedFix')
+  })
+})
+
+describe('aggregateFinding — worthFlagging quorum', () => {
+  it('no verifier expressed a worth judgment → worthFlagging absent (no signal, old-cache compatible)', () => {
+    const v = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'confirm', reason: 'real' },
+      { provider: 'anthropic', verdict: 'refute', reason: 'no' },
+    ])
+    expect(v.worthFlagging).toBeUndefined()
+    expect('worthFlagging' in v).toBe(false)
+  })
+
+  it('two verifiers judge moot → worthFlagging false even when both CONFIRM reality', () => {
+    // worth score = 1 (raiser) + 0 + 0 = 1 < 1.5 (polled 3 / 2) → moot.
+    const v = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'confirm', reason: 'real', worth: false },
+      { provider: 'anthropic', verdict: 'confirm', reason: 'real', worth: false },
+    ])
+    expect(v.surfaced).toBe(true) // reality axis unchanged
+    expect(v.worthFlagging).toBe(false)
+  })
+
+  it('a single dissenting verifier never demotes on its own (tie goes to worth)', () => {
+    // worth score = 1 (raiser) + 0 = 1 >= 1 (polled 2 / 2) → worth.
+    const v = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'confirm', reason: 'real', worth: false },
+    ])
+    expect(v.worthFlagging).toBe(true)
+  })
+
+  it('a majority of worth=true keeps worthFlagging true', () => {
+    const v = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'confirm', reason: 'real', worth: true },
+      { provider: 'anthropic', verdict: 'confirm', reason: 'real', worth: false },
+    ])
+    // 1 + 1 + 0 = 2 >= 1.5 → worth.
+    expect(v.worthFlagging).toBe(true)
+  })
+
+  it('an abstaining verifier counts as a neutral 0.5 once any verifier expressed a judgment', () => {
+    // 1 (raiser) + 0 (moot) + 0.5 (abstain) = 1.5 >= 1.5 → worth (tie).
+    const v = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'confirm', reason: 'real', worth: false },
+      { provider: 'anthropic', verdict: 'confirm', reason: 'real' },
+    ])
+    expect(v.worthFlagging).toBe(true)
+    // Three verifiers, two moot + one abstain: 1 + 0 + 0 + 0.5 = 1.5 < 2 → moot.
+    const v3 = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'confirm', reason: 'real', worth: false },
+      { provider: 'anthropic', verdict: 'confirm', reason: 'real', worth: false },
+      { provider: 'gemini', verdict: 'confirm', reason: 'real' },
+    ])
+    expect(v3.worthFlagging).toBe(false)
+  })
+
+  it('perModel verifier rows carry the explicit worth vote; abstainers and the raiser carry none', () => {
+    const v = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'confirm', reason: 'real', worth: false },
+      { provider: 'anthropic', verdict: 'confirm', reason: 'real' },
+    ])
+    expect(v.perModel[0].raised).toBe(true)
+    expect('worth' in v.perModel[0]).toBe(false)
+    expect(v.perModel[1].worth).toBe(false)
+    expect('worth' in v.perModel[2]).toBe(false)
+  })
+
+  it('the worth axis never moves the reality decision (surfaced/confirmedBy untouched)', () => {
+    const moot = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'confirm', reason: 'real', worth: false },
+      { provider: 'anthropic', verdict: 'confirm', reason: 'real', worth: false },
+    ])
+    const plain = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'confirm', reason: 'real' },
+      { provider: 'anthropic', verdict: 'confirm', reason: 'real' },
+    ])
+    expect(moot.surfaced).toBe(plain.surfaced)
+    expect(moot.confirmedBy).toBe(plain.confirmedBy)
+    expect(moot.polledModels).toBe(plain.polledModels)
+  })
+})
+
+describe('aggregateMultiRaiser — worthFlagging with multiple raisers', () => {
+  it('raisers count as implicit worth: 2 raisers outvote 2 moot verifiers at the tie', () => {
+    // 2 (raisers) + 0 + 0 = 2 >= 2 (polled 4 / 2) → worth.
+    const v = aggregateMultiRaiser(
+      ['A', 'B'],
+      [
+        { provider: 'C', verdict: 'confirm', reason: 'real', worth: false },
+        { provider: 'D', verdict: 'confirm', reason: 'real', worth: false },
+      ],
+      4,
+    )
+    expect(v.worthFlagging).toBe(true)
+  })
+
+  it('a lone raiser against three moot verifiers is judged moot', () => {
+    // 1 + 0 + 0 + 0 = 1 < 2 (polled 4 / 2) → moot.
+    const v = aggregateMultiRaiser(
+      ['A'],
+      [
+        { provider: 'B', verdict: 'confirm', reason: 'real', worth: false },
+        { provider: 'C', verdict: 'confirm', reason: 'real', worth: false },
+        { provider: 'D', verdict: 'confirm', reason: 'real', worth: false },
+      ],
+      4,
+    )
+    expect(v.worthFlagging).toBe(false)
+  })
+
+  it('no expressed worth judgments → worthFlagging absent', () => {
+    const v = aggregateMultiRaiser(['A'], [{ provider: 'B', verdict: 'confirm', reason: 'real' }], 2)
+    expect('worthFlagging' in v).toBe(false)
+  })
+})
+
+describe('crossVerify — worth flows end-to-end into FindingVerification', () => {
+  it('verifier worth verdicts aggregate into worthFlagging + perModel rows', async () => {
+    const verify: VerifyFn = async () => ({
+      result: {
+        verdicts: [
+          { id: 'f1', verdict: 'confirm', reason: 'real', worth: false },
+          { id: 'f2', verdict: 'confirm', reason: 'real', worth: true },
+        ],
+      },
+    })
+    const outcome = await crossVerify(
+      [finding('f1'), finding('f2')],
+      'deepseek',
+      [cfg('openai'), cfg('anthropic')],
+      verify,
+    )
+    const v1 = outcome.byId.get('f1')!
+    const v2 = outcome.byId.get('f2')!
+    // f1: 1 + 0 + 0 = 1 < 1.5 → moot; f2: 1 + 1 + 1 = 3 ≥ 1.5 → worth.
+    expect(v1.worthFlagging).toBe(false)
+    expect(v2.worthFlagging).toBe(true)
+    expect(v1.perModel.filter((m) => m.worth === false)).toHaveLength(2)
+    // Reality axis unchanged by the worth judgments.
+    expect(v1.surfaced).toBe(true)
+    expect(v2.surfaced).toBe(true)
+  })
+
+  it('a verifier that omits a finding contributes no worth signal for it', async () => {
+    const verify: VerifyFn = async () => ({
+      result: { verdicts: [{ id: 'f1', verdict: 'confirm', reason: 'real' }] },
+    })
+    const outcome = await crossVerify([finding('f1')], 'deepseek', [cfg('openai')], verify)
+    expect('worthFlagging' in outcome.byId.get('f1')!).toBe(false)
+  })
+})
+
+describe('fuseConfirm — worth flows through fusion', () => {
+  it('non-raiser worth=false votes demote the union finding on the worth axis', async () => {
+    const gens: GeneratorFindings[] = [
+      { generator: 'A', cfg: cfg('deepseek'), findings: [vf('f1', 'src/a.ts', 5, 'issue one')] },
+    ]
+    const merged = mergeGeneratorFindings(gens)
+    const participants = [
+      { generator: 'A', cfg: cfg('deepseek') },
+      { generator: 'B', cfg: cfg('openai') },
+      { generator: 'C', cfg: cfg('anthropic') },
+    ]
+    const verify: VerifyFn = async () => ({
+      result: { verdicts: [{ id: 'f1', verdict: 'confirm', reason: 'real', worth: false }] },
+    })
+    const outcome = await fuseConfirm(merged, participants, verify)
+    const v = outcome.merged[0].verification
+    // Raiser A implicit worth (1) + B/C worth=false (0 + 0) = 1 < 1.5 → moot.
+    expect(v.worthFlagging).toBe(false)
+    expect(v.surfaced).toBe(true)
+  })
+})
