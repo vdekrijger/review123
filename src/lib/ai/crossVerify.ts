@@ -114,6 +114,110 @@ export function classifyClaim(body: string): ClaimType {
   return 'in-diff'
 }
 
+// ---------------------------------------------------------------------------
+// Grounded verification — budget contract
+//
+// Every verifier call runs THROUGH the tool loop with repo-lookup tools
+// available (read_file / read_file_at_base / search_code / find_references),
+// ALWAYS ON when a repo source is wired — not gated behind deep mode. The
+// prompt instructs verifiers to answer directly when the provided context
+// suffices, so the common case stays ZERO tool calls (cost unchanged); tools
+// are spent only when a verdict hinges on code outside the diff.
+//
+// Budgets (all hard, enforced by wrapGroundedExecutor + the loop's maxToolCalls):
+// - PER VERIFIER CALL: GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_VERIFIER lookups and
+//   GROUNDED_VERIFY_MAX_FETCHED_BYTES fetched bytes. Half/quarter of the deep-
+//   GENERATION budgets (8 calls / 150 KB): verification checks specific claims,
+//   it does not explore.
+// - PER VERIFICATION ROUND (one finding set × ALL its verifiers, shared):
+//   GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_ROUND lookups total. This is the
+//   "pathological finding can't blow up" cap: a finding's grounding cost across
+//   every verifier call it appears in is bounded by the round total, because
+//   per-finding attribution inside a set-scoped verifier loop is not knowable.
+// - SEARCH calls (search_code AND find_references — both burn GitHub's ~10/min
+//   code-search quota): GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND per round.
+//   Up to 4 reviewer rounds + a verdict round can run concurrently, so 2/round
+//   keeps the worst-case concurrent burst (~10) inside the quota.
+// Exhaustion is HONEST: the wrapper returns an ok:false tool result telling the
+// verifier to vote on what it has and note the exhausted budget — never a throw.
+// ---------------------------------------------------------------------------
+
+/** Max repo lookups ONE verifier call may spend (loop maxToolCalls). */
+export const GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_VERIFIER = 4
+/** Max fetched bytes ONE verifier call may spend across its lookups. */
+export const GROUNDED_VERIFY_MAX_FETCHED_BYTES = 40_000
+/** Max repo lookups ONE verification round (all verifiers together) may spend. */
+export const GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_ROUND = 8
+/** Max code-search lookups (search_code + find_references) per round. */
+export const GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND = 2
+/** Cap on a grounded note (per verdict and on the aggregated verification). */
+export const GROUNDED_NOTE_MAX_CHARS = 200
+
+/** Tools that hit the code-search quota (GitHub /search/code — ~10/min). */
+export const GROUNDED_SEARCH_TOOLS: ReadonlySet<string> = new Set([
+  'search_code',
+  'find_references',
+])
+
+/** Shared mutable budget for one verification ROUND (all its verifier calls). */
+export interface GroundedRoundBudget {
+  toolCalls: number
+  searchCalls: number
+}
+
+export function createGroundedRoundBudget(): GroundedRoundBudget {
+  return { toolCalls: 0, searchCalls: 0 }
+}
+
+/** Structural tool-result shape (mirrors llmToolLoop's LlmToolResult). */
+interface GroundedToolResult {
+  ok: boolean
+  content: string
+}
+
+/**
+ * Wrap a toolkit executor with the grounded-verification budgets. Create ONE
+ * wrapper per VERIFIER CALL (it owns that call's byte budget) and pass the SAME
+ * `round` to every wrapper in the round (they share the round/search caps —
+ * safe across parallel loops: JS is single-threaded and each executeTool is
+ * awaited inside its own loop). Refusals are honest ok:false results the model
+ * can react to ("vote on what you have"); the wrapper never throws.
+ */
+export function wrapGroundedExecutor(
+  executeTool: (name: string, args: Record<string, unknown>) => Promise<GroundedToolResult>,
+  round: GroundedRoundBudget,
+): (name: string, args: Record<string, unknown>) => Promise<GroundedToolResult> {
+  let fetchedBytes = 0 // per-verifier-call byte budget
+  return async (name, args) => {
+    if (round.toolCalls >= GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_ROUND) {
+      return {
+        ok: false,
+        content:
+          'Shared grounding budget for this verification round is exhausted — vote on what you have and note "budget exhausted" where a lookup was needed.',
+      }
+    }
+    if (GROUNDED_SEARCH_TOOLS.has(name) && round.searchCalls >= GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND) {
+      return {
+        ok: false,
+        content:
+          'Code-search budget for this verification round is exhausted (search quota) — use read_file if you know the path, or vote on what you have and note it.',
+      }
+    }
+    if (fetchedBytes >= GROUNDED_VERIFY_MAX_FETCHED_BYTES) {
+      return {
+        ok: false,
+        content:
+          'Grounded-verification fetch budget exhausted (40 KB) — vote on what you have and note "budget exhausted" where a lookup was needed.',
+      }
+    }
+    round.toolCalls += 1
+    if (GROUNDED_SEARCH_TOOLS.has(name)) round.searchCalls += 1
+    const result = await executeTool(name, args)
+    if (result.ok) fetchedBytes += new TextEncoder().encode(result.content).length
+    return result
+  }
+}
+
 /** One verifier's judgement on a single finding. */
 export interface VerifierVerdict {
   id: string
@@ -125,6 +229,13 @@ export interface VerifierVerdict {
    * or stubs predating the axis omit it; absence is tolerated (no signal).
    */
   worth?: boolean
+  /**
+   * Grounded verification (repo lookups): what the verifier looked up before
+   * voting — "searched repo for parseConfig callers: 2 found". Present only
+   * when the verifier actually used a tool on this verdict; capped at
+   * GROUNDED_NOTE_MAX_CHARS. Optional-tolerant (older models/stubs omit it).
+   */
+  groundedNote?: string
 }
 
 /** Validated verifier response: a verdict per finding id. */
@@ -137,11 +248,15 @@ export interface VerifierResponse {
  * throws (a failing verifier is skipped — its vote omitted, never blocks). Every
  * verifier runs the SAME comprehensive adversarial prompt; decorrelation comes
  * from MODEL/PROVIDER diversity, not from per-judge framing.
+ *
+ * `toolCallsUsed` (grounded verification): how many repo lookups THIS verifier
+ * call spent. Optional — single-pass verifier calls (no tools) omit it; the
+ * orchestrator sums it across the round into FindingVerification.toolCallsUsed.
  */
 export type VerifyFn = (
   cfg: ProviderConfig,
   findings: VerifiableFinding[],
-) => Promise<{ result: VerifierResponse; usage?: LlmUsage }>
+) => Promise<{ result: VerifierResponse; usage?: LlmUsage; toolCallsUsed?: number }>
 
 /** A finding with its aggregated verification attached. */
 export interface VerifiedFinding {
@@ -220,10 +335,31 @@ context. The diff/excerpt NOT showing a test, caller, handler, or index is NOT p
 NEVER "confirm" a plausible-sounding absence you cannot actually verify. Suppressing an \
 unsubstantiated absence claim is the correct outcome.`
 
-export function buildVerifyPrompt(findings: VerifiableFinding[]): {
+/**
+ * The grounded-verification instruction block (repo lookups). Appended ONLY
+ * when the verifier call actually runs through the tool loop — the single-pass
+ * fallback prompt stays byte-identical to the ungrounded prompt.
+ */
+export const GROUNDED_VERIFY_INSTRUCTIONS = `GROUNDED VERIFICATION (repo lookup tools are \
+available on this call): answer directly from the provided context when it suffices — that is \
+the normal case and costs nothing. Use the tools ONLY when a verdict depends on code you cannot \
+see: callers/consumers of a changed symbol, a definition or config elsewhere, whether a test or \
+handler exists outside the diff. For an ABSENCE claim this is your chance to SETTLE it instead \
+of hedging: search for the thing claimed missing — found it → "refute"; genuinely found nothing \
+after a real search → you MAY "confirm" the absence (that search IS the positive verification \
+the default rule demands). When you use a tool, state what you looked up and what you found in \
+that verdict's "groundedNote" (≤${GROUNDED_NOTE_MAX_CHARS} chars, e.g. "searched repo for \
+parseConfig callers: 2 found"). If the tool budget runs out before you could check, vote on \
+what you have and note "budget exhausted" — never guess.`
+
+export function buildVerifyPrompt(
+  findings: VerifiableFinding[],
+  opts?: { grounded?: boolean },
+): {
   system: string
   user: string
 } {
+  const grounded = opts?.grounded === true
   const system = `You are an ADVERSARIAL verifier auditing another AI reviewer's findings on a \
 pull request. For EACH finding, decide whether it is a REAL, code-grounded issue worth \
 surfacing to a human reviewer — or noise.
@@ -251,19 +387,19 @@ or formatter would catch are NOT worth their time — set "worth": false for tho
 are technically real. When a suggestedFix is provided, weigh whether making THAT change is \
 genuinely worth the author's and reviewer's attention. "worth": true is reserved for findings a \
 busy reviewer would thank you for surfacing.
-
+${grounded ? `\n${GROUNDED_VERIFY_INSTRUCTIONS}\n` : ''}
 Respond with JSON ONLY — no markdown, no fences, no prose outside the object:
 
 {
   "verdicts": [
-    { "id": "<finding id>", "verdict": "confirm" | "refute" | "uncertain", "worth": true | false, "reason": "<≤1 sentence>" }
+    { "id": "<finding id>", "verdict": "confirm" | "refute" | "uncertain", "worth": true | false, "reason": "<≤1 sentence>"${grounded ? ', "groundedNote": "<ONLY when you used tools on this verdict: what you looked up and found, ≤200 chars>"' : ''} }
   ]
 }
 
 Rules:
 - One verdict per finding id provided. Do not invent ids.
 - worth: REQUIRED for every verdict — your independent worth-axis judgment (see above).
-- reason: at most one sentence; for "refute"/"uncertain"/"worth": false say briefly why.`
+- reason: at most one sentence; for "refute"/"uncertain"/"worth": false say briefly why.${grounded ? '\n- groundedNote: include ONLY on verdicts where you actually used a tool — omit it everywhere else.' : ''}`
 
   const payload = {
     findings: findings.map((f) => ({
@@ -301,11 +437,19 @@ export function validateVerifierResponse(x: unknown): VerifierResponse | null {
     // kept; absent/garbage → omitted (no signal), never a whole-response reject
     // (a verifier's reality verdicts stay valuable without the worth axis).
     const worth = typeof vo['worth'] === 'boolean' ? vo['worth'] : undefined
+    // groundedNote (grounded verification) — optional-tolerant: only a
+    // non-empty string is kept, trimmed and capped; absent/garbage → omitted.
+    const rawNote = vo['groundedNote']
+    const groundedNote =
+      typeof rawNote === 'string' && rawNote.trim().length > 0
+        ? rawNote.trim().slice(0, GROUNDED_NOTE_MAX_CHARS)
+        : undefined
     verdicts.push({
       id: vo['id'],
       verdict: vo['verdict'] as VerifierVerdict['verdict'],
       reason,
       ...(worth !== undefined ? { worth } : {}),
+      ...(groundedNote !== undefined ? { groundedNote } : {}),
     })
   }
   return { verdicts }
@@ -327,6 +471,26 @@ type VerifierVote = {
   model?: string
   /** Worth-axis judgment (mootness gate). Absent = the verifier expressed none. */
   worth?: boolean
+  /** Grounded-verification note ("searched X: found 2"). Absent = no lookup. */
+  groundedNote?: string
+}
+
+/**
+ * Compose the aggregated groundedNote for one finding from its verifier votes:
+ * distinct non-empty notes joined with '; ', capped at GROUNDED_NOTE_MAX_CHARS.
+ * Returns undefined when no vote carried a note (old caches / no lookups) so
+ * the field stays absent rather than empty.
+ */
+export function composeGroundedNote(
+  votes: { groundedNote?: string }[],
+): string | undefined {
+  const notes: string[] = []
+  for (const v of votes) {
+    const n = v.groundedNote?.trim()
+    if (n && !notes.includes(n)) notes.push(n)
+  }
+  if (notes.length === 0) return undefined
+  return notes.join('; ').slice(0, GROUNDED_NOTE_MAX_CHARS)
 }
 
 /** Numeric weight of a vote: confirm = 1, uncertain = 0.5 (neutral), refute = 0. */
@@ -422,12 +586,14 @@ export function aggregateFinding(
   const polledModels = 1 + verifierVotes.length
   const surfaced = applyAbsenceFloor(score >= polledModels / 2, absence)
   const worthFlagging = aggregateWorth(1, verifierVotes, polledModels)
+  const groundedNote = composeGroundedNote(verifierVotes)
   return {
     confirmedBy,
     polledModels,
     surfaced,
     perModel,
     ...(worthFlagging !== undefined ? { worthFlagging } : {}),
+    ...(groundedNote !== undefined ? { groundedNote } : {}),
   }
 }
 
@@ -479,12 +645,14 @@ export function aggregateMultiRaiser(
   const polledModels = Math.max(totalParticipants, raisers.length + verifierVotes.length)
   const surfaced = applyAbsenceFloor(score >= polledModels / 2, absence)
   const worthFlagging = aggregateWorth(raisers.length, verifierVotes, polledModels)
+  const groundedNote = composeGroundedNote(verifierVotes)
   return {
     confirmedBy,
     polledModels,
     surfaced,
     perModel,
     ...(worthFlagging !== undefined ? { worthFlagging } : {}),
+    ...(groundedNote !== undefined ? { groundedNote } : {}),
   }
 }
 
@@ -598,6 +766,8 @@ export async function crossVerify(
   const respondedProviders: string[] = []
   const responders: ProviderConfig[] = []
   const perModelUsage: ParticipantUsage[] = []
+  // Grounded verification: total repo lookups the round's verifier calls spent.
+  let roundToolCalls = 0
 
   results.forEach((res, i) => {
     if (res.status !== 'fulfilled') return // verifier failed → skip its votes
@@ -605,6 +775,7 @@ export async function crossVerify(
     respondedProviders.push(cfg.providerId)
     responders.push(cfg)
     usage = sumUsage(usage, res.value.usage)
+    roundToolCalls += res.value.toolCallsUsed ?? 0
     if (res.value.usage) {
       perModelUsage.push({ providerId: cfg.providerId, modelId: cfg.model.id, usage: res.value.usage })
     }
@@ -624,6 +795,8 @@ export async function crossVerify(
         // Worth axis: only an explicit judgment counts; an omitted finding
         // (or a verifier predating the axis) contributes no worth signal.
         ...(v?.worth !== undefined ? { worth: v.worth } : {}),
+        // Grounded verification: what this verifier looked up (when it did).
+        ...(v?.groundedNote !== undefined ? { groundedNote: v.groundedNote } : {}),
       })
     }
   })
@@ -659,7 +832,11 @@ export async function crossVerify(
       claimType === 'needs-external'
         ? { claimType, toolConfirmed: toolConfirmedById.get(f.id) ?? false }
         : undefined
-    out.set(f.id, aggregateFinding(generatorProvider, votesByFinding.get(f.id)!, generatorModel, absence))
+    const verification = aggregateFinding(generatorProvider, votesByFinding.get(f.id)!, generatorModel, absence)
+    // Grounded verification: attach the ROUND's lookup total (per-finding
+    // attribution inside a set-scoped verifier loop is not knowable — the
+    // round total is the honest upper bound). Absent when zero (old shape).
+    out.set(f.id, roundToolCalls > 0 ? { ...verification, toolCallsUsed: roundToolCalls } : verification)
   }
 
   // Per-verifier impact (Plan N): confirms/refutes/uncertains + decisive votes.
@@ -867,12 +1044,15 @@ export async function fuseConfirm(
   let usage: LlmUsage | undefined
   const respondedProviders: string[] = []
   const perModelUsage: ParticipantUsage[] = []
+  // Grounded verification: total repo lookups the round's verifier calls spent.
+  let roundToolCalls = 0
 
   results.forEach((res, i) => {
     if (res.status !== 'fulfilled') return
     const p = participants[i]
     respondedProviders.push(p.cfg.providerId)
     usage = sumUsage(usage, res.value.usage)
+    roundToolCalls += res.value.toolCallsUsed ?? 0
     if (res.value.usage) {
       perModelUsage.push({ providerId: p.cfg.providerId, modelId: p.cfg.model.id, usage: res.value.usage })
     }
@@ -890,6 +1070,8 @@ export async function fuseConfirm(
         model: p.cfg.model.id,
         // Worth axis: only an explicit judgment counts (see crossVerify above).
         ...(v?.worth !== undefined ? { worth: v.worth } : {}),
+        // Grounded verification: what this verifier looked up (when it did).
+        ...(v?.groundedNote !== undefined ? { groundedNote: v.groundedNote } : {}),
       })
     }
   })
@@ -918,15 +1100,17 @@ export async function fuseConfirm(
       claimType === 'needs-external'
         ? { claimType, toolConfirmed: toolConfirmedById.get(m.id) ?? false }
         : undefined
+    const verification = aggregateMultiRaiser(
+      m.raisedBy,
+      votesByFinding.get(m.id)!,
+      totalParticipants,
+      m.raiserCfgs.map((c) => c.model.id),
+      absence,
+    )
     return {
       merged: m,
-      verification: aggregateMultiRaiser(
-        m.raisedBy,
-        votesByFinding.get(m.id)!,
-        totalParticipants,
-        m.raiserCfgs.map((c) => c.model.id),
-        absence,
-      ),
+      // Grounded verification: round lookup total (see crossVerify above).
+      verification: roundToolCalls > 0 ? { ...verification, toolCallsUsed: roundToolCalls } : verification,
     }
   })
 

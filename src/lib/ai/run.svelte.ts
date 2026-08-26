@@ -30,7 +30,11 @@ import {
   mergeGeneratorFindings,
   fuseConfirm,
   classifyClaim,
+  createGroundedRoundBudget,
+  wrapGroundedExecutor,
+  GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_VERIFIER,
   type VerifiableFinding,
+  type VerifierResponse,
   type VerifyFn,
   type ToolCheckFn,
   type ParticipantUsage,
@@ -691,8 +695,13 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     suggestedFix?: string
   }
 
-  /** Real per-verifier call: comprehensive adversarial JSON judgement. */
-  const realVerify: VerifyFn = async (cfg: ProviderConfig, findings: VerifiableFinding[]) => {
+  /**
+   * Single-pass per-verifier call: comprehensive adversarial JSON judgement.
+   * The pre-grounding behavior — and the FALLBACK whenever grounding cannot
+   * run for a verifier (no repo source, provider unresolvable, or the model
+   * does not support function calling, e.g. legacy deepseek-reasoner).
+   */
+  const singlePassVerify: VerifyFn = async (cfg: ProviderConfig, findings: VerifiableFinding[]) => {
     const prompts = buildVerifyPrompt(findings)
     const { result, usage } = await llmJsonWithRepairFor(
       cfg,
@@ -700,6 +709,83 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       validateVerifierResponse,
     )
     return { result, usage }
+  }
+
+  /**
+   * GROUNDED verification (ALWAYS ON — not gated behind deep mode): build the
+   * per-ROUND VerifyFn. Every verifier call runs through the tool loop with the
+   * repo-lookup toolkit (read_file / read_file_at_base / search_code /
+   * find_references, sharing the per-review deep cache), so a verifier can
+   * CHECK code outside the diff before voting instead of hedging. The prompt
+   * instructs it to answer directly when the provided context suffices — the
+   * confident majority stays ONE call with ZERO lookups (cost unchanged).
+   *
+   * One round budget is shared by ALL the round's verifier calls (the
+   * per-round + search caps in crossVerify.ts); each call additionally gets
+   * its own call/byte caps. Call this ONCE per verification round.
+   *
+   * Fallbacks (per verifier, graceful):
+   * - no deepReview source (non-PR context) → singlePassVerify for the whole
+   *   round — byte-identical to the pre-grounding path;
+   * - verifier model without function calling / unresolvable provider →
+   *   singlePassVerify for THAT verifier, its vote counts exactly as today;
+   * - tool errors (404 / rate limit / no GitHub search) → the toolkit's
+   *   ok:false tool results — the loop proceeds, the round never fails;
+   * - unparseable final answer → one reformat repair on the SAME verifier
+   *   provider (no tools needed — the verdicts are already grounded).
+   */
+  function makeGroundedVerify(onActivity?: (line: string) => void): VerifyFn {
+    if (deepReview === undefined) return singlePassVerify
+    const round = createGroundedRoundBudget()
+    return async (cfg: ProviderConfig, findings: VerifiableFinding[]) => {
+      const provider = getProvider(cfg.providerId)
+      if (!provider || !modelSupportsTools(cfg.model)) return singlePassVerify(cfg, findings)
+      const toolkit = createDeepReviewToolkit(deepReview!, deepCache)
+      const prompts = buildVerifyPrompt(findings, { grounded: true })
+      const loop = await llmToolLoop({
+        system: prompts.system,
+        user: prompts.user,
+        tools: toolkit.tools,
+        executeTool: wrapGroundedExecutor(toolkit.executeTool, round),
+        humanize: toolkit.humanize,
+        maxToolCalls: GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_VERIFIER,
+        onToolEvent: (ev) => onActivity?.(ev.detail),
+        override: { provider, model: cfg.model },
+      })
+      if (loop.toolCallsUsed > 0) {
+        onActivity?.(
+          `${provider.displayName}: grounded with ${loop.toolCallsUsed} ${loop.toolCallsUsed === 1 ? 'lookup' : 'lookups'}`,
+        )
+      }
+      let parsed: VerifierResponse | null = null
+      try {
+        parsed = validateVerifierResponse(JSON.parse(loop.content) as unknown)
+      } catch {
+        parsed = null // fall through to the repair pass
+      }
+      if (parsed !== null) {
+        return { result: parsed, usage: loop.usage, toolCallsUsed: loop.toolCallsUsed }
+      }
+      // Repair: reformat the already-grounded answer — no tools needed. Runs on
+      // the SAME verifier provider so the reformat tokens are attributed to it.
+      const repaired = await llmJsonWithRepairFor(
+        cfg,
+        jsonTaskOpts({
+          system: prompts.system,
+          user:
+            `${prompts.user}\n\nYou already judged these findings (with repo lookups) and answered:\n` +
+            `${loop.content}\n` +
+            'Reformat that answer as valid JSON exactly matching the required shape. ' +
+            'Do not change the verdicts. Respond with the JSON only.',
+        }),
+        validateVerifierResponse,
+      )
+      return {
+        result: repaired.result,
+        usage: sumUsage(loop.usage, repaired.usage),
+        toolCallsUsed: loop.toolCallsUsed,
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -860,7 +946,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     try {
       // Every verifier runs the SAME comprehensive adversarial prompt; error
       // decorrelation comes from MODEL/PROVIDER diversity, not per-judge framing.
-      const outcome = await crossVerify(verifiable, generatorName, verifiers, realVerify, generatorModelId, toolCheck)
+      // Grounded (repo-lookup) verification with ONE shared round budget; falls
+      // back to the single-pass call per verifier when tools are unavailable.
+      const outcome = await crossVerify(verifiable, generatorName, verifiers, makeGroundedVerify(onActivity), generatorModelId, toolCheck)
       return {
         byId: outcome.byId,
         usage: outcome.usage,
@@ -1098,9 +1186,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         }
       }
 
-      // 3. Cross-confirm (each participant verifies findings it didn't raise).
+      // 3. Cross-confirm (each participant verifies findings it didn't raise),
+      //    grounded (repo lookups, one shared round budget) where available.
       //    Tool-backed absence verification (Part B) gates needs-external findings.
-      const outcome = await fuseConfirm(merged, participants, realVerify, buildAbsenceToolCheck(note))
+      const outcome = await fuseConfirm(merged, participants, makeGroundedVerify(note), buildAbsenceToolCheck(note))
 
       // 4. Rebuild findings, surfaced-first, carrying raisedBy + verification.
       const findings = outcome.merged.map((m) => ({
@@ -1226,9 +1315,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         return { result, usage: genUsage, models: buildFusionModels(participants, generators.length, genUsageByModel, [], []) }
       }
 
-      // 3. Cross-confirm (each participant verifies evidence it didn't raise).
+      // 3. Cross-confirm (each participant verifies evidence it didn't raise),
+      //    grounded (repo lookups, one shared round budget) where available.
       //    Tool-backed absence verification (Part B) gates needs-external evidence.
-      const outcome = await fuseConfirm(merged, participants, realVerify, buildAbsenceToolCheck(onActivity))
+      const outcome = await fuseConfirm(merged, participants, makeGroundedVerify(onActivity), buildAbsenceToolCheck(onActivity))
 
       // 4. Rebuild the verdict: surfaced-first evidence + per-row verification +
       //    raisedBy provenance. Primary `level` + unioned notAnalyzed.

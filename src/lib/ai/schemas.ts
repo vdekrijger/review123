@@ -1209,6 +1209,22 @@ export interface FindingVerification {
   worthFlagging?: boolean
   /** Per-model verdicts (generator first), for the tooltip. */
   perModel: FindingVerdict[]
+  /**
+   * Grounded verification (repo lookups): what the verifier(s) looked up
+   * before voting — e.g. "searched repo for parseConfig callers: 2 found".
+   * Distinct verifier notes joined with '; ', capped at 200 chars
+   * (GROUNDED_NOTE_MAX_CHARS). Shown as the "✓ verified" chip's hover title.
+   * Absent when no verifier used a lookup — and on old cached verifications,
+   * which every consumer must tolerate (render without it, never drop).
+   */
+  groundedNote?: string
+  /**
+   * Grounded verification: total repo lookups the finding's verification
+   * ROUND spent (per-finding attribution inside a set-scoped verifier call is
+   * not knowable, so this is the round total — an honest upper bound). Absent
+   * when zero and on old cached verifications.
+   */
+  toolCallsUsed?: number
 }
 
 /**

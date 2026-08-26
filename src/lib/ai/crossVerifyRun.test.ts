@@ -477,11 +477,21 @@ describe('tool-backed absence verification in runSkillReviews (Part B)', () => {
       const resp = { verdicts: [{ id: 'src/foo.ts:10:' + djb2('no test covers fooBar'), verdict: 'confirm', reason: 'plausible' }] }
       return { result: validate(resp), usage: undefined }
     })
-    // The tool loop searched and FOUND the test → refute.
-    const llmToolLoop = vi.fn().mockResolvedValue({
-      content: JSON.stringify({ verdict: 'refute' }),
-      usage: undefined,
-      toolCallsUsed: 1,
+    // With a deep source, the tool loop serves TWO surfaces: the GROUNDED
+    // verifier call (adversarial system prompt → a VerifierResponse) and the
+    // Part B absence check (single-claim prompt → {"verdict"}). Discriminate
+    // by system content, exactly like the real models would see.
+    const llmToolLoop = vi.fn().mockImplementation(async (opts: { system: string }) => {
+      if (/ADVERSARIAL verifier/i.test(opts.system)) {
+        // Grounded verifier: confirms without needing a lookup.
+        return {
+          content: JSON.stringify({ verdicts: [{ id: 'src/foo.ts:10:' + djb2('no test covers fooBar'), verdict: 'confirm', reason: 'plausible' }] }),
+          usage: undefined,
+          toolCallsUsed: 0,
+        }
+      }
+      // Absence check: searched and FOUND the test → refute.
+      return { content: JSON.stringify({ verdict: 'refute' }), usage: undefined, toolCallsUsed: 1 }
     })
 
     const source = makeDeepSource({ searchCode: vi.fn(async () => 'src/foo.test.ts: describe(fooBar)') })
@@ -491,7 +501,8 @@ describe('tool-backed absence verification in runSkillReviews (Part B)', () => {
     )
     await run.runSkillReviews()
 
-    expect(llmToolLoop).toHaveBeenCalledTimes(1)
+    // Both loop surfaces ran: 1 grounded verifier call + 1 absence check.
+    expect(llmToolLoop).toHaveBeenCalledTimes(2)
     const result = run.skillReviews[0].state.value as SkillReviewResult
     expect(result.findings[0].verification!.surfaced).toBe(false)
   })
@@ -700,10 +711,21 @@ describe('deep multi-generator fusion in runSkillReviews (Plan P deep)', () => {
     }
     const llmToolLoop = vi.fn().mockImplementation(
       async (opts: {
+        system: string
         override?: { provider: { id: string } }
         executeTool: (name: string, args: Record<string, unknown>) => Promise<unknown>
       }) => {
         const providerId = opts.override?.provider.id
+        // GROUNDED cross-confirm verify calls also run through the loop now —
+        // answer them neutrally (zero lookups) and keep them out of the
+        // generation bookkeeping below.
+        if (/ADVERSARIAL verifier/i.test(opts.system)) {
+          return {
+            content: JSON.stringify({ verdicts: [] }),
+            usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+            toolCallsUsed: 0,
+          }
+        }
         overridesSeen.push(providerId)
         // Read the same file in both generators' loops — exercises the cache.
         await opts.executeTool('read_file', { path: 'src/foo.ts' })
@@ -716,7 +738,8 @@ describe('deep multi-generator fusion in runSkillReviews (Plan P deep)', () => {
       },
     )
 
-    // Cross-confirm verify calls go through llmJsonWithRepairFor — neutral.
+    // Any residual single-pass calls (none expected for verify now that
+    // grounding routes them through the loop) stay neutral.
     const llmJsonWithRepairFor = vi.fn().mockImplementation(async (_cfg, _opts, validate) => {
       return { result: validate({ verdicts: [] }) ?? { verdicts: [] }, usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }
     })
