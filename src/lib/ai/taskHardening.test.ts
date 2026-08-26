@@ -142,8 +142,8 @@ describe('JSON task call options — maxTokens + size-aware timeoutMs', () => {
     await run.start()
 
     const calls = deps.llmJsonWithRepairWithUsage.mock.calls
-    // attention, diagrams, tests, alternatives, story, risk-judge, verdict
-    expect(calls.length).toBe(7)
+    // attention, diagrams, tests, alternatives, story, risk-judge, outcomes, verdict
+    expect(calls.length).toBe(8)
     for (const call of calls) {
       const opts = call[0] as { maxTokens?: number; timeoutMs?: number }
       expect(opts.maxTokens).toBe(JSON_TASK_MAX_TOKENS)
@@ -158,7 +158,7 @@ describe('JSON task call options — maxTokens + size-aware timeoutMs', () => {
     await run.start()
 
     const calls = deps.llmJsonWithRepairWithUsage.mock.calls
-    expect(calls.length).toBe(7)
+    expect(calls.length).toBe(8)
     for (const call of calls) {
       const opts = call[0] as { maxTokens?: number; timeoutMs?: number }
       expect(opts.maxTokens).toBe(JSON_TASK_MAX_TOKENS)

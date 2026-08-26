@@ -30,11 +30,12 @@ import {
   INTENT_BODY_MAX,
   INTENT_TRUNCATION_MARKER,
   INTENT_MIN_MEANINGFUL_CHARS,
+  outcomesPrompt,
   parseReadingOrder,
   stripReadingOrder,
   type ExpandCommentContext,
 } from './tasks'
-import { STORY_LAYERS, IMPACT_MAX_PER_GROUP, INTENT_MAX_ITEMS } from './schemas'
+import { STORY_LAYERS, IMPACT_MAX_PER_GROUP, INTENT_MAX_ITEMS, OUTCOMES_MAX_ITEMS } from './schemas'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
@@ -53,7 +54,7 @@ function makeCtx(text = 'PR context text here'): PackedContext {
  * version forward). Tasks added AFTER the migration (e.g. `simplify`, starting
  * its own history at 1) never lived through those shared eras and are excluded.
  */
-const POST_MIGRATION_TASKS = new Set(['simplify', 'intent'])
+const POST_MIGRATION_TASKS = new Set(['simplify', 'intent', 'outcomes'])
 const MIN_PROMPT_VERSION = Math.min(
   ...Object.entries(PROMPT_VERSIONS)
     .filter(([task]) => !POST_MIGRATION_TASKS.has(task))
@@ -2248,9 +2249,126 @@ describe('intentPrompt', () => {
       simplifyPrompt([{ id: 'f0', body: 'b' }]).system,
       expandCommentPrompt('note', { path: 'a.ts', line: 1, side: 'RIGHT', excerpt: '' }).system,
       askPrompt(ctx, [], 'q').system,
+      outcomesPrompt(ctx, { title: 't' }).system,
     ]
     for (const sys of others) {
       expect(sys.toLowerCase()).not.toContain('checking the implementation against the stated intent')
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// outcomesPrompt — expected-outcomes check (PROMPT_VERSIONS.outcomes)
+// ---------------------------------------------------------------------------
+
+describe('outcomesPrompt', () => {
+  const META = { title: 'fix: post off-diff comments at file level' }
+
+  it('carries the stable e2e dispatch marker in the system prompt', () => {
+    const { system } = outcomesPrompt(makeCtx(), META)
+    expect(system).toContain('deriving the observable behavior changes')
+  })
+
+  it('demands JSON-only output matching the ExpectedOutcomesResult shape', () => {
+    const { system } = outcomesPrompt(makeCtx(), META)
+    expect(system).toMatch(/JSON ONLY/i)
+    expect(system).toContain('"outcomes"')
+    expect(system).toContain('"before"')
+    expect(system).toContain('"after"')
+    expect(system).toContain('"evidence"')
+    expect(system).toContain('"symbols"')
+    expect(system).toContain('"withoutThis"')
+    expect(system).toMatch(/Do not include any text outside the JSON object/i)
+  })
+
+  it('demands OBSERVABLE behavior changes and bans code-structure narration', () => {
+    const { system } = outcomesPrompt(makeCtx(), META)
+    expect(system).toMatch(/OBSERVABLE behavior changes ONLY/i)
+    expect(system).toMatch(/Code-structure narration is NOT an outcome/i)
+    expect(system).toContain('"moved function X"')
+    expect(system).toMatch(/performance characteristics/i)
+  })
+
+  it('demands one plain sentence per before/after and bans the AI-isms (simplify style contract)', () => {
+    const { system } = outcomesPrompt(makeCtx(), META)
+    expect(system).toMatch(/ONE plain sentence each/i)
+    expect(system).toMatch(/busy colleague/i)
+    for (const banned of ["It's worth noting", 'Additionally', 'Furthermore', 'robust', 'leverage', 'It is important to']) {
+      expect(system).toContain(banned)
+    }
+  })
+
+  it('requires evidence to cite REAL changed files and forbids inventing', () => {
+    const { system } = outcomesPrompt(makeCtx(), META)
+    expect(system).toMatch(/NEVER cite a file that is not in the changes/i)
+    expect(system).toMatch(/NEVER invent/i)
+  })
+
+  it('instructs bare symbol names for the deterministic downstream test join', () => {
+    const { system } = outcomesPrompt(makeCtx(), META)
+    expect(system).toMatch(/bare names of the changed functions\/classes/i)
+    expect(system).toMatch(/cross-referenced against tests deterministically/i)
+    expect(system).toMatch(/Empty array when no named\s+symbol applies/i)
+  })
+
+  it('caps at OUTCOMES_MAX_ITEMS, most significant first, and asks for the withoutThis note', () => {
+    const { system } = outcomesPrompt(makeCtx(), META)
+    expect(system).toContain(`At most ${OUTCOMES_MAX_ITEMS} outcomes`)
+    expect(system).toMatch(/MOST SIGNIFICANT first/i)
+    expect(system).toMatch(/what stays broken, missing, or unchanged/i)
+  })
+
+  it('treats an empty outcomes array as the GOOD expected result on pure refactors', () => {
+    const { system } = outcomesPrompt(makeCtx(), META)
+    expect(system).toMatch(/EMPTY outcomes array is a GOOD, expected result/i)
+    expect(system).toMatch(/pure refactor/i)
+  })
+
+  it('user prompt carries the PR title and the SAME packed diff context — never the description', () => {
+    const ctx = makeCtx('outcomes-packed-context-xyz')
+    const { user } = outcomesPrompt(ctx, META)
+    expect(user).toContain('fix: post off-diff comments at file level')
+    expect(user).toContain('outcomes-packed-context-xyz')
+    // The PR body is deliberately NOT an input — the intent check owns
+    // promised-vs-actual; this prompt has no description section at all.
+    expect(user).not.toMatch(/description/i)
+  })
+
+  it("avoids every other stub's dispatch phrase (phrase-collision guard, #220 idiom)", () => {
+    const sys = outcomesPrompt(makeCtx(), META).system.toLowerCase()
+    for (const phrase of [
+      'reviewer persona', 'security reviewer', 'adversarial verifier', 'change-risk assessor',
+      'consolidating overlapping', 'rewriting code-review findings', 'hotspot', 'readingorder',
+      'mermaid', 'execution path', 'covered', 'gaps', 'clarity', 'senior engineer',
+      'alternative-is-better', 'approaches', "expanding a reviewer's terse note",
+      'checking the implementation', 'guided narrative walkthrough', 'changed test files',
+      'testflags',
+    ]) {
+      expect(sys, phrase).not.toContain(phrase)
+    }
+  })
+
+  it('no OTHER prompt builder contains the outcomes dispatch phrase (reverse collision guard)', () => {
+    const ctx = makeCtx()
+    const others = [
+      summarizePrompt(ctx).system,
+      attentionPrompt(ctx).system,
+      diagramsPrompt(ctx).system,
+      testInsightPrompt(ctx).system,
+      verdictPrompt(ctx, null).system,
+      riskJudgePrompt(ctx).system,
+      alternativesPrompt(ctx).system,
+      storyOrderPrompt(ctx).system,
+      coachPrompt([{ index: 0, path: 'a.ts', line: 1, body: 'b' }]).system,
+      skillReviewPrompt(ctx, { name: 'P', content: 'c' }).system,
+      convergencePrompt([], []).system,
+      simplifyPrompt([{ id: 'f0', body: 'b' }]).system,
+      expandCommentPrompt('note', { path: 'a.ts', line: 1, side: 'RIGHT', excerpt: '' }).system,
+      askPrompt(ctx, [], 'q').system,
+      intentPrompt(ctx, { title: 't', body: 'b' }).system,
+    ]
+    for (const sys of others) {
+      expect(sys.toLowerCase()).not.toContain('deriving the observable behavior changes')
     }
   })
 })

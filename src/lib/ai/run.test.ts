@@ -20,7 +20,7 @@ import { createAiRun, describeTaskError } from './run.svelte'
 import { LlmError } from '../llm/llm'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
-import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, RiskJudgeResult } from './schemas'
+import type { AttentionResult, VerdictResult, GraphResult, TestInsight, CoachResult, AlternativesResult, StoryOrderResult, RiskJudgeResult, ExpectedOutcomesResult } from './schemas'
 
 // ---------------------------------------------------------------------------
 // Fixture data
@@ -83,6 +83,11 @@ const RISK_JUDGE_RESULT: RiskJudgeResult = {
   snippets: [],
 }
 
+const OUTCOMES_RESULT: ExpectedOutcomesResult = {
+  outcomes: [{ id: 'o1', before: 'b', after: 'a', evidence: [{ path: 'src/foo.ts' }], symbols: [] }],
+  withoutThis: 'The change never lands.',
+}
+
 // ---------------------------------------------------------------------------
 // Default llmJsonWithRepair implementation that dispatches by validator result
 // Returns appropriate fixture based on which validator accepts the result.
@@ -94,7 +99,7 @@ function defaultJsonDispatch(_opts: unknown, validate: ValidateFn): unknown {
   // Try each fixture in order — return the first one the validator accepts.
   // StoryOrderResult is tried FIRST because validateAttention/etc. would not
   // accept it, but its own shape must win for the story task.
-  for (const candidate of [STORY_RESULT, ATTENTION_RESULT, GRAPH_RESULT, TEST_INSIGHT_RESULT, ALTERNATIVES_RESULT, VERDICT_RESULT, RISK_JUDGE_RESULT]) {
+  for (const candidate of [STORY_RESULT, ATTENTION_RESULT, GRAPH_RESULT, TEST_INSIGHT_RESULT, ALTERNATIVES_RESULT, OUTCOMES_RESULT, VERDICT_RESULT, RISK_JUDGE_RESULT]) {
     if (validate(candidate) !== null) return candidate
   }
   return ATTENTION_RESULT // fallback
@@ -292,6 +297,7 @@ describe('cache-hit (EC-17a, track cached:true)', () => {
       if (key.includes('alternatives')) return ALTERNATIVES_RESULT
       if (key.includes('story')) return STORY_RESULT
       if (key.includes('risk-judge')) return RISK_JUDGE_RESULT
+      if (key.includes('outcomes')) return OUTCOMES_RESULT
       if (key.includes('verdict')) return VERDICT_RESULT
       return null
     })
@@ -308,6 +314,7 @@ describe('cache-hit (EC-17a, track cached:true)', () => {
     expect(run.tests.status).toBe('done')
     expect(run.alternatives.status).toBe('done')
     expect(run.story.status).toBe('done')
+    expect(run.outcomes.status).toBe('done')
     expect(run.verdict.status).toBe('done')
   })
 })
@@ -686,6 +693,8 @@ describe('retry single task', () => {
       if (asStory !== null) return asStory
       const asRiskJudge = validate(RISK_JUDGE_RESULT)
       if (asRiskJudge !== null) return asRiskJudge
+      const asOutcomes = validate(OUTCOMES_RESULT)
+      if (asOutcomes !== null) return asOutcomes
       verdictCallCount++
       if (verdictCallCount === 1) throw new LlmError('server', 'verdict broke')
       return VERDICT_RESULT
@@ -792,7 +801,7 @@ describe('duration_ms as number', () => {
     await run.start()
 
     const completedCalls = deps.track.mock.calls.filter((c: unknown[]) => c[0] === 'ai_task_completed')
-    expect(completedCalls.length).toBe(8) // summary + attention + diagrams + tests + alternatives + story + risk-judge + verdict
+    expect(completedCalls.length).toBe(9) // summary + attention + diagrams + tests + alternatives + story + risk-judge + outcomes + verdict
 
     for (const call of completedCalls) {
       const props = call[1] as Record<string, unknown>
@@ -2130,16 +2139,16 @@ describe('totalUsage — per-review accumulation', () => {
     expect(run.totalUsage).toBeUndefined()
   })
 
-  it('sums every task usage after a full start() (summary 8 + 7 json tasks × 15)', async () => {
+  it('sums every task usage after a full start() (summary 8 + 8 json tasks × 15)', async () => {
     const deps = makeDeps()
     const run = createAiRun(makeInput(), deps)
     await run.start()
 
-    // summary: total 8; attention/diagrams/tests/alternatives/story/risk-judge/verdict: 15 each = 105
+    // summary: total 8; attention/diagrams/tests/alternatives/story/risk-judge/outcomes/verdict: 15 each = 120
     expect(run.totalUsage).toEqual({
-      prompt_tokens: 5 + 10 * 7,
-      completion_tokens: 3 + 5 * 7,
-      total_tokens: 8 + 15 * 7,
+      prompt_tokens: 5 + 10 * 8,
+      completion_tokens: 3 + 5 * 8,
+      total_tokens: 8 + 15 * 8,
     })
   })
 
@@ -2155,6 +2164,7 @@ describe('totalUsage — per-review accumulation', () => {
       if (key.includes('alternatives')) return ALTERNATIVES_RESULT
       if (key.includes('story')) return STORY_RESULT
       if (key.includes('risk-judge')) return RISK_JUDGE_RESULT
+      if (key.includes('outcomes')) return OUTCOMES_RESULT
       if (key.includes('verdict')) return VERDICT_RESULT
       return null
     })
@@ -2179,9 +2189,9 @@ describe('totalUsage — per-review accumulation', () => {
 
     expect(run.summary.usage).toBeUndefined()
     expect(run.totalUsage).toEqual({
-      prompt_tokens: 10 * 7,
-      completion_tokens: 5 * 7,
-      total_tokens: 15 * 7,
+      prompt_tokens: 10 * 8,
+      completion_tokens: 5 * 8,
+      total_tokens: 15 * 8,
     })
   })
 
