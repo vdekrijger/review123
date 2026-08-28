@@ -1119,14 +1119,15 @@ function outputExcerpt(text: string): string | undefined {
   // Strip C0/C1 control characters first (a raw reply can carry them), then
   // collapse all whitespace so the excerpt is a single tooltip-safe line.
   const clean = text
-    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim()
-  if (clean === "") return undefined
+  if (clean === '') return undefined
   return clean.length > OUTPUT_EXCERPT_MAX_CHARS
-    ? `${clean.slice(0, OUTPUT_EXCERPT_MAX_CHARS)}\u2026`
+    ? `${clean.slice(0, OUTPUT_EXCERPT_MAX_CHARS)}…`
     : clean
 }
+
 /** Previous output for the repair prompt — capped, with the cut declared. */
 function echoForRepair(text: string): string {
   if (text.length <= REPAIR_ECHO_MAX_CHARS) return text
