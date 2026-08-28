@@ -24,8 +24,13 @@ import {
   llmCompleteWithUsage,
   llmStream,
   llmStreamWithUsage,
+  llmJsonWithRepair,
+  llmTestConnection,
+  raisedTokenCap,
   LlmError,
+  ANTHROPIC_JSON_TOOL_NAME,
   INVALID_KEY_CHAR_MESSAGE,
+  TRUNCATION_RETRY_TOKEN_CEILING,
 } from './llm'
 import {
   setDeepseekKey,
@@ -478,13 +483,270 @@ describe('anthropic transport — llmComplete', () => {
     await expect(llmComplete({ system: 's', user: 'u' })).rejects.toMatchObject({ kind: 'rate-limited' })
   })
 
-  it('json flag does NOT add response_format field (Anthropic: prompt-enforced)', async () => {
+  it('json flag does NOT add response_format (Anthropic has no such field)', async () => {
     const body = { content: [{ type: 'text', text: '{"x":1}' }] }
     const f = vi.fn().mockResolvedValue(makeJsonResponse(body))
     vi.stubGlobal('fetch', f)
     await llmComplete({ system: 's', user: 'u', json: true })
     const reqBody = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
     expect(reqBody.response_format).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// anthropic JSON mode = forced tool use (its NATIVE structured-output path).
+// Verified 2026-08 against
+// platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools:
+//   tool_choice: {"type": "tool", "name": "<name>"} forces exactly that tool,
+//   and the model then emits only a tool_use block (no text block at all).
+// ---------------------------------------------------------------------------
+
+describe('anthropic transport — forced-tool JSON mode', () => {
+  beforeEach(() => {
+    setAiProvider('anthropic')
+    setAnthropicKey('sk-ant-test')
+  })
+
+  function toolUseBody(input: unknown, extra: Record<string, unknown> = {}) {
+    return {
+      content: [{ type: 'tool_use', id: 'toolu_1', name: ANTHROPIC_JSON_TOOL_NAME, input }],
+      ...extra,
+    }
+  }
+
+  it('json:true sends ONE tool plus tool_choice forcing it by name', async () => {
+    const f = vi.fn().mockResolvedValue(makeJsonResponse(toolUseBody({ x: 1 })))
+    vi.stubGlobal('fetch', f)
+    await llmComplete({ system: 's', user: 'u', json: true })
+
+    const reqBody = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
+    expect(reqBody.tools).toHaveLength(1)
+    expect(reqBody.tools[0].name).toBe(ANTHROPIC_JSON_TOOL_NAME)
+    expect(reqBody.tools[0].input_schema).toEqual({ type: 'object' })
+    expect(typeof reqBody.tools[0].description).toBe('string')
+    expect(reqBody.tool_choice).toEqual({ type: 'tool', name: ANTHROPIC_JSON_TOOL_NAME })
+  })
+
+  it('json:false (and unset) sends NO tools / tool_choice — byte-identical to before', async () => {
+    // A fresh Response per call — a Response body can only be read once.
+    const f = vi.fn().mockImplementation(async () => makeJsonResponse({ content: [{ type: 'text', text: 'hi' }] }))
+    vi.stubGlobal('fetch', f)
+    await llmComplete({ system: 's', user: 'u' })
+    await llmComplete({ system: 's', user: 'u', json: false })
+
+    for (const call of f.mock.calls) {
+      const reqBody = JSON.parse((call as [string, RequestInit])[1].body as string)
+      expect(reqBody.tools).toBeUndefined()
+      expect(reqBody.tool_choice).toBeUndefined()
+    }
+  })
+
+  it("reads the result from the tool_use block's input (no text block present)", async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse(toolUseBody({ x: 1, s: 'a' }))))
+    const content = await llmComplete({ system: 's', user: 'u', json: true })
+    expect(JSON.parse(content)).toEqual({ x: 1, s: 'a' })
+  })
+
+  it('the tool_use result round-trips through llmJsonWithRepair in ONE call', async () => {
+    const f = vi.fn().mockResolvedValue(makeJsonResponse(toolUseBody({ x: 7 })))
+    vi.stubGlobal('fetch', f)
+    const result = await llmJsonWithRepair({ system: 's', user: 'u' }, (v) => {
+      const o = v as { x?: unknown }
+      return typeof o?.x === 'number' ? o : null
+    })
+    expect(result).toEqual({ x: 7 })
+    expect(f).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to the TEXT block when a response carries no tool_use (gateway dropped tools)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(makeJsonResponse({ content: [{ type: 'text', text: '{"x":1}' }] })),
+    )
+    expect(await llmComplete({ system: 's', user: 'u', json: true })).toBe('{"x":1}')
+  })
+
+  it('ignores a tool_use block with a DIFFERENT name and uses the text block', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        makeJsonResponse({
+          content: [
+            { type: 'tool_use', id: 't1', name: 'some_other_tool', input: { nope: true } },
+            { type: 'text', text: '{"x":1}' },
+          ],
+        }),
+      ),
+    )
+    expect(await llmComplete({ system: 's', user: 'u', json: true })).toBe('{"x":1}')
+  })
+
+  it('still throws server when neither a matching tool_use nor a text block exists', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse({ content: [{ type: 'image' }] })))
+    await expect(llmComplete({ system: 's', user: 'u', json: true })).rejects.toMatchObject({ kind: 'server' })
+  })
+
+  it('llmTestConnection(anthropic) — the ping is NOT json, so it stays tool-free', async () => {
+    const f = vi.fn().mockResolvedValue(makeJsonResponse({ content: [{ type: 'text', text: 'ok' }] }))
+    vi.stubGlobal('fetch', f)
+    await llmTestConnection('anthropic')
+    const reqBody = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
+    expect(reqBody.tools).toBeUndefined()
+    expect(reqBody.tool_choice).toBeUndefined()
+    expect(reqBody.max_tokens).toBe(1024)
+  })
+
+  it('the STREAMING path never sends tools (streams are non-JSON by contract)', async () => {
+    const f = vi.fn().mockResolvedValue(
+      new Response(
+        makeStream([
+          'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n',
+          'data: {"type":"message_stop"}\n\n',
+        ]),
+        { status: 200 },
+      ),
+    )
+    vi.stubGlobal('fetch', f)
+    await llmStream({ system: 's', user: 'u' }, () => {})
+    const reqBody = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string)
+    expect(reqBody.tools).toBeUndefined()
+    expect(reqBody.tool_choice).toBeUndefined()
+    expect(reqBody.stream).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Truncation detection — one wire marker per transport.
+// ---------------------------------------------------------------------------
+
+describe('truncation detection per transport', () => {
+  const TRUNCATED = '{"a": 1, "b": "unterminated'
+
+  it('openai-compat: finish_reason "length" marks the reply truncated', async () => {
+    setDeepseekKey('sk-test')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () =>
+        makeJsonResponse({ choices: [{ message: { content: TRUNCATED }, finish_reason: 'length' }] }),
+      ),
+    )
+    await expect(llmJsonWithRepair({ system: 's', user: 'u' }, (v) => v)).rejects.toMatchObject({
+      kind: 'invalid-output',
+      truncated: true,
+    })
+  })
+
+  it('openai-compat: finish_reason "stop" does NOT mark it truncated', async () => {
+    setDeepseekKey('sk-test')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () =>
+        makeJsonResponse({ choices: [{ message: { content: 'prose only' }, finish_reason: 'stop' }] }),
+      ),
+    )
+    await expect(llmJsonWithRepair({ system: 's', user: 'u' }, (v) => v)).rejects.toMatchObject({
+      kind: 'invalid-output',
+      truncated: false,
+    })
+  })
+
+  it('anthropic: stop_reason "max_tokens" marks the reply truncated', async () => {
+    setAiProvider('anthropic')
+    setAnthropicKey('sk-ant-test')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () =>
+        makeJsonResponse({ content: [{ type: 'text', text: TRUNCATED }], stop_reason: 'max_tokens' }),
+      ),
+    )
+    await expect(llmJsonWithRepair({ system: 's', user: 'u' }, (v) => v)).rejects.toMatchObject({
+      kind: 'invalid-output',
+      truncated: true,
+    })
+  })
+
+  it('anthropic: stop_reason "model_context_window_exceeded" also counts as truncated', async () => {
+    setAiProvider('anthropic')
+    setAnthropicKey('sk-ant-test')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () =>
+        makeJsonResponse({
+          content: [{ type: 'text', text: TRUNCATED }],
+          stop_reason: 'model_context_window_exceeded',
+        }),
+      ),
+    )
+    await expect(llmJsonWithRepair({ system: 's', user: 'u' }, (v) => v)).rejects.toMatchObject({
+      truncated: true,
+    })
+  })
+
+  it('anthropic: stop_reason "end_turn" does NOT mark it truncated', async () => {
+    setAiProvider('anthropic')
+    setAnthropicKey('sk-ant-test')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () =>
+        makeJsonResponse({ content: [{ type: 'text', text: 'prose only' }], stop_reason: 'end_turn' }),
+      ),
+    )
+    await expect(llmJsonWithRepair({ system: 's', user: 'u' }, (v) => v)).rejects.toMatchObject({
+      truncated: false,
+    })
+  })
+
+  it('gemini: finishReason "MAX_TOKENS" marks the reply truncated', async () => {
+    setAiProvider('gemini')
+    setGeminiKey('AIza-test')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () =>
+        makeJsonResponse({
+          candidates: [{ content: { parts: [{ text: TRUNCATED }] }, finishReason: 'MAX_TOKENS' }],
+        }),
+      ),
+    )
+    await expect(llmJsonWithRepair({ system: 's', user: 'u' }, (v) => v)).rejects.toMatchObject({
+      truncated: true,
+    })
+  })
+
+  it('gemini: finishReason "STOP" does NOT mark it truncated', async () => {
+    setAiProvider('gemini')
+    setGeminiKey('AIza-test')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () =>
+        makeJsonResponse({ candidates: [{ content: { parts: [{ text: 'prose' }] }, finishReason: 'STOP' }] }),
+      ),
+    )
+    await expect(llmJsonWithRepair({ system: 's', user: 'u' }, (v) => v)).rejects.toMatchObject({
+      truncated: false,
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// raisedTokenCap — the truncation retry's cap policy.
+// ---------------------------------------------------------------------------
+
+describe('raisedTokenCap', () => {
+  it('doubles a cap that stays under the ceiling', () => {
+    expect(raisedTokenCap(4096)).toBe(8192)
+    expect(raisedTokenCap(8192)).toBe(TRUNCATION_RETRY_TOKEN_CEILING)
+  })
+
+  it('clamps at the ceiling', () => {
+    expect(raisedTokenCap(12_000)).toBe(TRUNCATION_RETRY_TOKEN_CEILING)
+  })
+
+  it('never LOWERS a cap the caller set above the ceiling', () => {
+    expect(raisedTokenCap(64_000)).toBe(64_000)
+  })
+
+  it('an unset cap becomes the ceiling (the provider default was the limit that bit)', () => {
+    expect(raisedTokenCap(undefined)).toBe(TRUNCATION_RETRY_TOKEN_CEILING)
   })
 })
 

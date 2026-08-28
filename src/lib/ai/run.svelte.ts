@@ -481,6 +481,15 @@ const ERROR_DETAIL_MAX = 300
 /** Cap on the reason_detail analytics property — enough to classify the failure mix. */
 const REASON_DETAIL_MAX = 120
 
+/**
+ * The invalid-output lead line when the provider CUT THE REPLY OFF at its
+ * output budget. The generic "unexpected response format" sentence sent the
+ * user hunting for a malformed model; the real fix is a smaller task or a model
+ * with more output headroom, so say that.
+ */
+export const TRUNCATED_OUTPUT_MESSAGE =
+  "The model's reply was cut off — try a shorter task, or a model with a larger output budget."
+
 export interface TaskErrorInfo {
   /** LlmError kind, or 'unknown' for non-LlmError throws. */
   kind: string
@@ -488,6 +497,13 @@ export interface TaskErrorInfo {
   error: string
   /** The concrete upstream detail, when it adds information — see rules below. */
   errorDetail?: string
+  /**
+   * errorDetail MINUS any excerpt of MODEL OUTPUT — the ONLY form allowed into
+   * analytics. Model output can paraphrase the user's own code, which
+   * ai_task_failed.reason_detail must never carry; the excerpt exists purely
+   * for the local UI tooltip.
+   */
+  analyticsDetail?: string
 }
 
 /**
@@ -506,28 +522,50 @@ export interface TaskErrorInfo {
  *      classified errors (rate-limited / 5xx): withTransientRetry exhausts its
  *      retries before such an error can surface here, so this is knowable from
  *      classification alone — no retry-hook bookkeeping needed.
+ *   5. An invalid-output LlmError carrying `outputExcerpt` (a short, sanitized
+ *      sample of what the model actually returned) appends it to errorDetail
+ *      for the UI — and ONLY there: analyticsDetail omits it, because model
+ *      output is derived from the user's code and must never leave the browser.
+ *
+ * A TRUNCATED invalid-output failure also swaps the canned lead line for
+ * TRUNCATED_OUTPUT_MESSAGE, which names the real remedy.
  */
 export function describeTaskError(err: unknown): TaskErrorInfo {
   const kind = err instanceof LlmError ? err.kind : 'unknown'
-  const error = humanMessage(kind)
+  const truncated = err instanceof LlmError && err.truncated === true
+  const error = truncated && kind === 'invalid-output' ? TRUNCATED_OUTPUT_MESSAGE : humanMessage(kind)
   const rawMessage = err instanceof Error ? err.message : err == null ? '' : String(err)
   let raw = rawMessage.trim().slice(0, ERROR_DETAIL_MAX)
   if (raw === error || raw === `llm: ${kind}`) raw = ''
   const status = err instanceof LlmError ? err.status : undefined
   if (raw && status !== undefined && !raw.includes(`(${status})`)) raw = `HTTP ${status}: ${raw}`
   const retried = err instanceof LlmError && isTransientLlmError(err)
-  const errorDetail = retried
+  const analyticsDetail = retried
     ? (raw ? `${raw} — retried automatically before failing` : 'Retried automatically before failing')
     : raw
-  return { kind, error, ...(errorDetail ? { errorDetail } : {}) }
+  // The model-output excerpt rides on the UI detail only (see rule 5).
+  const excerpt = err instanceof LlmError ? err.outputExcerpt : undefined
+  const errorDetail = excerpt
+    ? (analyticsDetail ? `${analyticsDetail} — the model returned: ${excerpt}` : `The model returned: ${excerpt}`)
+    : analyticsDetail
+  return {
+    kind,
+    error,
+    ...(errorDetail ? { errorDetail } : {}),
+    ...(analyticsDetail ? { analyticsDetail } : {}),
+  }
 }
 
-/** ai_task_failed props for a described failure — reason + truncated reason_detail. */
+/**
+ * ai_task_failed props for a described failure — reason + truncated
+ * reason_detail. Reads analyticsDetail, NEVER errorDetail: the latter can carry
+ * an excerpt of model output (derived from the user's code).
+ */
 function failureProps(task: string, info: TaskErrorInfo): { task: string; reason: string; reason_detail?: string } {
   return {
     task,
     reason: info.kind,
-    ...(info.errorDetail ? { reason_detail: info.errorDetail.slice(0, REASON_DETAIL_MAX) } : {}),
+    ...(info.analyticsDetail ? { reason_detail: info.analyticsDetail.slice(0, REASON_DETAIL_MAX) } : {}),
   }
 }
 
@@ -1898,7 +1936,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // adds information — composed by describeTaskError, same as every task.
       // This reason is shown by the fallback note.
       const info = describeTaskError(err)
-      const reason = info.errorDetail ? `${info.error} — ${info.errorDetail}` : info.error
+      // analyticsDetail (not errorDetail): the story fallback note is a short
+      // muted line, so it takes the concrete reason WITHOUT the model-output
+      // excerpt — which belongs on the panel tooltip, not in a one-liner.
+      const reason = info.analyticsDetail ? `${info.error} — ${info.analyticsDetail}` : info.error
       track('ai_task_failed', failureProps('story', info))
       // Robustness win: instead of the generic 'error' state, ALWAYS degrade to
       // the deterministic structural walkthrough so Story mode renders. The
@@ -2637,12 +2678,15 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       } catch (err) {
         // describeTaskError composes kind + concrete detail with the SAME rules
         // as every task catch (status prefix, retried-automatically suffix).
+        // analyticsDetail, not errorDetail: a chunk's detail is merged into
+        // failureDetail, which feeds BOTH the UI note and ai_task_failed's
+        // reason_detail — so it must never carry a model-output excerpt.
         const info = describeTaskError(err)
         return {
           ok: false,
           kind: info.kind,
           indices: chunkDrafts.map((d) => d.index),
-          ...(info.errorDetail ? { detail: info.errorDetail } : {}),
+          ...(info.analyticsDetail ? { detail: info.analyticsDetail } : {}),
         }
       }
     }
@@ -2667,10 +2711,14 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // The failing chunk's concrete detail rides along for tooltips/analytics.
     if (merged.reviews.length === 0 && merged.failedIndices.length > 0) {
       const kind = merged.failureKind ?? 'unknown'
+      // failureDetail is already the analytics-safe form (the chunk catch feeds
+      // it from analyticsDetail), so both fields carry the same string here.
       const info: TaskErrorInfo = {
         kind,
         error: humanMessage(kind),
-        ...(merged.failureDetail ? { errorDetail: merged.failureDetail } : {}),
+        ...(merged.failureDetail
+          ? { errorDetail: merged.failureDetail, analyticsDetail: merged.failureDetail }
+          : {}),
       }
       track('ai_task_failed', failureProps('coach', info))
       return { error: info.error, ...(info.errorDetail ? { errorDetail: info.errorDetail } : {}) }
@@ -2698,7 +2746,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         ...failureProps('coach', {
           kind: merged.failureKind ?? 'unknown',
           error: reason,
-          ...(merged.failureDetail ? { errorDetail: merged.failureDetail } : {}),
+          ...(merged.failureDetail
+            ? { errorDetail: merged.failureDetail, analyticsDetail: merged.failureDetail }
+            : {}),
         }),
         partial: true,
       })
