@@ -11,10 +11,18 @@
  *                   Wire format: chat/completions. Key in Authorization: Bearer.
  *   anthropic      — Direct browser (anthropic-dangerous-direct-browser-access: true).
  *                   /v1/messages. SSE: content_block_delta events.
- *                   JSON mode = prompt-enforced (no response_format).
+ *                   JSON mode = FORCED TOOL USE (tools + tool_choice:{type:'tool'}),
+ *                   Anthropic's native structured-output mechanism — it has no
+ *                   response_format field.
  *   gemini         — Direct browser. :generateContent / :streamGenerateContent?alt=sse.
  *                   JSON via generationConfig.responseMimeType = application/json.
  *                   Key via x-goog-api-key header.
+ *
+ * Every non-streaming adapter also reports whether the provider TRUNCATED the
+ * reply at the output cap (openai `finish_reason:'length'`, anthropic
+ * `stop_reason:'max_tokens'`, gemini `finishReason:'MAX_TOKENS'`), so the JSON
+ * repair loop can raise the cap instead of echoing a cut-off body back into a
+ * prompt that already overflowed.
  */
 
 import { getSettings } from '../settings/settings'
@@ -22,6 +30,7 @@ import { gateFor } from './concurrencyGate'
 import { withTransientRetry } from './transientRetry'
 import { activeLlmConfig, PROVIDER_KEY_FIELDS } from './config'
 import { getProvider, getModelDef } from './providers'
+import { parseJsonLoose } from './jsonExtract'
 import type { LlmProviderDef, LlmModelDef, LlmProviderId } from './providers'
 
 // ---------------------------------------------------------------------------
@@ -42,16 +51,31 @@ export class LlmError extends Error {
   public readonly status?: number
   /** Parsed Retry-After header in ms (429s), when the provider sent one. */
   public readonly retryAfterMs?: number
+  /**
+   * The provider CUT THE REPLY OFF at the output-token cap ('invalid-output'
+   * only). A different user-facing story from "the model wrote nonsense":
+   * the task is too big for the model's output budget, not malformed.
+   */
+  public readonly truncated?: boolean
+  /**
+   * A short, sanitized excerpt of what the model actually returned
+   * ('invalid-output' only). UI/tooltip ONLY — it is model output, i.e. it can
+   * paraphrase the user's own code, so it is deliberately kept OUT of
+   * `message` (which is what feeds the analytics `reason_detail` property).
+   */
+  public readonly outputExcerpt?: string
 
   constructor(
     public readonly kind: LlmErrorKind,
     message?: string,
-    detail?: { status?: number; retryAfterMs?: number },
+    detail?: { status?: number; retryAfterMs?: number; truncated?: boolean; outputExcerpt?: string },
   ) {
     super(message ?? `llm: ${kind}`)
     this.name = 'LlmError'
     this.status = detail?.status
     this.retryAfterMs = detail?.retryAfterMs
+    this.truncated = detail?.truncated
+    this.outputExcerpt = detail?.outputExcerpt
   }
 }
 
@@ -68,6 +92,12 @@ export interface LlmUsage {
 export interface LlmCompleteResult {
   content: string
   usage?: LlmUsage
+  /**
+   * The provider stopped because the output-token cap was reached, so `content`
+   * is a PREFIX of the intended answer. Additive: every adapter sets it, no
+   * existing caller has to read it.
+   */
+  truncated?: boolean
 }
 
 export interface LlmStreamResult {
@@ -322,7 +352,7 @@ async function openaiCompatComplete(
   if (!res!.ok) await mapHttpError(res!)
 
   const data = (await res!.json()) as {
-    choices?: { message?: { content?: string | null } }[]
+    choices?: { message?: { content?: string | null }; finish_reason?: string | null }[]
     usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
   }
   const content = data?.choices?.[0]?.message?.content
@@ -338,7 +368,8 @@ async function openaiCompatComplete(
     }
   }
 
-  return { content, usage }
+  // OpenAI wire format: finish_reason 'length' == cut off at the token cap.
+  return { content, usage, truncated: data?.choices?.[0]?.finish_reason === 'length' }
 }
 
 async function openaiCompatStream(
@@ -456,8 +487,47 @@ async function openaiCompatStream(
 //                event: message_delta         data: { usage: { output_tokens } }
 //                Final usage in message_delta: { usage: { output_tokens } }
 //                Input usage in message_start: { message: { usage: { input_tokens, output_tokens } } }
-// JSON mode: prompt-enforced — no response_format (llmJsonWithRepair handles repair)
+// JSON mode: FORCED TOOL USE. Anthropic has no response_format; its native
+//            structured-output mechanism is `tool_choice: {type:'tool', name}`
+//            with a matching entry in `tools` (verified against
+//            platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools,
+//            2026-08). The model then answers ONLY with a tool_use block whose
+//            `input` is a JSON object — no prose, no fences, nothing to strip.
 // ===========================================================================
+
+/**
+ * The single tool the anthropic adapter forces in JSON mode. The schema is
+ * deliberately PERMISSIVE (`{type:'object'}`): the real shape-checking is done
+ * by the per-task validators in ai/schemas.ts, and every one of them expects a
+ * top-level object. A strict per-task input_schema would be a much larger
+ * change (each prompt's shape would have to be expressed twice) for no
+ * additional robustness here.
+ */
+export const ANTHROPIC_JSON_TOOL_NAME = 'respond_with_result'
+
+const ANTHROPIC_JSON_TOOL_DESCRIPTION =
+  'Return the requested result. Put the complete result object in this tool input — ' +
+  'calling this tool is the only way to answer.'
+
+/**
+ * Forced-tool JSON mode for the anthropic Messages API.
+ *
+ * NOT used by llmToolLoop.ts: that module builds its own anthropic request with
+ * the caller's REAL tools, and never routes through this adapter — so deep
+ * review / grounded verification can never collide with this forcing.
+ */
+function anthropicJsonModeFields(): Record<string, unknown> {
+  return {
+    tools: [
+      {
+        name: ANTHROPIC_JSON_TOOL_NAME,
+        description: ANTHROPIC_JSON_TOOL_DESCRIPTION,
+        input_schema: { type: 'object' },
+      },
+    ],
+    tool_choice: { type: 'tool', name: ANTHROPIC_JSON_TOOL_NAME },
+  }
+}
 
 // Exported for llmToolLoop.ts (Plan G) — shared transport plumbing, not public API.
 export function buildAnthropicHeaders(key: string): Record<string, string> {
@@ -477,13 +547,16 @@ async function anthropicComplete(
   keyOverride?: string,
 ): Promise<LlmCompleteResult> {
   const key = keyOverride ?? getKeyForProvider(provider)
-  const { system, user, signal, maxTokens, timeoutMs } = opts
+  const { system, user, json, signal, maxTokens, timeoutMs } = opts
 
   const body: Record<string, unknown> = {
     model: model.id,
     max_tokens: maxTokens ?? 4096,
     system,
     messages: [{ role: 'user', content: user }],
+    // Additive: a non-JSON completion (including llmTestConnection's ping) is
+    // byte-identical to before — no tools, no tool_choice.
+    ...(json ? anthropicJsonModeFields() : {}),
   }
 
   const effectiveSignal = signal ?? AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
@@ -503,12 +576,24 @@ async function anthropicComplete(
   if (!res!.ok) await mapHttpError(res!)
 
   const data = (await res!.json()) as {
-    content?: { type: string; text?: string }[]
+    content?: { type: string; text?: string; name?: string; input?: unknown }[]
+    stop_reason?: string | null
     usage?: { input_tokens?: number; output_tokens?: number }
   }
 
-  const textBlock = data?.content?.find((b) => b.type === 'text')
-  const content = textBlock?.text
+  const blocks = data?.content ?? []
+  // Forced-tool JSON mode answers with a tool_use block and NO text block.
+  const toolBlock = blocks.find((b) => b.type === 'tool_use' && b.name === ANTHROPIC_JSON_TOOL_NAME)
+  const textBlock = blocks.find((b) => b.type === 'text')
+
+  let content: string | undefined
+  if (toolBlock && toolBlock.input !== undefined && toolBlock.input !== null) {
+    content = JSON.stringify(toolBlock.input)
+  } else if (typeof textBlock?.text === 'string') {
+    // Fallback for any response that carries text instead — a gateway that
+    // drops `tools`, or a plain non-JSON completion. Keeps the old contract.
+    content = textBlock.text
+  }
   if (typeof content !== 'string') {
     throw new LlmError('server', 'Missing text content block in Anthropic response')
   }
@@ -523,7 +608,13 @@ async function anthropicComplete(
     }
   }
 
-  return { content, usage }
+  // Anthropic marks a cap-hit with stop_reason 'max_tokens'; a reply that fills
+  // the whole context window reports 'model_context_window_exceeded'. Both mean
+  // "this content is a prefix".
+  const truncated =
+    data?.stop_reason === 'max_tokens' || data?.stop_reason === 'model_context_window_exceeded'
+
+  return { content, usage, truncated }
 }
 
 async function anthropicStream(
@@ -713,7 +804,7 @@ async function geminiComplete(
   if (!res!.ok) await mapHttpError(res!)
 
   const data = (await res!.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[]
+    candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[]
     usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number }
   }
 
@@ -732,7 +823,8 @@ async function geminiComplete(
     }
   }
 
-  return { content: text, usage }
+  // Gemini marks a cap-hit with finishReason MAX_TOKENS.
+  return { content: text, usage, truncated: data?.candidates?.[0]?.finishReason === 'MAX_TOKENS' }
 }
 
 async function geminiStream(
@@ -976,6 +1068,167 @@ export async function llmStreamWithUsage(
   return dispatchStream(opts, onDelta, true)
 }
 
+// ===========================================================================
+// JSON-with-repair — ONE implementation behind the three public entry points
+//
+// The three exported variants used to be near-identical copies; they differ
+// ONLY in which transport they call and how they report usage, so that is all
+// their wrappers still do.
+//
+// Per attempt:
+//   1. TOLERANT parse — extractJsonCandidate unwraps ```json fences, prose
+//      preambles/suffixes, a stray trailing fence and trailing commas before
+//      declaring a parse failure. A model that returned perfectly good JSON
+//      inside a fence used to fail here instantly.
+//   2. validate() — a null return is a SCHEMA failure, deliberately kept
+//      distinguishable from a parse failure in the error we finally throw.
+//
+// Between attempts, the retry depends on WHY the first one failed:
+//   - TRUNCATED (the provider cut the reply at the output cap): do NOT echo the
+//     body back — that is what turned one overflow into two. Retry with a
+//     raised output cap and an instruction to be concise.
+//   - anything else: the original repair prompt, with the echoed previous
+//     output capped and honestly marked.
+// ===========================================================================
+
+/** How much of a previous output is echoed into a (non-truncation) repair prompt. */
+export const REPAIR_ECHO_MAX_CHARS = 2_000
+
+/** Cap on the sanitized model-output excerpt carried on an invalid-output error. */
+export const OUTPUT_EXCERPT_MAX_CHARS = 200
+
+/**
+ * Ceiling for the raised output cap on a truncation retry. 16k is comfortably
+ * inside every model in the catalog's output limit (Anthropic 4.6+/Opus 128k,
+ * OpenAI GPT-5.x 128k, Gemini 3.x 64k, DeepSeek V4 384k, OpenRouter normalizes
+ * per upstream), so the retry can never 400 on an over-large cap — which would
+ * turn a recoverable truncation into a hard failure.
+ */
+export const TRUNCATION_RETRY_TOKEN_CEILING = 16_384
+
+/** The raised cap for a truncation retry, or undefined to leave it unset. */
+export function raisedTokenCap(current: number | undefined): number | undefined {
+  if (current === undefined) return TRUNCATION_RETRY_TOKEN_CEILING
+  // Never LOWER a cap the caller deliberately set above the ceiling.
+  if (current >= TRUNCATION_RETRY_TOKEN_CEILING) return current
+  return Math.min(current * 2, TRUNCATION_RETRY_TOKEN_CEILING)
+}
+
+/** One-line, control-character-free excerpt of a model reply, capped. */
+function outputExcerpt(text: string): string | undefined {
+  // Strip C0/C1 control characters first (a raw reply can carry them), then
+  // collapse all whitespace so the excerpt is a single tooltip-safe line.
+  const clean = text
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (clean === "") return undefined
+  return clean.length > OUTPUT_EXCERPT_MAX_CHARS
+    ? `${clean.slice(0, OUTPUT_EXCERPT_MAX_CHARS)}\u2026`
+    : clean
+}
+/** Previous output for the repair prompt — capped, with the cut declared. */
+function echoForRepair(text: string): string {
+  if (text.length <= REPAIR_ECHO_MAX_CHARS) return text
+  const dropped = text.length - REPAIR_ECHO_MAX_CHARS
+  return `${text.slice(0, REPAIR_ECHO_MAX_CHARS)}\n…[first ${REPAIR_ECHO_MAX_CHARS} characters only; ${dropped} more omitted]`
+}
+
+type JsonFailure = 'parse' | 'schema'
+
+interface JsonAttempt<T> {
+  /** The validated value, or null when this attempt failed. */
+  value: T | null
+  /** Why it failed (null when it succeeded). */
+  failure: JsonFailure | null
+  /** The raw model reply. */
+  content: string
+  /** The provider cut the reply off at the output cap. */
+  truncated: boolean
+  usage?: LlmUsage
+}
+
+/** A completion bound to a transport — the only thing the three variants differ in. */
+type JsonCall = (opts: LlmCompleteOpts) => Promise<LlmCompleteResult>
+
+async function jsonAttempt<T>(
+  call: JsonCall,
+  opts: LlmCompleteOpts,
+  validate: (x: unknown) => T | null,
+): Promise<JsonAttempt<T>> {
+  const { content, usage, truncated } = await call({ ...opts, json: true })
+  const parsed = parseJsonLoose(content)
+  if (!parsed.ok) {
+    return { value: null, failure: 'parse', content, truncated: truncated === true, usage }
+  }
+  const value = validate(parsed.value)
+  return {
+    value,
+    failure: value === null ? 'schema' : null,
+    content,
+    truncated: truncated === true,
+    usage,
+  }
+}
+
+function repairPrompt(user: string, attempt: JsonAttempt<unknown>): string {
+  const reason =
+    attempt.failure === 'schema'
+      ? 'Output did not match expected schema'
+      : 'No valid JSON could be parsed from the reply'
+  return `${user}\n\nYour previous output was invalid: ${reason}. Previous output:\n${echoForRepair(attempt.content)}\nRespond with corrected JSON only.`
+}
+
+function concisionPrompt(user: string): string {
+  return (
+    `${user}\n\nYour previous reply was CUT OFF before it finished — it ran past the output limit. ` +
+    'Answer again from scratch with complete, valid JSON only, keeping every string field as short as ' +
+    'it can be while staying accurate. Do not restate or continue the previous reply.'
+  )
+}
+
+/** The final, honest invalid-output error for a failed repair loop. */
+function invalidOutputError(last: JsonAttempt<unknown>): LlmError {
+  const cause =
+    last.failure === 'schema'
+      ? 'the JSON did not match the expected shape'
+      : 'no valid JSON could be parsed from the reply'
+  // Truncation is claimed from the LAST attempt only: a complete-but-wrong
+  // shape is a schema problem even when an EARLIER attempt was cut off.
+  const cut = last.truncated ? ' (the model’s reply was cut off at the output limit)' : ''
+  return new LlmError('invalid-output', `LLM produced invalid JSON after repair retry — ${cause}${cut}`, {
+    truncated: last.truncated,
+    outputExcerpt: outputExcerpt(last.content),
+  })
+}
+
+/** Usage from both attempts; the wrappers decide what to report. */
+interface JsonRepairOutcome<T> {
+  result: T
+  usage1?: LlmUsage
+  usage2?: LlmUsage
+}
+
+async function jsonWithRepair<T>(
+  call: JsonCall,
+  opts: LlmCompleteOpts,
+  validate: (x: unknown) => T | null,
+): Promise<JsonRepairOutcome<T>> {
+  const first = await jsonAttempt(call, opts, validate)
+  if (first.value !== null) return { result: first.value, usage1: first.usage }
+
+  const retryOpts: LlmCompleteOpts = first.truncated
+    ? { ...opts, user: concisionPrompt(opts.user), maxTokens: raisedTokenCap(opts.maxTokens) }
+    : { ...opts, user: repairPrompt(opts.user, first) }
+
+  const second = await jsonAttempt(call, retryOpts, validate)
+  if (second.value !== null) {
+    return { result: second.value, usage1: first.usage, usage2: second.usage }
+  }
+
+  throw invalidOutputError(second)
+}
+
 // ---------------------------------------------------------------------------
 // llmJsonWithRepair
 // ---------------------------------------------------------------------------
@@ -984,91 +1237,21 @@ export async function llmJsonWithRepair<T>(
   opts: LlmCompleteOpts,
   validate: (x: unknown) => T | null,
 ): Promise<T> {
-  // First attempt
-  const output1 = await llmComplete({ ...opts, json: true })
-
-  let parsed1: unknown
-  let error1: string | null = null
-
-  try {
-    parsed1 = JSON.parse(output1)
-  } catch (err) {
-    error1 = err instanceof Error ? err.message : String(err)
-  }
-
-  if (error1 === null) {
-    const valid1 = validate(parsed1)
-    if (valid1 !== null) return valid1
-    error1 = 'Output did not match expected schema'
-  }
-
-  // One repair retry
-  const repairUser =
-    `${opts.user}\n\nYour previous output was invalid: ${error1}. Previous output:\n${output1}\nRespond with corrected JSON only.`
-
-  const output2 = await llmComplete({ ...opts, user: repairUser, json: true })
-
-  let parsed2: unknown
-  let error2: string | null = null
-
-  try {
-    parsed2 = JSON.parse(output2)
-  } catch (err) {
-    error2 = err instanceof Error ? err.message : String(err)
-  }
-
-  if (error2 === null) {
-    const valid2 = validate(parsed2)
-    if (valid2 !== null) return valid2
-  }
-
-  throw new LlmError('invalid-output', 'LLM produced invalid JSON after repair retry')
+  const { result } = await jsonWithRepair((o) => dispatchComplete(o, false), opts, validate)
+  return result
 }
 
 // ---------------------------------------------------------------------------
-// llmJsonWithRepairWithUsage
+// llmJsonWithRepairWithUsage — reports the FIRST attempt's usage (unchanged:
+// the repair pass has never been billed into a task's token total here).
 // ---------------------------------------------------------------------------
 
 export async function llmJsonWithRepairWithUsage<T>(
   opts: LlmCompleteOpts,
   validate: (x: unknown) => T | null,
 ): Promise<LlmJsonWithRepairResult<T>> {
-  // First attempt via llmCompleteWithUsage to capture usage
-  const { content: output1, usage } = await llmCompleteWithUsage({ ...opts, json: true })
-
-  let parsed1: unknown
-  let error1: string | null = null
-  try {
-    parsed1 = JSON.parse(output1)
-  } catch (err) {
-    error1 = err instanceof Error ? err.message : String(err)
-  }
-
-  if (error1 === null) {
-    const valid1 = validate(parsed1)
-    if (valid1 !== null) return { result: valid1, usage }
-    error1 = 'Output did not match expected schema'
-  }
-
-  // One repair retry — via plain llmComplete (no usage needed for retry)
-  const repairUser =
-    `${opts.user}\n\nYour previous output was invalid: ${error1}. Previous output:\n${output1}\nRespond with corrected JSON only.`
-  const output2 = await llmComplete({ ...opts, user: repairUser, json: true })
-
-  let parsed2: unknown
-  let error2: string | null = null
-  try {
-    parsed2 = JSON.parse(output2)
-  } catch (err) {
-    error2 = err instanceof Error ? err.message : String(err)
-  }
-
-  if (error2 === null) {
-    const valid2 = validate(parsed2)
-    if (valid2 !== null) return { result: valid2, usage }
-  }
-
-  throw new LlmError('invalid-output', 'LLM produced invalid JSON after repair retry')
+  const { result, usage1 } = await jsonWithRepair((o) => dispatchComplete(o, true), opts, validate)
+  return { result, usage: usage1 }
 }
 
 // ---------------------------------------------------------------------------
@@ -1076,8 +1259,8 @@ export async function llmJsonWithRepairWithUsage<T>(
 //
 // Same two-attempt repair loop as llmJsonWithRepair, but every call routes
 // through the SPECIFIED provider config's transport (with its own key + model)
-// instead of the active provider. Returns usage so verifier cost can be folded
-// into per-PR / per-task totals.
+// instead of the active provider. SUMS both attempts' usage so verifier cost is
+// fully folded into per-PR / per-task totals.
 // ---------------------------------------------------------------------------
 
 export async function llmJsonWithRepairFor<T>(
@@ -1085,52 +1268,20 @@ export async function llmJsonWithRepairFor<T>(
   opts: LlmCompleteOpts,
   validate: (x: unknown) => T | null,
 ): Promise<LlmJsonWithRepairResult<T>> {
-  const { content: output1, usage: usage1 } = await dispatchCompleteFor(cfg, { ...opts, json: true }, true)
-
-  let parsed1: unknown
-  let error1: string | null = null
-  try {
-    parsed1 = JSON.parse(output1)
-  } catch (err) {
-    error1 = err instanceof Error ? err.message : String(err)
-  }
-
-  if (error1 === null) {
-    const valid1 = validate(parsed1)
-    if (valid1 !== null) return { result: valid1, usage: usage1 }
-    error1 = 'Output did not match expected schema'
-  }
-
-  const repairUser =
-    `${opts.user}\n\nYour previous output was invalid: ${error1}. Previous output:\n${output1}\nRespond with corrected JSON only.`
-  const { content: output2, usage: usage2 } = await dispatchCompleteFor(
-    cfg,
-    { ...opts, user: repairUser, json: true },
-    true,
+  const { result, usage1, usage2 } = await jsonWithRepair(
+    (o) => dispatchCompleteFor(cfg, o, true),
+    opts,
+    validate,
   )
-
-  let parsed2: unknown
-  let error2: string | null = null
-  try {
-    parsed2 = JSON.parse(output2)
-  } catch (err) {
-    error2 = err instanceof Error ? err.message : String(err)
-  }
-
-  const usage = usage1 && usage2
-    ? {
-        prompt_tokens: usage1.prompt_tokens + usage2.prompt_tokens,
-        completion_tokens: usage1.completion_tokens + usage2.completion_tokens,
-        total_tokens: usage1.total_tokens + usage2.total_tokens,
-      }
-    : (usage2 ?? usage1)
-
-  if (error2 === null) {
-    const valid2 = validate(parsed2)
-    if (valid2 !== null) return { result: valid2, usage }
-  }
-
-  throw new LlmError('invalid-output', 'LLM produced invalid JSON after repair retry')
+  const usage =
+    usage1 && usage2
+      ? {
+          prompt_tokens: usage1.prompt_tokens + usage2.prompt_tokens,
+          completion_tokens: usage1.completion_tokens + usage2.completion_tokens,
+          total_tokens: usage1.total_tokens + usage2.total_tokens,
+        }
+      : (usage2 ?? usage1)
+  return { result, usage }
 }
 
 // ---------------------------------------------------------------------------
