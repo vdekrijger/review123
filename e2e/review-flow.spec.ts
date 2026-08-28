@@ -527,6 +527,13 @@ async function setupRoutes(
      * contents) so the deterministic outcome↔test join can resolve a chip.
      */
     withTestFile?: boolean
+    /**
+     * JSON robustness: wrap every JSON-task reply in a ```json code fence and a
+     * prose preamble/suffix — exactly what a model that ignores "JSON only"
+     * returns. Before the tolerant extractor this failed EVERY Understand-step
+     * task with "LLM produced invalid JSON after repair retry".
+     */
+    fencedJson?: boolean
   } = {},
 ) {
   // Block PostHog analytics
@@ -758,6 +765,12 @@ async function setupRoutes(
       result = VERDICT_RESULT
     }
 
+    // A "chatty" model wraps its JSON in a fence and prose. Valid JSON, but the
+    // raw string is not — the transport must unwrap it rather than fail.
+    const content = opts.fencedJson
+      ? `Sure — here is the result:\n\n\`\`\`json\n${JSON.stringify(result)}\n\`\`\`\n\nLet me know if you need anything else.`
+      : JSON.stringify(result)
+
     return route.fulfill({
       status: 200,
       json: {
@@ -765,7 +778,7 @@ async function setupRoutes(
         object: 'chat.completion',
         choices: [
           {
-            message: { role: 'assistant', content: JSON.stringify(result) },
+            message: { role: 'assistant', content },
             finish_reason: 'stop',
             index: 0,
           },
@@ -2761,4 +2774,42 @@ test('expected outcomes: rows render with a deterministic test chip, the no-test
   // The necessity footer renders quietly at the bottom.
   await expect(outcomesPanel.getByText('Without this change:')).toBeVisible()
   await expect(outcomesPanel.getByText('Greetings stay unformatted without this change.')).toBeVisible()
+})
+
+// ---------------------------------------------------------------------------
+// JSON robustness: a model that wraps its JSON in a ```json fence + prose.
+//
+// Every JSON-task reply here is VALID JSON inside a fence. Before the tolerant
+// extractor landed, JSON.parse ran on the raw string, so each Understand-step
+// task failed with "LLM produced invalid JSON after repair retry" — the exact
+// production report this test pins.
+// ---------------------------------------------------------------------------
+
+test('fenced-JSON replies: Understand-step panels still populate (no invalid-JSON error)', async ({ page }) => {
+  await setupRoutes(page, { fencedJson: true })
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, seedSettings(false))
+
+  await page.goto(APP_REVIEW_UNDERSTAND)
+  await expect(
+    page.getByRole('heading', { name: /Test PR: add feature/i }),
+  ).toBeVisible({ timeout: 10_000 })
+
+  // Intent check parses out of the fence and renders its aligned outcome.
+  const intentPanel = page.locator('details.detail-panel.intent-panel')
+  await expect(intentPanel).toBeVisible({ timeout: 10_000 })
+  await intentPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+  await expect(
+    intentPanel.getByText(/Implementation matches the stated intent \(1 intent verified\)/),
+  ).toBeVisible({ timeout: 15_000 })
+
+  // Expected outcomes — a second, independently-parsed JSON task.
+  const outcomesPanel = page.locator('details.detail-panel.outcomes-panel')
+  await expect(outcomesPanel).toBeVisible({ timeout: 10_000 })
+  await outcomesPanel.evaluate((el: HTMLDetailsElement) => { el.open = true })
+  await expect(outcomesPanel.getByText('Without this change:')).toBeVisible({ timeout: 15_000 })
+
+  // The canned invalid-output copy must appear nowhere on the step.
+  await expect(page.getByText(/unexpected response format/i)).toHaveCount(0)
 })

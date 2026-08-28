@@ -2415,4 +2415,60 @@ describe('task failure surfaces errorDetail (state + reason_detail analytics)', 
     expect(failedCall).toBeTruthy()
     expect('reason_detail' in (failedCall![1] as Record<string, unknown>)).toBe(false)
   })
+
+  it('a model-output EXCERPT reaches the panel tooltip but NEVER reason_detail', async () => {
+    const deps = makeDeps()
+    // What a real invalid-output failure now carries: the concrete cause in the
+    // message, plus a sanitized sample of the model's reply.
+    deps.llmJsonWithRepair.mockImplementation(async (_opts: unknown, validate: ValidateFn) => {
+      if (validate(ATTENTION_RESULT) !== null) {
+        throw new LlmError(
+          'invalid-output',
+          'LLM produced invalid JSON after repair retry — no valid JSON could be parsed from the reply',
+          { truncated: false, outputExcerpt: 'I looked at src/internal/billing.ts and think that' },
+        )
+      }
+      return defaultJsonDispatch(_opts, validate)
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.attention.status).toBe('error')
+    expect(run.attention.errorDetail).toContain('no valid JSON could be parsed')
+    expect(run.attention.errorDetail).toContain('billing.ts')
+
+    const failedCall = deps.track.mock.calls.find(
+      (c: unknown[]) => c[0] === 'ai_task_failed' && (c[1] as Record<string, unknown>)['task'] === 'attention',
+    )
+    const props = failedCall![1] as Record<string, unknown>
+    expect(props['reason']).toBe('invalid-output')
+    expect(props['reason_detail']).toContain('no valid JSON could be parsed')
+    // The privacy boundary: model output paraphrases the user's code.
+    expect(props['reason_detail']).not.toContain('billing.ts')
+    expect(props['reason_detail']).not.toContain('the model returned')
+    expect((props['reason_detail'] as string).length).toBeLessThanOrEqual(120)
+  })
+
+  it('a TRUNCATED invalid-output shows the cut-off lead line instead of the canned one', async () => {
+    const deps = makeDeps()
+    deps.llmJsonWithRepair.mockImplementation(async (_opts: unknown, validate: ValidateFn) => {
+      if (validate(ATTENTION_RESULT) !== null) {
+        throw new LlmError(
+          'invalid-output',
+          'LLM produced invalid JSON after repair retry — no valid JSON could be parsed from the reply (the model’s reply was cut off at the output limit)',
+          { truncated: true },
+        )
+      }
+      return defaultJsonDispatch(_opts, validate)
+    })
+
+    const run = createAiRun(makeInput(), deps)
+    await run.start()
+
+    expect(run.attention.status).toBe('error')
+    expect(run.attention.error).toMatch(/cut off/i)
+    expect(run.attention.error).toMatch(/larger output budget/i)
+    expect(run.attention.error).not.toMatch(/unexpected response format/i)
+  })
 })

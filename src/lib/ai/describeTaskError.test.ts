@@ -12,7 +12,7 @@
  *       - a 300-char cap on the raw message
  */
 import { describe, it, expect } from 'vitest'
-import { describeTaskError } from './run.svelte'
+import { describeTaskError, TRUNCATED_OUTPUT_MESSAGE } from './run.svelte'
 import { LlmError } from '../llm/llm'
 
 describe('describeTaskError — kind and canned sentence', () => {
@@ -96,5 +96,82 @@ describe('describeTaskError — transient errors note the automatic retries', ()
   it('non-transient statuses (4xx) get NO retried note — the transport never retried them', () => {
     const info = describeTaskError(new LlmError('server', 'Server error (400): bad request', { status: 400 }))
     expect(info.errorDetail).toBe('Server error (400): bad request')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// invalid-output: truncation copy, parse-vs-schema, and the analytics boundary
+// ---------------------------------------------------------------------------
+
+describe('describeTaskError — truncated invalid-output gets its own lead line', () => {
+  it('a TRUNCATED invalid-output names the real remedy, not "unexpected response format"', () => {
+    const info = describeTaskError(
+      new LlmError('invalid-output', 'LLM produced invalid JSON after repair retry — x', { truncated: true }),
+    )
+    expect(info.kind).toBe('invalid-output')
+    expect(info.error).toBe(TRUNCATED_OUTPUT_MESSAGE)
+    expect(info.error).toMatch(/cut off/i)
+    expect(info.error).toMatch(/larger output budget/i)
+  })
+
+  it('a NON-truncated invalid-output keeps the generic format sentence', () => {
+    const info = describeTaskError(
+      new LlmError('invalid-output', 'LLM produced invalid JSON after repair retry — y', { truncated: false }),
+    )
+    expect(info.error).toMatch(/unexpected response format/i)
+    expect(info.error).not.toBe(TRUNCATED_OUTPUT_MESSAGE)
+  })
+
+  it('the truncation lead line is NOT applied to other kinds carrying the flag', () => {
+    const info = describeTaskError(new LlmError('server', 'boom', { truncated: true, status: 500 }))
+    expect(info.error).not.toBe(TRUNCATED_OUTPUT_MESSAGE)
+  })
+
+  it('parse vs schema stays distinguishable in the detail', () => {
+    const parseInfo = describeTaskError(
+      new LlmError(
+        'invalid-output',
+        'LLM produced invalid JSON after repair retry — no valid JSON could be parsed from the reply',
+      ),
+    )
+    const schemaInfo = describeTaskError(
+      new LlmError(
+        'invalid-output',
+        'LLM produced invalid JSON after repair retry — the JSON did not match the expected shape',
+      ),
+    )
+    expect(parseInfo.errorDetail).toMatch(/no valid JSON could be parsed/i)
+    expect(schemaInfo.errorDetail).toMatch(/did not match the expected shape/i)
+    expect(parseInfo.errorDetail).not.toBe(schemaInfo.errorDetail)
+  })
+})
+
+describe('describeTaskError — the model-output excerpt is UI-only', () => {
+  const withExcerpt = new LlmError('invalid-output', 'LLM produced invalid JSON after repair retry — parse', {
+    outputExcerpt: 'Sure! Here is the summary of src/secret.ts …',
+  })
+
+  it('errorDetail carries the excerpt for the tooltip', () => {
+    const info = describeTaskError(withExcerpt)
+    expect(info.errorDetail).toContain('the model returned: Sure! Here is the summary')
+  })
+
+  it('analyticsDetail — the ONLY form allowed into PostHog — omits it', () => {
+    const info = describeTaskError(withExcerpt)
+    expect(info.analyticsDetail).toBeDefined()
+    expect(info.analyticsDetail).not.toContain('secret.ts')
+    expect(info.analyticsDetail).not.toContain('the model returned')
+    expect(info.analyticsDetail).toContain('LLM produced invalid JSON after repair retry')
+  })
+
+  it('an error with no excerpt has errorDetail === analyticsDetail (unchanged shape)', () => {
+    const info = describeTaskError(new LlmError('server', 'Server error (503): overloaded', { status: 503 }))
+    expect(info.errorDetail).toBe(info.analyticsDetail)
+  })
+
+  it('an excerpt alone (no other detail) still renders a UI detail', () => {
+    const info = describeTaskError(new LlmError('invalid-output', undefined, { outputExcerpt: 'blah' }))
+    expect(info.errorDetail).toBe('The model returned: blah')
+    expect(info.analyticsDetail).toBeUndefined()
   })
 })

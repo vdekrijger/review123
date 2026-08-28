@@ -33,6 +33,15 @@ const EVENTS = {
   // already guarantees key-free bodies; providers do not echo request bodies).
   // Added so the failure mix is measurable (which real reasons dominate each
   // kind) instead of a 7-value enum.
+  // PRIVACY BOUNDARY (JSON robustness): an 'invalid-output' failure ALSO knows
+  // a short excerpt of what the MODEL actually returned — which paraphrases the
+  // user's own code and must never be sent. That excerpt lives on
+  // TaskErrorInfo.errorDetail (local UI tooltip only); reason_detail is fed
+  // exclusively from TaskErrorInfo.analyticsDetail, which omits it and carries
+  // only the machine-classified cause ("no valid JSON could be parsed from the
+  // reply" / "the JSON did not match the expected shape", plus whether the
+  // reply was cut off at the output limit). No new property is needed: the
+  // truncation signal rides inside that same classified sentence.
   ai_task_failed: ['task', 'reason', 'reason_detail', 'partial'],
   // PRIVACY DECISION (robust big-PR story): fired when the story task degrades
   // to the deterministic structural walkthrough (AI ordering failed or returned
