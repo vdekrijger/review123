@@ -65,6 +65,16 @@
       <p class="error-detail">{state.errorDetail}</p>
     {/if}
   </div>
+{:else if state.status === 'cancelled'}
+  <!-- The request was CANCELLED, not failed (LlmError kind 'aborted'). Calm and
+       muted: no role="alert", no red chip, no error-styled "Retry" — those are
+       what made an internal cancellation read as "the user aborted a request,
+       please click to try again". A plain "run again" link still offers a way
+       back, because a cancellation we did not initiate (page teardown, an
+       extension) would otherwise strand the panel with no recovery. -->
+  <div class="ai-panel-cancelled">
+    Cancelled — <button class="link-btn" onclick={onretry}>run again</button>
+  </div>
 {:else if state.status === 'no-key'}
   <div class="ai-panel-no-key">
     Add {article} {providerName} key in <a href="/settings" onclick={goToSettings}>Settings</a>
@@ -167,6 +177,24 @@
 
   .ai-panel-disabled a {
     color: var(--accent);
+  }
+
+  /* Cancelled: the same quiet treatment as 'disabled' — muted, no error
+     colour, no chip. The affordance is a link, not an error button. */
+  .ai-panel-cancelled {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    padding: 0.4rem 0;
+  }
+
+  .link-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: underline;
   }
 
   .ai-panel-note {

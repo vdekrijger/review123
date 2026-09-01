@@ -195,14 +195,20 @@ describe('llmComplete — status mappings', () => {
 // ---------------------------------------------------------------------------
 
 describe('llmComplete — signal passthrough', () => {
-  it('passes a caller-supplied signal to fetch', async () => {
+  // Was: `expect(init.signal).toBe(ctrl.signal)`. The adapter now COMPOSES the
+  // caller's signal with the per-request timeout (AbortSignal.any) instead of
+  // substituting one for the other, so the identity no longer holds — but the
+  // caller's cancellation must still reach fetch, which is what this pins.
+  it('a caller-supplied signal still cancels the fetch (composed, not replaced)', async () => {
     setDeepseekKey('sk-x')
     const f = vi.fn().mockResolvedValue(makeJsonResponse(completionBody('ok')))
     vi.stubGlobal('fetch', f)
     const ctrl = new AbortController()
     await llmComplete({ system: 's', user: 'u', signal: ctrl.signal })
-    const init = (f.mock.calls[0] as [string, RequestInit])[1]
-    expect(init.signal).toBe(ctrl.signal)
+    const passed = (f.mock.calls[0] as [string, RequestInit])[1].signal as AbortSignal
+    expect(passed.aborted).toBe(false)
+    ctrl.abort()
+    expect(passed.aborted).toBe(true)
   })
 })
 
@@ -673,11 +679,13 @@ describe('llmTestConnection — output-token cap field', () => {
 // ---------------------------------------------------------------------------
 // timeoutMs — size-aware per-request timeout threading (fix/ai-task-hardening)
 //
-// Adapters build `signal ?? AbortSignal.timeout(timeoutMs ?? 60_000)` per
-// attempt. We spy on AbortSignal.timeout to assert the window that was built:
+// Adapters build `AbortSignal.timeout(timeoutMs ?? 60_000)` per attempt and
+// COMPOSE it with any caller signal. We spy on AbortSignal.timeout to assert
+// the window that was built:
 //   - default stays 60s when timeoutMs is not passed
 //   - an explicit timeoutMs is honored
-//   - an explicit `signal` takes full control (no adapter-built timeout)
+//   - an explicit `signal` NO LONGER disables the timeout (fix/abort-handling:
+//     it used to, leaving those calls able to hang forever)
 //   - every transient-retry attempt rebuilds a FRESH full window
 // ---------------------------------------------------------------------------
 
@@ -705,12 +713,12 @@ describe('llmComplete — timeoutMs threading', () => {
     expect(spy).not.toHaveBeenCalledWith(60_000)
   })
 
-  it('an explicit signal takes precedence — no adapter-built timeout at all', async () => {
+  it('an explicit signal does NOT disable the timeout — both apply', async () => {
     const spy = vi.spyOn(AbortSignal, 'timeout')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse(completionBody('ok'))))
     const ctrl = new AbortController()
     await llmComplete({ system: 's', user: 'u', timeoutMs: 120_000, signal: ctrl.signal })
-    expect(spy).not.toHaveBeenCalled()
+    expect(spy).toHaveBeenCalledWith(120_000)
   })
 
   it('each transient-retry attempt rebuilds a fresh full window', async () => {

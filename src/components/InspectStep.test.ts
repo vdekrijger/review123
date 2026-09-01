@@ -397,6 +397,34 @@ describe('InspectStep — reviewer chip → finding navigation', () => {
     expect(spy).not.toHaveBeenCalled()
   })
 
+  // fix/abort-handling: a CANCELLED reviewer used to fall through the chip
+  // if-chain to the "⏳ queued" chip, which claims it is still waiting for a
+  // slot. It gets its own quiet chip — never the error chip, never "failed".
+  it('cancelled chip is quiet: not the error chip, not the misleading queued chip', () => {
+    const files = makeFiles(['a.ts'])
+    const cancelled: SkillReviewEntry = {
+      skillId, name: reviewerName, state: { status: 'cancelled' },
+    }
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [cancelled] } })
+    expect(container.querySelector('.chip-error')).toBeNull()
+    const chip = container.querySelector('.skill-status-chip')!
+    expect(chip.textContent).toMatch(/cancelled/i)
+    expect(chip.textContent).not.toMatch(/queued/i)
+    expect(chip.getAttribute('aria-label')).not.toMatch(/failed/i)
+  })
+
+  it('cancelled chip re-runs just that reviewer when a retry handler is wired', async () => {
+    const files = makeFiles(['a.ts'])
+    const onRetrySkill = vi.fn()
+    const cancelled: SkillReviewEntry = {
+      skillId, name: reviewerName, state: { status: 'cancelled' },
+    }
+    render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null, skillReviews: [cancelled], onRetrySkill } })
+    const btn = screen.getByRole('button', { name: new RegExp(`${reviewerName} cancelled`, 'i') })
+    await fireEvent.click(btn)
+    expect(onRetrySkill).toHaveBeenCalledWith(skillId)
+  })
+
   it('null-line finding lives in the popover (no separate bottom card) and jumps to its key', async () => {
     const spy = vi.spyOn(jumpToFileMod, 'jumpToFinding').mockImplementation(() => {})
     const files = makeFiles(['a.ts'])

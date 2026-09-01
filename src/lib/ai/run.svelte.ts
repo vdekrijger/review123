@@ -151,6 +151,22 @@ export type PanelStatus =
    * "No stated intent to check — the PR description is empty." state.
    */
   | 'skipped'
+  /**
+   * The task's request was CANCELLED, not failed — an abort that was not our
+   * own request timeout (LlmError kind 'aborted'): a deliberate internal
+   * cancellation, or the page/extension tearing the request down.
+   *
+   * A SEPARATE status rather than reusing 'idle' or 'skipped' on purpose:
+   *   - 'idle' renders the loading skeleton (AiPanel treats it as pending), so
+   *     a cancelled task would spin forever.
+   *   - 'skipped' means "there was nothing to do" and is claimed by the intent
+   *     panel's own copy ("no stated intent to check") — a cancelled task DID
+   *     have work to do.
+   * The panel renders a calm muted "Cancelled — run again" line: no red chip,
+   * no alert role, no "try again" error affordance. failTask never emits
+   * ai_task_failed for it, and a later re-run behaves exactly as before.
+   */
+  | 'cancelled'
 
 export interface PanelState<T> {
   status: PanelStatus
@@ -456,7 +472,7 @@ interface AiRunDeps {
 // Human-readable error messages per LlmError kind
 // ---------------------------------------------------------------------------
 
-function humanMessage(kind: string): string {
+export function humanMessage(kind: string): string {
   // Name the ACTIVE provider (Plan F) — not hardwired to DeepSeek.
   const provider = activeLlmConfig().provider.displayName
   switch (kind) {
@@ -465,10 +481,37 @@ function humanMessage(kind: string): string {
     case 'rate-limited': return `Rate limited by ${provider}. Please try again in a moment.`
     case 'server': return `${provider} server error. Please try again later.`
     case 'network': return `Network error reaching ${provider}. Check your connection.`
-    case 'timeout': return `Request to ${provider} timed out. Please try again.`
+    // Honest + actionable: a timeout is the MODEL being slow, not the user's
+    // connection, and the real remedy is usually a faster model. The old
+    // "Request to X timed out. Please try again." read as a network blip.
+    case 'timeout': return `The ${provider} model took too long to respond — retry, or pick a faster model.`
     case 'invalid-output': return 'AI returned an unexpected response format. Please retry.'
+    // Never rendered by the panels (a cancellation takes the 'cancelled'
+    // status, not the error state) — present so any surface that DOES fall
+    // back to the canned sentence stays calm and never blames the user.
+    case 'aborted': return CANCELLED_TASK_MESSAGE
     default: return 'An unexpected error occurred. Please retry.'
   }
+}
+
+/**
+ * The calm sentence for a cancelled task. Deliberately says nothing about the
+ * user aborting anything: the reported bug was the browser's own "The user
+ * aborted a request." text being shown to a user who cancelled nothing.
+ */
+export const CANCELLED_TASK_MESSAGE = 'Cancelled before it finished.'
+
+/**
+ * True when a thrown failure is a DELIBERATE cancellation rather than a real
+ * failure — the transport's 'aborted' kind (see llm.ts's mapFetchError), which
+ * also carries prepare.svelte.ts's cancel-on-navigate sentinel.
+ *
+ * Cancellations must never render as an error, never offer a "try again" error
+ * affordance, and never emit ai_task_failed: they are a discarded run, not a
+ * broken one, and counting them would corrupt the failure metrics.
+ */
+export function isCancellation(err: unknown): boolean {
+  return err instanceof LlmError && err.kind === 'aborted'
 }
 
 // ---------------------------------------------------------------------------
@@ -537,6 +580,11 @@ export function describeTaskError(err: unknown): TaskErrorInfo {
   const rawMessage = err instanceof Error ? err.message : err == null ? '' : String(err)
   let raw = rawMessage.trim().slice(0, ERROR_DETAIL_MAX)
   if (raw === error || raw === `llm: ${kind}`) raw = ''
+  // A cancellation NEVER carries a detail line. Its message is either our own
+  // fixed sentence (no information) or an internal sentinel — and the whole
+  // point of the 'aborted' kind is that no engine-authored abort text ("The
+  // user aborted a request.") can ever reach the UI through this field.
+  if (kind === 'aborted') raw = ''
   const status = err instanceof LlmError ? err.status : undefined
   if (raw && status !== undefined && !raw.includes(`(${status})`)) raw = `HTTP ${status}: ${raw}`
   const retried = err instanceof LlmError && isTransientLlmError(err)
@@ -721,6 +769,16 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
    * reason_detail so the failure mix is measurable — not just a 7-value enum.
    */
   function failTask(state: PanelState<unknown>, task: string, err: unknown): void {
+    // A CANCELLATION is not a failure. Calm state, no error copy, no retry-as-
+    // error affordance, and no ai_task_failed — the run was discarded, not
+    // broken, so counting it would corrupt the failure metrics.
+    if (isCancellation(err)) {
+      state.status = 'cancelled'
+      state.error = undefined
+      state.errorDetail = undefined
+      state.activity = undefined
+      return
+    }
     const info = describeTaskError(err)
     state.status = 'error'
     state.error = info.error
@@ -1930,6 +1988,13 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
     } catch (err) {
+      // A cancellation is not a degraded story: falling back would render (and
+      // count) a deterministic walkthrough for a run that was simply discarded.
+      // Take the calm 'cancelled' state instead — failTask emits no analytics.
+      if (isCancellation(err)) {
+        failTask(storyState, 'story', err)
+        return
+      }
       // Surface the SPECIFIC reason (mirrors #148): the friendly kind message as
       // the lead, plus the concrete detail (e.g. "maximum context length
       // exceeded …", "LLM produced invalid JSON after repair retry") when it
@@ -2720,6 +2785,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           ? { errorDetail: merged.failureDetail, analyticsDetail: merged.failureDetail }
           : {}),
       }
+      // Every chunk cancelled → calm sentence, no failure event (the run was
+      // discarded, not broken). Same contract as failTask's 'cancelled' branch.
+      if (kind === 'aborted') return { error: CANCELLED_TASK_MESSAGE }
       track('ai_task_failed', failureProps('coach', info))
       return { error: info.error, ...(info.errorDetail ? { errorDetail: info.errorDetail } : {}) }
     }
@@ -2742,16 +2810,21 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     if (merged.failedIndices.length > 0) {
       const reason = humanMessage(merged.failureKind ?? 'unknown')
       const n = merged.failedIndices.length
-      track('ai_task_failed', {
-        ...failureProps('coach', {
-          kind: merged.failureKind ?? 'unknown',
-          error: reason,
-          ...(merged.failureDetail
-            ? { errorDetail: merged.failureDetail, analyticsDetail: merged.failureDetail }
-            : {}),
-        }),
-        partial: true,
-      })
+      // Partially CANCELLED (not failed): the honest "couldn't coach N" note
+      // still renders so no comment is silently dropped, but a discarded run
+      // must not land in the failure metrics.
+      if (merged.failureKind !== 'aborted') {
+        track('ai_task_failed', {
+          ...failureProps('coach', {
+            kind: merged.failureKind ?? 'unknown',
+            error: reason,
+            ...(merged.failureDetail
+              ? { errorDetail: merged.failureDetail, analyticsDetail: merged.failureDetail }
+              : {}),
+          }),
+          partial: true,
+        })
+      }
       result.notCoached = {
         indices: merged.failedIndices,
         message: `Couldn't coach ${n} comment${n === 1 ? '' : 's'} (${reason}) — retry to grade ${n === 1 ? 'it' : 'them'}.`,
@@ -2814,6 +2887,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       return { ok: true, answer: askStreamResult.content }
     } catch (err) {
       const info = describeTaskError(err)
+      // A cancelled ask is not a failed ask: calm sentence, no failure event.
+      if (isCancellation(err)) return { ok: false, error: CANCELLED_TASK_MESSAGE }
       track('ai_task_failed', failureProps('ask', info))
       return { ok: false, error: info.error }
     }
@@ -2883,6 +2958,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       return { ok: true, comment: streamResult.content.trim() }
     } catch (err) {
       const info = describeTaskError(err)
+      // A cancelled expansion is not a failed one: calm sentence, no detail
+      // line (the browser's abort text is exactly what we are removing), no
+      // failure event. The composer's note is untouched either way.
+      if (isCancellation(err)) return { ok: false, error: CANCELLED_TASK_MESSAGE }
       track('ai_task_failed', failureProps('expand', info))
       return { ok: false, error: info.error, ...(info.errorDetail ? { errorDetail: info.errorDetail } : {}) }
     }
@@ -3116,6 +3195,17 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // loop can pace the next round instead of re-dispatching immediately.
       if (err instanceof LlmError && err.kind === 'rate-limited' && typeof err.retryAfterMs === 'number') {
         reviewerRetryAfterMs.set(idx, err.retryAfterMs)
+      }
+      // Cancelled reviewer: the calm state, no error copy, no analytics —
+      // same contract as failTask for the auto tasks.
+      if (isCancellation(err)) {
+        skillReviewsState[idx] = {
+          skillId: skill.id,
+          name: skill.name,
+          state: { status: 'cancelled' },
+        }
+        onUpdate?.()
+        return
       }
       skillReviewsState[idx] = {
         skillId: skill.id,

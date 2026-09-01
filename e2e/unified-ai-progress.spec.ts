@@ -209,3 +209,59 @@ test('unified AI progress: pending panels show status line + skeleton (no bare s
   // Eventually the reviewer completes and the finding renders.
   await expect(page.getByText(/Potential XSS vulnerability/i)).toBeVisible({ timeout: 20_000 })
 })
+
+// ---------------------------------------------------------------------------
+// fix/abort-handling — an ABORTED request renders the calm cancelled state.
+//
+// Why fetch is patched instead of routed: Playwright's route.abort() (any error
+// code, 'aborted' included) surfaces to page JS as `TypeError: Failed to fetch`,
+// which is a genuine network failure and correctly stays kind 'network'. Only a
+// real DOMException AbortError — what the browser throws when a signal fires —
+// exercises this path, so the init script makes the DeepSeek transport throw
+// exactly the Blink shape, including its user-blaming message.
+//
+// The bug: that message was rendered verbatim under a "Network error … check
+// your connection" lead, next to a Retry button — "the user aborted the
+// request, please click to try again", for a user who aborted nothing.
+// ---------------------------------------------------------------------------
+
+test('an aborted AI request renders the calm cancelled state — never a red error blaming the user', async ({ page }) => {
+  await setupRoutes(page)
+
+  await page.addInitScript(() => {
+    const realFetch = window.fetch.bind(window)
+    window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.includes('api.deepseek.com')) {
+        // The exact DOMException Blink throws for an aborted fetch.
+        return Promise.reject(new DOMException('The user aborted a request.', 'AbortError'))
+      }
+      return realFetch(input as RequestInfo, init)
+    }) as typeof window.fetch
+  })
+  await page.addInitScript(() => {
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test-deepseek-key', diffMode: 'unified', autoRunReviewers: false }))
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+
+  // The panels settle into the calm cancelled state.
+  await expect(page.locator('.ai-panel-cancelled').first()).toBeAttached({ timeout: 15_000 })
+
+  // NOTHING anywhere on the page blames the user for aborting.
+  await expect(page.getByText(/user aborted/i)).toHaveCount(0)
+  await expect(page.getByText(/aborted a request/i)).toHaveCount(0)
+  // Not the network-failure story either — nothing about the connection.
+  await expect(page.getByText(/check your connection/i)).toHaveCount(0)
+
+  // No error panel, no alert role, no error-styled retry affordance.
+  await expect(page.locator('.ai-panel-error')).toHaveCount(0)
+  await expect(page.locator('.ai-panel-error [role="alert"]')).toHaveCount(0)
+  await expect(page.locator('.retry-btn')).toHaveCount(0)
+
+  // The calm line offers a plain "run again" instead.
+  await expect(page.locator('.ai-panel-cancelled').first()).toContainText(/cancelled/i)
+  await expect(page.locator('.ai-panel-cancelled button', { hasText: /run again/i }).first()).toBeAttached()
+})
