@@ -124,3 +124,27 @@ describe('SectionStatus — error detail on hover (title + aria)', () => {
     expect(container.querySelector('.section-status')?.getAttribute('title')).toBeNull()
   })
 })
+
+describe('SectionStatus — cancelled is quiet, never the problem dot', () => {
+  it('renders the muted off-family glyph, not the error hint', () => {
+    const { container } = renderStatus('cancelled')
+    expect(container.querySelector('.ui-spinner')).toBeNull()
+    expect(container.querySelector('.section-status-hint')).toBeNull()
+    expect(container.querySelector('.section-status-off')).not.toBeNull()
+    expect(container.querySelector('.is-problem')).toBeNull()
+  })
+
+  it('announces "<title> cancelled" without the "unavailable" error wording', () => {
+    const { container } = renderStatus('cancelled')
+    const live = container.querySelector('.section-status-live')
+    expect(live?.textContent).toBe('Full summary cancelled')
+    expect(live?.textContent).not.toMatch(/unavailable/i)
+  })
+
+  it('carries no error tooltip (nothing failed)', () => {
+    const { container } = renderStatus('cancelled')
+    const root = container.querySelector('.section-status')
+    expect(root?.getAttribute('title')).toBeNull()
+    expect(root?.getAttribute('aria-label')).toBeNull()
+  })
+})

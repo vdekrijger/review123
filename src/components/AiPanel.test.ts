@@ -227,3 +227,53 @@ describe('AiPanel — error state shows the concrete detail under the canned lin
     expect(container.querySelector('.error-detail')).toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Cancelled state (fix/abort-handling)
+//
+// The reported bug rendered an internal cancellation as the ERROR state: a
+// role="alert" block, the browser's "The user aborted a request." as the detail
+// line, and a Retry button — i.e. "the user aborted the request, please click
+// to try again", for a user who aborted nothing. 'cancelled' is the calm state
+// that replaces it.
+// ---------------------------------------------------------------------------
+
+describe('AiPanel — cancelled state is calm, not an error', () => {
+  const CANCELLED = { status: 'cancelled' as const }
+
+  it('renders a muted cancelled line with NO alert role and NO error styling', () => {
+    const { container } = render(AiPanel, {
+      props: { title: 'Summary', task: 'summary', state: CANCELLED, onretry: vi.fn() },
+    })
+    expect(container.querySelector('.ai-panel-cancelled')).not.toBeNull()
+    expect(container.querySelector('.ai-panel-error')).toBeNull()
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(container.querySelector('.error-msg')).toBeNull()
+    expect(container.querySelector('.error-detail')).toBeNull()
+  })
+
+  it('offers no error-styled Retry button — a plain "run again" link instead', () => {
+    const { container } = render(AiPanel, {
+      props: { title: 'Summary', task: 'summary', state: CANCELLED, onretry: vi.fn() },
+    })
+    expect(container.querySelector('.retry-btn')).toBeNull()
+    expect(screen.queryByRole('button', { name: /^retry$/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /run again/i })).toBeInTheDocument()
+  })
+
+  it('never shows the spinner/skeleton (the task is not running)', () => {
+    const { container } = render(AiPanel, {
+      props: { title: 'Summary', task: 'summary', state: CANCELLED, onretry: vi.fn() },
+    })
+    expect(container.querySelector('.ai-panel-loading')).toBeNull()
+  })
+
+  it('"run again" re-runs the task through the normal retry path', async () => {
+    const onretry = vi.fn()
+    render(AiPanel, {
+      props: { title: 'Summary', task: 'summary', state: CANCELLED, onretry },
+    })
+    await userEvent.click(screen.getByRole('button', { name: /run again/i }))
+    expect(onretry).toHaveBeenCalledOnce()
+  })
+})
