@@ -1386,7 +1386,10 @@
 {#if skillReviews.length > 0}
   {@const runningEntries = skillReviews.filter(e => e.state.status === 'loading')}
   {@const queuedEntries = skillReviews.filter(e => e.state.status === 'queued')}
-  {@const settledEntries = skillReviews.filter(e => e.state.status === 'done' || e.state.status === 'error')}
+  <!-- 'cancelled' is settled too: the reviewer stopped, so it belongs in this
+       region rather than vanishing from the run status bar entirely (it is in
+       none of running/queued). Its chip is quiet, never the error chip. -->
+  {@const settledEntries = skillReviews.filter(e => e.state.status === 'done' || e.state.status === 'error' || e.state.status === 'cancelled')}
 
   <!-- RUNNING region: a BOUNDED, ALIGNED list of compact one-line rows. Each row
        is a small spinner + the reviewer NAME + (deep mode) ONLY its latest
@@ -1559,6 +1562,26 @@
                 title={errText || undefined}
               >
                 ↻ error
+              </span>
+            {/if}
+          {:else if entry.state.status === 'cancelled'}
+            <!-- The reviewer's request was CANCELLED, not failed. Without this
+                 branch it fell through to the "⏳ queued" chip below, which
+                 claims it is still waiting for a slot. Quiet chip, no error
+                 colour, no "failed" wording — clicking re-runs just this one. -->
+            {#if onRetrySkill}
+              <button
+                type="button"
+                class="skill-status-chip chip-queued"
+                aria-label="{entry.name} cancelled — click to run again"
+                title="Cancelled — click to run again"
+                onclick={() => retryReviewer(entry.skillId)}
+              >
+                — cancelled
+              </button>
+            {:else}
+              <span class="skill-status-chip chip-queued" aria-label="{entry.name} cancelled">
+                — cancelled
               </span>
             {/if}
           {:else}
