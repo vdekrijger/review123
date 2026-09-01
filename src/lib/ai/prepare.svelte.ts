@@ -58,6 +58,7 @@ import {
   llmJsonWithRepair as defaultLlmJsonWithRepair,
   llmJsonWithRepairWithUsage as defaultLlmJsonWithRepairWithUsage,
   llmJsonWithRepairFor as defaultLlmJsonWithRepairFor,
+  LlmError,
 } from '../llm/llm'
 import { llmToolLoop as defaultLlmToolLoop } from '../llm/llmToolLoop'
 import type { LlmUsage } from '../llm/llm'
@@ -219,7 +220,10 @@ function autoPanels(run: AiRun): PanelState<unknown>[] {
   ]
 }
 
-const SETTLED = new Set(['done', 'error', 'skipped', 'no-key', 'declined'])
+// 'cancelled' is settled for PROGRESS (the task stopped; the bar must not hang
+// on it) but is deliberately absent from tallyOutcome's done/error accounting,
+// exactly like 'skipped'/'disabled': it neither warmed the cache nor failed.
+const SETTLED = new Set(['done', 'error', 'skipped', 'no-key', 'declined', 'cancelled'])
 
 /**
  * Live progress for a preparing row, or null when it isn't preparing. Reads
@@ -320,7 +324,16 @@ function cancelGuard<T extends (...args: never[]) => unknown>(
   fn: T,
 ): T {
   return ((...args: never[]) => {
-    if (token.cancelled) throw new Error('prepare cancelled — the opened review takes over')
+    // Thrown as a TYPED cancellation (LlmError kind 'aborted'), not a plain
+    // Error: run.svelte.ts's isCancellation then routes it to the calm
+    // 'cancelled' panel status instead of the red "An unexpected error
+    // occurred. Please retry." state. Belt and braces — a cancelled prepare's
+    // run is already detached from the UI (its row and liveRuns entry are
+    // dropped, its analytics muted) — but nothing should be one refactor away
+    // from showing a discarded run's tasks as failures.
+    if (token.cancelled) {
+      throw new LlmError('aborted', 'prepare cancelled — the opened review takes over')
+    }
     return fn(...args)
   }) as T
 }

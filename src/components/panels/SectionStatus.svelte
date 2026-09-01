@@ -64,6 +64,10 @@
   // nothing to check (empty PR description) — a quiet muted "n/a" indicator,
   // distinct from "off" (a user setting) and never an error.
   const skipped = $derived(status === 'skipped')
+  // The task's request was cancelled (not failed): a quiet muted indicator in
+  // the same family as "off"/"n/a" — never the problem dot, which reads as an
+  // error the user has to act on.
+  const cancelled = $derived(status === 'cancelled')
 
   // One quiet polite announcement per state. Empty while pending (the spinner is
   // visual; no need to announce "loading" repeatedly).
@@ -74,6 +78,7 @@
       : status === 'declined' ? `${title} declined`
       : disabled ? `${title} disabled`
       : skipped ? `${title} skipped — nothing to check`
+      : cancelled ? `${title} cancelled`
       : ''
   )
 </script>
@@ -81,7 +86,7 @@
 <span
   class="section-status"
   class:is-problem={problem}
-  class:is-disabled={disabled || skipped}
+  class:is-disabled={disabled || skipped || cancelled}
   class:has-error-detail={errorTooltip !== ''}
   title={errorTooltip !== '' ? errorTooltip : undefined}
   aria-label={errorTooltip !== '' ? `${title} unavailable: ${errorTooltip}` : undefined}
@@ -94,6 +99,8 @@
     <span class="section-status-off" aria-hidden="true">off</span>
   {:else if skipped}
     <span class="section-status-off" aria-hidden="true">n/a</span>
+  {:else if cancelled}
+    <span class="section-status-off" aria-hidden="true">—</span>
   {:else if problem}
     <span class="section-status-hint" aria-hidden="true">·</span>
   {/if}
