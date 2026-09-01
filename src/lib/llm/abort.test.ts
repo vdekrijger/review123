@@ -27,6 +27,7 @@ import {
   mapFetchError,
   anySignal,
   manualAnySignal,
+  retryWithCancellation,
   LlmError,
   CANCELLED_MESSAGE,
 } from './llm'
@@ -298,5 +299,48 @@ describe('manualAnySignal — the fallback combinator', () => {
     timeout.abort(new DOMException('signal timed out', 'TimeoutError'))
     const combined = manualAnySignal([timeout.signal, new AbortController().signal])
     expect((combined.reason as DOMException).name).toBe('TimeoutError')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// retryWithCancellation — an abort DURING backoff is a cancellation
+//
+// withTransientRetry itself rethrows the LAST error when the caller aborts
+// mid-backoff (transientRetry.ts:164-166) — deliberately, so its own contract
+// stays "surface the real failure". That last error is typically the 429/5xx
+// that triggered the backoff, which would render as "rate limited" / "server
+// error" for a request the caller deliberately gave up on. The dispatchers wrap
+// it so the CALLER's abort wins the classification.
+// ---------------------------------------------------------------------------
+
+describe('retryWithCancellation', () => {
+  it("maps an abort during backoff to 'aborted', not the last transient error", async () => {
+    setTransientRetryPolicyForTests({ maxRetries: 3, baseDelayMs: 50, maxSleepMs: 50 })
+    const ctrl = new AbortController()
+    const transient = new LlmError('rate-limited', 'busy', { status: 429 })
+    const fn = vi.fn().mockRejectedValue(transient)
+
+    const call = retryWithCancellation(fn, { providerId: 'deepseek', signal: ctrl.signal })
+    const settled = call.catch((e: unknown) => e)
+    await Promise.resolve()
+    ctrl.abort()
+
+    const err = await settled
+    expect((err as LlmError).kind).toBe('aborted')
+    expect((err as LlmError).message).toBe(CANCELLED_MESSAGE)
+  })
+
+  it('leaves a genuine failure untouched when the caller never aborted', async () => {
+    const boom = new LlmError('server', 'upstream exploded', { status: 502 })
+    const err = await retryWithCancellation(vi.fn().mockRejectedValue(boom), {
+      providerId: 'deepseek',
+    }).catch((e: unknown) => e)
+    expect(err).toBe(boom)
+  })
+
+  it('passes successful results straight through', async () => {
+    await expect(
+      retryWithCancellation(async () => 'ok', { providerId: 'deepseek' }),
+    ).resolves.toBe('ok')
   })
 })
