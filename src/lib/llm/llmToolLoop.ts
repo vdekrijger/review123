@@ -164,10 +164,15 @@ async function postJson(
   // as the llm.ts dispatchers; retry wraps the gate, so a backoff sleep holds
   // no slot, and each attempt builds a fresh 60s timeout signal. Retrying a
   // round is safe: nothing is appended to the conversation until it succeeds.
-  return withTransientRetry(
+  return retryWithCancellation(
     () =>
       gateFor(providerId).run(async () => {
-        const effectiveSignal = signal ?? AbortSignal.timeout(60_000)
+        // The caller's signal is COMPOSED with the round's 60s window, never
+        // substituted for it (a caller signal used to disable the timeout
+        // outright), and the window is kept in hand so mapFetchError can tell
+        // "this round timed out" from "someone cancelled us".
+        const timeoutSignal = AbortSignal.timeout(TOOL_LOOP_TIMEOUT_MS)
+        const effectiveSignal = signal ? anySignal([signal, timeoutSignal]) : timeoutSignal
         let res: Response
         try {
           res = await fetch(url, {
@@ -177,7 +182,7 @@ async function postJson(
             signal: effectiveSignal,
           })
         } catch (err) {
-          mapFetchError(err)
+          mapFetchError(err, timeoutSignal)
         }
         if (!res!.ok) await mapHttpError(res!)
         return res!.json() as Promise<unknown>

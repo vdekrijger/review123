@@ -45,6 +45,18 @@ export type LlmErrorKind =
   | 'network'
   | 'timeout'
   | 'invalid-output'
+  /**
+   * The request was CANCELLED, not failed: an AbortSignal fired that was not
+   * our own per-request timeout (a caller cancelling deliberately, a page/
+   * extension tearing the request down). Never a red error in the UI and never
+   * an ai_task_failed event — see run.svelte.ts's 'cancelled' PanelStatus.
+   *
+   * Deliberately NOT 'network': the browser's abort DOMException carries text
+   * like "The user aborted a request.", which used to be shown verbatim under
+   * a "check your connection" lead — blaming the user for something they never
+   * did. A cancellation carries CANCELLED_MESSAGE instead, never engine text.
+   */
+  | 'aborted'
 
 export class LlmError extends Error {
   /** HTTP status of the failed response, when the failure was HTTP-level. */
@@ -145,10 +157,11 @@ export interface LlmCompleteOpts {
   /**
    * Per-request timeout for the adapter-built AbortSignal (default 60s).
    * Large-prompt tasks pass a scaled value so a big packed context isn't
-   * killed at the default window. IGNORED when `signal` is provided — an
-   * explicit signal takes full control of cancellation (unchanged semantics).
-   * Each transient-retry attempt re-runs the adapter, so every attempt gets a
-   * fresh, full window.
+   * killed at the default window. ALWAYS applies: a caller-supplied `signal`
+   * is COMPOSED with the timeout (AbortSignal.any), never substituted for it —
+   * passing a signal used to silently disable the timeout, leaving those calls
+   * able to hang indefinitely. Each transient-retry attempt re-runs the
+   * adapter, so every attempt gets a fresh, full window.
    */
   timeoutMs?: number
 }
@@ -157,7 +170,7 @@ export interface LlmStreamOpts {
   system: string
   user: string
   signal?: AbortSignal
-  /** Same contract as LlmCompleteOpts.timeoutMs (default 60s; ignored when `signal` is set). */
+  /** Same contract as LlmCompleteOpts.timeoutMs (default 60s; composed with `signal`). */
   timeoutMs?: number
 }
 
@@ -194,15 +207,145 @@ function isHeaderCharError(err: unknown): boolean {
   )
 }
 
-// Exported for llmToolLoop.ts (Plan G) — shared transport plumbing, not public API.
-export function mapFetchError(err: unknown): never {
-  if (err instanceof DOMException && err.name === 'TimeoutError') {
-    throw new LlmError('timeout', err.message)
+/**
+ * The message every 'aborted' LlmError carries. Fixed and neutral ON PURPOSE:
+ * the engine's own abort text ("The user aborted a request." in Blink, "Fetch
+ * is aborted" in WebKit) is a lie from the user's point of view — they did not
+ * abort anything — and it used to be rendered verbatim in the panel.
+ */
+export const CANCELLED_MESSAGE = 'The request was cancelled.'
+
+/**
+ * The message for a timeout we detected via the timeout SIGNAL rather than a
+ * spec'd TimeoutError DOMException (see mapFetchError).
+ */
+export const TIMED_OUT_MESSAGE = 'The request timed out.'
+
+/** True for the DOMException an aborted fetch / body-stream read rejects with. */
+function isAbortException(err: unknown): boolean {
+  if (err instanceof DOMException) return err.name === 'AbortError'
+  // Not every environment routes abort rejections through a real DOMException
+  // (test doubles, some polyfills) — the `name` discriminant is the contract.
+  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'AbortError'
+}
+
+/** True for the DOMException an `AbortSignal.timeout` firing rejects with, per spec. */
+function isTimeoutException(err: unknown): boolean {
+  if (err instanceof DOMException) return err.name === 'TimeoutError'
+  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'TimeoutError'
+}
+
+/**
+ * Map a thrown fetch/stream-read failure onto an LlmError.
+ *
+ * `timeoutSignal` is OUR per-request timeout signal for the call that threw.
+ * It matters because engines are inconsistent here: the spec says a fetch
+ * aborted by an `AbortSignal.timeout` rejects with the signal's reason (a
+ * TimeoutError DOMException), but Blink reports several of those paths — most
+ * importantly `reader.read()` on a signal-aborted response body, i.e. every
+ * mid-stream timeout — as a plain AbortError. Reading `err.name` alone would
+ * therefore classify a genuine timeout as a cancellation and silently drop the
+ * panel to a calm state when the honest answer is "the model took too long".
+ * So when an AbortError arrives and our own timeout signal has fired, the
+ * timeout wins; any other abort is a cancellation.
+ *
+ * Exported for llmToolLoop.ts (Plan G) — shared transport plumbing, not public API.
+ */
+export function mapFetchError(err: unknown, timeoutSignal?: AbortSignal): never {
+  if (isTimeoutException(err)) {
+    throw new LlmError('timeout', err instanceof Error ? err.message : TIMED_OUT_MESSAGE)
+  }
+  if (isAbortException(err)) {
+    if (timeoutSignal?.aborted) throw new LlmError('timeout', TIMED_OUT_MESSAGE)
+    throw new LlmError('aborted', CANCELLED_MESSAGE)
   }
   if (isHeaderCharError(err)) {
     throw new LlmError('auth', INVALID_KEY_CHAR_MESSAGE)
   }
   throw new LlmError('network', err instanceof Error ? err.message : String(err))
+}
+
+// ---------------------------------------------------------------------------
+// Signal composition
+// ---------------------------------------------------------------------------
+
+/**
+ * Combine abort signals WITHOUT `AbortSignal.any` — the feature-detect fallback.
+ * Propagates the winning signal's `reason` so a timeout stays a TimeoutError
+ * (which is what lets mapFetchError tell a timeout from a cancellation).
+ * Exported for its own unit tests; prefer anySignal().
+ */
+export function manualAnySignal(signals: AbortSignal[]): AbortSignal {
+  const controller = new AbortController()
+  const already = signals.find((s) => s.aborted)
+  if (already) {
+    controller.abort(already.reason)
+    return controller.signal
+  }
+  for (const s of signals) {
+    s.addEventListener('abort', () => controller.abort(s.reason), { once: true })
+  }
+  return controller.signal
+}
+
+/**
+ * One signal that fires when ANY of `signals` fires. Uses the native
+ * `AbortSignal.any` where available (widely supported) and falls back to
+ * manualAnySignal otherwise.
+ *
+ * This exists because the adapters used to write `signal ?? timeoutSignal`: a
+ * caller-supplied signal REPLACED the per-request timeout, so any call that
+ * passed one had no timeout at all and could hang indefinitely.
+ */
+export function anySignal(signals: AbortSignal[]): AbortSignal {
+  if (signals.length === 1) return signals[0]!
+  const native = (AbortSignal as { any?: (list: AbortSignal[]) => AbortSignal }).any
+  if (typeof native === 'function') return native.call(AbortSignal, signals)
+  return manualAnySignal(signals)
+}
+
+/**
+ * The per-request cancellation pair every adapter builds: our timeout signal
+ * (kept separately so mapFetchError can ask whether IT fired) and the signal
+ * actually handed to fetch — the caller's signal composed WITH the timeout,
+ * never one instead of the other.
+ */
+function requestSignals(
+  callerSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): { timeoutSignal: AbortSignal; effectiveSignal: AbortSignal } {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  return {
+    timeoutSignal,
+    effectiveSignal: callerSignal ? anySignal([callerSignal, timeoutSignal]) : timeoutSignal,
+  }
+}
+
+/**
+ * Rethrow a transport failure as a CANCELLATION when the caller's own signal
+ * has fired. Covers the paths where the real error is not the abort itself —
+ * most notably withTransientRetry surfacing the last 429/5xx after the caller
+ * aborted mid-backoff (transientRetry.ts:164-166), which would otherwise show
+ * a server error for a request the caller deliberately gave up on.
+ */
+function rethrowAsCancellation(err: unknown, callerSignal: AbortSignal | undefined): never {
+  if (callerSignal?.aborted) throw new LlmError('aborted', CANCELLED_MESSAGE)
+  throw err
+}
+
+/**
+ * withTransientRetry + caller-cancellation mapping. Exported for llmToolLoop.ts
+ * so the deep-mode tool loop classifies aborts exactly like the dispatchers.
+ */
+export async function retryWithCancellation<T>(
+  fn: () => Promise<T>,
+  info: { providerId?: string; signal?: AbortSignal },
+): Promise<T> {
+  try {
+    return await withTransientRetry(fn, info)
+  } catch (err) {
+    rethrowAsCancellation(err, info.signal)
+  }
 }
 
 // Exported for llmToolLoop.ts (Plan G) — shared transport plumbing, not public API.
@@ -335,7 +478,7 @@ async function openaiCompatComplete(
   // declared field (max_completion_tokens for OpenAI, max_tokens elsewhere).
   if (maxTokens !== undefined) body[provider.maxTokensParam ?? 'max_tokens'] = maxTokens
 
-  const effectiveSignal = signal ?? AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  const { timeoutSignal, effectiveSignal } = requestSignals(signal, timeoutMs)
 
   let res: Response
   try {
@@ -346,7 +489,7 @@ async function openaiCompatComplete(
       signal: effectiveSignal,
     })
   } catch (err) {
-    mapFetchError(err)
+    mapFetchError(err, timeoutSignal)
   }
 
   if (!res!.ok) await mapHttpError(res!)
@@ -394,7 +537,7 @@ async function openaiCompatStream(
     body.stream_options = { include_usage: true }
   }
 
-  const effectiveSignal = signal ?? AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  const { timeoutSignal, effectiveSignal } = requestSignals(signal, timeoutMs)
 
   let res: Response
   try {
@@ -405,7 +548,7 @@ async function openaiCompatStream(
       signal: effectiveSignal,
     })
   } catch (err) {
-    mapFetchError(err)
+    mapFetchError(err, timeoutSignal)
   }
 
   if (!res!.ok) await mapHttpError(res!)
@@ -468,7 +611,10 @@ async function openaiCompatStream(
     }
   } catch (err) {
     if (err instanceof LlmError) throw err
-    mapFetchError(err)
+    // Mid-stream failures land here. A timeout that fires while the body is
+    // being read is reported as an AbortError by Blink, so the timeout signal
+    // is what tells "the model stalled" apart from "someone cancelled us".
+    mapFetchError(err, timeoutSignal)
   } finally {
     reader.releaseLock()
   }
@@ -559,7 +705,7 @@ async function anthropicComplete(
     ...(json ? anthropicJsonModeFields() : {}),
   }
 
-  const effectiveSignal = signal ?? AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  const { timeoutSignal, effectiveSignal } = requestSignals(signal, timeoutMs)
 
   let res: Response
   try {
@@ -570,7 +716,7 @@ async function anthropicComplete(
       signal: effectiveSignal,
     })
   } catch (err) {
-    mapFetchError(err)
+    mapFetchError(err, timeoutSignal)
   }
 
   if (!res!.ok) await mapHttpError(res!)
@@ -634,7 +780,7 @@ async function anthropicStream(
     stream: true,
   }
 
-  const effectiveSignal = signal ?? AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  const { timeoutSignal, effectiveSignal } = requestSignals(signal, timeoutMs)
 
   let res: Response
   try {
@@ -645,7 +791,7 @@ async function anthropicStream(
       signal: effectiveSignal,
     })
   } catch (err) {
-    mapFetchError(err)
+    mapFetchError(err, timeoutSignal)
   }
 
   if (!res!.ok) await mapHttpError(res!)
@@ -720,7 +866,7 @@ async function anthropicStream(
     }
   } catch (err) {
     if (err instanceof LlmError) throw err
-    mapFetchError(err)
+    mapFetchError(err, timeoutSignal)
   } finally {
     reader.releaseLock()
   }
@@ -784,7 +930,7 @@ async function geminiComplete(
   const { system, user, json, signal, maxTokens, timeoutMs } = opts
 
   const body = buildGeminiBody(system, user, !!json, false, maxTokens)
-  const effectiveSignal = signal ?? AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  const { timeoutSignal, effectiveSignal } = requestSignals(signal, timeoutMs)
 
   let res: Response
   try {
@@ -798,7 +944,7 @@ async function geminiComplete(
       },
     )
   } catch (err) {
-    mapFetchError(err)
+    mapFetchError(err, timeoutSignal)
   }
 
   if (!res!.ok) await mapHttpError(res!)
@@ -837,7 +983,7 @@ async function geminiStream(
   const { system, user, signal, timeoutMs } = opts
 
   const body = buildGeminiBody(system, user, false, true)
-  const effectiveSignal = signal ?? AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  const { timeoutSignal, effectiveSignal } = requestSignals(signal, timeoutMs)
 
   let res: Response
   try {
@@ -851,7 +997,7 @@ async function geminiStream(
       },
     )
   } catch (err) {
-    mapFetchError(err)
+    mapFetchError(err, timeoutSignal)
   }
 
   if (!res!.ok) await mapHttpError(res!)
@@ -911,7 +1057,7 @@ async function geminiStream(
     }
   } catch (err) {
     if (err instanceof LlmError) throw err
-    mapFetchError(err)
+    mapFetchError(err, timeoutSignal)
   } finally {
     reader.releaseLock()
   }
@@ -941,7 +1087,7 @@ async function dispatchComplete(opts: LlmCompleteOpts, includeUsage: boolean): P
   // attempt re-runs the adapter, which builds a fresh timeout signal for the
   // full window (60s default, or the caller's timeoutMs).
   const { provider, model } = getActiveConfig()
-  return withTransientRetry(
+  return retryWithCancellation(
     () =>
       gateFor(provider.id).run(() => {
         switch (provider.transport) {
@@ -976,7 +1122,7 @@ async function dispatchCompleteFor(
   // path — verifier fan-out is exactly what trips rate limits at scale — but a
   // verifier's provider being saturated never blocks the OTHER providers.
   // Retry wraps the gate (slot released during backoff), same as dispatchComplete.
-  return withTransientRetry(
+  return retryWithCancellation(
     () =>
       gateFor(provider.id).run(() => {
         switch (provider.transport) {
@@ -1008,7 +1154,7 @@ async function dispatchStream(
   // stream never double-emits. Mid-stream failures map to 'network' (no
   // status) and are NOT retried.
   const { provider, model } = getActiveConfig()
-  return withTransientRetry(
+  return retryWithCancellation(
     () =>
       gateFor(provider.id).run(() => {
         switch (provider.transport) {
@@ -1316,7 +1462,12 @@ export async function llmTestConnection(
     // max_tokens". The prompt keeps the real reply to one word, so the actual
     // spend stays ~tens of tokens despite this ceiling.
     maxTokens: 1024,
-    signal: signal ?? AbortSignal.timeout(15_000),
+    // The ping's own SHORT window (15s, not the 60s default) — expressed as
+    // timeoutMs so the adapter owns the timeout signal and can tell a timeout
+    // apart from a cancellation. `signal` stays the CALLER's cancellation
+    // channel and is now composed with the window rather than replacing it.
+    timeoutMs: 15_000,
+    ...(signal ? { signal } : {}),
   }
 
   switch (provider.transport) {
