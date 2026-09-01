@@ -40,7 +40,6 @@
 
 import { activeLlmConfig } from './config'
 import { gateFor } from './concurrencyGate'
-import { withTransientRetry } from './transientRetry'
 import type { LlmProviderDef, LlmModelDef } from './providers'
 import {
   LlmError,
@@ -50,8 +49,13 @@ import {
   buildGeminiHeaders,
   mapFetchError,
   mapHttpError,
+  anySignal,
+  retryWithCancellation,
 } from './llm'
 import type { LlmUsage } from './llm'
+
+/** Per-round request window for the deep-mode tool loop (one HTTP call each). */
+const TOOL_LOOP_TIMEOUT_MS = 60_000
 
 // ---------------------------------------------------------------------------
 // Public types
