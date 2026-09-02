@@ -28,6 +28,11 @@
 import { getSettings } from '../settings/settings'
 import { gateFor } from './concurrencyGate'
 import { withTransientRetry } from './transientRetry'
+import {
+  isAbortException,
+  isTimeoutException,
+  requestSignals as sharedRequestSignals,
+} from '../net/signals'
 import { activeLlmConfig, PROVIDER_KEY_FIELDS } from './config'
 import { getProvider, getModelDef } from './providers'
 import { parseJsonLoose } from './jsonExtract'
@@ -221,19 +226,11 @@ export const CANCELLED_MESSAGE = 'The request was cancelled.'
  */
 export const TIMED_OUT_MESSAGE = 'The request timed out.'
 
-/** True for the DOMException an aborted fetch / body-stream read rejects with. */
-function isAbortException(err: unknown): boolean {
-  if (err instanceof DOMException) return err.name === 'AbortError'
-  // Not every environment routes abort rejections through a real DOMException
-  // (test doubles, some polyfills) — the `name` discriminant is the contract.
-  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'AbortError'
-}
-
-/** True for the DOMException an `AbortSignal.timeout` firing rejects with, per spec. */
-function isTimeoutException(err: unknown): boolean {
-  if (err instanceof DOMException) return err.name === 'TimeoutError'
-  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'TimeoutError'
-}
+// The abort/timeout discriminants and the signal combinators live in
+// net/signals.ts — the VCS API clients need exactly the same two, and this
+// module's public surface (anySignal / manualAnySignal) is preserved by the
+// re-export below so no caller or test has to move.
+export { anySignal, manualAnySignal } from '../net/signals'
 
 /**
  * Map a thrown fetch/stream-read failure onto an LlmError.
@@ -312,41 +309,6 @@ export async function readBody<T>(
 // ---------------------------------------------------------------------------
 
 /**
- * Combine abort signals WITHOUT `AbortSignal.any` — the feature-detect fallback.
- * Propagates the winning signal's `reason` so a timeout stays a TimeoutError
- * (which is what lets mapFetchError tell a timeout from a cancellation).
- * Exported for its own unit tests; prefer anySignal().
- */
-export function manualAnySignal(signals: AbortSignal[]): AbortSignal {
-  const controller = new AbortController()
-  const already = signals.find((s) => s.aborted)
-  if (already) {
-    controller.abort(already.reason)
-    return controller.signal
-  }
-  for (const s of signals) {
-    s.addEventListener('abort', () => controller.abort(s.reason), { once: true })
-  }
-  return controller.signal
-}
-
-/**
- * One signal that fires when ANY of `signals` fires. Uses the native
- * `AbortSignal.any` where available (widely supported) and falls back to
- * manualAnySignal otherwise.
- *
- * This exists because the adapters used to write `signal ?? timeoutSignal`: a
- * caller-supplied signal REPLACED the per-request timeout, so any call that
- * passed one had no timeout at all and could hang indefinitely.
- */
-export function anySignal(signals: AbortSignal[]): AbortSignal {
-  if (signals.length === 1) return signals[0]!
-  const native = (AbortSignal as { any?: (list: AbortSignal[]) => AbortSignal }).any
-  if (typeof native === 'function') return native.call(AbortSignal, signals)
-  return manualAnySignal(signals)
-}
-
-/**
  * The per-request cancellation pair every adapter builds: our timeout signal
  * (kept separately so mapFetchError can ask whether IT fired) and the signal
  * actually handed to fetch — the caller's signal composed WITH the timeout,
@@ -356,11 +318,7 @@ function requestSignals(
   callerSignal: AbortSignal | undefined,
   timeoutMs: number | undefined,
 ): { timeoutSignal: AbortSignal; effectiveSignal: AbortSignal } {
-  const timeoutSignal = AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
-  return {
-    timeoutSignal,
-    effectiveSignal: callerSignal ? anySignal([callerSignal, timeoutSignal]) : timeoutSignal,
-  }
+  return sharedRequestSignals(callerSignal, timeoutMs ?? DEFAULT_TIMEOUT_MS)
 }
 
 /**

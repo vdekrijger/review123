@@ -34,6 +34,13 @@ export type GithubError =
   // used by submitReview's one-shot re-route retry).
   | { kind: 'unprocessable'; message: string; errors?: unknown[] }
   | { kind: 'server'; status: number }
+  // The request exceeded OUR window (afterMs). Distinct from 'network': the
+  // connection was fine, GitHub just did not answer in time — so "check your
+  // connection" is the wrong advice.
+  | { kind: 'timeout'; afterMs: number }
+  // The request was CANCELLED (a caller's signal fired), not failed. Nothing is
+  // broken and nothing needs fixing.
+  | { kind: 'cancelled' }
   | { kind: 'network' }
 
 export class GithubApiError extends Error {

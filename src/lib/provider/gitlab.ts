@@ -14,6 +14,7 @@
  */
 
 import { glFetch, glFetchPage, glFetchRaw, GitlabApiError } from './gitlabClient'
+import { apiTimeoutMessage, REQUEST_CANCELLED_MESSAGE } from '../net/signals'
 import { getSettings } from '../settings/settings'
 import { resolveGitlabToken } from '../auth/gitlabAuth'
 import type { ReviewProvider, PrRefX, ParseResult, ProviderCapabilities, QueueItem } from './types'
@@ -994,6 +995,10 @@ function mapGitlabError(err: unknown, fallback: string): string {
         return detail.message
       case 'network':
         return 'Network error — check your connection and try again.'
+      case 'timeout':
+        return apiTimeoutMessage('GitLab', detail.afterMs)
+      case 'cancelled':
+        return REQUEST_CANCELLED_MESSAGE
       case 'server':
         return `GitLab server error (HTTP ${detail.status}).`
     }
