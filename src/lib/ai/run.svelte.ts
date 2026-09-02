@@ -2538,7 +2538,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // Internal: set all panels to the same status (no-key / declined / error)
   // ---------------------------------------------------------------------------
 
-  function setAllPanels(status: 'no-key' | 'declined' | 'error', error?: string): void {
+  function setAllPanels(
+    status: 'no-key' | 'declined' | 'error' | 'cancelled',
+    error?: string,
+    errorDetail?: string,
+  ): void {
     // Plan J: an OFF task wins — it shows 'disabled' (no tokens were ever going
     // to be spent on it) even when the whole run is no-key/declined/error.
     // Story and the risk judge are in the task matrix too, so they get the
@@ -2550,6 +2554,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       }
       state.status = status
       if (error !== undefined) state.error = error
+      if (errorDetail !== undefined) state.errorDetail = errorDetail
     }
     apply('summary', summaryState)
     apply('attention', attentionState)
@@ -2574,8 +2579,16 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       packedCtx = ctx
       return ctx
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      setAllPanels('error', `Couldn't prepare PR context: ${msg}`)
+      // Packing failures go through the SAME classification as every task
+      // failure. This used to interpolate the raw thrown message, which is the
+      // one way an engine-authored string ("The user aborted a request.") could
+      // reach a panel without passing describeTaskError at all.
+      if (isCancellation(err)) {
+        setAllPanels('cancelled')
+        return null
+      }
+      const info = describeTaskError(err)
+      setAllPanels('error', `Couldn't prepare PR context. ${info.error}`, info.errorDetail)
       return null
     }
   }

@@ -761,6 +761,46 @@ describe('pack failure', () => {
     expect(deps.llmJsonWithRepair).not.toHaveBeenCalled()
   })
 
+  // getPackedContext used to interpolate the RAW thrown message into the panel
+  // error — the one path that reached the UI without passing describeTaskError.
+  // An engine abort surfacing there printed Blink's own "The user aborted a
+  // request." under a red error chip, blaming a user who cancelled nothing.
+  it('an ABORT during pack() takes the calm cancelled state, not a red error', async () => {
+    const pack = async () => {
+      throw new DOMException('The user aborted a request.', 'AbortError')
+    }
+    const run = createAiRun({ ...makeInput(), pack }, makeDeps())
+    await run.start()
+
+    expect(run.summary.status).toBe('cancelled')
+    expect(run.verdict.status).toBe('cancelled')
+    expect(run.summary.error ?? '').not.toMatch(/user aborted/i)
+  })
+
+  it('a pack() failure never echoes engine-authored text into the panel', async () => {
+    const pack = async () => {
+      throw new DOMException('signal timed out', 'TimeoutError')
+    }
+    const run = createAiRun({ ...makeInput(), pack }, makeDeps())
+    await run.start()
+
+    expect(run.summary.status).toBe('error')
+    expect(run.summary.error).toContain("Couldn't prepare PR context")
+    // Classified copy, not the DOMException's own words.
+    expect(run.summary.error).toMatch(/took too long/i)
+    expect(run.summary.error).not.toContain('signal timed out')
+    expect(run.summary.errorDetail ?? '').not.toContain('signal timed out')
+  })
+
+  it('a non-transport pack failure still surfaces its concrete detail on hover', async () => {
+    const pack = async () => { throw new Error('GitHub rate limited') }
+    const run = createAiRun({ ...makeInput(), pack }, makeDeps())
+    await run.start()
+
+    expect(run.summary.error).toContain("Couldn't prepare PR context")
+    expect(run.summary.errorDetail).toContain('GitHub rate limited')
+  })
+
   it('pack failure: retry re-packs (pack called again on retry when initial pack failed)', async () => {
     let packCallCount = 0
     let shouldFail = true
