@@ -55,7 +55,7 @@ import {
 import type { LlmUsage } from './llm'
 
 /** Per-round request window for the deep-mode tool loop (one HTTP call each). */
-const TOOL_LOOP_TIMEOUT_MS = 60_000
+export const TOOL_LOOP_BASE_TIMEOUT_MS = 60_000
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -175,7 +175,7 @@ async function postJson(
         // substituted for it (a caller signal used to disable the timeout
         // outright), and the window is kept in hand so mapFetchError can tell
         // "this round timed out" from "someone cancelled us".
-        const timeoutSignal = AbortSignal.timeout(TOOL_LOOP_TIMEOUT_MS)
+        const timeoutSignal = AbortSignal.timeout(TOOL_LOOP_BASE_TIMEOUT_MS)
         const effectiveSignal = signal ? anySignal([signal, timeoutSignal]) : timeoutSignal
         let res: Response
         try {

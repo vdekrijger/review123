@@ -175,3 +175,52 @@ describe('describeTaskError — the model-output excerpt is UI-only', () => {
     expect(info.analyticsDetail).toBeUndefined()
   })
 })
+
+// ---------------------------------------------------------------------------
+// REPRO (fix/context-abort-errors): the exact tooltip the user reported —
+//
+//   "An unexpected error occurred. Please retry. — The user aborted a request."
+//
+// The lead sentence is the UNCLASSIFIED fallback, which proves the thrown value
+// was never an LlmError: a raw DOMException reached describeTaskError with its
+// engine-authored text intact, and InspectStep composes the reviewer chip hover
+// as `${error} — ${errorDetail} — click to retry`.
+//
+// The real fix is at the transport (the unguarded response-body reads), but
+// describeTaskError is the LAST gate before the UI and must never let an engine
+// abort/timeout exception through unclassified either — otherwise the next
+// un-audited fetch reintroduces the same user-blaming text.
+// ---------------------------------------------------------------------------
+
+describe('describeTaskError — a RAW engine abort never reaches the UI', () => {
+  const blinkAbort = (): DOMException =>
+    new DOMException('The user aborted a request.', 'AbortError')
+
+  it("a raw AbortError DOMException classifies as a cancellation, not 'unknown'", () => {
+    expect(describeTaskError(blinkAbort()).kind).toBe('aborted')
+  })
+
+  it('neither the lead sentence nor the detail echoes the engine text', () => {
+    const info = describeTaskError(blinkAbort())
+    expect(info.error).not.toMatch(/user aborted/i)
+    expect(info.errorDetail ?? '').not.toMatch(/user aborted/i)
+  })
+
+  it('the composed chip hover no longer contains the reported string', () => {
+    const info = describeTaskError(blinkAbort())
+    const hover = [info.error, info.errorDetail].filter(Boolean).join(' — ')
+    expect(hover).not.toMatch(/user aborted a request/i)
+    expect(hover).not.toMatch(/unexpected error occurred/i)
+  })
+
+  it('a raw TimeoutError DOMException classifies as a timeout', () => {
+    const info = describeTaskError(new DOMException('signal timed out', 'TimeoutError'))
+    expect(info.kind).toBe('timeout')
+    expect(info.error).toMatch(/took too long/i)
+  })
+
+  it('an AbortError-shaped plain object (test doubles / polyfills) classifies too', () => {
+    const like = Object.assign(new Error('The user aborted a request.'), { name: 'AbortError' })
+    expect(describeTaskError(like).kind).toBe('aborted')
+  })
+})
