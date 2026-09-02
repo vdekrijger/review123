@@ -265,6 +265,48 @@ export function mapFetchError(err: unknown, timeoutSignal?: AbortSignal): never 
   throw new LlmError('network', err instanceof Error ? err.message : String(err))
 }
 
+/**
+ * Classify a RAW engine exception that escaped a transport unmapped — 'aborted'
+ * or 'timeout' when it is recognisably one, else null.
+ *
+ * The UI boundary (describeTaskError) uses this as defence in depth. #233
+ * classified the transports; the reported regression came from ONE unguarded
+ * response-body read, which let a DOMException reach the panel with the
+ * engine's own "The user aborted a request." text intact. Any future
+ * un-audited fetch would do the same, so the last gate before the UI classifies
+ * too rather than trusting every call site to have been wrapped.
+ */
+export function rawTransportKind(err: unknown): 'aborted' | 'timeout' | null {
+  if (err instanceof LlmError) return null
+  if (isTimeoutException(err)) return 'timeout'
+  if (isAbortException(err)) return 'aborted'
+  return null
+}
+
+/**
+ * Read a response body inside the SAME classification boundary as the fetch.
+ *
+ * `fetch()` resolves as soon as the response HEADERS arrive; the body streams
+ * afterwards. So a per-request window that fires mid-body rejects the READ, not
+ * the fetch — and Blink reports that as a plain AbortError. Reading the body
+ * outside the adapter's try/catch therefore bypasses mapFetchError entirely.
+ * That was exactly the hole behind the reported "The user aborted a request."
+ * tooltips: #233 wrapped the SSE reader loop but not the non-streaming reads,
+ * and the biggest reviewers (the largest responses, hence the longest reads)
+ * were the ones whose body read was still in flight when the window expired.
+ */
+export async function readBody<T>(
+  read: () => Promise<T>,
+  timeoutSignal?: AbortSignal,
+): Promise<T> {
+  try {
+    return await read()
+  } catch (err) {
+    if (err instanceof LlmError) throw err
+    mapFetchError(err, timeoutSignal)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Signal composition
 // ---------------------------------------------------------------------------
@@ -494,7 +536,7 @@ async function openaiCompatComplete(
 
   if (!res!.ok) await mapHttpError(res!)
 
-  const data = (await res!.json()) as {
+  const data = (await readBody(() => res!.json(), timeoutSignal)) as {
     choices?: { message?: { content?: string | null }; finish_reason?: string | null }[]
     usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
   }
@@ -721,7 +763,7 @@ async function anthropicComplete(
 
   if (!res!.ok) await mapHttpError(res!)
 
-  const data = (await res!.json()) as {
+  const data = (await readBody(() => res!.json(), timeoutSignal)) as {
     content?: { type: string; text?: string; name?: string; input?: unknown }[]
     stop_reason?: string | null
     usage?: { input_tokens?: number; output_tokens?: number }
@@ -949,7 +991,7 @@ async function geminiComplete(
 
   if (!res!.ok) await mapHttpError(res!)
 
-  const data = (await res!.json()) as {
+  const data = (await readBody(() => res!.json(), timeoutSignal)) as {
     candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[]
     usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number }
   }
