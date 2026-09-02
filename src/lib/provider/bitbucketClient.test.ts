@@ -333,3 +333,53 @@ describe('bbFetchAll', () => {
     expect(result).toEqual([])
   })
 })
+
+// ---------------------------------------------------------------------------
+// Abort/timeout classification + window composition (matches ghFetch/glFetch).
+// ---------------------------------------------------------------------------
+
+describe('bbFetch — abort/timeout classification', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it("a TimeoutError is 'timeout', not 'network'", async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new DOMException('t', 'TimeoutError'))
+    await expect(bbFetch('/x')).rejects.toMatchObject({
+      detail: { kind: 'timeout', afterMs: 20_000 },
+    })
+  })
+
+  it("an AbortError with no window fired is 'cancelled', not 'network'", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValue(new DOMException('The user aborted a request.', 'AbortError'))
+    await expect(bbFetch('/x')).rejects.toMatchObject({ detail: { kind: 'cancelled' } })
+  })
+
+  it("a genuine connectivity TypeError stays 'network'", async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
+    await expect(bbFetch('/x')).rejects.toMatchObject({ detail: { kind: 'network' } })
+  })
+
+  it('a caller signal does NOT disable the 20s window', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout')
+    globalThis.fetch = vi.fn().mockResolvedValue(mockResponse({ id: 1 }))
+    await bbFetch('/x', { signal: new AbortController().signal })
+    expect(spy).toHaveBeenCalledWith(20_000)
+  })
+
+  it('a body read torn down mid-stream never escapes as a raw DOMException', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull() {
+            throw new DOMException('The user aborted a request.', 'AbortError')
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+    const err = await bbFetch('/x').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(BitbucketApiError)
+    expect((err as Error).message).not.toMatch(/user aborted/i)
+  })
+})

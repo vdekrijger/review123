@@ -23,6 +23,7 @@
 
 import { getSettings, saveGitlabOAuth } from '../settings/settings'
 import { resolveGitlabToken } from '../auth/gitlabAuth'
+import { classifyFetchFailure, requestSignals } from '../net/signals'
 
 // ---------------------------------------------------------------------------
 // Error types — mirrors github/types.ts GithubError shape
@@ -35,12 +36,27 @@ export type GitlabError =
   | { kind: 'forbidden'; message?: string }
   | { kind: 'unprocessable'; message: string }
   | { kind: 'server'; status: number }
+  // Mirrors GithubError: a timeout is not a connectivity failure, and a
+  // cancellation is not a failure at all.
+  | { kind: 'timeout'; afterMs: number }
+  | { kind: 'cancelled' }
   | { kind: 'network' }
 
 export class GitlabApiError extends Error {
   constructor(public readonly detail: GitlabError) {
     super(`gitlab: ${detail.kind}`)
   }
+}
+
+/** Per-request window for a GitLab API call. */
+const GITLAB_TIMEOUT_MS = 20_000
+
+/** Classify a failed fetch (or a failed read of its body) into a GitlabError. */
+function fetchFailure(err: unknown, timeoutSignal?: AbortSignal): GitlabApiError {
+  const kind = classifyFetchFailure(err, timeoutSignal)
+  if (kind === 'timeout') return new GitlabApiError({ kind: 'timeout', afterMs: GITLAB_TIMEOUT_MS })
+  if (kind === 'cancelled') return new GitlabApiError({ kind: 'cancelled' })
+  return new GitlabApiError({ kind: 'network' })
 }
 
 // ---------------------------------------------------------------------------
@@ -158,12 +174,13 @@ async function refreshGitlabOAuth(): Promise<string | null> {
 export async function glFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = `${getBase()}${path}`
   const headers = { ...buildHeaders(), ...(init.headers as Record<string, string> | undefined) }
-  const signal = init.signal ?? AbortSignal.timeout(20_000)
+  // Composed, never substituted — a caller signal used to disable the window.
+  const { timeoutSignal, effectiveSignal } = requestSignals(init.signal, GITLAB_TIMEOUT_MS)
   let res: Response
   try {
-    res = await fetch(url, { ...init, headers, signal })
-  } catch {
-    throw new GitlabApiError({ kind: 'network' })
+    res = await fetch(url, { ...init, headers, signal: effectiveSignal })
+  } catch (err) {
+    throw fetchFailure(err, timeoutSignal)
   }
 
   // Transparent OAuth refresh: attempt once on 401 when an OAuth token is active.
@@ -175,20 +192,33 @@ export async function glFetch<T>(path: string, init: RequestInit = {}): Promise<
         ...buildHeaders(newToken),
         ...(init.headers as Record<string, string> | undefined),
       }
+      const retry = requestSignals(init.signal, GITLAB_TIMEOUT_MS)
       let retryRes: Response
       try {
-        retryRes = await fetch(url, { ...init, headers: retryHeaders, signal: AbortSignal.timeout(20_000) })
-      } catch {
-        throw new GitlabApiError({ kind: 'network' })
+        retryRes = await fetch(url, { ...init, headers: retryHeaders, signal: retry.effectiveSignal })
+      } catch (err) {
+        throw fetchFailure(err, retry.timeoutSignal)
       }
-      if (retryRes.ok) return (await retryRes.json()) as T
+      if (retryRes.ok) {
+        try {
+          return (await retryRes.json()) as T
+        } catch (err) {
+          throw fetchFailure(err, retry.timeoutSignal)
+        }
+      }
       throw new GitlabApiError(mapError(retryRes, await tryParseBody(retryRes)))
     }
     // Refresh failed — gitlabOAuth was cleared; throw unauthorized so UI can prompt re-auth.
     throw new GitlabApiError({ kind: 'unauthorized' })
   }
 
-  if (res.ok) return (await res.json()) as T
+  if (res.ok) {
+    try {
+      return (await res.json()) as T
+    } catch (err) {
+      throw fetchFailure(err, timeoutSignal)
+    }
+  }
   throw new GitlabApiError(mapError(res, await tryParseBody(res)))
 }
 
@@ -200,14 +230,12 @@ export async function glFetchPage<T>(
   pathOrUrl: string,
 ): Promise<{ body: T; next: string | null }> {
   const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${getBase()}${pathOrUrl}`
+  const { timeoutSignal, effectiveSignal } = requestSignals(undefined, GITLAB_TIMEOUT_MS)
   let res: Response
   try {
-    res = await fetch(url, {
-      headers: buildHeaders(),
-      signal: AbortSignal.timeout(20_000),
-    })
-  } catch {
-    throw new GitlabApiError({ kind: 'network' })
+    res = await fetch(url, { headers: buildHeaders(), signal: effectiveSignal })
+  } catch (err) {
+    throw fetchFailure(err, timeoutSignal)
   }
   if (!res.ok) throw new GitlabApiError(mapError(res, await tryParseBody(res)))
 
@@ -225,7 +253,11 @@ export async function glFetchPage<T>(
     }
   }
 
-  return { body: (await res.json()) as T, next: nextUrl }
+  try {
+    return { body: (await res.json()) as T, next: nextUrl }
+  } catch (err) {
+    throw fetchFailure(err, timeoutSignal)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -234,18 +266,20 @@ export async function glFetchPage<T>(
 
 export async function glFetchRaw(path: string): Promise<string | null> {
   const url = `${getBase()}${path}`
+  const { timeoutSignal, effectiveSignal } = requestSignals(undefined, GITLAB_TIMEOUT_MS)
   let res: Response
   try {
-    res = await fetch(url, {
-      headers: buildHeaders(),
-      signal: AbortSignal.timeout(20_000),
-    })
-  } catch {
-    throw new GitlabApiError({ kind: 'network' })
+    res = await fetch(url, { headers: buildHeaders(), signal: effectiveSignal })
+  } catch (err) {
+    throw fetchFailure(err, timeoutSignal)
   }
   if (res.status === 404) return null
   if (!res.ok) throw new GitlabApiError(mapError(res, await tryParseBody(res)))
-  return res.text()
+  try {
+    return await res.text()
+  } catch (err) {
+    throw fetchFailure(err, timeoutSignal)
+  }
 }
 
 // ---------------------------------------------------------------------------

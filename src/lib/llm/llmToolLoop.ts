@@ -53,9 +53,15 @@ import {
   retryWithCancellation,
 } from './llm'
 import type { LlmUsage } from './llm'
+import { sizeAwareTimeoutMs, timeoutDetail } from './requestWindow'
+import { estimateTokens } from '../context/pack'
 
-/** Per-round request window for the deep-mode tool loop (one HTTP call each). */
-const TOOL_LOOP_TIMEOUT_MS = 60_000
+/**
+ * Base per-round request window for the deep-mode tool loop (one HTTP call
+ * each). A round whose conversation has grown large gets a SCALED window on top
+ * of this — see requestWindow.ts.
+ */
+export const TOOL_LOOP_BASE_TIMEOUT_MS = 60_000
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -153,6 +159,51 @@ function parseArgs(raw: unknown): Record<string, unknown> {
   return {}
 }
 
+/**
+ * The stage name folded into a round's timeout copy. Deep review and grounded
+ * verification both run through this loop, so it names the ROUND rather than
+ * any one task.
+ */
+const TOOL_LOOP_STAGE = 'This deep-review round'
+
+/**
+ * mapFetchError for one loop round, with the round's own size folded into a
+ * TIMEOUT so the panel hover says what timed out, how big it was, and what to
+ * do — instead of the bare "the model took too long".
+ *
+ * An error that is ALREADY an LlmError (mapHttpError's, or a nested map) passes
+ * through untouched apart from that timeout enrichment.
+ */
+function mapRoundError(
+  err: unknown,
+  timeoutSignal: AbortSignal,
+  windowMs: number,
+  promptTokens: number,
+): never {
+  let mapped: unknown = err
+  if (!(err instanceof LlmError)) {
+    try {
+      mapFetchError(err, timeoutSignal)
+    } catch (e) {
+      mapped = e
+    }
+  }
+  if (mapped instanceof LlmError && mapped.kind === 'timeout') {
+    throw new LlmError('timeout', timeoutDetail(TOOL_LOOP_STAGE, windowMs, promptTokens))
+  }
+  throw mapped
+}
+
+/**
+ * The estimated prompt size of ONE round, from the serialized request body.
+ * The conversation grows with every appended tool result, so a late round is
+ * genuinely bigger than the first — the window has to be computed per round,
+ * not once for the loop.
+ */
+function roundPromptTokens(body: Record<string, unknown>): number {
+  return estimateTokens(JSON.stringify(body))
+}
+
 async function postJson(
   providerId: string,
   url: string,
@@ -160,6 +211,12 @@ async function postJson(
   body: Record<string, unknown>,
   signal: AbortSignal | undefined,
 ): Promise<unknown> {
+  // The round's window scales with the round's own size (see requestWindow.ts).
+  // It used to be a flat 60s: reviewers whose grounded-verification rounds ran
+  // to 130k–370k tokens could not possibly answer inside it, so the biggest
+  // reviewers failed while the small ones passed.
+  const promptTokens = roundPromptTokens(body)
+  const windowMs = sizeAwareTimeoutMs(promptTokens) ?? TOOL_LOOP_BASE_TIMEOUT_MS
   // Each deep-mode tool-loop round is a separate non-streaming HTTP call, so it
   // acquires/releases a slot of ITS provider's gate individually (the loop's
   // rounds are sequential, but they coexist with all the OTHER concurrent
@@ -175,7 +232,7 @@ async function postJson(
         // substituted for it (a caller signal used to disable the timeout
         // outright), and the window is kept in hand so mapFetchError can tell
         // "this round timed out" from "someone cancelled us".
-        const timeoutSignal = AbortSignal.timeout(TOOL_LOOP_TIMEOUT_MS)
+        const timeoutSignal = AbortSignal.timeout(windowMs)
         const effectiveSignal = signal ? anySignal([signal, timeoutSignal]) : timeoutSignal
         let res: Response
         try {
@@ -186,10 +243,20 @@ async function postJson(
             signal: effectiveSignal,
           })
         } catch (err) {
-          mapFetchError(err, timeoutSignal)
+          mapRoundError(err, timeoutSignal, windowMs, promptTokens)
         }
         if (!res!.ok) await mapHttpError(res!)
-        return res!.json() as Promise<unknown>
+        // The body read is INSIDE the mapped boundary. fetch() resolves on
+        // HEADERS; a window that fires while the body is still streaming
+        // rejects THIS read, and Blink reports that as a plain AbortError. It
+        // used to be read outside the try/catch, so that DOMException escaped
+        // unclassified and the engine's "The user aborted a request." text was
+        // rendered verbatim in the reviewer chip's hover.
+        try {
+          return (await res!.json()) as unknown
+        } catch (err) {
+          mapRoundError(err, timeoutSignal, windowMs, promptTokens)
+        }
       }),
     { providerId, signal },
   )

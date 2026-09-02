@@ -31,6 +31,7 @@ import {
   LlmError,
   CANCELLED_MESSAGE,
 } from './llm'
+import { llmToolLoop, TOOL_LOOP_BASE_TIMEOUT_MS } from './llmToolLoop'
 import { setTransientRetryPolicyForTests } from './transientRetry'
 import { setDeepseekKey } from '../settings/settings'
 
@@ -342,5 +343,103 @@ describe('retryWithCancellation', () => {
     await expect(
       retryWithCancellation(async () => 'ok', { providerId: 'deepseek' }),
     ).resolves.toBe('ok')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// REPRO (fix/context-abort-errors): the NON-STREAMING response-body read.
+//
+// #233 wrapped the SSE `reader.read()` loop (llmStream) so a mid-stream abort
+// classifies. It did NOT wrap the non-streaming `await res.json()` that every
+// JSON adapter — and llmToolLoop's per-round postJson — performs AFTER the
+// fetch() try/catch has already closed. Blink reports a body read torn down by
+// an AbortSignal as a plain AbortError DOMException ("The user aborted a
+// request."), so that DOMException escapes the transport UNMAPPED: it is not an
+// LlmError, describeTaskError classifies it as kind 'unknown', and its raw
+// engine text lands in PanelState.errorDetail — rendered verbatim in the
+// reviewer chip's hover ("… — The user aborted a request. — click to retry").
+// ---------------------------------------------------------------------------
+
+/** A 200 response whose BODY read rejects the way Blink's does when aborted. */
+function abortingBodyResponse(): Response {
+  const body = new ReadableStream<Uint8Array>({
+    pull() {
+      throw blinkAbortError()
+    },
+  })
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } })
+}
+
+describe('non-streaming body read — an abort during res.json() must classify', () => {
+  beforeEach(() => setDeepseekKey('sk-test'))
+
+  it('llmComplete: an abort while the JSON body is read maps to an LlmError, not a raw DOMException', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(abortingBodyResponse()))
+    const err = await llmComplete({ system: 's', user: 'u' }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(LlmError)
+    expect((err as LlmError).kind).toBe('aborted')
+    expect((err as Error).message).not.toMatch(/user aborted/i)
+  })
+
+  it("llmComplete: our own window having fired makes it a 'timeout', not a cancellation", async () => {
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(firedTimeoutSignal())
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(abortingBodyResponse()))
+    const err = await llmComplete({ system: 's', user: 'u' }).catch((e: unknown) => e)
+    expect((err as LlmError).kind).toBe('timeout')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// llmToolLoop — THE reported path. Deep review (#82) and grounded verification
+// (#229) run every skill reviewer through this loop, and its per-round
+// postJson() had the same "fetch inside the try, body read outside it" shape.
+// The user's failing reviewers were the biggest ones: the largest responses
+// take the longest to READ, so theirs were the body reads still in flight when
+// the round window expired.
+// ---------------------------------------------------------------------------
+
+describe('llmToolLoop — the deep-review round is the path the reviewers take', () => {
+  beforeEach(() => setDeepseekKey('sk-test'))
+
+  it("an abort while a ROUND's JSON body is read maps to an LlmError, not a raw DOMException", async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(abortingBodyResponse()))
+    const err = await llmToolLoop({
+      system: 's',
+      user: 'u',
+      tools: [],
+      executeTool: async () => ({ ok: true, content: '' }),
+    }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(LlmError)
+    expect((err as LlmError).kind).toBe('aborted')
+    expect((err as Error).message).not.toMatch(/user aborted/i)
+  })
+
+  it("a round torn down by OUR window is a 'timeout', not a cancellation", async () => {
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(firedTimeoutSignal())
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(abortingBodyResponse()))
+    const err = await llmToolLoop({
+      system: 's',
+      user: 'u',
+      tools: [],
+      executeTool: async () => ({ ok: true, content: '' }),
+    }).catch((e: unknown) => e)
+    expect((err as LlmError).kind).toBe('timeout')
+  })
+
+  it('the per-round window SCALES with the prompt size instead of a flat 60s', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(makeJsonResponse({ choices: [{ message: { content: 'done' } }] })),
+    )
+    // ~150k characters is roughly 37k estimated tokens — past the large-prompt line.
+    await llmToolLoop({
+      system: 's',
+      user: 'x'.repeat(150_000),
+      tools: [],
+      executeTool: async () => ({ ok: true, content: '' }),
+    })
+    const windows = spy.mock.calls.map((c) => c[0] as number)
+    expect(Math.max(...windows)).toBeGreaterThan(TOOL_LOOP_BASE_TIMEOUT_MS)
   })
 })

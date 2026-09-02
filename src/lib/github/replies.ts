@@ -12,6 +12,7 @@
 
 import { ghFetch } from './client'
 import { GithubApiError } from './types'
+import { apiTimeoutMessage, REQUEST_CANCELLED_MESSAGE } from '../net/signals'
 import type { PrRef } from './parse'
 import { mapReviewComment, type PrComment, type RawReviewComment } from './comments'
 
@@ -52,6 +53,10 @@ function mapReplyError(err: unknown): string {
         return d.message
       case 'network':
         return 'Network error — check your connection and try again.'
+      case 'timeout':
+        return apiTimeoutMessage('GitHub', d.afterMs)
+      case 'cancelled':
+        return REQUEST_CANCELLED_MESSAGE
       case 'server':
         return `GitHub server error (HTTP ${d.status}).`
     }

@@ -25,6 +25,7 @@
  */
 import { ghFetch } from './client'
 import { GithubApiError, type GithubError } from './types'
+import { apiTimeoutMessage, REQUEST_CANCELLED_MESSAGE } from '../net/signals'
 import type { PrRef } from './parse'
 import type { Draft } from '../drafts/drafts.svelte'
 import { outgoingCommentBody } from '../drafts/drafts.svelte'
@@ -287,6 +288,10 @@ export async function submitReview(
           }
         case 'network':
           return { ok: false, kind: 'other', message: 'Network error — check your connection and try again.' }
+        case 'timeout':
+          return { ok: false, kind: 'other', message: apiTimeoutMessage('GitHub', detail.afterMs) }
+        case 'cancelled':
+          return { ok: false, kind: 'other', message: REQUEST_CANCELLED_MESSAGE }
         case 'server':
           return { ok: false, kind: 'other', message: `GitHub server error (HTTP ${detail.status}).` }
         default:

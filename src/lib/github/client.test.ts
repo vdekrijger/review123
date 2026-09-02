@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ghFetch, ghFetchPage } from './client'
 import { GithubApiError } from './types'
 import { setGithubPat, saveGithubAuth } from '../settings/settings'
@@ -83,9 +83,22 @@ describe('ghFetch', () => {
     await expect(ghFetch('/x')).rejects.toMatchObject({ detail: { kind: 'network' } })
   })
 
-  it('maps DOMException TimeoutError to network error', async () => {
+  // A timeout used to be reported as { kind: 'network' }, which told the user
+  // to check a connection that was working fine. It is its own kind now, and it
+  // carries the window it blew so the copy can name it.
+  it("maps DOMException TimeoutError to 'timeout', NOT 'network'", async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new DOMException('t', 'TimeoutError')))
-    await expect(ghFetch('/x')).rejects.toMatchObject({ detail: { kind: 'network' } })
+    await expect(ghFetch('/x')).rejects.toMatchObject({
+      detail: { kind: 'timeout', afterMs: 20_000 },
+    })
+  })
+
+  it("maps an AbortError with no window fired to 'cancelled', NOT 'network'", async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(new DOMException('The user aborted a request.', 'AbortError')),
+    )
+    await expect(ghFetch('/x')).rejects.toMatchObject({ detail: { kind: 'cancelled' } })
   })
 })
 
@@ -123,5 +136,87 @@ describe('ghFetchPage', () => {
     setGithubPat('ghp_secret')
     await ghFetchPage('https://api.github.com/x?page=2')
     expect(f.mock.calls[0][1].headers.Authorization).toBe('Bearer ghp_secret')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Timeout composition + body-read classification
+//
+// `init.signal ?? AbortSignal.timeout(20_000)` meant a caller-supplied signal
+// REPLACED the window: those calls had no timeout at all and could hang
+// forever. It is composed now (the same fix #233 made in the LLM adapters).
+//
+// And the body read is inside the mapped boundary: fetch() resolves on HEADERS,
+// so a window firing mid-body rejects the READ — the exact shape that let a raw
+// "The user aborted a request." DOMException reach the UI elsewhere.
+// ---------------------------------------------------------------------------
+
+describe('ghFetch — request window', () => {
+  // These specs spy on AbortSignal.timeout; restore so the spy cannot leak into
+  // a sibling and make an unrelated abort look like a timeout.
+  afterEach(() => vi.restoreAllMocks())
+
+  it('a caller signal does NOT disable the 20s window', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout')
+    vi.stubGlobal('fetch', mockFetch(200, {}))
+    await ghFetch('/x', { signal: new AbortController().signal })
+    expect(spy).toHaveBeenCalledWith(20_000)
+  })
+
+  it('the signal handed to fetch fires when the CALLER aborts', async () => {
+    const f = mockFetch(200, {})
+    vi.stubGlobal('fetch', f)
+    const ctrl = new AbortController()
+    await ghFetch('/x', { signal: ctrl.signal })
+    const passed = f.mock.calls[0][1].signal as AbortSignal
+    expect(passed.aborted).toBe(false)
+    ctrl.abort()
+    expect(passed.aborted).toBe(true)
+  })
+
+  it('the signal handed to fetch fires when the WINDOW fires', async () => {
+    const fired = new AbortController()
+    fired.abort(new DOMException('signal timed out', 'TimeoutError'))
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(fired.signal)
+    const f = mockFetch(200, {})
+    vi.stubGlobal('fetch', f)
+    await ghFetch('/x', { signal: new AbortController().signal })
+    expect((f.mock.calls[0][1].signal as AbortSignal).aborted).toBe(true)
+  })
+})
+
+describe('ghFetch — a body read torn down mid-stream', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  /** A 200 whose BODY read rejects the way Blink's does when aborted. */
+  function abortingBody(): Response {
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
+          throw new DOMException('The user aborted a request.', 'AbortError')
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )
+  }
+
+  it("classifies as 'cancelled' when no window fired", async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(abortingBody()))
+    await expect(ghFetch('/x')).rejects.toMatchObject({ detail: { kind: 'cancelled' } })
+  })
+
+  it("classifies as 'timeout' when OUR window fired", async () => {
+    const fired = new AbortController()
+    fired.abort(new DOMException('signal timed out', 'TimeoutError'))
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(fired.signal)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(abortingBody()))
+    await expect(ghFetch('/x')).rejects.toMatchObject({ detail: { kind: 'timeout' } })
+  })
+
+  it('never lets the raw DOMException escape', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(abortingBody()))
+    const err = await ghFetch('/x').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(GithubApiError)
+    expect((err as Error).message).not.toMatch(/user aborted/i)
   })
 })

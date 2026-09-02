@@ -28,6 +28,11 @@
 import { getSettings } from '../settings/settings'
 import { gateFor } from './concurrencyGate'
 import { withTransientRetry } from './transientRetry'
+import {
+  isAbortException,
+  isTimeoutException,
+  requestSignals as sharedRequestSignals,
+} from '../net/signals'
 import { activeLlmConfig, PROVIDER_KEY_FIELDS } from './config'
 import { getProvider, getModelDef } from './providers'
 import { parseJsonLoose } from './jsonExtract'
@@ -221,19 +226,11 @@ export const CANCELLED_MESSAGE = 'The request was cancelled.'
  */
 export const TIMED_OUT_MESSAGE = 'The request timed out.'
 
-/** True for the DOMException an aborted fetch / body-stream read rejects with. */
-function isAbortException(err: unknown): boolean {
-  if (err instanceof DOMException) return err.name === 'AbortError'
-  // Not every environment routes abort rejections through a real DOMException
-  // (test doubles, some polyfills) — the `name` discriminant is the contract.
-  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'AbortError'
-}
-
-/** True for the DOMException an `AbortSignal.timeout` firing rejects with, per spec. */
-function isTimeoutException(err: unknown): boolean {
-  if (err instanceof DOMException) return err.name === 'TimeoutError'
-  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'TimeoutError'
-}
+// The abort/timeout discriminants and the signal combinators live in
+// net/signals.ts — the VCS API clients need exactly the same two, and this
+// module's public surface (anySignal / manualAnySignal) is preserved by the
+// re-export below so no caller or test has to move.
+export { anySignal, manualAnySignal } from '../net/signals'
 
 /**
  * Map a thrown fetch/stream-read failure onto an LlmError.
@@ -265,44 +262,51 @@ export function mapFetchError(err: unknown, timeoutSignal?: AbortSignal): never 
   throw new LlmError('network', err instanceof Error ? err.message : String(err))
 }
 
+/**
+ * Classify a RAW engine exception that escaped a transport unmapped — 'aborted'
+ * or 'timeout' when it is recognisably one, else null.
+ *
+ * The UI boundary (describeTaskError) uses this as defence in depth. #233
+ * classified the transports; the reported regression came from ONE unguarded
+ * response-body read, which let a DOMException reach the panel with the
+ * engine's own "The user aborted a request." text intact. Any future
+ * un-audited fetch would do the same, so the last gate before the UI classifies
+ * too rather than trusting every call site to have been wrapped.
+ */
+export function rawTransportKind(err: unknown): 'aborted' | 'timeout' | null {
+  if (err instanceof LlmError) return null
+  if (isTimeoutException(err)) return 'timeout'
+  if (isAbortException(err)) return 'aborted'
+  return null
+}
+
+/**
+ * Read a response body inside the SAME classification boundary as the fetch.
+ *
+ * `fetch()` resolves as soon as the response HEADERS arrive; the body streams
+ * afterwards. So a per-request window that fires mid-body rejects the READ, not
+ * the fetch — and Blink reports that as a plain AbortError. Reading the body
+ * outside the adapter's try/catch therefore bypasses mapFetchError entirely.
+ * That was exactly the hole behind the reported "The user aborted a request."
+ * tooltips: #233 wrapped the SSE reader loop but not the non-streaming reads,
+ * and the biggest reviewers (the largest responses, hence the longest reads)
+ * were the ones whose body read was still in flight when the window expired.
+ */
+export async function readBody<T>(
+  read: () => Promise<T>,
+  timeoutSignal?: AbortSignal,
+): Promise<T> {
+  try {
+    return await read()
+  } catch (err) {
+    if (err instanceof LlmError) throw err
+    mapFetchError(err, timeoutSignal)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Signal composition
 // ---------------------------------------------------------------------------
-
-/**
- * Combine abort signals WITHOUT `AbortSignal.any` — the feature-detect fallback.
- * Propagates the winning signal's `reason` so a timeout stays a TimeoutError
- * (which is what lets mapFetchError tell a timeout from a cancellation).
- * Exported for its own unit tests; prefer anySignal().
- */
-export function manualAnySignal(signals: AbortSignal[]): AbortSignal {
-  const controller = new AbortController()
-  const already = signals.find((s) => s.aborted)
-  if (already) {
-    controller.abort(already.reason)
-    return controller.signal
-  }
-  for (const s of signals) {
-    s.addEventListener('abort', () => controller.abort(s.reason), { once: true })
-  }
-  return controller.signal
-}
-
-/**
- * One signal that fires when ANY of `signals` fires. Uses the native
- * `AbortSignal.any` where available (widely supported) and falls back to
- * manualAnySignal otherwise.
- *
- * This exists because the adapters used to write `signal ?? timeoutSignal`: a
- * caller-supplied signal REPLACED the per-request timeout, so any call that
- * passed one had no timeout at all and could hang indefinitely.
- */
-export function anySignal(signals: AbortSignal[]): AbortSignal {
-  if (signals.length === 1) return signals[0]!
-  const native = (AbortSignal as { any?: (list: AbortSignal[]) => AbortSignal }).any
-  if (typeof native === 'function') return native.call(AbortSignal, signals)
-  return manualAnySignal(signals)
-}
 
 /**
  * The per-request cancellation pair every adapter builds: our timeout signal
@@ -314,11 +318,7 @@ function requestSignals(
   callerSignal: AbortSignal | undefined,
   timeoutMs: number | undefined,
 ): { timeoutSignal: AbortSignal; effectiveSignal: AbortSignal } {
-  const timeoutSignal = AbortSignal.timeout(timeoutMs ?? DEFAULT_TIMEOUT_MS)
-  return {
-    timeoutSignal,
-    effectiveSignal: callerSignal ? anySignal([callerSignal, timeoutSignal]) : timeoutSignal,
-  }
+  return sharedRequestSignals(callerSignal, timeoutMs ?? DEFAULT_TIMEOUT_MS)
 }
 
 /**
@@ -494,7 +494,7 @@ async function openaiCompatComplete(
 
   if (!res!.ok) await mapHttpError(res!)
 
-  const data = (await res!.json()) as {
+  const data = (await readBody(() => res!.json(), timeoutSignal)) as {
     choices?: { message?: { content?: string | null }; finish_reason?: string | null }[]
     usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
   }
@@ -721,7 +721,7 @@ async function anthropicComplete(
 
   if (!res!.ok) await mapHttpError(res!)
 
-  const data = (await res!.json()) as {
+  const data = (await readBody(() => res!.json(), timeoutSignal)) as {
     content?: { type: string; text?: string; name?: string; input?: unknown }[]
     stop_reason?: string | null
     usage?: { input_tokens?: number; output_tokens?: number }
@@ -949,7 +949,7 @@ async function geminiComplete(
 
   if (!res!.ok) await mapHttpError(res!)
 
-  const data = (await res!.json()) as {
+  const data = (await readBody(() => res!.json(), timeoutSignal)) as {
     candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[]
     usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number }
   }

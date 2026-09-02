@@ -772,6 +772,12 @@
       <p role="alert">Your GitHub token was rejected. Update it in Settings.</p>
     {:else if load.state.error === 'network'}
       <p role="alert">Could not reach GitHub. Check your connection and try again.</p>
+    {:else if load.state.error === 'timeout'}
+      <!-- NOT "check your connection": the request reached GitHub, GitHub was
+           just too slow to answer inside our 20s window. -->
+      <p role="alert">GitHub didn't respond in time. It may be under load — reload to try again.</p>
+    {:else if load.state.error === 'cancelled'}
+      <p role="alert">Loading was cancelled before it finished. Reload to try again.</p>
     {:else}
       <p role="alert">GitHub returned an error. Wait a moment and try again.</p>
     {/if}

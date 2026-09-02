@@ -346,3 +346,85 @@ test('deep review: 2-round tool conversation renders verdict with the tool-call 
   // …with the deep-review footer counting the tool call.
   await expect(hotspotsSection.locator('.ai-deep-footer')).toHaveText(/Deep review: verified with 1 tool call/)
 })
+
+// ---------------------------------------------------------------------------
+// fix/context-abort-errors — a tool-loop round whose RESPONSE BODY READ is torn
+// down must render the calm cancelled state, never the engine's own text.
+//
+// This is the shape #233 missed. Its spec rejected the fetch PROMISE, which the
+// adapter's try/catch already covered. Here the fetch RESOLVES — headers and
+// all — and the failure happens while the body is being read, which is what
+// really happens when a per-request window expires mid-response. That read used
+// to sit OUTSIDE the mapped try/catch in llmToolLoop.postJson, so Blink's
+// "The user aborted a request." DOMException reached the reviewer chip's hover
+// under the unclassified "An unexpected error occurred. Please retry." lead.
+//
+// Playwright's route API cannot express "headers fine, body read rejects", and
+// neither can a synthetic Response built from an errored ReadableStream —
+// Blink normalises those to `TypeError: Failed to fetch`, losing the reason. So
+// the patch reproduces the mechanism itself: let the real fetch resolve, then
+// abort its signal before the app reads the body. Verified in Chromium, that
+// yields `DOMException{ name: 'AbortError', message: 'The user aborted a
+// request.' }` — the reported string, verbatim — and it does so even when the
+// aborting signal is an AbortSignal.timeout, which is exactly why the mapping
+// has to consult OUR window rather than the exception's name.
+// ---------------------------------------------------------------------------
+
+test('a body read aborted mid-response renders the calm cancelled state — never the engine text', async ({ page }) => {
+  await setupRoutes(page)
+
+  await page.addInitScript(() => {
+    const realFetch = window.fetch.bind(window)
+    window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.includes('api.deepseek.com')) {
+        const ctrl = new AbortController()
+        const res = await realFetch(input as RequestInfo, { ...init, signal: ctrl.signal })
+        // Headers have arrived; tear the body down before the app reads it.
+        ctrl.abort()
+        return res
+      }
+      return realFetch(input as RequestInfo, init)
+    }) as typeof window.fetch
+  })
+
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({ deepseekKey: 'sk-test-deepseek-key', aiDeepReview: true, diffMode: 'unified' }),
+    )
+    localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+  })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+
+  // The panels settle into the calm cancelled state.
+  await expect(page.locator('.ai-panel-cancelled').first()).toBeAttached({ timeout: 20_000 })
+
+  // NOTHING on the page carries the engine's own words, or the unclassified
+  // lead that proved the error had never been classified at all.
+  await expect(page.getByText(/user aborted/i)).toHaveCount(0)
+  await expect(page.getByText(/aborted a request/i)).toHaveCount(0)
+  await expect(page.getByText(/unexpected error occurred/i)).toHaveCount(0)
+  // Not the network story either — the connection was never the problem.
+  await expect(page.getByText(/check your connection/i)).toHaveCount(0)
+
+  // The same guarantee for every hover string, which is where the reported text
+  // actually lived (title / aria-label, not visible text).
+  const hoverText = await page.evaluate(() => {
+    const out: string[] = []
+    for (const el of Array.from(document.querySelectorAll('[title], [aria-label]'))) {
+      const t = el.getAttribute('title')
+      const a = el.getAttribute('aria-label')
+      if (t) out.push(t)
+      if (a) out.push(a)
+    }
+    return out.join(' | ')
+  })
+  expect(hoverText).not.toMatch(/user aborted/i)
+  expect(hoverText).not.toMatch(/unexpected error occurred/i)
+
+  // No error panel anywhere — a cancellation is not a failure.
+  await expect(page.locator('.ai-panel-error')).toHaveCount(0)
+})

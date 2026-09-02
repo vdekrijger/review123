@@ -330,3 +330,59 @@ describe('glFetchRaw', () => {
     await expect(glFetchRaw('/x')).rejects.toBeInstanceOf(GitlabApiError)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Abort/timeout classification + window composition (matches ghFetch/bbFetch).
+// Every transport failure used to collapse to { kind: 'network' }, and a
+// caller-supplied signal REPLACED the 20s window instead of composing with it.
+// ---------------------------------------------------------------------------
+
+describe('glFetch — abort/timeout classification', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it("a TimeoutError is 'timeout', not 'network'", async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new DOMException('t', 'TimeoutError')))
+    await expect(glFetch('/x')).rejects.toMatchObject({
+      detail: { kind: 'timeout', afterMs: 20_000 },
+    })
+  })
+
+  it("an AbortError with no window fired is 'cancelled', not 'network'", async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(new DOMException('The user aborted a request.', 'AbortError')),
+    )
+    await expect(glFetch('/x')).rejects.toMatchObject({ detail: { kind: 'cancelled' } })
+  })
+
+  it("a genuine connectivity TypeError stays 'network'", async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    await expect(glFetch('/x')).rejects.toMatchObject({ detail: { kind: 'network' } })
+  })
+
+  it('a caller signal does NOT disable the 20s window', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout')
+    vi.stubGlobal('fetch', mockFetch({ id: 1 }))
+    await glFetch('/x', { signal: new AbortController().signal })
+    expect(spy).toHaveBeenCalledWith(20_000)
+  })
+
+  it('a body read torn down mid-stream never escapes as a raw DOMException', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull() {
+              throw new DOMException('The user aborted a request.', 'AbortError')
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    )
+    const err = await glFetch('/x').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(GitlabApiError)
+    expect((err as Error).message).not.toMatch(/user aborted/i)
+  })
+})

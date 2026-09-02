@@ -22,7 +22,13 @@ export function primaryLanguage(files: PrFile[]): string {
 export type LoadState =
   | { status: 'loading' }
   | { status: 'ready'; meta: PrMeta; files: PrFile[] }
-  | { status: 'error'; error: 'not-found' | 'unauthorized' | 'forbidden' | 'network' | 'server' }
+  | {
+      status: 'error'
+      // 'timeout' and 'cancelled' are distinct from 'network' on purpose: the
+      // connection was not the problem in either case, so "check your
+      // connection" was the wrong thing to tell the user.
+      error: 'not-found' | 'unauthorized' | 'forbidden' | 'network' | 'server' | 'timeout' | 'cancelled'
+    }
   | { status: 'error'; error: 'rate-limited'; resetAt: Date }
 
 interface Deps {
@@ -53,7 +59,9 @@ export function createPrLoad(
           e.detail.kind === 'not-found' ||
           e.detail.kind === 'unauthorized' ||
           e.detail.kind === 'forbidden' ||
-          e.detail.kind === 'server'
+          e.detail.kind === 'server' ||
+          e.detail.kind === 'timeout' ||
+          e.detail.kind === 'cancelled'
         )
       ) {
         holder.state = { status: 'error', error: e.detail.kind }

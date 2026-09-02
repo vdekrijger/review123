@@ -20,8 +20,14 @@ import {
   llmJsonWithRepairWithUsage as defaultLlmJsonWithRepairWithUsage,
   llmJsonWithRepairFor as defaultLlmJsonWithRepairFor,
   LlmError,
+  rawTransportKind,
 } from '../llm/llm'
 import type { LlmUsage, ProviderConfig } from '../llm/llm'
+import {
+  sizeAwareTimeoutMs,
+  LARGE_PROMPT_TOKEN_THRESHOLD,
+  LARGE_PROMPT_TIMEOUT_MS,
+} from '../llm/requestWindow'
 import { isTransientLlmError } from '../llm/transientRetry'
 import {
   crossVerify,
@@ -511,7 +517,11 @@ export const CANCELLED_TASK_MESSAGE = 'Cancelled before it finished.'
  * broken one, and counting them would corrupt the failure metrics.
  */
 export function isCancellation(err: unknown): boolean {
-  return err instanceof LlmError && err.kind === 'aborted'
+  if (err instanceof LlmError) return err.kind === 'aborted'
+  // Defence in depth: a RAW engine AbortError that escaped some transport
+  // unmapped is still a cancellation, and must take the calm path rather than
+  // the red "An unexpected error occurred" one (see rawTransportKind).
+  return rawTransportKind(err) === 'aborted'
 }
 
 // ---------------------------------------------------------------------------
@@ -574,7 +584,14 @@ export interface TaskErrorInfo {
  * TRUNCATED_OUTPUT_MESSAGE, which names the real remedy.
  */
 export function describeTaskError(err: unknown): TaskErrorInfo {
-  const kind = err instanceof LlmError ? err.kind : 'unknown'
+  // A RAW engine abort/timeout exception that escaped a transport unmapped is
+  // classified HERE rather than falling through to 'unknown'. That fallback is
+  // what produced the reported reviewer tooltip — "An unexpected error
+  // occurred. Please retry. — The user aborted a request." — when one unguarded
+  // response-body read let a DOMException through. The transports are fixed,
+  // but this is the last gate before the UI and it does not trust them.
+  const rawKind = rawTransportKind(err)
+  const kind = err instanceof LlmError ? err.kind : (rawKind ?? 'unknown')
   const truncated = err instanceof LlmError && err.truncated === true
   const error = truncated && kind === 'invalid-output' ? TRUNCATED_OUTPUT_MESSAGE : humanMessage(kind)
   const rawMessage = err instanceof Error ? err.message : err == null ? '' : String(err)
@@ -585,6 +602,10 @@ export function describeTaskError(err: unknown): TaskErrorInfo {
   // point of the 'aborted' kind is that no engine-authored abort text ("The
   // user aborted a request.") can ever reach the UI through this field.
   if (kind === 'aborted') raw = ''
+  // Same rule for an unmapped engine exception of ANY kind: its message is
+  // engine-authored text ("The user aborted a request.", "signal timed out"),
+  // never something we want to show. The classified sentence stands alone.
+  if (rawKind !== null) raw = ''
   const status = err instanceof LlmError ? err.status : undefined
   if (raw && status !== undefined && !raw.includes(`(${status})`)) raw = `HTTP ${status}: ${raw}`
   const retried = err instanceof LlmError && isTransientLlmError(err)
@@ -630,17 +651,11 @@ function failureProps(task: string, info: TaskErrorInfo): { task: string; reason
  */
 export const JSON_TASK_MAX_TOKENS = 8192
 
-/**
- * Prompt size (estimated tokens, prompt = system + user) above which a JSON
- * task gets the extended timeout instead of the transport's 60s default. A
- * full packed context near the pack budget takes providers well over 60s to
- * ingest + answer — the old fixed window turned big-PR tasks into 'timeout'
- * failures.
- */
-export const LARGE_PROMPT_TOKEN_THRESHOLD = 30_000
-
-/** Extended per-attempt timeout for large-prompt JSON tasks (default stays 60s). */
-export const LARGE_PROMPT_TIMEOUT_MS = 120_000
+// The size-aware request-window ladder now lives in llm/requestWindow.ts so the
+// deep-review tool loop obeys the SAME rule (it used to have a flat 60s per
+// round regardless of size). Re-exported here because these names are part of
+// this module's public surface for the existing task-hardening tests.
+export { LARGE_PROMPT_TOKEN_THRESHOLD, LARGE_PROMPT_TIMEOUT_MS }
 
 /**
  * Build the LLM call options for a non-streaming JSON task: the prompts plus
@@ -655,11 +670,12 @@ function jsonTaskOpts(prompts: { system: string; user: string }): {
   timeoutMs?: number
 } {
   const promptTokens = estimateTokens(prompts.system) + estimateTokens(prompts.user)
+  const timeoutMs = sizeAwareTimeoutMs(promptTokens)
   return {
     system: prompts.system,
     user: prompts.user,
     maxTokens: JSON_TASK_MAX_TOKENS,
-    ...(promptTokens > LARGE_PROMPT_TOKEN_THRESHOLD ? { timeoutMs: LARGE_PROMPT_TIMEOUT_MS } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   }
 }
 
@@ -2522,7 +2538,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // Internal: set all panels to the same status (no-key / declined / error)
   // ---------------------------------------------------------------------------
 
-  function setAllPanels(status: 'no-key' | 'declined' | 'error', error?: string): void {
+  function setAllPanels(
+    status: 'no-key' | 'declined' | 'error' | 'cancelled',
+    error?: string,
+    errorDetail?: string,
+  ): void {
     // Plan J: an OFF task wins — it shows 'disabled' (no tokens were ever going
     // to be spent on it) even when the whole run is no-key/declined/error.
     // Story and the risk judge are in the task matrix too, so they get the
@@ -2534,6 +2554,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       }
       state.status = status
       if (error !== undefined) state.error = error
+      if (errorDetail !== undefined) state.errorDetail = errorDetail
     }
     apply('summary', summaryState)
     apply('attention', attentionState)
@@ -2558,8 +2579,16 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       packedCtx = ctx
       return ctx
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      setAllPanels('error', `Couldn't prepare PR context: ${msg}`)
+      // Packing failures go through the SAME classification as every task
+      // failure. This used to interpolate the raw thrown message, which is the
+      // one way an engine-authored string ("The user aborted a request.") could
+      // reach a panel without passing describeTaskError at all.
+      if (isCancellation(err)) {
+        setAllPanels('cancelled')
+        return null
+      }
+      const info = describeTaskError(err)
+      setAllPanels('error', `Couldn't prepare PR context. ${info.error}`, info.errorDetail)
       return null
     }
   }
