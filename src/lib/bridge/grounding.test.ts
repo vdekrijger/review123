@@ -32,7 +32,15 @@ const PR_HEAD = 'abc1234567890abcdef1234567890abcdef12345'
 const OTHER_HEAD = 'def4567890abcdef1234567890abcdef12345678'
 const TOKEN = 'pairing-token-0000000000000000000000000000'
 
-const ALL_READY: BridgeCapabilities = { inference: ['claude'], infer: true, files: true, search: true }
+// `fix: false` — grounding is a READ feature and never needs write capability.
+// Pinning it false here is the assertion that it never started to.
+const ALL_READY: BridgeCapabilities = {
+  inference: ['claude'],
+  infer: true,
+  files: true,
+  search: true,
+  fix: false,
+}
 
 function snapshot(overrides: Partial<BridgeSnapshot> = {}): BridgeSnapshot {
   return {

@@ -25,14 +25,24 @@ with no bridge running the app behaves exactly as it does today.
 
 ## Status
 
-Protocol **v1**, complete. `GET /v1/health`, `POST /v1/infer`, `POST /v1/files`
-and `POST /v1/search` are all implemented — nothing answers `501` any more.
+Protocol **v1**, complete. `GET /v1/health`, `POST /v1/infer`, `POST /v1/files`,
+`POST /v1/search` and `POST /v1/fix` are all implemented — nothing answers `501`
+any more.
 
 - With `/v1/infer` live, review123 runs its reviews through the CLI you already
   pay for: pick **Local bridge** under Settings → AI models.
 - With `/v1/files` and `/v1/search` live, it grounds those reviews in **your
   working tree** instead of the provider API — no rate limit, no 20k-line cap,
   and the whole repo rather than just the diff.
+- With `/v1/fix` live (**`--allow-write` only**), a finding that has a concrete
+  fix goes straight to your local coding agent, which fixes it in a **scratch
+  worktree**, runs your tests, and hands back one commit per finding. You review
+  the outcome — intent, diff, test result — and cherry-pick what you accept.
+
+> **The bridge is read-only unless you say otherwise.** `/v1/fix` exists only
+> when the process was started with `--allow-write`; without it the route
+> answers `403 write-disabled` and `capabilities.fix` is `false`. A web page
+> cannot turn it on, and there is no setting inside review123 that can.
 
 > **Local grounding only happens when your checkout matches the PR.**
 > `/v1/health` reports the tree's `head` sha, `branch` and whether it is
@@ -123,16 +133,21 @@ with Ctrl-C; the token dies with the process.
 | `--root <dir>` | cwd | The repo to serve. Resolved once, through `realpath`. |
 | `--token-file <path>` | — | Reuse/store the pairing token instead of minting a fresh one per run. Created `0600`. |
 | `--allow-origin <o>` | — | An extra **exact** origin allowed to call the bridge. Repeatable, additive to the defaults. |
+| `--allow-write` | **off** | Enables `POST /v1/fix`: review123 may hand findings to your local coding agent, which fixes them **in a scratch git worktree** and hands back one commit per finding. Your checkout, branch, index and uncommitted work are never touched, and nothing is pushed. Without it the route answers `403` and `capabilities.fix` is `false`. See [§7](#7-writing-is-opt-in-at-the-command-line). |
+| `--test-command <cmd>` | detected | What `/v1/fix` runs to check its own work, e.g. `"pnpm test"`. Split on spaces and run **without a shell** — shell syntax is refused, not silently half-run. |
+| `--no-tests` | — | Never run a test command during `/v1/fix`. |
 | `-h`, `--help` | — | Usage. |
 
-There is deliberately **no flag to change the bind address**.
+There is deliberately **no flag to change the bind address**, and **no request
+field, header or browser setting that can enable writing** — `--allow-write` is
+typed by the person at the terminal or it does not happen.
 
 ---
 
 ## Security model
 
 A local server that can read files and run CLIs, reachable from a web page, is a
-serious attack surface. Seven rules keep it narrow. Each one has tests in
+serious attack surface. Eight rules keep it narrow. Each one has tests in
 `src/*.test.ts`.
 
 ### 1. Loopback only
@@ -265,11 +280,91 @@ state; Settings → AI models → *Test* does a real one-turn round-trip instead
 | `/v1/search` file size | files over 1 MiB are not searched |
 | `/v1/search` files scanned (JS fallback) | 20 000 |
 | `git` probes behind `/v1/health` | 5 s, then the state is reported as `null` |
+| `/v1/fix` findings per request | 10 (over the cap is a `400`, never a silent trim) |
+| `/v1/fix` rounds per finding | 3 (a request may lower it, never raise it) |
+| `/v1/fix` per-finding CLI budget | 300 s default, 600 s ceiling |
+| `/v1/fix` total wall clock | 30 min, then the finished commits come back with `stopReason: "budget-exhausted"` |
+| `/v1/fix` patch per change | 256 KiB, then `truncated: true` |
+| `/v1/fix` test run | 10 min, 64 KiB of output buffered |
 
 `server.requestTimeout` bounds how long a client may take to **send** a request,
 not how long the bridge may take to answer — which is why a multi-minute CLI
 turn is legal under a 30 s receive budget. The inference budget is separate,
 enforced by killing the child (`SIGTERM`, then `SIGKILL` after 2 s).
+
+### 7. Writing is opt-in at the command line
+
+Everything above describes a **read-only** bridge, and that is what you get
+unless you start it with `--allow-write`. This section is about the one route
+that writes.
+
+**`--allow-write` is the entire authorisation model.** It is a process flag,
+read once from `argv` at startup. There is no request field, no header, no
+`localStorage` setting and no browser affordance that can enable it; the
+handler checks it *before parsing the body*, so a read-only bridge never
+reaches a line of the fix machinery. `/v1/health` reports it as
+`capabilities.fix`, which is why that flag is the one capability that is not a
+release-readiness boolean. It dies with Ctrl-C.
+
+**Your working tree is never touched.** All work happens in a **scratch git
+worktree** created from the PR's head commit with `git worktree add`, in a
+directory under your OS temp dir keyed by repo + head sha. It has its own HEAD
+and its own index and shares only the object store, so your branch, your index
+and every uncommitted line you have not pushed stay exactly as they were.
+`fix.test.ts` dirties a real checkout, runs a whole fix loop, and asserts the
+tree is byte-for-byte identical afterwards.
+
+*(The scratch worktree is under the temp dir and **not** inside `.git/`,
+because a coding agent treats anything under `.git/` as git's own
+configuration territory and refuses to edit it — verified against
+`claude` 2.1.278, which answered "sensitive-file approval unavailable".)*
+
+**What it does write**, stated plainly:
+
+1. a directory under your OS temp dir (removed and rebuilt per run, and older
+   slots are retired — only ever paths inside that one parent directory);
+2. git worktree admin data in `$GIT_DIR/worktrees/…` — unavoidable, and part of
+   no working tree;
+3. **one branch ref**, always under `review123/fix/`. That is what makes the
+   returned commits cherry-pickable from your own checkout. Nothing outside
+   that prefix is created, moved or deleted.
+
+**Nothing is pushed.** There is no remote-touching git command anywhere in the
+package. The route *returns* commits; applying them is your move, from your own
+terminal, with the shas it gives you.
+
+**The agent gets file tools and nothing else.** `claude` is started with
+`--tools Read,Edit,Write,Grep,Glob` — no `Bash`, no `WebFetch` — plus
+`--restricted` (file tools confined to the working directory; your settings
+files ignored), `--safe-mode` (no CLAUDE.md, hooks, plugins, MCP) and
+`--permission-prompts none`. It cannot run a command, so it cannot commit,
+stash, or reach a network, whatever a finding tells it. `codex` gets
+`--sandbox workspace-write`, its equivalent. **The bridge makes every commit
+itself**, which is also what guarantees one commit per finding.
+
+**Findings are data, not instructions.** A finding is text a language model
+wrote while reading a diff. The system prompt frames it as a *claim to
+evaluate*, names the categories that must be refused (removing an auth check,
+disabling a test, widening access), and makes refusing cheap: the agent replies
+`SKIP: <reason>` and the whole attempt is discarded. A refusal comes back as a
+first-class result (`skipped[].reason === "refused"`), not a failure.
+
+**The test command is the biggest thing the flag grants, and it is yours.**
+`/v1/fix` runs your repo's own test script — detected from the scratch
+worktree's `package.json` and the lockfile beside it, or set with
+`--test-command`, or disabled with `--no-tests`. That script comes from the PR
+head, i.e. code under review, which is precisely why enabling any of this
+requires a flag you type. The command is **never** a request field; a command
+supplied by a web origin would be arbitrary command execution however politely
+it were spelled.
+
+**One honest caveat.** A scratch worktree has no `node_modules`, so tests could
+not run at all. The bridge therefore creates a single symlink,
+`node_modules` → your checkout's `node_modules`, and excludes it from every
+commit. Consequence, stated rather than buried: a test that *writes* into
+`node_modules` would write into your checkout's copy. Nothing else in your
+checkout is reachable from the scratch tree. The alternative — never running
+tests in a JS repo — would make "the agent ran the tests" a lie.
 
 ### Bonus: DNS-rebinding guard
 
@@ -281,8 +376,13 @@ optionally with the port it bound) and answers `403 forbidden-host` otherwise.
 
 ### What the bridge does NOT do
 
-- It does not write to your repo. The CLIs it runs cannot either: `claude` is
-  started with no tools at all, `codex` with a read-only sandbox.
+- **Without `--allow-write`** it does not write to your repo at all, and the
+  CLIs it runs cannot either: `claude` is started with no tools whatsoever,
+  `codex` with a read-only sandbox.
+- **With `--allow-write`** it still never touches your working tree, your
+  branch, your index or your uncommitted work, and it never pushes. See
+  [§7](#7-writing-is-opt-in-at-the-command-line) for exactly what it does
+  write.
 - It does not read anything outside the repo root.
 - It does not phone home, log request bodies, or persist anything except an
   explicit `--token-file`. The temp files an inference call needs (the system
@@ -310,7 +410,7 @@ Every non-2xx response is:
 with `error` one of `bad-request`, `unauthorized`, `forbidden-origin`,
 `forbidden-host`, `forbidden-path`, `not-found`, `method-not-allowed`,
 `not-implemented`, `payload-too-large`, `timeout`, `cli-unavailable`,
-`cli-failed`.
+`cli-failed`, `write-disabled`, `worktree-failed`, `head-unknown`.
 
 Codes are **additive within v1**: a client that meets one it does not recognise
 must fall back on `message`, never crash.
@@ -326,7 +426,8 @@ must fall back on `message`, never crash.
     "inference": ["claude"],    // CLIs DETECTED on PATH — see below
     "infer": true,              // route READINESS — one flag per route
     "files": true,
-    "search": true              // true even without ripgrep: a JS walk answers
+    "search": true,             // true even without ripgrep: a JS walk answers
+    "fix": false                // the --allow-write FLAG, not a readiness bit
   },
   "git": {                      // the working tree RIGHT NOW — or null
     "head": "9f1c…",            // full 40-char sha
@@ -337,7 +438,7 @@ must fall back on `message`, never crash.
 }
 ```
 
-**`capabilities` has two different kinds of entry, on purpose:**
+**`capabilities` has three different kinds of entry, on purpose:**
 
 - `inference` is a **detection** signal: which of the known CLIs exist on
   `PATH`. It says nothing about whether the route works.
@@ -345,6 +446,11 @@ must fall back on `message`, never crash.
   and named after it. Each flips *in the same commit that implements its
   route*, so a client that trusts the flag can never call a route that is not
   there. All three are `true` — v1 is complete.
+- `fix` is an **authorisation** signal, and the only one: it reports whether
+  *this process* was started with `--allow-write`. It is not "true from the
+  release that shipped the route", because the route existing and the route
+  being permitted are different facts, and a client must show the user the
+  second one. Without the flag, `/v1/fix` answers `403 write-disabled`.
 
 `search` is `true` whether or not `ripgrep` is installed. The flag reports
 whether the **route** exists, never how fast it will be; conflating the two
@@ -535,6 +641,112 @@ skipped. If `rg` is present but fails, the walker runs instead and the caller
 cannot tell the difference.
 
 A malformed `regex` is a `400` you can act on, not a mystery two layers down.
+
+### `POST /v1/fix` — implemented, **`--allow-write` only**
+
+Hand findings to your local coding agent, let it fix them in a scratch
+worktree, and get back a small, attributed diff. Without `--allow-write` this
+route answers `403 write-disabled` — see
+[§7](#7-writing-is-opt-in-at-the-command-line) for the whole safety model.
+
+```ts
+interface FixRequest {
+  cli: 'claude' | 'codex'   // must appear in capabilities.inference
+  headSha: string           // full 40-hex commit; the scratch worktree's base
+  findings: FixFinding[]    // 1..10
+  maxRounds?: number        // clamped to [1, 3]; a request may only LOWER it
+  timeoutMs?: number        // per-finding CLI budget, ceiling 600 000
+}
+
+interface FixFinding {
+  id: string                // YOUR opaque id, echoed back on every result
+  path: string              // repo-relative; confined like every other path
+  line: number | null
+  severity: 'high' | 'medium' | 'low'
+  body: string
+  suggestedFix: string      // REQUIRED — see "the routing rule" below
+}
+```
+
+There is deliberately **no `testCommand`, `cwd`, `env` or argv field.** The
+test command comes from the terminal (`--test-command`) or from detection.
+
+```ts
+interface FixResponse {
+  ok: true
+  cli: string
+  baseSha: string           // echoes headSha
+  branch: string            // "review123/fix/<head12>" — in YOUR repo, unpushed
+  changes: FixChange[]      // one per finding that produced a commit
+  skipped: FixSkip[]        // one per finding that did not, with WHY
+  rounds: number            // the most rounds any single finding needed
+  stopReason: FixStopReason
+  tests: FixTestOutcome | null   // the FINAL state of the branch
+  durationMs: number
+}
+
+interface FixChange {
+  findingId: string
+  commit: string            // full sha — `git cherry-pick <commit>` just works
+  subject: string
+  intent: string            // the agent's own one-line account. Never invented.
+  files: string[]
+  diff: string              // `git show` patch, capped at 256 KiB
+  truncated: boolean
+  rounds: number            // 1 = right first time
+  stopReason: FixStopReason // why THIS finding's loop ended
+  tests: FixTestOutcome | null   // the tree AT THIS COMMIT
+}
+
+interface FixSkip {
+  findingId: string
+  reason: 'refused' | 'no-change' | 'agent-failed' | 'timeout'
+        | 'forbidden-path' | 'budget'
+  detail: string            // the agent's reason, or the bridge's
+}
+
+interface FixTestOutcome {
+  status: 'passed' | 'failed' | 'unrunnable' | 'timeout' | 'skipped'
+  command: string           // e.g. "pnpm test"
+  durationMs: number
+  output: string            // sanitized tail, 4 000 chars
+  detail?: string           // why, when unrunnable/skipped
+}
+```
+
+**The routing rule.** `suggestedFix` is required, and that is the rule made
+structural rather than conventional: every review123 finding carries either a
+concrete fix *or* an explicit `"No clean fix — <tradeoff>"`. The first kind is
+mechanical and belongs to an agent; the second is a judgment call and belongs
+to a person. The browser never sends the second kind, and this route could not
+accept one if it tried.
+
+**One commit per finding, always.** Findings are handled one at a time and the
+*bridge* makes the commit, at the end of that finding's loop, from whatever the
+agent left in the working tree. Six findings give you six independent commits,
+so accepting four and rejecting two is a `git cherry-pick`, not a merge
+conflict. If an agent commits anyway (it is told not to, and `claude` has no
+shell), its commits are soft-reset back into the working tree first.
+
+**Rounds are fix→re-check, per finding.** Round 1 makes the change; a further
+round happens **only** when the test command then failed, and the agent gets
+its own failure back to repair. The loop stops when:
+
+| `stopReason` | meaning |
+| --- | --- |
+| `all-addressed` | the change was made and the tests were not failing |
+| `round-cap` | 3 rounds ran and it was still red — **the commit is returned anyway, red** |
+| `no-progress` | a round left the tree exactly as the previous one did |
+| `repeat-diff` | a round reproduced a state an earlier round produced: oscillating |
+| `budget-exhausted` | the 30-minute total wall clock expired |
+
+On a `FixChange` it is that finding's reason; on the response it is the run's —
+`budget-exhausted`, or else the strongest any finding hit, so a summary line can
+never read greener than the detail under it.
+
+**Caps.** 10 findings per request; 3 rounds per finding; 300 s per finding
+(ceiling 600 s); 30 min total; 256 KiB of patch per change; 10 min and 64 KiB
+per test run.
 
 The canonical TypeScript source for all of the above is
 [`src/protocol.ts`](src/protocol.ts); the browser client mirrors it in

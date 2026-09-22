@@ -75,19 +75,36 @@ describe('detectInferenceClis', () => {
 })
 
 describe('detectCapabilities', () => {
-  it('reports every v1 route as READY — all three are implemented', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']))
-    expect(caps).toEqual({ inference: ['claude'], infer: true, files: true, search: true })
+  it('reports every read-only v1 route as READY — all three are implemented', async () => {
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false)
+    expect(caps).toEqual({ inference: ['claude'], infer: true, files: true, search: true, fix: false })
   })
 
   it('reports search READY with nothing on PATH — the route falls back to a JS walk', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], []))
+    const caps = await detectCapabilities(stubDeps(['/bin'], []), false)
     expect(caps.search).toBe(true)
   })
 
   it('reports infer READY even with no CLI detected — readiness and detection are different questions', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], []))
-    expect(caps).toEqual({ inference: [], infer: true, files: true, search: true })
+    const caps = await detectCapabilities(stubDeps(['/bin'], []), false)
+    expect(caps).toEqual({ inference: [], infer: true, files: true, search: true, fix: false })
+  })
+
+  // `fix` is NOT a release-readiness flag like its siblings: it is the
+  // --allow-write flag itself. These two tests are the whole contract.
+  it('reports fix FALSE without --allow-write, whatever else is installed', async () => {
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude', '/bin/codex']), false)
+    expect(caps.fix).toBe(false)
+  })
+
+  it('reports fix TRUE only when the process was started with --allow-write', async () => {
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), true)
+    expect(caps.fix).toBe(true)
+  })
+
+  it('reports fix TRUE even with no CLI detected — the flag is about authorisation, not tooling', async () => {
+    const caps = await detectCapabilities(stubDeps(['/bin'], []), true)
+    expect(caps).toEqual({ inference: [], infer: true, files: true, search: true, fix: true })
   })
 })
 

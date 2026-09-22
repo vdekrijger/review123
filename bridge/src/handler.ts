@@ -15,9 +15,14 @@
  *   5. Body cap.                                 413.
  *   6. Route.                                    200 / 4xx / 404.
  *
- * Every gate above still applies to `/v1/infer`, `/v1/files` and `/v1/search`:
- * no origin outside the allowlist, no request without the pairing token, and no
- * rebound hostname ever reaches the code that spawns a process or opens a file.
+ * Every gate above still applies to `/v1/infer`, `/v1/files`, `/v1/search` and
+ * `/v1/fix`: no origin outside the allowlist, no request without the pairing
+ * token, and no rebound hostname ever reaches the code that spawns a process,
+ * opens a file, or creates a worktree.
+ *
+ * `/v1/fix` adds a SEVENTH gate of its own, inside the route: `--allow-write`.
+ * It is checked before the body is even parsed, so a read-only bridge refuses
+ * without touching a line of the fix machinery.
  */
 
 import { extractBearer, tokenMatches } from './auth.js'
@@ -28,6 +33,7 @@ import {
   statusForFilesError,
   type FilesOutcome,
 } from './files.js'
+import { parseFixRequest, runFixLoop, statusForFixError, type FixOutcome } from './fix.js'
 import { readGitState } from './gitState.js'
 import {
   parseInferRequest,
@@ -43,6 +49,8 @@ import {
   type BridgeErrorCode,
   type ErrorResponse,
   type FilesRequest,
+  type FixRequest,
+  type FixResponse,
   type GitState,
   type HealthResponse,
   type InferRequest,
@@ -82,6 +90,15 @@ export interface HandlerContext {
   rootName: string
   /** Additive `--allow-origin` values, matched exactly. */
   extraOrigins: string[]
+  /**
+   * `--allow-write`. THE authorisation for `/v1/fix`, and the only one.
+   *
+   * It is a property of the PROCESS, set from argv at startup. Nothing a
+   * request carries can change it, so a web origin can neither turn writing on
+   * nor discover a way to ask for it — the only way is for the person at the
+   * terminal to restart the bridge with the flag.
+   */
+  allowWrite: boolean
   /** Re-probed per health request so plugging in a CLI does not need a restart. */
   capabilities: () => Promise<BridgeCapabilities>
   version: string
@@ -95,6 +112,12 @@ export interface HandlerContext {
   files: (req: FilesRequest) => Promise<FilesOutcome>
   /** Runs `/v1/search`. Injected for the same reason `infer` is. */
   search: (req: SearchRequest) => Promise<SearchResponse>
+  /**
+   * Runs `/v1/fix`. Injected so the handler's tests can exercise every
+   * protocol rule — above all the `--allow-write` gate — without a real
+   * worktree, a real agent, or a real commit.
+   */
+  fix: (req: FixRequest, availableClis: readonly string[]) => Promise<FixOutcome>
   /**
    * The working tree's repo state for `/v1/health`, or null when it cannot be
    * established. Injected so the handler's tests can exercise every state
@@ -124,6 +147,16 @@ export function defaultRepoState(realRoot: string) {
   return (): Promise<GitState | null> => readGitState(realRoot)
 }
 
+/**
+ * The real `/v1/fix` worker. Note what it closes over: the repo root and the
+ * TERMINAL's test-command settings. Nothing from a request reaches the
+ * subprocess layer except a validated sha and the findings' text.
+ */
+export function defaultFix(realRoot: string, testCommand: readonly string[], noTests: boolean) {
+  return (req: FixRequest, availableClis: readonly string[]): Promise<FixOutcome> =>
+    runFixLoop(req, { realRoot, availableClis, testCommand, noTests })
+}
+
 const JSON_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
   // A bridge response is never a cacheable document, and the 401/403 bodies
@@ -151,12 +184,17 @@ function fail(
  * Every POST route in protocol v1. Used for the 405 check, so a GET to a real
  * route is told the METHOD is wrong rather than that the route is missing.
  *
- * There is no longer a RESERVED set: `/v1/files` and `/v1/search` were the last
- * two 501s and they are implemented below. The `not-implemented` error CODE
- * stays in the contract (codes are additive within v1, and clients still
- * recognise it) — it is simply no longer produced by any route.
+ * There is no longer a RESERVED set: every v1 route is implemented below. The
+ * `not-implemented` error CODE stays in the contract (codes are additive within
+ * v1, and clients still recognise it) — it is simply no longer produced by any
+ * route.
+ *
+ * `/v1/fix` is listed here even on a bridge started WITHOUT `--allow-write`.
+ * That is deliberate: it exists and is understood, it is simply not authorised,
+ * so it answers `403 write-disabled` — a fact the user can act on — rather than
+ * a 404 that would read as "update your bridge".
  */
-const POST_ROUTES = new Set(['/v1/infer', '/v1/files', '/v1/search'])
+const POST_ROUTES = new Set(['/v1/infer', '/v1/files', '/v1/search', '/v1/fix'])
 
 /** Parse a request body as JSON, or null. Never throws. */
 function parseJsonBody(body: Buffer | null): unknown {
@@ -278,6 +316,55 @@ export async function handleRequest(
       return fail(statusForFilesError(outcome.code), outcome.code, outcome.message, cors)
     }
     return json(200, outcome, cors)
+  }
+
+  if (req.method === 'POST' && req.path === '/v1/fix') {
+    // ---- THE WRITE GATE ----
+    // First, before parsing and long before anything can create a directory or
+    // spawn an agent. A bridge without --allow-write never reaches a single
+    // line of fix.ts, whatever the body says.
+    if (!ctx.allowWrite) {
+      return fail(
+        403,
+        'write-disabled',
+        'This bridge is read-only. Restart it with --allow-write to let review123 hand findings to your local coding agent.',
+        cors,
+      )
+    }
+
+    const parsed = parseFixRequest(parseJsonBody(req.body))
+    if ('error' in parsed) return fail(400, 'bad-request', parsed.error, cors)
+
+    // Same re-probe as /v1/infer: installing a CLI must not need a restart, and
+    // "you do not have that CLI" is answered before any worktree is created.
+    const { inference } = await ctx.capabilities()
+    if (!inference.includes(parsed.cli)) {
+      return fail(
+        503,
+        'cli-unavailable',
+        `The ${parsed.cli} CLI is not on this machine's PATH. Install it, then restart the bridge.`,
+        cors,
+      )
+    }
+
+    const outcome = await ctx.fix(parsed, inference)
+    if (!outcome.ok) {
+      return fail(statusForFixError(outcome.code), outcome.code, outcome.message, cors)
+    }
+
+    const payload: FixResponse = {
+      ok: true,
+      cli: parsed.cli,
+      baseSha: outcome.baseSha,
+      branch: outcome.branch,
+      changes: outcome.changes,
+      skipped: outcome.skipped,
+      rounds: outcome.rounds,
+      stopReason: outcome.stopReason,
+      tests: outcome.tests,
+      durationMs: outcome.durationMs,
+    }
+    return json(200, payload, cors)
   }
 
   if (req.method === 'POST' && req.path === '/v1/search') {

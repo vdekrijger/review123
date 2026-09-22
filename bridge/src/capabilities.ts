@@ -92,12 +92,23 @@ export async function detectInferenceClis(deps: CapabilityDeps): Promise<string[
  * route"; `inference` says "and here is what it could run". A client needs
  * both, and gets a precise `cli-unavailable` error instead of a confusing 501
  * when it asks for a CLI that is not installed.
+ *
+ * `fix` IS DIFFERENT FROM ALL FOUR. It is not "true from the release that
+ * implements the route" — it is `allowWrite`, i.e. whether the person at the
+ * terminal started this process with `--allow-write`. The flag is the entire
+ * authorisation model for writing, so the capability has to report the flag
+ * and nothing else. A build that hard-coded `fix: true` here would hand every
+ * paired web origin a write button the user never granted.
  */
-export async function detectCapabilities(deps: CapabilityDeps): Promise<BridgeCapabilities> {
+export async function detectCapabilities(
+  deps: CapabilityDeps,
+  allowWrite: boolean,
+): Promise<BridgeCapabilities> {
   return {
     inference: await detectInferenceClis(deps),
     infer: true,
     files: true,
     search: true,
+    fix: allowWrite,
   }
 }

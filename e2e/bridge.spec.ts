@@ -668,3 +668,388 @@ test('with NO bridge paired, the review says nothing about grounding at all', as
   const calls = await page.evaluate(() => (window as unknown as { __bridgeCalls: string[] }).__bridgeCalls)
   expect(calls).toEqual([])
 })
+
+// ===========================================================================
+// THE AGENT FIX LOOP — findings straight to the user's coding agent.
+//
+// The rule these tests exist for: only a finding with a CONCRETE fix is sent.
+// The honest "No clean fix — <tradeoff>" form is a judgment call and must
+// never be handed to a machine, and a read-only bridge must never be offered
+// as a write one — that flag lives at the user's terminal, not in a web page.
+// ===========================================================================
+
+/** A reviewer skill, seeded the way skill-reviewers.spec.ts seeds one. */
+const FIX_SKILL_ID = 'skill-e2e-fix'
+
+/**
+ * Three findings that exercise the whole routing rule:
+ *   - two with a CONCRETE fix, high severity   → eligible, offered, selected
+ *   - one with the "No clean fix — …" form     → NEVER offered to the agent
+ */
+const FIX_REVIEW_RESULT = {
+  skillName: 'Security Reviewer',
+  findings: [
+    {
+      path: 'src/feature.ts',
+      line: 2,
+      severity: 'high',
+      body: 'Unescaped user input reaches the DOM',
+      suggestedFix: 'Escape it with `sanitizeHtml(input)` before rendering.',
+    },
+    {
+      path: 'src/feature.ts',
+      line: 3,
+      severity: 'high',
+      body: 'The loop reads one past the end of the array',
+      suggestedFix: 'Change the loop bound to `i < items.length`.',
+    },
+    {
+      path: 'src/feature.ts',
+      line: 4,
+      severity: 'high',
+      body: 'This query is N+1 across the request',
+      suggestedFix: 'No clean fix — batching adds latency; accept the N+1 here or restructure the caller.',
+    },
+  ],
+}
+
+function fixSettings() {
+  return {
+    deepseekKey: 'sk-test-deepseek-key',
+    diffMode: 'unified',
+    railCollapsed: false,
+    // Deterministic: this spec clicks "Run my reviewers" itself.
+    autoRunReviewers: false,
+  }
+}
+
+async function seedFixSkill(page: Page) {
+  await page.addInitScript(
+    ({ id }) => {
+      localStorage.setItem(
+        'review123:reviewer-skills',
+        JSON.stringify([
+          {
+            id,
+            name: 'Security Reviewer',
+            content: '## Security\nCheck for XSS and injection vulnerabilities.',
+            enabled: true,
+            addedAt: 1700000000000,
+          },
+        ]),
+      )
+      localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
+    },
+    { id: FIX_SKILL_ID },
+  )
+}
+
+/** DeepSeek stub that answers the reviewer, convergence and simplify passes. */
+async function setupReviewerProvider(page: Page) {
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: { role: string; content: string }[] } = {}
+    try {
+      body = route.request().postDataJSON() as typeof body
+    } catch {
+      /* non-JSON body */
+    }
+    const json = (content: unknown) =>
+      route.fulfill({
+        status: 200,
+        json: {
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify(content) }, finish_reason: 'stop', index: 0 }],
+        },
+      })
+
+    if (body?.stream === true) {
+      const chunk = {
+        id: 'chatcmpl-test',
+        object: 'chat.completion.chunk',
+        choices: [{ delta: { content: 'Summary. ' }, index: 0, finish_reason: null }],
+      }
+      return route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+        body: `data: ${JSON.stringify(chunk)}\ndata: [DONE]\n`,
+      })
+    }
+
+    const system = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
+    if (system.includes('consolidating overlapping code-review findings')) return json({ clusters: [] })
+    if (system.includes('rewriting code-review findings into plain')) return json({ rewrites: [] })
+    if (system.includes('reviewer persona') || system.includes('security reviewer')) {
+      return json(FIX_REVIEW_RESULT)
+    }
+    return json({ level: 'minor-changes', evidence: [], notAnalyzed: [] })
+  })
+}
+
+interface FixStubOptions {
+  /** `capabilities.fix` — the bridge's `--allow-write` flag. */
+  writeEnabled: boolean
+  /** When set, `/v1/fix` answers with this status + body instead of succeeding. */
+  refuse?: { status: number; error: string; message: string }
+}
+
+/**
+ * Stub a whole bridge: `/v1/health`, `/v1/files` (grounding reads it) and
+ * `/v1/fix`. The fix stub ECHOES the ids it was sent, so the test can assert
+ * that each returned commit lands against the finding it came from.
+ */
+async function stubBridgeFix(page: Page, opts: FixStubOptions) {
+  await page.addInitScript(
+    ({ health, refuse }) => {
+      const realFetch = window.fetch.bind(window)
+      const calls: { url: string; body: string | null }[] = []
+      ;(window as unknown as { __bridgeCalls: typeof calls }).__bridgeCalls = calls
+
+      const json = (payload: unknown, status = 200) =>
+        new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } })
+
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+        if (!url.includes('127.0.0.1')) return realFetch(input as RequestInfo, init)
+
+        const body = typeof init?.body === 'string' ? init.body : null
+        calls.push({ url, body })
+
+        if (url.includes('/v1/health')) return Promise.resolve(json(health))
+        if (url.includes('/v1/files')) {
+          const asked = (JSON.parse(body ?? '{}') as { paths?: string[] }).paths ?? []
+          return Promise.resolve(json({ ok: true, files: [], missing: asked, skipped: [] }))
+        }
+        if (url.includes('/v1/fix')) {
+          if (refuse) {
+            return Promise.resolve(
+              json({ ok: false, error: refuse.error, message: refuse.message }, refuse.status),
+            )
+          }
+          const sent = JSON.parse(body ?? '{}') as {
+            findings?: { id: string; path: string }[]
+            headSha?: string
+          }
+          const findings = sent.findings ?? []
+          const sha = (n: number) => String(n).repeat(40).slice(0, 40)
+          return Promise.resolve(
+            json({
+              ok: true,
+              cli: 'claude',
+              baseSha: sent.headSha,
+              branch: 'review123/fix/abc1234567890',
+              changes: findings.map((f, i) => ({
+                findingId: f.id,
+                commit: sha(i + 1),
+                subject: `fix: change ${i + 1}`,
+                intent: `Agent intent ${i + 1}: made the smallest change that addresses it.`,
+                files: [f.path],
+                diff: `--- a/${f.path}\n+++ b/${f.path}\n@@ -1 +1 @@\n-old ${i}\n+new ${i}\n`,
+                truncated: false,
+                rounds: 1,
+                stopReason: 'all-addressed',
+                tests: { status: 'passed', command: 'pnpm test', durationMs: 900, output: '1 passing' },
+              })),
+              skipped: [],
+              rounds: 1,
+              stopReason: 'all-addressed',
+              tests: { status: 'passed', command: 'pnpm test', durationMs: 900, output: '1 passing' },
+              durationMs: 4200,
+            }),
+          )
+        }
+        return Promise.resolve(json({ ok: false, error: 'not-found', message: 'no' }, 404))
+      }
+    },
+    {
+      health: healthBody({
+        capabilities: {
+          inference: ['claude'],
+          infer: true,
+          files: true,
+          search: true,
+          fix: opts.writeEnabled,
+        },
+      }),
+      refuse: opts.refuse ?? null,
+    },
+  )
+}
+
+/** Load the review, run the reviewers, and land on the Inspect step. */
+async function runReviewers(page: Page) {
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+  await page.getByRole('button', { name: /run my reviewers \(1\)/i }).click()
+  await expect(page.getByText(/Unescaped user input reaches the DOM/i).first()).toBeVisible({
+    timeout: 20_000,
+  })
+}
+
+test('fix loop: two eligible findings go to the agent, one is approved and one rejected', async ({
+  page,
+}) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await setupReviewerProvider(page)
+  await stubBridgeFix(page, { writeEnabled: true })
+  await seedPairing(page)
+  await seedFixSkill(page)
+  await page.addInitScript((s) => localStorage.setItem('review123:settings', JSON.stringify(s)), fixSettings())
+
+  await runReviewers(page)
+
+  const panel = page.getByTestId('agent-fix-panel')
+  await expect(panel).toBeVisible({ timeout: 10_000 })
+  await expect(panel).toHaveAttribute('data-ready', 'true')
+
+  // THE ROUTING RULE, on screen: the two concrete fixes are offered, and the
+  // "No clean fix — tradeoff" finding is NOT — it stays with the human.
+  const candidates = panel.getByTestId('agent-fix-candidate')
+  await expect(candidates).toHaveCount(2)
+  await expect(panel).toContainText('Unescaped user input reaches the DOM')
+  await expect(panel).toContainText('The loop reads one past the end')
+  await expect(panel).not.toContainText('This query is N+1')
+
+  // Everything eligible starts ticked — the user unticks what they keep.
+  await expect(panel.getByTestId('agent-fix-count')).toHaveText(/2 of 2 selected/)
+  for (const box of await panel.getByTestId('agent-fix-checkbox').all()) {
+    await expect(box).toBeChecked()
+  }
+
+  await panel.getByTestId('agent-fix-send').click()
+
+  // Two attributed commits come back, each against the finding it came from.
+  const results = panel.getByTestId('agent-fix-result')
+  await expect(results).toHaveCount(2, { timeout: 15_000 })
+  await expect(results.first().getByTestId('agent-fix-intent')).toContainText('Agent intent 1')
+  await expect(results.nth(1).getByTestId('agent-fix-intent')).toContainText('Agent intent 2')
+  await expect(results.first().getByTestId('agent-fix-tests')).toHaveAttribute('data-status', 'passed')
+
+  // The diff is there to read before deciding.
+  await results.first().getByTestId('agent-fix-diff').locator('summary').click()
+  await expect(results.first().getByTestId('agent-fix-diff')).toContainText('+new 0')
+
+  // What the bridge was actually sent: ids for the two eligible findings and a
+  // sha — no command, no cwd, no environment.
+  const calls = await page.evaluate(
+    () => (window as unknown as { __bridgeCalls: { url: string; body: string | null }[] }).__bridgeCalls,
+  )
+  const fixCall = calls.find((c) => c.url.includes('/v1/fix'))!
+  const sent = JSON.parse(fixCall.body ?? '{}')
+  expect(Object.keys(sent).sort()).toEqual(['cli', 'findings', 'headSha'])
+  expect(sent.headSha).toBe(HEAD_SHA)
+  expect(sent.findings).toHaveLength(2)
+  expect(sent.findings.every((f: { suggestedFix: string }) => !/^no clean fix/i.test(f.suggestedFix))).toBe(true)
+
+  // ---- Approve one, reject the other ----
+  await results.first().getByTestId('agent-fix-approve').click()
+  await results.nth(1).getByTestId('agent-fix-reject').click()
+  await expect(results.first()).toHaveAttribute('data-verdict', 'approved')
+  await expect(results.nth(1)).toHaveAttribute('data-verdict', 'rejected')
+
+  // The cherry-pick line carries ONLY the approved commit — that is what
+  // "accept four of six" means, and it is the user's own command to run.
+  const cherry = panel.getByTestId('agent-fix-cherry-pick')
+  await expect(cherry).toContainText('git cherry-pick 111111111111')
+  await expect(cherry).not.toContainText('222222222222')
+  await expect(panel).toContainText(/Nothing has been applied/i)
+})
+
+test('fix loop: a READ-ONLY bridge is never offered as a write one', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await setupReviewerProvider(page)
+  // Same bridge, same CLIs, same matching checkout — only --allow-write is off.
+  await stubBridgeFix(page, { writeEnabled: false })
+  await seedPairing(page)
+  await seedFixSkill(page)
+  await page.addInitScript((s) => localStorage.setItem('review123:settings', JSON.stringify(s)), fixSettings())
+
+  await runReviewers(page)
+
+  const panel = page.getByTestId('agent-fix-panel')
+  await expect(panel).toBeVisible({ timeout: 10_000 })
+  await expect(panel).toHaveAttribute('data-ready', 'false')
+  // It says WHY, and that only the terminal can change it.
+  await expect(panel.getByTestId('agent-fix-readiness')).toHaveAttribute('data-reason', 'write-disabled')
+  await expect(panel.getByTestId('agent-fix-readiness')).toContainText('--allow-write')
+  // No way in: no selection, no send button.
+  await expect(panel.getByTestId('agent-fix-send')).toHaveCount(0)
+  await expect(panel.getByTestId('agent-fix-candidate')).toHaveCount(0)
+
+  // THE INVARIANT: the route was never called.
+  const calls = await page.evaluate(
+    () => (window as unknown as { __bridgeCalls: { url: string; body: string | null }[] }).__bridgeCalls,
+  )
+  expect(calls.filter((c) => c.url.includes('/v1/fix'))).toEqual([])
+})
+
+test('fix loop: a bridge that refuses mid-run says so, and applies nothing', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await setupReviewerProvider(page)
+  // The bridge ADVERTISES write capability but refuses the call — the race
+  // where the user restarted it read-only between the health probe and the run.
+  await stubBridgeFix(page, {
+    writeEnabled: true,
+    refuse: { status: 403, error: 'write-disabled', message: 'This bridge is read-only.' },
+  })
+  await seedPairing(page)
+  await seedFixSkill(page)
+  await page.addInitScript((s) => localStorage.setItem('review123:settings', JSON.stringify(s)), fixSettings())
+
+  await runReviewers(page)
+
+  const panel = page.getByTestId('agent-fix-panel')
+  await expect(panel).toBeVisible({ timeout: 10_000 })
+  await panel.getByTestId('agent-fix-send').click()
+
+  const error = panel.getByTestId('agent-fix-error')
+  await expect(error).toBeVisible({ timeout: 15_000 })
+  await expect(error).toHaveAttribute('data-kind', 'write-disabled')
+  await expect(error).toContainText('--allow-write')
+  // A failure is a failure: no results surface, nothing to approve.
+  await expect(panel.getByTestId('agent-fix-result')).toHaveCount(0)
+  await expect(panel.getByTestId('agent-fix-cherry-pick')).toHaveCount(0)
+})
+
+test('fix loop: a checkout on another commit is told so, not quietly used', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await setupReviewerProvider(page)
+  await page.addInitScript(
+    ({ health }) => {
+      const realFetch = window.fetch.bind(window)
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+        if (!url.includes('127.0.0.1')) return realFetch(input as RequestInfo, init)
+        const json = (p: unknown, s = 200) =>
+          new Response(JSON.stringify(p), { status: s, headers: { 'Content-Type': 'application/json' } })
+        if (url.includes('/v1/health')) return Promise.resolve(json(health))
+        return Promise.resolve(json({ ok: false, error: 'not-found', message: 'no' }, 404))
+      }
+    },
+    {
+      health: healthBody({
+        capabilities: { inference: ['claude'], infer: true, files: true, search: true, fix: true },
+        git: { head: 'fee1111111111111111111111111111111111111', branch: 'main', dirty: false },
+      }),
+    },
+  )
+  await seedPairing(page)
+  await seedFixSkill(page)
+  await page.addInitScript((s) => localStorage.setItem('review123:settings', JSON.stringify(s)), fixSettings())
+
+  await runReviewers(page)
+
+  const readiness = page.getByTestId('agent-fix-panel').getByTestId('agent-fix-readiness')
+  await expect(readiness).toHaveAttribute('data-reason', 'head-mismatch', { timeout: 10_000 })
+  // It names the branch and BOTH short shas, so the user can act on it.
+  await expect(readiness).toContainText('main')
+  await expect(readiness).toContainText('fee1111')
+  await expect(readiness).toContainText(HEAD_SHA.slice(0, 7))
+  await expect(page.getByTestId('agent-fix-send')).toHaveCount(0)
+})

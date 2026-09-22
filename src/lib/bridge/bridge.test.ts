@@ -31,7 +31,7 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     ok: true,
     protocol: PROTOCOL_VERSION,
     root: 'review123',
-    capabilities: { inference: ['claude'], infer: true, files: true, search: true },
+    capabilities: { inference: ['claude'], infer: true, files: true, search: true, fix: false },
     git: { head: HEAD_SHA, branch: 'main', dirty: false },
     version: '0.1.0',
     ...overrides,
@@ -188,7 +188,16 @@ describe('connectBridge — user-initiated pairing', () => {
 
     expect(ok).toBe(true)
     expect(bridgeState.status).toBe('connected')
-    expect(bridgeState.capabilities).toEqual({ inference: ['claude'], infer: true, files: true, search: true })
+    // `fix: false` — this fixture's bridge is read-only, which is the default
+    // and the only state a browser can observe unless the person at the
+    // terminal typed --allow-write themselves.
+    expect(bridgeState.capabilities).toEqual({
+      inference: ['claude'],
+      infer: true,
+      files: true,
+      search: true,
+      fix: false,
+    })
     expect(bridgeState.git).toEqual({ head: HEAD_SHA, branch: 'main', dirty: false })
     expect(bridgeState.version).toBe('0.1.0')
     expect(readStoredBridge()).toEqual({ token: TOKEN, port: 7321 })
@@ -428,7 +437,28 @@ describe('parseHealth', () => {
       infer: false,
       files: false,
       search: false,
+      fix: false,
     })
+  })
+
+  // A WRITE capability must never be inferred from silence.
+  it('reads a MISSING fix flag as false — an old bridge cannot write', () => {
+    const older = healthBody({ capabilities: { inference: ['claude'], infer: true, files: true, search: true } })
+    expect(parseHealth(older)?.capabilities.fix).toBe(false)
+  })
+
+  it('reads a NON-BOOLEAN fix flag as malformed rather than as permission', () => {
+    const lying = healthBody({
+      capabilities: { inference: ['claude'], infer: true, files: true, search: true, fix: 'yes' },
+    })
+    expect(parseHealth(lying)).toBeNull()
+  })
+
+  it('carries a TRUE fix flag through, so a write-enabled bridge is usable', () => {
+    const writing = healthBody({
+      capabilities: { inference: ['claude'], infer: true, files: true, search: true, fix: true },
+    })
+    expect(parseHealth(writing)?.capabilities.fix).toBe(true)
   })
 
   it('reads a MISSING git field as null, so a pre-grounding bridge still pairs', () => {

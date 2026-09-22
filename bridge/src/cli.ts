@@ -48,6 +48,9 @@ export async function main(argv: readonly string[], cwd: string): Promise<number
     extraOrigins: options.extraOrigins,
     version: BRIDGE_VERSION,
     capabilityDeps,
+    allowWrite: options.allowWrite,
+    testCommand: options.testCommand,
+    noTests: options.noTests,
   })
 
   const port = await listenLoopback(bridge, options.port)
@@ -60,6 +63,9 @@ export async function main(argv: readonly string[], cwd: string): Promise<number
       clis,
       extraOrigins: options.extraOrigins,
       persistedToken: options.tokenFile !== null,
+      allowWrite: options.allowWrite,
+      testCommand: options.testCommand,
+      noTests: options.noTests,
     }),
   )
 
@@ -81,6 +87,9 @@ interface BannerInput {
   clis: string[]
   extraOrigins: string[]
   persistedToken: boolean
+  allowWrite: boolean
+  testCommand: string[]
+  noTests: boolean
 }
 
 /**
@@ -97,6 +106,18 @@ export function banner(input: BannerInput): string {
     `  listen   http://${LOOPBACK_HOST}:${input.port}   (loopback only)`,
     `  CLIs     ${input.clis.length > 0 ? input.clis.join(', ') : 'none detected on PATH'}`,
     `  origins  ${origins.join('  ')}`,
+    `  writes   ${input.allowWrite ? 'ENABLED (--allow-write)' : 'disabled — read-only'}`,
+    ...(input.allowWrite
+      ? [
+          `  tests    ${
+            input.noTests
+              ? 'never run (--no-tests)'
+              : input.testCommand.length > 0
+                ? `${input.testCommand.join(' ')} (--test-command)`
+                : "detected from the repo's package.json"
+          }`,
+        ]
+      : []),
     '',
     '  Paste this pairing token into review123 → Settings → Local bridge:',
     '',
@@ -107,6 +128,15 @@ export function banner(input: BannerInput): string {
       : '  This token is new for this run. Restarting the bridge invalidates it.',
     '',
     '  While this runs, the origins above can read this repo through the bridge.',
+    ...(input.allowWrite
+      ? [
+          '',
+          '  --allow-write is ON. review123 can ask your local coding agent to fix',
+          '  findings in a SCRATCH WORKTREE under your temp directory, and can run',
+          "  this repo's own test command there. Your checkout, branch, index and",
+          '  uncommitted work are never touched, and nothing is ever pushed.',
+        ]
+      : []),
     '  Stop it with Ctrl-C when you are done.',
     '',
   ]

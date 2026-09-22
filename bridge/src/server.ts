@@ -15,6 +15,7 @@ import { basename } from 'node:path'
 import { detectCapabilities, defaultCapabilityDeps, type CapabilityDeps } from './capabilities.js'
 import {
   defaultFiles,
+  defaultFix,
   defaultInfer,
   defaultRepoState,
   defaultSearch,
@@ -35,12 +36,24 @@ export interface BridgeServerOptions {
   extraOrigins?: string[]
   version: string
   capabilityDeps?: CapabilityDeps
+  /**
+   * `--allow-write`. Defaults to FALSE: a server constructed without saying
+   * otherwise is read-only, which is the behaviour every existing caller and
+   * every existing test already expects.
+   */
+  allowWrite?: boolean
+  /** `--test-command`, already argv. Empty → the fix loop detects one. */
+  testCommand?: string[]
+  /** `--no-tests`. */
+  noTests?: boolean
   /** Overrides the real `/v1/infer` worker. Tests only — see handler.ts. */
   infer?: HandlerContext['infer']
   /** Overrides the real `/v1/files` worker. Tests only. */
   files?: HandlerContext['files']
   /** Overrides the real `/v1/search` worker. Tests only. */
   search?: HandlerContext['search']
+  /** Overrides the real `/v1/fix` worker. Tests only. */
+  fix?: HandlerContext['fix']
   /** Overrides the real repo-state probe. Tests only. */
   repoState?: HandlerContext['repoState']
 }
@@ -48,15 +61,23 @@ export interface BridgeServerOptions {
 /** Build the handler context (also used directly by tests). */
 export function createContext(opts: BridgeServerOptions): HandlerContext {
   const deps = opts.capabilityDeps ?? defaultCapabilityDeps()
+  const allowWrite = opts.allowWrite === true
+  const testCommand = opts.testCommand ?? []
+  const noTests = opts.noTests === true
   return {
     token: opts.token,
     port: opts.port,
     realRoot: opts.realRoot,
     rootName: basename(opts.realRoot),
     extraOrigins: opts.extraOrigins ?? [],
-    capabilities: () => detectCapabilities(deps),
+    allowWrite,
+    // `capabilities.fix` is the --allow-write flag itself, re-read per health
+    // request like the CLI detection beside it. It can only be true for a
+    // process the user started with the flag.
+    capabilities: () => detectCapabilities(deps, allowWrite),
     version: opts.version,
     infer: opts.infer ?? defaultInfer(opts.realRoot),
+    fix: opts.fix ?? defaultFix(opts.realRoot, testCommand, noTests),
     files: opts.files ?? defaultFiles(opts.realRoot),
     // The ripgrep probe is re-run per search, exactly as capability detection
     // is re-run per health request, so installing `rg` does not need a bridge
