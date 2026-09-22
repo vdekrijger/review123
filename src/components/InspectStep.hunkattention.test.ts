@@ -59,7 +59,13 @@ const FILES: PrFile[] = [
 
 function renderInspect(files: PrFile[] = FILES) {
   return render(InspectStep, {
-    props: { files, changedFiles: files.length, mode: 'unified', onmode: () => {} },
+    props: {
+      files,
+      changedFiles: files.length,
+      mode: 'unified',
+      onmode: () => {},
+      draftStore: null,
+    },
   })
 }
 
