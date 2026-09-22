@@ -9,15 +9,29 @@
  *     allow-forms" and sends no referrer
  *   - the iframe src is SANITIZED: query/hash/credentials stripped (tokens
  *     never forwarded), https only; unframeable URLs render no iframe at all
+ *
+ * The panel now has TWO possible sources (the deploy preview, and the local
+ * app when the PR is checked out and running). These tests cover the DEPLOY
+ * half; the local half and the source-selection rule live in
+ * PreviewPanel.local.test.ts, so this file keeps asserting exactly what it
+ * always did — that the deploy path is unchanged and unreachable-proof.
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import PreviewPanel from './PreviewPanel.svelte'
+import { _resetStackForTest } from '../lib/bridge/runPr.svelte'
+
+const HEAD_SHA = 'abc1234567890abcdef1234567890abcdef12345'
+
+beforeEach(() => {
+  // No bridge, no local checkout: every test here is the deploy-only world.
+  _resetStackForTest()
+})
 
 function renderPanel(url = 'https://app-abc.vercel.app', onclose = vi.fn()) {
   const utils = render(PreviewPanel, {
-    props: { url, providerName: 'vercel', onclose },
+    props: { url, providerName: 'vercel', headSha: HEAD_SHA, onclose },
   })
   return { ...utils, onclose }
 }

@@ -31,7 +31,7 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     ok: true,
     protocol: PROTOCOL_VERSION,
     root: 'review123',
-    capabilities: { inference: ['claude'], infer: true, files: true, search: true, fix: false },
+    capabilities: { inference: ['claude'], infer: true, files: true, search: true, fix: false, checkout: false },
     git: { head: HEAD_SHA, branch: 'main', dirty: false },
     version: '0.1.0',
     ...overrides,
@@ -188,15 +188,17 @@ describe('connectBridge — user-initiated pairing', () => {
 
     expect(ok).toBe(true)
     expect(bridgeState.status).toBe('connected')
-    // `fix: false` — this fixture's bridge is read-only, which is the default
-    // and the only state a browser can observe unless the person at the
-    // terminal typed --allow-write themselves.
+    // `fix: false` and `checkout: false` — this fixture's bridge grants
+    // neither, which is the default and the only state a browser can observe
+    // unless the person at the terminal typed --allow-write or
+    // --allow-checkout themselves.
     expect(bridgeState.capabilities).toEqual({
       inference: ['claude'],
       infer: true,
       files: true,
       search: true,
       fix: false,
+      checkout: false,
     })
     expect(bridgeState.git).toEqual({ head: HEAD_SHA, branch: 'main', dirty: false })
     expect(bridgeState.version).toBe('0.1.0')
@@ -438,6 +440,7 @@ describe('parseHealth', () => {
       files: false,
       search: false,
       fix: false,
+      checkout: false,
     })
   })
 
@@ -445,6 +448,32 @@ describe('parseHealth', () => {
   it('reads a MISSING fix flag as false — an old bridge cannot write', () => {
     const older = healthBody({ capabilities: { inference: ['claude'], infer: true, files: true, search: true } })
     expect(parseHealth(older)?.capabilities.fix).toBe(false)
+  })
+
+  // Same rule, same reason, for the grant that moves the user's branch.
+  it('reads a MISSING checkout flag as false — an old bridge cannot switch branches', () => {
+    const older = healthBody({ capabilities: { inference: ['claude'], infer: true, files: true, search: true } })
+    expect(parseHealth(older)?.capabilities.checkout).toBe(false)
+  })
+
+  it('reads a NON-BOOLEAN checkout flag as malformed rather than as permission', () => {
+    const lying = healthBody({
+      capabilities: { inference: ['claude'], infer: true, files: true, search: true, checkout: 'yes' },
+    })
+    expect(parseHealth(lying)).toBeNull()
+  })
+
+  // The two grants are independent on the wire as well as at the terminal.
+  it('does not read checkout from fix, in either direction', () => {
+    const writeOnly = healthBody({
+      capabilities: { inference: ['claude'], infer: true, files: true, search: true, fix: true },
+    })
+    expect(parseHealth(writeOnly)?.capabilities).toMatchObject({ fix: true, checkout: false })
+
+    const checkoutOnly = healthBody({
+      capabilities: { inference: ['claude'], infer: true, files: true, search: true, checkout: true },
+    })
+    expect(parseHealth(checkoutOnly)?.capabilities).toMatchObject({ fix: false, checkout: true })
   })
 
   it('reads a NON-BOOLEAN fix flag as malformed rather than as permission', () => {

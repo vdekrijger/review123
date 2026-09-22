@@ -23,9 +23,34 @@
  * `/v1/fix` adds a SEVENTH gate of its own, inside the route: `--allow-write`.
  * It is checked before the body is even parsed, so a read-only bridge refuses
  * without touching a line of the fix machinery.
+ *
+ * `/v1/checkout` and `/v1/restore` add their OWN seventh gate, a DIFFERENT
+ * one: `--allow-checkout`. The two are never read for each other. A bridge
+ * started with `--allow-write` alone refuses a checkout, and a bridge started
+ * with `--allow-checkout` alone refuses a fix — because writing in an isolated
+ * scratch worktree and moving the user's own branch are different risks, and
+ * consenting to one is not consenting to the other.
+ *
+ * `/v1/stack` is gated by 1-5 like everything else but has NO seventh gate: it
+ * only reads, and the client needs its answer (including the flag's value) to
+ * explain why an action is unavailable.
  */
 
+import { readAppState } from './appUrl.js'
 import { extractBearer, tokenMatches } from './auth.js'
+import {
+  CheckoutError,
+  parseCheckoutRequest,
+  parseRestoreRequest,
+  readDirtyState,
+  readPriorState,
+  readTreeState,
+  runCheckout,
+  runRestore,
+  statusForCheckoutError,
+  type CheckoutResult,
+  type RestoreResult,
+} from './checkout.js'
 import { corsHeaders, isAllowedHost, isAllowedOrigin } from './cors.js'
 import {
   parseFilesRequest,
@@ -47,6 +72,7 @@ import {
   PROTOCOL_VERSION,
   type BridgeCapabilities,
   type BridgeErrorCode,
+  type CheckoutRequest,
   type ErrorResponse,
   type FilesRequest,
   type FixRequest,
@@ -55,8 +81,12 @@ import {
   type HealthResponse,
   type InferRequest,
   type InferResponse,
+  type RestoreRequest,
   type SearchRequest,
   type SearchResponse,
+  type StackApp,
+  type StackActionResponse,
+  type StackResponse,
 } from './protocol.js'
 
 /** The subset of an incoming HTTP request the protocol actually looks at. */
@@ -99,6 +129,18 @@ export interface HandlerContext {
    * terminal to restart the bridge with the flag.
    */
   allowWrite: boolean
+  /**
+   * `--allow-checkout`. THE authorisation for `/v1/checkout` and `/v1/restore`,
+   * and the only one.
+   *
+   * A SEPARATE PROPERTY FROM `allowWrite`, which is the entire point. The fix
+   * loop's grant lets an agent write inside an isolated scratch worktree and
+   * promises the user's checkout is never touched. This grant moves the user's
+   * checkout. Reading one from the other would hand every person who wanted
+   * agent fixes a branch-switching capability they never asked for, so the
+   * handler never falls back from one to the other.
+   */
+  allowCheckout: boolean
   /** Re-probed per health request so plugging in a CLI does not need a restart. */
   capabilities: () => Promise<BridgeCapabilities>
   version: string
@@ -124,6 +166,22 @@ export interface HandlerContext {
    * (clean, dirty, detached, no repo) as data, with no real checkout.
    */
   repoState: () => Promise<GitState | null>
+  /**
+   * The `/v1/stack` probe: tree state, dirty paths, the recorded prior state,
+   * and whether the dev server answers. Injected so the handler's tests can
+   * exercise every combination as data, with no real checkout and no socket.
+   */
+  stack: () => Promise<Omit<StackResponse, 'ok' | 'checkoutEnabled'>>
+  /** Runs `/v1/checkout`. Injected for the same reason `fix` is. */
+  checkout: (req: CheckoutRequest & {
+    remote: string
+    stashDirty: boolean
+    acknowledgeUntrusted: boolean
+  }) => Promise<CheckoutResult>
+  /** Runs `/v1/restore`. Injected for the same reason `fix` is. */
+  restore: (req: Required<RestoreRequest>) => Promise<RestoreResult>
+  /** The dev-server probe, re-run after a checkout so the answer is current. */
+  appState: () => Promise<StackApp>
 }
 
 /** The real worker, used unless a test injects its own. */
@@ -145,6 +203,46 @@ export function defaultSearch(realRoot: string, hasRipgrep: () => Promise<boolea
 /** The real repo-state probe, used unless a test injects its own. */
 export function defaultRepoState(realRoot: string) {
   return (): Promise<GitState | null> => readGitState(realRoot)
+}
+
+/** The real dev-server probe. `appUrl` is the `--app-url` flag, or null. */
+export function defaultAppState(realRoot: string, appUrl: string | null) {
+  return (): Promise<StackApp> => readAppState(realRoot, appUrl)
+}
+
+/**
+ * The real `/v1/stack` probe.
+ *
+ * Note what it is NOT gated on: `/v1/stack` answers whether or not
+ * `--allow-checkout` was given, and reports the flag in `checkoutEnabled`. A
+ * read-only bridge that 403'd here would leave the UI unable to explain WHY
+ * the button is unavailable — the named-reason discipline this repo follows
+ * requires the client to be able to tell "no flag" from "no bridge".
+ */
+export function defaultStack(realRoot: string, appUrl: string | null) {
+  return async (): Promise<Omit<StackResponse, 'ok' | 'checkoutEnabled'>> => {
+    const git = await readTreeState(realRoot)
+    const dirty = await readDirtyState(realRoot)
+    return {
+      git,
+      dirtyPaths: dirty.paths,
+      dirtyCount: dirty.count,
+      prior: await readPriorState(realRoot),
+      app: await readAppState(realRoot, appUrl),
+    }
+  }
+}
+
+/** The real `/v1/checkout` worker, used unless a test injects its own. */
+export function defaultCheckout(realRoot: string) {
+  return (
+    req: CheckoutRequest & { remote: string; stashDirty: boolean; acknowledgeUntrusted: boolean },
+  ): Promise<CheckoutResult> => runCheckout(realRoot, req)
+}
+
+/** The real `/v1/restore` worker, used unless a test injects its own. */
+export function defaultRestore(realRoot: string) {
+  return (req: Required<RestoreRequest>): Promise<RestoreResult> => runRestore(realRoot, req)
 }
 
 /**
@@ -181,6 +279,25 @@ function fail(
 }
 
 /**
+ * A checkout/restore refusal, rendered with its evidence.
+ *
+ * `tree-dirty` carries the paths a stash would take, because a refusal that
+ * says only "your tree is dirty" makes the user take the bridge's word for
+ * what is about to move. Every other kind carries the message alone.
+ */
+function failCheckout(err: CheckoutError, cors: Record<string, string>): BridgeResponse {
+  const payload: ErrorResponse = {
+    ok: false,
+    error: err.kind === 'no-repo-state' ? 'checkout-failed' : err.kind,
+    message: err.message,
+    ...(err.kind === 'tree-dirty'
+      ? { dirtyPaths: err.dirtyPaths, dirtyCount: err.dirtyCount }
+      : {}),
+  }
+  return json(statusForCheckoutError(err.kind), payload, cors)
+}
+
+/**
  * Every POST route in protocol v1. Used for the 405 check, so a GET to a real
  * route is told the METHOD is wrong rather than that the route is missing.
  *
@@ -194,7 +311,18 @@ function fail(
  * so it answers `403 write-disabled` — a fact the user can act on — rather than
  * a 404 that would read as "update your bridge".
  */
-const POST_ROUTES = new Set(['/v1/infer', '/v1/files', '/v1/search', '/v1/fix'])
+const POST_ROUTES = new Set([
+  '/v1/infer',
+  '/v1/files',
+  '/v1/search',
+  '/v1/fix',
+  // Listed even without `--allow-checkout`, for the same reason `/v1/fix` is
+  // listed without `--allow-write`: the route exists and is understood, it is
+  // simply not authorised. `403 checkout-disabled` is a fact the user can act
+  // on; a 404 would read as "update your bridge".
+  '/v1/checkout',
+  '/v1/restore',
+])
 
 /** Parse a request body as JSON, or null. Never throws. */
 function parseJsonBody(body: Buffer | null): unknown {
@@ -263,10 +391,77 @@ export async function handleRequest(
     return json(200, payload, cors)
   }
 
+  if (req.method === 'GET' && req.path === '/v1/stack') {
+    // NOT gated on --allow-checkout. The client needs to know the state of the
+    // tree and the flag in order to EXPLAIN why an action is unavailable; a
+    // 403 here would leave it with a bare disabled button and no reason.
+    const state = await ctx.stack()
+    const payload: StackResponse = { ok: true, ...state, checkoutEnabled: ctx.allowCheckout }
+    return json(200, payload, cors)
+  }
+
   if (POST_ROUTES.has(req.path)) {
     if (req.method !== 'POST') {
       return fail(405, 'method-not-allowed', `${req.path} accepts POST.`, { ...cors, Allow: 'POST, OPTIONS' })
     }
+  }
+
+  if (req.method === 'POST' && (req.path === '/v1/checkout' || req.path === '/v1/restore')) {
+    // ---- THE CHECKOUT GATE ----
+    // First, before parsing and long before any git command can run. It reads
+    // `allowCheckout` and NOTHING ELSE: a bridge started with --allow-write but
+    // not --allow-checkout refuses here, because the two grants authorise
+    // different things and one must never stand in for the other.
+    if (!ctx.allowCheckout) {
+      return fail(
+        403,
+        'checkout-disabled',
+        'This bridge may not change your working tree. Restart it with --allow-checkout to let review123 check a pull request out here. (--allow-write does not enable this: it grants the fix loop, which only ever writes in an isolated worktree.)',
+        cors,
+      )
+    }
+
+    if (req.path === '/v1/restore') {
+      const parsed = parseRestoreRequest(parseJsonBody(req.body))
+      if ('error' in parsed) return fail(400, 'bad-request', parsed.error, cors)
+      let outcome: RestoreResult
+      try {
+        outcome = await ctx.restore(parsed)
+      } catch (err) {
+        if (err instanceof CheckoutError) return failCheckout(err, cors)
+        throw err
+      }
+      const payload: StackActionResponse = {
+        ok: true,
+        git: outcome.git,
+        // A completed restore consumes the record: there is no longer a prior
+        // state, and reporting a stale one would offer a second "Restore".
+        prior: null,
+        stash: outcome.stash,
+        app: await ctx.appState(),
+      }
+      return json(200, payload, cors)
+    }
+
+    const parsed = parseCheckoutRequest(parseJsonBody(req.body))
+    if ('error' in parsed) return fail(400, 'bad-request', parsed.error, cors)
+    let outcome: CheckoutResult
+    try {
+      outcome = await ctx.checkout(parsed)
+    } catch (err) {
+      if (err instanceof CheckoutError) return failCheckout(err, cors)
+      throw err
+    }
+    const payload: StackActionResponse = {
+      ok: true,
+      git: outcome.git,
+      prior: outcome.prior,
+      stash: outcome.stash,
+      // Re-probed AFTER the checkout: a dev server that was up a moment ago may
+      // be mid-reload, and the honest answer is the one measured now.
+      app: await ctx.appState(),
+    }
+    return json(200, payload, cors)
   }
 
   if (req.method === 'POST' && req.path === '/v1/infer') {

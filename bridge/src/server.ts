@@ -14,11 +14,15 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { basename } from 'node:path'
 import { detectCapabilities, defaultCapabilityDeps, type CapabilityDeps } from './capabilities.js'
 import {
+  defaultAppState,
+  defaultCheckout,
   defaultFiles,
   defaultFix,
   defaultInfer,
   defaultRepoState,
+  defaultRestore,
   defaultSearch,
+  defaultStack,
   handleRequest,
   type BridgeRequest,
   type HandlerContext,
@@ -46,6 +50,14 @@ export interface BridgeServerOptions {
   testCommand?: string[]
   /** `--no-tests`. */
   noTests?: boolean
+  /**
+   * `--allow-checkout`. Defaults to FALSE, and is read SEPARATELY from
+   * `allowWrite`: a server constructed with write access alone may not move
+   * the user's working tree, which is the whole reason the flag exists.
+   */
+  allowCheckout?: boolean
+  /** `--app-url`, already validated to a loopback origin. Null → detect. */
+  appUrl?: string | null
   /** Overrides the real `/v1/infer` worker. Tests only — see handler.ts. */
   infer?: HandlerContext['infer']
   /** Overrides the real `/v1/files` worker. Tests only. */
@@ -56,6 +68,14 @@ export interface BridgeServerOptions {
   fix?: HandlerContext['fix']
   /** Overrides the real repo-state probe. Tests only. */
   repoState?: HandlerContext['repoState']
+  /** Overrides the real `/v1/stack` probe. Tests only. */
+  stack?: HandlerContext['stack']
+  /** Overrides the real `/v1/checkout` worker. Tests only. */
+  checkout?: HandlerContext['checkout']
+  /** Overrides the real `/v1/restore` worker. Tests only. */
+  restore?: HandlerContext['restore']
+  /** Overrides the real dev-server probe. Tests only. */
+  appState?: HandlerContext['appState']
 }
 
 /** Build the handler context (also used directly by tests). */
@@ -64,6 +84,8 @@ export function createContext(opts: BridgeServerOptions): HandlerContext {
   const allowWrite = opts.allowWrite === true
   const testCommand = opts.testCommand ?? []
   const noTests = opts.noTests === true
+  const allowCheckout = opts.allowCheckout === true
+  const appUrl = opts.appUrl ?? null
   return {
     token: opts.token,
     port: opts.port,
@@ -71,10 +93,13 @@ export function createContext(opts: BridgeServerOptions): HandlerContext {
     rootName: basename(opts.realRoot),
     extraOrigins: opts.extraOrigins ?? [],
     allowWrite,
-    // `capabilities.fix` is the --allow-write flag itself, re-read per health
-    // request like the CLI detection beside it. It can only be true for a
-    // process the user started with the flag.
-    capabilities: () => detectCapabilities(deps, allowWrite),
+    allowCheckout,
+    // `capabilities.fix` is the --allow-write flag itself and
+    // `capabilities.checkout` is --allow-checkout, re-read per health request
+    // like the CLI detection beside them. Each can only be true for a process
+    // the user started with THAT flag — they are passed separately here so one
+    // can never stand in for the other.
+    capabilities: () => detectCapabilities(deps, allowWrite, allowCheckout),
     version: opts.version,
     infer: opts.infer ?? defaultInfer(opts.realRoot),
     fix: opts.fix ?? defaultFix(opts.realRoot, testCommand, noTests),
@@ -84,6 +109,10 @@ export function createContext(opts: BridgeServerOptions): HandlerContext {
     // restart to take effect.
     search: opts.search ?? defaultSearch(opts.realRoot, ripgrepProbe(deps)),
     repoState: opts.repoState ?? defaultRepoState(opts.realRoot),
+    stack: opts.stack ?? defaultStack(opts.realRoot, appUrl),
+    checkout: opts.checkout ?? defaultCheckout(opts.realRoot),
+    restore: opts.restore ?? defaultRestore(opts.realRoot),
+    appState: opts.appState ?? defaultAppState(opts.realRoot, appUrl),
   }
 }
 

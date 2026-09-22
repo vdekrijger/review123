@@ -3,6 +3,7 @@
  * handler.test.ts — the protocol's gates, exercised as plain data.
  */
 import { describe, it, expect } from 'vitest'
+import { CheckoutError } from './checkout.js'
 import { handleRequest, type BridgeRequest, type HandlerContext } from './handler.js'
 import { MAX_BODY_BYTES, PROTOCOL_VERSION, type HealthResponse } from './protocol.js'
 import { REVIEW123_ORIGIN } from './cors.js'
@@ -10,6 +11,16 @@ import { REVIEW123_ORIGIN } from './cors.js'
 const TOKEN = 'test-token-0000000000000000000000000000000'
 const PORT = 7321
 const HEAD_SHA = '1234567890abcdef1234567890abcdef12345678'
+/** The commit a checked-out PR ref resolves to, in the stack-route fixtures. */
+const PR_SHA = 'fedcba9876543210fedcba9876543210fedcba98'
+
+/** A detected, reachable dev server — the happy default for the stack routes. */
+const STUB_APP = {
+  url: 'http://localhost:8010',
+  source: 'posthog' as const,
+  reachable: true,
+  detail: 'This is a PostHog checkout, whose dev stack is fronted at port 8010.',
+}
 
 function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
   return {
@@ -22,7 +33,18 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
     // pass `allowWrite: true` is asserting the behaviour of a bridge the user
     // started without the flag — which is the overwhelming majority of them.
     allowWrite: false,
-    capabilities: async () => ({ inference: ['claude'], infer: true, files: true, search: true, fix: false }),
+    // READ-ONLY ABOUT THE WORKING TREE BY DEFAULT, for the same reason and as a
+    // SEPARATE default: a test that does not say `allowCheckout: true` is
+    // asserting the behaviour of a bridge the user started without that flag.
+    allowCheckout: false,
+    capabilities: async () => ({
+      inference: ['claude'],
+      infer: true,
+      files: true,
+      search: true,
+      fix: false,
+      checkout: false,
+    }),
     version: '0.1.0',
     // Default stubs: the handler's own tests never spawn a CLI, open a file or
     // walk a tree. infer/files/search.test.ts own those mechanics; this file
@@ -42,6 +64,30 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
       durationMs: 5,
     }),
     repoState: async () => ({ head: HEAD_SHA, branch: 'main', dirty: false }),
+    // Default stubs for the run-this-PR family. Like their siblings above, the
+    // handler's own tests never run a git command; checkout.test.ts owns those
+    // mechanics and this file owns the protocol gates.
+    stack: async () => ({
+      git: { head: HEAD_SHA, branch: 'main', dirty: false },
+      dirtyPaths: [],
+      dirtyCount: 0,
+      prior: null,
+      app: STUB_APP,
+    }),
+    checkout: async () => ({
+      git: { head: PR_SHA, branch: null, dirty: false },
+      prior: {
+        branch: 'main',
+        head: HEAD_SHA,
+        recordedAt: '2026-01-01T00:00:00.000Z',
+        checkedOutRef: 'refs/pull/42/head',
+        checkedOutSha: PR_SHA,
+        stashRef: null,
+      },
+      stash: null,
+    }),
+    restore: async () => ({ git: { head: HEAD_SHA, branch: 'main', dirty: false }, stash: null }),
+    appState: async () => STUB_APP,
     ...overrides,
   }
 }
@@ -76,7 +122,14 @@ describe('GET /v1/health', () => {
       ok: true,
       protocol: PROTOCOL_VERSION,
       root: 'review123',
-      capabilities: { inference: ['claude'], infer: true, files: true, search: true, fix: false },
+      capabilities: {
+        inference: ['claude'],
+        infer: true,
+        files: true,
+        search: true,
+        fix: false,
+        checkout: false,
+      },
       git: { head: HEAD_SHA, branch: 'main', dirty: false },
       version: '0.1.0',
     })
@@ -102,13 +155,14 @@ describe('GET /v1/health', () => {
 
   it('re-probes capabilities per request so a newly installed CLI shows up', async () => {
     let installed: string[] = []
-    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, files: true, search: true, fix: false }) })
+    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, files: true, search: true, fix: false, checkout: false }) })
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
       inference: [],
       infer: true,
       files: true,
       search: true,
       fix: false,
+      checkout: false,
     })
     installed = ['codex']
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
@@ -117,6 +171,7 @@ describe('GET /v1/health', () => {
       files: true,
       search: true,
       fix: false,
+      checkout: false,
     })
   })
 })
@@ -336,7 +391,7 @@ describe('POST /v1/infer', () => {
   it('503s a KNOWN cli that is not installed — checked before the worker runs', async () => {
     let spawnedAnyway = false
     const context = ctx({
-      capabilities: async () => ({ inference: [], infer: true, files: false, search: false, fix: false }),
+      capabilities: async () => ({ inference: [], infer: true, files: false, search: false, fix: false, checkout: false }),
       infer: async () => {
         spawnedAnyway = true
         return { ok: true as const, text: '', truncated: false, durationMs: 0 }
@@ -681,7 +736,7 @@ describe('POST /v1/fix — the other gates still apply', () => {
   it('refuses a CLI that is not installed, with 503 rather than a confusing 501', async () => {
     const res = await handleRequest(
       fixReq({ ...FIX_BODY, cli: 'codex' }),
-      ctx({ ...write, capabilities: async () => ({ inference: ['claude'], infer: true, files: true, search: true, fix: true }) }),
+      ctx({ ...write, capabilities: async () => ({ inference: ['claude'], infer: true, files: true, search: true, fix: true, checkout: false }) }),
     )
     expect(res.status).toBe(503)
     expect(parse(res.body)['error']).toBe('cli-unavailable')
@@ -701,5 +756,330 @@ describe('POST /v1/fix — the other gates still apply', () => {
       expect(res.status).toBe(status)
       expect(parse(res.body)['error']).toBe(code)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GET /v1/stack and the checkout family — the routes that move the USER'S OWN
+// working tree, and the SECOND, SEPARATE gate in front of them.
+// ---------------------------------------------------------------------------
+
+const CHECKOUT_BODY = { ref: 'refs/pull/42/head', acknowledgeUntrusted: true }
+
+function checkoutReq(body: unknown = CHECKOUT_BODY, overrides: Partial<BridgeRequest> = {}) {
+  return req({
+    method: 'POST',
+    path: '/v1/checkout',
+    body: Buffer.from(JSON.stringify(body)),
+    ...overrides,
+  })
+}
+
+function restoreReq(body: unknown = {}, overrides: Partial<BridgeRequest> = {}) {
+  return req({
+    method: 'POST',
+    path: '/v1/restore',
+    body: Buffer.from(JSON.stringify(body)),
+    ...overrides,
+  })
+}
+
+describe('GET /v1/stack', () => {
+  it('answers 200 with the tree, the dirty paths, the prior state and the app', async () => {
+    const res = await handleRequest(req({ path: '/v1/stack' }), ctx())
+    expect(res.status).toBe(200)
+    expect(parse(res.body)).toEqual({
+      ok: true,
+      git: { head: HEAD_SHA, branch: 'main', dirty: false },
+      dirtyPaths: [],
+      dirtyCount: 0,
+      prior: null,
+      app: STUB_APP,
+      checkoutEnabled: false,
+    })
+  })
+
+  // NOT gated on --allow-checkout. The client needs this answer — including
+  // the flag's value — to EXPLAIN why the action is unavailable. A 403 here
+  // would leave it with a bare disabled button and no reason, which is exactly
+  // the failure mode the named-reason discipline exists to prevent.
+  it('answers on a bridge WITHOUT --allow-checkout, reporting the flag as false', async () => {
+    const res = await handleRequest(req({ path: '/v1/stack' }), ctx())
+    expect(res.status).toBe(200)
+    expect(parse(res.body)['checkoutEnabled']).toBe(false)
+  })
+
+  it('reports checkoutEnabled true when the bridge WAS started with the flag', async () => {
+    const res = await handleRequest(req({ path: '/v1/stack' }), ctx({ allowCheckout: true }))
+    expect(parse(res.body)['checkoutEnabled']).toBe(true)
+  })
+
+  it('reports an undetectable dev server honestly, rather than guessing one', async () => {
+    const unknownApp = {
+      url: null,
+      source: 'unknown' as const,
+      reachable: false,
+      detail: 'The "dev" script names no port, so the bridge will not guess one.',
+    }
+    const res = await handleRequest(
+      req({ path: '/v1/stack' }),
+      ctx({
+        stack: async () => ({
+          git: { head: HEAD_SHA, branch: 'main', dirty: false },
+          dirtyPaths: [],
+          dirtyCount: 0,
+          prior: null,
+          app: unknownApp,
+        }),
+      }),
+    )
+    expect(parse(res.body)['app']).toEqual(unknownApp)
+  })
+
+  it('carries the dirty paths, so a stash prompt can name what it would move', async () => {
+    const res = await handleRequest(
+      req({ path: '/v1/stack' }),
+      ctx({
+        stack: async () => ({
+          git: { head: HEAD_SHA, branch: 'main', dirty: true },
+          dirtyPaths: ['src/a.ts', 'notes.txt'],
+          dirtyCount: 2,
+          prior: null,
+          app: STUB_APP,
+        }),
+      }),
+    )
+    expect(parse(res.body)['dirtyPaths']).toEqual(['src/a.ts', 'notes.txt'])
+    expect(parse(res.body)['dirtyCount']).toBe(2)
+  })
+
+  it('still requires the pairing token, the origin and the Host', async () => {
+    expect(
+      (await handleRequest(req({ path: '/v1/stack', headers: { authorization: undefined } }), ctx()))
+        .status,
+    ).toBe(401)
+    expect(
+      (await handleRequest(req({ path: '/v1/stack', headers: { origin: 'https://evil.test' } }), ctx()))
+        .status,
+    ).toBe(403)
+    expect(
+      (await handleRequest(req({ path: '/v1/stack', headers: { host: 'evil.test' } }), ctx())).status,
+    ).toBe(403)
+  })
+})
+
+describe('POST /v1/checkout — the --allow-checkout gate', () => {
+  it('REFUSES with 403 checkout-disabled without the flag', async () => {
+    const res = await handleRequest(checkoutReq(), ctx())
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('checkout-disabled')
+    expect(parse(res.body)['message']).toContain('--allow-checkout')
+  })
+
+  // THE HEADLINE RULE OF THIS WHOLE FEATURE. Someone who turned on agent fixes
+  // must NOT discover they also handed the browser their branch.
+  it('--allow-write alone does NOT open it', async () => {
+    const res = await handleRequest(checkoutReq(), ctx({ allowWrite: true }))
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('checkout-disabled')
+  })
+
+  it('and the refusal SAYS that --allow-write is not the flag they want', async () => {
+    const res = await handleRequest(checkoutReq(), ctx({ allowWrite: true }))
+    expect(parse(res.body)['message']).toContain('--allow-write does not enable this')
+  })
+
+  // The mirror image, so neither grant can be read off the other.
+  it('--allow-checkout alone does NOT open /v1/fix', async () => {
+    const res = await handleRequest(fixReq(), ctx({ allowCheckout: true }))
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('write-disabled')
+  })
+
+  it('refuses BEFORE the worker runs — a read-only bridge never reaches a git command', async () => {
+    let ran = false
+    const res = await handleRequest(
+      checkoutReq(),
+      ctx({
+        checkout: async () => {
+          ran = true
+          throw new Error('must never be reached')
+        },
+      }),
+    )
+    expect(res.status).toBe(403)
+    expect(ran).toBe(false)
+  })
+
+  it('refuses a MALFORMED body with 403 too — the gate is before parsing', async () => {
+    const res = await handleRequest(checkoutReq({ nonsense: true }), ctx())
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('checkout-disabled')
+  })
+
+  it('nothing in the REQUEST can turn it on', async () => {
+    for (const forged of [
+      { ...CHECKOUT_BODY, allowCheckout: true },
+      { ...CHECKOUT_BODY, capabilities: { checkout: true } },
+      // Including the adjacent grant, spelled every way a caller might hope.
+      { ...CHECKOUT_BODY, allowWrite: true },
+      { ...CHECKOUT_BODY, checkout: 'yes' },
+    ]) {
+      expect((await handleRequest(checkoutReq(forged), ctx())).status).toBe(403)
+    }
+  })
+
+  it('/v1/restore is behind the SAME gate', async () => {
+    const res = await handleRequest(restoreReq(), ctx())
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('checkout-disabled')
+    expect((await handleRequest(restoreReq(), ctx({ allowWrite: true }))).status).toBe(403)
+  })
+
+  it('answers 200 once the bridge WAS started with the flag', async () => {
+    const res = await handleRequest(checkoutReq(), ctx({ allowCheckout: true }))
+    expect(res.status).toBe(200)
+    const payload = parse(res.body)
+    expect(payload['ok']).toBe(true)
+    expect(payload['git']).toEqual({ head: PR_SHA, branch: null, dirty: false })
+    expect(payload['prior']).toMatchObject({ branch: 'main', checkedOutRef: 'refs/pull/42/head' })
+    expect(payload['app']).toEqual(STUB_APP)
+  })
+})
+
+describe('POST /v1/checkout — refusals from the worker', () => {
+  const allow = { allowCheckout: true }
+
+  it('renders a tree-dirty refusal WITH the paths, so the UI can name them', async () => {
+    const res = await handleRequest(
+      checkoutReq(),
+      ctx({
+        ...allow,
+        checkout: async () => {
+          throw new CheckoutError('tree-dirty', 'You have 2 uncommitted changes.', {
+            dirty: true,
+            paths: ['src/a.ts', 'notes.txt'],
+            count: 2,
+          })
+        },
+      }),
+    )
+    expect(res.status).toBe(409)
+    const payload = parse(res.body)
+    expect(payload['error']).toBe('tree-dirty')
+    expect(payload['dirtyPaths']).toEqual(['src/a.ts', 'notes.txt'])
+    expect(payload['dirtyCount']).toBe(2)
+  })
+
+  it('maps each worker refusal onto its own code and status', async () => {
+    const cases = [
+      ['untrusted-unacknowledged', 403],
+      ['ref-unknown', 404],
+      ['prior-gone', 409],
+      ['moved-since', 409],
+      ['checkout-failed', 500],
+    ] as const
+    for (const [kind, status] of cases) {
+      const res = await handleRequest(
+        checkoutReq(),
+        ctx({
+          ...allow,
+          checkout: async () => {
+            throw new CheckoutError(kind, 'nope')
+          },
+        }),
+      )
+      expect(res.status).toBe(status)
+      expect(parse(res.body)['error']).toBe(kind)
+    }
+  })
+
+  it('does not attach dirtyPaths to refusals that are not about a dirty tree', async () => {
+    const res = await handleRequest(
+      checkoutReq(),
+      ctx({
+        ...allow,
+        checkout: async () => {
+          throw new CheckoutError('ref-unknown', 'no such ref')
+        },
+      }),
+    )
+    expect(parse(res.body)).not.toHaveProperty('dirtyPaths')
+  })
+
+  it('validates the ref, and says why a flag-shaped one is refused', async () => {
+    const res = await handleRequest(
+      checkoutReq({ ref: '--upload-pack=evil', acknowledgeUntrusted: true }),
+      ctx(allow),
+    )
+    expect(res.status).toBe(400)
+    expect(parse(res.body)['message']).toContain('refs/pull/42/head')
+  })
+
+  it('reports a restore with nothing recorded as 404 no-prior-state', async () => {
+    const res = await handleRequest(
+      restoreReq(),
+      ctx({
+        ...allow,
+        restore: async () => {
+          throw new CheckoutError('no-prior-state', 'nothing recorded')
+        },
+      }),
+    )
+    expect(res.status).toBe(404)
+    expect(parse(res.body)['error']).toBe('no-prior-state')
+  })
+
+  it('a completed restore reports NO prior state, so no second Restore is offered', async () => {
+    const res = await handleRequest(restoreReq(), ctx(allow))
+    expect(res.status).toBe(200)
+    expect(parse(res.body)['prior']).toBeNull()
+    expect(parse(res.body)['git']).toEqual({ head: HEAD_SHA, branch: 'main', dirty: false })
+  })
+})
+
+describe('the checkout family — the other gates still apply', () => {
+  const allow = { allowCheckout: true }
+
+  it('still requires the pairing token', async () => {
+    const res = await handleRequest(
+      checkoutReq(CHECKOUT_BODY, { headers: { authorization: undefined } }),
+      ctx(allow),
+    )
+    expect(res.status).toBe(401)
+  })
+
+  it('still refuses an origin outside the allowlist', async () => {
+    const res = await handleRequest(
+      checkoutReq(CHECKOUT_BODY, { headers: { origin: 'https://evil.test' } }),
+      ctx(allow),
+    )
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('forbidden-origin')
+  })
+
+  it('still refuses a rebound Host', async () => {
+    const res = await handleRequest(
+      checkoutReq(CHECKOUT_BODY, { headers: { host: 'evil.test' } }),
+      ctx(allow),
+    )
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('forbidden-host')
+  })
+
+  it('answers 405 to a GET on either route, so neither reads as missing', async () => {
+    for (const path of ['/v1/checkout', '/v1/restore']) {
+      const res = await handleRequest(req({ method: 'GET', path }), ctx(allow))
+      expect(res.status).toBe(405)
+      expect(res.headers['Allow']).toBe('POST, OPTIONS')
+    }
+  })
+
+  it('answers the CORS preflight without auth, like every other route', async () => {
+    const res = await handleRequest(
+      req({ method: 'OPTIONS', path: '/v1/checkout', headers: { authorization: undefined } }),
+      ctx(allow),
+    )
+    expect(res.status).toBe(204)
   })
 })

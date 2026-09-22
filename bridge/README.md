@@ -26,8 +26,8 @@ with no bridge running the app behaves exactly as it does today.
 ## Status
 
 Protocol **v1**, complete. `GET /v1/health`, `POST /v1/infer`, `POST /v1/files`,
-`POST /v1/search` and `POST /v1/fix` are all implemented — nothing answers `501`
-any more.
+`POST /v1/search`, `POST /v1/fix`, `GET /v1/stack`, `POST /v1/checkout` and
+`POST /v1/restore` are all implemented — nothing answers `501` any more.
 
 - With `/v1/infer` live, review123 runs its reviews through the CLI you already
   pay for: pick **Local bridge** under Settings → AI models.
@@ -38,11 +38,20 @@ any more.
   fix goes straight to your local coding agent, which fixes it in a **scratch
   worktree**, runs your tests, and hands back one commit per finding. You review
   the outcome — intent, diff, test result — and cherry-pick what you accept.
+- With `/v1/checkout` live (**`--allow-checkout` only**), you can click through
+  a pull request **in your own running app** instead of a deploy preview: the
+  bridge checks it out in your existing checkout and the dev stack you already
+  have running picks it up. Your database, your flags, your seed data. One
+  click puts you back where you were.
 
-> **The bridge is read-only unless you say otherwise.** `/v1/fix` exists only
-> when the process was started with `--allow-write`; without it the route
-> answers `403 write-disabled` and `capabilities.fix` is `false`. A web page
-> cannot turn it on, and there is no setting inside review123 that can.
+> **The bridge is read-only unless you say otherwise, and there are TWO
+> separate ways to say it.** `/v1/fix` exists only with `--allow-write`;
+> `/v1/checkout` and `/v1/restore` only with `--allow-checkout`. **Neither flag
+> implies the other** — the fix loop writes in an isolated scratch worktree and
+> never touches your checkout, while checkout moves your branch, and consenting
+> to one is not consenting to the other. Without the relevant flag the route
+> answers `403` and its capability is `false`. A web page cannot turn either
+> on, and there is no setting inside review123 that can.
 
 > **Local grounding only happens when your checkout matches the PR.**
 > `/v1/health` reports the tree's `head` sha, `branch` and whether it is
@@ -136,11 +145,15 @@ with Ctrl-C; the token dies with the process.
 | `--allow-write` | **off** | Enables `POST /v1/fix`: review123 may hand findings to your local coding agent, which fixes them **in a scratch git worktree** and hands back one commit per finding. Your checkout, branch, index and uncommitted work are never touched, and nothing is pushed. Without it the route answers `403` and `capabilities.fix` is `false`. See [§7](#7-writing-is-opt-in-at-the-command-line). |
 | `--test-command <cmd>` | detected | What `/v1/fix` runs to check its own work, e.g. `"pnpm test"`. Split on spaces and run **without a shell** — shell syntax is refused, not silently half-run. |
 | `--no-tests` | — | Never run a test command during `/v1/fix`. |
+| `--allow-checkout` | **off** | Enables `POST /v1/checkout` and `POST /v1/restore`: review123 may check a pull request out **in this working tree**, so the dev server you already have running serves it. **Separate from `--allow-write`, which does not enable it.** A dirty tree is refused outright; moving uncommitted work needs a second explicit confirmation and uses `git stash push`. See [§8](#8-checking-a-pull-request-out-is-a-second-separate-grant). |
+| `--app-url <url>` | detected | Where your dev server listens, e.g. `http://localhost:8010`. Must be a **loopback** address — the bridge opens a socket to it. |
 | `-h`, `--help` | — | Usage. |
 
 There is deliberately **no flag to change the bind address**, and **no request
 field, header or browser setting that can enable writing** — `--allow-write` is
-typed by the person at the terminal or it does not happen.
+typed by the person at the terminal or it does not happen. The same is true of
+`--allow-checkout`, and the two are **independent in both directions**: neither
+implies the other.
 
 ---
 
@@ -366,6 +379,73 @@ commit. Consequence, stated rather than buried: a test that *writes* into
 checkout is reachable from the scratch tree. The alternative — never running
 tests in a JS repo — would make "the agent ran the tests" a lie.
 
+### 8. Checking a pull request out is a second, separate grant
+
+Everything in §7 turns on `--allow-write`, and every word of its promise —
+*your checkout, branch, index and uncommitted work are never touched* — is
+still true. That promise belongs to **the fix loop**, and the fix loop still
+keeps it.
+
+`--allow-checkout` is a **different grant for a different thing**. It lets
+review123 check a pull request out **in your working tree**, so the dev stack
+you already have running serves it: Vite hot-reloads, Django autoreloads, and
+the app on `localhost` is the pull request seconds later. No second stack, no
+second database.
+
+**The two flags never stand in for each other.** `--allow-write` does not
+enable checkout, `--allow-checkout` does not enable the fix loop, and the
+refusal message says so — because someone who enabled agent fixes must not
+discover they also handed a web page their branch.
+
+What it may do, and what it will never do:
+
+| | |
+| --- | --- |
+| **Refuses a dirty tree** | Outright, with the list of files, before fetching anything. Nothing is ever checked out over your work. |
+| **Moves work only on a second confirmation** | `git stash push --include-untracked`, and only when the request explicitly says `stashDirty`. The entry's **sha** is recorded — not `stash@{0}`, which shifts. |
+| **Restores with `apply`, never `pop`** | `pop` drops the entry on success, and dropping is destroying. `apply` leaves it in the list, so a failed restore costs nothing. The drop command is handed to **you**. |
+| **Never forces anything** | No `--force`, no `reset --hard`, no `clean`, no `stash drop`, no `checkout -f`, no `-B`. When git refuses, that refusal is reported verbatim — it is git protecting your work. |
+| **Always records the way home** | The branch you were on (or the sha, if you were detached) is written to `~/.review123-bridge/checkouts/<hash>.json` **before anything moves**, so a bridge restart cannot strand you. |
+| **Lands detached** | At the fetched commit, creating no ref — so there is nothing left behind to clean up and nothing that can collide with a branch you have. |
+| **Requires you to acknowledge what a checkout IS** | Checking a ref out and letting a dev server autoreload it **runs that code**, install scripts and all. The bridge cannot tell a fork's ref from the repo's own, so it refuses every checkout unless the request explicitly acknowledges that. The browser asks first, and names the risk. |
+
+Three irregular cases each get their own refusal with an explicit answer,
+rather than a guess: the tree is dirty now (`tree-dirty` → `stashDirty`), the
+branch you came from was deleted (`prior-gone` → `detachToSha`), or HEAD moved
+since (`moved-since` → `acknowledgeMoved`).
+
+`checkout.ts` holds all of this, and `checkout.test.ts` proves it against
+**real git repositories** with real uncommitted content — including one test
+that collects every argv the module issues across every path and asserts the
+destructive vocabulary never appears in any of them.
+
+#### Finding your dev server
+
+`GET /v1/stack` reports whether your app is up. The browser cannot find this
+out itself — a page on `https://review123.dev` that fetches `localhost:8010`
+gets an identical CORS failure whether the port is serving a thriving app or
+nothing at all, which is exactly the port-scanning attack the same-origin
+policy exists to prevent. The bridge just opens a socket.
+
+The ladder, each rung reported as its own `source`:
+
+1. `--app-url` — you said so.
+2. **PostHog** — detected from marker files (`package.json` named `posthog`,
+   or `manage.py` beside `posthog/settings/base.py`), never from the directory
+   name. Its dev stack is fronted at the fixed port `8010`.
+3. **`package.json`** — a `dev` or `start` script that *names* a port
+   (`--port N`, `--port=N`, `-p N`, `PORT=N`).
+4. **`unknown`** — and that is what it says.
+
+The fourth rung is the feature, not a gap. Assuming Vite's 5173 when a `dev`
+script names no port would frame whatever else happens to be on 5173 and
+present it as your pull request. A wrong answer delivered confidently is worse
+than "I could not tell", so it says the latter and `--app-url` is right there.
+
+`--app-url` is restricted to a **loopback** origin at parse time: the bridge
+connects to it, and a flag that accepted any host would turn a local
+convenience into a probe for whatever else the machine can reach.
+
 ### Bonus: DNS-rebinding guard
 
 `127.0.0.1` can be reached from `http://evil.test/` if an attacker rebinds that
@@ -383,6 +463,14 @@ optionally with the port it bound) and answers `403 forbidden-host` otherwise.
   branch, your index or your uncommitted work, and it never pushes. See
   [§7](#7-writing-is-opt-in-at-the-command-line) for exactly what it does
   write.
+- **With `--allow-checkout`** it may move your working tree — that is the
+  point of the flag — but it never destroys anything doing so: a dirty tree is
+  refused, work moves only via `git stash push` on a second explicit
+  confirmation, restores use `apply` and never `pop`, and there is no
+  `--force`, `reset --hard`, `clean` or `stash drop` anywhere in the code
+  path. See [§8](#8-checking-a-pull-request-out-is-a-second-separate-grant).
+- **Without `--allow-checkout`** your working tree is never modified at all,
+  whatever `--allow-write` is set to.
 - It does not read anything outside the repo root.
 - It does not phone home, log request bodies, or persist anything except an
   explicit `--token-file`. The temp files an inference call needs (the system
@@ -410,7 +498,13 @@ Every non-2xx response is:
 with `error` one of `bad-request`, `unauthorized`, `forbidden-origin`,
 `forbidden-host`, `forbidden-path`, `not-found`, `method-not-allowed`,
 `not-implemented`, `payload-too-large`, `timeout`, `cli-unavailable`,
-`cli-failed`, `write-disabled`, `worktree-failed`, `head-unknown`.
+`cli-failed`, `write-disabled`, `worktree-failed`, `head-unknown`,
+`checkout-disabled`, `tree-dirty`, `ref-unknown`, `checkout-failed`,
+`no-prior-state`, `prior-gone`, `moved-since`, `untrusted-unacknowledged`.
+
+A `tree-dirty` body carries two extra fields, `dirtyPaths` and `dirtyCount`,
+so a client can name exactly what a stash would move instead of asking the
+user to take "your tree is dirty" on trust.
 
 Codes are **additive within v1**: a client that meets one it does not recognise
 must fall back on `message`, never crash.
@@ -427,7 +521,8 @@ must fall back on `message`, never crash.
     "infer": true,              // route READINESS — one flag per route
     "files": true,
     "search": true,             // true even without ripgrep: a JS walk answers
-    "fix": false                // the --allow-write FLAG, not a readiness bit
+    "fix": false,               // the --allow-write FLAG, not a readiness bit
+    "checkout": false           // the --allow-checkout FLAG — a SEPARATE grant
   },
   "git": {                      // the working tree RIGHT NOW — or null
     "head": "9f1c…",            // full 40-char sha
@@ -446,11 +541,18 @@ must fall back on `message`, never crash.
   and named after it. Each flips *in the same commit that implements its
   route*, so a client that trusts the flag can never call a route that is not
   there. All three are `true` — v1 is complete.
-- `fix` is an **authorisation** signal, and the only one: it reports whether
-  *this process* was started with `--allow-write`. It is not "true from the
-  release that shipped the route", because the route existing and the route
-  being permitted are different facts, and a client must show the user the
-  second one. Without the flag, `/v1/fix` answers `403 write-disabled`.
+- `fix` and `checkout` are **authorisation** signals: each reports whether
+  *this process* was started with its own flag (`--allow-write`,
+  `--allow-checkout`). Neither is "true from the release that shipped the
+  route", because the route existing and the route being permitted are
+  different facts, and a client must show the user the second one. Without the
+  flag, `/v1/fix` answers `403 write-disabled` and `/v1/checkout` answers
+  `403 checkout-disabled`.
+
+**`fix` and `checkout` are independent in both directions.** `fix` grants
+writing inside an isolated scratch worktree; `checkout` grants moving *your
+own* working tree. A client must never read one from the other, and the bridge
+never does either — see [§8](#8-checking-a-pull-request-out-is-a-second-separate-grant).
 
 `search` is `true` whether or not `ripgrep` is installed. The flag reports
 whether the **route** exists, never how fast it will be; conflating the two
@@ -747,6 +849,93 @@ never read greener than the detail under it.
 **Caps.** 10 findings per request; 3 rounds per finding; 300 s per finding
 (ceiling 600 s); 30 min total; 256 KiB of patch per change; 10 min and 64 KiB
 per test run.
+
+### `GET /v1/stack` — implemented
+
+Everything the "run this PR" UI needs, in one probe. **Not** gated on
+`--allow-checkout`: it only reads, and a client needs its answer — including
+the flag's value — in order to *explain* why an action is unavailable. A `403`
+here would leave the UI with a bare disabled button and no reason.
+
+```jsonc
+{
+  "ok": true,
+  "git": { "head": "9f1c…", "branch": "main", "dirty": true },
+  "dirtyPaths": ["src/a.ts", "notes.md"],   // capped at 100
+  "dirtyCount": 2,                          // the true total
+  "prior": {                                // the recorded way home, or null
+    "branch": "main",                       // null if you were detached
+    "head": "9f1c…",
+    "recordedAt": "2026-01-01T00:00:00.000Z",
+    "checkedOutRef": "refs/pull/42/head",
+    "checkedOutSha": "abc1…",
+    "stashRef": "72ff…"                     // a SHA, never `stash@{0}`
+  },
+  "app": {
+    "url": "http://localhost:8010",         // null when source is "unknown"
+    "source": "posthog",                    // flag | posthog | package-json | unknown
+    "reachable": true,                      // a TCP connect, just now
+    "detail": "This is a PostHog checkout, …"
+  },
+  "checkoutEnabled": true                   // mirrors capabilities.checkout
+}
+```
+
+`reachable` is always `false` when `url` is `null` — an unprobed port can never
+be reported as up, the same rule `git.dirty` follows for unknown.
+
+### `POST /v1/checkout` — implemented, **`--allow-checkout` only**
+
+```jsonc
+{
+  "ref": "refs/pull/42/head",   // REQUIRED. Must start with `refs/`
+  "remote": "origin",           // optional
+  "stashDirty": true,           // explicit consent to `git stash push -u`
+  "acknowledgeUntrusted": true  // REQUIRED. "I know this runs its code"
+}
+```
+
+The `refs/` prefix is the guard that matters: argv is passed through `spawn` as
+an array so nothing can become a second command, but a value beginning with `-`
+could still be read by git as a **flag**. A string that must start with `refs/`
+cannot be, and it covers every forge's shape — `refs/pull/<n>/head` (GitHub),
+`refs/merge-requests/<n>/head` (GitLab). The **browser** supplies the ref and
+the bridge just validates and fetches, so the bridge needs no case per host.
+
+The response reports the tree afterwards, the recorded prior state, any stash
+it created, and a re-probed `app` (a dev server that was up a moment ago may be
+mid-reload, so the honest answer is the one measured *now*):
+
+```jsonc
+{
+  "ok": true,
+  "git": { "head": "abc1…", "branch": null, "dirty": false },
+  "prior": { … },
+  "stash": {
+    "action": "created",
+    "ref": "72ff…",
+    "dropCommand": "git stash drop 72ffa129f5bb"   // for YOU to run
+  },
+  "app": { … }
+}
+```
+
+### `POST /v1/restore` — implemented, **`--allow-checkout` only**
+
+```jsonc
+{
+  "stashDirty": false,       // the tree is dirty NOW — stash that too
+  "detachToSha": false,      // the recorded branch is gone — take the sha
+  "acknowledgeMoved": false, // HEAD moved since — restore anyway
+  "restoreStash": true       // `git stash apply <sha>` — never `pop`
+}
+```
+
+An empty body is a legitimate plain restore. Each of the first three answers a
+specific `409`; without it the bridge refuses rather than guessing.
+
+**Caps.** 120 s for the fetch (the only network call in this package); 60 s per
+local git command; 100 dirty paths reported.
 
 The canonical TypeScript source for all of the above is
 [`src/protocol.ts`](src/protocol.ts); the browser client mirrors it in

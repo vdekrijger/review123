@@ -32,14 +32,17 @@ const PR_HEAD = 'abc1234567890abcdef1234567890abcdef12345'
 const OTHER_HEAD = 'def4567890abcdef1234567890abcdef12345678'
 const TOKEN = 'pairing-token-0000000000000000000000000000'
 
-// `fix: false` — grounding is a READ feature and never needs write capability.
-// Pinning it false here is the assertion that it never started to.
+// `fix: false` and `checkout: false` — grounding is a READ feature and needs
+// neither write grant. Pinning both false here is the assertion that it never
+// started to: a grounding decision must never depend on the user having handed
+// the bridge permission to write or to move their branch.
 const ALL_READY: BridgeCapabilities = {
   inference: ['claude'],
   infer: true,
   files: true,
   search: true,
   fix: false,
+  checkout: false,
 }
 
 function snapshot(overrides: Partial<BridgeSnapshot> = {}): BridgeSnapshot {

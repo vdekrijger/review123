@@ -17,11 +17,29 @@
    * The test chips render only once contentsMap is READY (non-null): before
    * the file contents arrive we make no claim about test evidence at all.
    * The join is pure client-side post-processing — no LLM involvement.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * MAKING AN OUTCOME ACTIONABLE
+   *
+   * Each row already states a concrete before → after claim. When the pull
+   * request is checked out locally AND the dev server is answering, that claim
+   * is CHECKABLE right now — so each row grows a "Try it" link onto the
+   * running app.
+   *
+   * It opens the app's ROOT, not a route derived from the outcome. Deriving a
+   * route would mean the outcomes task emitting one per outcome (a prompt
+   * change), and a guessed route would send the reviewer to a 404 while
+   * implying the app disagreed with the claim. A link that lands somewhere
+   * real and lets them navigate is honest; a guessed deep link is not.
+   *
+   * The state is read from the `stackState` module singleton rather than
+   * threaded down — the same idiom GroundingIndicator uses for `bridgeState`.
    */
   import AiPanel from '../AiPanel.svelte'
   import MarkdownView from '../MarkdownView.svelte'
   import { matchOutcomeTests, type TestFileContent, type OutcomeTestRef } from '../../lib/ai/outcomeTests'
   import { isTestFile } from '../../lib/testFile'
+  import { stackState } from '../../lib/bridge/runPr.svelte'
   import type { AiRun } from '../../lib/ai/run.svelte'
   import type { ExpectedOutcomesResult } from '../../lib/ai/schemas'
   import type { PrFile } from '../../lib/github/types'
@@ -34,9 +52,26 @@
     contentsMap: Map<string, { before: string | null; after: string | null }> | null
     /** Called when an evidence/test link is clicked (jump to file in Inspect). */
     onhotspot?: (path: string) => void
+    /**
+     * The PR's head sha. Without it no "Try it" link renders at all: a local
+     * app serving some OTHER branch must never be offered as a way to check
+     * this pull request's outcomes.
+     */
+    headSha?: string
   }
 
-  let { run, files, contentsMap, onhotspot }: Props = $props()
+  let { run, files, contentsMap, onhotspot, headSha }: Props = $props()
+
+  /**
+   * The running app, but only when it is running THIS pull request. Both
+   * halves are required — checked out, and answering — because either alone
+   * would send the reviewer somewhere that cannot support the claim.
+   */
+  const localApp = $derived.by(() => {
+    if (headSha === undefined || !stackState.onPrBranch(headSha)) return null
+    const app = stackState.app
+    return app !== null && app.reachable && app.url !== null ? app.url : null
+  })
 
   const outcomes = $derived(
     run.outcomes.status === 'done' ? (run.outcomes.value as ExpectedOutcomesResult) : null
@@ -114,6 +149,16 @@
                 {:else}
                   <span class="outcome-test-chip outcome-test-none">no test asserts this outcome</span>
                 {/if}
+              {/if}
+              {#if localApp !== null}
+                <a
+                  class="outcome-try"
+                  data-testid="outcome-try"
+                  href={localApp}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open your local app, which is running this pull request"
+                >Try it <span aria-hidden="true">↗</span></a>
               {/if}
             </div>
           </li>
@@ -271,6 +316,21 @@
   .outcome-test-none {
     color: var(--text-muted);
     font-style: italic;
+  }
+
+  /* "Try it" — only present when the claim is actually checkable right now,
+     so it can afford to be quiet rather than shouting for attention. */
+  .outcome-try {
+    font-size: 0.75rem;
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    white-space: nowrap;
+  }
+
+  .outcome-try:hover,
+  .outcome-try:focus-visible {
+    opacity: 0.75;
   }
 
   /* --- "Without this change" footer --- */

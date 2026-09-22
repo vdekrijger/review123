@@ -35,6 +35,31 @@ export interface BridgeOptions {
   testCommand: string[]
   /** `--no-tests` — never run a test command at all. */
   noTests: boolean
+  /**
+   * `--allow-checkout` — the switch that lets `/v1/checkout` and `/v1/restore`
+   * exist, i.e. the ONLY way the bridge may move the user's own working tree.
+   *
+   * DELIBERATELY NOT `--allow-write`. That flag grants the fix loop, which
+   * works exclusively in an isolated scratch worktree and never goes near the
+   * user's checkout. This one switches the branch under a running dev stack.
+   * Someone who wanted agent fixes must not silently also get branch
+   * switching, so the grants are separate and neither implies the other.
+   *
+   * Like `--allow-write` it is a COMMAND-LINE flag and nothing else: no request
+   * field, no header, no settings file, no browser affordance can turn it on.
+   * It lives for the process and dies with Ctrl-C.
+   */
+  allowCheckout: boolean
+  /**
+   * `--app-url` — where the user's dev server is, when they know and the
+   * bridge could not work it out.
+   *
+   * Restricted to a LOOPBACK http(s) origin at parse time. The bridge opens a
+   * TCP connection to this address to report whether the stack is up, and a
+   * bridge that could be pointed at an arbitrary host would be a probe for
+   * whatever else the machine can reach. Empty → detect (see appUrl.ts).
+   */
+  appUrl: string | null
   help: boolean
 }
 
@@ -69,6 +94,17 @@ Options:
                        "pnpm test". Split on spaces and run WITHOUT a shell.
                        Default: detected from the repo's package.json.
   --no-tests           Never run a test command during /v1/fix.
+  --allow-checkout     Enable POST /v1/checkout and /v1/restore: let review123
+                       check a pull request out IN THIS CHECKOUT, so the dev
+                       stack you already have running serves it. SEPARATE from
+                       --allow-write, which does NOT enable this. A dirty tree
+                       is refused outright; moving your uncommitted work needs
+                       a second, explicit confirmation and uses git stash push
+                       (never a force, a reset or a drop). The branch you were
+                       on is recorded first, so it can always be restored.
+  --app-url <url>      Where your dev server listens, e.g. http://localhost:8010.
+                       Must be a loopback address. Default: detected from the
+                       repo (PostHog → 8010; else a dev/start script's port).
   -h, --help           Show this help.
 
 The bridge binds 127.0.0.1 only and requires the printed pairing token on every
@@ -86,6 +122,8 @@ export function parseArgs(argv: readonly string[], cwd: string): BridgeOptions {
     allowWrite: false,
     testCommand: [],
     noTests: false,
+    allowCheckout: false,
+    appUrl: null,
     help: false,
   }
 
@@ -116,6 +154,12 @@ export function parseArgs(argv: readonly string[], cwd: string): BridgeOptions {
         break
       case '--no-tests':
         options.noTests = true
+        break
+      case '--allow-checkout':
+        options.allowCheckout = true
+        break
+      case '--app-url':
+        options.appUrl = parseAppUrl(takeValue(argv, (i += 1), '--app-url'))
         break
       default:
         throw new BridgeArgError(`Unknown option: ${arg}`)
@@ -158,6 +202,42 @@ function parseTestCommand(raw: string): string[] {
   const parts = raw.trim().split(/\s+/).filter((p) => p !== '')
   if (parts.length === 0) throw new BridgeArgError('--test-command needs a command')
   return parts
+}
+
+/**
+ * Loopback hostnames `--app-url` may name.
+ *
+ * The bridge OPENS A TCP CONNECTION to this address to report whether the dev
+ * stack is up. Allowing an arbitrary host would turn a local convenience into
+ * a port scanner for whatever else the machine can reach — the user's router,
+ * a cloud metadata endpoint, an internal service. Loopback only, and no DNS
+ * name that could resolve anywhere else.
+ */
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
+
+/**
+ * Parse `--app-url` into a bare origin.
+ *
+ * Path, query and hash are DROPPED rather than refused: a user pasting
+ * `http://localhost:8010/project/1` means "my app is on 8010", and silently
+ * keeping the path would make the preview panel open one deep link forever.
+ */
+function parseAppUrl(raw: string): string {
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    throw new BridgeArgError(`--app-url must be a URL like http://localhost:8010, got: ${raw}`)
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new BridgeArgError(`--app-url must be http or https, got: ${raw}`)
+  }
+  if (!LOOPBACK_HOSTNAMES.has(url.hostname)) {
+    throw new BridgeArgError(
+      `--app-url must point at this machine (localhost or 127.0.0.1) — the bridge connects to it to check whether your dev server is up. Got: ${url.hostname}`,
+    )
+  }
+  return url.origin
 }
 
 function parsePort(raw: string): number {
