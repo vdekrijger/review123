@@ -16,10 +16,17 @@
  *
  * Two commands here DO reset and check out — `discardChanges` and
  * `softResetTo` — and both take the SCRATCH directory, never the repo root.
- * The only commands that ever run in the user's own directory are
+ * The only commands THIS FILE ever runs in the user's own directory are
  * `rev-parse --verify` and the three `worktree` subcommands. There is
  * deliberately no code path in this file that can stash, merge, rebase, fetch
  * or push anywhere at all.
+ *
+ * SCOPE NOTE: `checkout.ts` DOES move the user's own working tree — that is the
+ * whole job of `/v1/checkout`, it is gated on a different flag
+ * (`--allow-checkout`, never `--allow-write`), and nothing in the fix loop can
+ * reach it. The promise above is the FIX LOOP's promise and it is unchanged:
+ * no agent run, and no code in this file, ever touches the user's checkout.
+ * `checkout.ts` imports `runGit` from here and nothing else.
  * ────────────────────────────────────────────────────────────────────────────
  *
  * WHAT IT DOES WRITE, stated plainly, because "writes nothing" would be a lie:

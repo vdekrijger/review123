@@ -14,7 +14,15 @@
  *   POST /v1/infer
  *   POST /v1/files
  *   POST /v1/search
- *   POST /v1/fix     (ONLY when the bridge was started with --allow-write)
+ *   POST /v1/fix       (ONLY when the bridge was started with --allow-write)
+ *   GET  /v1/stack
+ *   POST /v1/checkout  (ONLY when the bridge was started with --allow-checkout)
+ *   POST /v1/restore   (ONLY when the bridge was started with --allow-checkout)
+ *
+ * THE TWO WRITE GRANTS ARE INDEPENDENT. `--allow-write` enables `/v1/fix`,
+ * which works only inside an isolated scratch worktree. `--allow-checkout`
+ * enables `/v1/checkout` and `/v1/restore`, which move the user's OWN working
+ * tree. Neither flag implies the other, and no web origin can set either.
  */
 
 /** Wire protocol revision. Bumped only on a breaking change to these shapes. */
@@ -150,6 +158,19 @@ export interface BridgeCapabilities {
    * the truth before it offers the user a button.
    */
   fix: boolean
+  /**
+   * `/v1/checkout` and `/v1/restore` — the routes that move the USER'S OWN
+   * working tree. Reports `--allow-checkout`, and nothing else.
+   *
+   * IT IS A SEPARATE FLAG FROM `fix`, AND THAT SEPARATION IS THE POINT. The
+   * fix loop writes only inside an isolated scratch worktree and swears never
+   * to touch the user's checkout; this capability switches the branch under
+   * their feet so their running dev stack serves the PR. They are different
+   * risks, so they are different grants: `--allow-write` does NOT enable this,
+   * `--allow-checkout` does NOT enable the fix loop, and a browser can turn on
+   * neither.
+   */
+  checkout: boolean
 }
 
 /**
@@ -243,12 +264,63 @@ export type BridgeErrorCode =
    * worktree cannot be created at it. Fetch or check out the PR locally first.
    */
   | 'head-unknown'
+  /**
+   * `/v1/checkout` or `/v1/restore` on a bridge started WITHOUT
+   * `--allow-checkout`. The exact sibling of `write-disabled`, and a SEPARATE
+   * code on purpose: a client must never read "writing is on" as "switching
+   * branches is on".
+   */
+  | 'checkout-disabled'
+  /**
+   * The working tree has uncommitted changes, so nothing was moved. The
+   * response carries `dirtyPaths`, so the caller can name exactly what a stash
+   * would take before it asks the user for one.
+   */
+  | 'tree-dirty'
+  /** `git fetch` found no such ref on the remote (or could not reach it). */
+  | 'ref-unknown'
+  /**
+   * `git checkout` itself refused — most often because the ref adds a file the
+   * tree already has untracked. NOTHING was forced and nothing was discarded;
+   * `message` carries git's own reason.
+   */
+  | 'checkout-failed'
+  /** `/v1/restore` with no recorded prior state for this repo. */
+  | 'no-prior-state'
+  /**
+   * The branch recorded before the checkout no longer exists (deleted, or
+   * renamed). The recorded SHA is still in `message`; restoring to it detached
+   * needs the explicit `detachToSha`.
+   */
+  | 'prior-gone'
+  /**
+   * HEAD is not where the checkout left it — the user switched branches or
+   * committed since. Restoring anyway needs the explicit `acknowledgeMoved`.
+   */
+  | 'moved-since'
+  /**
+   * A checkout was requested without `acknowledgeUntrusted`. Checking a ref
+   * out and letting a dev stack autoreload it runs that code; the caller has
+   * to say it knows.
+   */
+  | 'untrusted-unacknowledged'
 
-/** Every non-2xx response body has this shape. */
+/**
+ * Every non-2xx response body has this shape.
+ *
+ * `dirtyPaths` is ADDITIVE within v1 and present only on `tree-dirty`: a
+ * refusal that says "your tree is dirty" without saying WHICH files would make
+ * the user take the bridge's word for what a stash is about to move. A client
+ * that does not read the field still works.
+ */
 export interface ErrorResponse {
   ok: false
   error: BridgeErrorCode
   message: string
+  /** On `tree-dirty` only: repo-relative paths, capped at MAX_DIRTY_PATHS. */
+  dirtyPaths?: string[]
+  /** On `tree-dirty` only: how many are dirty in total. See `dirtyPaths`. */
+  dirtyCount?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -692,4 +764,256 @@ export interface FixResponse {
    */
   tests: FixTestOutcome | null
   durationMs: number
+}
+
+// ---------------------------------------------------------------------------
+// `GET /v1/stack`, `POST /v1/checkout`, `POST /v1/restore` — RUN THIS PR.
+//
+// The second family of routes that writes, and the FIRST that writes inside
+// the user's own working tree. See bridge/README.md § 8.
+// ---------------------------------------------------------------------------
+
+/**
+ * Budget for `git fetch <remote> <ref>`. The only command in this package that
+ * touches a network, and the slowest thing a checkout does.
+ */
+export const CHECKOUT_FETCH_TIMEOUT_MS = 120_000
+
+/** Budget for the local git commands a checkout/restore runs. */
+export const CHECKOUT_GIT_TIMEOUT_MS = 60_000
+
+/**
+ * Cap on the dirty paths reported back. A tree with 4000 changed files does not
+ * need to send all of them to make the point; the COUNT is reported separately
+ * so the UI never implies the list is complete when it is not.
+ */
+export const MAX_DIRTY_PATHS = 100
+
+/** Wall-clock budget for the dev-server TCP probe. It is on this machine. */
+export const APP_PROBE_TIMEOUT_MS = 1_000
+
+/** The remote a checkout fetches from when the request names none. */
+export const DEFAULT_CHECKOUT_REMOTE = 'origin'
+
+/**
+ * A ref the bridge is willing to fetch.
+ *
+ * REQUIRING THE `refs/` PREFIX IS THE WHOLE GUARD. Every argv here is passed
+ * through `spawn` with an array so nothing can become a second command, but a
+ * value beginning with `-` could still be read by git as a FLAG. A string that
+ * must start with `refs/` cannot be one, and it covers every provider's PR ref
+ * shape: `refs/pull/<n>/head` (GitHub), `refs/merge-requests/<n>/head`
+ * (GitLab), `refs/pull-requests/<n>/from` (Bitbucket).
+ *
+ * `..` and an empty path segment are refused separately in parseCheckoutRequest
+ * — both are refname-illegal, and a caller sending one is not a caller we want
+ * to hand to `git fetch`.
+ */
+export const CHECKOUT_REF_RE = /^refs\/[A-Za-z0-9._][A-Za-z0-9._/-]{0,180}$/
+
+/** A remote name. Same reasoning as the ref: no leading `-`, nothing exotic. */
+export const CHECKOUT_REMOTE_RE = /^[A-Za-z0-9._][A-Za-z0-9._-]{0,100}$/
+
+/**
+ * How the bridge worked out WHERE the user's dev server is.
+ *
+ * Reported always, never reconstructed by the client from whether a URL is
+ * present — the same discipline `GroundingReason` and `FixStopReason` follow.
+ *
+ * - `flag`         — `--app-url` was given. The user said so; we believe them.
+ * - `posthog`      — the repo is a PostHog checkout, which serves Django, Vite,
+ *                    Celery and the plugin-server behind one fixed port, 8010.
+ * - `package-json` — a `dev` or `start` script named a port.
+ * - `unknown`      — NOTHING could be determined. `url` is null and `detail`
+ *                    says why. Deliberately NOT a guess: a default like 5173
+ *                    would point the preview panel at whatever else happens to
+ *                    be on that port, which is worse than saying nothing.
+ */
+export type AppUrlSource = 'flag' | 'posthog' | 'package-json' | 'unknown'
+
+export interface StackApp {
+  /** The loopback URL of the dev server, or null when `source` is 'unknown'. */
+  url: string | null
+  source: AppUrlSource
+  /**
+   * Did a TCP connect to that port succeed just now?
+   *
+   * FALSE IS NOT AN ERROR — the user may simply not have started their stack.
+   * It is always false when `url` is null, because an unprobed port cannot be
+   * reported as reachable.
+   */
+  reachable: boolean
+  /** Why `source` is 'unknown', or how the port was read. One honest sentence. */
+  detail: string
+}
+
+/**
+ * The working tree's state BEFORE a `/v1/checkout` moved it — recorded so the
+ * user can always be put back exactly where they were.
+ *
+ * Persisted on disk, keyed by repo, so it survives a bridge restart: a user
+ * whose bridge died mid-session must never be stranded on a PR branch with no
+ * record of where they came from.
+ */
+export interface StackPriorState {
+  /** The branch that was checked out, or null when HEAD was already detached. */
+  branch: string | null
+  /** The sha HEAD pointed at. Always present — the fallback restore target. */
+  head: string
+  /** ISO-8601 timestamp of the recording. */
+  recordedAt: string
+  /** The ref that was checked out over it, e.g. "refs/pull/42/head". */
+  checkedOutRef: string
+  /** The sha that ref resolved to — what HEAD should still be at on restore. */
+  checkedOutSha: string
+  /**
+   * The stash entry created to get the tree clean, or null when the tree was
+   * already clean. A 40-hex commit sha, NOT a `stash@{n}` index: indices shift
+   * as other entries are pushed and popped, and restoring the wrong entry
+   * would hand the user someone else's work.
+   */
+  stashRef: string | null
+}
+
+/** `GET /v1/stack` — everything the "run this PR" UI needs, in one probe. */
+export interface StackResponse {
+  ok: true
+  /** The tree's current state. Same value and same null meaning as health's. */
+  git: GitState | null
+  /**
+   * Repo-relative paths with uncommitted changes, capped at MAX_DIRTY_PATHS.
+   * Present so a stash confirmation can name EXACTLY what it is about to move,
+   * rather than asking the user to trust the word "dirty".
+   */
+  dirtyPaths: string[]
+  /** How many paths are dirty. Larger than `dirtyPaths.length` when capped. */
+  dirtyCount: number
+  /** The recorded pre-checkout state, or null when the bridge holds none. */
+  prior: StackPriorState | null
+  app: StackApp
+  /** Mirrors `capabilities.checkout` — the flag, restated where the UI acts. */
+  checkoutEnabled: boolean
+}
+
+/**
+ * `POST /v1/checkout` — fetch a pull request's ref and check it out IN THE
+ * USER'S OWN WORKING TREE, so the dev stack they already have running serves
+ * it.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * THIS IS A DIFFERENT CONTRACT FROM `/v1/fix`, ON PURPOSE.
+ *
+ * Every previous writing route promised never to touch the user's checkout.
+ * This one's entire job is to touch it. That promise is not being broken — it
+ * was made about the FIX LOOP, which still runs in an isolated scratch
+ * worktree and still never goes near the user's tree. This is a SEPARATE
+ * capability with a SEPARATE flag and its own gate, precisely so that someone
+ * who enabled agent fixes does not silently also get branch switching.
+ * ────────────────────────────────────────────────────────────────────────────
+ *
+ * SAFETY INVARIANTS (each has a test):
+ *   1. Refused with `403 checkout-disabled` unless the process was started
+ *      with `--allow-checkout`. `--allow-write` does NOT enable it, and no
+ *      web origin can turn either on.
+ *   2. Refused with `409 tree-dirty` on ANY uncommitted change, until the
+ *      caller explicitly sets `stashDirty`. Nothing is ever checked out over
+ *      the user's work.
+ *   3. `git stash push -u` is the ONLY way work is ever moved, it happens only
+ *      on that explicit flag, and the entry's sha is recorded. There is no
+ *      `checkout --force`, no `reset --hard`, no `clean`, and no `stash drop`
+ *      anywhere in this route or its restore.
+ *   4. The prior branch (or sha, when detached) is recorded BEFORE anything
+ *      moves, and persisted, so `/v1/restore` can always put it back.
+ *   5. `acknowledgeUntrusted` is REQUIRED. Checking a ref out and letting a
+ *      dev stack autoreload it IS running that code — install scripts, config
+ *      and all. The bridge cannot know whether a ref came from a fork, so it
+ *      refuses to check ANY of them out unless the caller says, in one
+ *      explicit field, that it understands the code will run.
+ *   6. Every existing gate still applies: loopback bind, pairing token,
+ *      exact-origin CORS, Host anti-rebinding, caps.
+ *   7. The request carries no command, argv, cwd or environment. The ref and
+ *      remote are pattern-validated and passed through `spawn` with an argv
+ *      ARRAY — never a shell.
+ */
+export interface CheckoutRequest {
+  /** The ref to fetch. Must match CHECKOUT_REF_RE. */
+  ref: string
+  /** Remote to fetch from; must match CHECKOUT_REMOTE_RE. Absent → 'origin'. */
+  remote?: string
+  /**
+   * Explicitly authorise `git stash push -u` when the tree is dirty.
+   *
+   * A SEPARATE confirmation from the checkout itself, because moving someone's
+   * uncommitted work is a separate decision from switching branches. Absent on
+   * a dirty tree → `409 tree-dirty` with the paths, so the UI can name them
+   * before it asks.
+   */
+  stashDirty?: boolean
+  /**
+   * Explicitly acknowledge that the checked-out code WILL RUN on this machine.
+   * Required on every checkout — see invariant 5.
+   */
+  acknowledgeUntrusted?: boolean
+}
+
+/**
+ * What happened to the user's uncommitted work.
+ *
+ * `dropCommand` is deliberately a command for the USER to run rather than
+ * something the bridge does: dropping a stash entry destroys it, and this
+ * package does not destroy things. Applying leaves the entry in place, so a
+ * restore that goes wrong can simply be applied again.
+ */
+export interface StackStashOutcome {
+  /** 'created' by a checkout, 'applied' by a restore. */
+  action: 'created' | 'applied'
+  /** The entry's commit sha. Stable, unlike a `stash@{n}` index. */
+  ref: string
+  /** The exact command that removes the entry, for the user to run themselves. */
+  dropCommand: string
+}
+
+/** What a `/v1/checkout` or `/v1/restore` did, stated plainly. */
+export interface StackActionResponse {
+  ok: true
+  /** The tree's state AFTER the operation. Never null on success. */
+  git: GitState
+  /** The recorded prior state (checkout), or null once a restore consumed it. */
+  prior: StackPriorState | null
+  /** The stash this call created (checkout) or applied (restore), if any. */
+  stash: StackStashOutcome | null
+  app: StackApp
+}
+
+/**
+ * `POST /v1/restore` — put the working tree back exactly where `/v1/checkout`
+ * found it.
+ *
+ * Every irregular case is a DIFFERENT refusal the caller must answer
+ * explicitly, never a guess:
+ *   - the tree is dirty now            → `409 tree-dirty`,  answer `stashDirty`
+ *   - the recorded branch was deleted  → `409 prior-gone`,  answer `detachToSha`
+ *   - HEAD is not where we left it     → `409 moved-since`, answer `acknowledgeMoved`
+ */
+export interface RestoreRequest {
+  /** Authorise `git stash push -u` when the tree is dirty NOW. See above. */
+  stashDirty?: boolean
+  /**
+   * The recorded branch no longer exists — restore to the recorded SHA with a
+   * detached HEAD instead. Explicit because landing on a detached HEAD is not
+   * what the user asked for, and must not happen silently.
+   */
+  detachToSha?: boolean
+  /**
+   * HEAD has moved since the checkout (the user switched branches by hand, or
+   * committed). Restoring anyway is legitimate, but it is their call.
+   */
+  acknowledgeMoved?: boolean
+  /**
+   * Apply the stash recorded at checkout time.
+   *
+   * `git stash apply`, NEVER `pop`: apply leaves the entry in the stash list,
+   * so a conflict or a mistake costs nothing. The entry is the user's to drop.
+   */
+  restoreStash?: boolean
 }

@@ -76,35 +76,60 @@ describe('detectInferenceClis', () => {
 
 describe('detectCapabilities', () => {
   it('reports every read-only v1 route as READY — all three are implemented', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false)
-    expect(caps).toEqual({ inference: ['claude'], infer: true, files: true, search: true, fix: false })
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, false)
+    expect(caps).toEqual({ inference: ['claude'], infer: true, files: true, search: true, fix: false, checkout: false })
   })
 
   it('reports search READY with nothing on PATH — the route falls back to a JS walk', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], []), false)
+    const caps = await detectCapabilities(stubDeps(['/bin'], []), false, false)
     expect(caps.search).toBe(true)
   })
 
   it('reports infer READY even with no CLI detected — readiness and detection are different questions', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], []), false)
-    expect(caps).toEqual({ inference: [], infer: true, files: true, search: true, fix: false })
+    const caps = await detectCapabilities(stubDeps(['/bin'], []), false, false)
+    expect(caps).toEqual({ inference: [], infer: true, files: true, search: true, fix: false, checkout: false })
   })
 
   // `fix` is NOT a release-readiness flag like its siblings: it is the
   // --allow-write flag itself. These two tests are the whole contract.
   it('reports fix FALSE without --allow-write, whatever else is installed', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude', '/bin/codex']), false)
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude', '/bin/codex']), false, false)
     expect(caps.fix).toBe(false)
   })
 
   it('reports fix TRUE only when the process was started with --allow-write', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), true)
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), true, false)
     expect(caps.fix).toBe(true)
   })
 
   it('reports fix TRUE even with no CLI detected — the flag is about authorisation, not tooling', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], []), true)
-    expect(caps).toEqual({ inference: [], infer: true, files: true, search: true, fix: true })
+    const caps = await detectCapabilities(stubDeps(['/bin'], []), true, false)
+    expect(caps).toEqual({ inference: [], infer: true, files: true, search: true, fix: true, checkout: false })
+  })
+
+  // `checkout` is the --allow-checkout flag, and the WHOLE point of it being a
+  // separate flag is that neither grant can be read off the other. These four
+  // assert that contract in both directions, explicitly.
+  it('reports checkout FALSE without --allow-checkout', async () => {
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, false)
+    expect(caps.checkout).toBe(false)
+  })
+
+  it('reports checkout TRUE only when the process was started with --allow-checkout', async () => {
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, true)
+    expect(caps.checkout).toBe(true)
+  })
+
+  it('--allow-write alone does NOT enable checkout', async () => {
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), true, false)
+    expect(caps.fix).toBe(true)
+    expect(caps.checkout).toBe(false)
+  })
+
+  it('--allow-checkout alone does NOT enable fix', async () => {
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, true)
+    expect(caps.checkout).toBe(true)
+    expect(caps.fix).toBe(false)
   })
 })
 

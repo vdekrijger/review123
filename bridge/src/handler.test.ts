@@ -10,6 +10,16 @@ import { REVIEW123_ORIGIN } from './cors.js'
 const TOKEN = 'test-token-0000000000000000000000000000000'
 const PORT = 7321
 const HEAD_SHA = '1234567890abcdef1234567890abcdef12345678'
+/** The commit a checked-out PR ref resolves to, in the stack-route fixtures. */
+const PR_SHA = 'fedcba9876543210fedcba9876543210fedcba98'
+
+/** A detected, reachable dev server — the happy default for the stack routes. */
+const STUB_APP = {
+  url: 'http://localhost:8010',
+  source: 'posthog' as const,
+  reachable: true,
+  detail: 'This is a PostHog checkout, whose dev stack is fronted at port 8010.',
+}
 
 function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
   return {
@@ -22,7 +32,18 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
     // pass `allowWrite: true` is asserting the behaviour of a bridge the user
     // started without the flag — which is the overwhelming majority of them.
     allowWrite: false,
-    capabilities: async () => ({ inference: ['claude'], infer: true, files: true, search: true, fix: false }),
+    // READ-ONLY ABOUT THE WORKING TREE BY DEFAULT, for the same reason and as a
+    // SEPARATE default: a test that does not say `allowCheckout: true` is
+    // asserting the behaviour of a bridge the user started without that flag.
+    allowCheckout: false,
+    capabilities: async () => ({
+      inference: ['claude'],
+      infer: true,
+      files: true,
+      search: true,
+      fix: false,
+      checkout: false,
+    }),
     version: '0.1.0',
     // Default stubs: the handler's own tests never spawn a CLI, open a file or
     // walk a tree. infer/files/search.test.ts own those mechanics; this file
@@ -42,6 +63,30 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
       durationMs: 5,
     }),
     repoState: async () => ({ head: HEAD_SHA, branch: 'main', dirty: false }),
+    // Default stubs for the run-this-PR family. Like their siblings above, the
+    // handler's own tests never run a git command; checkout.test.ts owns those
+    // mechanics and this file owns the protocol gates.
+    stack: async () => ({
+      git: { head: HEAD_SHA, branch: 'main', dirty: false },
+      dirtyPaths: [],
+      dirtyCount: 0,
+      prior: null,
+      app: STUB_APP,
+    }),
+    checkout: async () => ({
+      git: { head: PR_SHA, branch: null, dirty: false },
+      prior: {
+        branch: 'main',
+        head: HEAD_SHA,
+        recordedAt: '2026-01-01T00:00:00.000Z',
+        checkedOutRef: 'refs/pull/42/head',
+        checkedOutSha: PR_SHA,
+        stashRef: null,
+      },
+      stash: null,
+    }),
+    restore: async () => ({ git: { head: HEAD_SHA, branch: 'main', dirty: false }, stash: null }),
+    appState: async () => STUB_APP,
     ...overrides,
   }
 }
@@ -76,7 +121,14 @@ describe('GET /v1/health', () => {
       ok: true,
       protocol: PROTOCOL_VERSION,
       root: 'review123',
-      capabilities: { inference: ['claude'], infer: true, files: true, search: true, fix: false },
+      capabilities: {
+        inference: ['claude'],
+        infer: true,
+        files: true,
+        search: true,
+        fix: false,
+        checkout: false,
+      },
       git: { head: HEAD_SHA, branch: 'main', dirty: false },
       version: '0.1.0',
     })
@@ -102,13 +154,14 @@ describe('GET /v1/health', () => {
 
   it('re-probes capabilities per request so a newly installed CLI shows up', async () => {
     let installed: string[] = []
-    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, files: true, search: true, fix: false }) })
+    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, files: true, search: true, fix: false, checkout: false }) })
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
       inference: [],
       infer: true,
       files: true,
       search: true,
       fix: false,
+      checkout: false,
     })
     installed = ['codex']
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
@@ -117,6 +170,7 @@ describe('GET /v1/health', () => {
       files: true,
       search: true,
       fix: false,
+      checkout: false,
     })
   })
 })
@@ -336,7 +390,7 @@ describe('POST /v1/infer', () => {
   it('503s a KNOWN cli that is not installed — checked before the worker runs', async () => {
     let spawnedAnyway = false
     const context = ctx({
-      capabilities: async () => ({ inference: [], infer: true, files: false, search: false, fix: false }),
+      capabilities: async () => ({ inference: [], infer: true, files: false, search: false, fix: false, checkout: false }),
       infer: async () => {
         spawnedAnyway = true
         return { ok: true as const, text: '', truncated: false, durationMs: 0 }
@@ -681,7 +735,7 @@ describe('POST /v1/fix — the other gates still apply', () => {
   it('refuses a CLI that is not installed, with 503 rather than a confusing 501', async () => {
     const res = await handleRequest(
       fixReq({ ...FIX_BODY, cli: 'codex' }),
-      ctx({ ...write, capabilities: async () => ({ inference: ['claude'], infer: true, files: true, search: true, fix: true }) }),
+      ctx({ ...write, capabilities: async () => ({ inference: ['claude'], infer: true, files: true, search: true, fix: true, checkout: false }) }),
     )
     expect(res.status).toBe(503)
     expect(parse(res.body)['error']).toBe('cli-unavailable')

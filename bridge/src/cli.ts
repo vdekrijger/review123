@@ -51,6 +51,8 @@ export async function main(argv: readonly string[], cwd: string): Promise<number
     allowWrite: options.allowWrite,
     testCommand: options.testCommand,
     noTests: options.noTests,
+    allowCheckout: options.allowCheckout,
+    appUrl: options.appUrl,
   })
 
   const port = await listenLoopback(bridge, options.port)
@@ -66,6 +68,8 @@ export async function main(argv: readonly string[], cwd: string): Promise<number
       allowWrite: options.allowWrite,
       testCommand: options.testCommand,
       noTests: options.noTests,
+      allowCheckout: options.allowCheckout,
+      appUrl: options.appUrl,
     }),
   )
 
@@ -90,6 +94,8 @@ interface BannerInput {
   allowWrite: boolean
   testCommand: string[]
   noTests: boolean
+  allowCheckout: boolean
+  appUrl: string | null
 }
 
 /**
@@ -107,6 +113,11 @@ export function banner(input: BannerInput): string {
     `  CLIs     ${input.clis.length > 0 ? input.clis.join(', ') : 'none detected on PATH'}`,
     `  origins  ${origins.join('  ')}`,
     `  writes   ${input.allowWrite ? 'ENABLED (--allow-write)' : 'disabled — read-only'}`,
+    // Reported as its own line, never folded into `writes`: they are separate
+    // grants and a banner that implied otherwise would misinform the one
+    // person who can actually change them.
+    `  checkout ${input.allowCheckout ? 'ENABLED (--allow-checkout) — this bridge may switch your branch' : 'disabled — your working tree is never changed'}`,
+    ...(input.appUrl !== null ? [`  app      ${input.appUrl} (--app-url)`] : []),
     ...(input.allowWrite
       ? [
           `  tests    ${
@@ -135,6 +146,17 @@ export function banner(input: BannerInput): string {
           '  findings in a SCRATCH WORKTREE under your temp directory, and can run',
           "  this repo's own test command there. Your checkout, branch, index and",
           '  uncommitted work are never touched, and nothing is ever pushed.',
+        ]
+      : []),
+    ...(input.allowCheckout
+      ? [
+          '',
+          '  --allow-checkout is ON. review123 can check a pull request out HERE, in',
+          '  this working tree, so the dev server you already have running serves it.',
+          '  That means RUNNING the pull request\'s code. A dirty tree is refused; ',
+          '  moving your uncommitted work needs a second confirmation and uses',
+          '  `git stash push` — nothing is ever forced, reset or dropped, and the',
+          '  branch you were on is recorded so it can always be restored.',
         ]
       : []),
     '  Stop it with Ctrl-C when you are done.',

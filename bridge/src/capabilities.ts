@@ -99,10 +99,20 @@ export async function detectInferenceClis(deps: CapabilityDeps): Promise<string[
  * authorisation model for writing, so the capability has to report the flag
  * and nothing else. A build that hard-coded `fix: true` here would hand every
  * paired web origin a write button the user never granted.
+ *
+ * `checkout` IS THE SAME KIND OF FLAG AS `fix`, AND A DIFFERENT ONE FROM IT.
+ * It reports `--allow-checkout` — the grant to move the user's OWN working
+ * tree — and it is read from a separate argument for a reason that is the
+ * whole point of this capability: someone who started the bridge with
+ * `--allow-write` to get agent fixes must not discover that they also handed
+ * the browser the ability to switch their branch. Two risks, two grants, two
+ * booleans. Passing `allowWrite` to both parameters would collapse the
+ * distinction the flag exists to make.
  */
 export async function detectCapabilities(
   deps: CapabilityDeps,
   allowWrite: boolean,
+  allowCheckout: boolean,
 ): Promise<BridgeCapabilities> {
   return {
     inference: await detectInferenceClis(deps),
@@ -110,5 +120,6 @@ export async function detectCapabilities(
     files: true,
     search: true,
     fix: allowWrite,
+    checkout: allowCheckout,
   }
 }
