@@ -6,7 +6,7 @@
   import type { DiffMode } from '../lib/settings/settings'
   import { getSettings, setTreeOpen, setFocusMode, type FocusMode } from '../lib/settings/settings'
   import { settingsState } from '../lib/settings/settingsState.svelte'
-  import { formatUsageLabel } from '../lib/ai/tokenCost'
+  import { formatUsageLabel, formatTokens } from '../lib/ai/tokenCost'
   import { activeProviderHasKey, panelMode } from '../lib/llm/config'
   import type { DiffWidth } from '../lib/settings/settings'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
@@ -2013,7 +2013,7 @@
         <span class="tests-review-hint" data-testid="tests-review-hint">{testsReviewCostHint}</span>
         {#if showCost && !testsReviewRunning && testsReviewTokens > 0}
           <span class="tests-review-cost" data-testid="tests-review-cost">
-            {testsReviewTokens.toLocaleString()} tokens used
+            {formatTokens(testsReviewTokens)} tokens used
           </span>
         {/if}
       </div>
