@@ -12,6 +12,7 @@
  * IMPLEMENTED in v1:
  *   GET  /v1/health
  *   POST /v1/infer
+ *   POST /v1/infer/stream   (the same work, delivered as it is produced)
  *   POST /v1/files
  *   POST /v1/search
  *   POST /v1/fix       (ONLY when the bridge was started with --allow-write)
@@ -144,6 +145,21 @@ export const MAX_INFER_FILE_CONTEXT_BYTES = 256 * 1024
 export interface BridgeCapabilities {
   inference: string[]
   infer: boolean
+  /**
+   * `POST /v1/infer/stream` — a route-READINESS boolean exactly like `infer`,
+   * flipped in the same commit that implements the route.
+   *
+   * It says the bridge UNDERSTANDS the streaming route. It does NOT promise
+   * that every CLI produces incremental output: `claude` does, `codex` does
+   * not, and the route says which per call in its `start` event
+   * (`InferStreamStart.streaming`). Conflating the two would let a client
+   * claim "your answer is typing out" for a CLI that physically cannot.
+   *
+   * A bridge predating this route omits the flag; an absent flag reads as
+   * false, and a client that tries anyway gets a plain `404 not-found` and
+   * falls back to `/v1/infer` — no CLI is spawned on the way.
+   */
+  inferStream: boolean
   files: boolean
   search: boolean
   /**
@@ -397,6 +413,114 @@ export interface InferResponse {
   /** Present only when the CLI reported token counts. See InferUsage. */
   usage?: InferUsage
 }
+
+// ---------------------------------------------------------------------------
+// `POST /v1/infer/stream` — the same work, delivered as it is produced.
+// ---------------------------------------------------------------------------
+
+/** The route. A constant so the two protocol mirrors cannot drift on a string. */
+export const INFER_STREAM_PATH = '/v1/infer/stream'
+
+/**
+ * NDJSON — one JSON document per line, `\n`-terminated — NOT Server-Sent
+ * Events. Four reasons, in order of weight:
+ *
+ *  1. `EventSource` is unusable here anyway. It cannot send an `Authorization`
+ *     header and cannot POST a body, and this route needs both. So the browser
+ *     reads the response with `fetch` + a `ReadableStream` reader either way —
+ *     which strips SSE of the only thing it was going to buy us.
+ *  2. SSE's auto-reconnect is actively WRONG for this route. A reconnect would
+ *     re-POST and spawn a SECOND CLI run, spending the user's subscription
+ *     twice for one answer. NDJSON has no such behaviour to disable.
+ *  3. SSE `data:` fields cannot contain a raw newline, so every delta would
+ *     have to be re-split across continuation lines and re-joined. Model output
+ *     is full of newlines. NDJSON carries them inside the JSON string escape.
+ *  4. Both CLIs already speak NDJSON natively (`claude --output-format
+ *     stream-json`, `codex exec --json`), and every other bridge route speaks
+ *     JSON. One framing end to end, one parser, one error envelope.
+ */
+export const INFER_STREAM_CONTENT_TYPE = 'application/x-ndjson'
+
+/**
+ * First line of every streamed response, before any work is reported.
+ *
+ * `streaming` is the honesty field: TRUE when this CLI genuinely emits text as
+ * the model produces it, FALSE when the bridge had to fall back to the CLI's
+ * one-shot path and the whole answer will arrive in a single `delta` at the
+ * end. The bridge NEVER chops a finished answer into timed fragments to look
+ * like streaming — a client that wants to tell the user "this does not type
+ * out" needs a fact, not a simulation.
+ */
+export interface InferStreamStart {
+  type: 'start'
+  cli: string
+  streaming: boolean
+}
+
+/** A piece of assistant text, in order. Concatenated they form the answer. */
+export interface InferStreamDelta {
+  type: 'delta'
+  text: string
+}
+
+/**
+ * The terminator. Its absence is itself meaningful: a stream that ends without
+ * a `done` (or an `error`) was CUT, and a client must treat that as a failure
+ * rather than as a short answer.
+ *
+ * `text` is the CLI's own final answer and is AUTHORITATIVE — the deltas are
+ * for rendering progress. For `claude` the two agree, but the final result
+ * document is what the CLI actually committed to, and on a truncated run it is
+ * the only place a complete-as-far-as-it-got answer exists.
+ */
+export interface InferStreamDone {
+  type: 'done'
+  text: string
+  truncated: boolean
+  durationMs: number
+  /** Present ONLY when the CLI reported token counts. Never zero-filled. */
+  usage?: InferUsage
+}
+
+/**
+ * A failure. May be the FIRST line (nothing ran) or arrive mid-stream after
+ * deltas (the child died, the budget expired). Either way it is terminal: no
+ * further events follow, and a client must surface it as an error even when it
+ * already has partial text.
+ *
+ * The HTTP status is 200 for every mid-stream failure, because the status line
+ * was already committed before the CLI produced a byte. That is why the code
+ * lives in the event: `code` carries exactly the same BridgeErrorCode the
+ * one-shot route would have answered with.
+ */
+export interface InferStreamError {
+  type: 'error'
+  code: BridgeErrorCode
+  message: string
+}
+
+export type InferStreamEvent =
+  | InferStreamStart
+  | InferStreamDelta
+  | InferStreamDone
+  | InferStreamError
+
+/** Serialise one event as an NDJSON line, terminator included. */
+export function encodeStreamEvent(event: InferStreamEvent): string {
+  return `${JSON.stringify(event)}\n`
+}
+
+/**
+ * Cap on a SINGLE unterminated line of CLI stdout the bridge will buffer while
+ * waiting for its newline.
+ *
+ * Separate from MAX_INFER_OUTPUT_BYTES, which caps the answer. This one caps
+ * the FRAMING: `claude --output-format stream-json` emits one JSON document
+ * per line, and a CLI that produced a line and no newline would otherwise grow
+ * the buffer without bound. 8 MiB is far above any real event and far below
+ * anything that threatens a laptop.
+ */
+export const MAX_INFER_STREAM_LINE_BYTES = 8 * 1024 * 1024
 
 /**
  * `POST /v1/files` — read file contents from the working tree.

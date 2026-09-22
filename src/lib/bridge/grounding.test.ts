@@ -39,6 +39,7 @@ const TOKEN = 'pairing-token-0000000000000000000000000000'
 const ALL_READY: BridgeCapabilities = {
   inference: ['claude'],
   infer: true,
+  inferStream: true,
   files: true,
   search: true,
   fix: false,

@@ -77,10 +77,16 @@ export async function detectInferenceClis(deps: CapabilityDeps): Promise<string[
 /**
  * The full capability block for `/v1/health`.
  *
- * `infer`, `files` and `search` are route-READINESS flags. Each flips in the
- * same commit that implements its route, so a client that trusts the flag can
- * never call a route that is not there. All three are true as of the grounding
- * PR — every v1 route is implemented.
+ * `infer`, `inferStream`, `files` and `search` are route-READINESS flags. Each
+ * flips in the same commit that implements its route, so a client that trusts
+ * the flag can never call a route that is not there. All four are true as of
+ * the streaming PR — every v1 route is implemented.
+ *
+ * `inferStream` reports that `/v1/infer/stream` EXISTS, not that every CLI
+ * streams through it: `claude` emits text as the model produces it, `codex`
+ * has no incremental output and the route says so per call in its `start`
+ * event. A single flag conflating "the route is here" with "your CLI types
+ * out" would let a client promise the user something codex cannot do.
  *
  * `search` is true whether or not `ripgrep` is installed: the route always
  * answers, falling back to a bounded JS walk. The flag reports whether the
@@ -117,6 +123,7 @@ export async function detectCapabilities(
   return {
     inference: await detectInferenceClis(deps),
     infer: true,
+    inferStream: true,
     files: true,
     search: true,
     fix: allowWrite,

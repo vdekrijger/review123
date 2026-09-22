@@ -7,7 +7,7 @@
  * 0.0.0.0 hands the whole LAN a read view of the user's repo. So this suite
  * starts an actual server and inspects what it bound.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
 import type { Server } from 'node:http'
 import { mkdtemp, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -15,6 +15,8 @@ import { dirname, join } from 'node:path'
 import { LOOPBACK_HOST, createBridgeServer, listenLoopback, type BridgeServer } from './server.js'
 import { MAX_BODY_BYTES, PROTOCOL_VERSION } from './protocol.js'
 import { REVIEW123_ORIGIN } from './cors.js'
+import { runStreamProcess } from './inferStream.js'
+import { runProcess } from './infer.js'
 
 const TOKEN = 'server-test-token-000000000000000000000000'
 
@@ -98,6 +100,7 @@ describe('GET /v1/health over HTTP', () => {
     expect(body['capabilities']).toEqual({
       inference: [],
       infer: true,
+      inferStream: true,
       files: true,
       search: true,
       fix: false,
@@ -296,4 +299,255 @@ describe('unknown routes', () => {
     const res = await call('/v1/exec', { method: 'POST', headers: auth(), body: '{}' })
     expect(res.status).toBe(404)
   })
+})
+
+// ===========================================================================
+// POST /v1/infer/stream, OVER A REAL SOCKET.
+//
+// Everything below needs an actual TCP connection, because the properties are
+// about the connection: that bytes reach the reader BEFORE the run is over,
+// and that a reader hanging up kills the CLI. A pure-data sink can prove the
+// event shapes (handler.test.ts does) but not either of these.
+//
+// The child is `node`, not `claude`: CI has no CLI installed, and what is
+// being proved is the plumbing between a browser's abort and a dead pid —
+// which is identical whichever binary is on the other end.
+// ===========================================================================
+
+describe('POST /v1/infer/stream over HTTP', () => {
+  let streamBridge: BridgeServer
+  let streamPort: number
+  /** The pid of the last child the stream worker spawned. */
+  let lastPid: number | undefined
+  /** Resolves once that child has been spawned, so a test can race it. */
+  let spawned: Promise<void>
+  let markSpawned: () => void
+
+  beforeAll(async () => {
+    streamBridge = createBridgeServer({
+      token: TOKEN,
+      port: 0,
+      realRoot: root,
+      version: '0.1.0',
+      capabilityDeps: { env: { PATH: '/bin' }, isExecutable: async () => true },
+      // A real subprocess, driven through the real streaming runner, with the
+      // real disconnect signal the socket shell built.
+      inferStream: async (_req, _clis, emit, signal) => {
+        emit({ type: 'start', cli: 'claude', streaming: true })
+        const result = await runStreamProcess({
+          bin: process.execPath,
+          // Emits a line every 60ms forever. Only a kill ends it.
+          args: ['-e', `let i=0;setInterval(()=>process.stdout.write('chunk'+(++i)+'\\n'),60)`],
+          stdin: '',
+          cwd: root,
+          timeoutMs: 20_000,
+          signal,
+          onLine: (line) => {
+            emit({ type: 'delta', text: line })
+            return true
+          },
+        })
+        lastPid = result.pid
+        markSpawned()
+        if (result.aborted) return
+        emit({ type: 'done', text: '', truncated: result.truncated, durationMs: 1 })
+      },
+    })
+    streamPort = await listenLoopback(streamBridge, 0)
+  })
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => streamBridge.server.close(() => resolve()))
+  })
+
+  beforeEach(() => {
+    lastPid = undefined
+    spawned = new Promise<void>((resolve) => {
+      markSpawned = resolve
+    })
+  })
+
+  function streamCall(init: RequestInit = {}): Promise<Response> {
+    return fetch(`http://${LOOPBACK_HOST}:${streamPort}/v1/infer/stream`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cli: 'claude', prompt: 'hi' }),
+      ...init,
+    })
+  }
+
+  it('DELIVERS DELTAS AS THEY HAPPEN — not one blob when the run ends', async () => {
+    const controller = new AbortController()
+    const res = await streamCall({ signal: controller.signal })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('application/x-ndjson')
+
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    const started = Date.now()
+    const arrivals: number[] = []
+    let buffer = ''
+    const lines: string[] = []
+
+    // Read until three deltas have arrived. The child never stops on its own,
+    // so reaching this at all proves bytes were flushed mid-run.
+    while (lines.length < 4) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let idx: number
+      while ((idx = buffer.indexOf('\n')) !== -1) {
+        lines.push(buffer.slice(0, idx))
+        buffer = buffer.slice(idx + 1)
+        arrivals.push(Date.now() - started)
+      }
+    }
+    controller.abort()
+    await spawned
+
+    const parsed = lines.map((l) => JSON.parse(l) as Record<string, unknown>)
+    expect(parsed[0]).toEqual({ type: 'start', cli: 'claude', streaming: true })
+    expect(parsed.slice(1).map((e) => e['type'])).toEqual(['delta', 'delta', 'delta'])
+    // The first delta landed well before the third: it was streamed, not
+    // buffered and released together.
+    expect(arrivals[1]!).toBeLessThan(arrivals[3]! - 40)
+  }, 20_000)
+
+  it('A CLIENT ABORT KILLS THE CHILD — no orphan left spending the subscription', async () => {
+    const controller = new AbortController()
+    const res = await streamCall({ signal: controller.signal })
+    const reader = res.body!.getReader()
+    // Wait until the child is definitely running and writing.
+    await reader.read()
+    await reader.read()
+
+    controller.abort()
+
+    // The worker resolves only after runStreamProcess saw 'close', i.e. after
+    // the child was reaped — so awaiting it is awaiting the reap.
+    await spawned
+    expect(typeof lastPid).toBe('number')
+    let alive = true
+    try {
+      process.kill(lastPid!, 0)
+    } catch {
+      alive = false
+    }
+    expect(alive).toBe(false)
+  }, 20_000)
+
+  it('still enforces auth, Origin and Host on the streaming route', async () => {
+    const base = `http://${LOOPBACK_HOST}:${streamPort}/v1/infer/stream`
+    const body = JSON.stringify({ cli: 'claude', prompt: 'hi' })
+
+    const noToken = await fetch(base, { method: 'POST', body })
+    expect(noToken.status).toBe(401)
+
+    const badOrigin = await fetch(base, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, Origin: 'https://evil.example.com' },
+      body,
+    })
+    expect(badOrigin.status).toBe(403)
+    expect((await badOrigin.json() as Record<string, unknown>)['error']).toBe('forbidden-origin')
+
+    const goodOrigin = await fetch(base, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, Origin: REVIEW123_ORIGIN, 'Content-Type': 'application/json' },
+      body,
+    })
+    expect(goodOrigin.status).toBe(200)
+    expect(goodOrigin.headers.get('access-control-allow-origin')).toBe(REVIEW123_ORIGIN)
+    await goodOrigin.body!.cancel()
+  }, 20_000)
+
+  it('405s a GET on the streaming route rather than 404ing it', async () => {
+    const res = await fetch(`http://${LOOPBACK_HOST}:${streamPort}/v1/infer/stream`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    })
+    expect(res.status).toBe(405)
+    expect(res.headers.get('allow')).toBe('POST, OPTIONS')
+  })
+})
+
+// ===========================================================================
+// THE SAME DISCONNECT MECHANISM, on the NON-streaming route.
+//
+// Before this, cancelling a bridge inference only closed the socket: `claude
+// -p` kept running on the user's machine, on their subscription, producing an
+// answer nobody would ever read, until it finished or burned the whole
+// per-call budget. One AbortSignal now serves both routes, and this is the
+// half that proves the OLD route got it too.
+// ===========================================================================
+
+describe('POST /v1/infer over HTTP — a client that hangs up', () => {
+  let abortBridge: BridgeServer
+  let abortPort: number
+  let lastPid: number | undefined
+  let finished: Promise<void>
+  let markFinished: () => void
+
+  beforeAll(async () => {
+    abortBridge = createBridgeServer({
+      token: TOKEN,
+      port: 0,
+      realRoot: root,
+      version: '0.1.0',
+      capabilityDeps: { env: { PATH: '/bin' }, isExecutable: async () => true },
+      // The REAL one-shot runner against a real child, so the signal is
+      // exercised end to end: socket → BridgeRequest.signal → runInference →
+      // runProcess → SIGTERM.
+      infer: async (_req, _clis, signal) => {
+        const result = await runProcess({
+          bin: process.execPath,
+          // Would run forever. Only a kill ends it.
+          args: ['-e', `process.stdout.write('x');setInterval(()=>{},1000)`],
+          stdin: '',
+          cwd: root,
+          timeoutMs: 20_000,
+          ...(signal ? { signal } : {}),
+        })
+        lastPid = result.pid
+        markFinished()
+        return { ok: true as const, text: 'ignored', truncated: false, durationMs: 1 }
+      },
+    })
+    abortPort = await listenLoopback(abortBridge, 0)
+  })
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => abortBridge.server.close(() => resolve()))
+  })
+
+  beforeEach(() => {
+    lastPid = undefined
+    finished = new Promise<void>((resolve) => {
+      markFinished = resolve
+    })
+  })
+
+  it('KILLS THE CLI when the browser aborts — not just closes the socket', async () => {
+    const controller = new AbortController()
+    const inFlight = fetch(`http://${LOOPBACK_HOST}:${abortPort}/v1/infer`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cli: 'claude', prompt: 'hello' }),
+      signal: controller.signal,
+    })
+    // Let the child actually start before pulling the rug.
+    await new Promise((r) => setTimeout(r, 150))
+    controller.abort()
+    await expect(inFlight).rejects.toThrow()
+
+    // runProcess resolves on 'close', i.e. after the child was reaped.
+    await finished
+    expect(typeof lastPid).toBe('number')
+    let alive = true
+    try {
+      process.kill(lastPid!, 0)
+    } catch {
+      alive = false
+    }
+    expect(alive).toBe(false)
+  }, 20_000)
 })

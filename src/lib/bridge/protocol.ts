@@ -7,8 +7,8 @@
  * three interfaces). Change BOTH files together; `bridge/README.md` documents
  * the canonical contract.
  *
- * IMPLEMENTED in v1: GET /v1/health, POST /v1/infer, POST /v1/files,
- * POST /v1/search, POST /v1/fix. Nothing answers 501 any more.
+ * IMPLEMENTED in v1: GET /v1/health, POST /v1/infer, POST /v1/infer/stream,
+ * POST /v1/files, POST /v1/search, POST /v1/fix. Nothing answers 501 any more.
  */
 
 /** Wire protocol revision this build speaks. A bridge on another major is refused. */
@@ -35,6 +35,19 @@ export const DEFAULT_BRIDGE_PORT = 7321
 export interface BridgeCapabilities {
   inference: string[]
   infer: boolean
+  /**
+   * `POST /v1/infer/stream` — a route-readiness boolean exactly like `infer`,
+   * flipped in the same commit that implemented the route.
+   *
+   * It says the bridge UNDERSTANDS the route, not that every CLI types out:
+   * `claude` streams, `codex` cannot, and the route says which per call in its
+   * `start` event. The Local bridge settings section reports this so a user
+   * who wonders why their panels appear all at once can see the answer.
+   *
+   * A bridge predating the route omits the flag; an absent flag reads as
+   * false, and the transport falls back to `/v1/infer`.
+   */
+  inferStream: boolean
   files: boolean
   search: boolean
   /**
@@ -221,6 +234,144 @@ export function parseInferResponse(value: unknown): InferResponse | null {
     }
   }
   return parsed
+}
+
+// ---------------------------------------------------------------------------
+// `POST /v1/infer/stream` — the same work, delivered as it is produced.
+// ---------------------------------------------------------------------------
+
+/** The route. A constant so the two protocol mirrors cannot drift on a string. */
+export const INFER_STREAM_PATH = '/v1/infer/stream'
+
+/**
+ * NDJSON — one JSON document per `\n`-terminated line — NOT Server-Sent
+ * Events. The bridge's own protocol.ts carries the full reasoning; the short
+ * version from the browser's side is that `EventSource` cannot send an
+ * `Authorization` header or a POST body, so this has to be read with `fetch`
+ * and a stream reader anyway — and SSE's auto-reconnect would silently re-POST
+ * and spawn a SECOND CLI run on the user's subscription.
+ */
+export const INFER_STREAM_CONTENT_TYPE = 'application/x-ndjson'
+
+export interface InferStreamStart {
+  type: 'start'
+  cli: string
+  /**
+   * TRUE when this CLI genuinely emits text as the model writes it. FALSE when
+   * the bridge fell back to the CLI's one-shot path and the whole answer will
+   * arrive as a single delta at the end (codex). The bridge never fakes
+   * fragments, so this is the fact the UI may repeat to the user.
+   */
+  streaming: boolean
+}
+
+export interface InferStreamDelta {
+  type: 'delta'
+  text: string
+}
+
+export interface InferStreamDone {
+  type: 'done'
+  /** The CLI's own final answer, AUTHORITATIVE over the concatenated deltas. */
+  text: string
+  truncated: boolean
+  durationMs: number
+  /** Present ONLY when the CLI reported token counts. Never zero-filled. */
+  usage?: InferUsage
+}
+
+export interface InferStreamError {
+  type: 'error'
+  /** The same BridgeErrorCode the one-shot route's HTTP status would carry. */
+  code: BridgeErrorCode | null
+  message: string
+}
+
+export type InferStreamEvent =
+  | InferStreamStart
+  | InferStreamDelta
+  | InferStreamDone
+  | InferStreamError
+
+/**
+ * Narrow one untrusted NDJSON line.
+ *
+ * Returns null for a line we cannot read — a blank line, a truncated write, or
+ * an event type from a NEWER bridge. Null means SKIP, never fail: event types
+ * are additive within v1 for the same reason error codes are, and a client
+ * that crashed on an unknown `type` would break the moment the bridge grew a
+ * progress event.
+ *
+ * `text` is NOT sanitized, for the same reason `InferResponse.text` is not: it
+ * is model output headed for the JSON-extraction ladder and the markdown
+ * renderer, both of which already treat it as untrusted, and stripping control
+ * characters would corrupt legitimate answers. `cli` and `message` ARE
+ * sanitized — they are rendered as labels.
+ */
+export function parseInferStreamEvent(line: string): InferStreamEvent | null {
+  const trimmed = line.trim()
+  if (trimmed === '') return null
+  let value: unknown
+  try {
+    value = JSON.parse(trimmed)
+  } catch {
+    return null
+  }
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+
+  switch (raw['type']) {
+    case 'start':
+      if (typeof raw['cli'] !== 'string') return null
+      return {
+        type: 'start',
+        cli: sanitizeLabel(raw['cli'], 40),
+        // Anything but a literal `true` reads as false: claiming a stream that
+        // is not one is the single dishonesty this field exists to prevent.
+        streaming: raw['streaming'] === true,
+      }
+    case 'delta':
+      if (typeof raw['text'] !== 'string') return null
+      return { type: 'delta', text: raw['text'] }
+    case 'done': {
+      if (typeof raw['text'] !== 'string') return null
+      if (typeof raw['truncated'] !== 'boolean') return null
+      if (typeof raw['durationMs'] !== 'number') return null
+      const done: InferStreamDone = {
+        type: 'done',
+        text: raw['text'],
+        truncated: raw['truncated'],
+        durationMs: raw['durationMs'],
+      }
+      // ALL-OR-NOTHING, exactly as parseInferResponse does it: a half-reported
+      // pair would be a fabricated number in the cost UI.
+      const usage = raw['usage']
+      if (typeof usage === 'object' && usage !== null) {
+        const u = usage as Record<string, unknown>
+        if (typeof u['inputTokens'] === 'number' && typeof u['outputTokens'] === 'number') {
+          done.usage = { inputTokens: u['inputTokens'], outputTokens: u['outputTokens'] }
+        }
+      }
+      return done
+    }
+    case 'error': {
+      // The bridge sends `code` here — verified against a live bridge. `error`
+      // is accepted as an alias because that is the field name on every OTHER
+      // bridge error body (the non-2xx envelope), so it is the spelling a
+      // hand-rolled proxy or a future revision is most likely to reach for.
+      // Reading one field and silently dropping the other would turn a
+      // classified failure into an unclassified one.
+      const code = raw['code'] ?? raw['error']
+      const message = raw['message']
+      return {
+        type: 'error',
+        code: typeof code === 'string' && KNOWN_ERROR_CODES.includes(code) ? (code as BridgeErrorCode) : null,
+        message: typeof message === 'string' ? sanitizeLabel(message, 300) : '',
+      }
+    }
+    default:
+      return null
+  }
 }
 
 /**
@@ -422,7 +573,7 @@ export function parseSearchResponse(value: unknown): BridgeSearchResponse | null
  * call this route?" — even though the bridge answers it from a flag rather
  * than from a release number.
  */
-export type BridgeCapability = 'infer' | 'files' | 'search' | 'fix' | 'checkout'
+export type BridgeCapability = 'infer' | 'inferStream' | 'files' | 'search' | 'fix' | 'checkout'
 
 /** The loopback URL for a bridge route. Always 127.0.0.1 — never `localhost`. */
 export function bridgeUrl(port: number, path: string): string {
@@ -455,6 +606,11 @@ export function parseHealth(value: unknown): BridgeHealth | null {
   // not as a parse failure, which would break pairing with an older bridge.
   const inferReady = capsRaw['infer']
   if (inferReady !== undefined && typeof inferReady !== 'boolean') return null
+  // `inferStream` arrived with the streaming route, additive the same way
+  // `infer` was. An absent flag is an OLDER bridge, not a malformed one, and
+  // reads as false — which routes the transport to the one-shot path.
+  const streamReady = capsRaw['inferStream']
+  if (streamReady !== undefined && typeof streamReady !== 'boolean') return null
   if (typeof capsRaw['files'] !== 'boolean') return null
   if (typeof capsRaw['search'] !== 'boolean') return null
   // `fix` arrived with the fix-loop release and is additive the same way
@@ -477,6 +633,7 @@ export function parseHealth(value: unknown): BridgeHealth | null {
     capabilities: {
       inference: (inference as string[]).map((cli) => sanitizeLabel(cli, 40)),
       infer: inferReady === true,
+      inferStream: streamReady === true,
       files: capsRaw['files'],
       search: capsRaw['search'],
       fix: fixReady === true,

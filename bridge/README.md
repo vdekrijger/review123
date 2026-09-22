@@ -25,12 +25,18 @@ with no bridge running the app behaves exactly as it does today.
 
 ## Status
 
-Protocol **v1**, complete. `GET /v1/health`, `POST /v1/infer`, `POST /v1/files`,
-`POST /v1/search`, `POST /v1/fix`, `GET /v1/stack`, `POST /v1/checkout` and
-`POST /v1/restore` are all implemented — nothing answers `501` any more.
+Protocol **v1**, complete. `GET /v1/health`, `POST /v1/infer`,
+`POST /v1/infer/stream`, `POST /v1/files`, `POST /v1/search`, `POST /v1/fix`,
+`GET /v1/stack`, `POST /v1/checkout` and `POST /v1/restore` are all
+implemented — nothing answers `501` any more.
 
 - With `/v1/infer` live, review123 runs its reviews through the CLI you already
   pay for: pick **Local bridge** under Settings → AI models.
+- With `/v1/infer/stream` live, those answers **type out** instead of appearing
+  all at once after the wait, and cancelling one actually stops the CLI rather
+  than leaving it running on your subscription. (`codex` has no partial-output
+  mode, so its answers still arrive whole — the bridge says which, per call,
+  rather than faking a typewriter.)
 - With `/v1/files` and `/v1/search` live, it grounds those reviews in **your
   working tree** instead of the provider API — no rate limit, no 20k-line cap,
   and the whole repo rather than just the diff.
@@ -489,6 +495,10 @@ JSON over HTTP on `127.0.0.1`. The version lives in the **path**, so an old
 browser build and a new bridge can never half-understand each other — a
 mismatched client simply 404s.
 
+One route answers incrementally rather than with a single document:
+[`POST /v1/infer/stream`](#post-v1inferstream--implemented), framed as NDJSON.
+Everything below about gates, codes and caps applies to it unchanged.
+
 Every non-2xx response is:
 
 ```jsonc
@@ -519,6 +529,7 @@ must fall back on `message`, never crash.
   "capabilities": {
     "inference": ["claude"],    // CLIs DETECTED on PATH — see below
     "infer": true,              // route READINESS — one flag per route
+    "inferStream": true,        // ditto, for POST /v1/infer/stream
     "files": true,
     "search": true,             // true even without ripgrep: a JS walk answers
     "fix": false,               // the --allow-write FLAG, not a readiness bit
@@ -537,10 +548,10 @@ must fall back on `message`, never crash.
 
 - `inference` is a **detection** signal: which of the known CLIs exist on
   `PATH`. It says nothing about whether the route works.
-- `infer`, `files` and `search` are **route-readiness** booleans, one per route
-  and named after it. Each flips *in the same commit that implements its
-  route*, so a client that trusts the flag can never call a route that is not
-  there. All three are `true` — v1 is complete.
+- `infer`, `inferStream`, `files` and `search` are **route-readiness**
+  booleans, one per route and named after it. Each flips *in the same commit
+  that implements its route*, so a client that trusts the flag can never call a
+  route that is not there. All four are `true` — v1 is complete.
 - `fix` and `checkout` are **authorisation** signals: each reports whether
   *this process* was started with its own flag (`--allow-write`,
   `--allow-checkout`). Neither is "true from the release that shipped the
@@ -650,17 +661,156 @@ reads the subscription, which would defeat the entire point of the bridge.
   token counts, `codex exec` does not report them machine-readably. An absent
   `usage` means *unknown* — never zero. review123 shows tokens-unknown rather
   than implying the call was free.
-- **No streaming route.** `claude -p` can stream, and a v1-compatible
-  `POST /v1/infer/stream` is possible, but it needs its own event framing and
-  its own mid-stream cancellation through the child process. Until then a
-  streaming caller receives the whole answer at once, so the summary and Ask
-  panels do not type out over the bridge.
 - **No agentic tool loop.** `claude -p` is already an agent with its own tools;
   driving it from review123's tool loop would be two tool vocabularies talking
   through a text pipe. Deep review stays on the API transports.
 - **Strict JSON is prompt-enforced.** A CLI has no JSON mode, so review123
   appends a format instruction and runs the answer through its existing
   extract-and-repair ladder.
+
+### `POST /v1/infer/stream` — implemented
+
+The same work as `/v1/infer`, delivered as the model produces it, so the
+summary and Ask panels type out instead of appearing all at once after the
+wait. Same request body, same clamps, same confinement, same gates.
+
+#### Why NDJSON and not Server-Sent Events
+
+The response is **newline-delimited JSON** — one complete JSON document per
+`\n`-terminated line — with `Content-Type: application/x-ndjson`. Four reasons,
+heaviest first:
+
+1. **`EventSource` is unusable here anyway.** It cannot send an `Authorization`
+   header and cannot POST a body, and this route needs both. So a browser reads
+   the response with `fetch` plus a `ReadableStream` reader either way — which
+   strips SSE of the one thing it was going to buy.
+2. **SSE's auto-reconnect is actively wrong for this route.** A reconnect would
+   re-POST and spawn a *second* CLI run, spending the user's subscription twice
+   for one answer. NDJSON has no such behaviour to disable.
+3. **`data:` fields cannot contain a raw newline.** Model output is full of
+   them, so every delta would have to be split across continuation lines and
+   rejoined. NDJSON carries newlines inside the JSON string escape.
+4. **Everything else already speaks it.** Both CLIs emit NDJSON natively
+   (`claude --output-format stream-json`, `codex exec --json`) and every other
+   bridge route speaks JSON. One framing end to end, one parser, one error
+   envelope.
+
+#### The events
+
+```jsonc
+{"type":"start","cli":"claude","streaming":true}
+{"type":"delta","text":"Hello"}
+{"type":"delta","text":", world"}
+{"type":"done","text":"Hello, world","truncated":false,"durationMs":1850,
+ "usage":{"inputTokens":467,"outputTokens":41}}
+```
+
+- **`start`** always precedes any delta. `streaming` is the honesty field:
+  `true` when the CLI genuinely emits text as the model writes it, `false` when
+  the bridge fell back to that CLI's one-shot path and the whole answer will
+  arrive in a single delta at the end. **The bridge never chops a finished
+  answer into timed fragments** to look like streaming.
+- **`delta`** carries a piece of assistant text, in order. Concatenated they
+  form the answer.
+- **`done`** terminates the stream. Its `text` is the CLI's own final answer and
+  is **authoritative** over the concatenated deltas — the deltas are for
+  rendering progress; the result document is what the CLI committed to.
+  `usage` is present only when the CLI reported it (see below).
+- **`error`** — `{"type":"error","error":"<code>","message":"…"}` — carries the
+  same `BridgeErrorCode` the one-shot route would have returned as a status. It
+  may be the first line (nothing ran) or arrive after deltas (the child died,
+  the budget expired). Either way it is terminal.
+
+**A stream that ends without `done` or `error` was cut**, and a client must
+treat that as a failure rather than as a short answer. review123's transport
+does.
+
+#### The status line is the pivot
+
+Everything decidable **before** the CLI starts is a real HTTP status: `401`,
+`403 forbidden-origin` / `forbidden-host`, `413`, `400 bad-request`,
+`503 cli-unavailable`, `405` on a non-POST. Everything **after** it is a 200
+carrying an NDJSON `error` event, because the status line is already spent.
+That is the one real cost of streaming, and it is why the error event carries
+the code the status would have.
+
+The gate ladder is **the same ladder**, not a copy: `handler.ts` factors gates
+1–5 into `checkGates()` and both routes run it.
+
+#### Verified streaming invocations
+
+Checked against **claude 2.1.278** and **codex-cli 0.155.1** by running
+`--help` and real calls:
+
+```sh
+claude -p --output-format stream-json --include-partial-messages --verbose \
+       --tools "" --permission-prompts none --safe-mode \
+       --system-prompt-file <tmp>                    # prompt on stdin
+```
+
+| Flag | Why |
+| --- | --- |
+| `--output-format stream-json` | Emits one JSON document per line as the turn proceeds. |
+| `--include-partial-messages` | Turns a per-*message* event log into a per-*chunk* one. Without it the only assistant event is the finished message — non-streaming with extra steps. |
+| `--verbose` | **Not optional.** `claude 2.1.278` exits with `When using --print, --output-format=stream-json requires --verbose`. |
+
+Every safety flag is **identical** to the one-shot invocation. Streaming
+changes how the answer is delivered, never what the child may do — `--tools ""`
+still disables every tool, `--safe-mode` still drops `CLAUDE.md`, hooks,
+plugins and MCP servers.
+
+The bridge reads two line shapes and skips everything else (init banners,
+status pings, tool events, rate-limit notices):
+
+```jsonc
+{"type":"stream_event","event":{"type":"content_block_delta",
+ "delta":{"type":"text_delta","text":"…"}}}          // → a delta
+{"type":"result","subtype":"success","is_error":false,
+ "result":"…","usage":{…}}                            // → the final answer
+```
+
+A `thinking_delta` is **not** streamed: it is the model's private reasoning,
+not its answer, and emitting it would put text in the panel that the final
+result does not contain.
+
+**`codex` cannot stream, and the bridge says so rather than faking it.**
+`codex exec --json` emits NDJSON too, but the assistant text arrives in exactly
+one `{"type":"item.completed","item":{"type":"agent_message","text":"…"}}`
+event containing the whole finished message; `codex exec` has no
+partial-message flag. So `/v1/infer/stream` runs codex through the ordinary
+one-shot path and sets `streaming: false` on its `start` event. review123's
+settings page repeats that fact to the user, because "my answers don't type
+out" otherwise looks like a bug.
+
+#### Cancellation reaches the child process
+
+**Closing the connection stops the work.** The browser aborting the fetch (or
+closing the tab) tears down the socket; the bridge turns that into an
+`AbortSignal` and kills the child on the same `SIGTERM` → `SIGKILL`-after-2s
+ladder the timeout uses, then waits for `'close'` — i.e. for the child to be
+*reaped* — before the request is over. An aborted stream emits no terminal
+event at all: nobody is listening, and a verdict written into a closed socket
+would only invite a caller to log a failure for a request it cancelled itself.
+
+**This now applies to `/v1/infer` too.** Before, a cancelled inference only
+closed the socket and `claude -p` kept running on your machine, on your
+subscription, until it finished or burned the whole per-call budget. One
+mechanism serves both routes.
+
+`/v1/fix` is deliberately **not** wired to it: it writes commits in a scratch
+worktree, and killing it mid-round is a different design question (what state
+the worktree is left in) than cancelling a read-only completion.
+
+#### Honest limitations
+
+- `usage` is still absent for `codex`, and still absent whenever the CLI did not
+  report it. Never zero-filled.
+- A run cut at `MAX_INFER_OUTPUT_BYTES` ends with `done` and `truncated: true`
+  carrying **the real partial text** — which is strictly better than the
+  one-shot route can manage, since there the truncated JSON is unparseable and
+  the answer is lost entirely.
+- `maxOutputTokens` and model selection are ignored here exactly as they are on
+  `/v1/infer`.
 
 ### `POST /v1/files` — implemented
 

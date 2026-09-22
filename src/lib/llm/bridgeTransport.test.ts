@@ -24,6 +24,9 @@ import {
   BRIDGE_NOT_PAIRED_MESSAGE,
   BRIDGE_UNREACHABLE_MESSAGE,
   CANCELLED_MESSAGE,
+  TIMED_OUT_MESSAGE,
+  bridgeLastStreamMode,
+  _resetBridgeStreamModeForTest,
 } from './llm'
 import { llmToolLoop } from './llmToolLoop'
 import { setTransientRetryPolicyForTests } from './transientRetry'
@@ -450,43 +453,312 @@ describe('bridge transport — gate and retry', () => {
 })
 
 // ===========================================================================
-// Streaming — the deferred-streaming decision, made visible
+// Streaming — POST /v1/infer/stream, NDJSON
+//
+// The properties that matter are the ones #234 taught this repo the hard way:
+// every read of the body has to be inside the classification boundary, and a
+// stream that ends badly must never look like a short answer.
 // ===========================================================================
 
+/** One NDJSON line, terminator included. */
+function ndjson(event: Record<string, unknown>): string {
+  return `${JSON.stringify(event)}\n`
+}
+
+/**
+ * An NDJSON Response whose body yields `chunks` one `reader.read()` at a time,
+ * so a test can assert that deltas reach the consumer BETWEEN reads rather
+ * than all at the end.
+ */
+function streamResponse(chunks: string[], status = 200): Response {
+  const encoder = new TextEncoder()
+  let i = 0
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (i >= chunks.length) {
+        controller.close()
+        return
+      }
+      controller.enqueue(encoder.encode(chunks[i]!))
+      i += 1
+    },
+  })
+  return new Response(body, {
+    status,
+    headers: { 'Content-Type': 'application/x-ndjson' },
+  })
+}
+
+/** The usual happy sequence: start, three deltas, done. */
+function happyStream(text = 'Hello, world', usage?: Record<string, number>): string[] {
+  return [
+    ndjson({ type: 'start', cli: 'claude', streaming: true }),
+    ndjson({ type: 'delta', text: text.slice(0, 5) }),
+    ndjson({ type: 'delta', text: text.slice(5, 8) }),
+    ndjson({ type: 'delta', text: text.slice(8) }),
+    ndjson({ type: 'done', text, truncated: false, durationMs: 42, ...(usage ? { usage } : {}) }),
+  ]
+}
+
+/** A fetch mock that answers the STREAM route and 404s everything else. */
+function streamFetch(chunks: string[], status = 200): ReturnType<typeof vi.fn> {
+  return vi.fn().mockImplementation(async (url: string) => {
+    if (String(url).includes('/v1/infer/stream')) return streamResponse(chunks, status)
+    throw new Error(`unexpected fetch: ${url}`)
+  })
+}
+
 describe('bridge transport — streaming', () => {
-  it('delivers the whole answer as ONE delta (there is no streaming route yet)', async () => {
+  beforeEach(() => {
+    _resetBridgeStreamModeForTest()
+  })
+
+  it('POSTs the STREAM route on the paired port, bearer-authenticated, no cookies', async () => {
     useBridge()
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(inferBody({ text: 'a full paragraph' }))))
+    pairBridge(9100)
+    const fetchMock = streamFetch(happyStream())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmStream({ system: 'S', user: 'U' }, () => {})
+
+    expect(fetchMock.mock.calls[0]![0]).toBe('http://127.0.0.1:9100/v1/infer/stream')
+    expect(sentHeaders(fetchMock)['Authorization']).toBe(`Bearer ${TOKEN}`)
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).credentials).toBe('omit')
+    // Still a CLI id and a prompt on the body — never a command, argv or cwd.
+    expect(Object.keys(sentBody(fetchMock)).sort()).toEqual(['cli', 'prompt', 'system', 'timeoutMs'])
+  })
+
+  it('DELIVERS DELTAS INCREMENTALLY — the consumer sees them before the answer ends', async () => {
+    useBridge()
+    vi.stubGlobal('fetch', streamFetch(happyStream('Hello, world')))
 
     const deltas: string[] = []
     const content = await llmStream({ system: 'S', user: 'U' }, (d) => deltas.push(d))
 
-    expect(content).toBe('a full paragraph')
-    // The UX consequence, pinned: one chunk at the end, not a typing effect.
-    expect(deltas).toEqual(['a full paragraph'])
+    // Three separate deltas, in order — not one blob at the end. This is the
+    // whole point of the route.
+    expect(deltas).toEqual(['Hello', ', w', 'orld'])
+    expect(content).toBe('Hello, world')
+  })
+
+  it('a delta reaches the consumer BEFORE the stream is finished being read', async () => {
+    useBridge()
+    const seenAt: number[] = []
+    let reads = 0
+    const encoder = new TextEncoder()
+    const chunks = happyStream('Hello, world')
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (reads >= chunks.length) {
+          controller.close()
+          return
+        }
+        controller.enqueue(encoder.encode(chunks[reads]!))
+        reads += 1
+      },
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(body, { headers: { 'Content-Type': 'application/x-ndjson' } })),
+    )
+
+    await llmStream({ system: 'S', user: 'U' }, () => seenAt.push(reads))
+
+    // The first delta was observed while chunks were STILL UNREAD, and each
+    // later one after strictly more reads. A buffered implementation would
+    // report the same (final) read count for every delta.
+    expect(seenAt).toHaveLength(3)
+    expect(seenAt[0]!).toBeLessThan(chunks.length)
+    expect(seenAt[0]!).toBeLessThan(seenAt[1]!)
+    expect(seenAt[1]!).toBeLessThan(seenAt[2]!)
+  })
+
+  it('uses done.text as the final answer — the CLI’s own verdict, not our concatenation', async () => {
+    useBridge()
+    vi.stubGlobal(
+      'fetch',
+      streamFetch([
+        ndjson({ type: 'start', cli: 'claude', streaming: true }),
+        ndjson({ type: 'delta', text: 'partial' }),
+        ndjson({ type: 'done', text: 'the complete answer', truncated: false, durationMs: 1 }),
+      ]),
+    )
+    const content = await llmStream({ system: 'S', user: 'U' }, () => {})
+    expect(content).toBe('the complete answer')
+  })
+
+  it('falls back on the accumulated deltas when done carries no text', async () => {
+    useBridge()
+    vi.stubGlobal(
+      'fetch',
+      streamFetch([
+        ndjson({ type: 'delta', text: 'all ' }),
+        ndjson({ type: 'delta', text: 'of it' }),
+        ndjson({ type: 'done', text: '', truncated: true, durationMs: 1 }),
+      ]),
+    )
+    expect(await llmStream({ system: 'S', user: 'U' }, () => {})).toBe('all of it')
   })
 
   it('emits nothing for an empty answer rather than a blank delta', async () => {
     useBridge()
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(inferBody({ text: '' }))))
-
+    vi.stubGlobal(
+      'fetch',
+      streamFetch([
+        ndjson({ type: 'start', cli: 'claude', streaming: true }),
+        ndjson({ type: 'delta', text: '' }),
+        ndjson({ type: 'done', text: '', truncated: false, durationMs: 1 }),
+      ]),
+    )
     const deltas: string[] = []
     await llmStream({ system: 'S', user: 'U' }, (d) => deltas.push(d))
     expect(deltas).toEqual([])
   })
 
-  it('reports usage on the streaming path too, when the CLI reported it', async () => {
+  it('reports usage when the CLI reported it, and omits it otherwise', async () => {
+    useBridge()
+    vi.stubGlobal('fetch', streamFetch(happyStream('Hello, world', { inputTokens: 10, outputTokens: 4 })))
+    const withUsage = await llmStreamWithUsage({ system: 'S', user: 'U' }, () => {})
+    expect(withUsage.usage).toEqual({ prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 })
+
+    vi.stubGlobal('fetch', streamFetch(happyStream('Hello, world')))
+    const without = await llmStreamWithUsage({ system: 'S', user: 'U' }, () => {})
+    expect(without.usage).toBeUndefined()
+  })
+
+  it('ignores a HALF-reported usage pair rather than inventing the missing half', async () => {
     useBridge()
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(jsonResponse(inferBody({ usage: { inputTokens: 10, outputTokens: 4 } }))),
+      streamFetch([
+        ndjson({ type: 'done', text: 'x', truncated: false, durationMs: 1, usage: { inputTokens: 10 } }),
+      ]),
     )
-
     const { usage } = await llmStreamWithUsage({ system: 'S', user: 'U' }, () => {})
-    expect(usage).toEqual({ prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 })
+    expect(usage).toBeUndefined()
   })
 
-  it('propagates a bridge failure to a streaming caller, again with no paid fallback', async () => {
+  it('skips an event type it does not know — stream events are additive within v1', async () => {
+    useBridge()
+    vi.stubGlobal(
+      'fetch',
+      streamFetch([
+        ndjson({ type: 'start', cli: 'claude', streaming: true }),
+        ndjson({ type: 'progress', percent: 40 }),
+        ndjson({ type: 'delta', text: 'still fine' }),
+        '\n',
+        ndjson({ type: 'done', text: 'still fine', truncated: false, durationMs: 1 }),
+      ]),
+    )
+    expect(await llmStream({ system: 'S', user: 'U' }, () => {})).toBe('still fine')
+  })
+
+  it('reassembles an event split across two reads', async () => {
+    useBridge()
+    const line = ndjson({ type: 'done', text: 'reassembled', truncated: false, durationMs: 1 })
+    vi.stubGlobal('fetch', streamFetch([line.slice(0, 12), line.slice(12)]))
+    expect(await llmStream({ system: 'S', user: 'U' }, () => {})).toBe('reassembled')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Failures — never a short answer, never a paid fallback
+// ---------------------------------------------------------------------------
+
+describe('bridge transport — streaming failures', () => {
+  beforeEach(() => {
+    _resetBridgeStreamModeForTest()
+  })
+
+  it('a stream that ends WITHOUT done is a failure, not a short answer', async () => {
+    useBridge()
+    vi.stubGlobal(
+      'fetch',
+      streamFetch([
+        ndjson({ type: 'start', cli: 'claude', streaming: true }),
+        ndjson({ type: 'delta', text: 'half an ans' }),
+      ]),
+    )
+    await expect(llmStream({ system: 'S', user: 'U' }, () => {})).rejects.toMatchObject({
+      kind: 'server',
+      message: expect.stringMatching(/ended the stream before the answer was finished/i),
+    })
+  })
+
+  // A real bridge keys this `code` (verified live); `error` is the alias every
+  // other bridge error body uses. Both must classify, or a failure arrives at
+  // the panel unclassified.
+  it.each([
+    ['code', 'code'],
+    ['error', 'error'],
+  ])(
+    'a mid-stream error event keyed by `%s` classifies by its CODE, exactly as the status would',
+    async (_label, field) => {
+      useBridge()
+      vi.stubGlobal(
+        'fetch',
+        streamFetch([
+          ndjson({ type: 'start', cli: 'claude', streaming: true }),
+          ndjson({ type: 'delta', text: 'started' }),
+          ndjson({ type: 'error', [field]: 'timeout', message: 'The claude CLI did not finish in time.' }),
+        ]),
+      )
+      await expect(llmStream({ system: 'S', user: 'U' }, () => {})).rejects.toMatchObject({
+        kind: 'timeout',
+        message: 'The claude CLI did not finish in time.',
+      })
+    },
+  )
+
+  it('a mid-stream cli-failed does NOT carry a retry status — a retry would re-emit the deltas', async () => {
+    useBridge()
+    setTransientRetryPolicyForTests({ maxRetries: 2 })
+    const fetchMock = streamFetch([
+      ndjson({ type: 'start', cli: 'claude', streaming: true }),
+      ndjson({ type: 'delta', text: 'the opening of the answer' }),
+      ndjson({ type: 'error', error: 'cli-failed', message: 'The claude CLI exited with code 1.' }),
+    ])
+    vi.stubGlobal('fetch', fetchMock)
+
+    const deltas: string[] = []
+    await expect(llmStream({ system: 'S', user: 'U' }, (d) => deltas.push(d))).rejects.toMatchObject({
+      kind: 'server',
+      status: undefined,
+    })
+    // ONE attempt, ONE copy of the opening. A retried stream would have shown
+    // the consumer the same text twice.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(deltas).toEqual(['the opening of the answer'])
+  })
+
+  it('an error BEFORE any delta keeps the ordinary retry decision — nothing to double-emit', async () => {
+    useBridge()
+    setTransientRetryPolicyForTests({ maxRetries: 1 })
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      streamResponse([
+        ndjson({ type: 'start', cli: 'claude', streaming: true }),
+        ndjson({ type: 'error', error: 'cli-failed', message: 'The claude CLI exited with code 1.' }),
+      ]),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(llmStream({ system: 'S', user: 'U' }, () => {})).rejects.toMatchObject({ kind: 'server' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('an unknown error code falls back on the message rather than crashing', async () => {
+    useBridge()
+    vi.stubGlobal(
+      'fetch',
+      streamFetch([ndjson({ type: 'error', error: 'quantum-flux', message: 'Something new went wrong.' })]),
+    )
+    await expect(llmStream({ system: 'S', user: 'U' }, () => {})).rejects.toMatchObject({
+      kind: 'server',
+      message: 'Something new went wrong.',
+    })
+  })
+
+  it('a bridge that stopped answering fails HONESTLY — no silent paid fallback', async () => {
     useBridge()
     setDeepseekKey('sk-deepseek-key')
     const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
@@ -496,7 +768,282 @@ describe('bridge transport — streaming', () => {
       kind: 'network',
       message: BRIDGE_UNREACHABLE_MESSAGE,
     })
+    // Exactly one call, to loopback. Nothing reached a metered provider.
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0]![0])).toContain('127.0.0.1')
+  })
+
+  it('a mid-stream failure never falls back to the configured API key either', async () => {
+    useBridge()
+    setDeepseekKey('sk-deepseek-key')
+    const fetchMock = streamFetch([
+      ndjson({ type: 'delta', text: 'started' }),
+      ndjson({ type: 'error', error: 'cli-failed', message: 'boom' }),
+    ])
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(llmStream({ system: 'S', user: 'U' }, () => {})).rejects.toThrow()
+    for (const call of fetchMock.mock.calls) {
+      expect(String(call[0])).toContain('127.0.0.1')
+    }
+  })
+
+  it('an unpaired bridge is `no-key`, with the pairing instruction', async () => {
+    setAiProvider('bridge')
+    setAiModel('claude')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(llmStream({ system: 'S', user: 'U' }, () => {})).rejects.toMatchObject({
+      kind: 'no-key',
+      message: BRIDGE_NOT_PAIRED_MESSAGE,
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('a non-2xx that is not 404 is classified from its body, before any body read', async () => {
+    useBridge()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(errorResponse('cli-unavailable', 503)))
+    await expect(llmStream({ system: 'S', user: 'U' }, () => {})).rejects.toMatchObject({ kind: 'no-key' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #233/#234 CLASSIFICATION PARITY — the regression this PR is likeliest to
+// reintroduce.
+//
+// `fetch()` resolves when the HEADERS arrive. The body streams afterwards, so
+// a window that fires mid-answer rejects `reader.read()`, not the fetch — and
+// Blink reports that as a plain AbortError. A body read left OUTSIDE the
+// mapped try/catch therefore escapes unclassified and reaches the panel with
+// the engine's own "The user aborted a request." text intact. That is exactly
+// the bug #234 fixed, and streaming is where it lived.
+// ---------------------------------------------------------------------------
+
+/**
+ * A Response whose body read REJECTS after `before` chunks, with `err`.
+ * The rejection is the thing under test: it must come back classified.
+ */
+function rejectingStreamResponse(before: string[], err: unknown, delayMs = 0): Response {
+  const encoder = new TextEncoder()
+  let i = 0
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (i < before.length) {
+        controller.enqueue(encoder.encode(before[i]!))
+        i += 1
+        return
+      }
+      // `delayMs` lets a test put the rejection AFTER our own request window
+      // has expired, which is the case Blink reports as a plain AbortError.
+      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs))
+      controller.error(err)
+    },
+  })
+  return new Response(body, { headers: { 'Content-Type': 'application/x-ndjson' } })
+}
+
+function domError(name: string): DOMException {
+  return new DOMException(`engine text for ${name}`, name)
+}
+
+describe('bridge transport — stream-read classification parity (#233/#234)', () => {
+  beforeEach(() => {
+    _resetBridgeStreamModeForTest()
+  })
+
+  it('A STREAM-READ ABORT IS `aborted`, WITH NEUTRAL COPY — never the engine’s "user aborted" text', async () => {
+    useBridge()
+    const controller = new AbortController()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () => {
+        // The caller cancels once the response is in flight, so the failure
+        // lands on reader.read() rather than on the fetch itself.
+        queueMicrotask(() => controller.abort())
+        return rejectingStreamResponse(
+          [ndjson({ type: 'start', cli: 'claude', streaming: true })],
+          domError('AbortError'),
+        )
+      }),
+    )
+
+    const err = await llmStream({ system: 'S', user: 'U', signal: controller.signal }, () => {}).catch(
+      (e: unknown) => e,
+    )
+    expect(err).toBeInstanceOf(LlmError)
+    expect((err as LlmError).kind).toBe('aborted')
+    expect((err as LlmError).message).toBe(CANCELLED_MESSAGE)
+    // THE REGRESSION: the engine's own wording must never reach the panel.
+    expect((err as LlmError).message).not.toMatch(/user aborted|engine text/i)
+  })
+
+  it('A STREAM-READ ABORT WHILE OUR OWN WINDOW HAS FIRED IS `timeout`, not a cancellation', async () => {
+    useBridge()
+    // Blink reports a window-aborted body read as a plain AbortError, so
+    // reading err.name alone would call a genuine timeout a cancellation and
+    // quietly drop the panel to a calm state. The timeout SIGNAL is what tells
+    // the truth, and this pins that it is consulted on the READ path too.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        rejectingStreamResponse([ndjson({ type: 'delta', text: 'started' })], domError('AbortError'), 40),
+      ),
+    )
+
+    const err = await llmStream({ system: 'S', user: 'U', timeoutMs: 5 }, () => {}).catch(
+      (e: unknown) => e,
+    )
+    expect(err).toBeInstanceOf(LlmError)
+    expect((err as LlmError).kind).toBe('timeout')
+    expect((err as LlmError).message).toBe(TIMED_OUT_MESSAGE)
+  })
+
+  it('A STREAM-READ TimeoutError IS `timeout`, by the spec’d discriminant', async () => {
+    useBridge()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        rejectingStreamResponse([ndjson({ type: 'delta', text: 'x' })], domError('TimeoutError')),
+      ),
+    )
+    const err = await llmStream({ system: 'S', user: 'U' }, () => {}).catch((e: unknown) => e)
+    expect((err as LlmError).kind).toBe('timeout')
+  })
+
+  it('ANY OTHER stream-read rejection is `network` — classified, never raw', async () => {
+    useBridge()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        rejectingStreamResponse(
+          [ndjson({ type: 'delta', text: 'x' })],
+          new TypeError('network error while reading body'),
+        ),
+      ),
+    )
+    const err = await llmStream({ system: 'S', user: 'U' }, () => {}).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(LlmError)
+    expect((err as LlmError).kind).toBe('network')
+  })
+
+  it('an LlmError raised INSIDE the read loop is not re-classified as a network failure', async () => {
+    useBridge()
+    vi.stubGlobal(
+      'fetch',
+      streamFetch([ndjson({ type: 'error', error: 'timeout', message: 'the CLI was too slow' })]),
+    )
+    const err = await llmStream({ system: 'S', user: 'U' }, () => {}).catch((e: unknown) => e)
+    // Re-mapping it would turn a precise `timeout` into a generic `network`.
+    expect((err as LlmError).kind).toBe('timeout')
+  })
+
+  it('a caller cancellation before the headers arrive is still `aborted`', async () => {
+    useBridge()
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(domError('AbortError')))
+    const err = await llmStream({ system: 'S', user: 'U' }, () => {}).catch((e: unknown) => e)
+    expect((err as LlmError).kind).toBe('aborted')
+    expect((err as LlmError).message).toBe(CANCELLED_MESSAGE)
+  })
+
+  it('a BRIDGE-side timeout event carries the bridge’s message, still classified `timeout`', async () => {
+    useBridge()
+    vi.stubGlobal(
+      'fetch',
+      streamFetch([
+        ndjson({
+          type: 'error',
+          error: 'timeout',
+          message: 'The claude CLI did not finish within the 120000 ms budget and was stopped.',
+        }),
+      ]),
+    )
+    const err = await llmStream({ system: 'S', user: 'U' }, () => {}).catch((e: unknown) => e)
+    expect((err as LlmError).kind).toBe('timeout')
+    expect((err as LlmError).message).toContain('120000 ms budget')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The fallback: an older bridge with no streaming route
+// ---------------------------------------------------------------------------
+
+describe('bridge transport — an older bridge with no /v1/infer/stream', () => {
+  beforeEach(() => {
+    _resetBridgeStreamModeForTest()
+  })
+
+  /** 404 the stream route (an older bridge), answer the one-shot route. */
+  function olderBridgeFetch(body: Record<string, unknown> = inferBody()): ReturnType<typeof vi.fn> {
+    return vi.fn().mockImplementation(async (url: string) => {
+      if (String(url).includes('/v1/infer/stream')) {
+        return jsonResponse({ ok: false, error: 'not-found', message: 'No route POST /v1/infer/stream' }, 404)
+      }
+      return jsonResponse(body)
+    })
+  }
+
+  it('falls back to the ONE-SHOT route transparently, and still answers', async () => {
+    useBridge()
+    const fetchMock = olderBridgeFetch(inferBody({ text: 'a full paragraph' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const deltas: string[] = []
+    const content = await llmStream({ system: 'S', user: 'U' }, (d) => deltas.push(d))
+
+    expect(content).toBe('a full paragraph')
+    // One delta at the end — the pre-streaming behaviour, unchanged. Emitting
+    // none would leave a delta-rendered panel permanently blank.
+    expect(deltas).toEqual(['a full paragraph'])
+    expect(String(fetchMock.mock.calls[0]![0])).toContain('/v1/infer/stream')
+    expect(String(fetchMock.mock.calls[1]![0])).toMatch(/\/v1\/infer$/)
+  })
+
+  it('NEVER CLAIMS TO HAVE STREAMED — the app can say so if the user asks', async () => {
+    useBridge()
+    vi.stubGlobal('fetch', olderBridgeFetch())
+    await llmStream({ system: 'S', user: 'U' }, () => {})
+    expect(bridgeLastStreamMode()).toBe('no-route')
+  })
+
+  it('records `streamed` when the CLI really did type out', async () => {
+    useBridge()
+    vi.stubGlobal('fetch', streamFetch(happyStream()))
+    await llmStream({ system: 'S', user: 'U' }, () => {})
+    expect(bridgeLastStreamMode()).toBe('streamed')
+  })
+
+  it('records `cli-one-shot` when the bridge streams but the CLI cannot (codex)', async () => {
+    useBridge('codex')
+    vi.stubGlobal(
+      'fetch',
+      streamFetch([
+        ndjson({ type: 'start', cli: 'codex', streaming: false }),
+        ndjson({ type: 'delta', text: 'the whole answer at once' }),
+        ndjson({ type: 'done', text: 'the whole answer at once', truncated: false, durationMs: 9 }),
+      ]),
+    )
+    const deltas: string[] = []
+    await llmStream({ system: 'S', user: 'U' }, (d) => deltas.push(d))
+    expect(bridgeLastStreamMode()).toBe('cli-one-shot')
+    // Honest: ONE delta, because that is genuinely how it arrived.
+    expect(deltas).toEqual(['the whole answer at once'])
+  })
+
+  it('the fallback still refuses to spend the API key when the one-shot route ALSO fails', async () => {
+    useBridge()
+    setDeepseekKey('sk-deepseek-key')
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (String(url).includes('/v1/infer/stream')) {
+        return jsonResponse({ ok: false, error: 'not-found', message: 'no' }, 404)
+      }
+      return errorResponse('cli-failed', 502, 'The claude CLI exited with code 1.')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(llmStream({ system: 'S', user: 'U' }, () => {})).rejects.toMatchObject({ kind: 'server' })
+    for (const call of fetchMock.mock.calls) {
+      expect(String(call[0])).toContain('127.0.0.1')
+    }
   })
 })
 
