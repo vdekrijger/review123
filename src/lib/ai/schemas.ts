@@ -1502,3 +1502,186 @@ export function validateSkillReviewResult(x: unknown): SkillReviewResult | null 
 
   return x as unknown as SkillReviewResult
 }
+
+// ---------------------------------------------------------------------------
+// StandingRulesResult — authoring rules distilled from the user's own review
+// behaviour (the standing-rules knowledge base).
+//
+// The same corpus mineSkill points at a REVIEWER persona, pointed the other
+// way: at the agents that WRITE the code. A review comment the user keeps
+// repeating is a spec fragment that arrived too late; stated as an imperative
+// sentence it becomes a standing order an agent can follow beforehand.
+//
+// Two kinds, because they read differently:
+//   'do'    — something the user repeatedly ASKS FOR.
+//   'avoid' — something the user repeatedly REJECTS or dismisses ("we don't
+//             care about that here"). Dismissal-ledger signal lands here.
+// ---------------------------------------------------------------------------
+
+/** Hard cap on distilled rules. A CLAUDE.md section nobody reads is worthless. */
+export const STANDING_RULES_MAX = 12
+/** Per-rule sentence cap — a rule longer than this is a paragraph, not a rule. */
+export const STANDING_RULE_TEXT_MAX = 240
+/** Evidence excerpts kept per rule. */
+export const STANDING_RULE_EVIDENCE_MAX = 4
+/** Per-excerpt char cap. */
+export const STANDING_RULE_EXCERPT_MAX = 160
+
+export type StandingRuleKind = 'do' | 'avoid'
+
+/** Which corpus stream a supporting excerpt came from. */
+export type StandingRuleSource = 'review-comment' | 'dismissal' | 'draft'
+
+const STANDING_RULE_KINDS = new Set<string>(['do', 'avoid'])
+const STANDING_RULE_SOURCES = new Set<string>(['review-comment', 'dismissal', 'draft'])
+
+export interface StandingRuleEvidence {
+  source: StandingRuleSource
+  /** A short excerpt of the corpus item that supports the rule. */
+  excerpt: string
+}
+
+export interface StandingRule {
+  /** ONE imperative sentence — the line that belongs in a CLAUDE.md. */
+  rule: string
+  kind: StandingRuleKind
+  /** How many corpus items the model says support this rule. */
+  occurrences: number
+  evidence: StandingRuleEvidence[]
+}
+
+export interface StandingRulesResult {
+  rules: StandingRule[]
+}
+
+function normalizeExcerpt(raw: string): string {
+  const flat = raw.replace(/\s+/g, ' ').trim()
+  return flat.length > STANDING_RULE_EXCERPT_MAX
+    ? `${flat.slice(0, STANDING_RULE_EXCERPT_MAX).trimEnd()}…`
+    : flat
+}
+
+function normalizeRuleText(raw: string): string {
+  const flat = raw.replace(/\s+/g, ' ').trim()
+  return flat.length > STANDING_RULE_TEXT_MAX
+    ? `${flat.slice(0, STANDING_RULE_TEXT_MAX).trimEnd()}…`
+    : flat
+}
+
+/**
+ * Validate an unknown value as StandingRulesResult (STRICT).
+ * Returns a NORMALIZED value or null if the shape is invalid.
+ *
+ * Strict rules (any violation → null; the caller then tries the salvage):
+ * - `rules` must be an array.
+ * - each rule: non-empty `rule` string, `kind` exactly 'do' | 'avoid',
+ *   `occurrences` a finite number ≥ 1 (rounded), `evidence` an array whose
+ *   every entry has a valid `source` enum and a non-empty `excerpt` string.
+ * Rules are capped at STANDING_RULES_MAX and evidence at
+ * STANDING_RULE_EVIDENCE_MAX (truncated, not rejected — mirrors
+ * validateRiskJudge's snippet cap); text is whitespace-collapsed and cut at
+ * its cap.
+ */
+export function validateStandingRules(x: unknown): StandingRulesResult | null {
+  if (!isObject(x)) return null
+  if (!Array.isArray(x['rules'])) return null
+
+  const rules: StandingRule[] = []
+  for (const raw of x['rules']) {
+    if (!isObject(raw)) return null
+    if (typeof raw['rule'] !== 'string' || raw['rule'].trim().length === 0) return null
+    if (typeof raw['kind'] !== 'string' || !STANDING_RULE_KINDS.has(raw['kind'])) return null
+    const occ = raw['occurrences']
+    if (typeof occ !== 'number' || !Number.isFinite(occ) || occ < 1) return null
+    if (!Array.isArray(raw['evidence'])) return null
+
+    const evidence: StandingRuleEvidence[] = []
+    for (const ev of raw['evidence']) {
+      if (!isObject(ev)) return null
+      if (typeof ev['source'] !== 'string' || !STANDING_RULE_SOURCES.has(ev['source'])) return null
+      if (typeof ev['excerpt'] !== 'string' || ev['excerpt'].trim().length === 0) return null
+      evidence.push({
+        source: ev['source'] as StandingRuleSource,
+        excerpt: normalizeExcerpt(ev['excerpt']),
+      })
+    }
+
+    rules.push({
+      rule: normalizeRuleText(raw['rule']),
+      kind: raw['kind'] as StandingRuleKind,
+      occurrences: Math.round(occ),
+      evidence: evidence.slice(0, STANDING_RULE_EVIDENCE_MAX),
+    })
+  }
+
+  return { rules: rules.slice(0, STANDING_RULES_MAX) }
+}
+
+/**
+ * Best-effort PER-ELEMENT salvage of a malformed standing-rules payload
+ * (mirrors salvageIntentCheck / salvageExpectedOutcomes): each rule that
+ * carries the substance — an imperative sentence — is KEPT, so one garbled
+ * entry no longer nukes a distillation the user paid an LLM call for.
+ *
+ * Per-item rules (violation → that ITEM is dropped, the rest kept):
+ * - a non-empty `rule` string is REQUIRED — without it there is no rule.
+ * - a missing/invalid `kind` degrades to 'do' (the positive, lower-stakes
+ *   reading: an authoring instruction, not a claim about what the user
+ *   rejects).
+ * - a missing/invalid `occurrences` degrades to the evidence count, floored
+ *   at 1 — never fabricated upward.
+ * - malformed evidence entries are dropped individually; an invalid `source`
+ *   degrades to 'review-comment' (the corpus's largest stream). A rule may end
+ *   with empty evidence — the card then renders the count without excerpts.
+ *
+ * Returns null when nothing usable survives: the value isn't an object,
+ * `rules` isn't an array at all, or a NON-EMPTY rules array salvages to
+ * nothing (garbage, not a legitimate "no rules" answer).
+ */
+export function salvageStandingRules(x: unknown): StandingRulesResult | null {
+  if (!isObject(x)) return null
+  if (!Array.isArray(x['rules'])) return null
+  const rawRules = x['rules']
+
+  const rules: StandingRule[] = []
+  for (const raw of rawRules) {
+    if (!isObject(raw)) continue
+    if (typeof raw['rule'] !== 'string' || raw['rule'].trim().length === 0) continue
+
+    const evidence: StandingRuleEvidence[] = []
+    if (Array.isArray(raw['evidence'])) {
+      for (const ev of raw['evidence']) {
+        if (!isObject(ev)) continue
+        if (typeof ev['excerpt'] !== 'string' || ev['excerpt'].trim().length === 0) continue
+        const source =
+          typeof ev['source'] === 'string' && STANDING_RULE_SOURCES.has(ev['source'])
+            ? (ev['source'] as StandingRuleSource)
+            : 'review-comment'
+        evidence.push({ source, excerpt: normalizeExcerpt(ev['excerpt']) })
+      }
+    }
+
+    const kind =
+      typeof raw['kind'] === 'string' && STANDING_RULE_KINDS.has(raw['kind'])
+        ? (raw['kind'] as StandingRuleKind)
+        : 'do'
+    const occ = raw['occurrences']
+    const occurrences =
+      typeof occ === 'number' && Number.isFinite(occ) && occ >= 1
+        ? Math.round(occ)
+        : Math.max(1, evidence.length)
+
+    rules.push({
+      rule: normalizeRuleText(raw['rule']),
+      kind,
+      occurrences,
+      evidence: evidence.slice(0, STANDING_RULE_EVIDENCE_MAX),
+    })
+  }
+
+  // A non-empty raw list that salvages to nothing is garbage, not a
+  // legitimate "no rules" answer — let the caller take the error path.
+  if (rawRules.length > 0 && rules.length === 0) return null
+
+  return { rules: rules.slice(0, STANDING_RULES_MAX) }
+}

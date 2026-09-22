@@ -31,11 +31,14 @@ import {
   INTENT_TRUNCATION_MARKER,
   INTENT_MIN_MEANINGFUL_CHARS,
   outcomesPrompt,
+  standingRulesPrompt,
+  PLAIN_ENGLISH_RULES,
+  STANDING_RULES_ITEM_MAX,
   parseReadingOrder,
   stripReadingOrder,
   type ExpandCommentContext,
 } from './tasks'
-import { STORY_LAYERS, IMPACT_MAX_PER_GROUP, INTENT_MAX_ITEMS, OUTCOMES_MAX_ITEMS } from './schemas'
+import { STORY_LAYERS, IMPACT_MAX_PER_GROUP, INTENT_MAX_ITEMS, OUTCOMES_MAX_ITEMS, STANDING_RULES_MAX, STANDING_RULE_EVIDENCE_MAX } from './schemas'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 
@@ -54,7 +57,7 @@ function makeCtx(text = 'PR context text here'): PackedContext {
  * version forward). Tasks added AFTER the migration (e.g. `simplify`, starting
  * its own history at 1) never lived through those shared eras and are excluded.
  */
-const POST_MIGRATION_TASKS = new Set(['simplify', 'intent', 'outcomes', 'skillsTests'])
+const POST_MIGRATION_TASKS = new Set(['simplify', 'intent', 'outcomes', 'skillsTests', 'standingRules'])
 const MIN_PROMPT_VERSION = Math.min(
   ...Object.entries(PROMPT_VERSIONS)
     .filter(([task]) => !POST_MIGRATION_TASKS.has(task))
@@ -2622,5 +2625,157 @@ describe('expandCommentPrompt', () => {
     // Same policy as the other user-triggered tasks:
     expect('ask' in PROMPT_VERSIONS).toBe(false)
     expect('coach' in PROMPT_VERSIONS).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// standingRulesPrompt — the authoring-rules distillation
+// (PROMPT_VERSIONS.standingRules)
+// ---------------------------------------------------------------------------
+
+describe('standingRulesPrompt', () => {
+  const CORPUS = {
+    reviewComments: ['This belongs in the domain module, not the handler.'],
+    dismissals: [{ pattern: 'missing jsdoc on an internal helper', reason: 'not-worth' as const }],
+    drafts: ['Pull this into a shared constant.'],
+    acceptedFindings: ['The retry loop has no ceiling.'],
+  }
+
+  it('carries the stable e2e dispatch marker in the system prompt', () => {
+    const { system } = standingRulesPrompt(CORPUS)
+    expect(system).toContain("turning a reviewer's own past corrections into standing orders")
+  })
+
+  it('states the framing that makes this the AUTHOR-facing task, not a persona', () => {
+    const { system } = standingRulesPrompt(CORPUS)
+    expect(system).toMatch(/specification fragment that arrived too late/i)
+    expect(system).toMatch(/BEFORE the code is written/)
+  })
+
+  it('demands ONE imperative sentence per rule and bans vague virtues', () => {
+    const { system } = standingRulesPrompt(CORPUS)
+    expect(system).toMatch(/ONE imperative sentence/)
+    expect(system).toMatch(/CLAUDE\.md/)
+    expect(system).toMatch(/never a vague virtue/i)
+    expect(system).toContain('Write clean code')
+  })
+
+  it('distinguishes the two signals: repeatedly asked for vs repeatedly rejected', () => {
+    const { system } = standingRulesPrompt(CORPUS)
+    expect(system).toContain('kind "do" for something they repeatedly ASK FOR')
+    expect(system).toContain('kind "avoid" for something they repeatedly REJECT or dismiss')
+    // The dismissal stream is explicitly named as the negative signal.
+    expect(system).toMatch(/what their codebase does NOT care about/i)
+  })
+
+  it('requires a pattern to repeat, and says an EMPTY result is honest', () => {
+    const { system } = standingRulesPrompt(CORPUS)
+    expect(system).toMatch(/at LEAST TWICE/)
+    expect(system).toMatch(/One comment is a one-off/)
+    expect(system).toMatch(/EMPTY rules array is a valid, honest answer/)
+    expect(system).toMatch(/never pad/)
+  })
+
+  it('carries the caps the validator enforces, so prompt and schema agree', () => {
+    const { system } = standingRulesPrompt(CORPUS)
+    expect(system).toContain(`At most ${STANDING_RULES_MAX} rules`)
+    expect(system).toContain(`up to ${STANDING_RULE_EVIDENCE_MAX} short excerpts`)
+  })
+
+  it('demands evidence the human can judge — counts and VERBATIM excerpts', () => {
+    const { system } = standingRulesPrompt(CORPUS)
+    expect(system).toMatch(/Count honestly; never round up/)
+    expect(system).toMatch(/NEVER write an excerpt that does not appear in the input/)
+  })
+
+  it('reuses the #220 plain-English contract VERBATIM instead of writing a second one', () => {
+    const { system } = standingRulesPrompt(CORPUS)
+    expect(system).toContain(PLAIN_ENGLISH_RULES)
+  })
+
+  it("PLAIN_ENGLISH_RULES is still byte-identical to simplifyPrompt's own lines", () => {
+    // THE POINT OF THIS TEST: the product has ONE style doctrine. simplifyPrompt
+    // is its source of truth; if either side is edited without the other, this
+    // fails instead of the two quietly drifting apart.
+    const simplify = simplifyPrompt([{ id: 'f0', body: 'b' }]).system
+    for (const line of PLAIN_ENGLISH_RULES.split('\n')) {
+      expect(simplify, line).toContain(line)
+    }
+  })
+
+  it('demands JSON-only output matching the StandingRulesResult shape', () => {
+    const { system } = standingRulesPrompt(CORPUS)
+    expect(system).toMatch(/JSON ONLY/)
+    expect(system).toContain('"rules"')
+    expect(system).toContain('"occurrences"')
+    expect(system).toContain('"evidence"')
+    expect(system).toContain('"review-comment"')
+  })
+
+  it('user payload carries all four streams, each under its own key', () => {
+    const { user } = standingRulesPrompt(CORPUS)
+    const parsed = JSON.parse(user) as Record<string, unknown>
+    expect(parsed['reviewComments']).toEqual(CORPUS.reviewComments)
+    expect(parsed['dismissals']).toEqual([{ pattern: 'missing jsdoc on an internal helper', reason: 'not-worth' }])
+    expect(parsed['drafts']).toEqual(CORPUS.drafts)
+    expect(parsed['acceptedFindings']).toEqual(CORPUS.acceptedFindings)
+  })
+
+  it('caps each corpus item at STANDING_RULES_ITEM_MAX and marks the cut', () => {
+    const long = 'x'.repeat(STANDING_RULES_ITEM_MAX + 400)
+    const { user } = standingRulesPrompt({ ...CORPUS, reviewComments: [long] })
+    const parsed = JSON.parse(user) as { reviewComments: string[] }
+    expect(parsed.reviewComments[0].length).toBeLessThanOrEqual(STANDING_RULES_ITEM_MAX + 1)
+    expect(parsed.reviewComments[0].endsWith('…')).toBe(true)
+  })
+
+  it('an empty corpus still produces a well-formed payload (the caller gates, not the prompt)', () => {
+    const { user } = standingRulesPrompt({ reviewComments: [], dismissals: [], drafts: [], acceptedFindings: [] })
+    expect(JSON.parse(user)).toEqual({ reviewComments: [], dismissals: [], drafts: [], acceptedFindings: [] })
+  })
+
+  it("avoids every other stub's dispatch phrase (phrase-collision guard, #220 idiom)", () => {
+    const sys = standingRulesPrompt(CORPUS).system.toLowerCase()
+    for (const phrase of [
+      'reviewer persona', 'security reviewer', 'adversarial verifier', 'change-risk assessor',
+      'consolidating overlapping', 'rewriting code-review findings', 'hotspot', 'readingorder',
+      'mermaid', 'execution path', 'senior engineer', 'alternative-is-better', 'approaches',
+      "expanding a reviewer's terse note", 'checking the implementation',
+      'guided narrative walkthrough', 'changed test files', 'testflags',
+      'deriving the observable behavior changes',
+    ]) {
+      expect(sys, phrase).not.toContain(phrase)
+    }
+  })
+
+  it('no OTHER prompt builder contains the standing-rules dispatch phrase (reverse collision guard)', () => {
+    const ctx = makeCtx()
+    const others = [
+      summarizePrompt(ctx).system,
+      attentionPrompt(ctx).system,
+      diagramsPrompt(ctx).system,
+      testInsightPrompt(ctx).system,
+      verdictPrompt(ctx, null).system,
+      riskJudgePrompt(ctx).system,
+      alternativesPrompt(ctx).system,
+      storyOrderPrompt(ctx).system,
+      coachPrompt([{ index: 0, path: 'a.ts', line: 1, body: 'b' }]).system,
+      skillReviewPrompt(ctx, { name: 'P', content: 'c' }).system,
+      convergencePrompt([], []).system,
+      simplifyPrompt([{ id: 'f0', body: 'b' }]).system,
+      expandCommentPrompt('note', { path: 'a.ts', line: 1, side: 'RIGHT', excerpt: '' }).system,
+      askPrompt(ctx, [], 'q').system,
+      intentPrompt(ctx, { title: 't', body: 'b' }).system,
+      outcomesPrompt(ctx, { title: 't' }).system,
+    ]
+    for (const sys of others) {
+      expect(sys.toLowerCase()).not.toContain("turning a reviewer's own past corrections into standing orders")
+    }
+  })
+
+  it('has its OWN PROMPT_VERSIONS entry, deliberately not a bump of anything else', () => {
+    expect(PROMPT_VERSIONS.standingRules).toBe(1)
+    expect(PROMPT_VERSIONS.simplify).toBe(1)
+    expect(PROMPT_VERSIONS.skills).toBe(29)
   })
 })

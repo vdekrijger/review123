@@ -13,8 +13,18 @@ import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import type { AiTaskId } from '../settings/settings'
 import type { CoachCodeContext } from './coachContext'
-import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS, INTENT_MAX_ITEMS, OUTCOMES_MAX_ITEMS } from './schemas'
+import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS, INTENT_MAX_ITEMS, OUTCOMES_MAX_ITEMS, STANDING_RULES_MAX, STANDING_RULE_EVIDENCE_MAX, STANDING_RULE_EXCERPT_MAX } from './schemas'
 
+// PROMPT_VERSIONS standingRules 1 (standing-rules knowledge base): a NEW
+// settings-time prompt (standingRulesPrompt) that distils the user's OWN past
+// review behaviour — their review comments, their dismissal ledger, their own
+// draft comments — into authoring rules for the agents that WRITE the code.
+// Deliberately a new entry, never a bump of any existing one: no other task's
+// prompt bytes change, and no cached review result is invalidated by adding
+// it. Its "cache" is the settings-time record in
+// src/lib/skills/standingRulesStore.ts, which stamps this version so a future
+// prompt change marks a stored distillation stale instead of silently serving
+// rules the current prompt would no longer produce.
 // PROMPT_VERSIONS skills 29 (dismissal calibration): the skill-review prompt
 // TEMPLATE gains an optional per-reviewer calibration section — when the user
 // has dismissed findings WITH a reason ("Not real" / "Not worth flagging"),
@@ -131,7 +141,7 @@ import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNI
  * version so the implementation pass's cache stays warm across tests-prompt
  * edits and vice versa.
  */
-export type PromptVersionedTaskId = AiTaskId | 'convergence' | 'skillsTests'
+export type PromptVersionedTaskId = AiTaskId | 'convergence' | 'skillsTests' | 'standingRules'
 
 /**
  * Per-task prompt versions (H6 — cache-invalidation hygiene).
@@ -172,6 +182,7 @@ export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   riskJudge: 26,
   convergence: 26,
   simplify: 1,
+  standingRules: 1,
 }
 
 /** The prompt version that keys `task`'s cache entries. */
@@ -1997,6 +2008,132 @@ the original used it.`
 
   const rows = findings.map((f) => ({ id: f.id, body: f.body.slice(0, SIMPLIFY_INPUT_BODY_MAX) }))
   const user = JSON.stringify({ findings: rows }, null, 2)
+  return { system, user }
+}
+
+// ---------------------------------------------------------------------------
+// standingRulesPrompt — distil the user's review behaviour into AUTHORING
+// rules (PROMPT_VERSIONS.standingRules)
+// ---------------------------------------------------------------------------
+
+/**
+ * The plain-English style contract, lifted VERBATIM from simplifyPrompt (#220).
+ *
+ * The product has ONE style doctrine, not two that drift apart. simplifyPrompt
+ * stays its source of truth — its prompt bytes are untouched by this constant's
+ * existence — and tasks.test.ts pins that every line here still appears in that
+ * prompt, so a future edit to one without the other fails the suite.
+ */
+export const PLAIN_ENGLISH_RULES = `- Plain conversational English, active voice — write like a busy colleague explaining the issue, \
+not like a report.
+- Banned phrasings (never emit them): "It's worth noting", "Additionally", "Furthermore", \
+"potential inconsistency wherein", "robust", "leverage", "It is important to", and stacked \
+hedges like "may potentially possibly".`
+
+/** Per-corpus-item input cap (cost bound). A runaway comment is cut, not dropped. */
+export const STANDING_RULES_ITEM_MAX = 600
+
+/** One corpus item handed to the distillation, tagged with its stream. */
+export interface StandingRulesCorpusInput {
+  /** Review comments the user wrote on pull requests (mineSkill's harvest). */
+  reviewComments: readonly string[]
+  /** Finding patterns the user dismissed, with WHY (the #230 ledger). */
+  dismissals: readonly { pattern: string; reason: 'not-real' | 'not-worth' }[]
+  /** Comment bodies the user wrote themselves while reviewing (their own words). */
+  drafts: readonly string[]
+  /** AI findings the user ACCEPTED as drafts — endorsed, but not their words. */
+  acceptedFindings: readonly string[]
+}
+
+function cap(text: string): string {
+  const flat = text.trim()
+  return flat.length > STANDING_RULES_ITEM_MAX ? `${flat.slice(0, STANDING_RULES_ITEM_MAX).trimEnd()}…` : flat
+}
+
+/**
+ * Build prompts for the STANDING-RULES distillation: ONE call, run only when
+ * the user clicks, over their accumulated review behaviour.
+ *
+ * The framing that makes this a different task from mineSkill's persona: every
+ * review comment is a SPEC FRAGMENT THAT ARRIVED TOO LATE. Pointed at the
+ * reviewer it produces a persona; pointed at the author it produces standing
+ * orders. Same corpus, opposite direction.
+ *
+ * Both signals are rules, and they read differently: 'do' for what the user
+ * keeps ASKING FOR, 'avoid' for what they keep REJECTING (the dismissal ledger
+ * is pure 'avoid' signal — "we don't care about that here").
+ *
+ * The system prompt's "turning a reviewer's own past corrections into standing
+ * orders" phrase is the e2e stubs' dispatch marker — keep it stable.
+ */
+export function standingRulesPrompt(corpus: StandingRulesCorpusInput): { system: string; user: string } {
+  const system = `You are turning a reviewer's own past corrections into standing orders for the \
+coding agents that write code in their repositories.
+
+Every review comment this person wrote is a specification fragment that arrived too late. Your \
+job is to find the corrections they make OVER AND OVER and state each one as a rule an agent can \
+follow BEFORE the code is written.
+
+You receive four streams of their own history:
+- reviewComments — comments they wrote on pull requests.
+- dismissals — findings an automated reviewer raised that they judged "not-real" (a false \
+positive) or "not-worth" (true but not worth anyone's time). Pure negative signal: this is what \
+their codebase does NOT care about.
+- drafts — comments they wrote in their OWN words during a review, in their own editor. Highest \
+signal; weight these most heavily.
+- acceptedFindings — AI-written findings they accepted as drafts. They endorsed the point, but \
+the words are not theirs — weight them below drafts.
+
+Rule contract (every rule is binding):
+- ONE imperative sentence. The kind of line that belongs in a CLAUDE.md, not a paragraph of \
+analysis and not a summary of what you read.
+- CONCRETE and durable: name the actual practice ("Put domain logic in the domain module, never \
+inline it in a route handler"), never a vague virtue ("Write clean code", "Follow best \
+practices"). If you cannot name the practice, drop the rule.
+- kind "do" for something they repeatedly ASK FOR. kind "avoid" for something they repeatedly \
+REJECT or dismiss — an "avoid" rule tells the agent what this codebase does not care about, \
+which is just as useful as what it does.
+- A pattern must appear at LEAST TWICE to be a standing rule. One comment is a one-off. If the \
+history only supports two or three rules, return two or three — never pad.
+- At most ${STANDING_RULES_MAX} rules, ordered by how often the pattern appears.
+- An EMPTY rules array is a valid, honest answer when the history shows no repeated pattern. Do \
+not invent rules to fill space.
+${PLAIN_ENGLISH_RULES}
+
+Evidence (this is what lets the human judge whether your rule is real):
+- occurrences: how many items across all streams support the rule. Count honestly; never round up.
+- evidence: up to ${STANDING_RULE_EVIDENCE_MAX} short excerpts taken from the ACTUAL items you \
+used, each at most ${STANDING_RULE_EXCERPT_MAX} characters, tagged with the stream it came from \
+("review-comment", "dismissal" or "draft"). Quote what is there — NEVER write an excerpt that \
+does not appear in the input.
+
+Respond with JSON ONLY — no explanation, no markdown outside the JSON, no code fences. Your \
+response must be valid JSON that exactly matches this shape:
+
+{
+  "rules": [
+    {
+      "rule": "<one imperative sentence>",
+      "kind": "do",
+      "occurrences": 4,
+      "evidence": [
+        { "source": "review-comment", "excerpt": "<short quote from the item>" }
+      ]
+    }
+  ]
+}`
+
+  const user = JSON.stringify(
+    {
+      reviewComments: corpus.reviewComments.map(cap),
+      dismissals: corpus.dismissals.map((d) => ({ pattern: cap(d.pattern), reason: d.reason })),
+      drafts: corpus.drafts.map(cap),
+      acceptedFindings: corpus.acceptedFindings.map(cap),
+    },
+    null,
+    2,
+  )
+
   return { system, user }
 }
 
