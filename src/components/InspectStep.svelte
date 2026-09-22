@@ -37,6 +37,7 @@
   import { classifyFile } from '../lib/diff/diffFile'
   import { classifyFile as classifyAttention, sortRiskFirst, pathCompare, type FileTriage } from '../lib/guide/triage'
   import { getInspectSort, setInspectSort, type InspectSort } from '../lib/guide/sortPref'
+  import { hunkAttentionPref, toggleHunkAttention } from '../lib/guide/hunkAttentionPref.svelte'
   import { createPhaseStore, partitionFilesByPhase, type ReviewPhase } from '../lib/guide/phase.svelte'
   import { pairStepTests } from '../lib/diff/symbolTests'
   import { isGeneratedFile, sortGeneratedLast } from '../lib/diff/generated'
@@ -605,6 +606,20 @@
     setFocusMode(next)
     if (next !== 'off') track('focus_mode_on')
   }
+
+  // ---- Per-hunk attention quick toggle (toolbar) --------------------------
+  // The off switch for within-file guidance: the per-file "what changed" strip
+  // and the receded mechanical hunks (src/lib/guide/hunkAttention). It changes
+  // how code READS, so it needs a control — and it lives next to Focus because
+  // it is the same kind of decision, one level up from lines.
+  //
+  // Storage is the per-browser localStorage idiom (review123:hunk-attention,
+  // mirroring review123:inspect-sort) rather than a Settings row: a parallel
+  // change owns the Settings surface right now.
+  //
+  // The dimming itself lives in FileDiff, which reads the same reactive
+  // preference — so Story mode's diffs follow the toggle with no extra wiring.
+  const hunkAttentionOn = $derived(hunkAttentionPref.enabled)
 
   // ---- Viewport thresholds ----
   // The margin-vs-inline drawer decision is pure CSS (see the drawer CSS block
@@ -1571,6 +1586,14 @@
     title="Dim low-signal lines (imports, comments) so real changes stand out. Click to cycle: off → imports → imports + comments."
     onclick={cycleFocusMode}
   >{FOCUS_LABEL[focusMode]}</button>
+  <button
+    class="btn hunk-attention-toggle"
+    class:btn-active={hunkAttentionOn}
+    aria-pressed={hunkAttentionOn}
+    data-testid="hunk-attention-toggle"
+    title="Within a file: list the decision points and recede the mechanical hunks (formatting, imports, comments, renames, fixture data). Nothing is ever hidden — a receded hunk restores with one click."
+    onclick={() => toggleHunkAttention()}
+  >{hunkAttentionOn ? 'Hunk focus: on' : 'Hunk focus: off'}</button>
   {#if hideWhitespace && whitespaceToggleEnabled && whitespaceOnlyCount > 0}
     <span class="ws-only-note" role="status">
       {whitespaceOnlyCount} whitespace-only file{whitespaceOnlyCount === 1 ? '' : 's'} hidden
