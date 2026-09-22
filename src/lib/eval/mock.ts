@@ -2,9 +2,9 @@
  * src/lib/eval/mock.ts — scripted LLM stub for the eval harness (--mock mode).
  *
  * The mock returns a fixed JSON string per taskKey ("verdict" | "attention" |
- * `skill:<name>`) from a responses map. This makes the harness's scoring +
- * matching path DETERMINISTIC so it can be unit-tested and run in CI without a
- * network or API key.
+ * `skill:<name>` | `tests:<name>`) from a responses map. This makes the
+ * harness's scoring + matching path DETERMINISTIC so it can be unit-tested and
+ * run in CI without a network or API key.
  *
  * HONESTY: --mock validates the harness MECHANICS, not model quality. The mock
  * responses are authored alongside each golden case to represent a plausible
@@ -37,8 +37,14 @@ export function emptyResponseFor(taskKey: string): string {
   if (taskKey === 'attention') {
     return JSON.stringify({ readingOrder: [], hotspots: [], testFlags: [] })
   }
-  if (taskKey.startsWith('skill:')) {
-    return JSON.stringify({ skillName: taskKey.slice('skill:'.length), findings: [] })
+  // The implementation pass and the separate TESTS pass (#237) both return a
+  // SkillReviewResult, so both need the same silent shape. Without this the
+  // tests pass fell back to '{}', which the validator REJECTS — an unscripted
+  // tests pass would have looked like a malformed model rather than a quiet one.
+  for (const prefix of ['skill:', 'tests:']) {
+    if (taskKey.startsWith(prefix)) {
+      return JSON.stringify({ skillName: taskKey.slice(prefix.length), findings: [] })
+    }
   }
   return '{}'
 }

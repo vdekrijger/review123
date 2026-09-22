@@ -4,6 +4,18 @@ Makes AI-review **quality measurable** so prompt/harness changes can be judged b
 numbers instead of by eyeballing screenshots — e.g. "did turning Deep review on
 actually catch more real bugs?" or "did this calibration tweak cut the noise?".
 
+> **This harness is the gate for finding-quality changes.** Any PR that claims to
+> improve what the reviewer surfaces — a prompt edit, a calibration tweak, a new
+> filtering or ranking pass — must post a `--matrix` run before and after, and
+> `eval/BASELINE.md` is what it diffs against. Between 2026-06 and 2026-09 eight
+> such PRs shipped without a single measurement; the harness existed the whole
+> time and nobody ran it. Don't repeat that.
+>
+> The measurement that matters is the **per-case delta**, not the aggregate. A
+> filtering change that raises precision on `02-clean-pr` / `03-noise-trap` while
+> dropping recall on `01-real-bug` / `05-security` has not improved anything — it
+> has moved the failure from noise to blindness.
+
 The harness runs the **real** review code paths (the prompt builders in
 `src/lib/ai/tasks.ts` and the validators in `src/lib/ai/schemas.ts`) against a
 small **golden set** of hand-labeled PR fixtures, then scores the produced
@@ -34,6 +46,12 @@ pnpm eval -- --case 01-real-bug
 # Live: real provider call (measures actual quality)
 DEEPSEEK_API_KEY=sk-... pnpm eval -- --live
 
+# Live with NO API key, on your Claude Code / Codex subscription (see "Live
+# transports" below) — costs nothing per token:
+pnpm bridge -- --port 7739 --token-file .bridge-token      # in another terminal
+BRIDGE_URL=http://127.0.0.1:7739 BRIDGE_TOKEN_FILE=.bridge-token \
+  pnpm eval -- --live --matrix --concurrency 3
+
 # Live + agentic deep-review guidance
 DEEPSEEK_API_KEY=sk-... pnpm eval -- --live --deep
 
@@ -42,6 +60,72 @@ DEEPSEEK_API_KEY=sk-... pnpm eval -- --live --deep
 pnpm eval -- --cross-verify                          # mock
 DEEPSEEK_API_KEY=sk-... pnpm eval -- --live --cross-verify
 ```
+
+### `--matrix` — the on/off comparison (start here)
+
+A single precision number cannot tell you whether a filtering pass **improved**
+the findings or merely **hid** them. `--matrix` answers that: it pays for **one**
+generation per case, then scores those same findings under every combination of
+the post-generation stages the app grew between #206 and #242.
+
+```bash
+pnpm eval -- --live --matrix --concurrency 3
+```
+
+The stages, and the PR each one came from, live in `src/lib/eval/surface.ts`:
+
+| variant | what it is |
+| --- | --- |
+| `generate-only` | the raw reviewer output — the surface this harness measured before 2026-09 |
+| `+tests-pass` | the separate tests reviewer (#237) added |
+| `+verify` | cross-model verification drops demoted findings |
+| `+triage` | `findingRank` (#226) keeps only the inline tier, with no verification data |
+| `verify+triage/moot-off` | verification + triage, **mootness gate off** |
+| `verify+triage` | the same with the mootness gate (#228) on — the isolating pair |
+| `app-default` | every stage on: what review123 shows inline today |
+| `app-default/show-all` | the same, with the "show all findings" escape hatch |
+
+Read the table as **deltas between adjacent rows**, and always per case:
+
+- `03-noise-trap` and `02-clean-pr` are the **over-filtering detectors** — they
+  have no real findings, so filtering can only help there.
+- `01-real-bug` and `05-security` are the **under-filtering detectors** — they
+  each hold a genuine defect, so a recall drop there is a filter that went too far.
+
+A stage that cuts noise-rate on the first pair while holding recall on the second
+earned its place. One that cuts both is trading blindness for tidiness.
+
+**The measured baseline lives in [`BASELINE.md`](./BASELINE.md)**, and the two
+runs behind it are committed at `eval/baseline-run.json` and
+`eval/repeat-run.json` (the second one so the run-to-run jitter — which decides
+whether your delta means anything — is checkable rather than asserted).
+
+### Re-scoring a stored run for free (`pnpm eval:rescore`)
+
+A `--matrix` run writes every generated finding — with its severity, its
+cross-model verification and its simplify rewrite — into `eval/results/`. Those
+are all the inputs the post-generation stages consume, so **any variant can be
+scored again from the file with no model call at all**:
+
+```bash
+pnpm eval:rescore                            # the newest run in eval/results/
+pnpm eval:rescore eval/baseline-run.json     # the committed baseline
+pnpm eval:rescore -- --per-case              # per-case breakdown
+```
+
+Use this rather than re-running whenever you add or fix a variant. Two rows only
+belong in the same comparison if they came from the **same** generation; models
+are stochastic, so a second run cannot give you that and re-scoring can.
+
+> **Two verifiers minimum.** Cross-verification surfaces a finding when
+> `score >= polledModels / 2`, and the generator counts as one implicit confirm.
+> With a single verifier that is `1 >= 2/2` — true no matter how the verifier
+> votes. A one-verifier run **cannot demote anything**, and its worth axis can
+> never reach the mootness threshold either, so both `--cross-verify` and the
+> mootness gate are silent no-ops. The runner prints a warning when it detects
+> this. (It was the live configuration here until 2026-09, which is why the
+> "cross-verification lift" this README promised had never actually been
+> observable in `--live`.)
 
 ### Measuring the cross-verification lift (`--cross-verify`)
 
@@ -108,10 +192,50 @@ aggregate **recall** drops below — or the **noise-rate** rises above — the g
 in `src/lib/eval/scorer.ts` (`DEFAULT_GATES`). This makes it *opt-in* CI-gatable
 later; it is intentionally **not** wired into the required CI workflow yet.
 
-### Live provider selection
+### Live transports
 
-The live caller is a self-contained OpenAI-compatible `chat/completions` POST.
-It picks a provider from the environment, in priority order:
+`--live` needs a way to reach a model. There are two, and the **bridge is tried
+first** whenever `BRIDGE_URL` is set, because a user who started a bridge meant
+to use it.
+
+**1. The local bridge — no API key, no per-token cost.**
+
+`POST /v1/infer` is the same transport the app offers: it invokes the user's
+**already-installed `claude` / `codex` CLI** as a subprocess, so the run spends
+an existing subscription instead of metered API credit. This is the only way to
+run the harness on a machine with no API key at all.
+
+```bash
+pnpm bridge -- --port 7739 --token-file .bridge-token
+BRIDGE_URL=http://127.0.0.1:7739 BRIDGE_TOKEN_FILE=.bridge-token \
+  pnpm eval -- --live --matrix --concurrency 3
+```
+
+| Env | Meaning |
+| --- | --- |
+| `BRIDGE_URL` | Where the bridge listens, e.g. `http://127.0.0.1:7739`. |
+| `BRIDGE_TOKEN` / `BRIDGE_TOKEN_FILE` | The pairing token, inline or via the `--token-file` path. |
+| `BRIDGE_CLI` | Generator CLI — `claude` (default) or `codex`. |
+| `BRIDGE_VERIFY_CLIS` | Comma-separated verifier CLIs. Defaults to the *other* vendor's CLI plus the generator's. **Repeat a CLI to reach the two-verifier minimum** (e.g. `codex,codex`). |
+| `BRIDGE_TIMEOUT_MS` | Per-call budget. Default 240000. |
+
+Two things the bridge **cannot** measure, and will not pretend to:
+
+- **Deep review (`--deep`) and grounded verification (#229).** `/v1/infer` runs
+  the CLI with `--tools ""` — every built-in tool disabled, by design, so the
+  route cannot touch the repo. Both features instruct the model to verify claims
+  with repo tools and to *drop whatever it cannot verify*. Over the bridge those
+  tools do not exist, so a run would measure a crippled prompt, not the feature.
+  Use an API-key transport with the app's real agentic harness for those.
+- **A genuinely cross-vendor verifier panel**, if you point both verifier slots
+  at the same CLI. Two calls to one model are two samples, not two opinions.
+
+Known wrinkle: the `claude` CLI reliably times out on the multi-finding verify
+payload through `/v1/infer`, while `codex` answers it in ~50s. `codex,codex` is
+the configuration that currently works end-to-end for verification.
+
+**2. An OpenAI-compatible API key.** A self-contained `chat/completions` POST.
+Picked from the environment in priority order:
 
 | Env | Base URL | Default model |
 | --- | --- | --- |
@@ -119,7 +243,8 @@ It picks a provider from the environment, in priority order:
 | `OPENAI_API_KEY` | `OPENAI_BASE_URL` or `https://api.openai.com` | `gpt-4o-mini` |
 | `LLM_API_KEY` | `LLM_BASE_URL` (required) | `LLM_MODEL` (required) |
 
-Set `LLM_MODEL` to override the model for any provider.
+Set `LLM_MODEL` to override the model for any provider. One API provider means
+one verifier model — see the two-verifier note above.
 
 ## Capturing a real PR as a golden case
 
@@ -301,9 +426,14 @@ you resolve them to `"real"` or `"noise"`:
 ### `mock/responses.json` (used by `--mock` only)
 
 A map of **task key → the model's scripted JSON response object** (the runner
-serializes it). Task keys are `"verdict"`, `"attention"`, and `"skill:<persona-name>"`.
+serializes it). Task keys are `"verdict"`, `"attention"`, `"skill:<persona-name>"`
+and — for the separate tests pass (#237) — `"tests:<persona-name>"`.
 Any task without an entry gets a valid, finding-free ("silent") response — which
-shows up as a recall miss, not a crash. Author these to represent a *plausible*
+shows up as a recall miss, not a crash.
+
+Skill findings carry `suggestedFix` (the solutions requirement, #228). The
+validator tolerates its absence, but a mock is supposed to look like a
+*plausible current* model run, so the seed cases include it. Author these to represent a *plausible*
 model run (e.g. a good run that catches the real bug and avoids the noise) so the
 mock metrics demonstrate the scoring end to end.
 
@@ -350,9 +480,17 @@ mock metrics demonstrate the scoring end to end.
 
 - `src/lib/eval/scorer.ts` — matching + metrics + gates (pure, unit-tested).
 - `src/lib/eval/harness.ts` — golden-case → real prompts → findings (unit-tested).
+- `src/lib/eval/surface.ts` — the post-generation pipeline as toggles: cross-model
+  verification, `findingRank` triage, the mootness gate, simplify, the tests
+  pass. This is what `--matrix` varies, and it reuses the app's real
+  `rankFindings` rather than re-implementing the policy (unit-tested).
 - `src/lib/eval/mock.ts` — the scripted LLM stub for `--mock`.
 - `eval/run-eval.mts` — the thin CLI driver (`pnpm eval`). Loads the harness via a
   throwaway Vite SSR server so the app's bundler-style imports resolve under Node.
+- `eval/rescore.mts` — re-scores a stored run under the variants, offline
+  (`pnpm eval:rescore`).
+- `eval/BASELINE.md` + `eval/baseline-run.json` + `eval/repeat-run.json` — the
+  measured baseline and the two runs behind it.
 
 The scorer/harness/mock live under `src/lib/` so they run under the normal
 `pnpm test`. Their tests are `src/lib/eval/*.test.ts`.

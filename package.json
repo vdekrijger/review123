@@ -17,7 +17,8 @@
     "bridge:bundle": "node bridge/scripts/bundle.mjs",
     "test:watch": "vitest",
     "eval": "node eval/run-eval.mts",
-    "eval:capture": "node eval/capture-case.mts"
+    "eval:capture": "node eval/capture-case.mts",
+    "eval:rescore": "node eval/rescore.mts"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",

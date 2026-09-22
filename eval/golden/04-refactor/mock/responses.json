@@ -6,7 +6,8 @@
         "path": "src/lib/report.ts",
         "line": 7,
         "severity": "high",
-        "body": "Behavior change: `sort()` lost its numeric comparator, so it now sorts lexicographically and reorders scores (e.g. 10 sorts before 2). Restore `(a, b) => a - b`."
+        "body": "Behavior change: `sort()` lost its numeric comparator, so it now sorts lexicographically and reorders scores (e.g. 10 sorts before 2). Restore `(a, b) => a - b`.",
+        "suggestedFix": "Restore the comparator: `scores.sort((a, b) => a - b)`."
       }
     ]
   },
