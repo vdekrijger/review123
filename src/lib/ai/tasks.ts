@@ -124,8 +124,14 @@ import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNI
  * by design: it runs only as a cheap follow-up to the reviewers the user
  * already enabled, so it has no mode of its own. `coach` and `ask` are not
  * cached, so they are deliberately absent.
+ *
+ * `skillsTests` (#237) is the second entry outside the mode matrix: the
+ * on-demand TESTS reviewer pass shares the `skills` mode switch (off → it
+ * never runs) but has its OWN prompt (testsReviewPrompt), so it needs its own
+ * version so the implementation pass's cache stays warm across tests-prompt
+ * edits and vice versa.
  */
-export type PromptVersionedTaskId = AiTaskId | 'convergence'
+export type PromptVersionedTaskId = AiTaskId | 'convergence' | 'skillsTests'
 
 /**
  * Per-task prompt versions (H6 — cache-invalidation hygiene).
@@ -146,7 +152,10 @@ export type PromptVersionedTaskId = AiTaskId | 'convergence'
  * brand-new cache segment has nothing to invalidate): `simplify` (the
  * post-review plain-English rewrite pass, simplifyPrompt) starts at 1,
  * `intent` (the intent-vs-implementation check, intentPrompt) starts at 1,
- * and `outcomes` (the expected-outcomes check, outcomesPrompt) starts at 1.
+ * `outcomes` (the expected-outcomes check, outcomesPrompt) starts at 1, and
+ * `skillsTests` (the on-demand TESTS reviewer pass, testsReviewPrompt) starts
+ * at 1 — a NEW prompt, deliberately not a bump of `skills`, so the
+ * implementation pass keeps its warm cache.
  */
 export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   summary: 26,
@@ -158,6 +167,7 @@ export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   intent: 1,
   outcomes: 1,
   skills: 29,
+  skillsTests: 1,
   story: 26,
   riskJudge: 26,
   convergence: 26,
@@ -1612,18 +1622,18 @@ is allowed where the comment benefits from it.`
  * skill edits AND new reasoned dismissals each invalidate the cache — the
  * latter for that one reviewer only.
  */
-export function skillReviewPrompt(
-  ctx: PackedContext,
-  skill: { name: string; content: string },
-  existingComments?: string[],
-  calibration?: string,
-): { system: string; user: string } {
-  // Same cap/truncation policy as coachPrompt: ≤30 comments, ≤200 chars each.
+/**
+ * The "Existing PR comments" section shared by the implementation and TESTS
+ * reviewer prompts. Same cap/truncation policy as coachPrompt: ≤30 comments,
+ * ≤200 chars each. Empty input → '' (no section).
+ *
+ * Extracted verbatim from skillReviewPrompt — the produced string is
+ * byte-identical, so no prompt version moves.
+ */
+function reviewerExistingCommentsSection(existingComments?: string[]): string {
   const cappedComments = (existingComments ?? []).slice(0, 30).map((c) => c.slice(0, 200))
-
-  const existingCommentsSection =
-    cappedComments.length > 0
-      ? `
+  if (cappedComments.length === 0) return ''
+  return `
 
 Existing PR comments (already made by humans or other reviewers):
 ${cappedComments.map((c) => `- ${c.replace(/\n/g, ' ')}`).join('\n')}
@@ -1631,21 +1641,35 @@ ${cappedComments.map((c) => `- ${c.replace(/\n/g, ' ')}`).join('\n')}
 Never repeat a point an existing comment already makes — duplicated feedback wastes the \
 author's attention. If your only candidate findings are already covered above, return an \
 empty findings array.`
-      : ''
+}
 
-  // Dismissal calibration (v29): the user's per-reviewer ledger of dismissed-
-  // with-reason findings. The block arrives pre-built (header + "- [false
-  // positive] …" / "- [noise] …" lines), sanitized and capped by
-  // buildCalibrationBlock. Empty/absent → no section, byte-identical prompt.
-  const calibrationSection =
-    calibration && calibration.trim() !== ''
-      ? `
+/**
+ * The dismissal-calibration section (v29) shared by the implementation and
+ * TESTS reviewer prompts: the user's per-reviewer ledger of dismissed-with-
+ * reason findings. The block arrives pre-built (header + "- [false positive] …"
+ * / "- [noise] …" lines), sanitized and capped by buildCalibrationBlock.
+ * Empty/absent → '' (no section, byte-identical prompt).
+ *
+ * Extracted verbatim from skillReviewPrompt — produced string unchanged.
+ */
+function reviewerCalibrationSection(calibration?: string): string {
+  if (!calibration || calibration.trim() === '') return ''
+  return `
 
 ${calibration}
 These reflect the reviewer's judgment about what is worth their attention in THIS codebase. \
 Do not re-raise a finding matching one of these patterns unless the new case MATERIALLY \
 differs (different root cause, or concrete new evidence of harm).`
-      : ''
+}
+
+export function skillReviewPrompt(
+  ctx: PackedContext,
+  skill: { name: string; content: string },
+  existingComments?: string[],
+  calibration?: string,
+): { system: string; user: string } {
+  const existingCommentsSection = reviewerExistingCommentsSection(existingComments)
+  const calibrationSection = reviewerCalibrationSection(calibration)
 
   const system = `You are the reviewer persona defined below. Your job is to review the pull \
 request in the user message and apply ONLY this persona's priorities, style, and standards. \
@@ -1674,6 +1698,130 @@ ${ANTI_FATIGUE_RULES}
 
 Silence from this lens: an empty findings array means "No significant issues from this lens." \
 That is a GOOD and expected outcome on clean code — never pad the list to look thorough.${existingCommentsSection}${calibrationSection}
+
+Respond with JSON ONLY — no explanation, no markdown outside the JSON, no code fences. \
+Your response must be valid JSON that exactly matches this shape:
+
+{
+  "skillName": "${skill.name}",
+  "findings": [
+    {
+      "path": "<file path from the PR context>",
+      "line": <line number as integer, or null for file-level findings>,
+      "severity": "high" | "medium" | "low",
+      "body": "<concrete finding text>",
+      "suggestedFix": "<the concrete fix — see the field rules>"
+    }
+  ]
+}
+
+Field rules:
+- skillName: must be exactly "${skill.name}".
+- findings: an array of 0–5 findings. Only include findings for files that appear in the PR changes.
+- path: must be a file path that actually appears in the PR diff context. Do not invent paths.
+- line: the specific line number (integer) the finding applies to, or null if it is a file-level concern.
+- severity: exactly one of "high", "medium", "low" — rated by this persona's own standards. \
+  Nits are nits: label them "low"; never inflate.
+- body: one sentence of WHAT + WHERE, one sentence of WHY IT MATTERS (the concrete harm). \
+  The fix lives in suggestedFix, not here.
+- suggestedFix: REQUIRED for every finding — the concrete fix: the SPECIFIC change to make, in \
+  1–3 sentences or a short code sketch (inline markdown / a small fenced code block is \
+  encouraged where it makes the change unambiguous). If no clean fix exists, write \
+  "No clean fix —" followed by the tradeoff the author must weigh. State the change; never \
+  restate the finding.
+
+Do not include any text outside the JSON object.`
+
+  return { system, user: ctx.text }
+}
+
+// ---------------------------------------------------------------------------
+// testsReviewPrompt — the on-demand TESTS pass (PROMPT_VERSIONS.skillsTests 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * The stable dispatch marker in the tests-pass system prompt. Test stubs (unit
+ * and e2e) branch on this to tell a TESTS-pass reviewer call apart from an
+ * implementation-pass one, so it must stay a literal substring of `system`.
+ */
+export const TESTS_REVIEW_MARKER = 'reviewing the TESTS of this pull request'
+
+/**
+ * Build prompts for the on-demand TESTS reviewer pass (#237).
+ *
+ * WHY A SECOND PROMPT rather than a bump of skillReviewPrompt: the two passes
+ * ask different questions. The implementation pass reads the code under review
+ * (scoped to non-test files) and asks "is this code right?". This pass reads
+ * the WHOLE PR — the tests AND the implementation they exercise — and asks the
+ * user's question: does the code make sense, and do the tests cover the parts
+ * that matter? A separate prompt with its own PROMPT_VERSIONS entry means
+ * editing one never cold-invalidates the other's cache.
+ *
+ * Everything shared stays shared, byte-for-byte: the persona framing, the
+ * evidence/severity/solution rules, ANTI_FATIGUE_RULES, the existing-comments
+ * section and the dismissal-calibration section. Only the JOB statement and
+ * the "what to look for" rubric differ.
+ *
+ * ctx is the FULL-PR packed context (PackScope 'all'): judging a test against
+ * an implementation you cannot see is exactly the failure mode this pass
+ * exists to avoid.
+ */
+export function testsReviewPrompt(
+  ctx: PackedContext,
+  skill: { name: string; content: string },
+  existingComments?: string[],
+  calibration?: string,
+): { system: string; user: string } {
+  const existingCommentsSection = reviewerExistingCommentsSection(existingComments)
+  const calibrationSection = reviewerCalibrationSection(calibration)
+
+  const system = `You are the reviewer persona defined below, and you are \
+${TESTS_REVIEW_MARKER}. The implementation has already been reviewed and signed off; the \
+PR context contains BOTH the test files and the implementation they exercise. Apply ONLY \
+this persona's priorities, style, and standards. Do not adopt any other reviewer perspective.
+
+Persona name: ${skill.name}
+
+Persona definition:
+\`\`\`
+${skill.content}
+\`\`\`
+
+Your job in this pass — in order of importance:
+1. DO THE TESTS PIN THE BEHAVIOUR? Would each test actually FAIL if the implementation \
+  it covers were wrong? Call out tests that assert on mocks, restate the implementation, \
+  or pass no matter what the code does.
+2. IS WHAT MATTERS COVERED? Name the specific behaviour, branch, error path or edge case \
+  in the changed implementation that NO test exercises — and say why that gap is the one \
+  worth closing. Do not ask for coverage of trivia.
+3. DOES THE IMPLEMENTATION STILL MAKE SENSE in light of the tests? Reading the tests often \
+  exposes an interface that is awkward to use, a contract nobody can state, or behaviour \
+  the tests had to work around. Say so — a finding about the IMPLEMENTATION is in scope here.
+
+Anchor findings wherever the problem is. A missing-coverage finding belongs on the TEST \
+file (or the test file that should have covered it); a finding about the code itself \
+belongs on the implementation file. Never invent a path.
+
+Your findings must be:
+- Concrete and anchored to actual files and lines visible in the PR context.
+- Hard cap: at most 5 findings total (≤5). Report the TOP findings ranked by \
+  severity × confidence. If you cut lower-confidence candidates, append \
+  "(N lower-confidence observations omitted)" to the LAST finding's body — one line, \
+  no list of what was cut.
+- Severity must be rated according to THIS persona's own standards: "high", "medium", or "low".
+- ACTIONABLE (solutions required): every finding MUST carry a concrete fix in its \
+  suggestedFix field — the specific change to make (1–3 sentences or a short code sketch). \
+  If no clean fix exists, say "No clean fix —" and name the tradeoff. A finding you cannot \
+  suggest a fix for is usually not worth raising.
+
+${ANTI_FATIGUE_RULES}
+
+Coverage is not a target. "Add a test for this too" with no stated risk is noise — the bar \
+is a behaviour that could break silently. Never ask for a coverage percentage.
+
+Silence from this lens: an empty findings array means "These tests hold up under this \
+lens." That is a GOOD and expected outcome on well-tested code — never pad the list to \
+look thorough.${existingCommentsSection}${calibrationSection}
 
 Respond with JSON ONLY — no explanation, no markdown outside the JSON, no code fences. \
 Your response must be valid JSON that exactly matches this shape:

@@ -90,6 +90,8 @@ export function createDemoRun(): AiRun {
     outcomes: { status: 'disabled' },
     story: done(demoStory),
     skillReviews,
+    // No demo tests pass — it is on-demand only and the demo never runs it.
+    testReviews: [] as SkillReviewEntry[],
     // No convergence pass in the demo (the canned reviewers don't overlap) —
     // 'idle' is the honest "skipped" state and renders nothing.
     convergence: { status: 'idle' },
@@ -105,6 +107,9 @@ export function createDemoRun(): AiRun {
     ask: async () => ({ ok: false as const, error: 'Ask AI is disabled in the demo.' }),
     expandComment: async () => ({ ok: false as const, error: 'Expand is disabled in the demo.' }),
     runSkillReviews: async () => {},
+    // The on-demand tests pass (#237) is inert in the demo like every other
+    // network-touching method — the demo's findings are pre-generated.
+    runTestsReview: async () => {},
     retrySkill: async () => {},
   }
 }

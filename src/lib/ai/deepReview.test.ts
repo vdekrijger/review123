@@ -11,6 +11,7 @@ import {
   createDeepReviewToolkit,
   createDeepReviewCache,
   resolveTaskMode,
+  resolveAgenticTaskMode,
   DEEP_REVIEW_MAX_TOOL_CALLS,
   DEEP_REVIEW_MAX_FETCHED_BYTES,
   DEEP_REVIEW_FILE_CAP_BYTES,
@@ -216,6 +217,56 @@ describe('resolveTaskMode (Plan J — per-task run resolution)', () => {
   it('budget constants match the plan: 8 calls, 150KB', () => {
     expect(DEEP_REVIEW_MAX_TOOL_CALLS).toBe(8)
     expect(DEEP_REVIEW_MAX_FETCHED_BYTES).toBe(150_000)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// resolveAgenticTaskMode (#237) — always-agentic tasks that still honour OFF
+// ---------------------------------------------------------------------------
+
+describe('resolveAgenticTaskMode (#237 — the on-demand tests reviewer pass)', () => {
+  const toolCapable = { aiProvider: 'deepseek', aiModel: 'deepseek-v4-flash' }
+
+  it("'standard' does NOT demote it — the user asked for this pass by clicking it", () => {
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({ ...toolCapable, aiTaskModes: { skills: 'standard' } }),
+    )
+    // resolveTaskMode would say single-pass here; the agentic resolver does not.
+    expect(resolveTaskMode('skills', makeSource())).toEqual({ run: true, deep: false })
+    expect(resolveAgenticTaskMode('skills', makeSource())).toEqual({ run: true, deep: true })
+  })
+
+  it("'deep' resolves to deep, same as the normal resolver", () => {
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({ ...toolCapable, aiTaskModes: { skills: 'deep' } }),
+    )
+    expect(resolveAgenticTaskMode('skills', makeSource())).toEqual({ run: true, deep: true })
+  })
+
+  it("'off' still means OFF — an on-demand pass never overrides the user's switch", () => {
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({ ...toolCapable, aiTaskModes: { skills: 'off' } }),
+    )
+    expect(resolveAgenticTaskMode('skills', makeSource())).toEqual({ run: false, deep: false })
+  })
+
+  it('no tool source wired → runs single-pass, silently (nothing to say)', () => {
+    localStorage.setItem('review123:settings', JSON.stringify(toolCapable))
+    expect(resolveAgenticTaskMode('skills', undefined)).toEqual({ run: true, deep: false })
+  })
+
+  it('a model that cannot call tools → runs single-pass WITH the honest note', () => {
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({ aiProvider: 'deepseek', aiModel: 'deepseek-reasoner' }),
+    )
+    const r = resolveAgenticTaskMode('skills', makeSource())
+    expect(r.run).toBe(true)
+    expect(r.deep).toBe(false)
+    expect(r.note).toContain('does not support tool calling')
   })
 })
 

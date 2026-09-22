@@ -60,6 +60,7 @@ describe('PROMPT_VERSIONS map', () => {
         'intent',
         'outcomes',
         'skills',
+        'skillsTests',
         'story',
         'riskJudge',
         'convergence',
@@ -80,10 +81,19 @@ describe('PROMPT_VERSIONS map', () => {
     }
   })
 
-  it('post-migration tasks start at ≥1 (simplify, intent and outcomes have their own version history)', () => {
+  it('post-migration tasks start at ≥1 (simplify, intent, outcomes and skillsTests have their own version history)', () => {
     expect(PROMPT_VERSIONS.simplify).toBeGreaterThanOrEqual(1)
     expect(PROMPT_VERSIONS.intent).toBeGreaterThanOrEqual(1)
     expect(PROMPT_VERSIONS.outcomes).toBeGreaterThanOrEqual(1)
+    expect(PROMPT_VERSIONS.skillsTests).toBeGreaterThanOrEqual(1)
+  })
+
+  it('the tests reviewer pass is a NEW entry, never a bump of skills (#237)', () => {
+    // The whole point of a separate entry: adding the on-demand tests pass must
+    // leave the implementation pass's cache WARM. If a future change to the
+    // tests prompt bumps `skills` instead of `skillsTests`, this fails.
+    expect(PROMPT_VERSIONS.skills).toBe(29)
+    expect(PROMPT_VERSIONS.skillsTests).toBe(1)
   })
 })
 
@@ -165,6 +175,31 @@ describe('cache-key stability (migration: global v26 → per-task map)', () => {
     expect(calibrated).not.toBe(hash)
     expect(cacheKey(PR, 'skill:' + calibrated, promptVersionFor('skills'))).not.toBe(
       cacheKey(PR, 'skill:' + hash, promptVersionFor('skills')),
+    )
+  })
+
+  it('tests reviewer pass (#237) — own "|tests" segment and own v1 history', () => {
+    // The tests pass runs the SAME personas over a DIFFERENT prompt and a
+    // DIFFERENT context, so its key must never collide with the implementation
+    // pass's for the same persona content.
+    const content = '# Persona\nYou review for security.'
+    const hash = djb2(content)
+    expect(cacheKey(PR, 'skill:' + hash + '|tests', promptVersionFor('skillsTests'))).toBe(
+      `owner/repo#1@abc123|skill:${hash}|tests|v1`,
+    )
+    expect(cacheKey(PR, 'skill:' + hash + '|tests|deep', promptVersionFor('skillsTests'))).toBe(
+      `owner/repo#1@abc123|skill:${hash}|tests|deep|v1`,
+    )
+    expect(cacheKey(PR, 'skill:' + hash + '|tests|deep|models', promptVersionFor('skillsTests'))).toBe(
+      `owner/repo#1@abc123|skill:${hash}|tests|deep|models|v1`,
+    )
+    // …and it is a DIFFERENT key from the implementation pass's, in both
+    // shallow and deep shapes — neither pass can overwrite the other.
+    expect(cacheKey(PR, 'skill:' + hash + '|tests', promptVersionFor('skillsTests'))).not.toBe(
+      cacheKey(PR, 'skill:' + hash, promptVersionFor('skills')),
+    )
+    expect(cacheKey(PR, 'skill:' + hash + '|tests|deep', promptVersionFor('skillsTests'))).not.toBe(
+      cacheKey(PR, 'skill:' + hash + '|deep', promptVersionFor('skills')),
     )
   })
 

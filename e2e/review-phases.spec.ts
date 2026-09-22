@@ -188,3 +188,240 @@ test('inspect: the Tests phase is previewable before approval, and says so', asy
   await expect(page.getByTestId('phase-approve')).toHaveText('Implementation looks good')
   await expect(page.getByTestId('phase-approved-note')).toHaveCount(0)
 })
+
+// ---------------------------------------------------------------------------
+// The reviewer passes across the two phases (#237)
+//
+// The automatic reviewer run is SCOPED to the implementation, and the tests get
+// their own on-demand, agentic pass. This exercises the whole arc end to end:
+// what the automatic run actually SENDS, the action's honest cost framing, and
+// where the tests-pass findings land.
+// ---------------------------------------------------------------------------
+
+/** The implementation-pass finding — anchored on an implementation file. */
+const IMPL_FINDING = {
+  skillName: 'Security Reviewer',
+  findings: [
+    {
+      path: 'src/auth/core.ts',
+      line: 2,
+      severity: 'high',
+      body: 'IMPL FINDING: deriveSecret is unsalted, so tokens are forgeable.',
+      suggestedFix: 'Salt the secret with a per-user value.',
+    },
+  ],
+}
+
+/** The tests-pass finding — anchored on a TEST file, so it files into the Tests phase. */
+const TESTS_FINDING = {
+  skillName: 'Security Reviewer',
+  findings: [
+    {
+      path: 'src/app.test.ts',
+      line: 3,
+      severity: 'medium',
+      body: 'TESTS FINDING: this assertion passes whatever the implementation does.',
+      suggestedFix: 'Assert on the value issueToken actually returns.',
+    },
+  ],
+}
+
+function jsonCompletion(payload: unknown) {
+  return {
+    status: 200,
+    json: {
+      id: 'chatcmpl-test',
+      object: 'chat.completion',
+      choices: [
+        { message: { role: 'assistant', content: JSON.stringify(payload) }, finish_reason: 'stop', index: 0 },
+      ],
+    },
+  }
+}
+
+/** One recorded reviewer LLM call: which pass it was, and what context it saw. */
+interface ReviewerCall {
+  pass: 'implementation' | 'tests'
+  user: string
+}
+
+/**
+ * Routes with a WORKING AI stub + one seeded reviewer skill. Returns the live
+ * list of reviewer calls so a test can assert what each pass actually sent.
+ */
+async function setupAiRoutes(page: import('@playwright/test').Page): Promise<ReviewerCall[]> {
+  const reviewerCalls: ReviewerCall[] = []
+
+  await page.route('**/*posthog.com/**', (route) => route.abort())
+  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+
+  await page.route('**/api.github.com/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}`) {
+      return route.fulfill({
+        json: {
+          title: 'Review phases test PR',
+          state: 'open', merged: false, body: null,
+          base: { sha: BASE_SHA, repo: { private: false } },
+          head: { sha: HEAD_SHA },
+          changed_files: 4,
+        },
+      })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) {
+      return route.fulfill({
+        json: [
+          { filename: 'src/app.ts', status: 'modified', patch: SMALL_PATCH, additions: 1, deletions: 0 },
+          { filename: 'src/app.test.ts', status: 'modified', patch: TEST_PATCH, additions: 1, deletions: 0 },
+          { filename: 'src/auth/core.ts', status: 'added', patch: AUTH_PATCH, additions: 400, deletions: 0 },
+          { filename: 'src/auth/core.spec.ts', status: 'added', patch: TEST_PATCH, additions: 1, deletions: 0 },
+        ],
+      })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/commits/${HEAD_SHA}/check-runs`) {
+      return route.fulfill({ json: { total_count: 0, check_runs: [] } })
+    }
+    return route.fulfill({ json: [] })
+  })
+
+  await page.route('**/api.deepseek.com/**', async (route) => {
+    let body: { stream?: boolean; messages?: Array<{ role: string; content: string }> } = {}
+    try {
+      body = route.request().postDataJSON() as typeof body
+    } catch {
+      // non-JSON body
+    }
+
+    // Streaming tasks (summary): a minimal SSE response.
+    if (body?.stream === true) {
+      return route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+        body:
+          'data: ' +
+          JSON.stringify({ choices: [{ delta: { content: 'A summary.' } }] }) +
+          '\n\ndata: [DONE]\n',
+      })
+    }
+
+    const system = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
+    const user = body?.messages?.find((m) => m.role === 'user')?.content ?? ''
+
+    // Follow-up passes first — their prompts also mention reviewers.
+    if (system.includes('consolidating overlapping code-review findings')) {
+      return route.fulfill(jsonCompletion({ clusters: [] }))
+    }
+    if (system.includes('rewriting code-review findings into plain')) {
+      return route.fulfill(jsonCompletion({ rewrites: [] }))
+    }
+
+    // The TESTS pass must be matched BEFORE the generic persona branch — its
+    // prompt is also a persona prompt.
+    if (system.includes('reviewing the tests of this pull request')) {
+      reviewerCalls.push({ pass: 'tests', user })
+      return route.fulfill(jsonCompletion(TESTS_FINDING))
+    }
+    if (system.includes('reviewer persona')) {
+      reviewerCalls.push({ pass: 'implementation', user })
+      return route.fulfill(jsonCompletion(IMPL_FINDING))
+    }
+
+    // Everything else (verdict, tests insight, alternatives, …).
+    return route.fulfill(
+      jsonCompletion({ level: 'minor-changes', evidence: ['src/auth/core.ts added'], notAnalyzed: [] }),
+    )
+  })
+
+  await page.addInitScript(
+    (seed) => {
+      localStorage.setItem('review123:settings', JSON.stringify(seed.settings))
+      localStorage.setItem('review123:reviewer-skills', JSON.stringify(seed.skills))
+    },
+    {
+      settings: {
+        deepseekKey: 'sk-test-deepseek-key',
+        aiProvider: 'deepseek',
+        diffMode: 'unified',
+        railCollapsed: true,
+        focusMode: 'off',
+        // Phases are a Files-mode concept; Story mode is a walkthrough of the
+        // WHOLE change and deliberately does not apply them. With a key present
+        // the story task becomes available and Story is the default flow, so
+        // pin Files mode explicitly.
+        storyMode: false,
+        // The automatic implementation pass is the behaviour under test.
+        autoRunReviewers: true,
+      },
+      skills: [
+        {
+          id: 'skill-e2e-phase',
+          name: 'Security Reviewer',
+          content: '## Security\nCheck for XSS and injection vulnerabilities.',
+          enabled: true,
+          addedAt: 1700000000000,
+        },
+      ],
+    },
+  )
+
+  return reviewerCalls
+}
+
+test('inspect: the automatic run reviews the implementation only, and the tests get their own on-demand pass', async ({ page }) => {
+  const reviewerCalls = await setupAiRoutes(page)
+  await gotoInspect(page)
+
+  // --- 1. The AUTOMATIC pass is scoped to the implementation ---------------
+  await expect(page.getByText(/IMPL FINDING: deriveSecret is unsalted/)).toBeVisible({ timeout: 15_000 })
+
+  const implCalls = reviewerCalls.filter((c) => c.pass === 'implementation')
+  expect(implCalls.length).toBeGreaterThan(0)
+  // It saw the implementation…
+  expect(implCalls[0].user).toContain('src/auth/core.ts')
+  expect(implCalls[0].user).toContain('issueToken')
+  // …and NOT the tests. This is the cost/timeout win: smaller context.
+  expect(implCalls[0].user).not.toContain('src/app.test.ts')
+  expect(implCalls[0].user).not.toContain('src/auth/core.spec.ts')
+
+  // Nothing fired the tests pass on its own.
+  expect(reviewerCalls.filter((c) => c.pass === 'tests')).toHaveLength(0)
+
+  // The Tests phase is not even offering the action yet — we are on
+  // Implementation, where that pass already ran.
+  await expect(page.getByTestId('tests-review-run')).toHaveCount(0)
+
+  // --- 2. Approve → the Tests phase offers the on-demand pass -------------
+  await page.getByTestId('phase-approve').click()
+  await expect(page.getByTestId('phase-btn-tests')).toHaveAttribute('aria-pressed', 'true')
+
+  // The implementation finding is deferred to its own phase, not lost.
+  await expect(page.getByText(/IMPL FINDING: deriveSecret is unsalted/)).toHaveCount(0)
+
+  const runTests = page.getByTestId('tests-review-run')
+  await expect(runTests).toBeVisible()
+  await expect(runTests).toHaveText(/Review the tests/)
+  // The cost is stated BEFORE the click — this is the expensive pass.
+  await expect(page.getByTestId('tests-review-hint')).toContainText('1 reviewer · agentic · runs on demand')
+
+  // --- 3. Click it → the tests findings land in the Tests phase ------------
+  await runTests.click()
+  await expect(page.getByText(/TESTS FINDING: this assertion passes whatever/)).toBeVisible({
+    timeout: 15_000,
+  })
+
+  const testsCalls = reviewerCalls.filter((c) => c.pass === 'tests')
+  expect(testsCalls).toHaveLength(1)
+  // It reads the tests AND the implementation they exercise.
+  expect(testsCalls[0].user).toContain('src/app.test.ts')
+  expect(testsCalls[0].user).toContain('src/auth/core.ts')
+
+  // The status bar shows the pass, tagged so the two runs are distinguishable.
+  await expect(page.locator('.skill-pass-tag')).toHaveCount(1)
+
+  // --- 4. Back on Implementation, that pass's finding is still there -------
+  await page.getByTestId('phase-btn-implementation').click()
+  await expect(page.getByText(/IMPL FINDING: deriveSecret is unsalted/)).toBeVisible()
+  await expect(page.getByText(/TESTS FINDING: this assertion passes whatever/)).toHaveCount(0)
+})

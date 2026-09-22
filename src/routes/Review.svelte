@@ -931,9 +931,11 @@
         resolvedCommentIds={isCompareActive ? new Set() : resolvedCommentIds}
         {contentsMap}
         skillReviews={aiRun?.skillReviews ?? []}
+        testReviews={aiRun?.testReviews ?? []}
         convergence={aiRun?.convergence ?? null}
         simplify={aiRun?.simplify ?? null}
         runSkillReviewsFn={aiRun != null ? (() => { void aiRun!.runSkillReviews(undefined, prComments.map((c) => c.body)) }) : null}
+        runTestsReviewFn={aiRun != null ? (() => { void aiRun!.runTestsReview(undefined, prComments.map((c) => c.body)) }) : null}
         onRetrySkill={aiRun != null ? ((skillId) => { void aiRun!.retrySkill(skillId, undefined, prComments.map((c) => c.body)) }) : null}
         askFn={aiRun ? aiRun.ask : null}
         expandFn={aiRun ? aiRun.expandComment : null}

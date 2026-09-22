@@ -20,7 +20,14 @@
  *    off; the run's own mode gates enforce this. Skill reviewers run when the
  *    skills mode is on and skills are enabled: prepare is an explicit "do the
  *    review work now" action, so it includes them even when auto-run-on-open
- *    is off (documented judgment call).
+ *    is off (documented judgment call). That is the IMPLEMENTATION reviewer
+ *    pass — the automatic one, and the one worth warming. The on-demand TESTS
+ *    pass (#237, AiRun.runTestsReview) is deliberately NOT warmed here: its
+ *    question ("do these tests pin the behaviour of the implementation you
+ *    just approved?") only makes sense after the user has read the
+ *    implementation, and it is the expensive pass — every enabled reviewer,
+ *    agentic. Warming it would spend that budget on PRs the user may never
+ *    open. It stays exactly what the user chose: a click.
  *  - Navigation safety (cancel-on-navigate): there is NO in-flight dedup
  *    between two concurrent AiRuns for the same PR — each run checks the cache
  *    only at task start, so a prepare racing the route's run would double-call
