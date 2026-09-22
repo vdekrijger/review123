@@ -67,7 +67,11 @@ import {
   type InferOutcome,
 } from './infer.js'
 import { parseSearchRequest, runSearch } from './search.js'
+import { runStreamInference, type StreamEmit } from './inferStream.js'
 import {
+  encodeStreamEvent,
+  INFER_STREAM_CONTENT_TYPE,
+  INFER_STREAM_PATH,
   MAX_BODY_BYTES,
   PROTOCOL_VERSION,
   type BridgeCapabilities,
@@ -150,6 +154,21 @@ export interface HandlerContext {
    * one installed to run the suite).
    */
   infer: (req: InferRequest, availableClis: readonly string[]) => Promise<InferOutcome>
+  /**
+   * Runs `/v1/infer/stream`. Injected for the same reason `infer` is, with one
+   * addition that only streaming has: `signal`, which fires when the BROWSER
+   * disconnected and must reach the child process.
+   *
+   * It resolves when the run is over — after the child has been reaped, never
+   * before — so the HTTP layer can end the response knowing nothing is still
+   * spending the user's subscription.
+   */
+  inferStream: (
+    req: InferRequest,
+    availableClis: readonly string[],
+    emit: StreamEmit,
+    signal: AbortSignal,
+  ) => Promise<void>
   /** Runs `/v1/files`. Injected for the same reason `infer` is. */
   files: (req: FilesRequest) => Promise<FilesOutcome>
   /** Runs `/v1/search`. Injected for the same reason `infer` is. */
@@ -188,6 +207,16 @@ export interface HandlerContext {
 export function defaultInfer(realRoot: string) {
   return (req: InferRequest, availableClis: readonly string[]): Promise<InferOutcome> =>
     runInference(req, { realRoot, availableClis })
+}
+
+/** The real `/v1/infer/stream` worker, used unless a test injects its own. */
+export function defaultInferStream(realRoot: string) {
+  return (
+    req: InferRequest,
+    availableClis: readonly string[],
+    emit: StreamEmit,
+    signal: AbortSignal,
+  ): Promise<void> => runStreamInference(req, { realRoot, availableClis, emit, signal })
 }
 
 /** The real `/v1/files` worker, used unless a test injects its own. */
@@ -313,6 +342,10 @@ function failCheckout(err: CheckoutError, cors: Record<string, string>): BridgeR
  */
 const POST_ROUTES = new Set([
   '/v1/infer',
+  // Listed so a GET is told the METHOD is wrong rather than that the route is
+  // missing. The POST itself never reaches handleRequest: server.ts hands it
+  // to handleStreamRequest, which cannot return a single BridgeResponse.
+  INFER_STREAM_PATH,
   '/v1/files',
   '/v1/search',
   '/v1/fix',
@@ -334,13 +367,31 @@ function parseJsonBody(body: Buffer | null): unknown {
   }
 }
 
-export async function handleRequest(
-  req: BridgeRequest,
-  ctx: HandlerContext,
-): Promise<BridgeResponse> {
+/**
+ * The outcome of gates 1-5: either a response that ENDS the request, or the
+ * CORS headers every later answer has to carry.
+ */
+export type GateOutcome =
+  | { kind: 'halt'; response: BridgeResponse }
+  | { kind: 'pass'; cors: Record<string, string> }
+
+/**
+ * GATES 1-5, as ONE function, so every route surface runs the SAME ladder.
+ *
+ * It exists because `/v1/infer/stream` cannot be a `BridgeResponse`-returning
+ * route — it writes its body incrementally — and a streaming route that
+ * re-implemented "is this host allowed, is this origin allowed, is the token
+ * right" would be a second copy of the security model, drifting from this one
+ * the first time either changed. There is one copy, and it is here.
+ *
+ * See the file header for what each gate is for and why the order is what it
+ * is. Route-SPECIFIC gates (`--allow-write`, `--allow-checkout`) are NOT here:
+ * they belong to their routes.
+ */
+export function checkGates(req: BridgeRequest, ctx: HandlerContext): GateOutcome {
   // ---- 1. Host: refuse a rebound hostname pointed at our loopback socket ----
   if (!isAllowedHost(req.headers.host, ctx.port)) {
-    return fail(403, 'forbidden-host', 'The bridge only answers on 127.0.0.1.')
+    return { kind: 'halt', response: fail(403, 'forbidden-host', 'The bridge only answers on 127.0.0.1.') }
   }
 
   // ---- 2. Origin: exact allowlist, no headers leak to a stranger ----
@@ -349,7 +400,10 @@ export async function handleRequest(
   if (origin !== undefined && !originAllowed) {
     // No Access-Control-Allow-* headers: the browser will block the read even
     // if this body somehow became interesting.
-    return fail(403, 'forbidden-origin', 'This origin is not allowed to use the bridge.')
+    return {
+      kind: 'halt',
+      response: fail(403, 'forbidden-origin', 'This origin is not allowed to use the bridge.'),
+    }
   }
   // A request with NO Origin is not browser-borne (curl, a health check). The
   // bearer token still gates it, and it gets no CORS headers because it needs
@@ -358,21 +412,41 @@ export async function handleRequest(
 
   // ---- 3. Preflight: answer before auth (no Authorization is sent on one) ----
   if (req.method === 'OPTIONS') {
-    return { status: 204, headers: { ...cors, 'Cache-Control': 'no-store' }, body: '' }
+    return {
+      kind: 'halt',
+      response: { status: 204, headers: { ...cors, 'Cache-Control': 'no-store' }, body: '' },
+    }
   }
 
   // ---- 4. Auth ----
   if (!tokenMatches(extractBearer(req.headers.authorization), ctx.token)) {
-    return fail(401, 'unauthorized', 'A valid pairing token is required.', {
-      ...cors,
-      'WWW-Authenticate': 'Bearer realm="review123-bridge"',
-    })
+    return {
+      kind: 'halt',
+      response: fail(401, 'unauthorized', 'A valid pairing token is required.', {
+        ...cors,
+        'WWW-Authenticate': 'Bearer realm="review123-bridge"',
+      }),
+    }
   }
 
   // ---- 5. Body cap ----
   if (req.body !== null && req.body.byteLength > MAX_BODY_BYTES) {
-    return fail(413, 'payload-too-large', `Request bodies are capped at ${MAX_BODY_BYTES} bytes.`, cors)
+    return {
+      kind: 'halt',
+      response: fail(413, 'payload-too-large', `Request bodies are capped at ${MAX_BODY_BYTES} bytes.`, cors),
+    }
   }
+
+  return { kind: 'pass', cors }
+}
+
+export async function handleRequest(
+  req: BridgeRequest,
+  ctx: HandlerContext,
+): Promise<BridgeResponse> {
+  const gate = checkGates(req, ctx)
+  if (gate.kind === 'halt') return gate.response
+  const { cors } = gate
 
   // ---- 6. Routes ----
   if (req.method === 'GET' && req.path === '/v1/health') {
@@ -572,4 +646,122 @@ export async function handleRequest(
   }
 
   return fail(404, 'not-found', `No route ${req.method} ${req.path} in protocol v${PROTOCOL_VERSION}.`, cors)
+}
+
+// ===========================================================================
+// `POST /v1/infer/stream` — the ONE route that answers incrementally.
+// ===========================================================================
+
+/**
+ * Where a streamed response goes.
+ *
+ * Deliberately NOT a `ServerResponse`: the whole protocol stays testable over
+ * plain data, exactly as `handleRequest` is. `server.ts` supplies the socket
+ * version; the tests supply an array.
+ */
+export interface StreamSink {
+  /** Called exactly once, before any body byte. */
+  head: (status: number, headers: Record<string, string>) => void
+  write: (chunk: string) => void
+  end: () => void
+  /**
+   * Fires when the CLIENT went away — the fetch was aborted, the tab closed,
+   * the socket died. It is the whole reason this route exists in this shape:
+   * it is forwarded to the worker, which forwards it to the child process.
+   */
+  signal: AbortSignal
+}
+
+/**
+ * `POST /v1/infer/stream`.
+ *
+ * SAME GATES, ONE COPY. Host, Origin, preflight, auth and the body cap all run
+ * through `checkGates` — the identical ladder `/v1/infer` runs. A rebound
+ * hostname, a foreign origin and a missing token are refused here exactly as
+ * they are there, and they are refused with an ordinary JSON body, because
+ * nothing has been committed to the wire yet.
+ *
+ * THE STATUS LINE IS THE PIVOT. Everything decidable BEFORE the CLI starts — a
+ * malformed body, an uninstalled CLI — is an HTTP status, so a client sees an
+ * ordinary error. Everything after it is an NDJSON `error` event under a 200,
+ * because the status line is already spent. That is the one real cost of
+ * streaming, and it is why `InferStreamError` carries exactly the same
+ * BridgeErrorCode the status would have.
+ */
+export async function handleStreamRequest(
+  req: BridgeRequest,
+  ctx: HandlerContext,
+  sink: StreamSink,
+): Promise<void> {
+  const gate = checkGates(req, ctx)
+  if (gate.kind === 'halt') {
+    sink.head(gate.response.status, gate.response.headers)
+    if (gate.response.body !== '') sink.write(gate.response.body)
+    sink.end()
+    return
+  }
+  const { cors } = gate
+
+  const sendJson = (response: BridgeResponse): void => {
+    sink.head(response.status, response.headers)
+    sink.write(response.body)
+    sink.end()
+  }
+
+  if (req.method !== 'POST') {
+    sendJson(
+      fail(405, 'method-not-allowed', `${INFER_STREAM_PATH} accepts POST.`, {
+        ...cors,
+        Allow: 'POST, OPTIONS',
+      }),
+    )
+    return
+  }
+
+  const parsed = parseInferRequest(parseJsonBody(req.body))
+  if ('error' in parsed) {
+    sendJson(fail(400, 'bad-request', parsed.error, cors))
+    return
+  }
+
+  // Re-probed per call exactly as `/v1/infer` does, so installing a CLI does
+  // not need a bridge restart — and so "you do not have that CLI" is still a
+  // real 503 rather than a 200 with an error event buried in it.
+  const { inference } = await ctx.capabilities()
+  if (!inference.includes(parsed.cli)) {
+    sendJson(
+      fail(
+        503,
+        'cli-unavailable',
+        `The ${parsed.cli} CLI is not on this machine's PATH. Install it, then restart the bridge.`,
+        cors,
+      ),
+    )
+    return
+  }
+
+  sink.head(200, {
+    'Content-Type': INFER_STREAM_CONTENT_TYPE,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    // Nothing sits in front of a loopback bridge today, but a proxy that
+    // buffers the whole body would make this route silently not a stream.
+    'X-Accel-Buffering': 'no',
+    ...cors,
+  })
+
+  // A closed socket must never turn a delta into a crash — and must never stop
+  // us awaiting the worker, because that await is what reaps the child.
+  let open = true
+  const emit: StreamEmit = (event) => {
+    if (!open || sink.signal.aborted) return
+    try {
+      sink.write(encodeStreamEvent(event))
+    } catch {
+      open = false
+    }
+  }
+
+  await ctx.inferStream(parsed, inference, emit, sink.signal)
+  sink.end()
 }

@@ -19,15 +19,18 @@ import {
   defaultFiles,
   defaultFix,
   defaultInfer,
+  defaultInferStream,
   defaultRepoState,
   defaultRestore,
   defaultSearch,
   defaultStack,
   handleRequest,
+  handleStreamRequest,
   type BridgeRequest,
   type HandlerContext,
+  type StreamSink,
 } from './handler.js'
-import { MAX_BODY_BYTES, REQUEST_TIMEOUT_MS } from './protocol.js'
+import { INFER_STREAM_PATH, MAX_BODY_BYTES, REQUEST_TIMEOUT_MS } from './protocol.js'
 import { ripgrepProbe } from './search.js'
 
 /** The address the bridge binds. Not configurable — see the header comment. */
@@ -60,6 +63,8 @@ export interface BridgeServerOptions {
   appUrl?: string | null
   /** Overrides the real `/v1/infer` worker. Tests only — see handler.ts. */
   infer?: HandlerContext['infer']
+  /** Overrides the real `/v1/infer/stream` worker. Tests only. */
+  inferStream?: HandlerContext['inferStream']
   /** Overrides the real `/v1/files` worker. Tests only. */
   files?: HandlerContext['files']
   /** Overrides the real `/v1/search` worker. Tests only. */
@@ -102,6 +107,7 @@ export function createContext(opts: BridgeServerOptions): HandlerContext {
     capabilities: () => detectCapabilities(deps, allowWrite, allowCheckout),
     version: opts.version,
     infer: opts.infer ?? defaultInfer(opts.realRoot),
+    inferStream: opts.inferStream ?? defaultInferStream(opts.realRoot),
     fix: opts.fix ?? defaultFix(opts.realRoot, testCommand, noTests),
     files: opts.files ?? defaultFiles(opts.realRoot),
     // The ripgrep probe is re-run per search, exactly as capability detection
@@ -171,9 +177,74 @@ async function respond(
     // the 413 answer stays in the one place that formats responses.
     body: body === 'too-large' ? Buffer.alloc(MAX_BODY_BYTES + 1) : body,
   }
+
+  // The ONE route that cannot be a single BridgeResponse: it writes its body
+  // as the CLI produces it. Everything else — including an OPTIONS preflight
+  // or a GET to this path — goes through the ordinary handler.
+  if (bridgeReq.method === 'POST' && bridgeReq.path === INFER_STREAM_PATH) {
+    await respondStreaming(req, res, ctx, bridgeReq)
+    return
+  }
+
   const result = await handleRequest(bridgeReq, ctx)
   res.writeHead(result.status, result.headers)
   res.end(result.body)
+}
+
+/**
+ * The socket half of `/v1/infer/stream`.
+ *
+ * Its whole job is to turn a dead connection into an AbortSignal. Node tells
+ * us the client is gone through `req`'s 'aborted'/'close' and `res`'s 'close';
+ * all three are wired, because which one fires depends on how the peer went
+ * away (an aborted fetch, a closed tab, a killed browser). The signal is
+ * handed to the handler, which hands it to the worker, which hands it to the
+ * child process — an unbroken chain from "the user cancelled" to "the CLI
+ * stopped spending their subscription".
+ *
+ * `flushHeaders()` and the per-write `flush()` matter: Node buffers small
+ * writes by default, and a stream that arrives in one buffered lump at the end
+ * is exactly the behaviour this route exists to remove.
+ */
+async function respondStreaming(
+  req: IncomingMessage,
+  res: ServerResponse,
+  ctx: HandlerContext,
+  bridgeReq: BridgeRequest,
+): Promise<void> {
+  const controller = new AbortController()
+  const clientGone = (): void => controller.abort()
+  req.on('aborted', clientGone)
+  req.on('close', () => {
+    // `res.writableEnded` distinguishes "we finished and the socket closed"
+    // from "the peer hung up on us". Only the second is a cancellation.
+    if (!res.writableEnded) clientGone()
+  })
+  res.on('close', () => {
+    if (!res.writableEnded) clientGone()
+  })
+
+  const sink: StreamSink = {
+    head: (status, headers) => {
+      res.writeHead(status, headers)
+      res.flushHeaders()
+    },
+    write: (chunk) => {
+      if (res.writableEnded) return
+      res.write(chunk)
+    },
+    end: () => {
+      if (!res.writableEnded) res.end()
+    },
+    signal: controller.signal,
+  }
+
+  try {
+    await handleStreamRequest(bridgeReq, ctx, sink)
+  } finally {
+    req.removeListener('aborted', clientGone)
+    sink.end()
+  }
 }
 
 /**

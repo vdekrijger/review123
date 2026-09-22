@@ -98,6 +98,7 @@ describe('GET /v1/health over HTTP', () => {
     expect(body['capabilities']).toEqual({
       inference: [],
       infer: true,
+      inferStream: true,
       files: true,
       search: true,
       fix: false,

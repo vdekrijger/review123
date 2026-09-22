@@ -177,6 +177,23 @@ export const NEUTRAL_SYSTEM_PROMPT =
  *     `--bare` forces ANTHROPIC_API_KEY and never reads the subscription, i.e.
  *     it defeats the entire purpose of the bridge.
  *
+ * STREAMING (`stream: true`, for `/v1/infer/stream`) changes ONE thing on
+ * claude's argv: `--output-format json` becomes
+ * `--output-format stream-json --include-partial-messages --verbose`.
+ *
+ *   - VERIFIED by running claude 2.1.278: `--output-format stream-json`
+ *     without `--verbose` exits with "When using --print,
+ *     --output-format=stream-json requires --verbose", so `--verbose` is not
+ *     optional — it is part of the streaming invocation.
+ *   - `--include-partial-messages` is what turns a per-MESSAGE event log into
+ *     a per-TOKEN one: without it the only assistant event is the finished
+ *     message, which is the non-streaming behaviour with extra steps.
+ *   - The final line is still a `{"type":"result", ...}` document with the
+ *     same `result` / `is_error` / `subtype` / `usage` fields `--output-format
+ *     json` prints, so readClaudeResult reads it unchanged.
+ *   - Every safety flag is IDENTICAL. Streaming changes how the answer is
+ *     delivered, never what the child is allowed to do.
+ *
  * codex-cli 0.155.1:
  *   `codex exec --sandbox read-only --skip-git-repo-check --color never
  *    --ephemeral --output-last-message <f> -` with the prompt on stdin.
@@ -194,17 +211,23 @@ export function buildInvocation(
   req: InferRequest,
   tmpDir: string,
   fileContext?: string,
+  opts?: { stream?: boolean },
 ): Invocation {
   const system = req.system?.trim() ? req.system : NEUTRAL_SYSTEM_PROMPT
 
   if (cli === 'claude') {
     const systemFile = join(tmpDir, 'system.txt')
+    // The ONLY difference between the one-shot and the streaming invocation.
+    // Everything after it — every safety flag — is shared, so streaming can
+    // never widen what the child may do.
+    const outputFormat = opts?.stream === true
+      ? ['--output-format', 'stream-json', '--include-partial-messages', '--verbose']
+      : ['--output-format', 'json']
     return {
       bin: 'claude',
       args: [
         '-p',
-        '--output-format',
-        'json',
+        ...outputFormat,
         '--tools',
         '',
         '--permission-prompts',
@@ -240,6 +263,30 @@ export function buildInvocation(
   }
 }
 
+/**
+ * Which CLIs actually produce INCREMENTAL output, verified by running them.
+ *
+ *   claude 2.1.278 — YES. `--output-format stream-json
+ *     --include-partial-messages --verbose` emits one
+ *     `content_block_delta` / `text_delta` NDJSON line per chunk as the model
+ *     writes, then the usual `{"type":"result"}` document.
+ *
+ *   codex-cli 0.155.1 — NO. `codex exec --json` emits NDJSON too, but the
+ *     assistant text arrives in exactly one `{"type":"item.completed",
+ *     "item":{"type":"agent_message","text":"…"}}` line containing the whole
+ *     finished message. There is no partial-message flag on `codex exec`.
+ *
+ * So `/v1/infer/stream` runs codex through the ORDINARY one-shot path and says
+ * `streaming: false` in its `start` event. It does NOT chop the finished text
+ * into timed fragments: a fake typewriter would make the bridge's own
+ * capability report a lie, and would tell the user their codex subscription is
+ * doing something it is not.
+ */
+export const CLI_STREAMS: Record<InferenceCli, boolean> = {
+  claude: true,
+  codex: false,
+}
+
 // ---------------------------------------------------------------------------
 // Layer 2 — process mechanics
 // ---------------------------------------------------------------------------
@@ -256,6 +303,18 @@ export interface ProcessResult {
   timedOut: boolean
   /** The binary could not be executed at all (ENOENT and friends). */
   spawnFailed: boolean
+  /**
+   * The CALLER went away (`options.signal` fired) and the child was killed.
+   *
+   * Optional because every pre-existing caller passes no signal and can never
+   * see it. It exists for `/v1/infer/stream`, where the browser closing the
+   * socket must reach the subprocess: a request that ends with a CLI still
+   * running would keep spending the user's subscription on an answer nobody
+   * will ever read.
+   */
+  aborted?: boolean
+  /** The child's pid, when it was spawned at all. Used to prove it was reaped. */
+  pid?: number | undefined
 }
 
 export type SpawnFn = typeof nodeSpawn
@@ -268,6 +327,12 @@ export interface RunProcessOptions {
   timeoutMs: number
   maxOutputBytes?: number
   spawn?: SpawnFn
+  /**
+   * Fires when the CALLER gave up. The child is killed on the same
+   * SIGTERM-then-SIGKILL ladder the timeout uses — a cancelled request must
+   * not leave a CLI running on the user's subscription.
+   */
+  signal?: AbortSignal
 }
 
 export type RunProcess = (opts: RunProcessOptions) => Promise<ProcessResult>
@@ -301,6 +366,7 @@ export async function runProcess(opts: RunProcessOptions): Promise<ProcessResult
     let truncated = false
     let timedOut = false
     let spawnFailed = false
+    let aborted = false
     let settled = false
     let killTimer: NodeJS.Timeout | null = null
 
@@ -320,7 +386,18 @@ export async function runProcess(opts: RunProcessOptions): Promise<ProcessResult
       settled = true
       clearTimeout(budgetTimer)
       if (killTimer) clearTimeout(killTimer)
-      resolve({ code: exitCode, signal: exitSignal, stdout, stderr, truncated, timedOut, spawnFailed })
+      opts.signal?.removeEventListener('abort', onAbort)
+      resolve({
+        code: exitCode,
+        signal: exitSignal,
+        stdout,
+        stderr,
+        truncated,
+        timedOut,
+        spawnFailed,
+        aborted,
+        pid: child.pid,
+      })
     }
 
     let exitCode: number | null = null
@@ -338,6 +415,19 @@ export async function runProcess(opts: RunProcessOptions): Promise<ProcessResult
       timedOut = true
       terminate()
     }, opts.timeoutMs)
+
+    /**
+     * The caller gave up. We do NOT resolve here: we kill and wait for
+     * 'close', so the promise settles only once the child is actually reaped.
+     * Resolving early would hand the caller a "done" while a CLI was still
+     * running — precisely the orphan this exists to prevent.
+     */
+    function onAbort(): void {
+      aborted = true
+      terminate()
+    }
+    if (opts.signal?.aborted) onAbort()
+    else opts.signal?.addEventListener('abort', onAbort, { once: true })
 
     child.stdout?.setEncoding('utf8')
     child.stdout?.on('data', (chunk: string) => {
@@ -520,6 +610,18 @@ export interface RunInferenceOptions {
   run?: RunProcess
   /** Injected in tests so no temp directory is created. */
   now?: () => number
+  /**
+   * Fires when the caller gave up, and is forwarded to the child so it dies
+   * with the request. `/v1/infer/stream`'s codex path passes the browser's
+   * disconnect through here; `/v1/infer` passes nothing and behaves exactly
+   * as it did.
+   *
+   * An aborted run's OUTCOME is deliberately not special-cased into a new
+   * error code: the caller that aborted is the one who knows it aborted, and
+   * it is responsible for discarding whatever comes back rather than
+   * reporting it as a CLI failure.
+   */
+  signal?: AbortSignal
 }
 
 /** Clamp a requested budget into the range the bridge will actually honour. */
@@ -616,6 +718,7 @@ export async function runInference(
       stdin: invocation.stdin,
       cwd: opts.realRoot,
       timeoutMs: clampTimeout(req.timeoutMs),
+      ...(opts.signal ? { signal: opts.signal } : {}),
     })
     const durationMs = now() - started
 
