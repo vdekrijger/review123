@@ -14,10 +14,20 @@
  *                    origin was allowed, so the browser can READ the 401.
  *   5. Body cap.                                 413.
  *   6. Route.                                    200 / 501 / 404.
+ *
+ * Every gate above still applies to `/v1/infer`: no origin outside the
+ * allowlist, no request without the pairing token, and no rebound hostname ever
+ * reaches the code that spawns a process.
  */
 
 import { extractBearer, tokenMatches } from './auth.js'
 import { corsHeaders, isAllowedHost, isAllowedOrigin } from './cors.js'
+import {
+  parseInferRequest,
+  runInference,
+  statusForInferError,
+  type InferOutcome,
+} from './infer.js'
 import {
   MAX_BODY_BYTES,
   PROTOCOL_VERSION,
@@ -25,6 +35,8 @@ import {
   type BridgeErrorCode,
   type ErrorResponse,
   type HealthResponse,
+  type InferRequest,
+  type InferResponse,
 } from './protocol.js'
 
 /** The subset of an incoming HTTP request the protocol actually looks at. */
@@ -61,6 +73,18 @@ export interface HandlerContext {
   /** Re-probed per health request so plugging in a CLI does not need a restart. */
   capabilities: () => Promise<BridgeCapabilities>
   version: string
+  /**
+   * Runs `/v1/infer`. Injected so the handler's tests can exercise every
+   * protocol rule without spawning a real CLI (and without a machine needing
+   * one installed to run the suite).
+   */
+  infer: (req: InferRequest, availableClis: readonly string[]) => Promise<InferOutcome>
+}
+
+/** The real worker, used unless a test injects its own. */
+export function defaultInfer(realRoot: string) {
+  return (req: InferRequest, availableClis: readonly string[]): Promise<InferOutcome> =>
+    runInference(req, { realRoot, availableClis })
 }
 
 const JSON_HEADERS = {
@@ -87,7 +111,20 @@ function fail(
 }
 
 /** Routes that exist in the contract but answer 501 until their PR lands. */
-const RESERVED_ROUTES = new Set(['/v1/infer', '/v1/files', '/v1/search'])
+const RESERVED_ROUTES = new Set(['/v1/files', '/v1/search'])
+
+/** POST routes that are actually implemented. Used for the 405 check. */
+const POST_ROUTES = new Set(['/v1/infer'])
+
+/** Parse a request body as JSON, or null. Never throws. */
+function parseJsonBody(body: Buffer | null): unknown {
+  if (body === null || body.byteLength === 0) return null
+  try {
+    return JSON.parse(body.toString('utf8'))
+  } catch {
+    return null
+  }
+}
 
 export async function handleRequest(
   req: BridgeRequest,
@@ -142,10 +179,48 @@ export async function handleRequest(
     return json(200, payload, cors)
   }
 
-  if (RESERVED_ROUTES.has(req.path)) {
+  if (POST_ROUTES.has(req.path) || RESERVED_ROUTES.has(req.path)) {
     if (req.method !== 'POST') {
       return fail(405, 'method-not-allowed', `${req.path} accepts POST.`, { ...cors, Allow: 'POST, OPTIONS' })
     }
+  }
+
+  if (req.method === 'POST' && req.path === '/v1/infer') {
+    const parsed = parseInferRequest(parseJsonBody(req.body))
+    if ('error' in parsed) return fail(400, 'bad-request', parsed.error, cors)
+
+    // The detected-CLI list is re-probed per call, exactly as /v1/health does,
+    // so installing a CLI does not require a bridge restart. The gate lives
+    // HERE, before the worker, so "you do not have that CLI" is answered
+    // without touching any process-spawning code at all. runInference repeats
+    // the check as defence in depth for callers that reach it directly.
+    const { inference } = await ctx.capabilities()
+    if (!inference.includes(parsed.cli)) {
+      return fail(
+        503,
+        'cli-unavailable',
+        `The ${parsed.cli} CLI is not on this machine's PATH. Install it, then restart the bridge.`,
+        cors,
+      )
+    }
+
+    const outcome = await ctx.infer(parsed, inference)
+    if (!outcome.ok) {
+      return fail(statusForInferError(outcome.code), outcome.code, outcome.message, cors)
+    }
+
+    const payload: InferResponse = {
+      ok: true,
+      cli: parsed.cli,
+      text: outcome.text,
+      truncated: outcome.truncated,
+      durationMs: outcome.durationMs,
+      ...(outcome.usage ? { usage: outcome.usage } : {}),
+    }
+    return json(200, payload, cors)
+  }
+
+  if (RESERVED_ROUTES.has(req.path)) {
     return fail(
       501,
       'not-implemented',

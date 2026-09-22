@@ -567,6 +567,21 @@ function createTransport(opts: LlmToolLoopOpts): ToolTransport {
       return createAnthropicTransport(provider, model, opts)
     case 'gemini':
       return createGeminiTransport(provider, model, opts)
+    case 'bridge':
+      // THE TOOL LOOP DOES NOT RUN OVER THE BRIDGE, on purpose.
+      //
+      // `claude -p` is itself an agent with its own tools and its own loop.
+      // Driving it from this loop would be an agent steering an agent through
+      // a text pipe, with two tool vocabularies that do not agree and no way
+      // to attribute a tool call to either. The bridge models therefore carry
+      // `supportsTools: false`, so every deep-review gate (run.svelte.ts,
+      // deepReview.ts) routes to the single-pass path BEFORE reaching here —
+      // this arm is the backstop that keeps that contract loud rather than
+      // silent if a new call site forgets to check.
+      throw new LlmError(
+        'server',
+        'Deep (agentic) review does not run through the local bridge — the CLI is already an agent. Pick an API provider for deep review, or use standard review over the bridge.',
+      )
   }
 }
 

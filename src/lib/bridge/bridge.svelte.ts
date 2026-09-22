@@ -1,11 +1,15 @@
 /**
  * bridge.svelte.ts — the browser half of the optional local bridge.
  *
- * Connection state machine, capability store, token persistence, and the
- * `bridgeAvailable()` helper other modules will consult once the follow-up PRs
- * route work through the bridge. NOTHING in the app depends on it today: with
- * no bridge paired, this module makes ZERO network requests and the app behaves
- * exactly as it did before.
+ * Connection state machine, capability store, and the readiness helpers other
+ * modules consult before routing work through the bridge. The LLM transport is
+ * the first real consumer (`bridge` provider in llm.ts).
+ *
+ * WITH NO BRIDGE PAIRED THIS MODULE MAKES ZERO NETWORK REQUESTS and the app
+ * behaves exactly as it did before. That guarantee survived `initBridge()`
+ * moving to app start: the very first thing it does is read the stored token,
+ * and with none it returns without touching the network. A first-time visitor's
+ * page load is byte-for-byte unchanged.
  *
  * THE PROBE IS SILENT. A bridge that is not running is the normal case — the
  * user closed the terminal, rebooted, or never started one. So a failed probe
@@ -25,6 +29,13 @@
 import { track } from '../analytics/analytics'
 import { classifyFetchFailure, requestSignals } from '../net/signals'
 import {
+  clearStoredBridge,
+  isValidPort,
+  readStoredBridge,
+  writeStoredBridge,
+  type StoredBridge,
+} from './storage'
+import {
   DEFAULT_BRIDGE_PORT,
   PROTOCOL_VERSION,
   bridgeUrl,
@@ -34,8 +45,17 @@ import {
   type BridgeHealth,
 } from './protocol'
 
-/** localStorage key holding the pairing token + port. */
-export const BRIDGE_STORAGE_KEY = 'review123:bridge'
+/**
+ * Persistence lives in `./storage` — a rune-free, analytics-free module, so the
+ * LLM transport can read the pairing without importing this state machine.
+ * Re-exported here so every existing importer keeps its one import site.
+ */
+export {
+  BRIDGE_STORAGE_KEY,
+  isValidPort,
+  readStoredBridge,
+  type StoredBridge,
+} from './storage'
 
 /**
  * Probe budget. Deliberately short: a bridge is a process on this machine, so
@@ -45,12 +65,6 @@ export const BRIDGE_STORAGE_KEY = 'review123:bridge'
 export const BRIDGE_PROBE_TIMEOUT_MS = 2_500
 
 export type BridgeStatus = 'disconnected' | 'pairing' | 'connected' | 'error'
-
-/** What we persist. The token is a local-process credential, not a secret key. */
-export interface StoredBridge {
-  token: string
-  port: number
-}
 
 interface BridgeHolder {
   status: BridgeStatus
@@ -102,53 +116,6 @@ export const bridgeState = {
   get paired(): boolean {
     return holder.paired
   },
-}
-
-// ---------------------------------------------------------------------------
-// Persistence
-// ---------------------------------------------------------------------------
-
-/**
- * The stored pairing, or null. Never throws: Safari private mode and blocked
- * site data both make localStorage access throw, and a bridge that cannot
- * remember its token must degrade to "not paired", not to a broken settings
- * page.
- */
-export function readStoredBridge(): StoredBridge | null {
-  try {
-    const raw = localStorage.getItem(BRIDGE_STORAGE_KEY)
-    if (!raw) return null
-    const parsed: unknown = JSON.parse(raw)
-    if (typeof parsed !== 'object' || parsed === null) return null
-    const record = parsed as Record<string, unknown>
-    const token = record['token']
-    const port = record['port']
-    if (typeof token !== 'string' || token === '') return null
-    return { token, port: typeof port === 'number' && isValidPort(port) ? port : DEFAULT_BRIDGE_PORT }
-  } catch {
-    return null
-  }
-}
-
-function writeStoredBridge(value: StoredBridge): void {
-  try {
-    localStorage.setItem(BRIDGE_STORAGE_KEY, JSON.stringify(value))
-  } catch {
-    // Storage is a convenience here: the in-memory connection still works for
-    // this session, the user just re-pastes the token next time.
-  }
-}
-
-function clearStoredBridge(): void {
-  try {
-    localStorage.removeItem(BRIDGE_STORAGE_KEY)
-  } catch {
-    // ignore — see writeStoredBridge
-  }
-}
-
-export function isValidPort(port: number): boolean {
-  return Number.isInteger(port) && port >= 1 && port <= 65535
 }
 
 // ---------------------------------------------------------------------------
@@ -324,18 +291,39 @@ export function disconnectBridge(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Can the bridge serve `capability` right now?
+ * Is the bridge's `capability` ROUTE live right now?
  *
  * ALWAYS false unless a bridge is connected, so every caller degrades to the
- * existing hosted path by default. For `files` and `search` this tracks the
- * bridge's own route-readiness flag; for `inference` it means "at least one CLI
- * was detected". NOTE: `/v1/infer` itself answers 501 in protocol v1 — the
- * inference PR ships the route and its caller together.
+ * existing hosted path by default. It tracks the bridge's own route-readiness
+ * flag, which flips in the same release that implements the route — so a
+ * `true` here can never mean "the route 501s".
+ *
+ * This answers readiness ONLY. "Which CLIs exist" is a different question with
+ * a different accessor, `bridgeInferenceClis()`, because a single boolean
+ * conflating the two is exactly the bug that would silently send an infer
+ * request to a bridge with no CLI installed.
  */
 export function bridgeAvailable(capability: BridgeCapability): boolean {
   if (holder.status !== 'connected' || holder.capabilities === null) return false
-  if (capability === 'inference') return holder.capabilities.inference.length > 0
   return holder.capabilities[capability]
+}
+
+/**
+ * The CLIs the connected bridge DETECTED on the user's PATH, in bridge order.
+ * Empty when nothing is connected. Detection, not readiness — see above.
+ */
+export function bridgeInferenceClis(): string[] {
+  if (holder.status !== 'connected' || holder.capabilities === null) return []
+  return holder.capabilities.inference
+}
+
+/**
+ * Can `cli` actually be run right now? BOTH halves must hold: the route exists
+ * AND that CLI was detected. Every inference caller asks this one question
+ * rather than assembling the two answers itself.
+ */
+export function bridgeCanInfer(cli: string): boolean {
+  return bridgeAvailable('infer') && bridgeInferenceClis().includes(cli)
 }
 
 /** The stored credential, for the modules that will make bridge calls later. */

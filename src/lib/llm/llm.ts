@@ -17,6 +17,11 @@
  *   gemini         — Direct browser. :generateContent / :streamGenerateContent?alt=sse.
  *                   JSON via generationConfig.responseMimeType = application/json.
  *                   Key via x-goog-api-key header.
+ *   bridge         — NOT a vendor API: POST 127.0.0.1/v1/infer on the optional
+ *                   local bridge, which spawns the user's own Claude Code /
+ *                   Codex CLI on their subscription. No JSON mode (the shared
+ *                   extract/repair ladder handles it), usage only when the CLI
+ *                   reports it, and no streaming route yet — see bridgeStream.
  *
  * Every non-streaming adapter also reports whether the provider TRUNCATED the
  * reply at the output cap (openai `finish_reason:'length'`, anthropic
@@ -33,6 +38,14 @@ import {
   isTimeoutException,
   requestSignals as sharedRequestSignals,
 } from '../net/signals'
+import { readStoredBridge } from '../bridge/storage'
+import {
+  bridgeUrl,
+  parseBridgeError,
+  parseInferResponse,
+  type BridgeCli,
+  type InferRequest,
+} from '../bridge/protocol'
 import { activeLlmConfig, PROVIDER_KEY_FIELDS } from './config'
 import { getProvider, getModelDef } from './providers'
 import { parseJsonLoose } from './jsonExtract'
@@ -425,6 +438,14 @@ function parseSseLine(line: string): string | null {
 
 // Exported for llmToolLoop.ts (Plan G) — shared transport plumbing, not public API.
 export function getKeyForProvider(provider: LlmProviderDef): string {
+  // The local bridge has no API key: its credential is the pairing token the
+  // bridge printed, stored by the Local bridge settings section. Narrowed on
+  // the ID (not the transport) so PROVIDER_KEY_FIELDS below sees ApiProviderId.
+  if (provider.id === 'bridge') {
+    const stored = readStoredBridge()
+    if (stored === null) throw new LlmError('no-key', BRIDGE_NOT_PAIRED_MESSAGE)
+    return stored.token
+  }
   const keyName = PROVIDER_KEY_FIELDS[provider.id]
   if (!keyName) throw new LlmError('no-key', `No key mapping for provider ${provider.id}`)
   const settings = getSettings()
@@ -1069,6 +1090,195 @@ async function geminiStream(
 }
 
 // ===========================================================================
+// bridge transport — the user's OWN Claude Code / Codex CLI, over 127.0.0.1
+//
+// Not a vendor API. The "request" is a POST to the local bridge, which spawns
+// the CLI the user already pays for. Three consequences shape this adapter:
+//
+//   1. NO JSON MODE. A CLI returns whatever the model wrote. Anthropic's
+//      forced-tool JSON mode (#232) is unreachable here, so `json: true` falls
+//      back to INSTRUCTING the model — and the answer then goes through the
+//      SAME extractJsonCandidate / repair ladder every other provider's
+//      fallback uses. There is deliberately no second JSON path.
+//   2. USAGE MAY BE UNKNOWN. `claude` reports tokens, `codex` does not. When it
+//      is unknown we OMIT `usage` — exactly as openaiCompatComplete does for a
+//      provider that sent none — rather than reporting a zero that would render
+//      as "this cost nothing".
+//   3. NO STREAMING ROUTE YET. See bridgeStream.
+// ===========================================================================
+
+/**
+ * The instruction appended to the system prompt when a caller asks for JSON.
+ *
+ * TRANSPORT-level, not task-level: it says how to FORMAT the answer and nothing
+ * about what to answer, so it is the bridge's equivalent of
+ * `response_format: json_object` — not a task prompt, and not a reason to touch
+ * any PROMPT_VERSIONS entry.
+ */
+export const BRIDGE_JSON_INSTRUCTION =
+  'Respond with a single valid JSON value and nothing else: no prose before or after it, no explanation, and no markdown code fence.'
+
+/** Shown when the user picked the bridge but never paired one. */
+export const BRIDGE_NOT_PAIRED_MESSAGE =
+  'No local bridge is paired. Open Settings → Local bridge and paste the pairing token the bridge printed.'
+
+/** Shown when the bridge was paired but is not answering — the mid-review case. */
+export const BRIDGE_UNREACHABLE_MESSAGE =
+  'The local bridge is not responding. Start it in your repo (pnpm bridge), or pick an API provider in Settings → AI models.'
+
+/**
+ * Map a bridge failure onto an LlmError.
+ *
+ * The rule the whole feature rests on: a bridge failure NEVER silently becomes
+ * an API-key call. The user chose to spend their subscription; quietly falling
+ * back to a metered provider would spend their money without asking. So every
+ * branch here throws, with a message that says what to do about it.
+ */
+async function mapBridgeHttpError(res: Response, timeoutSignal?: AbortSignal): Promise<never> {
+  const body = await readBody(() => res.json().catch(() => null), timeoutSignal)
+  const { code, message } = parseBridgeError(body)
+
+  // WHETHER `status` IS ATTACHED IS A RETRY DECISION, not decoration:
+  // withTransientRetry retries ANY LlmError carrying `status >= 500`. The
+  // bridge's failures are mostly 5xx, and most of them are deterministic — so
+  // the status is attached only where another attempt could genuinely differ.
+  //
+  //   RETRIED    cli-failed (502)  a CLI run that failed can succeed next time
+  //              unknown 5xx       a newer bridge's transient failure
+  //   NOT        cli-unavailable   the CLI is not installed; waiting never
+  //                                installs it, and 3 backoffs × ~50 tasks in
+  //                                a review is minutes of certain failure
+  //              timeout           the CLI already burned the full budget;
+  //                                re-running it spends that again, ×3
+  //              not-implemented   an old bridge does not grow the route
+  //                                mid-review
+  switch (code) {
+    case 'unauthorized':
+      throw new LlmError('auth', 'The local bridge rejected its pairing token. The bridge mints a new one every time it starts — re-pair it in Settings → Local bridge.', { status: res.status })
+    case 'cli-unavailable':
+      throw new LlmError('no-key', message || 'That CLI is not installed on this machine.')
+    case 'timeout':
+      throw new LlmError('timeout', message || TIMED_OUT_MESSAGE)
+    case 'not-implemented':
+      throw new LlmError('server', 'This local bridge is too old to run inference. Update it and restart.')
+    case 'forbidden-origin':
+    case 'forbidden-host':
+      throw new LlmError('auth', 'The local bridge refused this origin. Restart it with --allow-origin for this URL.', { status: res.status })
+    case 'forbidden-path':
+    case 'bad-request':
+    case 'payload-too-large':
+      // Our own request was wrong. Sending it again cannot fix it.
+      throw new LlmError('server', message || `The local bridge refused the request (HTTP ${res.status}).`)
+    case 'cli-failed':
+      throw new LlmError('server', message || `The local bridge could not run the CLI (HTTP ${res.status}).`, { status: res.status })
+    default:
+      // An unrecognised code must never crash the client: protocol v1 codes are
+      // additive, so a newer bridge can legitimately send one we do not know.
+      throw new LlmError('server', message || `The local bridge answered with HTTP ${res.status}.`, { status: res.status })
+  }
+}
+
+async function bridgeComplete(
+  _provider: LlmProviderDef,
+  model: LlmModelDef,
+  opts: LlmCompleteOpts,
+  includeUsage: boolean,
+): Promise<LlmCompleteResult> {
+  const stored = readStoredBridge()
+  // 'no-key' is the honest kind: the pairing token IS this provider's
+  // credential, and the UI's no-key copy is "configure your provider".
+  if (stored === null) throw new LlmError('no-key', BRIDGE_NOT_PAIRED_MESSAGE)
+
+  const { system, user, json, signal, maxTokens, timeoutMs } = opts
+  const { timeoutSignal, effectiveSignal } = requestSignals(signal, timeoutMs)
+
+  const payload: InferRequest = {
+    cli: (model.id === 'codex' ? 'codex' : 'claude') as BridgeCli,
+    prompt: user,
+    system: json ? `${system}\n\n${BRIDGE_JSON_INSTRUCTION}` : system,
+    // The bridge clamps this to its own ceiling; sending our window keeps the
+    // two budgets aligned so the CLI is killed at roughly the moment the
+    // browser would have given up anyway.
+    timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  }
+  if (maxTokens !== undefined) payload.maxOutputTokens = maxTokens
+
+  let res: Response
+  try {
+    res = await fetch(bridgeUrl(stored.port, '/v1/infer'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${stored.token}` },
+      // Bearer-token authenticated; never attach ambient cookies.
+      credentials: 'omit',
+      cache: 'no-store',
+      body: JSON.stringify(payload),
+      signal: effectiveSignal,
+    })
+  } catch (err) {
+    // mapFetchError preserves the #233/#234 abort-vs-timeout split. A genuine
+    // connection refusal lands on 'network', and THAT is the mid-review
+    // disconnect case, so it gets the actionable message rather than the
+    // engine's "Failed to fetch".
+    if (isAbortException(err) || isTimeoutException(err)) mapFetchError(err, timeoutSignal)
+    throw new LlmError('network', BRIDGE_UNREACHABLE_MESSAGE)
+  }
+
+  if (!res.ok) await mapBridgeHttpError(res, timeoutSignal)
+
+  const body = await readBody(() => res.json(), timeoutSignal)
+  const parsed = parseInferResponse(body)
+  if (parsed === null) {
+    throw new LlmError('server', 'The local bridge returned a malformed answer.')
+  }
+
+  // Usage is reported ONLY when the CLI reported it. `total_tokens` is the sum
+  // of two numbers we actually have — never an estimate.
+  let usage: LlmUsage | undefined
+  if (includeUsage && parsed.usage) {
+    usage = {
+      prompt_tokens: parsed.usage.inputTokens,
+      completion_tokens: parsed.usage.outputTokens,
+      total_tokens: parsed.usage.inputTokens + parsed.usage.outputTokens,
+    }
+  }
+
+  return { content: parsed.text, usage, truncated: parsed.truncated }
+}
+
+/**
+ * Streaming over the bridge — deliberately NOT streaming yet.
+ *
+ * `claude -p` can stream (`--output-format stream-json`), so a
+ * `POST /v1/infer/stream` is genuinely possible. It is not in this PR: it needs
+ * its own event framing, its own mid-stream abort semantics on both sides of
+ * the socket, and its own cancellation path through the child process — a
+ * second protocol surface, not a flag.
+ *
+ * So a streaming caller gets the complete answer in ONE delta when the CLI
+ * finishes. THE UX CONSEQUENCE IS REAL AND WORTH STATING: the summary and Ask
+ * panels do not type out over the bridge, they appear all at once after the
+ * wait. Everything else — the final text, cancellation, timeout classification,
+ * usage — behaves identically, and no caller needs to know.
+ */
+async function bridgeStream(
+  provider: LlmProviderDef,
+  model: LlmModelDef,
+  opts: LlmStreamOpts,
+  onDelta: (text: string) => void,
+  includeUsage: boolean,
+): Promise<LlmStreamResult> {
+  const completeOpts: LlmCompleteOpts = { system: opts.system, user: opts.user }
+  if (opts.signal !== undefined) completeOpts.signal = opts.signal
+  if (opts.timeoutMs !== undefined) completeOpts.timeoutMs = opts.timeoutMs
+
+  const result = await bridgeComplete(provider, model, completeOpts, includeUsage)
+  // One delta, after the fact. Emitting nothing would leave a panel that
+  // renders only from deltas permanently blank.
+  if (result.content) onDelta(result.content)
+  return result.usage ? { content: result.content, usage: result.usage } : { content: result.content }
+}
+
+// ===========================================================================
 // Transport dispatch — routes to the right adapter based on active config
 // ===========================================================================
 
@@ -1097,6 +1307,8 @@ async function dispatchComplete(opts: LlmCompleteOpts, includeUsage: boolean): P
             return anthropicComplete(provider, model, opts)
           case 'gemini':
             return geminiComplete(provider, model, opts)
+          case 'bridge':
+            return bridgeComplete(provider, model, opts, includeUsage)
         }
       }),
     { providerId: provider.id, signal: opts.signal },
@@ -1132,6 +1344,10 @@ async function dispatchCompleteFor(
             return anthropicComplete(provider, cfg.model, opts, cfg.key)
           case 'gemini':
             return geminiComplete(provider, cfg.model, opts, cfg.key)
+          case 'bridge':
+            // A bridge participant ignores cfg.key: its credential is the
+            // pairing token in localStorage, not a per-participant API key.
+            return bridgeComplete(provider, cfg.model, opts, includeUsage)
         }
       }),
     { providerId: provider.id, signal: opts.signal },
@@ -1164,6 +1380,8 @@ async function dispatchStream(
             return anthropicStream(provider, model, opts, onDelta)
           case 'gemini':
             return geminiStream(provider, model, opts, onDelta)
+          case 'bridge':
+            return bridgeStream(provider, model, opts, onDelta, includeUsage)
         }
       }),
     { providerId: provider.id, signal: opts.signal },
@@ -1471,6 +1689,13 @@ export async function llmTestConnection(
   }
 
   switch (provider.transport) {
+    case 'bridge':
+      // A real round-trip through the bridge and into the CLI. It is the only
+      // honest connection test here: /v1/health proves the bridge answers but
+      // says nothing about whether the CLI is signed in, and guessing from a
+      // credentials file on disk is exactly what this feature refuses to do.
+      await bridgeComplete(provider, model, opts, false)
+      return
     case 'openai-compat':
       await openaiCompatComplete(provider, model, opts, false)
       return

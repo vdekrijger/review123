@@ -8,7 +8,8 @@
     type AiPanel, type PanelParticipant, type ParticipantRole,
   } from '../../lib/settings/settings'
   import { settingsState } from '../../lib/settings/settingsState.svelte'
-  import { PROVIDERS, getProvider, getModelDef, type LlmProviderId } from '../../lib/llm/providers'
+  import { PROVIDERS, getProvider, getModelDef, type ApiProviderId, type LlmProviderId } from '../../lib/llm/providers'
+  import { bridgeState, bridgeCanInfer } from '../../lib/bridge/bridge.svelte'
   import { llmTestConnection, LlmError } from '../../lib/llm/llm'
   import { activeProviderHasKey, resolvePanel } from '../../lib/llm/config'
   import { providerSupportsBalance, fetchProviderBalance, formatBalance, type ProviderBalance } from '../../lib/llm/balance'
@@ -33,6 +34,9 @@
     anthropic: current.anthropicKey ?? '',
     gemini: current.geminiKey ?? '',
     openrouter: current.openrouterKey ?? '',
+    // The bridge has no API key; the entry exists so every record stays keyed
+    // by LlmProviderId and no lookup needs a special case.
+    bridge: '',
   })
   let error = $state<string | null>(null)
 
@@ -200,6 +204,7 @@
     anthropic: '',
     gemini: '',
     openrouter: '',
+    bridge: '',
   })
   {
     // Seed the active provider's card from a stored aiModel when it's valid.
@@ -222,7 +227,7 @@
     if (id === provider) setAiModel(value)
   }
 
-  const KEY_FIELD: Record<LlmProviderId, 'deepseekKey' | 'openaiKey' | 'anthropicKey' | 'geminiKey' | 'openrouterKey'> = {
+  const KEY_FIELD: Record<ApiProviderId, 'deepseekKey' | 'openaiKey' | 'anthropicKey' | 'geminiKey' | 'openrouterKey'> = {
     deepseek: 'deepseekKey',
     openai: 'openaiKey',
     anthropic: 'anthropicKey',
@@ -230,8 +235,26 @@
     openrouter: 'openrouterKey',
   }
 
+  /**
+   * The settings field holding a provider's key, or null for the LOCAL BRIDGE,
+   * which has none — its credential is the pairing token the Local bridge
+   * section owns. Every key-field path goes through here so "the bridge has no
+   * key" is stated once instead of being an if-branch in five places.
+   */
+  function keyField(id: LlmProviderId): (typeof KEY_FIELD)[ApiProviderId] | null {
+    return id === 'bridge' ? null : KEY_FIELD[id]
+  }
+
+  const isBridge = (id: LlmProviderId): boolean => id === 'bridge'
+
+  /** The bridge can serve a review when it is paired, live, and has that CLI. */
+  const bridgeReady = $derived(
+    (bridgeState.status, bridgeCanInfer(modelSel.bridge || getProvider('bridge')!.defaultModel)),
+  )
+
   function saveKey(id: LlmProviderId): void {
-    const field = KEY_FIELD[id]
+    const field = keyField(id)
+    if (field === null) return
     const hadKey = !!getSettings()[field]
     const value = keys[id].trim()
     saveTokens({ [field]: value === '' ? null : keys[id] })
@@ -247,7 +270,9 @@
     const s = settingsState.current
     const result = {} as Record<LlmProviderId, boolean>
     for (const p of PROVIDERS) {
-      result[p.id] = keys[p.id].trim() !== (s[KEY_FIELD[p.id]] ?? '')
+      const field = keyField(p.id)
+      // A keyless provider is never "dirty" — there is nothing to save.
+      result[p.id] = field !== null && keys[p.id].trim() !== (s[field] ?? '')
     }
     return result
   })
@@ -259,6 +284,7 @@
     anthropic: false,
     gemini: false,
     openrouter: false,
+    bridge: false,
   })
   const savedTimers: Partial<Record<LlmProviderId, ReturnType<typeof setTimeout>>> = {}
   function showSaved(id: LlmProviderId) {
@@ -279,6 +305,7 @@
     anthropic: { status: 'idle' },
     gemini: { status: 'idle' },
     openrouter: { status: 'idle' },
+    bridge: { status: 'idle' },
   })
 
   async function handleSaveAndTest(id: LlmProviderId) {
@@ -323,11 +350,13 @@
     anthropic: { status: 'idle' },
     gemini: { status: 'idle' },
     openrouter: { status: 'idle' },
+    bridge: { status: 'idle' },
   })
 
   /** The provider's saved key (the source of truth for whether to fetch). */
   function savedKey(id: LlmProviderId): string {
-    return getSettings()[KEY_FIELD[id]] ?? ''
+    const field = keyField(id)
+    return field === null ? '' : getSettings()[field] ?? ''
   }
 
   /** Re-fetch one provider's balance. No-op for unsupported / key-less providers. */
@@ -395,19 +424,39 @@
           </label>
         {/if}
 
-        <label class="key-label">{p.displayName} API key
-          <SecretInput bind:value={keys[p.id]} placeholder={p.keyHint} />
-        </label>
+        {#if isBridge(p.id)}
+          <p class="bridge-line" data-testid="bridge-source-status">
+            {#if bridgeState.status === 'connected'}
+              {#if bridgeReady}
+                Paired with <strong>{bridgeState.root}</strong>. Reviews run through your own CLI
+                on your existing subscription — no API key, no per-token bill.
+              {:else}
+                Paired with <strong>{bridgeState.root}</strong>, but that CLI was not found on its
+                PATH. Detected: {bridgeState.capabilities?.inference.join(', ') || 'none'}.
+              {/if}
+            {:else if bridgeState.paired}
+              Not connected — start the bridge in your repo, then it reconnects automatically.
+            {:else}
+              No bridge paired yet. Set one up in <a href="#bridge">Local bridge</a> below.
+            {/if}
+          </p>
+        {:else}
+          <label class="key-label">{p.displayName} API key
+            <SecretInput bind:value={keys[p.id]} placeholder={p.keyHint} />
+          </label>
+        {/if}
         <div class="test-row">
           <button
             class="btn test-btn"
             data-dirty={dirtyKeys[p.id] ? 'true' : 'false'}
             onclick={() => handleSaveAndTest(p.id)}
             disabled={testStates[p.id].status === 'testing'}
-            aria-label="Save & test {p.displayName} connection"
+            aria-label={isBridge(p.id)
+              ? `Test ${p.displayName} connection`
+              : `Save & test ${p.displayName} connection`}
             aria-busy={testStates[p.id].status === 'testing'}
           >
-            {#if testStates[p.id].status === 'testing'}<Spinner size="0.8em" />{/if}{testStates[p.id].status === 'testing' ? 'Testing…' : 'Save & test'}
+            {#if testStates[p.id].status === 'testing'}<Spinner size="0.8em" />{/if}{testStates[p.id].status === 'testing' ? 'Testing…' : isBridge(p.id) ? 'Test' : 'Save & test'}
           </button>
           {#if dirtyKeys[p.id]}<span class="dirty-hint">Unsaved changes</span>{/if}
           <span class="saved-note" class:visible={savedStates[p.id]} aria-live="polite">{savedStates[p.id] ? 'Saved ✓' : ''}</span>
@@ -438,7 +487,11 @@
         {/if}
 
         <p class="privacy-line">
-          {#if p.id === 'openai'}
+          {#if isBridge(p.id)}
+            Nothing leaves your machine: the prompt goes to 127.0.0.1, and the bridge runs your
+            CLI, which talks to its own vendor as it always does. Deep (agentic) review is not
+            available over the bridge — the CLI is already an agent.
+          {:else if p.id === 'openai'}
             The OpenAI key transits our serverless proxy (OpenAI's API blocks browser requests) —
             it is forwarded per-request and never stored or logged on the server.
           {:else}
@@ -808,6 +861,18 @@
   .balance-refresh:disabled {
     color: var(--text-muted);
     cursor: default;
+  }
+
+  .bridge-line {
+    margin: 0.4rem 0 0;
+    font-size: 0.85em;
+    line-height: 1.5;
+    color: var(--text-muted);
+  }
+
+  .bridge-line strong {
+    color: var(--text);
+    font-weight: 600;
   }
 
   .privacy-line {

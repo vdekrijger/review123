@@ -17,8 +17,11 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
     realRoot: '/private/tmp/checkouts/review123',
     rootName: 'review123',
     extraOrigins: [],
-    capabilities: async () => ({ inference: ['claude'], files: false, search: false }),
+    capabilities: async () => ({ inference: ['claude'], infer: true, files: false, search: false }),
     version: '0.1.0',
+    // Default stub: the handler's own tests never spawn a CLI. infer.test.ts
+    // owns the process mechanics; this file owns the protocol gates.
+    infer: async () => ({ ok: true as const, text: 'stub answer', truncated: false, durationMs: 3 }),
     ...overrides,
   }
 }
@@ -53,7 +56,7 @@ describe('GET /v1/health', () => {
       ok: true,
       protocol: PROTOCOL_VERSION,
       root: 'review123',
-      capabilities: { inference: ['claude'], files: false, search: false },
+      capabilities: { inference: ['claude'], infer: true, files: false, search: false },
       version: '0.1.0',
     })
   })
@@ -78,15 +81,17 @@ describe('GET /v1/health', () => {
 
   it('re-probes capabilities per request so a newly installed CLI shows up', async () => {
     let installed: string[] = []
-    const context = ctx({ capabilities: async () => ({ inference: installed, files: false, search: false }) })
+    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, files: false, search: false }) })
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
       inference: [],
+      infer: true,
       files: false,
       search: false,
     })
     installed = ['codex']
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
       inference: ['codex'],
+      infer: true,
       files: false,
       search: false,
     })
@@ -206,8 +211,157 @@ describe('host gate (DNS rebinding)', () => {
   })
 })
 
+describe('POST /v1/infer', () => {
+  function inferReq(body: unknown, overrides: Partial<BridgeRequest> = {}): BridgeRequest {
+    return req({ method: 'POST', path: '/v1/infer', body: Buffer.from(JSON.stringify(body)), ...overrides })
+  }
+
+  it('answers 200 with the InferResponse shape', async () => {
+    const res = await handleRequest(inferReq({ cli: 'claude', prompt: 'hi' }), ctx())
+    expect(res.status).toBe(200)
+    expect(parse(res.body)).toEqual({
+      ok: true,
+      cli: 'claude',
+      text: 'stub answer',
+      truncated: false,
+      durationMs: 3,
+    })
+  })
+
+  it('includes usage ONLY when the CLI reported it', async () => {
+    const withUsage = ctx({
+      infer: async () => ({
+        ok: true as const, text: 'a', truncated: false, durationMs: 1,
+        usage: { inputTokens: 10, outputTokens: 2 },
+      }),
+    })
+    expect(parse((await handleRequest(inferReq({ cli: 'claude', prompt: 'hi' }), withUsage)).body)).toHaveProperty(
+      'usage',
+      { inputTokens: 10, outputTokens: 2 },
+    )
+    // The default stub reports none, so the field is ABSENT rather than zeroed.
+    expect(parse((await handleRequest(inferReq({ cli: 'claude', prompt: 'hi' }), ctx())).body)).not.toHaveProperty('usage')
+  })
+
+  it('405s a GET', async () => {
+    const res = await handleRequest(req({ method: 'GET', path: '/v1/infer' }), ctx())
+    expect(res.status).toBe(405)
+    expect(res.headers['Allow']).toBe('POST, OPTIONS')
+  })
+
+  it.each([
+    ['a body that is not JSON at all', Buffer.from('not json')],
+    ['an empty body', null],
+  ])('400s %s', async (_label, body) => {
+    const res = await handleRequest(req({ method: 'POST', path: '/v1/infer', body }), ctx())
+    expect(res.status).toBe(400)
+    expect(parse(res.body)['error']).toBe('bad-request')
+  })
+
+  it('400s a cli id that is not in the hard-coded set', async () => {
+    const res = await handleRequest(inferReq({ cli: '/bin/sh', prompt: 'hi' }), ctx())
+    expect(res.status).toBe(400)
+  })
+
+  it('503s a KNOWN cli that is not installed — checked before the worker runs', async () => {
+    let spawnedAnyway = false
+    const context = ctx({
+      capabilities: async () => ({ inference: [], infer: true, files: false, search: false }),
+      infer: async () => {
+        spawnedAnyway = true
+        return { ok: true as const, text: '', truncated: false, durationMs: 0 }
+      },
+    })
+    const res = await handleRequest(inferReq({ cli: 'claude', prompt: 'hi' }), context)
+    expect(res.status).toBe(503)
+    expect(parse(res.body)['error']).toBe('cli-unavailable')
+    expect(spawnedAnyway).toBe(false)
+  })
+
+  it.each([
+    ['timeout', 504],
+    ['cli-failed', 502],
+    ['forbidden-path', 403],
+  ] as const)('maps a %s failure onto HTTP %i', async (code, status) => {
+    const context = ctx({ infer: async () => ({ ok: false as const, code, message: 'nope' }) })
+    const res = await handleRequest(inferReq({ cli: 'claude', prompt: 'hi' }), context)
+    expect(res.status).toBe(status)
+    expect(parse(res.body)['error']).toBe(code)
+  })
+
+  it('still carries CORS headers on an infer failure so the browser can READ it', async () => {
+    const context = ctx({ infer: async () => ({ ok: false as const, code: 'cli-failed' as const, message: 'nope' }) })
+    const res = await handleRequest(inferReq({ cli: 'claude', prompt: 'hi' }), context)
+    expect(res.headers['Access-Control-Allow-Origin']).toBe(REVIEW123_ORIGIN)
+  })
+
+  it('403s a rebound Host BEFORE the worker is ever consulted', async () => {
+    let reached = false
+    const context = ctx({
+      infer: async () => {
+        reached = true
+        return { ok: true as const, text: '', truncated: false, durationMs: 0 }
+      },
+    })
+    const res = await handleRequest(
+      inferReq({ cli: 'claude', prompt: 'hi' }, { headers: { host: 'evil.test:7321' } }),
+      context,
+    )
+    expect(res.status).toBe(403)
+    expect(reached).toBe(false)
+  })
+
+  it('403s a disallowed Origin BEFORE the worker is ever consulted', async () => {
+    let reached = false
+    const context = ctx({
+      infer: async () => {
+        reached = true
+        return { ok: true as const, text: '', truncated: false, durationMs: 0 }
+      },
+    })
+    const res = await handleRequest(
+      inferReq({ cli: 'claude', prompt: 'hi' }, { headers: { origin: 'https://evil.test' } }),
+      context,
+    )
+    expect(res.status).toBe(403)
+    expect(reached).toBe(false)
+  })
+
+  it('401s without a token BEFORE the worker is ever consulted', async () => {
+    let reached = false
+    const context = ctx({
+      infer: async () => {
+        reached = true
+        return { ok: true as const, text: '', truncated: false, durationMs: 0 }
+      },
+    })
+    const res = await handleRequest(
+      inferReq({ cli: 'claude', prompt: 'hi' }, { headers: { authorization: undefined } }),
+      context,
+    )
+    expect(res.status).toBe(401)
+    expect(reached).toBe(false)
+  })
+
+  it('413s an over-cap body BEFORE the worker is ever consulted', async () => {
+    let reached = false
+    const context = ctx({
+      infer: async () => {
+        reached = true
+        return { ok: true as const, text: '', truncated: false, durationMs: 0 }
+      },
+    })
+    const res = await handleRequest(
+      req({ method: 'POST', path: '/v1/infer', body: Buffer.alloc(MAX_BODY_BYTES + 1) }),
+      context,
+    )
+    expect(res.status).toBe(413)
+    expect(reached).toBe(false)
+  })
+})
+
 describe('reserved routes', () => {
-  it.each(['/v1/infer', '/v1/files', '/v1/search'])('%s answers 501 not-implemented', async (path) => {
+  it.each(['/v1/files', '/v1/search'])('%s answers 501 not-implemented', async (path) => {
     const res = await handleRequest(req({ method: 'POST', path, body: Buffer.from('{}') }), ctx())
     expect(res.status).toBe(501)
     expect(parse(res.body)).toEqual({

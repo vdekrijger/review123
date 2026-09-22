@@ -117,11 +117,31 @@ describe('modelSupportsTools', () => {
     expect(modelSupportsTools(reasoner)).toBe(false)
   })
 
-  it('all non-legacy models across providers support tools', () => {
-    for (const p of PROVIDERS) {
+  it('all non-legacy models across the API providers support tools', () => {
+    // The LOCAL BRIDGE is excluded on purpose, and asserted separately below:
+    // its "models" are CLIs that are already agents.
+    for (const p of PROVIDERS.filter((pr) => pr.id !== 'bridge')) {
       const def = p.models.find((m) => m.id === p.defaultModel)!
       expect(modelSupportsTools(def)).toBe(true)
     }
+  })
+
+  it('EVERY local-bridge model reports no tool support, which is what keeps the tool loop off it', () => {
+    // `claude -p` runs its own agent loop with its own tools. Driving it from
+    // llmToolLoop would be two agents with two tool vocabularies talking
+    // through a text pipe. This flag is the mechanism that makes the existing
+    // deep-review gates route those tasks to the single-pass path instead —
+    // no call site had to change.
+    for (const m of getProvider('bridge')!.models) {
+      expect(modelSupportsTools(m)).toBe(false)
+    }
+  })
+
+  it('refuses outright if a caller reaches the tool loop with the bridge selected', async () => {
+    setAiProvider('bridge')
+    await expect(
+      llmToolLoop({ system: 's', user: 'u', tools: [], executeTool: async () => ({ ok: true, content: '' }) }),
+    ).rejects.toMatchObject({ kind: 'server' })
   })
 })
 

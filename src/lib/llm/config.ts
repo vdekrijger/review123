@@ -10,27 +10,50 @@
  */
 
 import { getSettings } from '../settings/settings'
+import { readStoredBridge } from '../bridge/storage'
 import { PROVIDERS, getProvider, getModelDef, computeBudgetTokens } from './providers'
-import type { LlmProviderDef, LlmModelDef, LlmProviderId } from './providers'
+import type { ApiProviderId, LlmProviderDef, LlmModelDef, LlmProviderId } from './providers'
 import type { ProviderConfig } from './llm'
 
-/** Settings field that stores each provider's API key. */
+/**
+ * Settings field that stores each API provider's key.
+ *
+ * The local bridge is absent BY TYPE, not by omission: it has no API key at
+ * all. Its credential is the pairing token in localStorage, which is why
+ * `providerCredential` exists rather than a sixth entry pointing at a settings
+ * field that does not exist.
+ */
 export const PROVIDER_KEY_FIELDS = {
   deepseek: 'deepseekKey',
   openai: 'openaiKey',
   anthropic: 'anthropicKey',
   gemini: 'geminiKey',
   openrouter: 'openrouterKey',
-} as const satisfies Record<LlmProviderId, string>
+} as const satisfies Record<ApiProviderId, string>
 
 /**
- * Whether the ACTIVE provider (settings.aiProvider) has an API key saved.
+ * The credential for a provider, or null when none is configured.
+ *
+ * For an API provider that is the saved key. For the LOCAL BRIDGE it is the
+ * pairing token — "configured" means PAIRED, not "reachable right now",
+ * deliberately matching how an API provider behaves: a saved-but-expired key
+ * also reads as configured, and the failure surfaces at call time with a
+ * message about what to do. Gating the whole product on a live health probe
+ * would make every review unavailable the moment a terminal was closed.
+ */
+export function providerCredential(providerId: LlmProviderId): string | null {
+  if (providerId === 'bridge') return readStoredBridge()?.token ?? null
+  return (getSettings()[PROVIDER_KEY_FIELDS[providerId]] as string | null) || null
+}
+
+/**
+ * Whether the ACTIVE provider (settings.aiProvider) has a credential saved.
  * Used by no-key gates so they follow the provider selection instead of
  * being hardwired to deepseekKey.
  */
 export function activeProviderHasKey(): boolean {
   const { provider } = activeLlmConfig()
-  return !!getSettings()[PROVIDER_KEY_FIELDS[provider.id]]
+  return providerCredential(provider.id) !== null
 }
 
 /** Static fallback — kept for compatibility. Do not use in new code. */
@@ -109,9 +132,9 @@ export interface ResolvedEnsemble {
   verifiers: ProviderConfig[]
 }
 
-/** Read a provider's saved key (null when absent). */
+/** Read a provider's saved credential (null when absent). */
 function providerKey(providerId: LlmProviderId): string | null {
-  return getSettings()[PROVIDER_KEY_FIELDS[providerId]] as string | null
+  return providerCredential(providerId)
 }
 
 /**
@@ -129,6 +152,13 @@ function defaultResolvedPanel(): ResolvedPanel {
   const verifiers: ProviderConfig[] = []
   for (const provider of PROVIDERS) {
     if (provider.id === active.provider.id) continue
+    // The local bridge is NEVER auto-enlisted as a verifier. Cross-verification
+    // fans one review out across every keyed provider; doing that to a single
+    // subscription seat would multiply CLI invocations behind the user's back,
+    // on a resource with a personal rate limit. It can still be chosen
+    // explicitly in a custom panel (resolvePanel, below) — just never by
+    // default, merely because a bridge happened to be paired.
+    if (provider.id === 'bridge') continue
     const key = providerKey(provider.id)
     if (!key) continue
     const model = getModelDef(provider, provider.defaultModel) ?? provider.models[0]

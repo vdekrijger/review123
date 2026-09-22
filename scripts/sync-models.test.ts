@@ -321,9 +321,20 @@ describe('helpers', () => {
 
   it('serializeCatalog round-trips a catalog into valid TS with all provider keys', () => {
     const out = serializeCatalog(baseCatalog())
-    expect(out).toContain("import type { LlmModelDef, LlmProviderId } from './providers'")
-    expect(out).toContain('export const MODEL_CATALOG: Record<LlmProviderId, LlmModelDef[]> = {')
+    expect(out).toContain("import type { ApiProviderId, LlmModelDef } from './providers'")
+    expect(out).toContain('export const MODEL_CATALOG: Record<ApiProviderId, LlmModelDef[]> = {')
     for (const id of ['deepseek', 'openai', 'anthropic', 'gemini']) expect(out).toContain(`  ${id}: [`)
     expect(out).toContain('id: "gpt-5.4"')
+  })
+
+  it('emits the ApiProviderId key type, so a regeneration can never drop the local bridge', () => {
+    const out = serializeCatalog(baseCatalog())
+    // The bridge's "models" are CLI process names authored in providers.ts
+    // (BRIDGE_MODELS). Keying the generated catalog by the FULL LlmProviderId
+    // would make this file's rewrite a type error the moment the bridge exists
+    // — or, worse, invite someone to add a `bridge:` block the sync then owns.
+    expect(out).not.toContain("import type { LlmModelDef, LlmProviderId }")
+    expect(out).not.toContain('Record<LlmProviderId, LlmModelDef[]>')
+    expect(out).not.toContain('bridge: [')
   })
 })

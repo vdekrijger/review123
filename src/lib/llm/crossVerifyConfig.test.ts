@@ -5,9 +5,12 @@ import {
   resolveEnsemble,
   resolvePanel,
   panelMode,
+  providerCredential,
+  activeProviderHasKey,
   MAX_VERIFIER_PROVIDERS,
   ENSEMBLE_RUNAWAY_BACKSTOP,
 } from './config'
+import { BRIDGE_STORAGE_KEY } from '../bridge/storage'
 import {
   setDeepseekKey,
   setOpenaiKey,
@@ -293,5 +296,125 @@ describe('fusionParticipants / fusionGenerators', () => {
   it('empty when no usable generator', () => {
     setAiProvider('deepseek') // no key
     expect(fusionParticipants()).toEqual([])
+  })
+})
+
+// ===========================================================================
+// The LOCAL BRIDGE as a credential-bearing source
+//
+// It has no API key. Its credential is the pairing token, which lives in
+// localStorage rather than in settings — so every gate that asks "is this
+// provider configured?" has to know about it, or selecting the bridge silently
+// disables AI everywhere.
+// ===========================================================================
+
+const BRIDGE_TOKEN = 'pairing-token-0000000000000000000000000000'
+
+function pairBridge(): void {
+  localStorage.setItem(BRIDGE_STORAGE_KEY, JSON.stringify({ token: BRIDGE_TOKEN, port: 7321 }))
+}
+
+describe('providerCredential — the bridge pairing counts as a credential', () => {
+  it('is null for the bridge when nothing is paired', () => {
+    expect(providerCredential('bridge')).toBeNull()
+  })
+
+  it('is the pairing token once a bridge is paired', () => {
+    pairBridge()
+    expect(providerCredential('bridge')).toBe(BRIDGE_TOKEN)
+  })
+
+  it('still reads API providers from their settings key field', () => {
+    setDeepseekKey('sk-k')
+    expect(providerCredential('deepseek')).toBe('sk-k')
+    expect(providerCredential('openai')).toBeNull()
+  })
+
+  it('treats an EMPTY stored key as no credential, not as an empty one', () => {
+    // setDeepseekKey refuses an empty value, but a record written by an older
+    // build can still hold one — and `'' ` is falsy, so a naive read would
+    // return it and a naive gate would call it configured.
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: '' }))
+    expect(providerCredential('deepseek')).toBeNull()
+  })
+})
+
+describe('activeProviderHasKey with the bridge selected', () => {
+  it('is false with no bridge paired — every AI gate stays closed', () => {
+    setAiProvider('bridge')
+    expect(activeProviderHasKey()).toBe(false)
+  })
+
+  it('is true once paired, with no API key anywhere', () => {
+    setAiProvider('bridge')
+    pairBridge()
+    expect(activeProviderHasKey()).toBe(true)
+  })
+
+  it('means PAIRED, not reachable — same contract as a saved-but-expired API key', () => {
+    // No health probe is consulted. Gating the product on a live probe would
+    // make every review unavailable the moment a terminal was closed; the
+    // failure belongs at call time, with a message about what to do.
+    setAiProvider('bridge')
+    pairBridge()
+    expect(activeProviderHasKey()).toBe(true)
+  })
+})
+
+describe('the bridge is never an AUTOMATIC verifier', () => {
+  it('is excluded from the default panel even when paired and keyed providers exist', () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setOpenaiKey('o')
+    pairBridge()
+
+    // Fanning a review across every configured source would multiply CLI
+    // invocations on ONE subscription seat, behind the user's back.
+    expect(verifierProviderConfigs().map((c) => c.providerId)).toEqual(['openai'])
+  })
+
+  it('can still be a generator when the user selects it', () => {
+    setAiProvider('bridge')
+    pairBridge()
+    const { generators } = resolvePanel()
+    expect(generators.map((g) => g.providerId)).toEqual(['bridge'])
+    expect(generators[0]!.key).toBe(BRIDGE_TOKEN)
+    expect(generators[0]!.model.id).toBe('claude')
+  })
+
+  it('can be named EXPLICITLY in a custom panel, as a verifier', () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    pairBridge()
+    setAiPanel({ participants: [gen('deepseek', 'deepseek-v4-flash'), ver('bridge', 'codex')] })
+
+    const cfgs = verifierProviderConfigs()
+    expect(cfgs.map((c) => c.providerId)).toEqual(['bridge'])
+    expect(cfgs[0]!.model.id).toBe('codex')
+  })
+
+  it('drops a bridge participant from a custom panel when no bridge is paired', () => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAiPanel({ participants: [gen('deepseek', 'deepseek-v4-flash'), ver('bridge', 'claude')] })
+    expect(verifierProviderConfigs()).toEqual([])
+  })
+})
+
+describe('crossModelVerifyEffective with the bridge as generator', () => {
+  it('is false with the bridge alone — one participant is not cross-verification', () => {
+    setAiProvider('bridge')
+    pairBridge()
+    setCrossModelVerify(true)
+    expect(crossModelVerifyEffective()).toBe(false)
+  })
+
+  it('is true with the bridge generating and a keyed API verifier', () => {
+    setAiProvider('bridge')
+    pairBridge()
+    setOpenaiKey('o')
+    setCrossModelVerify(true)
+    expect(crossModelVerifyEffective()).toBe(true)
+    expect(verifierProviderConfigs().map((c) => c.providerId)).toEqual(['openai'])
   })
 })

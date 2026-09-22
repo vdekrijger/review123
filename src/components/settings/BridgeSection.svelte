@@ -17,6 +17,7 @@
     connectBridge,
     disconnectBridge,
     initBridge,
+    bridgeAvailable,
     BRIDGE_STORAGE_KEY,
   } from '../../lib/bridge/bridge.svelte'
   import { DEFAULT_BRIDGE_PORT } from '../../lib/bridge/protocol'
@@ -25,14 +26,20 @@
   let portInput = $state(String(bridgeState.port))
   let busy = $state(false)
 
-  // Silent re-probe on mount. initBridge() does nothing at all — no fetch —
-  // unless a token was stored by a previous pairing.
+  // Re-probe when this section mounts. main.ts already probes at app start
+  // (inference routes through the bridge, so the connection has to be known
+  // before Settings is ever opened); this second probe is about FRESHNESS —
+  // someone who just started the bridge in a terminal and came here to pair it
+  // should see the live answer, not the one from page load. Still silent, and
+  // still does nothing at all — no fetch — unless a token was stored.
   $effect(() => {
     void initBridge()
   })
 
   const connected = $derived(bridgeState.status === 'connected')
   const clis = $derived(bridgeState.capabilities?.inference ?? [])
+  /** Route readiness — an older bridge answers /v1/health but not /v1/infer. */
+  const inferReady = $derived(bridgeAvailable('infer'))
 
   const statusLine = $derived.by(() => {
     switch (bridgeState.status) {
@@ -70,9 +77,9 @@
   <p class="section-label">Local bridge <span class="optional-note">(optional)</span></p>
 
   <p class="explainer">
-    Run a small process inside a repo on your machine and review123 can read that
-    working tree directly — and later run reviews through your own Claude Code or
-    Codex CLI instead of a paid API key. It listens on <code>127.0.0.1</code> only
+    Run a small process inside a repo on your machine and review123 can run reviews
+    through your own Claude Code or Codex CLI, on the subscription you already pay
+    for, instead of a per-token API key. It listens on <code>127.0.0.1</code> only
     and needs the pairing token it prints on startup.
   </p>
   <p class="explainer warning">
@@ -97,9 +104,17 @@
       <dt>Bridge version</dt>
       <dd>{bridgeState.version}</dd>
     </dl>
-    <p class="field-note">
-      File reads and local inference are not wired up yet — this build only
-      confirms the connection.
+    <p class="field-note" data-testid="bridge-inference-note">
+      {#if !inferReady}
+        This bridge is too old to run inference — update it and restart.
+      {:else if clis.length === 0}
+        No CLI was found on its PATH, so it cannot run reviews yet. Install
+        <code>claude</code> or <code>codex</code>, then restart the bridge.
+      {:else}
+        Ready to run reviews. Pick <strong>Local bridge</strong> under
+        <a href="#ai-models">AI models</a> to use it instead of an API key.
+        Reading repo files through the bridge is not wired up yet.
+      {/if}
     </p>
     <button type="button" class="secondary-btn" onclick={handleDisconnect}>Disconnect</button>
   {:else}

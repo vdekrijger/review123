@@ -16,6 +16,7 @@ import {
   getProvider,
   getModelDef,
   computeBudgetTokens,
+  estimateCostUsd,
 } from './providers'
 import { setTransientRetryPolicyForTests } from './transientRetry'
 import { activeLlmConfig } from './config'
@@ -87,9 +88,27 @@ afterEach(() => {
 // ===========================================================================
 
 describe('PROVIDERS — structure', () => {
-  it('exports exactly 5 providers: deepseek, openai, anthropic, gemini, openrouter', () => {
+  it('exports exactly 6 sources: the 5 API providers plus the local bridge', () => {
     const ids = PROVIDERS.map((p) => p.id)
-    expect(ids).toEqual(['deepseek', 'openai', 'anthropic', 'gemini', 'openrouter'])
+    expect(ids).toEqual(['deepseek', 'openai', 'anthropic', 'gemini', 'openrouter', 'bridge'])
+  })
+
+  it('the local bridge is a keyless, priceless, tool-less source — every one of those on purpose', () => {
+    const bridge = getProvider('bridge')!
+    expect(bridge.transport).toBe('bridge')
+    // No keyHint: there is no API key to paste, only a pairing token.
+    expect(bridge.keyHint).toBe('')
+    // No baseUrl constant: the address comes from the stored pairing's port.
+    expect(bridge.baseUrl).toBe('')
+    expect(bridge.models.map((m) => m.id)).toEqual(['claude', 'codex'])
+    for (const m of bridge.models) {
+      // No pricing → estimateCostUsd returns null → the UI shows tokens and
+      // never a fabricated dollar figure for a subscription we cannot price.
+      expect(m.pricing).toBeUndefined()
+      expect(estimateCostUsd(m, 1_000_000, 1_000_000)).toBeNull()
+      // No tools → the agentic path is gated off before it can be attempted.
+      expect(m.supportsTools).toBe(false)
+    }
   })
 
   it('openrouter has transport openai-compat, a direct baseUrl, and a curated default', () => {

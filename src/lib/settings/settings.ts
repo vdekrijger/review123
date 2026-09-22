@@ -57,7 +57,12 @@ export interface GitlabOAuth {
   expiresAt: number
 }
 
-export type AiProvider = 'deepseek' | 'openai' | 'anthropic' | 'gemini' | 'openrouter'
+/**
+ * The inference source. `'bridge'` is the optional LOCAL BRIDGE — not a vendor
+ * API but the user's own Claude Code / Codex CLI, driven over 127.0.0.1. It has
+ * no API-key field: its credential is the bridge pairing token.
+ */
+export type AiProvider = 'deepseek' | 'openai' | 'anthropic' | 'gemini' | 'openrouter' | 'bridge'
 
 /**
  * Emergent fusion mode (Plan P). Derived from the panel's generator count — it
@@ -364,7 +369,16 @@ const DEFAULTS: Settings = {
   showTokenCost: false,
 }
 
-const AI_PROVIDER_IDS = new Set<string>(['deepseek', 'openai', 'anthropic', 'gemini', 'openrouter'])
+/**
+ * Provider ids a stored panel participant may name. `'bridge'` is included:
+ * the panel editor offers the local bridge like any other source, and a panel
+ * naming it must survive a reload rather than being silently dropped. (The
+ * bridge is never auto-enlisted as a DEFAULT verifier — see config.ts — but an
+ * explicit choice is the user's to make.)
+ */
+const AI_PROVIDER_IDS = new Set<string>([
+  'deepseek', 'openai', 'anthropic', 'gemini', 'openrouter', 'bridge',
+])
 
 /** Coerce a provider+model pair; returns null if either is invalid. */
 function coerceProviderModel(raw: unknown): { provider: AiProvider; model: string } | null {
@@ -603,7 +617,7 @@ function coerce(raw: unknown): Partial<Settings> {
   if (typeof deepseekKey === 'string' || deepseekKey === null) result.deepseekKey = deepseekKey
 
   const aiProvider = obj['aiProvider']
-  if (aiProvider === 'deepseek' || aiProvider === 'openai' || aiProvider === 'anthropic' || aiProvider === 'gemini' || aiProvider === 'openrouter') {
+  if (aiProvider === 'deepseek' || aiProvider === 'openai' || aiProvider === 'anthropic' || aiProvider === 'gemini' || aiProvider === 'openrouter' || aiProvider === 'bridge') {
     result.aiProvider = aiProvider
   }
 
