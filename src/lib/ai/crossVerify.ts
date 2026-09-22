@@ -134,10 +134,8 @@ export function classifyClaim(body: string): ClaimType {
 //   "pathological finding can't blow up" cap: a finding's grounding cost across
 //   every verifier call it appears in is bounded by the round total, because
 //   per-finding attribution inside a set-scoped verifier loop is not knowable.
-// - SEARCH calls (search_code AND find_references — both burn GitHub's ~10/min
-//   code-search quota): GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND per round.
-//   Up to 4 reviewer rounds + a verdict round can run concurrently, so 2/round
-//   keeps the worst-case concurrent burst (~10) inside the quota.
+// - SEARCH calls (search_code AND find_references): capped per round, and the
+//   cap DEPENDS ON WHO ANSWERS THEM — see searchCallsPerRound below.
 // Exhaustion is HONEST: the wrapper returns an ok:false tool result telling the
 // verifier to vote on what it has and note the exhausted budget — never a throw.
 // ---------------------------------------------------------------------------
@@ -148,8 +146,48 @@ export const GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_VERIFIER = 4
 export const GROUNDED_VERIFY_MAX_FETCHED_BYTES = 40_000
 /** Max repo lookups ONE verification round (all verifiers together) may spend. */
 export const GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_ROUND = 8
-/** Max code-search lookups (search_code + find_references) per round. */
+
+/**
+ * WHERE a round's searches are answered. A named source rather than a boolean,
+ * the way `decideGrounding` names its reasons: the cap below differs for a
+ * reason, and the reason should be readable at the call site.
+ */
+export type GroundedSearchSource = 'github' | 'local'
+
+/**
+ * Max code-search lookups (search_code + find_references) per round, when the
+ * PROVIDER answers them. GitHub's `/search/code` allows ~10 a minute, and up to
+ * 4 reviewer rounds plus a verdict round can run concurrently — so 2/round
+ * keeps the worst-case concurrent burst (~10) inside the quota.
+ */
 export const GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND = 2
+
+/**
+ * The same cap when the user's own checkout answers them (#242 — the bridge,
+ * once its head matches the PR's).
+ *
+ * A local search is ripgrep over a tree already in page cache: no quota, no
+ * round trip, no shared burst to blow. The 2 was paying for a rate limit that
+ * is no longer there, and it was costing precision — a verifier that runs out
+ * of searches votes "uncertain" on exactly the absence claims searching was
+ * meant to settle.
+ *
+ * 6, not unlimited, and for a different reason than the 2: every tool RESULT is
+ * appended to the conversation and re-sent on the next round, so a search still
+ * costs tokens whoever served the bytes — and a search result is the fattest
+ * one there is (up to 10 files × 6 quoted lines). 6 leaves room inside the
+ * round's 8 total for at least a couple of `read_file` lookups, which is what
+ * actually settles a claim once a search has located it.
+ */
+export const GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND_LOCAL = 6
+
+/** The per-round search cap for a round whose searches `source` answers. */
+export function searchCallsPerRound(source: GroundedSearchSource): number {
+  return source === 'local'
+    ? GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND_LOCAL
+    : GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND
+}
+
 /** Cap on a grounded note (per verdict and on the aggregated verification). */
 export const GROUNDED_NOTE_MAX_CHARS = 200
 
@@ -163,10 +201,20 @@ export const GROUNDED_SEARCH_TOOLS: ReadonlySet<string> = new Set([
 export interface GroundedRoundBudget {
   toolCalls: number
   searchCalls: number
+  /** Where this round's searches come from — fixes `searchCap` for the round. */
+  readonly source: GroundedSearchSource
+  /** The search cap this round runs under (searchCallsPerRound(source)). */
+  readonly searchCap: number
 }
 
-export function createGroundedRoundBudget(): GroundedRoundBudget {
-  return { toolCalls: 0, searchCalls: 0 }
+/**
+ * Create one round's shared budget. `source` defaults to 'github' so a caller
+ * that does not know where its searches land gets the quota-safe cap.
+ */
+export function createGroundedRoundBudget(
+  source: GroundedSearchSource = 'github',
+): GroundedRoundBudget {
+  return { toolCalls: 0, searchCalls: 0, source, searchCap: searchCallsPerRound(source) }
 }
 
 /** Structural tool-result shape (mirrors llmToolLoop's LlmToolResult). */
@@ -196,11 +244,11 @@ export function wrapGroundedExecutor(
           'Shared grounding budget for this verification round is exhausted — vote on what you have and note "budget exhausted" where a lookup was needed.',
       }
     }
-    if (GROUNDED_SEARCH_TOOLS.has(name) && round.searchCalls >= GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND) {
+    if (GROUNDED_SEARCH_TOOLS.has(name) && round.searchCalls >= round.searchCap) {
       return {
         ok: false,
         content:
-          'Code-search budget for this verification round is exhausted (search quota) — use read_file if you know the path, or vote on what you have and note it.',
+          `Code-search budget for this verification round is exhausted (${round.source === 'local' ? 'context cost' : 'search quota'}) — use read_file if you know the path, or vote on what you have and note it.`,
       }
     }
     if (fetchedBytes >= GROUNDED_VERIFY_MAX_FETCHED_BYTES) {
