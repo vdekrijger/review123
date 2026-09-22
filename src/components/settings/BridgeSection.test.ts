@@ -20,7 +20,7 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     ok: true,
     protocol: PROTOCOL_VERSION,
     root: 'review123',
-    capabilities: { inference: ['claude', 'codex'], infer: true, files: true, search: true },
+    capabilities: { inference: ['claude', 'codex'], infer: true, inferStream: true, files: true, search: true },
     git: { head: HEAD_SHA, branch: 'main', dirty: false },
     version: '0.1.0',
     ...overrides,
@@ -165,6 +165,36 @@ describe('BridgeSection — connecting', () => {
     const note = screen.getByTestId('bridge-inference-note')
     expect(note).toHaveTextContent(/ready to run reviews/i)
     expect(within(note).getByRole('link', { name: /ai models/i })).toHaveAttribute('href', '#ai-models')
+  })
+
+  // "Never silently claiming to stream": the absence of the streaming route is
+  // VISIBLE to the user — answers stop typing out — so the section says why
+  // rather than leaving them to wonder.
+  it('says nothing about streaming when the bridge streams and claude is present', async () => {
+    await connectWith(healthBody())
+    expect(screen.getByTestId('bridge-inference-note')).not.toHaveTextContent(/all at once/i)
+  })
+
+  it('tells the user an OLDER bridge cannot stream, and what to do about it', async () => {
+    await connectWith(
+      healthBody({ capabilities: { inference: ['claude'], infer: true, files: true, search: true } }),
+    )
+    const note = screen.getByTestId('bridge-inference-note')
+    expect(note).toHaveTextContent(/all at once rather than typing out/i)
+    expect(note).toHaveTextContent(/no streaming route/i)
+  })
+
+  // A DIFFERENT reason for the same symptom, so the fix the user is told about
+  // is the one that would actually work.
+  it('tells a codex-only user that the CLI, not the bridge, is why nothing types out', async () => {
+    await connectWith(
+      healthBody({
+        capabilities: { inference: ['codex'], infer: true, inferStream: true, files: true, search: true },
+      }),
+    )
+    const note = screen.getByTestId('bridge-inference-note')
+    expect(note).toHaveTextContent(/no partial-output mode/i)
+    expect(note).not.toHaveTextContent(/no streaming route/i)
   })
 
   // The section cannot say whether grounding WILL be local — that depends on

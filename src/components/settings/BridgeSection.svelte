@@ -48,6 +48,14 @@
   const clis = $derived(bridgeState.capabilities?.inference ?? [])
   /** Route readiness — an older bridge answers /v1/health but not /v1/infer. */
   const inferReady = $derived(bridgeAvailable('infer'))
+  /**
+   * `/v1/infer/stream`. Stated rather than hidden because its absence is
+   * VISIBLE to the user — answers stop typing out — and an app that let them
+   * wonder why would be implying a stream it never got. It is route readiness,
+   * not a promise about every CLI: `codex` has no partial-output mode even on
+   * a bridge that has the route, which the note below says separately.
+   */
+  const streamReady = $derived(bridgeAvailable('inferStream'))
   /** Both grounding routes. An older bridge has neither. */
   const filesReady = $derived(bridgeAvailable('files') && bridgeAvailable('search'))
   /**
@@ -150,6 +158,13 @@
       {:else}
         Ready to run reviews. Pick <strong>Local bridge</strong> under
         <a href="#ai-models">AI models</a> to use it instead of an API key.
+        {#if !streamReady}
+          Answers will arrive all at once rather than typing out: this bridge has no
+          streaming route. Update it to see them stream.
+        {:else if clis.includes('codex') && !clis.includes('claude')}
+          Answers from <code>codex</code> arrive all at once rather than typing out — it has
+          no partial-output mode. <code>claude</code> streams.
+        {/if}
       {/if}
     </p>
     <p class="field-note" data-testid="bridge-write-note">

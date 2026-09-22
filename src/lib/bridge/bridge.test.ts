@@ -21,7 +21,16 @@ import {
   isValidPort,
   readStoredBridge,
 } from './bridge.svelte'
-import { DEFAULT_BRIDGE_PORT, PROTOCOL_VERSION, bridgeUrl, parseGitState, parseHealth } from './protocol'
+import {
+  DEFAULT_BRIDGE_PORT,
+  INFER_STREAM_CONTENT_TYPE,
+  INFER_STREAM_PATH,
+  PROTOCOL_VERSION,
+  bridgeUrl,
+  parseGitState,
+  parseHealth,
+  parseInferStreamEvent,
+} from './protocol'
 import { _setCaptureForTest } from '../analytics/analytics'
 
 const TOKEN = 'pairing-token-0000000000000000000000000000'
@@ -596,5 +605,103 @@ describe('parseHealth — remaining shape rules', () => {
 
   it('caps a preposterously long repo name', () => {
     expect(parseHealth(healthBody({ root: 'x'.repeat(5_000) }))?.root.length).toBe(80)
+  })
+})
+
+// ===========================================================================
+// parseInferStreamEvent — one untrusted NDJSON line at a time.
+//
+// The contract this narrower has to hold: an unreadable line is SKIPPED, never
+// fatal (event types are additive within v1 exactly as error codes are), and
+// no field is ever guessed in the permissive direction.
+// ===========================================================================
+
+describe('parseInferStreamEvent', () => {
+  const line = (event: Record<string, unknown>): string => JSON.stringify(event)
+
+  it('reads the route and framing constants the two protocol mirrors share', () => {
+    expect(INFER_STREAM_PATH).toBe('/v1/infer/stream')
+    // NDJSON, not text/event-stream — see the protocol header for why.
+    expect(INFER_STREAM_CONTENT_TYPE).toBe('application/x-ndjson')
+  })
+
+  it('reads a start event, including the streaming fact', () => {
+    expect(parseInferStreamEvent(line({ type: 'start', cli: 'claude', streaming: true }))).toEqual({
+      type: 'start',
+      cli: 'claude',
+      streaming: true,
+    })
+  })
+
+  it('reads a NON-boolean `streaming` as false — claiming a stream is the one lie that matters', () => {
+    for (const streaming of ['yes', 1, undefined, null]) {
+      expect(parseInferStreamEvent(line({ type: 'start', cli: 'codex', streaming }))).toMatchObject({
+        streaming: false,
+      })
+    }
+  })
+
+  it('reads a delta, leaving the text EXACTLY as the model wrote it', () => {
+    // Not sanitized: it is model output headed for the JSON ladder and the
+    // markdown renderer, both of which already treat it as untrusted.
+    const text = 'a\tb\n```json\n{"x":1}\n```'
+    expect(parseInferStreamEvent(line({ type: 'delta', text }))).toEqual({ type: 'delta', text })
+  })
+
+  it('reads a done event with usage', () => {
+    expect(
+      parseInferStreamEvent(
+        line({
+          type: 'done',
+          text: 'the answer',
+          truncated: false,
+          durationMs: 42,
+          usage: { inputTokens: 10, outputTokens: 4 },
+        }),
+      ),
+    ).toEqual({
+      type: 'done',
+      text: 'the answer',
+      truncated: false,
+      durationMs: 42,
+      usage: { inputTokens: 10, outputTokens: 4 },
+    })
+  })
+
+  it('drops a HALF-reported usage pair rather than inventing the missing half', () => {
+    const done = parseInferStreamEvent(
+      line({ type: 'done', text: 'x', truncated: false, durationMs: 1, usage: { inputTokens: 10 } }),
+    )
+    expect(done).not.toHaveProperty('usage')
+  })
+
+  it('reads an error event and its code, and sanitizes the message it will render', () => {
+    const NUL = String.fromCharCode(0)
+    expect(
+      parseInferStreamEvent(line({ type: 'error', error: 'timeout', message: `too${NUL} slow` })),
+    ).toEqual({ type: 'error', code: 'timeout', message: 'too slow' })
+  })
+
+  it('reads an UNKNOWN error code as null, so the message still reaches the user', () => {
+    expect(parseInferStreamEvent(line({ type: 'error', error: 'quantum-flux', message: 'new' }))).toEqual({
+      type: 'error',
+      code: null,
+      message: 'new',
+    })
+  })
+
+  it.each([
+    ['a blank line', ''],
+    ['whitespace', '   '],
+    ['a non-JSON line', 'Welcome to Claude Code!'],
+    ['a JSON scalar', 'null'],
+    ['a JSON array', '[1,2,3]'],
+    ['an event type from a NEWER bridge', '{"type":"progress","percent":40}'],
+    ['a start with no cli', '{"type":"start","streaming":true}'],
+    ['a delta with no text', '{"type":"delta"}'],
+    ['a done with no text', '{"type":"done","truncated":false,"durationMs":1}'],
+    ['a done with a non-numeric duration', '{"type":"done","text":"x","truncated":false,"durationMs":"1"}'],
+  ])('SKIPS %s rather than failing the stream', (_label, raw) => {
+    expect(parseInferStreamEvent(raw)).toBeNull()
   })
 })
