@@ -140,7 +140,7 @@ describe('modelSupportsTools', () => {
   it('refuses outright if a caller reaches the tool loop with the bridge selected', async () => {
     setAiProvider('bridge')
     await expect(
-      llmToolLoop({ system: 's', user: 'u', tools: [], runTool: async () => ({ ok: true, content: '' }) }),
+      llmToolLoop({ system: 's', user: 'u', tools: [], executeTool: async () => ({ ok: true, content: '' }) }),
     ).rejects.toMatchObject({ kind: 'server' })
   })
 })

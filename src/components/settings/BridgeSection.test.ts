@@ -6,7 +6,7 @@
  * connect attempt.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/svelte'
+import { render, screen, waitFor, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import BridgeSection from './BridgeSection.svelte'
 import { BRIDGE_STORAGE_KEY, _resetBridgeForTest } from '../../lib/bridge/bridge.svelte'
@@ -20,7 +20,7 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     ok: true,
     protocol: PROTOCOL_VERSION,
     root: 'review123',
-    capabilities: { inference: ['claude', 'codex'], files: false, search: false },
+    capabilities: { inference: ['claude', 'codex'], infer: true, files: false, search: false },
     version: '0.1.0',
     ...overrides,
   }
@@ -114,18 +114,41 @@ describe('BridgeSection — connecting', () => {
     expect(screen.queryByLabelText(/bridge pairing token/i)).not.toBeInTheDocument()
   })
 
-  it('is honest that nothing is routed through the bridge yet', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(healthBody()))
+  /** Pair with a bridge reporting the given health document. */
+  async function connectWith(body: Record<string, unknown>): Promise<void> {
+    fetchMock.mockResolvedValue(jsonResponse(body))
     render(BridgeSection)
-
     await userEvent.type(screen.getByLabelText(/bridge pairing token/i), TOKEN)
     await userEvent.click(screen.getByRole('button', { name: /^connect$/i }))
-
     await waitFor(() => {
-      expect(screen.getByRole('region', { name: /local bridge/i })).toHaveTextContent(
-        /not wired up yet/i,
-      )
+      expect(screen.getByTestId('bridge-inference-note')).toBeInTheDocument()
     })
+  }
+
+  it('points a ready bridge at the AI models picker', async () => {
+    await connectWith(healthBody())
+    const note = screen.getByTestId('bridge-inference-note')
+    expect(note).toHaveTextContent(/ready to run reviews/i)
+    expect(within(note).getByRole('link', { name: /ai models/i })).toHaveAttribute('href', '#ai-models')
+  })
+
+  it('is still honest that FILE reads are not wired up', async () => {
+    await connectWith(healthBody())
+    expect(screen.getByTestId('bridge-inference-note')).toHaveTextContent(
+      /reading repo files through the bridge is not wired up yet/i,
+    )
+  })
+
+  it('says a bridge with no CLI on its PATH cannot run reviews yet', async () => {
+    await connectWith(healthBody({ capabilities: { inference: [], infer: true, files: false, search: false } }))
+    expect(screen.getByTestId('bridge-inference-note')).toHaveTextContent(/no cli was found/i)
+  })
+
+  it('tells the user to update a bridge whose infer route is not there', async () => {
+    // An OLDER bridge: same protocol version, CLIs detected, but no `infer`
+    // readiness flag — so /v1/infer would 501.
+    await connectWith(healthBody({ capabilities: { inference: ['claude'], files: false, search: false } }))
+    expect(screen.getByTestId('bridge-inference-note')).toHaveTextContent(/too old to run inference/i)
   })
 
   it('uses the port from the port field', async () => {

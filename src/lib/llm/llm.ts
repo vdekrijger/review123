@@ -1138,22 +1138,38 @@ async function mapBridgeHttpError(res: Response, timeoutSignal?: AbortSignal): P
   const body = await readBody(() => res.json().catch(() => null), timeoutSignal)
   const { code, message } = parseBridgeError(body)
 
+  // WHETHER `status` IS ATTACHED IS A RETRY DECISION, not decoration:
+  // withTransientRetry retries ANY LlmError carrying `status >= 500`. The
+  // bridge's failures are mostly 5xx, and most of them are deterministic — so
+  // the status is attached only where another attempt could genuinely differ.
+  //
+  //   RETRIED    cli-failed (502)  a CLI run that failed can succeed next time
+  //              unknown 5xx       a newer bridge's transient failure
+  //   NOT        cli-unavailable   the CLI is not installed; waiting never
+  //                                installs it, and 3 backoffs × ~50 tasks in
+  //                                a review is minutes of certain failure
+  //              timeout           the CLI already burned the full budget;
+  //                                re-running it spends that again, ×3
+  //              not-implemented   an old bridge does not grow the route
+  //                                mid-review
   switch (code) {
     case 'unauthorized':
       throw new LlmError('auth', 'The local bridge rejected its pairing token. The bridge mints a new one every time it starts — re-pair it in Settings → Local bridge.', { status: res.status })
     case 'cli-unavailable':
-      throw new LlmError('no-key', message || 'That CLI is not installed on this machine.', { status: res.status })
+      throw new LlmError('no-key', message || 'That CLI is not installed on this machine.')
     case 'timeout':
-      throw new LlmError('timeout', message || TIMED_OUT_MESSAGE, { status: res.status })
+      throw new LlmError('timeout', message || TIMED_OUT_MESSAGE)
     case 'not-implemented':
-      throw new LlmError('server', 'This local bridge is too old to run inference. Update it and restart.', { status: res.status })
+      throw new LlmError('server', 'This local bridge is too old to run inference. Update it and restart.')
     case 'forbidden-origin':
     case 'forbidden-host':
       throw new LlmError('auth', 'The local bridge refused this origin. Restart it with --allow-origin for this URL.', { status: res.status })
-    case 'cli-failed':
     case 'forbidden-path':
     case 'bad-request':
     case 'payload-too-large':
+      // Our own request was wrong. Sending it again cannot fix it.
+      throw new LlmError('server', message || `The local bridge refused the request (HTTP ${res.status}).`)
+    case 'cli-failed':
       throw new LlmError('server', message || `The local bridge could not run the CLI (HTTP ${res.status}).`, { status: res.status })
     default:
       // An unrecognised code must never crash the client: protocol v1 codes are
