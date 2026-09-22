@@ -6,8 +6,23 @@
  * SAME input (and therefore the same cache keys) as the route.
  */
 
-import { describe, it, expect, vi } from 'vitest'
-import { aiPrKey, aiBudgetTokens, buildAiRunInput, scopeFilesForPack, type AiRunWiring } from './runInput'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import {
+  aiPrKey,
+  aiBudgetTokens,
+  buildAiRunInput,
+  localHeadReader,
+  scopeFilesForPack,
+  type AiRunWiring,
+} from './runInput'
+import {
+  findLocalReferences,
+  groundingIsLocal,
+  noteGroundingFailure,
+  readLocalFile,
+  readLocalFiles,
+  searchLocalCode,
+} from '../bridge/grounding'
 import { LLM_CONFIG } from '../llm/config'
 import type { PrMeta, PrFile } from '../github/types'
 import type { CiSummary } from '../github/checks'
@@ -247,5 +262,141 @@ describe('buildAiRunInput — pack(scope)', () => {
     await input.pack('implementation')
     expect(w.getContents).toHaveBeenCalledTimes(2)
     expect(w.getCi).toHaveBeenCalledTimes(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Local (bridge) grounding.
+//
+// `groundingIsLocal` is mocked rather than driven through the real bridge
+// store, because what these tests own is the WIRING: given that the seam says
+// local, do the tools read locally, does the budget flag flip, and — the one
+// that matters most — does a bridge that dies mid-review fall back instead of
+// killing the review?
+// ---------------------------------------------------------------------------
+
+vi.mock('../bridge/grounding', () => ({
+  groundingIsLocal: vi.fn(() => false),
+  noteGroundingFailure: vi.fn(),
+  readLocalFile: vi.fn(),
+  readLocalFiles: vi.fn(),
+  searchLocalCode: vi.fn(),
+  findLocalReferences: vi.fn(),
+}))
+
+describe('local grounding wiring', () => {
+  beforeEach(() => {
+    vi.mocked(groundingIsLocal).mockReturnValue(false)
+    vi.mocked(noteGroundingFailure).mockClear()
+    vi.mocked(readLocalFile).mockReset()
+    vi.mocked(readLocalFiles).mockReset()
+    vi.mocked(searchLocalCode).mockReset()
+    vi.mocked(findLocalReferences).mockReset()
+  })
+
+  describe('localHeadReader', () => {
+    it('is undefined when grounding is not local — the caller gets the provider path', () => {
+      expect(localHeadReader('head1')).toBeUndefined()
+    })
+
+    it('reads through the bridge when grounding IS local', async () => {
+      vi.mocked(groundingIsLocal).mockReturnValue(true)
+      vi.mocked(readLocalFiles).mockResolvedValue(new Map([['a.ts', 'local']]))
+
+      const reader = localHeadReader('head1')
+      expect(reader).toBeDefined()
+      expect((await reader!(['a.ts'])).get('a.ts')).toBe('local')
+      expect(readLocalFiles).toHaveBeenCalledWith('head1', ['a.ts'])
+    })
+
+    it('LATCHES the failure and rethrows, so fetchContents falls back once and stays fallen back', async () => {
+      vi.mocked(groundingIsLocal).mockReturnValue(true)
+      vi.mocked(readLocalFiles).mockRejectedValue(new Error('bridge gone'))
+
+      await expect(localHeadReader('head1')!(['a.ts'])).rejects.toThrow('bridge gone')
+      expect(noteGroundingFailure).toHaveBeenCalledWith('head1')
+    })
+  })
+
+  describe('deep-review tools', () => {
+    it('reads the HEAD ref locally when grounding is local', async () => {
+      vi.mocked(groundingIsLocal).mockReturnValue(true)
+      vi.mocked(readLocalFile).mockResolvedValue('local contents')
+
+      const input = buildAiRunInput(makeWiring())
+      await expect(input.deepReview!.getFileAtHead('src/a.ts')).resolves.toBe('local contents')
+      expect(readLocalFile).toHaveBeenCalledWith('head1', 'src/a.ts')
+    })
+
+    it('reads the BASE ref from the provider even when grounding is local', async () => {
+      vi.mocked(groundingIsLocal).mockReturnValue(true)
+      const w = makeWiring()
+      const input = buildAiRunInput(w)
+
+      await input.deepReview!.getFileAtBase('src/a.ts')
+
+      // The base commit is not checked out — claiming otherwise would ground a
+      // "before" comparison in whatever happens to be on disk.
+      expect(w.provider.getFileAtRef as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+        { owner: 'o', repo: 'r' },
+        'src/a.ts',
+        'base1',
+      )
+      expect(readLocalFile).not.toHaveBeenCalled()
+    })
+
+    it('FALLS BACK to the provider when a local read fails mid-review', async () => {
+      vi.mocked(groundingIsLocal).mockReturnValue(true)
+      vi.mocked(readLocalFile).mockRejectedValue(new Error('bridge gone'))
+      const w = makeWiring()
+
+      const input = buildAiRunInput(w)
+      await expect(input.deepReview!.getFileAtHead('src/a.ts')).resolves.toBe('content')
+      expect(noteGroundingFailure).toHaveBeenCalledWith('head1')
+    })
+
+    it('OFFERS search tools with no provider support at all, when grounding is local', async () => {
+      vi.mocked(groundingIsLocal).mockReturnValue(true)
+      vi.mocked(searchLocalCode).mockResolvedValue('local results')
+      vi.mocked(findLocalReferences).mockResolvedValue('local refs')
+
+      // A provider with NO searchCode/findReferences — e.g. GitLab, or a
+      // signed-out GitHub user whose /search/code would 401.
+      const input = buildAiRunInput(makeWiring())
+
+      expect(input.deepReview!.searchCode).toBeDefined()
+      expect(input.deepReview!.findReferences).toBeDefined()
+      await expect(input.deepReview!.searchCode!('q')).resolves.toBe('local results')
+      await expect(input.deepReview!.findReferences!('s')).resolves.toBe('local refs')
+    })
+
+    it('answers honestly, not with a crash, when local search fails and the provider has none', async () => {
+      vi.mocked(groundingIsLocal).mockReturnValue(true)
+      vi.mocked(searchLocalCode).mockRejectedValue(new Error('bridge gone'))
+
+      const input = buildAiRunInput(makeWiring())
+      await expect(input.deepReview!.searchCode!('q')).resolves.toMatch(/not available/i)
+      expect(noteGroundingFailure).toHaveBeenCalledWith('head1')
+    })
+
+    it('falls back to the PROVIDER search when it has one', async () => {
+      vi.mocked(groundingIsLocal).mockReturnValue(true)
+      vi.mocked(searchLocalCode).mockRejectedValue(new Error('bridge gone'))
+      const searchCode = vi.fn().mockResolvedValue('provider results')
+
+      const input = buildAiRunInput(
+        makeWiring({
+          provider: { getFileAtRef: vi.fn(), searchCode } as unknown as ReviewProvider,
+        }),
+      )
+      await expect(input.deepReview!.searchCode!('q')).resolves.toBe('provider results')
+      expect(searchCode).toHaveBeenCalledWith({ owner: 'o', repo: 'r' }, 'q')
+    })
+
+    it('flags the source so the toolkit can pick the right fetch budget', () => {
+      expect(buildAiRunInput(makeWiring()).deepReview!.local).toBe(false)
+      vi.mocked(groundingIsLocal).mockReturnValue(true)
+      expect(buildAiRunInput(makeWiring()).deepReview!.local).toBe(true)
+    })
   })
 })

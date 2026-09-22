@@ -34,6 +34,12 @@
  */
 
 import { track } from '../analytics/analytics'
+import {
+  groundingIsLocal,
+  noteGroundingFailure,
+  readLocalFiles,
+  searchLocalPaths,
+} from '../bridge/grounding'
 import { GithubApiError } from '../github/types'
 import { providerFor } from '../provider/registry'
 import type { ReviewProvider } from '../provider/types'
@@ -60,6 +66,11 @@ export interface RepoSearchContext {
    * their call points). Defaults to the currently registered symbol sources.
    */
   excludePaths?: Set<string>
+  /**
+   * Force the source instead of asking `groundingIsLocal(headSha)`. Tests only
+   * — production always lets the one seam decide.
+   */
+  forceSource?: 'local' | 'provider'
 }
 
 export type RepoSearchOutcome =
@@ -89,16 +100,20 @@ export type RepoSearchOutcome =
 
 /**
  * Build the search context for the CURRENT review, or null when repo search
- * is unavailable: not on a review route (e.g. the demo), no head SHA known,
- * or the provider doesn't implement searchCodePaths (GitLab/Bitbucket today).
- * The popover shows the "Search repo" action only when this is non-null.
+ * is unavailable: not on a review route (e.g. the demo), or no head SHA known.
+ *
+ * The provider's `searchCodePaths` is no longer the only way to answer: a
+ * local bridge whose head MATCHES this PR can search the working tree instead.
+ * So the action is offered when EITHER source can answer — which is also what
+ * gives a GitLab/Bitbucket user (and a signed-out GitHub user, whose
+ * `/search/code` needs auth) repo search for the first time.
  */
 export function currentRepoSearchContext(headSha: string | undefined): RepoSearchContext | null {
   if (!headSha) return null
   const route = router.route
   if (route.name !== 'review') return null
   const provider = providerFor(route.provider)
-  if (typeof provider.searchCodePaths !== 'function') return null
+  if (typeof provider.searchCodePaths !== 'function' && !groundingIsLocal(headSha)) return null
   return { provider: provider as RepoSearchProvider, repo: { owner: route.owner, repo: route.repo }, headSha }
 }
 
@@ -109,6 +124,9 @@ export function currentRepoSearchContext(headSha: string | undefined): RepoSearc
 /**
  * Same cap as the Tier 1 index (symbolIndex.ts MAX_FULL_CONTENT_LINES): a
  * fetched file larger than this many lines is skipped, not scanned.
+ *
+ * Unchanged by local grounding on purpose — it is a main-thread PARSE budget,
+ * not a transfer budget. See the comment at its use site.
  */
 const MAX_FILE_LINES = 20_000
 
@@ -140,32 +158,75 @@ function classifyFailure(err: unknown): { kind: RepoSearchFailureKind; message: 
   return { kind: 'error', message: 'Repo search failed — try again.' }
 }
 
+/** Is this search answered from the working tree rather than the provider? */
+function useLocal(ctx: RepoSearchContext): boolean {
+  if (ctx.forceSource) return ctx.forceSource === 'local'
+  return groundingIsLocal(ctx.headSha)
+}
+
 async function doSearch(symbol: string, ctx: RepoSearchContext): Promise<RepoSearchOutcome> {
   const exclude = ctx.excludePaths ?? registeredSymbolFilenames()
-  const rawPaths = await ctx.provider.searchCodePaths(ctx.repo, symbol)
+  const local = useLocal(ctx)
+
+  // STEP 1 — candidate paths. Locally this is a real content search over the
+  // checked-out tree; through the provider it is a default-branch index that
+  // step 2 then has to self-correct against the PR's head.
+  let rawPaths: string[]
+  try {
+    rawPaths = local ? await searchLocalPaths(symbol) : await ctx.provider.searchCodePaths(ctx.repo, symbol)
+  } catch (err) {
+    if (!local) throw err
+    // The bridge went away mid-search. Latch it so nothing else waits on it,
+    // and retry through the provider rather than telling the user "no results"
+    // for a symbol that may well have plenty.
+    noteGroundingFailure(ctx.headSha)
+    rawPaths = await ctx.provider.searchCodePaths(ctx.repo, symbol)
+  }
   const paths = rawPaths.filter((p) => !exclude.has(p)).slice(0, MAX_RESULT_FILES)
 
-  // Fetch each result file at the PR's HEAD SHA in small batches. null content
-  // (file moved/deleted at head) drops out — the default-branch search index
-  // self-corrects against the PR's real tree.
+  // STEP 2 — read each candidate. Locally that is ONE batched call against a
+  // tree we have already proven is at this PR's head; through the provider it
+  // is one GET per file at the head SHA. null content (moved/deleted at head)
+  // drops out either way.
   const fetched: { path: string; text: string }[] = []
   let skipped = 0
-  for (let i = 0; i < paths.length; i += FETCH_BATCH) {
-    const batch = paths.slice(i, i + FETCH_BATCH)
-    const results = await Promise.all(
-      batch.map(async (path) => ({ path, text: await ctx.provider.getFileAtRef(ctx.repo, path, ctx.headSha) })),
-    )
-    for (const r of results) {
-      if (r.text === null) {
-        skipped++
-        continue
-      }
-      // Same size cap as the Tier 1 index — a giant generated file is skipped.
-      if (r.text.split('\n').length > MAX_FILE_LINES) {
-        skipped++
-        continue
-      }
-      fetched.push({ path: r.path, text: r.text })
+  const take = (path: string, text: string | null): void => {
+    if (text === null) {
+      skipped++
+      return
+    }
+    // Size cap: a giant generated file is skipped rather than stalling the UI.
+    //
+    // DELIBERATELY NOT RELAXED FOR LOCAL FILES. It is tempting — local reads
+    // are free and instant — but this cap has never been about fetch cost. It
+    // bounds how many lines buildSymbolIndex parses ON THE MAIN THREAD, and a
+    // 200k-line generated file freezes the UI for exactly as long whether it
+    // arrived over HTTPS or off an SSD. Raising it because the bytes got
+    // cheaper would trade a real user-visible stall for nothing.
+    if (text.split('\n').length > MAX_FILE_LINES) {
+      skipped++
+      return
+    }
+    fetched.push({ path, text })
+  }
+
+  let readLocally = local
+  if (local) {
+    try {
+      const contents = await readLocalFiles(ctx.headSha, paths)
+      for (const path of paths) take(path, contents.get(path) ?? null)
+    } catch {
+      noteGroundingFailure(ctx.headSha)
+      readLocally = false
+    }
+  }
+  if (!readLocally) {
+    for (let i = 0; i < paths.length; i += FETCH_BATCH) {
+      const batch = paths.slice(i, i + FETCH_BATCH)
+      const results = await Promise.all(
+        batch.map(async (path) => ({ path, text: await ctx.provider.getFileAtRef(ctx.repo, path, ctx.headSha) })),
+      )
+      for (const r of results) take(r.path, r.text)
     }
   }
 

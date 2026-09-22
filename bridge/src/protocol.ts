@@ -12,8 +12,6 @@
  * IMPLEMENTED in v1:
  *   GET  /v1/health
  *   POST /v1/infer
- *
- * RESERVED in v1 (documented shapes below, route answers 501 not-implemented):
  *   POST /v1/files
  *   POST /v1/search
  */
@@ -28,10 +26,63 @@ export const DEFAULT_PORT = 7321
 export const MAX_BODY_BYTES = 1024 * 1024
 
 /**
- * Hard cap on the bytes returned for a single file by the (reserved)
- * `/v1/files` route. Larger files come back with `truncated: true`.
+ * Hard cap on the bytes returned for a single file by `/v1/files`. Larger
+ * files come back with `truncated: true`.
  */
 export const MAX_FILE_BYTES = 2 * 1024 * 1024
+
+/**
+ * Hard cap on how many paths ONE `/v1/files` request may name. Over the cap is
+ * a `bad-request`, not a silent trim: a caller that asked for 500 files and
+ * silently got 200 would ground its answer in a set it did not choose.
+ */
+export const MAX_FILES_PER_REQUEST = 200
+
+/**
+ * Hard cap on the SUM of `content` bytes one `/v1/files` response carries.
+ * Files that would cross it are returned truncated (or, once the budget is
+ * spent, with empty content and `truncated: true`) — never silently dropped.
+ */
+export const MAX_FILES_TOTAL_BYTES = 4 * 1024 * 1024
+
+/**
+ * Bytes sniffed for a NUL when classifying a file as binary. Same heuristic
+ * git uses: a NUL in the first few KB means "not text". A binary file is
+ * REPORTED (in `skipped`), never decoded — handing a reviewer mojibake and
+ * calling it source is worse than saying nothing.
+ */
+export const BINARY_SNIFF_BYTES = 8_000
+
+/** `/v1/search` result ceiling when the request names none. */
+export const DEFAULT_SEARCH_RESULTS = 200
+
+/** Ceiling on `SearchRequest.maxResults`. Anything larger is clamped to this. */
+export const MAX_SEARCH_RESULTS = 1_000
+
+/** A search preview line is trimmed to this many characters. */
+export const SEARCH_PREVIEW_MAX_CHARS = 240
+
+/**
+ * Wall-clock budget for one `/v1/search`. Local search is fast, but a
+ * pathological regex over a monorepo is not, and a hung search would hold a
+ * browser request open indefinitely. On expiry the results gathered so far are
+ * returned with `truncated: true` — a partial honest answer beats an error.
+ */
+export const SEARCH_TIMEOUT_MS = 15_000
+
+/** Files larger than this are not searched by either backend. */
+export const SEARCH_MAX_FILE_BYTES = 1024 * 1024
+
+/** Ceiling on files the JS fallback walker will open in one search. */
+export const SEARCH_MAX_FILES_SCANNED = 20_000
+
+/**
+ * Wall-clock budget for the `git` probes behind `/v1/health`. Three read-only
+ * commands on a local repo answer in milliseconds; a hung `git` (a stale index
+ * lock, a network filesystem) must not hold the health probe open, so it is
+ * reported as "no git state" instead.
+ */
+export const GIT_STATE_TIMEOUT_MS = 5_000
 
 /**
  * Budget for RECEIVING a request (`server.requestTimeout`). It bounds how long
@@ -76,8 +127,7 @@ export const MAX_INFER_FILE_CONTEXT_BYTES = 256 * 1024
  * - `infer` / `files` / `search` — route READINESS booleans, one per route,
  *   named after the route. Each flips to `true` in the same commit that
  *   implements its route, so a client that trusts the flag can never call a
- *   route that is not there. `infer` is `true` from the inference PR onwards;
- *   `files`/`search` are still `false`.
+ *   route that is not there. All three are `true` from the grounding PR on.
  *
  * A client wanting to run inference needs BOTH: `infer === true` (the route
  * exists) AND a CLI it can name in `inference` (something to run).
@@ -89,7 +139,39 @@ export interface BridgeCapabilities {
   search: boolean
 }
 
-/** `GET /v1/health` — the only implemented route in protocol v1. */
+/**
+ * What the served working tree currently IS — the load-bearing field of the
+ * whole grounding feature.
+ *
+ * The bridge serves whatever is on disk RIGHT NOW. That may be a different
+ * branch, a dirty tree, or a checkout three weeks stale. Grounding a review of
+ * PR #123 in `main`'s copy of a file would produce findings about code the PR
+ * does not contain — silently wrong, and worse than no local grounding at all.
+ *
+ * So the bridge REPORTS its state and lets the client decide. review123 uses
+ * local files only when `head` equals the PR's head sha; on any mismatch it
+ * falls back to the provider API and says so in the UI.
+ *
+ * Produced by three READ-ONLY `git` commands with hard-coded argv (see
+ * gitState.ts). `null` in `HealthResponse.git` means "this root is not a git
+ * repository, has no commits yet, or git did not answer" — all of which mean
+ * the same thing to a client: you cannot prove a match, so do not claim one.
+ */
+export interface GitState {
+  /** Full 40-character HEAD commit sha. */
+  head: string
+  /** Current branch name, or `null` on a detached HEAD. */
+  branch: string | null
+  /**
+   * True when `git status --porcelain` reports anything at all: staged or
+   * unstaged modifications, AND untracked files. Untracked counts because an
+   * untracked file is still code a reviewer could be handed that is in no
+   * commit the PR contains.
+   */
+  dirty: boolean
+}
+
+/** `GET /v1/health` — the cheap "what is this bridge" probe. */
 export interface HealthResponse {
   ok: true
   protocol: number
@@ -100,6 +182,14 @@ export interface HealthResponse {
    */
   root: string
   capabilities: BridgeCapabilities
+  /**
+   * The working tree's current git state, or null when it cannot be
+   * established. Clients MUST treat null as "no match provable". See GitState.
+   *
+   * A bridge predating the grounding PR omits this field entirely; a client
+   * must read an absent `git` as null rather than as a parse failure.
+   */
+  git: GitState | null
   /** The bridge package version, e.g. "0.1.0". */
   version: string
 }
@@ -206,11 +296,18 @@ export interface InferResponse {
   usage?: InferUsage
 }
 
-/** `POST /v1/files` — read file contents from the working tree. */
+/**
+ * `POST /v1/files` — read file contents from the working tree.
+ *
+ * EVERY path goes through confine.ts, one at a time: absolute paths, `..`
+ * traversal and symlinks pointing out of the repo are all `403 forbidden-path`.
+ * One bad path fails the WHOLE request rather than being dropped from the
+ * results, so a caller can never mistake a refusal for a missing file.
+ */
 export interface FilesRequest {
-  /** Repo-relative paths. Each is confined to the repo root. */
+  /** Repo-relative paths. At most MAX_FILES_PER_REQUEST of them. */
   paths: string[]
-  /** Per-file byte ceiling; clamped to MAX_FILE_BYTES. */
+  /** Per-file byte ceiling; clamped to [1, MAX_FILE_BYTES]. */
   maxBytes?: number
 }
 
@@ -223,20 +320,49 @@ export interface FileEntry {
   encoding: 'utf-8'
 }
 
+/**
+ * Why a requested path produced no content even though something IS there.
+ *
+ * - `binary` — a NUL byte in the first BINARY_SNIFF_BYTES. Decoding it as
+ *   UTF-8 would return replacement-character soup that reads like source but
+ *   is not, so it is reported instead.
+ * - `not-a-file` — a directory, socket, fifo, …
+ * - `unreadable` — it exists but open/read failed (permissions, a race).
+ */
+export type FileSkipReason = 'binary' | 'not-a-file' | 'unreadable'
+
+export interface FileSkip {
+  path: string
+  reason: FileSkipReason
+}
+
 export interface FilesResponse {
   ok: true
   files: FileEntry[]
   /** Requested paths that do not exist (a missing file is not an error). */
   missing: string[]
+  /**
+   * Paths that exist but yielded no text, with the reason. ADDITIVE within
+   * v1: a client that only reads `files`/`missing` still works, it just does
+   * not get to explain the gap. Never overlaps `files` or `missing`.
+   */
+  skipped: FileSkip[]
 }
 
-/** `POST /v1/search` — content search across the working tree. */
+/**
+ * `POST /v1/search` — content search across the working tree.
+ *
+ * Backed by `ripgrep` when it is on PATH (gitignore-aware and far faster),
+ * otherwise by a bounded JS walk that applies the common subset of
+ * `.gitignore` semantics. Neither backend follows a symlink, so a link
+ * pointing out of the repo cannot smuggle outside content into results.
+ */
 export interface SearchRequest {
   query: string
   /** Treat `query` as a regular expression instead of a literal. */
   regex?: boolean
   caseSensitive?: boolean
-  /** Ceiling on returned matches; the bridge clamps it. */
+  /** Ceiling on returned matches; clamped to [1, MAX_SEARCH_RESULTS]. */
   maxResults?: number
   /** Optional repo-relative glob filters, e.g. ["src/**\/*.ts"]. */
   include?: string[]
@@ -256,6 +382,11 @@ export interface SearchMatch {
 export interface SearchResponse {
   ok: true
   matches: SearchMatch[]
-  /** True when `maxResults` cut the result set. */
+  /**
+   * True when the result set was CUT: `maxResults` reached, the scan budget
+   * (SEARCH_MAX_FILES_SCANNED) spent, or SEARCH_TIMEOUT_MS expired. The
+   * distinction does not change what a caller should do — "there may be more"
+   * — so it is one honest boolean rather than three.
+   */
   truncated: boolean
 }

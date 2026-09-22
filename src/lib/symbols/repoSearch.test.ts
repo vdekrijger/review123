@@ -21,6 +21,17 @@ import { registerSymbolSource, _resetSymbolSourcesForTest } from './symbolSource
 import { _setCaptureForTest } from '../analytics/analytics'
 import { GithubApiError } from '../github/types'
 import { router } from '../router/router.svelte'
+import { groundingIsLocal, noteGroundingFailure, readLocalFiles, searchLocalPaths } from '../bridge/grounding'
+
+// The bridge seam is mocked: these tests own the WIRING (which source answers,
+// and what happens when it stops answering), not the transport — grounding.test.ts
+// owns that. Default OFF so every pre-existing test keeps its provider path.
+vi.mock('../bridge/grounding', () => ({
+  groundingIsLocal: vi.fn(() => false),
+  noteGroundingFailure: vi.fn(),
+  readLocalFiles: vi.fn(),
+  searchLocalPaths: vi.fn(),
+}))
 
 const REPO = { owner: 'org', repo: 'repo' }
 const HEAD = 'headsha123'
@@ -65,6 +76,7 @@ function makeCtx(overrides: {
 beforeEach(() => {
   _resetRepoSearchCacheForTest()
   _resetSymbolSourcesForTest()
+  vi.mocked(groundingIsLocal).mockReturnValue(false)
 })
 
 describe('searchRepoForSymbol — pipeline', () => {
@@ -329,5 +341,139 @@ describe('currentRepoSearchContext — capability detection', () => {
     expect(currentRepoSearchContext('headsha123')).toBeNull()
     router.route = { ...reviewRoute, provider: 'bitbucket' }
     expect(currentRepoSearchContext('headsha123')).toBeNull()
+  })
+
+  it('OFFERS repo search on a provider without it, when a matching local checkout can answer', () => {
+    vi.mocked(groundingIsLocal).mockReturnValue(true)
+    router.route = { ...reviewRoute, provider: 'gitlab' }
+    // This is the user-visible gain: repo search where there was none.
+    expect(currentRepoSearchContext('headsha123')).not.toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Local (bridge) grounding — the symbol-search half.
+//
+// Two independent steps can each be answered locally: finding CANDIDATE PATHS,
+// and READING them. Both must fall back independently, because a bridge can
+// die between them.
+// ---------------------------------------------------------------------------
+
+describe('searchRepoForSymbol — local grounding', () => {
+  beforeEach(() => {
+    vi.mocked(groundingIsLocal).mockReturnValue(true)
+    vi.mocked(noteGroundingFailure).mockClear()
+    vi.mocked(searchLocalPaths).mockReset()
+    vi.mocked(readLocalFiles).mockReset()
+  })
+
+  it('searches AND reads locally, touching the provider not once', async () => {
+    vi.mocked(searchLocalPaths).mockResolvedValue(['src/other.ts'])
+    vi.mocked(readLocalFiles).mockResolvedValue(new Map([['src/other.ts', OTHER_TS]]))
+    const ctx = makeCtx({})
+
+    const out = await searchRepoForSymbol('computeTotal', ctx)
+
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.filesScanned).toBe(1)
+    expect(out.references.length).toBeGreaterThan(0)
+    expect(ctx.searchMock).not.toHaveBeenCalled()
+    expect(ctx.fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reads the whole candidate list in ONE call, not one per file', async () => {
+    vi.mocked(searchLocalPaths).mockResolvedValue(['a.ts', 'b.ts', 'c.ts'])
+    vi.mocked(readLocalFiles).mockResolvedValue(new Map())
+
+    await searchRepoForSymbol('computeTotal', makeCtx({}))
+
+    expect(readLocalFiles).toHaveBeenCalledTimes(1)
+    expect(readLocalFiles).toHaveBeenCalledWith(HEAD, ['a.ts', 'b.ts', 'c.ts'])
+  })
+
+  it('still excludes the PR’s own files — Tier 1 already lists those call points', async () => {
+    vi.mocked(searchLocalPaths).mockResolvedValue(['src/other.ts', 'src/in-pr.ts'])
+    vi.mocked(readLocalFiles).mockResolvedValue(new Map([['src/other.ts', OTHER_TS]]))
+
+    await searchRepoForSymbol('computeTotal', makeCtx({ excludePaths: new Set(['src/in-pr.ts']) }))
+
+    expect(readLocalFiles).toHaveBeenCalledWith(HEAD, ['src/other.ts'])
+  })
+
+  it('falls back to the PROVIDER search when the local path search fails', async () => {
+    vi.mocked(searchLocalPaths).mockRejectedValue(new Error('bridge gone'))
+    const ctx = makeCtx({ paths: ['src/other.ts'], files: { 'src/other.ts': OTHER_TS } })
+
+    const out = await searchRepoForSymbol('computeTotal', ctx)
+
+    expect(out.ok).toBe(true)
+    expect(ctx.searchMock).toHaveBeenCalledWith(REPO, 'computeTotal')
+    expect(noteGroundingFailure).toHaveBeenCalledWith(HEAD)
+  })
+
+  it('falls back to PROVIDER reads when the search worked but the read failed', async () => {
+    vi.mocked(searchLocalPaths).mockResolvedValue(['src/other.ts'])
+    vi.mocked(readLocalFiles).mockRejectedValue(new Error('bridge gone mid-search'))
+    const ctx = makeCtx({ files: { 'src/other.ts': OTHER_TS } })
+
+    const out = await searchRepoForSymbol('computeTotal', ctx)
+
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.filesScanned).toBe(1)
+    expect(ctx.fetchMock).toHaveBeenCalledWith(REPO, 'src/other.ts', HEAD)
+    expect(noteGroundingFailure).toHaveBeenCalledWith(HEAD)
+  })
+
+  it('counts a locally-unreadable file as SKIPPED, exactly as a 404 at head is', async () => {
+    vi.mocked(searchLocalPaths).mockResolvedValue(['src/other.ts', 'src/binary.png'])
+    vi.mocked(readLocalFiles).mockResolvedValue(
+      new Map<string, string | null>([
+        ['src/other.ts', OTHER_TS],
+        ['src/binary.png', null],
+      ]),
+    )
+
+    const out = await searchRepoForSymbol('computeTotal', makeCtx({}))
+
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.filesScanned).toBe(1)
+    expect(out.filesSkipped).toBe(1)
+  })
+
+  it('applies the SAME line cap to local files — it is a parse budget, not a transfer one', async () => {
+    vi.mocked(searchLocalPaths).mockResolvedValue(['huge.ts'])
+    vi.mocked(readLocalFiles).mockResolvedValue(
+      new Map([['huge.ts', 'computeTotal()\n'.repeat(20_001)]]),
+    )
+
+    const out = await searchRepoForSymbol('computeTotal', makeCtx({}))
+
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.filesScanned).toBe(0)
+    expect(out.filesSkipped).toBe(1)
+  })
+
+  it('uses the PROVIDER when grounding is not local, unchanged', async () => {
+    vi.mocked(groundingIsLocal).mockReturnValue(false)
+    const ctx = makeCtx({ paths: ['src/other.ts'], files: { 'src/other.ts': OTHER_TS } })
+
+    await searchRepoForSymbol('computeTotal', ctx)
+
+    expect(ctx.searchMock).toHaveBeenCalled()
+    expect(searchLocalPaths).not.toHaveBeenCalled()
+  })
+
+  it('forceSource overrides the seam, for tests that want one source only', async () => {
+    vi.mocked(groundingIsLocal).mockReturnValue(true)
+    const ctx = { ...makeCtx({ paths: ['src/other.ts'], files: { 'src/other.ts': OTHER_TS } }), forceSource: 'provider' as const }
+
+    await searchRepoForSymbol('computeTotal', ctx)
+
+    expect(ctx.searchMock).toHaveBeenCalled()
+    expect(searchLocalPaths).not.toHaveBeenCalled()
   })
 })

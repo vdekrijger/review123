@@ -9,9 +9,9 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import type { Server } from 'node:http'
-import { mkdtemp, realpath } from 'node:fs/promises'
+import { mkdtemp, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { LOOPBACK_HOST, createBridgeServer, listenLoopback, type BridgeServer } from './server.js'
 import { MAX_BODY_BYTES, PROTOCOL_VERSION } from './protocol.js'
 import { REVIEW123_ORIGIN } from './cors.js'
@@ -27,6 +27,10 @@ let claudeInstalled = false
 
 beforeAll(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'bridge-server-')))
+  // One real file inside the served root, and one OUTSIDE it that the
+  // confinement test tries (and must fail) to reach through `..`.
+  await writeFile(join(root, 'hello.txt'), 'hello bridge')
+  await writeFile(join(dirname(root), 'outside.txt'), 'secret')
   bridge = createBridgeServer({
     token: TOKEN,
     // 0 asks the OS for a free port so parallel suites never collide. The CLI
@@ -43,6 +47,10 @@ beforeAll(async () => {
       req.prompt === 'boom'
         ? { ok: false as const, code: 'cli-failed' as const, message: 'The claude CLI exited with code 1.' }
         : { ok: true as const, text: `echo:${req.prompt}`, truncated: false, durationMs: 7 },
+    // A temp dir is not a checkout, so the real probe would answer null on
+    // every health call (and spawn three `git` processes to say so). A fixed
+    // state instead proves the field actually crosses the socket.
+    repoState: async () => ({ head: 'a'.repeat(40), branch: 'main', dirty: false }),
   })
   server = bridge.server
   port = await listenLoopback(bridge, 0)
@@ -84,7 +92,8 @@ describe('GET /v1/health over HTTP', () => {
     expect(body['ok']).toBe(true)
     expect(body['protocol']).toBe(PROTOCOL_VERSION)
     expect(body['root']).toBe(root.split('/').pop())
-    expect(body['capabilities']).toEqual({ inference: [], infer: true, files: false, search: false })
+    expect(body['capabilities']).toEqual({ inference: [], infer: true, files: true, search: true })
+    expect(body['git']).toEqual({ head: 'a'.repeat(40), branch: 'main', dirty: false })
   })
 
   it('ignores a query string when routing', async () => {
@@ -206,15 +215,53 @@ describe('POST /v1/infer over HTTP', () => {
   })
 })
 
-describe('reserved routes over HTTP', () => {
-  it.each(['/v1/files', '/v1/search'])('%s answers 501', async (path) => {
-    const res = await call(path, {
+describe('grounding routes over HTTP', () => {
+  it('reads a real file out of the served root, and reports a missing one as missing', async () => {
+    const res = await call('/v1/files', {
+      method: 'POST',
+      headers: auth({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ paths: ['hello.txt', 'gone.txt'] }),
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['files']).toEqual([
+      { path: 'hello.txt', bytes: 12, truncated: false, content: 'hello bridge', encoding: 'utf-8' },
+    ])
+    expect(body['missing']).toEqual(['gone.txt'])
+    expect(body['skipped']).toEqual([])
+  })
+
+  it('403s a path that escapes the served root — over the wire, not just in the worker', async () => {
+    const res = await call('/v1/files', {
+      method: 'POST',
+      headers: auth({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ paths: ['../outside.txt'] }),
+    })
+    expect(res.status).toBe(403)
+    const body = (await res.json()) as Record<string, unknown>
+    expect(body['error']).toBe('forbidden-path')
+    expect(res.body === null ? '' : JSON.stringify(body)).not.toContain('secret')
+  })
+
+  it('searches the served root and finds the file it just read', async () => {
+    const res = await call('/v1/search', {
+      method: 'POST',
+      headers: auth({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ query: 'hello bridge' }),
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { matches: { path: string; line: number }[] }
+    expect(body.matches.map((m) => m.path)).toContain('hello.txt')
+  })
+
+  it('400s a search with no query', async () => {
+    const res = await call('/v1/search', {
       method: 'POST',
       headers: auth({ 'Content-Type': 'application/json' }),
       body: '{}',
     })
-    expect(res.status).toBe(501)
-    expect((await res.json() as Record<string, unknown>)['error']).toBe('not-implemented')
+    expect(res.status).toBe(400)
+    expect((await res.json() as Record<string, unknown>)['error']).toBe('bad-request')
   })
 })
 

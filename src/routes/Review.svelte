@@ -19,14 +19,15 @@
   import { createAiRun } from '../lib/ai/run.svelte'
   import { listSkills } from '../lib/skills/skills'
   import { shouldAutoStartReviewers } from '../lib/review/autoStartReviewers'
-  import { buildAiRunInput } from '../lib/ai/runInput'
+  import { buildAiRunInput, localHeadReader } from '../lib/ai/runInput'
   import { cancelPrepare } from '../lib/ai/prepare.svelte'
-  import { fetchContents } from '../lib/context/pack'
+  import { fetchContents, CONTENTS_FILE_LIMIT, CONTENTS_FILE_LIMIT_LOCAL } from '../lib/context/pack'
   import { getProvider } from '../lib/llm/providers'
   import { parseReadingOrder } from '../lib/ai/tasks'
   import ConsentDialog from '../components/ConsentDialog.svelte'
   import UnderstandStep from '../components/UnderstandStep.svelte'
   import ContextRail from '../components/ContextRail.svelte'
+  import GroundingIndicator from '../components/GroundingIndicator.svelte'
   import { navigate as navigateTo, STEP_PATHS, router } from '../lib/router/router.svelte'
   import { addToHistory } from '../lib/history/history'
   import { createViewedStore } from '../lib/viewed/viewed.svelte'
@@ -427,7 +428,18 @@
     meta: { baseSha: string; headSha: string },
   ): Promise<Map<string, { before: string | null; after: string | null }>> {
     if (!contentsPromise) {
-      contentsPromise = fetchContents({ owner, repo }, files, meta).catch(() => new Map())
+      // The HEAD side comes from the user's own checkout when a bridge is
+      // connected AND its head sha equals this PR's; `localHeadReader` returns
+      // undefined otherwise, which is the unchanged provider path. A local
+      // read that fails falls back inside fetchContents — see pack.ts.
+      const readAtHead = localHeadReader(meta.headSha)
+      contentsPromise = fetchContents(
+        { owner, repo },
+        files,
+        meta,
+        readAtHead ? CONTENTS_FILE_LIMIT_LOCAL : CONTENTS_FILE_LIMIT,
+        readAtHead ? { readAtHead } : {},
+      ).catch(() => new Map())
       contentsPromise.then((map) => { contentsMap = map })
     }
     return contentsPromise
@@ -819,6 +831,9 @@
         prKey={prId}
       />
     {/if}
+
+    <!-- Where this review's code is being read from, and why (bridge grounding). -->
+    <GroundingIndicator headSha={load.state.meta.headSha} />
 
     <!-- ContextRail outside step switch (all steps) -->
     {#if aiRun}

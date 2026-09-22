@@ -15,9 +15,11 @@
  *                              to files (GitHub-only in v1; capability-gated)
  *
  * Budgets (hard): DEEP_REVIEW_MAX_TOOL_CALLS calls per run (enforced by the
- * loop) and DEEP_REVIEW_MAX_FETCHED_BYTES total fetched bytes (enforced
- * here). Files are capped at DEEP_REVIEW_FILE_CAP_BYTES each, truncated with
- * an explicit marker so the model knows it saw a prefix.
+ * loop) and a total fetched-bytes budget enforced HERE — 150 KB from the
+ * provider, 400 KB when `source.local` says the bytes come off the user's own
+ * disk through the bridge (see fetchBudgetFor for why only that one moves).
+ * Files are capped at DEEP_REVIEW_FILE_CAP_BYTES each, truncated with an
+ * explicit marker so the model knows it saw a prefix.
  *
  * Shared cross-task cache (cost): a per-REVIEW DeepReviewCache (created once
  * per createAiRun, i.e. per PR/run) is threaded into every per-task toolkit.
@@ -54,6 +56,38 @@ export const DEEP_REVIEW_FILE_CAP_BYTES = 50_000
 export const DEEP_REVIEW_TRUNCATION_MARKER = '\n…[truncated: deep review reads at most 50 KB per file]'
 
 /**
+ * The same two budgets when the source is the user's LOCAL CHECKOUT (the
+ * bridge, once its head sha matches the PR's — see lib/bridge/grounding.ts).
+ *
+ * WHY THESE TWO MOVE AND THE OTHERS DO NOT
+ *
+ * 8 calls / 150 KB were never about what the model needed. They were about
+ * what the PROVIDER costs: every read is an HTTPS round trip against an API
+ * with a ~10-searches-per-minute code-search quota, and several tasks run
+ * concurrently. Locally a read is an `open()` on the user's own SSD and a
+ * search is ripgrep over a tree already in page cache — no quota, no round
+ * trip, no shared budget to exhaust. So the ceiling that remains exists for a
+ * different reason, and is set by it:
+ *
+ *   - 20 calls, not unlimited. A tool loop still costs TOKENS: every result is
+ *     appended to the conversation and re-sent on the next round, so the bill
+ *     grows quadratically in call count whoever served the bytes. 20 is about
+ *     the point where a round's prompt stops being dominated by the diff.
+ *   - 400 KB, not unlimited, for the same reason — and because the model has a
+ *     context window that a free filesystem does not enlarge.
+ *
+ * DEEP_REVIEW_FILE_CAP_BYTES is deliberately NOT raised: 50 KB per file is a
+ * prompt-shape decision (a reviewer reading a 2 MB file is not reviewing), and
+ * nothing about a cheaper read changes it.
+ */
+export const DEEP_REVIEW_LOCAL_MAX_FETCHED_BYTES = 400_000
+
+/** The fetch-bytes budget for one toolkit, given where its bytes come from. */
+export function fetchBudgetFor(source: DeepReviewSource): number {
+  return source.local === true ? DEEP_REVIEW_LOCAL_MAX_FETCHED_BYTES : DEEP_REVIEW_MAX_FETCHED_BYTES
+}
+
+/**
  * Total bytes the shared per-review cache may hold before LRU eviction. Scaled
  * to a few per-task budgets' worth: the whole point is to let multiple tasks
  * reuse the SAME handful of files, so a couple of fetch budgets is enough to
@@ -83,6 +117,16 @@ export interface DeepReviewSource {
    * GitHub-only in v1; when absent, find_references is not offered.
    */
   findReferences?: (symbol: string) => Promise<string>
+  /**
+   * True when these functions read the user's LOCAL CHECKOUT through the
+   * bridge rather than the provider API (set in runInput.ts, only once the
+   * bridge's head sha has been proven equal to this PR's).
+   *
+   * It buys exactly one thing: the larger fetch-bytes budget above. It does
+   * NOT change what the tools do or what the model is told — a reviewer's
+   * findings must not depend on where a file came from, only on what it says.
+   */
+  local?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +415,9 @@ export function createDeepReviewToolkit(
   cache?: DeepReviewCache,
 ): DeepReviewToolkit {
   let fetchedBytes = 0
+  // Larger when the bytes come off the user's own disk — see fetchBudgetFor.
+  const fetchBudget = fetchBudgetFor(source)
+  const exhausted = `Fetch budget exhausted (${Math.round(fetchBudget / 1000)} KB) — provide your final answer from what you have verified.`
 
   const tools: LlmToolDef[] = [READ_FILE_DEF, READ_FILE_AT_BASE_DEF]
   if (source.searchCode) tools.push(SEARCH_CODE_DEF)
@@ -395,8 +442,8 @@ export function createDeepReviewToolkit(
     fetcher: (path: string) => Promise<string | null>,
     refLabel: string,
   ): Promise<LlmToolResult> {
-    if (fetchedBytes >= DEEP_REVIEW_MAX_FETCHED_BYTES) {
-      return { ok: false, content: 'Fetch budget exhausted (150 KB) — provide your final answer from what you have verified.' }
+    if (fetchedBytes >= fetchBudget) {
+      return { ok: false, content: exhausted }
     }
     // compute returns null on 404 -> the cache passes it through WITHOUT storing
     // it, so a transient miss never poisons later tasks; we surface ok:false.
@@ -425,8 +472,8 @@ export function createDeepReviewToolkit(
     query: string,
     fetcher: (query: string) => Promise<string>,
   ): Promise<LlmToolResult> {
-    if (fetchedBytes >= DEEP_REVIEW_MAX_FETCHED_BYTES) {
-      return { ok: false, content: 'Fetch budget exhausted (150 KB) — provide your final answer from what you have verified.' }
+    if (fetchedBytes >= fetchBudget) {
+      return { ok: false, content: exhausted }
     }
     try {
       const cached = await viaCache(`${cacheKind}:${query}`, async () => {
