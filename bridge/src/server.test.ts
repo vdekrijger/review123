@@ -16,6 +16,7 @@ import { LOOPBACK_HOST, createBridgeServer, listenLoopback, type BridgeServer } 
 import { MAX_BODY_BYTES, PROTOCOL_VERSION } from './protocol.js'
 import { REVIEW123_ORIGIN } from './cors.js'
 import { runStreamProcess } from './inferStream.js'
+import { runProcess } from './infer.js'
 
 const TOKEN = 'server-test-token-000000000000000000000000'
 
@@ -467,4 +468,86 @@ describe('POST /v1/infer/stream over HTTP', () => {
     expect(res.status).toBe(405)
     expect(res.headers.get('allow')).toBe('POST, OPTIONS')
   })
+})
+
+// ===========================================================================
+// THE SAME DISCONNECT MECHANISM, on the NON-streaming route.
+//
+// Before this, cancelling a bridge inference only closed the socket: `claude
+// -p` kept running on the user's machine, on their subscription, producing an
+// answer nobody would ever read, until it finished or burned the whole
+// per-call budget. One AbortSignal now serves both routes, and this is the
+// half that proves the OLD route got it too.
+// ===========================================================================
+
+describe('POST /v1/infer over HTTP — a client that hangs up', () => {
+  let abortBridge: BridgeServer
+  let abortPort: number
+  let lastPid: number | undefined
+  let finished: Promise<void>
+  let markFinished: () => void
+
+  beforeAll(async () => {
+    abortBridge = createBridgeServer({
+      token: TOKEN,
+      port: 0,
+      realRoot: root,
+      version: '0.1.0',
+      capabilityDeps: { env: { PATH: '/bin' }, isExecutable: async () => true },
+      // The REAL one-shot runner against a real child, so the signal is
+      // exercised end to end: socket → BridgeRequest.signal → runInference →
+      // runProcess → SIGTERM.
+      infer: async (_req, _clis, signal) => {
+        const result = await runProcess({
+          bin: process.execPath,
+          // Would run forever. Only a kill ends it.
+          args: ['-e', `process.stdout.write('x');setInterval(()=>{},1000)`],
+          stdin: '',
+          cwd: root,
+          timeoutMs: 20_000,
+          ...(signal ? { signal } : {}),
+        })
+        lastPid = result.pid
+        markFinished()
+        return { ok: true as const, text: 'ignored', truncated: false, durationMs: 1 }
+      },
+    })
+    abortPort = await listenLoopback(abortBridge, 0)
+  })
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => abortBridge.server.close(() => resolve()))
+  })
+
+  beforeEach(() => {
+    lastPid = undefined
+    finished = new Promise<void>((resolve) => {
+      markFinished = resolve
+    })
+  })
+
+  it('KILLS THE CLI when the browser aborts — not just closes the socket', async () => {
+    const controller = new AbortController()
+    const inFlight = fetch(`http://${LOOPBACK_HOST}:${abortPort}/v1/infer`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cli: 'claude', prompt: 'hello' }),
+      signal: controller.signal,
+    })
+    // Let the child actually start before pulling the rug.
+    await new Promise((r) => setTimeout(r, 150))
+    controller.abort()
+    await expect(inFlight).rejects.toThrow()
+
+    // runProcess resolves on 'close', i.e. after the child was reaped.
+    await finished
+    expect(typeof lastPid).toBe('number')
+    let alive = true
+    try {
+      process.kill(lastPid!, 0)
+    } catch {
+      alive = false
+    }
+    expect(alive).toBe(false)
+  }, 20_000)
 })

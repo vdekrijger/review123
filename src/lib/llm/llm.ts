@@ -20,8 +20,9 @@
  *   bridge         — NOT a vendor API: POST 127.0.0.1/v1/infer on the optional
  *                   local bridge, which spawns the user's own Claude Code /
  *                   Codex CLI on their subscription. No JSON mode (the shared
- *                   extract/repair ladder handles it), usage only when the CLI
- *                   reports it, and no streaming route yet — see bridgeStream.
+ *                   extract/repair ladder handles it) and usage only when the
+ *                   CLI reports it. Streaming goes to /v1/infer/stream, whose
+ *                   framing is NDJSON rather than SSE — see bridgeStream.
  *
  * Every non-streaming adapter also reports whether the provider TRUNCATED the
  * reply at the output cap (openai `finish_reason:'length'`, anthropic
@@ -44,8 +45,11 @@ import {
   bridgeUrl,
   parseBridgeError,
   parseInferResponse,
+  parseInferStreamEvent,
+  INFER_STREAM_PATH,
   type BridgeCli,
   type InferRequest,
+  type InferUsage,
 } from '../bridge/protocol'
 import { activeLlmConfig, PROVIDER_KEY_FIELDS } from './config'
 import { getProvider, getModelDef } from './providers'
@@ -1105,7 +1109,10 @@ async function geminiStream(
 //      is unknown we OMIT `usage` — exactly as openaiCompatComplete does for a
 //      provider that sent none — rather than reporting a zero that would render
 //      as "this cost nothing".
-//   3. NO STREAMING ROUTE YET. See bridgeStream.
+//   3. STREAMING IS A SECOND ROUTE, not a flag on the first: /v1/infer/stream,
+//      framed as NDJSON. A bridge too old to have it 404s and the transport
+//      falls back to the one-shot route — transparently, but never silently:
+//      `bridgeLastStreamMode()` records which of the two actually happened.
 // ===========================================================================
 
 /**
@@ -1146,7 +1153,24 @@ export const BRIDGE_UNREACHABLE_MESSAGE =
 async function mapBridgeHttpError(res: Response, timeoutSignal?: AbortSignal): Promise<never> {
   const body = await readBody(() => res.json().catch(() => null), timeoutSignal)
   const { code, message } = parseBridgeError(body)
+  mapBridgeErrorCode(code, message, res.status)
+}
 
+/**
+ * The bridge's failure vocabulary → an LlmError. ONE copy, because the
+ * streaming route carries exactly the same codes in an NDJSON `error` event
+ * that the one-shot route carries in an HTTP status, and two mappings would
+ * mean two sets of user-facing copy for one set of failures.
+ *
+ * `status` is the RETRY LEVER, not decoration — see the table below. The
+ * streaming caller passes `undefined` once it has emitted a delta, because a
+ * retry would re-emit text the consumer already has.
+ */
+function mapBridgeErrorCode(
+  code: string | null,
+  message: string,
+  status: number | undefined,
+): never {
   // WHETHER `status` IS ATTACHED IS A RETRY DECISION, not decoration:
   // withTransientRetry retries ANY LlmError carrying `status >= 500`. The
   // bridge's failures are mostly 5xx, and most of them are deterministic — so
@@ -1161,9 +1185,14 @@ async function mapBridgeHttpError(res: Response, timeoutSignal?: AbortSignal): P
   //                                re-running it spends that again, ×3
   //              not-implemented   an old bridge does not grow the route
   //                                mid-review
+  // `detail` is attached only when there IS a status. A mid-stream failure has
+  // none (the 200 was committed before the CLI produced a byte), and that is
+  // also exactly when a retry would be wrong — see bridgeStream.
+  const detail = status === undefined ? undefined : { status }
+  const httpSuffix = status === undefined ? '' : ` (HTTP ${status})`
   switch (code) {
     case 'unauthorized':
-      throw new LlmError('auth', 'The local bridge rejected its pairing token. The bridge mints a new one every time it starts — re-pair it in Settings → Local bridge.', { status: res.status })
+      throw new LlmError('auth', 'The local bridge rejected its pairing token. The bridge mints a new one every time it starts — re-pair it in Settings → Local bridge.', detail)
     case 'cli-unavailable':
       throw new LlmError('no-key', message || 'That CLI is not installed on this machine.')
     case 'timeout':
@@ -1172,18 +1201,18 @@ async function mapBridgeHttpError(res: Response, timeoutSignal?: AbortSignal): P
       throw new LlmError('server', 'This local bridge is too old to run inference. Update it and restart.')
     case 'forbidden-origin':
     case 'forbidden-host':
-      throw new LlmError('auth', 'The local bridge refused this origin. Restart it with --allow-origin for this URL.', { status: res.status })
+      throw new LlmError('auth', 'The local bridge refused this origin. Restart it with --allow-origin for this URL.', detail)
     case 'forbidden-path':
     case 'bad-request':
     case 'payload-too-large':
       // Our own request was wrong. Sending it again cannot fix it.
-      throw new LlmError('server', message || `The local bridge refused the request (HTTP ${res.status}).`)
+      throw new LlmError('server', message || `The local bridge refused the request${httpSuffix}.`)
     case 'cli-failed':
-      throw new LlmError('server', message || `The local bridge could not run the CLI (HTTP ${res.status}).`, { status: res.status })
+      throw new LlmError('server', message || `The local bridge could not run the CLI${httpSuffix}.`, detail)
     default:
       // An unrecognised code must never crash the client: protocol v1 codes are
       // additive, so a newer bridge can legitimately send one we do not know.
-      throw new LlmError('server', message || `The local bridge answered with HTTP ${res.status}.`, { status: res.status })
+      throw new LlmError('server', message || `The local bridge answered with an error${httpSuffix}.`, detail)
   }
 }
 
@@ -1255,21 +1284,52 @@ async function bridgeComplete(
 }
 
 /**
- * Streaming over the bridge — deliberately NOT streaming yet.
- *
- * `claude -p` can stream (`--output-format stream-json`), so a
- * `POST /v1/infer/stream` is genuinely possible. It is not in this PR: it needs
- * its own event framing, its own mid-stream abort semantics on both sides of
- * the socket, and its own cancellation path through the child process — a
- * second protocol surface, not a flag.
- *
- * So a streaming caller gets the complete answer in ONE delta when the CLI
- * finishes. THE UX CONSEQUENCE IS REAL AND WORTH STATING: the summary and Ask
- * panels do not type out over the bridge, they appear all at once after the
- * wait. Everything else — the final text, cancellation, timeout classification,
- * usage — behaves identically, and no caller needs to know.
+ * The message a caller (or the settings UI) gets when it asks WHY nothing
+ * typed out. Exported so the copy lives in one place.
  */
-async function bridgeStream(
+export const BRIDGE_NO_STREAM_ROUTE_MESSAGE =
+  'This local bridge has no streaming route, so answers arrive all at once. Update the bridge to see them type out.'
+
+/** Same question, different answer: the bridge streams, this CLI does not. */
+export const BRIDGE_CLI_NO_STREAM_MESSAGE =
+  'The codex CLI has no partial-output mode, so its answers arrive all at once rather than typing out.'
+
+/**
+ * How the LAST bridge stream was actually delivered.
+ *
+ * Read by the settings UI (and by anyone debugging "why doesn't it type out?")
+ * so the app can answer honestly instead of implying a stream it never got.
+ * Deliberately a fact recorded after the event, never a promise made before
+ * one: `null` means no bridge stream has run in this session.
+ *
+ *   'streamed'    — deltas arrived from the CLI as the model wrote them.
+ *   'cli-one-shot'— the bridge streams, but this CLI has no partial output.
+ *   'no-route'    — the bridge is older than the streaming route.
+ */
+export type BridgeStreamMode = 'streamed' | 'cli-one-shot' | 'no-route'
+
+let lastBridgeStreamMode: BridgeStreamMode | null = null
+
+export function bridgeLastStreamMode(): BridgeStreamMode | null {
+  return lastBridgeStreamMode
+}
+
+/** FOR TESTS ONLY. */
+export function _resetBridgeStreamModeForTest(): void {
+  lastBridgeStreamMode = null
+}
+
+/**
+ * The one-shot fallback: run `/v1/infer` and hand the finished answer over as
+ * a single delta.
+ *
+ * Used when the paired bridge predates `/v1/infer/stream` (it 404s). NOT a
+ * silent degradation: `lastBridgeStreamMode` records it, and nothing in this
+ * path ever claims to have streamed. Emitting one delta rather than none is
+ * what keeps a delta-rendered panel from staying blank for a perfectly good
+ * answer.
+ */
+async function bridgeStreamViaOneShot(
   provider: LlmProviderDef,
   model: LlmModelDef,
   opts: LlmStreamOpts,
@@ -1281,10 +1341,168 @@ async function bridgeStream(
   if (opts.timeoutMs !== undefined) completeOpts.timeoutMs = opts.timeoutMs
 
   const result = await bridgeComplete(provider, model, completeOpts, includeUsage)
-  // One delta, after the fact. Emitting nothing would leave a panel that
-  // renders only from deltas permanently blank.
   if (result.content) onDelta(result.content)
   return result.usage ? { content: result.content, usage: result.usage } : { content: result.content }
+}
+
+/**
+ * Streaming over the bridge — `POST /v1/infer/stream`, NDJSON.
+ *
+ * #238 shipped inference with the whole answer in one delta and said what was
+ * missing: event framing, mid-stream abort on both sides, and cancellation
+ * through the child process. This is that route's client.
+ *
+ * THREE THINGS THIS HAS TO GET EXACTLY RIGHT:
+ *
+ * 1. EVERY READ IS INSIDE THE MAPPED BOUNDARY. `fetch()` resolves when the
+ *    HEADERS arrive; the body streams after. So our per-request window firing
+ *    mid-answer rejects `reader.read()`, not the fetch — and Blink reports
+ *    that as a plain AbortError, which reads as a cancellation unless the
+ *    timeout signal is consulted. #234's regression was exactly one body read
+ *    left outside the try/catch. The read loop below is wrapped whole, and an
+ *    LlmError thrown INSIDE it (from an NDJSON `error` event) is rethrown
+ *    untouched rather than re-classified as a network failure.
+ *
+ * 2. A FAILURE IS NEVER A SHORT ANSWER. A stream that ends without `done` was
+ *    cut; it throws. A mid-stream `error` event throws. Neither is allowed to
+ *    return the partial text as if the model had finished.
+ *
+ * 3. NO SILENT PAID FALLBACK. Every failure path throws, exactly as
+ *    bridgeComplete's does. The only fallback here is to the bridge's OWN
+ *    one-shot route on an older bridge — never to a metered API.
+ */
+async function bridgeStream(
+  provider: LlmProviderDef,
+  model: LlmModelDef,
+  opts: LlmStreamOpts,
+  onDelta: (text: string) => void,
+  includeUsage: boolean,
+): Promise<LlmStreamResult> {
+  const stored = readStoredBridge()
+  if (stored === null) throw new LlmError('no-key', BRIDGE_NOT_PAIRED_MESSAGE)
+
+  const { system, user, signal, timeoutMs } = opts
+  const { timeoutSignal, effectiveSignal } = requestSignals(signal, timeoutMs)
+
+  const payload: InferRequest = {
+    cli: (model.id === 'codex' ? 'codex' : 'claude') as BridgeCli,
+    prompt: user,
+    system,
+    // Same budget on both ends, so the CLI is killed at roughly the moment the
+    // browser would have given up anyway.
+    timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  }
+
+  let res: Response
+  try {
+    res = await fetch(bridgeUrl(stored.port, INFER_STREAM_PATH), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${stored.token}` },
+      credentials: 'omit',
+      cache: 'no-store',
+      body: JSON.stringify(payload),
+      signal: effectiveSignal,
+    })
+  } catch (err) {
+    if (isAbortException(err) || isTimeoutException(err)) mapFetchError(err, timeoutSignal)
+    throw new LlmError('network', BRIDGE_UNREACHABLE_MESSAGE)
+  }
+
+  // AN OLDER BRIDGE. The route does not exist, so it 404s — before spawning
+  // anything, so nothing was run and nothing was spent. Fall back to the
+  // one-shot route the same bridge does have.
+  if (res.status === 404) {
+    await res.body?.cancel().catch(() => {})
+    lastBridgeStreamMode = 'no-route'
+    return bridgeStreamViaOneShot(provider, model, opts, onDelta, includeUsage)
+  }
+
+  if (!res.ok) await mapBridgeHttpError(res, timeoutSignal)
+
+  const bodyStream = res.body
+  if (!bodyStream) throw new LlmError('network', 'The local bridge sent no body for a streaming request.')
+
+  const reader = bodyStream.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let accumulated = ''
+  let emitted = 0
+  let final: { text: string; usage?: InferUsage } | null = null
+
+  try {
+    let reading = true
+    while (reading) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      let newlineIdx: number
+      while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, newlineIdx)
+        buffer = buffer.slice(newlineIdx + 1)
+
+        const event = parseInferStreamEvent(line)
+        // Null is SKIP: a blank line, or an event type a newer bridge grew.
+        if (event === null) continue
+
+        if (event.type === 'start') {
+          lastBridgeStreamMode = event.streaming ? 'streamed' : 'cli-one-shot'
+          continue
+        }
+        if (event.type === 'delta') {
+          if (event.text === '') continue
+          accumulated += event.text
+          emitted += 1
+          onDelta(event.text)
+          continue
+        }
+        if (event.type === 'error') {
+          // A mid-stream failure carries NO status once a delta has gone out:
+          // withTransientRetry would re-run the whole stream and the consumer
+          // would see the opening of the answer twice. Before the first delta
+          // a retry is exactly as safe as it is on the one-shot route, so the
+          // bridge's own retry decision (the code) stands.
+          mapBridgeErrorCode(event.code, event.message, emitted === 0 ? 502 : undefined)
+        }
+        // done
+        final = event.usage ? { text: event.text, usage: event.usage } : { text: event.text }
+        reading = false
+        break
+      }
+    }
+  } catch (err) {
+    // An LlmError from an `error` event is already classified — re-mapping it
+    // would turn a precise `timeout` into a generic `network`.
+    if (err instanceof LlmError) throw err
+    // Everything else lands here: a mid-stream timeout (reported by Blink as a
+    // plain AbortError, which is why the timeout signal is consulted), a
+    // caller cancellation, a dropped connection.
+    mapFetchError(err, timeoutSignal)
+  } finally {
+    reader.releaseLock()
+  }
+
+  // THE STREAM ENDED WITHOUT A TERMINATOR. The bridge died, or the socket was
+  // cut. Whatever text arrived is partial, and returning it would turn a
+  // broken run into a confident short answer.
+  if (final === null) {
+    throw new LlmError('server', 'The local bridge ended the stream before the answer was finished.')
+  }
+
+  // `done.text` is the CLI's own final answer and wins over the concatenation.
+  // They agree in practice; when they cannot (a run cut at the output cap) the
+  // CLI's version is the one it actually committed to.
+  const content = final.text || accumulated
+
+  let usage: LlmUsage | undefined
+  if (includeUsage && final.usage) {
+    usage = {
+      prompt_tokens: final.usage.inputTokens,
+      completion_tokens: final.usage.outputTokens,
+      total_tokens: final.usage.inputTokens + final.usage.outputTokens,
+    }
+  }
+  return usage ? { content, usage } : { content }
 }
 
 // ===========================================================================

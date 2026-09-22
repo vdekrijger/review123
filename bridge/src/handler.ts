@@ -15,10 +15,13 @@
  *   5. Body cap.                                 413.
  *   6. Route.                                    200 / 4xx / 404.
  *
- * Every gate above still applies to `/v1/infer`, `/v1/files`, `/v1/search` and
- * `/v1/fix`: no origin outside the allowlist, no request without the pairing
- * token, and no rebound hostname ever reaches the code that spawns a process,
- * opens a file, or creates a worktree.
+ * Every gate above still applies to `/v1/infer`, `/v1/infer/stream`,
+ * `/v1/files`, `/v1/search` and `/v1/fix`: no origin outside the allowlist, no
+ * request without the pairing token, and no rebound hostname ever reaches the
+ * code that spawns a process, opens a file, or creates a worktree. The ladder
+ * lives in ONE function, `checkGates`, precisely so the streaming route — which
+ * cannot return a single BridgeResponse — runs the same copy rather than a
+ * second one that would drift.
  *
  * `/v1/fix` adds a SEVENTH gate of its own, inside the route: `--allow-write`.
  * It is checked before the body is even parsed, so a read-only bridge refuses
@@ -104,6 +107,18 @@ export interface BridgeRequest {
     authorization?: string | undefined
   }
   body: Buffer | null
+  /**
+   * Fires when the CLIENT went away — the fetch was aborted, the tab closed,
+   * the socket died.
+   *
+   * It is on the REQUEST because it is a property of the request's liveness,
+   * and because both routes that spawn a CLI need it for the same reason: a
+   * cancelled inference must not leave `claude -p` running on the user's
+   * machine, spending their subscription on an answer nobody will read. Absent
+   * (a test building a request by hand) means "assume the caller is still
+   * there", which is the pre-existing behaviour.
+   */
+  signal?: AbortSignal | undefined
 }
 
 export interface BridgeResponse {
@@ -153,7 +168,11 @@ export interface HandlerContext {
    * protocol rule without spawning a real CLI (and without a machine needing
    * one installed to run the suite).
    */
-  infer: (req: InferRequest, availableClis: readonly string[]) => Promise<InferOutcome>
+  infer: (
+    req: InferRequest,
+    availableClis: readonly string[],
+    signal?: AbortSignal,
+  ) => Promise<InferOutcome>
   /**
    * Runs `/v1/infer/stream`. Injected for the same reason `infer` is, with one
    * addition that only streaming has: `signal`, which fires when the BROWSER
@@ -205,8 +224,12 @@ export interface HandlerContext {
 
 /** The real worker, used unless a test injects its own. */
 export function defaultInfer(realRoot: string) {
-  return (req: InferRequest, availableClis: readonly string[]): Promise<InferOutcome> =>
-    runInference(req, { realRoot, availableClis })
+  return (
+    req: InferRequest,
+    availableClis: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<InferOutcome> =>
+    runInference(req, { realRoot, availableClis, ...(signal ? { signal } : {}) })
 }
 
 /** The real `/v1/infer/stream` worker, used unless a test injects its own. */
@@ -557,7 +580,11 @@ export async function handleRequest(
       )
     }
 
-    const outcome = await ctx.infer(parsed, inference)
+    // `req.signal` is why a cancelled `/v1/infer` now stops the CLI instead of
+    // only closing the socket: it reaches runProcess, which kills the child on
+    // the same SIGTERM→SIGKILL ladder the timeout uses. The answer below is
+    // then written into a socket nobody is reading, which server.ts skips.
+    const outcome = await ctx.infer(parsed, inference, req.signal)
     if (!outcome.ok) {
       return fail(statusForInferError(outcome.code), outcome.code, outcome.message, cors)
     }
@@ -762,6 +789,8 @@ export async function handleStreamRequest(
     }
   }
 
+  // Awaited even when the client is already gone: this await is what reaps the
+  // child. Returning early would report "done" while a CLI was still running.
   await ctx.inferStream(parsed, inference, emit, sink.signal)
   sink.end()
 }

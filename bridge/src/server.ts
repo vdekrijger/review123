@@ -158,11 +158,41 @@ function readBody(req: IncomingMessage): Promise<Buffer | 'too-large'> {
   })
 }
 
+/**
+ * An AbortSignal that fires when the CLIENT went away.
+ *
+ * THE ONE MECHANISM BOTH ROUTES USE. Without it, a browser cancelling an
+ * inference only closed the socket: `claude -p` kept running on the user's
+ * machine, on their subscription, producing an answer nobody would ever read,
+ * until it finished or burned the whole per-call budget (which the standing
+ * rules caller sets to 300 s). Closing a connection has to mean stopping the
+ * work, and this is the wire that makes it mean that.
+ *
+ * TWO listeners, and deliberately NOT a third:
+ *   - `req` 'aborted' — the prompt, explicit signal for a cancelled fetch.
+ *   - `res` 'close' with `!res.writableEnded` — the connection died before we
+ *     finished answering. The guard is what distinguishes it from the ordinary
+ *     close that follows every completed response.
+ *   - `req` 'close' is NOT used: on a fully-received request it fires as part
+ *     of normal completion, and a spurious abort would kill a live CLI — a
+ *     strictly worse failure than missing one cancellation.
+ */
+function clientDisconnectSignal(req: IncomingMessage, res: ServerResponse): AbortSignal {
+  const controller = new AbortController()
+  const gone = (): void => controller.abort()
+  req.on('aborted', gone)
+  res.on('close', () => {
+    if (!res.writableEnded) gone()
+  })
+  return controller.signal
+}
+
 async function respond(
   req: IncomingMessage,
   res: ServerResponse,
   ctx: HandlerContext,
 ): Promise<void> {
+  const signal = clientDisconnectSignal(req, res)
   const body = req.method === 'GET' || req.method === 'HEAD' ? null : await readBody(req)
   const bridgeReq: BridgeRequest = {
     method: req.method ?? 'GET',
@@ -176,17 +206,22 @@ async function respond(
     // 'too-large' is handed to the handler as an over-cap buffer stand-in so
     // the 413 answer stays in the one place that formats responses.
     body: body === 'too-large' ? Buffer.alloc(MAX_BODY_BYTES + 1) : body,
+    signal,
   }
 
   // The ONE route that cannot be a single BridgeResponse: it writes its body
   // as the CLI produces it. Everything else — including an OPTIONS preflight
   // or a GET to this path — goes through the ordinary handler.
   if (bridgeReq.method === 'POST' && bridgeReq.path === INFER_STREAM_PATH) {
-    await respondStreaming(req, res, ctx, bridgeReq)
+    await respondStreaming(res, ctx, bridgeReq)
     return
   }
 
   const result = await handleRequest(bridgeReq, ctx)
+  // The client may have hung up while the CLI was running. Writing into a dead
+  // socket is not an error worth reporting — it is the normal end of a
+  // cancelled request, and the child has already been killed.
+  if (res.writableEnded || res.destroyed) return
   res.writeHead(result.status, result.headers)
   res.end(result.body)
 }
@@ -194,55 +229,39 @@ async function respond(
 /**
  * The socket half of `/v1/infer/stream`.
  *
- * Its whole job is to turn a dead connection into an AbortSignal. Node tells
- * us the client is gone through `req`'s 'aborted'/'close' and `res`'s 'close';
- * all three are wired, because which one fires depends on how the peer went
- * away (an aborted fetch, a closed tab, a killed browser). The signal is
- * handed to the handler, which hands it to the worker, which hands it to the
- * child process — an unbroken chain from "the user cancelled" to "the CLI
- * stopped spending their subscription".
+ * It adds one thing to what `respond` already does: writing the body in
+ * pieces, unbuffered. `flushHeaders()` and Node's per-write flush matter here
+ * — a response that arrives in one lump at the end is exactly the behaviour
+ * this route exists to remove.
  *
- * `flushHeaders()` and the per-write `flush()` matter: Node buffers small
- * writes by default, and a stream that arrives in one buffered lump at the end
- * is exactly the behaviour this route exists to remove.
+ * The disconnect signal is the SAME one every route gets, built once in
+ * `respond` by `clientDisconnectSignal`, so the chain from "the user
+ * cancelled" to "the CLI stopped spending their subscription" is one chain,
+ * not two.
  */
 async function respondStreaming(
-  req: IncomingMessage,
   res: ServerResponse,
   ctx: HandlerContext,
   bridgeReq: BridgeRequest,
 ): Promise<void> {
-  const controller = new AbortController()
-  const clientGone = (): void => controller.abort()
-  req.on('aborted', clientGone)
-  req.on('close', () => {
-    // `res.writableEnded` distinguishes "we finished and the socket closed"
-    // from "the peer hung up on us". Only the second is a cancellation.
-    if (!res.writableEnded) clientGone()
-  })
-  res.on('close', () => {
-    if (!res.writableEnded) clientGone()
-  })
-
   const sink: StreamSink = {
     head: (status, headers) => {
       res.writeHead(status, headers)
       res.flushHeaders()
     },
     write: (chunk) => {
-      if (res.writableEnded) return
+      if (res.writableEnded || res.destroyed) return
       res.write(chunk)
     },
     end: () => {
       if (!res.writableEnded) res.end()
     },
-    signal: controller.signal,
+    signal: bridgeReq.signal ?? new AbortController().signal,
   }
 
   try {
     await handleStreamRequest(bridgeReq, ctx, sink)
   } finally {
-    req.removeListener('aborted', clientGone)
     sink.end()
   }
 }

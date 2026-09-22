@@ -31,7 +31,7 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     ok: true,
     protocol: PROTOCOL_VERSION,
     root: 'review123',
-    capabilities: { inference: ['claude'], infer: true, files: true, search: true, fix: false, checkout: false },
+    capabilities: { inference: ['claude'], infer: true, inferStream: true, files: true, search: true, fix: false, checkout: false },
     git: { head: HEAD_SHA, branch: 'main', dirty: false },
     version: '0.1.0',
     ...overrides,
@@ -195,6 +195,7 @@ describe('connectBridge — user-initiated pairing', () => {
     expect(bridgeState.capabilities).toEqual({
       inference: ['claude'],
       infer: true,
+      inferStream: true,
       files: true,
       search: true,
       fix: false,
@@ -437,11 +438,30 @@ describe('parseHealth', () => {
     expect(parseHealth(older)?.capabilities).toEqual({
       inference: ['claude'],
       infer: false,
+      inferStream: false,
       files: false,
       search: false,
       fix: false,
       checkout: false,
     })
+  })
+
+  // Route readiness, read exactly like `infer` was: an older bridge that has
+  // no streaming route is not malformed, it simply cannot stream — and the
+  // transport falls back to the one-shot route rather than refusing.
+  it('reads a MISSING inferStream flag as false, so a pre-streaming bridge still pairs', () => {
+    const older = healthBody({
+      capabilities: { inference: ['claude'], infer: true, files: true, search: true },
+    })
+    expect(parseHealth(older)?.capabilities.inferStream).toBe(false)
+    expect(parseHealth(older)?.capabilities.infer).toBe(true)
+  })
+
+  it('reads a NON-BOOLEAN inferStream flag as malformed rather than guessing', () => {
+    const lying = healthBody({
+      capabilities: { inference: ['claude'], infer: true, inferStream: 'yes', files: true, search: true },
+    })
+    expect(parseHealth(lying)).toBeNull()
   })
 
   // A WRITE capability must never be inferred from silence.
