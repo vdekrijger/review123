@@ -45,6 +45,8 @@
   import { track } from '../lib/analytics/analytics'
   import PreviewButton from '../components/PreviewButton.svelte'
   import PreviewPanel from '../components/PreviewPanel.svelte'
+  import RunPrPanel from '../components/RunPrPanel.svelte'
+  import { prRefForProvider, stackState } from '../lib/bridge/runPr.svelte'
   import {
     pickBestPreview,
     loadPreviewPanelOpen,
@@ -564,12 +566,19 @@
     if (previewPanelOpen) railCollapsed = true
   }
 
-  // Panel is only meaningful for a READY preview (there's nothing to frame
-  // while building/failed) — the toggle button only renders in that state too.
-  // Local const re-narrows previewBest for TS (same idiom as aiRun above).
+  // Panel is meaningful when there is something to frame: a READY deploy
+  // preview (nothing to show while building/failed), OR the local app serving
+  // this PR. The second source is why this is no longer just a deploy check —
+  // a reviewer whose repo has no deploy previews at all can still open the
+  // panel onto their own running app.
+  const localPreviewLive = $derived(
+    load.state.status === 'ready' &&
+      stackState.onPrBranch(load.state.meta.headSha) &&
+      stackState.app?.reachable === true,
+  )
   const previewPanelVisible = $derived.by(() => {
     const p = previewBest
-    return previewPanelOpen && p !== null && p.state === 'ready'
+    return previewPanelOpen && ((p !== null && p.state === 'ready') || localPreviewLive)
   })
 
   // Fetch PR comments + resolved thread state once when PR is ready (non-blocking, silent on failure)
@@ -803,6 +812,14 @@
           panelOpen={previewPanelOpen}
           onTogglePanel={togglePreviewPanel}
         />
+        <!-- Run this PR against the reviewer's own running app. Renders
+             nothing unless a bridge has been paired. -->
+        <RunPrPanel
+          headSha={load.state.meta.headSha}
+          prRef={prRefForProvider(prRefX.provider, number)}
+          panelOpen={previewPanelOpen}
+          onTogglePanel={togglePreviewPanel}
+        />
         <a
           class="view-on-provider"
           href={activeProvider.prWebUrl(prRefX)}
@@ -994,10 +1011,11 @@
 <!-- Embedded deploy-preview panel — fixed right-side mount at the ROUTE level
      (never inside InspectStep); side-by-side layout comes from the section's
      data-preview-open padding. -->
-{#if previewPanelVisible && previewBest !== null}
+{#if previewPanelVisible && load.state.status === 'ready'}
   <PreviewPanel
-    url={previewBest.url}
-    providerName={previewBest.providerName}
+    url={previewBest?.state === 'ready' ? previewBest.url : ''}
+    providerName={previewBest?.providerName ?? ''}
+    headSha={load.state.meta.headSha}
     onclose={togglePreviewPanel}
   />
 {/if}

@@ -174,6 +174,40 @@ export function describeCheckout(readiness: CheckoutReadiness): string {
 }
 
 // ---------------------------------------------------------------------------
+// Which ref to fetch
+// ---------------------------------------------------------------------------
+
+/**
+ * The git ref a forge parks a pull request's head at.
+ *
+ * THE BROWSER SUPPLIES THE REF AND THE BRIDGE JUST FETCHES IT. That split is
+ * deliberate: ref shapes are a forge detail, the browser is the half that
+ * knows which forge this PR came from, and the bridge stays provider-agnostic
+ * — it validates the shape (`refs/…`, no flag-looking value) and fetches,
+ * without needing a case for every host.
+ *
+ * Bitbucket CLOUD is `null`, not a guess. Server/Data Center exposes
+ * `refs/pull-requests/<id>/from`, but Cloud does not publish a fetchable PR
+ * ref at all, and inventing one would produce a `ref-unknown` failure that
+ * looks like a broken remote. The UI disables the action and says the provider
+ * does not expose one, which is the truth.
+ */
+export function prRefForProvider(
+  provider: 'github' | 'gitlab' | 'bitbucket',
+  prNumber: number,
+): string | null {
+  if (!Number.isInteger(prNumber) || prNumber <= 0) return null
+  switch (provider) {
+    case 'github':
+      return `refs/pull/${prNumber}/head`
+    case 'gitlab':
+      return `refs/merge-requests/${prNumber}/head`
+    case 'bitbucket':
+      return null
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Trust — whose code is about to run on this machine
 // ---------------------------------------------------------------------------
 
@@ -549,6 +583,14 @@ async function call<T>(
     if (classified === 'timeout') return { ok: false, failure: emptyFailure('timeout') }
     if (classified === 'cancelled') return { ok: false, failure: emptyFailure('cancelled') }
     return { ok: false, failure: emptyFailure('unreachable') }
+  }
+
+  // Defensive: everything below reads `response` as a Response. A transport
+  // that handed back anything else would otherwise throw out of a function
+  // whose whole contract is "never throws" — and `refreshStack` calls it from
+  // an effect, where a rejection has nobody to catch it.
+  if (typeof response !== 'object' || response === null || typeof response.ok !== 'boolean') {
+    return { ok: false, failure: emptyFailure('malformed') }
   }
 
   if (!response.ok) {
