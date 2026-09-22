@@ -98,6 +98,24 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('region', { name: /reviewer skills/i })).toBeInTheDocument()
   })
 
+  it('renders the Local bridge section', () => {
+    render(SettingsPage)
+    expect(screen.getByRole('region', { name: /local bridge/i })).toBeInTheDocument()
+  })
+
+  it('keeps Reviewer skills LAST — the scrollspy bottom rule activates the last section', () => {
+    render(SettingsPage)
+    const nav = screen.getByRole('navigation', { name: /settings sections/i })
+    const labels = Array.from(nav.querySelectorAll('a')).map((a) => a.textContent?.trim())
+    expect(labels).toEqual([
+      'Appearance',
+      'Providers & access',
+      'Local bridge',
+      'AI models',
+      'Reviewer skills',
+    ])
+  })
+
   it('renders the section nav', () => {
     render(SettingsPage)
     expect(screen.getByRole('navigation', { name: /settings sections/i })).toBeInTheDocument()
@@ -201,11 +219,17 @@ describe('SettingsPage scrollspy', () => {
     expect(navLink(/appearance/i)).not.toHaveAttribute('aria-current')
   })
 
-  it('registers the IntersectionObserver seam over all four sections', () => {
+  it('registers the IntersectionObserver seam over every section', () => {
     render(SettingsPage)
     expect(observeSections).toHaveBeenCalledTimes(1)
     const elements = vi.mocked(observeSections).mock.calls[0][0]
-    expect(elements.map((el) => el.id)).toEqual(['appearance', 'providers', 'ai-models', 'skills'])
+    expect(elements.map((el) => el.id)).toEqual([
+      'appearance',
+      'providers',
+      'bridge',
+      'ai-models',
+      'skills',
+    ])
   })
 
   it('clicking a nav item immediately sets it active', async () => {
@@ -220,6 +244,7 @@ describe('SettingsPage scrollspy', () => {
     // providers crossed the midline (top 100 <= 400); ai-models has not (700)
     stubSectionTop('appearance', -500)
     stubSectionTop('providers', 100)
+    stubSectionTop('bridge', 500)
     stubSectionTop('ai-models', 700)
     stubSectionTop('skills', 1300)
     getObserverCallback()()
@@ -233,6 +258,7 @@ describe('SettingsPage scrollspy', () => {
     render(SettingsPage)
     stubSectionTop('appearance', -1800)
     stubSectionTop('providers', -1000)
+    stubSectionTop('bridge', -600)
     stubSectionTop('ai-models', -200)
     stubSectionTop('skills', 450) // short last section: below midline (400)
     setScrollY(2200) // 2200 + 800 = 3000 = scrollHeight
@@ -249,6 +275,7 @@ describe('SettingsPage scrollspy', () => {
     render(SettingsPage)
     stubSectionTop('appearance', 130) // page header above it is in view
     stubSectionTop('providers', 350) // already above the midline (400)!
+    stubSectionTop('bridge', 620)
     stubSectionTop('ai-models', 900)
     stubSectionTop('skills', 1500)
     getObserverCallback()()
@@ -262,6 +289,7 @@ describe('SettingsPage scrollspy', () => {
     // Mid-page: providers dominates
     stubSectionTop('appearance', -500)
     stubSectionTop('providers', 100)
+    stubSectionTop('bridge', 500)
     stubSectionTop('ai-models', 700)
     stubSectionTop('skills', 1300)
     getObserverCallback()()
@@ -271,6 +299,7 @@ describe('SettingsPage scrollspy', () => {
     // Back at the top — only a scroll event fires (no IO threshold crossing)
     stubSectionTop('appearance', 130)
     stubSectionTop('providers', 350)
+    stubSectionTop('bridge', 620)
     stubSectionTop('ai-models', 900)
     stubSectionTop('skills', 1500)
     window.dispatchEvent(new Event('scroll'))
@@ -287,6 +316,7 @@ describe('SettingsPage scrollspy', () => {
     // Observer fires mid-scroll with an intermediate section dominant
     stubSectionTop('appearance', -500)
     stubSectionTop('providers', 100)
+    stubSectionTop('bridge', 500)
     stubSectionTop('ai-models', 700)
     stubSectionTop('skills', 1300)
     getObserverCallback()()
@@ -309,6 +339,7 @@ describe('SettingsPage scrollspy', () => {
       expect(skillsLink).toHaveAttribute('aria-current', 'true')
       stubSectionTop('appearance', -500)
       stubSectionTop('providers', 100)
+      stubSectionTop('bridge', 500)
       stubSectionTop('ai-models', 700)
       stubSectionTop('skills', 1300)
       vi.advanceTimersByTime(1500) // beyond the suppression window

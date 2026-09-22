@@ -201,10 +201,28 @@ const EVENTS = {
   // (same convention as ai_task_completed). Never a repo, PR number, title,
   // finding, or any code/diff content.
   review_prepared: ['outcome', 'tasks_run', 'duration_ms'],
+  // PRIVACY DECISION (local bridge): fired ONCE when the user successfully pairs
+  // review123 with a local bridge (bridge/README.md). Props describe the
+  // MACHINE'S CAPABILITIES, never the machine or the code:
+  //   - 'inference_clis' : the detected CLI ids, from the hard-coded set
+  //                        ['claude', 'codex']. A fixed enum list, not free text.
+  //   - 'has_files'      : boolean — whether the bridge advertises file reads.
+  // Explicitly NOT sent: the pairing token, the port, the repo name (the bridge
+  // reports only a directory basename and even that stays local), any path, and
+  // any file content. Added so we can see whether the bridge is adopted at all
+  // and which CLI the inference path has to support first.
+  bridge_connected: ['inference_clis', 'has_files'],
 } as const
 
 export type EventName = keyof typeof EVENTS
-type AllowedProps<E extends EventName> = Partial<Record<(typeof EVENTS)[E][number], string | number | boolean>>
+/**
+ * A property value. `readonly string[]` is permitted for properties that are
+ * genuinely a SET of enum values (bridge_connected.inference_clis) — PostHog
+ * stores arrays natively and they stay far more queryable than a joined string.
+ * The allowlist above still governs WHICH properties may be sent at all.
+ */
+type PropValue = string | number | boolean | readonly string[]
+type AllowedProps<E extends EventName> = Partial<Record<(typeof EVENTS)[E][number], PropValue>>
 
 type CaptureFn = (event: string, props: Record<string, unknown>) => void
 let capture: CaptureFn = posthog.capture.bind(posthog)

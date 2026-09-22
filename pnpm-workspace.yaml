@@ -1,5 +1,9 @@
 packages:
   - '.'
+  # The OPTIONAL local bridge (bridge/README.md). Its own package so the Node
+  # process and the browser SPA keep separate type worlds; it declares no
+  # dependencies at all — Node built-ins only.
+  - 'bridge'
 allowBuilds:
   core-js: false
   # tree-sitter grammar packages: their install scripts only compile native

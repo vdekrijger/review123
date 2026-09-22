@@ -3,6 +3,7 @@
   import { pickActiveSection, isAtBottom, observeSections } from '../lib/settings/scrollspy'
   import AppearanceSection from '../components/settings/AppearanceSection.svelte'
   import ProvidersSection from '../components/settings/ProvidersSection.svelte'
+  import BridgeSection from '../components/settings/BridgeSection.svelte'
   import AiModelsSection from '../components/settings/AiModelsSection.svelte'
   import SkillsSection from '../components/settings/SkillsSection.svelte'
 
@@ -11,6 +12,10 @@
   const NAV_ITEMS = [
     { id: 'appearance', label: 'Appearance' },
     { id: 'providers', label: 'Providers & access' },
+    // Placed with the other CONNECTION settings, and deliberately NOT last:
+    // the scrollspy's bottom-edge rule activates whichever section is last,
+    // which 'Reviewer skills' is asserted to be.
+    { id: 'bridge', label: 'Local bridge' },
     { id: 'ai-models', label: 'AI models' },
     { id: 'skills', label: 'Reviewer skills' },
   ] as const
@@ -130,6 +135,7 @@
     <main class="settings-content">
       <AppearanceSection />
       <ProvidersSection />
+      <BridgeSection />
       <AiModelsSection />
       <SkillsSection />
     </main>

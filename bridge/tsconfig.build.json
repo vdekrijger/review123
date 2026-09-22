@@ -1,0 +1,14 @@
+{
+  // Emit project: same options, minus the tests, writing dist/.
+  // `pnpm --filter @review123/bridge build` (and `start`, which builds first).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

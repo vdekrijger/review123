@@ -1,0 +1,25 @@
+{
+  // Typecheck-only project: covers the bridge sources AND its tests.
+  // `pnpm --filter @review123/bridge check` runs this; the root `pnpm check`
+  // chains into it so CI typechecks the bridge with no workflow change.
+  //
+  // Deliberately NOT extending the root tsconfig: this is Node code (no DOM
+  // lib, node types) while the root project is a browser SPA. Keeping the two
+  // type worlds apart is the whole point of the separate package.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"]
+}

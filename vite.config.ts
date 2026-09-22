@@ -86,7 +86,16 @@ export default defineConfig(({ mode }) => ({
     // vitest's default empty-module CSS stub.
     css: true,
     setupFiles: ['./src/test-setup.ts'],
-    include: ['src/**/*.{test,spec}.ts', 'api/**/*.{test,spec}.ts', 'scripts/**/*.{test,spec}.ts'],
+    // bridge/** is the optional local bridge (a Node package, see
+    // bridge/README.md). Its specs carry a `// @vitest-environment node`
+    // docblock so they run outside jsdom while staying in the ONE `pnpm test`
+    // suite — no second runner, no workflow change.
+    include: [
+      'src/**/*.{test,spec}.ts',
+      'api/**/*.{test,spec}.ts',
+      'scripts/**/*.{test,spec}.ts',
+      'bridge/**/*.{test,spec}.ts',
+    ],
     env: {
       VITE_GITHUB_CLIENT_ID: 'test_client_id',
       VITE_GITLAB_CLIENT_ID: 'test_gitlab_client_id',
