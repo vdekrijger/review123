@@ -63,10 +63,25 @@ async function stubBridge(page: Page, body: Record<string, unknown>, status = 20
  */
 async function stubBridgeInference(
   page: Page,
-  opts: { health: Record<string, unknown>; answers: Record<string, string>; down?: boolean },
+  opts: {
+    health: Record<string, unknown>
+    answers: Record<string, string>
+    down?: boolean
+    /**
+     * Answer `/v1/infer/stream` with real NDJSON instead of 404ing it.
+     *
+     * Absent is the OLDER-BRIDGE case, and it is the default on purpose: every
+     * pre-existing test in this file then exercises the transparent fallback
+     * to `/v1/infer`, which is exactly the behaviour a user on a bridge they
+     * have not updated will get.
+     */
+    stream?: boolean
+    /** ms of silence in the middle of a streamed answer, so a test can see it arrive in pieces. */
+    streamGapMs?: number
+  },
 ) {
   await page.addInitScript(
-    ({ health, answers, down }) => {
+    ({ health, answers, down, stream, streamGapMs }) => {
       const realFetch = window.fetch.bind(window)
       const calls: { url: string; body: string | null }[] = []
       ;(window as unknown as { __bridgeCalls: typeof calls }).__bridgeCalls = calls
@@ -90,18 +105,58 @@ async function stubBridgeInference(
 
         if (url.includes('/v1/health')) return Promise.resolve(json(health))
 
-        if (url.includes('/v1/infer')) {
+        /** The CLI's "answer" for this prompt, chosen the way the vendor stubs do. */
+        const answerFor = (): string => {
           const sent = (body ?? '').toLowerCase()
           const match = Object.keys(answers).find((needle) => sent.includes(needle.toLowerCase()))
-          const text = match ? answers[match]! : answers['default'] ?? ''
+          return match ? answers[match]! : answers['default'] ?? ''
+        }
+
+        // Checked BEFORE /v1/infer: the streaming path contains it as a prefix.
+        if (url.includes('/v1/infer/stream')) {
+          if (!stream) {
+            // An older bridge: the route does not exist. Nothing was spawned,
+            // so the client may fall back to /v1/infer for free.
+            return Promise.resolve(
+              json({ ok: false, error: 'not-found', message: 'No route POST /v1/infer/stream' }, 404),
+            )
+          }
+          const text = answerFor()
+          // Split in the middle so a test can watch half the answer render
+          // while the other half is still in flight.
+          const cut = Math.floor(text.length / 2)
+          const encoder = new TextEncoder()
+          const line = (event: unknown) => encoder.encode(JSON.stringify(event) + '\n')
+          const ndjson = new ReadableStream<Uint8Array>({
+            async start(controller) {
+              controller.enqueue(line({ type: 'start', cli: 'claude', streaming: true }))
+              controller.enqueue(line({ type: 'delta', text: text.slice(0, cut) }))
+              await new Promise((r) => setTimeout(r, streamGapMs ?? 0))
+              controller.enqueue(line({ type: 'delta', text: text.slice(cut) }))
+              controller.enqueue(line({ type: 'done', text, truncated: false, durationMs: 12 }))
+              controller.close()
+            },
+          })
           return Promise.resolve(
-            json({ ok: true, cli: 'claude', text, truncated: false, durationMs: 12 }),
+            new Response(ndjson, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } }),
+          )
+        }
+
+        if (url.includes('/v1/infer')) {
+          return Promise.resolve(
+            json({ ok: true, cli: 'claude', text: answerFor(), truncated: false, durationMs: 12 }),
           )
         }
         return Promise.resolve(json({ ok: false, error: 'not-found', message: 'no' }, 404))
       }
     },
-    { health: opts.health, answers: opts.answers, down: opts.down === true },
+    {
+      health: opts.health,
+      answers: opts.answers,
+      down: opts.down === true,
+      stream: opts.stream === true,
+      streamGapMs: opts.streamGapMs ?? 0,
+    },
   )
 }
 
@@ -158,7 +213,7 @@ function healthBody(overrides: Record<string, unknown> = {}) {
     ok: true,
     protocol: 1,
     root: 'review123',
-    capabilities: { inference: ['claude', 'codex'], infer: true, files: true, search: true },
+    capabilities: { inference: ['claude', 'codex'], infer: true, inferStream: true, files: true, search: true },
     git: { head: BRIDGE_HEAD, branch: 'main', dirty: false },
     version: '0.1.0',
     ...overrides,
@@ -477,6 +532,116 @@ test('a review task is answered BY THE BRIDGE, and no paid provider is called', 
   expect(Object.keys(sent).sort()).toEqual(['cli', 'prompt', 'system', 'timeoutMs'])
 
   // …and the configured DeepSeek key was never spent.
+  const paid = await page.evaluate(() => (window as unknown as { __paidCalls: string[] }).__paidCalls)
+  expect(paid).toEqual([])
+})
+
+// ===========================================================================
+// STREAMING through the bridge — the thing users feel every session.
+//
+// #238 shipped inference with the whole answer in one delta, so the summary
+// panel sat blank for the length of a CLI turn and then filled instantly.
+// These two tests pin the two halves of the fix: a bridge that HAS the
+// streaming route renders the answer progressively, and a bridge that does NOT
+// still answers, through the one-shot route, without spending an API key.
+// ===========================================================================
+
+/** The first half of the streamed summary — rendered while the rest is still coming. */
+const STREAM_HEAD = 'Reviewed live by your local CLI, arriving as it is written. '
+/** The second half, held back by streamGapMs so the two are distinguishable. */
+const STREAM_TAIL = 'The second half landed later.\n\n===READING-ORDER===\nsrc/feature.ts\n===END==='
+
+test('streaming bridge: the summary renders PROGRESSIVELY, not all at once', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await stubBridgeInference(page, {
+    health: healthBody(),
+    answers: {
+      'reading-order': STREAM_HEAD + STREAM_TAIL,
+      default: JSON.stringify({ level: 'minor-changes', evidence: [], notAnalyzed: [] }),
+    },
+    stream: true,
+    // Long enough that "the first half is on screen and the second is not" is
+    // a fact rather than a race.
+    streamGapMs: 2_500,
+  })
+  await forbidPaidProviders(page)
+  await seedPairing(page)
+  await seedBridgeAsProvider(page)
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({
+    timeout: 10_000,
+  })
+
+  // THE POINT OF THE WHOLE PR: the opening of the answer is in the DOM while
+  // the rest of it is still on the wire.
+  await expect(page.getByText(/arriving as it is written/i).first()).toBeAttached({
+    timeout: 25_000,
+  })
+  await expect(page.getByText(/the second half landed later/i)).toHaveCount(0)
+
+  // …and then the rest arrives and completes the answer.
+  await expect(page.getByText(/the second half landed later/i).first()).toBeAttached({
+    timeout: 25_000,
+  })
+
+  // The SUMMARY went to the streaming route. (The review's other tasks are
+  // single-shot JSON calls and legitimately use `/v1/infer`; only the tasks
+  // that stream — summary and Ask — use this one.)
+  const calls = await page.evaluate(
+    () => (window as unknown as { __bridgeCalls: { url: string; body: string | null }[] }).__bridgeCalls,
+  )
+  const streamCalls = calls.filter((c) => c.url.includes('/v1/infer/stream'))
+  expect(streamCalls.length).toBeGreaterThan(0)
+  expect(streamCalls.some((c) => (c.body ?? '').toLowerCase().includes('reading-order'))).toBe(true)
+
+  // Still a CLI id and a prompt on the body — never a command.
+  const streamed = calls.find((c) => c.url.includes('/v1/infer/stream'))!
+  const sent = JSON.parse(streamed.body ?? '{}')
+  expect(sent.cli).toBe('claude')
+  expect(Object.keys(sent).sort()).toEqual(['cli', 'prompt', 'system', 'timeoutMs'])
+
+  const paid = await page.evaluate(() => (window as unknown as { __paidCalls: string[] }).__paidCalls)
+  expect(paid).toEqual([])
+})
+
+test('an OLDER bridge with no streaming route still answers, via the one-shot route', async ({
+  page,
+}) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  // `stream` absent → /v1/infer/stream 404s, exactly as a pre-streaming bridge
+  // does. Nothing was spawned to produce that 404, so the fallback is free.
+  await stubBridgeInference(page, {
+    health: healthBody({
+      capabilities: { inference: ['claude'], infer: true, files: true, search: true },
+    }),
+    answers: {
+      'reading-order': BRIDGE_SUMMARY,
+      default: JSON.stringify({ level: 'minor-changes', evidence: [], notAnalyzed: [] }),
+    },
+  })
+  await forbidPaidProviders(page)
+  await seedPairing(page)
+  await seedBridgeAsProvider(page)
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({
+    timeout: 10_000,
+  })
+  await expect(page.getByText(/reviewed by your local cli/i).first()).toBeAttached({
+    timeout: 25_000,
+  })
+
+  const calls = await page.evaluate(
+    () => (window as unknown as { __bridgeCalls: { url: string; body: string | null }[] }).__bridgeCalls,
+  )
+  // It TRIED the streaming route, was told it does not exist, and fell back.
+  expect(calls.some((c) => c.url.includes('/v1/infer/stream'))).toBe(true)
+  expect(calls.some((c) => /\/v1\/infer$/.test(c.url))).toBe(true)
+
+  // The fallback is to the bridge's OWN other route — never to a paid one.
   const paid = await page.evaluate(() => (window as unknown as { __paidCalls: string[] }).__paidCalls)
   expect(paid).toEqual([])
 })

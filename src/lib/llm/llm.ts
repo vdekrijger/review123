@@ -1284,17 +1284,6 @@ async function bridgeComplete(
 }
 
 /**
- * The message a caller (or the settings UI) gets when it asks WHY nothing
- * typed out. Exported so the copy lives in one place.
- */
-export const BRIDGE_NO_STREAM_ROUTE_MESSAGE =
-  'This local bridge has no streaming route, so answers arrive all at once. Update the bridge to see them type out.'
-
-/** Same question, different answer: the bridge streams, this CLI does not. */
-export const BRIDGE_CLI_NO_STREAM_MESSAGE =
-  'The codex CLI has no partial-output mode, so its answers arrive all at once rather than typing out.'
-
-/**
  * How the LAST bridge stream was actually delivered.
  *
  * Read by the settings UI (and by anyone debugging "why doesn't it type out?")
