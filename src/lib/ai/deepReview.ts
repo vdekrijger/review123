@@ -17,7 +17,8 @@
  * Budgets (hard): DEEP_REVIEW_MAX_TOOL_CALLS calls per run (enforced by the
  * loop) and a total fetched-bytes budget enforced HERE — 150 KB from the
  * provider, 400 KB when `source.local` says the bytes come off the user's own
- * disk through the bridge (see fetchBudgetFor for why only that one moves).
+ * disk through the bridge (see DEEP_REVIEW_LOCAL_MAX_FETCHED_BYTES for why the
+ * bytes move with the source and the CALL budget deliberately does not).
  * Files are capped at DEEP_REVIEW_FILE_CAP_BYTES each, truncated with an
  * explicit marker so the model knows it saw a prefix.
  *
@@ -56,29 +57,39 @@ export const DEEP_REVIEW_FILE_CAP_BYTES = 50_000
 export const DEEP_REVIEW_TRUNCATION_MARKER = '\n…[truncated: deep review reads at most 50 KB per file]'
 
 /**
- * The same two budgets when the source is the user's LOCAL CHECKOUT (the
+ * The FETCH-BYTES budget when the source is the user's LOCAL CHECKOUT (the
  * bridge, once its head sha matches the PR's — see lib/bridge/grounding.ts).
  *
- * WHY THESE TWO MOVE AND THE OTHERS DO NOT
+ * WHY THIS ONE MOVES AND THE OTHER TWO DO NOT
  *
- * 8 calls / 150 KB were never about what the model needed. They were about
- * what the PROVIDER costs: every read is an HTTPS round trip against an API
- * with a ~10-searches-per-minute code-search quota, and several tasks run
- * concurrently. Locally a read is an `open()` on the user's own SSD and a
- * search is ripgrep over a tree already in page cache — no quota, no round
- * trip, no shared budget to exhaust. So the ceiling that remains exists for a
- * different reason, and is set by it:
+ * 150 KB was never about what the model needed. It was about what the PROVIDER
+ * costs: every read is an HTTPS round trip against a rate-limited API, and
+ * several tasks run concurrently. Locally a read is an `open()` on the user's
+ * own SSD — no quota, no round trip, no shared budget to exhaust.
  *
- *   - 20 calls, not unlimited. A tool loop still costs TOKENS: every result is
- *     appended to the conversation and re-sent on the next round, so the bill
- *     grows quadratically in call count whoever served the bytes. 20 is about
- *     the point where a round's prompt stops being dominated by the diff.
- *   - 400 KB, not unlimited, for the same reason — and because the model has a
- *     context window that a free filesystem does not enlarge.
+ * 400 KB, not unlimited, because the bytes still land in the PROMPT: the model
+ * has a context window that a free filesystem does not enlarge. It is also
+ * exactly DEEP_REVIEW_MAX_TOOL_CALLS × DEEP_REVIEW_FILE_CAP_BYTES — what 8
+ * calls can fetch at the per-file cap — so locally the bytes stop binding and
+ * the CALL budget is the single remaining ceiling. That is deliberate.
  *
- * DEEP_REVIEW_FILE_CAP_BYTES is deliberately NOT raised: 50 KB per file is a
- * prompt-shape decision (a reviewer reading a 2 MB file is not reviewing), and
- * nothing about a cheaper read changes it.
+ * DEEP_REVIEW_FILE_CAP_BYTES is NOT raised: 50 KB per file is a prompt-shape
+ * decision (a reviewer reading a 2 MB file is not reviewing), and nothing about
+ * a cheaper read changes it.
+ *
+ * DEEP_REVIEW_MAX_TOOL_CALLS is NOT raised either, and the premise for raising
+ * it does not survive checking. It is not a quota budget: `maxToolCalls` is the
+ * tool-LOOP bound (llmToolLoop runs maxToolCalls + 2 ROUNDS), and every round
+ * re-sends the whole accumulated conversation to the model. Its cost is tokens
+ * and context, both of which are identical whoever served the bytes — an
+ * `open()` on the local SSD does not make round 9 cheaper than round 8. The
+ * quota argument applies only to the two SEARCH tools, and the place that is
+ * genuinely quota-bound budgets them separately and conditionally already
+ * (crossVerify.ts, searchCallsPerRound), which is the right shape for a limit
+ * that really does depend on who answers. Raising 8 here would buy a longer
+ * conversation, not a cheaper one. Same conclusion, same reasoning, as
+ * symbolIndex.ts's MAX_FULL_CONTENT_LINES: a cheaper source is not a reason to
+ * move a budget that was never about the source.
  */
 export const DEEP_REVIEW_LOCAL_MAX_FETCHED_BYTES = 400_000
 
