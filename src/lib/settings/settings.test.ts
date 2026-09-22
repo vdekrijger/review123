@@ -842,6 +842,24 @@ describe('aiPanel setting (Plan P — unified model panel)', () => {
     })
   })
 
+  it('KEEPS a local-bridge participant — the panel editor offers it, so it must survive a reload', () => {
+    // The bridge is never an automatic default verifier (config.ts), but an
+    // explicit panel naming it is the user's own choice and was being silently
+    // dropped on load.
+    const participants: PanelParticipant[] = [gen('bridge', 'claude'), ver('openai', 'gpt-5.4')]
+    setAiPanel({ participants })
+    expect(getSettings().aiPanel).toEqual({ participants })
+  })
+
+  it('still drops a bridge participant naming a CLI that does not exist', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      aiPanel: {
+        participants: [gen('bridge', 'claude'), ver('bridge', 'not-a-cli')],
+      },
+    }))
+    expect(getSettings().aiPanel).toEqual({ participants: [gen('bridge', 'claude')] })
+  })
+
   it('drops a participant with an invalid role', () => {
     localStorage.setItem('review123:settings', JSON.stringify({
       aiPanel: {

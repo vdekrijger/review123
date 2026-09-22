@@ -369,7 +369,16 @@ const DEFAULTS: Settings = {
   showTokenCost: false,
 }
 
-const AI_PROVIDER_IDS = new Set<string>(['deepseek', 'openai', 'anthropic', 'gemini', 'openrouter'])
+/**
+ * Provider ids a stored panel participant may name. `'bridge'` is included:
+ * the panel editor offers the local bridge like any other source, and a panel
+ * naming it must survive a reload rather than being silently dropped. (The
+ * bridge is never auto-enlisted as a DEFAULT verifier — see config.ts — but an
+ * explicit choice is the user's to make.)
+ */
+const AI_PROVIDER_IDS = new Set<string>([
+  'deepseek', 'openai', 'anthropic', 'gemini', 'openrouter', 'bridge',
+])
 
 /** Coerce a provider+model pair; returns null if either is invalid. */
 function coerceProviderModel(raw: unknown): { provider: AiProvider; model: string } | null {
