@@ -37,15 +37,21 @@ follow-up PRs land. Nothing in the app is routed through the bridge yet.
 Node 22 or newer. From the repo you want to serve:
 
 ```sh
-# from a review123 checkout
+# from a review123 checkout — compiles the package, then runs it against the cwd
 pnpm bridge                          # = pnpm --filter @review123/bridge start
 ```
 
-Or, inside some other repo:
+Or, inside some **other** repo, after building the package once
+(`pnpm --filter @review123/bridge build`):
 
 ```sh
 node /path/to/review123/bridge/dist/cli.js --root .
 ```
+
+The package intentionally has no root workspace dependency, so there is no
+`node_modules/.bin/review123-bridge` shim: linking a bin whose `dist/` may not
+be built yet is a way to break `pnpm install` on a fresh checkout (and on the
+Vercel deploy), which is a bad trade for a shorter command.
 
 It prints a banner with the pairing token:
 
