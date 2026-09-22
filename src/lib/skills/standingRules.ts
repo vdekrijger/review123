@@ -19,6 +19,7 @@
  */
 
 import type { llmJsonWithRepairFor as LlmJsonForFn, ProviderConfig } from '../llm/llm'
+import { LlmError, rawTransportKind } from '../llm/llm'
 import type { LlmModelDef } from '../llm/providers'
 import { getProvider, getModelDef } from '../llm/providers'
 import { activeLlmConfig, providerCredential } from '../llm/config'
@@ -174,7 +175,33 @@ export interface DistillDeps {
 
 export type DistillOutcome =
   | { ok: true; rules: StandingRule[]; source: DistillSource; sourceLabel: string }
-  | { ok: false; error: string; source: DistillSource; sourceLabel: string }
+  /**
+   * The caller stopped the run. NOT a failure: it carries no error string on
+   * purpose, so no surface can render a cancellation as one.
+   */
+  | { ok: false; cancelled: true; error?: undefined; source: DistillSource; sourceLabel: string }
+  | { ok: false; cancelled?: false; error: string; source: DistillSource; sourceLabel: string }
+
+/**
+ * True when the run was STOPPED rather than broken — the same distinction
+ * run.svelte.ts's `isCancellation` draws, applied at this module's boundary
+ * because `distillStandingRules` swallows the thrown LlmError.
+ *
+ * Three signals, in order of trust:
+ *   1. the caller's own signal fired — whatever came out of the transport
+ *      afterwards is a consequence of that cancel, not a diagnosis;
+ *   2. the transport classified it ('aborted' — see llm.ts's mapFetchError,
+ *      which keeps our own request timeout on the 'timeout' kind instead);
+ *   3. a RAW engine AbortError that escaped some transport unmapped.
+ *
+ * A cancellation must never render as an error, never carry the engine's own
+ * "The user aborted a request." text, and never count as a failure.
+ */
+export function isDistillCancellation(err: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true
+  if (err instanceof LlmError) return err.kind === 'aborted'
+  return rawTransportKind(err) === 'aborted'
+}
 
 /**
  * Run ONE distillation over the corpus through the given route.
@@ -204,6 +231,11 @@ export async function distillStandingRules(
     )
     return { ok: true, rules: result.rules, source: route.source, sourceLabel: route.label }
   } catch (err) {
+    // A STOPPED run is not a failed one: no error text at all, so the caller
+    // cannot accidentally render the calm case as a red one.
+    if (isDistillCancellation(err, signal)) {
+      return { ok: false, cancelled: true, source: route.source, sourceLabel: route.label }
+    }
     const detail = err instanceof Error ? err.message : 'The distillation failed.'
     return {
       ok: false,

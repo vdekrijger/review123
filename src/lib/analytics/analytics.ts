@@ -282,7 +282,14 @@ const EVENTS = {
   //   - 'comments' / 'dismissals' / 'drafts' : integer SIZES of the three
   //                     corpus streams. Sizes, never contents.
   //   - 'duration_ms' : elapsed ms (same convention as ai_task_completed).
-  standing_rules_distilled: ['source', 'rules', 'do', 'avoid', 'comments', 'dismissals', 'drafts', 'duration_ms'],
+  //   - 'outcome'     : 'done' | 'cancelled'. The distillation is a multi-minute
+  //                     call the user can now stop, and an ABANDONED run is not
+  //                     a failed one — the same distinction bridge_fix_settled
+  //                     makes. Without it a cancel would either be invisible
+  //                     (unmeasurable) or land in the failure mix (a lie). A
+  //                     cancelled run carries the corpus sizes and the elapsed
+  //                     ms it got through, and NO rule counts: there are none.
+  standing_rules_distilled: ['outcome', 'source', 'rules', 'do', 'avoid', 'comments', 'dismissals', 'drafts', 'duration_ms'],
   // Fired when the user accepts or rejects ONE proposed rule. The accept/reject
   // rate is the only real precision measure this feature has — and it needs no
   // rule text to be useful. Fixed enums and one boolean:
