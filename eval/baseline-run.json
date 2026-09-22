@@ -1,0 +1,2879 @@
+{
+  "mode": "live",
+  "transport": "bridge (claude, verifiers: codex+codex)",
+  "model": "bridge:claude",
+  "verifiers": [
+    "bridge:codex",
+    "bridge:codex"
+  ],
+  "deep": false,
+  "testsPass": true,
+  "crossVerify": true,
+  "aggregate": {
+    "cases": [
+      {
+        "caseName": "01-real-bug",
+        "produced": 9,
+        "realCaught": 1,
+        "realTotal": 1,
+        "noiseFlagged": 0,
+        "noiseTotal": 1,
+        "unmatched": 4,
+        "recall": 1,
+        "precision": 0.2,
+        "noiseRate": 0
+      },
+      {
+        "caseName": "02-clean-pr",
+        "produced": 0,
+        "realCaught": 0,
+        "realTotal": 0,
+        "noiseFlagged": 0,
+        "noiseTotal": 2,
+        "unmatched": 0,
+        "recall": 1,
+        "precision": 1,
+        "noiseRate": 0
+      },
+      {
+        "caseName": "03-noise-trap",
+        "produced": 0,
+        "realCaught": 0,
+        "realTotal": 0,
+        "noiseFlagged": 0,
+        "noiseTotal": 3,
+        "unmatched": 0,
+        "recall": 1,
+        "precision": 1,
+        "noiseRate": 0
+      },
+      {
+        "caseName": "04-refactor",
+        "produced": 4,
+        "realCaught": 1,
+        "realTotal": 1,
+        "noiseFlagged": 1,
+        "noiseTotal": 2,
+        "unmatched": 1,
+        "recall": 1,
+        "precision": 0.3333333333333333,
+        "noiseRate": 0.5
+      },
+      {
+        "caseName": "05-security",
+        "produced": 5,
+        "realCaught": 1,
+        "realTotal": 1,
+        "noiseFlagged": 0,
+        "noiseTotal": 2,
+        "unmatched": 3,
+        "recall": 1,
+        "precision": 0.25,
+        "noiseRate": 0
+      },
+      {
+        "caseName": "06-perf",
+        "produced": 7,
+        "realCaught": 1,
+        "realTotal": 1,
+        "noiseFlagged": 0,
+        "noiseTotal": 1,
+        "unmatched": 3,
+        "recall": 1,
+        "precision": 0.25,
+        "noiseRate": 0
+      }
+    ],
+    "recall": 1,
+    "precision": 0.25,
+    "noiseRate": 0.09090909090909091,
+    "totalProduced": 25,
+    "realTotal": 4,
+    "realCaught": 4,
+    "noiseTotal": 11,
+    "noiseFlagged": 1
+  },
+  "variantAggregates": {
+    "generate-only": {
+      "cases": [
+        {
+          "caseName": "01-real-bug",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "02-clean-pr",
+          "produced": 2,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0,
+          "noiseRate": 0.5
+        },
+        {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "04-refactor",
+          "produced": 5,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 2,
+          "noiseTotal": 2,
+          "unmatched": 2,
+          "recall": 1,
+          "precision": 0.2,
+          "noiseRate": 1
+        },
+        {
+          "caseName": "05-security",
+          "produced": 6,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 4,
+          "recall": 1,
+          "precision": 0.16666666666666666,
+          "noiseRate": 0.5
+        },
+        {
+          "caseName": "06-perf",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 4,
+          "recall": 1,
+          "precision": 0.2,
+          "noiseRate": 0
+        }
+      ],
+      "recall": 1,
+      "precision": 0.18181818181818182,
+      "noiseRate": 0.36363636363636365,
+      "totalProduced": 27,
+      "realTotal": 4,
+      "realCaught": 4,
+      "noiseTotal": 11,
+      "noiseFlagged": 4,
+      "label": "raw generation (pre-#226 surface)",
+      "stages": {
+        "crossVerify": false,
+        "triage": false,
+        "mootnessGate": false,
+        "simplify": false,
+        "testsPass": false
+      }
+    },
+    "+tests-pass": {
+      "cases": [
+        {
+          "caseName": "01-real-bug",
+          "produced": 9,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 4,
+          "recall": 1,
+          "precision": 0.2,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "02-clean-pr",
+          "produced": 2,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0,
+          "noiseRate": 0.5
+        },
+        {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "04-refactor",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 2,
+          "noiseTotal": 2,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.16666666666666666,
+          "noiseRate": 1
+        },
+        {
+          "caseName": "05-security",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 4,
+          "recall": 1,
+          "precision": 0.16666666666666666,
+          "noiseRate": 0.5
+        },
+        {
+          "caseName": "06-perf",
+          "produced": 9,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 5,
+          "recall": 1,
+          "precision": 0.16666666666666666,
+          "noiseRate": 0
+        }
+      ],
+      "recall": 1,
+      "precision": 0.16,
+      "noiseRate": 0.36363636363636365,
+      "totalProduced": 34,
+      "realTotal": 4,
+      "realCaught": 4,
+      "noiseTotal": 11,
+      "noiseFlagged": 4,
+      "label": "tests pass added (#237)",
+      "stages": {
+        "crossVerify": false,
+        "triage": false,
+        "mootnessGate": false,
+        "simplify": false,
+        "testsPass": true
+      }
+    },
+    "+verify": {
+      "cases": [
+        {
+          "caseName": "01-real-bug",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "02-clean-pr",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "04-refactor",
+          "produced": 3,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0.5
+        },
+        {
+          "caseName": "05-security",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "06-perf",
+          "produced": 5,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 2,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0
+        }
+      ],
+      "recall": 1,
+      "precision": 0.2857142857142857,
+      "noiseRate": 0.09090909090909091,
+      "totalProduced": 19,
+      "realTotal": 4,
+      "realCaught": 4,
+      "noiseTotal": 11,
+      "noiseFlagged": 1,
+      "label": "cross-model verification (#229)",
+      "stages": {
+        "crossVerify": true,
+        "triage": false,
+        "mootnessGate": false,
+        "simplify": false,
+        "testsPass": false
+      }
+    },
+    "+triage": {
+      "cases": [
+        {
+          "caseName": "01-real-bug",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "02-clean-pr",
+          "produced": 2,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0,
+          "noiseRate": 0.5
+        },
+        {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "04-refactor",
+          "produced": 5,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 2,
+          "noiseTotal": 2,
+          "unmatched": 2,
+          "recall": 1,
+          "precision": 0.2,
+          "noiseRate": 1
+        },
+        {
+          "caseName": "05-security",
+          "produced": 6,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 4,
+          "recall": 1,
+          "precision": 0.16666666666666666,
+          "noiseRate": 0.5
+        },
+        {
+          "caseName": "06-perf",
+          "produced": 6,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        }
+      ],
+      "recall": 1,
+      "precision": 0.19047619047619047,
+      "noiseRate": 0.36363636363636365,
+      "totalProduced": 26,
+      "realTotal": 4,
+      "realCaught": 4,
+      "noiseTotal": 11,
+      "noiseFlagged": 4,
+      "label": "triage alone, unverified (#226)",
+      "stages": {
+        "crossVerify": false,
+        "triage": true,
+        "mootnessGate": true,
+        "simplify": false,
+        "testsPass": false
+      }
+    },
+    "verify+triage/moot-off": {
+      "cases": [
+        {
+          "caseName": "01-real-bug",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "02-clean-pr",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "04-refactor",
+          "produced": 3,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0.5
+        },
+        {
+          "caseName": "05-security",
+          "produced": 3,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 2,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "06-perf",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        }
+      ],
+      "recall": 1,
+      "precision": 0.4,
+      "noiseRate": 0.09090909090909091,
+      "totalProduced": 14,
+      "realTotal": 4,
+      "realCaught": 4,
+      "noiseTotal": 11,
+      "noiseFlagged": 1,
+      "label": "verify + triage, mootness gate OFF",
+      "stages": {
+        "crossVerify": true,
+        "triage": true,
+        "mootnessGate": false,
+        "simplify": false,
+        "testsPass": false
+      }
+    },
+    "verify+triage": {
+      "cases": [
+        {
+          "caseName": "01-real-bug",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "02-clean-pr",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "04-refactor",
+          "produced": 3,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0.5
+        },
+        {
+          "caseName": "05-security",
+          "produced": 3,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 2,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "06-perf",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        }
+      ],
+      "recall": 1,
+      "precision": 0.4,
+      "noiseRate": 0.09090909090909091,
+      "totalProduced": 14,
+      "realTotal": 4,
+      "realCaught": 4,
+      "noiseTotal": 11,
+      "noiseFlagged": 1,
+      "label": "verify + triage + mootness gate (#228)",
+      "stages": {
+        "crossVerify": true,
+        "triage": true,
+        "mootnessGate": true,
+        "simplify": false,
+        "testsPass": false
+      }
+    },
+    "app-default": {
+      "cases": [
+        {
+          "caseName": "01-real-bug",
+          "produced": 5,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "02-clean-pr",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "04-refactor",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0.5
+        },
+        {
+          "caseName": "05-security",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "06-perf",
+          "produced": 5,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        }
+      ],
+      "recall": 1,
+      "precision": 0.4444444444444444,
+      "noiseRate": 0.09090909090909091,
+      "totalProduced": 18,
+      "realTotal": 4,
+      "realCaught": 4,
+      "noiseTotal": 11,
+      "noiseFlagged": 1,
+      "label": "everything on — the inline surface today",
+      "stages": {
+        "crossVerify": true,
+        "triage": true,
+        "mootnessGate": true,
+        "simplify": true,
+        "testsPass": true
+      }
+    },
+    "app-default/show-all": {
+      "cases": [
+        {
+          "caseName": "01-real-bug",
+          "produced": 9,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "02-clean-pr",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "04-refactor",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0.5
+        },
+        {
+          "caseName": "05-security",
+          "produced": 5,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 2,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0
+        },
+        {
+          "caseName": "06-perf",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        }
+      ],
+      "recall": 1,
+      "precision": 0.2857142857142857,
+      "noiseRate": 0.09090909090909091,
+      "totalProduced": 25,
+      "realTotal": 4,
+      "realCaught": 4,
+      "noiseTotal": 11,
+      "noiseFlagged": 1,
+      "label": "everything on, \"show all findings\"",
+      "stages": {
+        "crossVerify": true,
+        "triage": false,
+        "mootnessGate": true,
+        "simplify": true,
+        "testsPass": true
+      }
+    }
+  },
+  "gate": {
+    "passed": true,
+    "reasons": []
+  },
+  "cases": {
+    "01-real-bug": {
+      "score": {
+        "caseName": "01-real-bug",
+        "produced": 9,
+        "realCaught": 1,
+        "realTotal": 1,
+        "noiseFlagged": 0,
+        "noiseTotal": 1,
+        "unmatched": 4,
+        "recall": 1,
+        "precision": 0.2,
+        "noiseRate": 0
+      },
+      "produced": [
+        {
+          "file": "src/lib/paginate.ts",
+          "line": null,
+          "description": "src/lib/paginate.ts: `start` changed from `pageNum * size` to `(pageNum - 1) * size`, switching the page-number contract from 0-based to 1-based; any caller still passing pageNum=0 now gets `start = -size`, which `Array.prototype.slice` treats as an offset from the end of the array, returning the wrong items."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": null,
+          "description": "src/lib/paginate.ts: `end` changed from `start + size` to `start + size - 1`, and because `slice`'s second argument is exclusive, every page now returns `size - 1` items and silently drops the last item of each page."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": null,
+          "description": "src/lib/paginate.ts: the diff's own comment on the `end` line is labeled `BUG:` and describes the off-by-one, so the change is documented as incorrect in the code itself."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": null,
+          "description": "`end = start + size - 1` is passed as the exclusive upper bound to `slice`, so every page returns `size - 1` items and the last item of each page is silently dropped (the in-diff comment itself labels this as a BUG). Any consumer relying on full pages will lose one record per page with no error, and the fix is `const end = start + size`."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": null,
+          "description": "`start = (pageNum - 1) * size` switches the public `page()` contract from 0-based to 1-based page numbers, and a caller still passing `pageNum = 0` now gets a negative `start`, which `slice` interprets as an offset from the end of the array. No call sites are updated in this diff and none are visible here, so couldn't verify whether existing consumers still pass 0-based page numbers."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": 6,
+          "description": "`end = start + size - 1` combined with `slice`'s exclusive end bound drops the last element of every page (e.g. `page([1,2,3,4], 1, 2)` returns `[1]` instead of `[1,2]`). Every consumer silently loses one item per page, and the final item of the collection is never reachable via pagination."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": 3,
+          "description": "Switching to `(pageNum - 1) * size` changes the contract from 0-based to 1-based, so any existing caller still passing `pageNum = 0` now gets a negative `start` and `Array.prototype.slice` interprets it as an offset from the end, returning the tail of the array instead of the first page. Callers are not visible in this diff — couldn't verify whether any still pass 0 — but the failure is silent wrong data rather than an error."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": 6,
+          "description": "`end = start + size - 1` combined with `slice`'s exclusive end bound returns `size - 1` items for every full page, e.g. `page([1,2,3,4,5,6], 1, 3)` yields `[1,2]` instead of `[1,2,3]`, and `page([1,2,3,4,5,6], 2, 3)` yields `[4,5]` — item 3 and item 6 are never returned by any page. This is a silent data-loss bug for every caller; no test file is visible in this PR context, so I couldn't verify whether any test asserts the exact contents/length of a full page (a `toEqual([1,2,3])` on page 1 would catch it)."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": 3,
+          "description": "Switching to 1-based `pageNum` without a lower-bound guard means the previously-valid first page `pageNum = 0` now computes `start = -size`, and `items.slice(-size, ...)` silently returns items from the END of the array rather than the first page or an error. Any existing caller still passing 0-based page numbers gets wrong-but-plausible data instead of a visible failure."
+        }
+      ],
+      "findings": [
+        {
+          "file": "src/lib/paginate.ts",
+          "line": null,
+          "description": "src/lib/paginate.ts: `start` changed from `pageNum * size` to `(pageNum - 1) * size`, switching the page-number contract from 0-based to 1-based; any caller still passing pageNum=0 now gets `start = -size`, which `Array.prototype.slice` treats as an offset from the end of the array, returning the wrong items.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "uncertain",
+                "reason": "The diff shows pageNum=0 behavior changed, but the provided context does not prove that 0 remains a valid contract or that any caller still passes it.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "uncertain",
+                "reason": "The negative-slice behavior is real for pageNum=0, but whether 0 remains a valid caller contract is not established by the provided context.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          },
+          "simpleBody": "In src/lib/paginate.ts, `start` changed from `pageNum * size` to `(pageNum - 1) * size`, making page numbers 1-based instead of 0-based. Any caller still passing pageNum=0 now gets `start = -size`, which `Array.prototype.slice` treats as an offset from the end and returns the wrong items."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": null,
+          "description": "src/lib/paginate.ts: `end` changed from `start + size` to `start + size - 1`, and because `slice`'s second argument is exclusive, every page now returns `size - 1` items and silently drops the last item of each page.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "slice uses an exclusive end bound, so end = start + size - 1 returns one fewer item than requested on full pages.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The code passes start + size - 1 to slice's exclusive end bound, so full pages return one fewer item.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          },
+          "simpleBody": "In src/lib/paginate.ts, `end` changed from `start + size` to `start + size - 1`, but `slice`'s second argument is exclusive, so every page returns `size - 1` items and silently drops its last item."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": null,
+          "description": "src/lib/paginate.ts: the diff's own comment on the `end` line is labeled `BUG:` and describes the off-by-one, so the change is documented as incorrect in the code itself.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The provided diff comment explicitly labels the same off-by-one as a BUG, matching the real slice-bound defect.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The in-diff BUG comment accurately points to the same real off-by-one pagination defect.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          },
+          "simpleBody": "In src/lib/paginate.ts, the diff's own comment on the `end` line is labeled `BUG:` and describes the off-by-one, so the code documents itself as incorrect."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": null,
+          "description": "`end = start + size - 1` is passed as the exclusive upper bound to `slice`, so every page returns `size - 1` items and the last item of each page is silently dropped (the in-diff comment itself labels this as a BUG). Any consumer relying on full pages will lose one record per page with no error, and the fix is `const end = start + size`.",
+          "severity": "high",
+          "taskKey": "attention",
+          "reviewerName": "attention",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The code passes start + size - 1 to slice's exclusive upper bound, silently dropping the last item of each full page.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The exclusive slice bound makes end = start + size - 1 silently drop the last item from each full page.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          },
+          "simpleBody": "`end = start + size - 1` is used as `slice`'s exclusive upper bound, so every page returns `size - 1` items and silently drops its last one (the in-diff comment even labels this a BUG). Any consumer relying on full pages loses one record per page with no error. Fix: `const end = start + size`."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": null,
+          "description": "`start = (pageNum - 1) * size` switches the public `page()` contract from 0-based to 1-based page numbers, and a caller still passing `pageNum = 0` now gets a negative `start`, which `slice` interprets as an offset from the end of the array. No call sites are updated in this diff and none are visible here, so couldn't verify whether existing consumers still pass 0-based page numbers.",
+          "severity": "medium",
+          "taskKey": "attention",
+          "reviewerName": "attention",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "uncertain",
+                "reason": "The pageNum=0 failure is plausible, but the finding itself admits the relevant callers are not visible, so the breaking-contract claim is not proven.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "uncertain",
+                "reason": "The claim depends on unseen call sites still using 0-based page numbers, which the provided context does not establish.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          },
+          "simpleBody": "`start = (pageNum - 1) * size` makes the public `page()` contract 1-based, so a caller still passing `pageNum = 0` gets a negative `start`, which `slice` reads as an offset from the end of the array. No call sites are updated or visible in this diff, so I couldn't verify whether existing consumers still pass 0-based page numbers."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": 6,
+          "description": "`end = start + size - 1` combined with `slice`'s exclusive end bound drops the last element of every page (e.g. `page([1,2,3,4], 1, 2)` returns `[1]` instead of `[1,2]`). Every consumer silently loses one item per page, and the final item of the collection is never reachable via pagination.",
+          "severity": "high",
+          "taskKey": "skill:bug-hunter",
+          "reviewerName": "bug-hunter",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "With end = start + size - 1, page([1,2,3,4], 1, 2) returns [1], confirming a silent pagination correctness bug.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The example follows directly from slice's exclusive end bound and shows a real item-loss bug.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          },
+          "simpleBody": "`end = start + size - 1` with `slice`'s exclusive end bound drops the last element of every page, e.g. `page([1,2,3,4], 1, 2)` returns `[1]` instead of `[1,2]`. Every consumer silently loses one item per page, and the collection's final item is never reachable through pagination."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": 3,
+          "description": "Switching to `(pageNum - 1) * size` changes the contract from 0-based to 1-based, so any existing caller still passing `pageNum = 0` now gets a negative `start` and `Array.prototype.slice` interprets it as an offset from the end, returning the tail of the array instead of the first page. Callers are not visible in this diff — couldn't verify whether any still pass 0 — but the failure is silent wrong data rather than an error.",
+          "severity": "medium",
+          "taskKey": "skill:bug-hunter",
+          "reviewerName": "bug-hunter",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "uncertain",
+                "reason": "The negative-start behavior would occur for pageNum=0, but the provided context does not establish any remaining 0-based caller.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "uncertain",
+                "reason": "The behavior would be wrong for existing 0-based callers, but the finding itself admits those callers are not visible.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          },
+          "simpleBody": "Switching to `(pageNum - 1) * size` makes page numbers 1-based, so any caller still passing `pageNum = 0` gets a negative `start` and `Array.prototype.slice` returns the tail of the array instead of the first page. Callers aren't visible in this diff, so I couldn't verify whether any still pass 0, but the failure is silent wrong data rather than an error."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": 6,
+          "description": "`end = start + size - 1` combined with `slice`'s exclusive end bound returns `size - 1` items for every full page, e.g. `page([1,2,3,4,5,6], 1, 3)` yields `[1,2]` instead of `[1,2,3]`, and `page([1,2,3,4,5,6], 2, 3)` yields `[4,5]` — item 3 and item 6 are never returned by any page. This is a silent data-loss bug for every caller; no test file is visible in this PR context, so I couldn't verify whether any test asserts the exact contents/length of a full page (a `toEqual([1,2,3])` on page 1 would catch it).",
+          "severity": "high",
+          "taskKey": "tests:bug-hunter",
+          "reviewerName": "bug-hunter",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The examples follow directly from slice's exclusive end bound and show items at page boundaries becoming unreachable.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The pagination examples demonstrate the real off-by-one defect, regardless of the unverified note about missing tests.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          },
+          "simpleBody": "`end = start + size - 1` with `slice`'s exclusive end bound returns `size - 1` items per full page: `page([1,2,3,4,5,6], 1, 3)` yields `[1,2]` instead of `[1,2,3]`, `page([1,2,3,4,5,6], 2, 3)` yields `[4,5]`, and items 3 and 6 are never returned by any page. This is silent data loss for every caller. No test file is visible in this PR, so I couldn't verify whether any test checks a full page's exact contents or length (a `toEqual([1,2,3])` on page 1 would catch it)."
+        },
+        {
+          "file": "src/lib/paginate.ts",
+          "line": 3,
+          "description": "Switching to 1-based `pageNum` without a lower-bound guard means the previously-valid first page `pageNum = 0` now computes `start = -size`, and `items.slice(-size, ...)` silently returns items from the END of the array rather than the first page or an error. Any existing caller still passing 0-based page numbers gets wrong-but-plausible data instead of a visible failure.",
+          "severity": "medium",
+          "taskKey": "tests:bug-hunter",
+          "reviewerName": "bug-hunter",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "uncertain",
+                "reason": "The pageNum=0 behavior is wrong under a 0-based contract, but the provided context does not prove that contract still applies or that callers use it.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "uncertain",
+                "reason": "The pageNum=0 failure is code-grounded, but whether pageNum=0 is still a valid input after the contract change is not proven.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          },
+          "simpleBody": "Making `pageNum` 1-based without a lower-bound guard means the previously-valid first page `pageNum = 0` now computes `start = -size`, and `items.slice(-size, ...)` silently returns items from the END of the array instead of the first page or an error. Existing callers still passing 0-based page numbers get wrong-but-plausible data instead of a visible failure."
+        }
+      ],
+      "variantScores": {
+        "generate-only": {
+          "caseName": "01-real-bug",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        },
+        "+tests-pass": {
+          "caseName": "01-real-bug",
+          "produced": 9,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 4,
+          "recall": 1,
+          "precision": 0.2,
+          "noiseRate": 0
+        },
+        "+verify": {
+          "caseName": "01-real-bug",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        },
+        "+triage": {
+          "caseName": "01-real-bug",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        },
+        "verify+triage/moot-off": {
+          "caseName": "01-real-bug",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        },
+        "verify+triage": {
+          "caseName": "01-real-bug",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        },
+        "app-default": {
+          "caseName": "01-real-bug",
+          "produced": 5,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        },
+        "app-default/show-all": {
+          "caseName": "01-real-bug",
+          "produced": 9,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        }
+      },
+      "rawByTask": {
+        "verdict": "{\"level\":\"significant-changes\",\"evidence\":[\"src/lib/paginate.ts: `start` changed from `pageNum * size` to `(pageNum - 1) * size`, switching the page-number contract from 0-based to 1-based; any caller still passing pageNum=0 now gets `start = -size`, which `Array.prototype.slice` treats as an offset from the end of the array, returning the wrong items.\",\"src/lib/paginate.ts: `end` changed from `start + size` to `start + size - 1`, and because `slice`'s second argument is exclusive, every page now returns `size - 1` items and silently drops the last item of each page.\",\"src/lib/paginate.ts: the diff's own comment on the `end` line is labeled `BUG:` and describes the off-by-one, so the change is documented as incorrect in the code itself.\"],\"notAnalyzed\":[\"Call sites of `page()` were not provided — couldn't verify whether consumers were updated for the new 1-based page numbering.\",\"No test files were included in the diff — couldn't verify whether existing tests cover the page-size or first-page behavior.\"]}",
+        "attention": "{\n  \"readingOrder\": [\"src/lib/paginate.ts\"],\n  \"hotspots\": [\n    {\n      \"path\": \"src/lib/paginate.ts\",\n      \"reason\": \"`end = start + size - 1` is passed as the exclusive upper bound to `slice`, so every page returns `size - 1` items and the last item of each page is silently dropped (the in-diff comment itself labels this as a BUG). Any consumer relying on full pages will lose one record per page with no error, and the fix is `const end = start + size`.\",\n      \"level\": \"high\"\n    },\n    {\n      \"path\": \"src/lib/paginate.ts\",\n      \"reason\": \"`start = (pageNum - 1) * size` switches the public `page()` contract from 0-based to 1-based page numbers, and a caller still passing `pageNum = 0` now gets a negative `start`, which `slice` interprets as an offset from the end of the array. No call sites are updated in this diff and none are visible here, so couldn't verify whether existing consumers still pass 0-based page numbers.\",\n      \"level\": \"medium\"\n    }\n  ],\n  \"testFlags\": [\n    {\n      \"path\": \"src/lib/paginate.ts\",\n      \"note\": \"Inferred from the diff, not measured coverage: both the indexing base and the slice bound changed in `page()` but no test file was added or modified in this PR. Does an existing test exercise `page()` with a full page and assert its length equals `size`? Such a test would have caught the off-by-one.\"\n    }\n  ]\n}",
+        "skill:bug-hunter": "{\n  \"skillName\": \"bug-hunter\",\n  \"findings\": [\n    {\n      \"path\": \"src/lib/paginate.ts\",\n      \"line\": 6,\n      \"severity\": \"high\",\n      \"body\": \"`end = start + size - 1` combined with `slice`'s exclusive end bound drops the last element of every page (e.g. `page([1,2,3,4], 1, 2)` returns `[1]` instead of `[1,2]`). Every consumer silently loses one item per page, and the final item of the collection is never reachable via pagination.\",\n      \"suggestedFix\": \"Remove the `- 1`: `const end = start + size` — `slice(start, start + size)` already yields exactly `size` items because the end index is exclusive.\"\n    },\n    {\n      \"path\": \"src/lib/paginate.ts\",\n      \"line\": 3,\n      \"severity\": \"medium\",\n      \"body\": \"Switching to `(pageNum - 1) * size` changes the contract from 0-based to 1-based, so any existing caller still passing `pageNum = 0` now gets a negative `start` and `Array.prototype.slice` interprets it as an offset from the end, returning the tail of the array instead of the first page. Callers are not visible in this diff — couldn't verify whether any still pass 0 — but the failure is silent wrong data rather than an error.\",\n      \"suggestedFix\": \"Guard the boundary so an out-of-contract page number fails loudly instead of returning tail data: `if (pageNum < 1) throw new RangeError('pageNum is 1-based')` (or return `[]`), and audit call sites for the 0→1 migration.\"\n    }\n  ]\n}",
+        "tests:bug-hunter": "{\n  \"skillName\": \"bug-hunter\",\n  \"findings\": [\n    {\n      \"path\": \"src/lib/paginate.ts\",\n      \"line\": 6,\n      \"severity\": \"high\",\n      \"body\": \"`end = start + size - 1` combined with `slice`'s exclusive end bound returns `size - 1` items for every full page, e.g. `page([1,2,3,4,5,6], 1, 3)` yields `[1,2]` instead of `[1,2,3]`, and `page([1,2,3,4,5,6], 2, 3)` yields `[4,5]` — item 3 and item 6 are never returned by any page. This is a silent data-loss bug for every caller; no test file is visible in this PR context, so I couldn't verify whether any test asserts the exact contents/length of a full page (a `toEqual([1,2,3])` on page 1 would catch it).\",\n      \"suggestedFix\": \"Change line 6 to `const end = start + size` (slice's end is exclusive, so no `- 1`), delete the BUG comment, and pin it with a test like `expect(page([1,2,3,4,5,6], 1, 3)).toEqual([1,2,3]); expect(page([1,2,3,4,5,6], 2, 3)).toEqual([4,5,6])`.\"\n    },\n    {\n      \"path\": \"src/lib/paginate.ts\",\n      \"line\": 3,\n      \"severity\": \"medium\",\n      \"body\": \"Switching to 1-based `pageNum` without a lower-bound guard means the previously-valid first page `pageNum = 0` now computes `start = -size`, and `items.slice(-size, ...)` silently returns items from the END of the array rather than the first page or an error. Any existing caller still passing 0-based page numbers gets wrong-but-plausible data instead of a visible failure.\",\n      \"suggestedFix\": \"Reject or clamp out-of-range input at the top of the function, e.g. `if (!Number.isInteger(pageNum) || pageNum < 1 || size < 1) throw new RangeError(\\\\`page: pageNum must be >= 1 and size >= 1 (got ${pageNum}, ${size})\\\\`)`, and add a test asserting `page(items, 0, 3)` throws (or returns `[]`, whichever contract you choose).\"\n    }\n  ]\n}"
+      }
+    },
+    "02-clean-pr": {
+      "score": {
+        "caseName": "02-clean-pr",
+        "produced": 0,
+        "realCaught": 0,
+        "realTotal": 0,
+        "noiseFlagged": 0,
+        "noiseTotal": 2,
+        "unmatched": 0,
+        "recall": 1,
+        "precision": 1,
+        "noiseRate": 0
+      },
+      "produced": [],
+      "findings": [
+        {
+          "file": "src/lib/greet.ts",
+          "line": null,
+          "description": "src/lib/greet.ts renames the parameter `n` to `name` and replaces string concatenation with a template literal, producing the identical output string.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": false,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "A behavior-preserving parameter rename and template literal refactor is not a defect or review-worthy issue.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "The described change preserves behavior and does not identify any correctness, security, performance, reproducibility, or maintainability defect.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          },
+          "simpleBody": "src/lib/greet.ts renames `n` to `name` and switches to a template literal; the output string is identical."
+        },
+        {
+          "file": "src/lib/greet.test.ts",
+          "line": null,
+          "description": "src/lib/greet.test.ts shows a changed line whose before/after text is visually identical (likely whitespace or invisible-character only), with the assertion `greet('Ada')` → `'Hello, Ada!'` unchanged.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": false,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "A visually identical or whitespace-only test assertion change does not show a real bug or actionable risk.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "A visually identical or whitespace-only test assertion change is not a code-grounded issue worth surfacing.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          },
+          "simpleBody": "src/lib/greet.test.ts has a changed line that looks identical before and after, likely whitespace or an invisible character only. The assertion `greet('Ada')` → `'Hello, Ada!'` is unchanged."
+        }
+      ],
+      "variantScores": {
+        "generate-only": {
+          "caseName": "02-clean-pr",
+          "produced": 2,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0,
+          "noiseRate": 0.5
+        },
+        "+tests-pass": {
+          "caseName": "02-clean-pr",
+          "produced": 2,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0,
+          "noiseRate": 0.5
+        },
+        "+verify": {
+          "caseName": "02-clean-pr",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        "+triage": {
+          "caseName": "02-clean-pr",
+          "produced": 2,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0,
+          "noiseRate": 0.5
+        },
+        "verify+triage/moot-off": {
+          "caseName": "02-clean-pr",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        "verify+triage": {
+          "caseName": "02-clean-pr",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        "app-default": {
+          "caseName": "02-clean-pr",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        "app-default/show-all": {
+          "caseName": "02-clean-pr",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        }
+      },
+      "rawByTask": {
+        "verdict": "{\"level\":\"behavior-preserved\",\"evidence\":[\"src/lib/greet.ts renames the parameter `n` to `name` and replaces string concatenation with a template literal, producing the identical output string.\",\"src/lib/greet.test.ts shows a changed line whose before/after text is visually identical (likely whitespace or invisible-character only), with the assertion `greet('Ada')` → `'Hello, Ada!'` unchanged.\"],\"notAnalyzed\":[\"Exact nature of the src/lib/greet.test.ts line change (e.g. trailing whitespace, line ending, or non-printing character) could not be determined from the rendered diff.\"]}",
+        "attention": "{\"readingOrder\":[\"src/lib/greet.ts\",\"src/lib/greet.test.ts\"],\"hotspots\":[],\"testFlags\":[]}",
+        "skill:bug-hunter": "{\"skillName\":\"bug-hunter\",\"findings\":[]}",
+        "tests:bug-hunter": "{\"skillName\":\"bug-hunter\",\"findings\":[]}"
+      }
+    },
+    "03-noise-trap": {
+      "score": {
+        "caseName": "03-noise-trap",
+        "produced": 0,
+        "realCaught": 0,
+        "realTotal": 0,
+        "noiseFlagged": 0,
+        "noiseTotal": 3,
+        "unmatched": 0,
+        "recall": 1,
+        "precision": 1,
+        "noiseRate": 0
+      },
+      "produced": [],
+      "findings": [],
+      "variantScores": {
+        "generate-only": {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        "+tests-pass": {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        "+verify": {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        "+triage": {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        "verify+triage/moot-off": {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        "verify+triage": {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        "app-default": {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        },
+        "app-default/show-all": {
+          "caseName": "03-noise-trap",
+          "produced": 0,
+          "realCaught": 0,
+          "realTotal": 0,
+          "noiseFlagged": 0,
+          "noiseTotal": 3,
+          "unmatched": 0,
+          "recall": 1,
+          "precision": 1,
+          "noiseRate": 0
+        }
+      },
+      "rawByTask": {
+        "verdict": "{\"level\":\"behavior-preserved\",\"evidence\":[\"src/lib/retry.ts: the only change is the catch-block log call, switching `console.log('retry failed')` to `console.warn(\\`retry attempt ${attempt} failed\\`)`; retry loop, attempt count, and rethrow of `lastErr` are untouched.\",\"src/lib/retry.ts: `console.warn` emits to stderr instead of stdout in Node and the message text changed, so any log-scraping of the exact string 'retry failed' on stdout would no longer match — couldn't verify whether such consumers exist outside the provided context.\"],\"notAnalyzed\":[\"Callers of withRetry and any log-aggregation/alerting rules keyed on the old 'retry failed' message were not provided.\"]}",
+        "attention": "{\"readingOrder\":[\"src/lib/retry.ts\"],\"hotspots\":[],\"testFlags\":[]}",
+        "skill:bug-hunter": "{\"skillName\":\"bug-hunter\",\"findings\":[]}",
+        "tests:bug-hunter": "{\"skillName\":\"bug-hunter\",\"findings\":[]}"
+      }
+    },
+    "04-refactor": {
+      "score": {
+        "caseName": "04-refactor",
+        "produced": 4,
+        "realCaught": 1,
+        "realTotal": 1,
+        "noiseFlagged": 1,
+        "noiseTotal": 2,
+        "unmatched": 1,
+        "recall": 1,
+        "precision": 0.3333333333333333,
+        "noiseRate": 0.5
+      },
+      "produced": [
+        {
+          "file": "src/lib/report.ts",
+          "line": null,
+          "description": "src/lib/report.ts: `summarize` previously called `.sort((a, b) => a - b)` but now calls `.sort()` with no comparator, so numbers are compared as strings (e.g. [10, 9, 2] now yields 10, 2, 9 and [-1, -10, 5] yields -1, -10, 5), changing the ranked output of this exported function for any input with multi-digit or negative values."
+        },
+        {
+          "file": "src/lib/report.ts",
+          "line": null,
+          "description": "`[...scores].sort()` in `summarize` drops the numeric comparator `(a, b) => a - b` that the previous version used, so numbers are now sorted lexicographically as strings (e.g. [10, 9, 2] becomes [10, 2, 9], and negatives/decimals misorder too). Every rank label emitted by this function is now wrong for any input with mixed digit counts, which silently corrupts the report output rather than failing loudly; restore `.sort((a, b) => a - b)`."
+        },
+        {
+          "file": "src/lib/report.ts",
+          "line": 7,
+          "description": "`[...scores].sort()` at src/lib/report.ts:7 replaces the original `.sort((a, b) => a - b)`, so numbers are now compared as strings — e.g. `[10, 9, 2]` sorts to `[10, 2, 9]` and `[-1, 5]` sorts to `[-1, 5]` while `[-1, -5]` sorts to `[-1, -5]` instead of `[-5, -1]`. This changes the output ordering and thus the rank labels for any input containing multi-digit or negative values, which is an observable behavior change rather than an equivalent rewrite. (The extracted `formatLine`, template literal, and loop-to-map changes are all output-identical and not flagged.)"
+        },
+        {
+          "file": "src/lib/report.ts",
+          "line": 7,
+          "description": "Dropping the `(a, b) => a - b` comparator on line 7 switches numeric sort to the default lexicographic string sort, so `summarize([10, 9, 2])` now yields `#1: 10.00\\n#2: 2.00\\n#3: 9.00` instead of `#1: 2.00\\n#2: 9.00\\n#3: 10.00`, and negatives/decimals reorder as well (`[-1, 5, -10]` → `-1, -10, 5`). This is not an equivalent rewrite — the rank ordering, which is the entire observable output of this function, changes for any input mixing digit lengths or signs (the `formatLine` extraction, `map`, and template literal are all behavior-preserving and are not at issue)."
+        }
+      ],
+      "findings": [
+        {
+          "file": "src/lib/report.ts",
+          "line": null,
+          "description": "src/lib/report.ts: `summarize` previously called `.sort((a, b) => a - b)` but now calls `.sort()` with no comparator, so numbers are compared as strings (e.g. [10, 9, 2] now yields 10, 2, 9 and [-1, -10, 5] yields -1, -10, 5), changing the ranked output of this exported function for any input with multi-digit or negative values.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "Dropping the numeric comparator on JavaScript numbers is a real behavior change because default sort is lexicographic.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The diff shows the numeric comparator was replaced by default sort, which changes observable numeric ordering for cases like multi-digit or negative scores.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          },
+          "simpleBody": "`summarize` in src/lib/report.ts now calls `.sort()` without the `(a, b) => a - b` comparator, so numbers get compared as strings — [10, 9, 2] now yields 10, 2, 9 and [-1, -10, 5] yields -1, -10, 5. That changes this exported function's ranked output for any input with multi-digit or negative values."
+        },
+        {
+          "file": "src/lib/report.ts",
+          "line": null,
+          "description": "src/lib/report.ts: the inline comment ('NOTE: comparator dropped here') explicitly acknowledges the comparator removal, confirming this is not an accidental omission that will be restored elsewhere in the PR.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": false,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "Whether the comparator removal was intentional is not itself a defect or useful review finding.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "The comment exists, but it is not an independent defect or actionable review finding.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          },
+          "simpleBody": "The inline comment ('NOTE: comparator dropped here') in src/lib/report.ts shows the comparator removal was deliberate, not an accident that gets restored elsewhere in the PR."
+        },
+        {
+          "file": "src/lib/report.ts",
+          "line": null,
+          "description": "src/lib/report.ts: the `formatLine` extraction and `for`→`map` conversion are output-equivalent (`#${rank}: ${score.toFixed(2)}` matches the prior string concatenation) and are not the source of the behavior change.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": false,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "This describes behavior-preserving refactor parts rather than an actionable issue.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "This correctly describes behavior-preserving refactor pieces, but it does not identify an issue worth surfacing.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          },
+          "simpleBody": "The `formatLine` extraction and `for`→`map` conversion in src/lib/report.ts produce identical output (`#${rank}: ${score.toFixed(2)}` matches the old string concatenation), so they aren't the source of the behavior change."
+        },
+        {
+          "file": "src/lib/report.ts",
+          "line": null,
+          "description": "`[...scores].sort()` in `summarize` drops the numeric comparator `(a, b) => a - b` that the previous version used, so numbers are now sorted lexicographically as strings (e.g. [10, 9, 2] becomes [10, 2, 9], and negatives/decimals misorder too). Every rank label emitted by this function is now wrong for any input with mixed digit counts, which silently corrupts the report output rather than failing loudly; restore `.sort((a, b) => a - b)`.",
+          "severity": "high",
+          "taskKey": "attention",
+          "reviewerName": "attention",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The comparator removal can silently mis-rank numeric scores, which is an observable correctness regression.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "Dropping the comparator makes JavaScript sort numbers lexicographically, causing real report ordering regressions despite some overbroad wording.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          },
+          "simpleBody": "`[...scores].sort()` in `summarize` dropped the `(a, b) => a - b` comparator, so numbers now sort as strings — [10, 9, 2] becomes [10, 2, 9], and negatives/decimals misorder too. Every rank label is wrong for inputs with mixed digit counts, silently corrupting the report instead of failing loudly. Restore `.sort((a, b) => a - b)`."
+        },
+        {
+          "file": "src/lib/report.ts",
+          "line": 7,
+          "description": "`[...scores].sort()` at src/lib/report.ts:7 replaces the original `.sort((a, b) => a - b)`, so numbers are now compared as strings — e.g. `[10, 9, 2]` sorts to `[10, 2, 9]` and `[-1, 5]` sorts to `[-1, 5]` while `[-1, -5]` sorts to `[-1, -5]` instead of `[-5, -1]`. This changes the output ordering and thus the rank labels for any input containing multi-digit or negative values, which is an observable behavior change rather than an equivalent rewrite. (The extracted `formatLine`, template literal, and loop-to-map changes are all output-identical and not flagged.)",
+          "severity": "high",
+          "taskKey": "skill:refactor-reviewer",
+          "reviewerName": "refactor-reviewer",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The cited `.sort()` change really switches numeric ordering to lexicographic ordering and changes report rank output.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "Line 7 changes numeric sorting to lexicographic sorting, which is an observable behavior change even though not every listed negative example misorders.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          },
+          "simpleBody": "`[...scores].sort()` at src/lib/report.ts:7 replaces `.sort((a, b) => a - b)`, so numbers now compare as strings — `[10, 9, 2]` sorts to `[10, 2, 9]`, `[-1, 5]` sorts to `[-1, 5]`, and `[-1, -5]` sorts to `[-1, -5]` instead of `[-5, -1]`. That changes the rank labels for any input with multi-digit or negative values — a real behavior change, not an equivalent rewrite. The `formatLine` extraction, template literal, and loop-to-map changes are output-identical and not flagged."
+        },
+        {
+          "file": "src/lib/report.ts",
+          "line": 7,
+          "description": "Dropping the `(a, b) => a - b` comparator on line 7 switches numeric sort to the default lexicographic string sort, so `summarize([10, 9, 2])` now yields `#1: 10.00\\n#2: 2.00\\n#3: 9.00` instead of `#1: 2.00\\n#2: 9.00\\n#3: 10.00`, and negatives/decimals reorder as well (`[-1, 5, -10]` → `-1, -10, 5`). This is not an equivalent rewrite — the rank ordering, which is the entire observable output of this function, changes for any input mixing digit lengths or signs (the `formatLine` extraction, `map`, and template literal are all behavior-preserving and are not at issue).",
+          "severity": "high",
+          "taskKey": "tests:refactor-reviewer",
+          "reviewerName": "refactor-reviewer",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The concrete example demonstrates the exported output changes due to lexicographic sorting.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The provided examples demonstrate a real ranking regression from default lexicographic sort, and restoring the comparator is actionable.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          },
+          "simpleBody": "Dropping the `(a, b) => a - b` comparator on line 7 makes the sort compare as strings, so `summarize([10, 9, 2])` now yields `#1: 10.00\\n#2: 2.00\\n#3: 9.00` instead of `#1: 2.00\\n#2: 9.00\\n#3: 10.00`, and negatives/decimals reorder too (`[-1, 5, -10]` → `-1, -10, 5`). The rank ordering is this function's entire observable output, and it changes for any input mixing digit lengths or signs — not an equivalent rewrite. The `formatLine` extraction, `map`, and template literal are behavior-preserving and not at issue."
+        },
+        {
+          "file": "src/lib/report.ts",
+          "line": 7,
+          "description": "No test file is included in this PR context, so I couldn't verify what pins `summarize` — but any existing test that only uses single-digit non-negative scores (e.g. `[3, 1, 2]`) passes identically under both the numeric and lexicographic sort and therefore does not pin the ordering contract this refactor just broke. If that is the only coverage, the line-7 regression ships silently.",
+          "severity": "medium",
+          "taskKey": "tests:refactor-reviewer",
+          "reviewerName": "refactor-reviewer",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": false,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "The test-coverage claim is explicitly conditional and not established by the provided context.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "It speculates about missing or insufficient tests outside the provided context, so the absence claim is not established.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          },
+          "simpleBody": "No test file is in this PR context, so I couldn't check what pins `summarize`. Any test using only single-digit non-negative scores (e.g. `[3, 1, 2]`) passes under both numeric and string sort, so it doesn't pin the ordering this refactor broke. If that's the only coverage, the line-7 regression ships silently."
+        }
+      ],
+      "variantScores": {
+        "generate-only": {
+          "caseName": "04-refactor",
+          "produced": 5,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 2,
+          "noiseTotal": 2,
+          "unmatched": 2,
+          "recall": 1,
+          "precision": 0.2,
+          "noiseRate": 1
+        },
+        "+tests-pass": {
+          "caseName": "04-refactor",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 2,
+          "noiseTotal": 2,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.16666666666666666,
+          "noiseRate": 1
+        },
+        "+verify": {
+          "caseName": "04-refactor",
+          "produced": 3,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0.5
+        },
+        "+triage": {
+          "caseName": "04-refactor",
+          "produced": 5,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 2,
+          "noiseTotal": 2,
+          "unmatched": 2,
+          "recall": 1,
+          "precision": 0.2,
+          "noiseRate": 1
+        },
+        "verify+triage/moot-off": {
+          "caseName": "04-refactor",
+          "produced": 3,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0.5
+        },
+        "verify+triage": {
+          "caseName": "04-refactor",
+          "produced": 3,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0.5
+        },
+        "app-default": {
+          "caseName": "04-refactor",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0.5
+        },
+        "app-default/show-all": {
+          "caseName": "04-refactor",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0.5
+        }
+      },
+      "rawByTask": {
+        "verdict": "{\"level\":\"significant-changes\",\"evidence\":[\"src/lib/report.ts: `summarize` previously called `.sort((a, b) => a - b)` but now calls `.sort()` with no comparator, so numbers are compared as strings (e.g. [10, 9, 2] now yields 10, 2, 9 and [-1, -10, 5] yields -1, -10, 5), changing the ranked output of this exported function for any input with multi-digit or negative values.\",\"src/lib/report.ts: the inline comment ('NOTE: comparator dropped here') explicitly acknowledges the comparator removal, confirming this is not an accidental omission that will be restored elsewhere in the PR.\",\"src/lib/report.ts: the `formatLine` extraction and `for`→`map` conversion are output-equivalent (`#${rank}: ${score.toFixed(2)}` matches the prior string concatenation) and are not the source of the behavior change.\"],\"notAnalyzed\":[\"Callers of `summarize` outside src/lib/report.ts — couldn't verify how the changed ordering is consumed.\",\"Tests for `summarize` — none were included in the provided context, so I couldn't verify whether existing tests would catch the ordering change.\"]}",
+        "attention": "{\"readingOrder\":[\"src/lib/report.ts\"],\"hotspots\":[{\"path\":\"src/lib/report.ts\",\"reason\":\"`[...scores].sort()` in `summarize` drops the numeric comparator `(a, b) => a - b` that the previous version used, so numbers are now sorted lexicographically as strings (e.g. [10, 9, 2] becomes [10, 2, 9], and negatives/decimals misorder too). Every rank label emitted by this function is now wrong for any input with mixed digit counts, which silently corrupts the report output rather than failing loudly; restore `.sort((a, b) => a - b)`.\",\"level\":\"high\"}],\"testFlags\":[{\"path\":\"src/lib/report.ts\",\"note\":\"Inferred from the diff, not measured coverage: `summarize` changed ordering behavior (comparator removed) but no test file was added or modified in this PR; a test with values like [10, 9, 2] would catch the lexicographic-sort regression.\"}]}",
+        "skill:refactor-reviewer": "{\"skillName\":\"refactor-reviewer\",\"findings\":[{\"path\":\"src/lib/report.ts\",\"line\":7,\"severity\":\"high\",\"body\":\"`[...scores].sort()` at src/lib/report.ts:7 replaces the original `.sort((a, b) => a - b)`, so numbers are now compared as strings — e.g. `[10, 9, 2]` sorts to `[10, 2, 9]` and `[-1, 5]` sorts to `[-1, 5]` while `[-1, -5]` sorts to `[-1, -5]` instead of `[-5, -1]`. This changes the output ordering and thus the rank labels for any input containing multi-digit or negative values, which is an observable behavior change rather than an equivalent rewrite. (The extracted `formatLine`, template literal, and loop-to-map changes are all output-identical and not flagged.)\",\"suggestedFix\":\"Restore the numeric comparator: `const sorted = [...scores].sort((a, b) => a - b)` and remove the \\\"comparator dropped\\\" note from the comment.\"}]}",
+        "tests:refactor-reviewer": "{\n  \"skillName\": \"refactor-reviewer\",\n  \"findings\": [\n    {\n      \"path\": \"src/lib/report.ts\",\n      \"line\": 7,\n      \"severity\": \"high\",\n      \"body\": \"Dropping the `(a, b) => a - b` comparator on line 7 switches numeric sort to the default lexicographic string sort, so `summarize([10, 9, 2])` now yields `#1: 10.00\\\\n#2: 2.00\\\\n#3: 9.00` instead of `#1: 2.00\\\\n#2: 9.00\\\\n#3: 10.00`, and negatives/decimals reorder as well (`[-1, 5, -10]` → `-1, -10, 5`). This is not an equivalent rewrite — the rank ordering, which is the entire observable output of this function, changes for any input mixing digit lengths or signs (the `formatLine` extraction, `map`, and template literal are all behavior-preserving and are not at issue).\",\n      \"suggestedFix\": \"Restore the comparator: `const sorted = [...scores].sort((a, b) => a - b)` and delete the `NOTE: comparator dropped here` comment. Add a regression assertion with mixed-magnitude input, e.g. `expect(summarize([10, 9, 2])).toBe('#1: 2.00\\\\n#2: 9.00\\\\n#3: 10.00')`, which fails under the current code.\"\n    },\n    {\n      \"path\": \"src/lib/report.ts\",\n      \"line\": 7,\n      \"severity\": \"medium\",\n      \"body\": \"No test file is included in this PR context, so I couldn't verify what pins `summarize` — but any existing test that only uses single-digit non-negative scores (e.g. `[3, 1, 2]`) passes identically under both the numeric and lexicographic sort and therefore does not pin the ordering contract this refactor just broke. If that is the only coverage, the line-7 regression ships silently.\",\n      \"suggestedFix\": \"Does the test covering `summarize` include at least one input where numeric and string order diverge (a value ≥ 10 alongside single digits, or a negative)? If not, add one — `[10, 9, 2]` or `[-5, 3, -20]` — asserting the exact joined string, so the sort comparator is exercised rather than incidentally satisfied.\"\n    }\n  ]\n}"
+      }
+    },
+    "05-security": {
+      "score": {
+        "caseName": "05-security",
+        "produced": 5,
+        "realCaught": 1,
+        "realTotal": 1,
+        "noiseFlagged": 0,
+        "noiseTotal": 2,
+        "unmatched": 3,
+        "recall": 1,
+        "precision": 0.25,
+        "noiseRate": 0
+      },
+      "produced": [
+        {
+          "file": "src/api/search.ts",
+          "line": null,
+          "description": "src/api/search.ts: `search` now builds the query as `ORDER BY ${sort}` via template-string concatenation while only `term` is parameterized, so any caller-controlled `sort` value is executed as raw SQL (SQL injection) — the in-code comment itself acknowledges this."
+        },
+        {
+          "file": "src/api/search.ts",
+          "line": null,
+          "description": "In `search`, the new `sort` argument is interpolated directly into the SQL string (`ORDER BY ${sort}`) while only `term` is parameterized. If `sort` can be caller/user-controlled this is a SQL injection vector (e.g. `name; DROP TABLE products--` or `(SELECT ...)` subqueries); fix by whitelisting `sort` against an allowed set of column names/directions before building the query."
+        },
+        {
+          "file": "src/api/search.ts",
+          "line": null,
+          "description": "`search`'s signature changed from `(term)` to `(term, sort)` with no call sites updated in this diff. Existing callers passing one argument will produce `ORDER BY undefined` at runtime (a SQL error) — couldn't verify consumers outside the provided context."
+        },
+        {
+          "file": "src/api/search.ts",
+          "line": 6,
+          "description": "`sort` is string-interpolated directly into the SQL at `ORDER BY ${sort}` in `search()`, while only `term` is parameterized. A caller-controlled `sort` value like `1; DROP TABLE products--` or `(SELECT CASE WHEN ... END)` executes as raw SQL, enabling data exfiltration or destruction via boolean/time-based injection."
+        },
+        {
+          "file": "src/api/search.ts",
+          "line": 6,
+          "description": "`sort` is interpolated directly into the SQL string (`ORDER BY ${sort}`) while `term` is parameterized, so any caller-controlled sort value is a live SQL injection sink introduced by this change. An attacker can pass e.g. `name; DROP TABLE products--` or a subquery-based blind-extraction payload through `sort` and execute arbitrary SQL; no test file is visible in this PR context, so I couldn't verify whether any test pins rejection of non-allowlisted `sort` values — if one does not exist, the injection can ship silently."
+        }
+      ],
+      "findings": [
+        {
+          "file": "src/api/search.ts",
+          "line": null,
+          "description": "src/api/search.ts: `search` now builds the query as `ORDER BY ${sort}` via template-string concatenation while only `term` is parameterized, so any caller-controlled `sort` value is executed as raw SQL (SQL injection) — the in-code comment itself acknowledges this.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The provided code shows `sort` interpolated into `ORDER BY` while only `term` is parameterized, which is a real SQL injection sink.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The provided code shows `sort` interpolated directly into `ORDER BY`, creating a real SQL injection sink if exposed to caller input.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          },
+          "simpleBody": "`search` in src/api/search.ts interpolates `sort` straight into `ORDER BY ${sort}` while only `term` is parameterized, so any caller-controlled `sort` runs as raw SQL (SQL injection). The in-code comment already admits this."
+        },
+        {
+          "file": "src/api/search.ts",
+          "line": null,
+          "description": "src/api/search.ts: `search` signature changed from `(term: string)` to `(term: string, sort: string)` with `sort` required; no call sites appear in the diff, so couldn't verify consumers outside the provided context.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": false,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "This is an unverified absence/call-site compatibility claim and does not establish an actual broken consumer from the provided context.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "This only notes an unverified signature change/call-site concern and does not establish a concrete defect in the provided context.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          },
+          "simpleBody": "`search` in src/api/search.ts now requires `sort`: the signature went from `(term: string)` to `(term: string, sort: string)`. No call sites appear in the diff, so couldn't verify consumers outside the provided context."
+        },
+        {
+          "file": "src/api/search.ts",
+          "line": null,
+          "description": "src/api/search.ts: new exported `renderName` wraps `escapeHtml(name)` in a `<span>` — additive new API surface with output escaping applied.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": false,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "The finding describes safe escaped output and additive API surface, not a defect worth review attention.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "`renderName` escapes `name` before inserting it into HTML, so the provided code does not show an XSS or other defect.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          }
+        },
+        {
+          "file": "src/api/search.ts",
+          "line": null,
+          "description": "In `search`, the new `sort` argument is interpolated directly into the SQL string (`ORDER BY ${sort}`) while only `term` is parameterized. If `sort` can be caller/user-controlled this is a SQL injection vector (e.g. `name; DROP TABLE products--` or `(SELECT ...)` subqueries); fix by whitelisting `sort` against an allowed set of column names/directions before building the query.",
+          "severity": "high",
+          "taskKey": "attention",
+          "reviewerName": "attention",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The raw `ORDER BY ${sort}` interpolation is code-grounded and should be fixed with an allowlist.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The SQL string directly interpolates the `sort` argument, and allowlisting is the appropriate reviewer-actionable fix.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          },
+          "simpleBody": "`search` interpolates the new `sort` argument directly into the SQL (`ORDER BY ${sort}`) while only `term` is parameterized. If `sort` can be caller/user-controlled, that's a SQL injection vector (e.g. `name; DROP TABLE products--` or `(SELECT ...)` subqueries). Fix: whitelist `sort` against an allowed set of column names/directions before building the query."
+        },
+        {
+          "file": "src/api/search.ts",
+          "line": null,
+          "description": "`search`'s signature changed from `(term)` to `(term, sort)` with no call sites updated in this diff. Existing callers passing one argument will produce `ORDER BY undefined` at runtime (a SQL error) — couldn't verify consumers outside the provided context.",
+          "severity": "medium",
+          "taskKey": "attention",
+          "reviewerName": "attention",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "uncertain",
+                "reason": "The runtime breakage depends on existing one-argument callers, which the provided context explicitly does not verify.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "uncertain",
+                "reason": "The broken existing-caller claim depends on call sites outside the provided context, so it is not confirmable from this diff.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          },
+          "simpleBody": "`search` changed from `(term)` to `(term, sort)` but no call sites were updated in this diff. Existing one-argument callers will hit `ORDER BY undefined` at runtime (a SQL error); couldn't verify consumers outside the provided context."
+        },
+        {
+          "file": "src/api/search.ts",
+          "line": 6,
+          "description": "`sort` is string-interpolated directly into the SQL at `ORDER BY ${sort}` in `search()`, while only `term` is parameterized. A caller-controlled `sort` value like `1; DROP TABLE products--` or `(SELECT CASE WHEN ... END)` executes as raw SQL, enabling data exfiltration or destruction via boolean/time-based injection.",
+          "severity": "high",
+          "taskKey": "skill:security-reviewer",
+          "reviewerName": "security-reviewer",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "A caller-controlled `sort` reaches raw SQL interpolation in `ORDER BY`, making the injection risk real and actionable.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "Line 6 shows raw interpolation of `sort` into SQL while only `term` is parameterized, which is a real injection issue.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          },
+          "simpleBody": "`search()` interpolates `sort` straight into the SQL at `ORDER BY ${sort}` while only `term` is parameterized. A caller-controlled `sort` like `1; DROP TABLE products--` or `(SELECT CASE WHEN ... END)` runs as raw SQL, enabling data exfiltration or destruction via boolean/time-based injection."
+        },
+        {
+          "file": "src/api/search.ts",
+          "line": 6,
+          "description": "`sort` is interpolated directly into the SQL string (`ORDER BY ${sort}`) while `term` is parameterized, so any caller-controlled sort value is a live SQL injection sink introduced by this change. An attacker can pass e.g. `name; DROP TABLE products--` or a subquery-based blind-extraction payload through `sort` and execute arbitrary SQL; no test file is visible in this PR context, so I couldn't verify whether any test pins rejection of non-allowlisted `sort` values — if one does not exist, the injection can ship silently.",
+          "severity": "high",
+          "taskKey": "tests:security-reviewer",
+          "reviewerName": "security-reviewer",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The SQL injection sink is real and worth surfacing, though the test-coverage aside is not independently supported.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The injection claim is code-grounded despite the unverified test-absence aside, because `sort` is directly interpolated into the SQL.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          },
+          "simpleBody": "This change interpolates `sort` directly into the SQL (`ORDER BY ${sort}`) while `term` is parameterized, so any caller-controlled sort value is a live SQL injection sink. An attacker can pass `name; DROP TABLE products--` or a subquery-based blind-extraction payload through `sort` and run arbitrary SQL. No test file is visible in this PR, so I couldn't verify any test rejects non-allowlisted `sort` values — without one, the injection can ship silently."
+        }
+      ],
+      "variantScores": {
+        "generate-only": {
+          "caseName": "05-security",
+          "produced": 6,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 4,
+          "recall": 1,
+          "precision": 0.16666666666666666,
+          "noiseRate": 0.5
+        },
+        "+tests-pass": {
+          "caseName": "05-security",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 4,
+          "recall": 1,
+          "precision": 0.16666666666666666,
+          "noiseRate": 0.5
+        },
+        "+verify": {
+          "caseName": "05-security",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        },
+        "+triage": {
+          "caseName": "05-security",
+          "produced": 6,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 1,
+          "noiseTotal": 2,
+          "unmatched": 4,
+          "recall": 1,
+          "precision": 0.16666666666666666,
+          "noiseRate": 0.5
+        },
+        "verify+triage/moot-off": {
+          "caseName": "05-security",
+          "produced": 3,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 2,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0
+        },
+        "verify+triage": {
+          "caseName": "05-security",
+          "produced": 3,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 2,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0
+        },
+        "app-default": {
+          "caseName": "05-security",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        },
+        "app-default/show-all": {
+          "caseName": "05-security",
+          "produced": 5,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 2,
+          "unmatched": 2,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0
+        }
+      },
+      "rawByTask": {
+        "verdict": "{\"level\":\"significant-changes\",\"evidence\":[\"src/api/search.ts: `search` now builds the query as `ORDER BY ${sort}` via template-string concatenation while only `term` is parameterized, so any caller-controlled `sort` value is executed as raw SQL (SQL injection) — the in-code comment itself acknowledges this.\",\"src/api/search.ts: `search` signature changed from `(term: string)` to `(term: string, sort: string)` with `sort` required; no call sites appear in the diff, so couldn't verify consumers outside the provided context.\",\"src/api/search.ts: new exported `renderName` wraps `escapeHtml(name)` in a `<span>` — additive new API surface with output escaping applied.\"],\"notAnalyzed\":[\"Callers of `search` (not in diff) — cannot confirm whether `sort` is constrained to an allowlist upstream or is user-controlled.\",\"src/api/html.ts `escapeHtml` implementation — cannot verify it escapes all relevant characters.\",\"src/api/db.ts `query` implementation — cannot verify whether it applies any additional sanitization.\",\"Tests for search/renderName (none provided).\"]}",
+        "attention": "{\"readingOrder\":[\"src/api/search.ts\"],\"hotspots\":[{\"path\":\"src/api/search.ts\",\"reason\":\"In `search`, the new `sort` argument is interpolated directly into the SQL string (`ORDER BY ${sort}`) while only `term` is parameterized. If `sort` can be caller/user-controlled this is a SQL injection vector (e.g. `name; DROP TABLE products--` or `(SELECT ...)` subqueries); fix by whitelisting `sort` against an allowed set of column names/directions before building the query.\",\"level\":\"high\"},{\"path\":\"src/api/search.ts\",\"reason\":\"`search`'s signature changed from `(term)` to `(term, sort)` with no call sites updated in this diff. Existing callers passing one argument will produce `ORDER BY undefined` at runtime (a SQL error) — couldn't verify consumers outside the provided context.\",\"level\":\"medium\"}],\"testFlags\":[{\"path\":\"src/api/search.ts\",\"note\":\"Inferred from the diff (not measured coverage): `search` gained a `sort` parameter that changes the generated SQL and `renderName` is a new exported function, but no test file was added or modified in this PR.\"}]}",
+        "skill:security-reviewer": "{\"skillName\":\"security-reviewer\",\"findings\":[{\"path\":\"src/api/search.ts\",\"line\":6,\"severity\":\"high\",\"body\":\"`sort` is string-interpolated directly into the SQL at `ORDER BY ${sort}` in `search()`, while only `term` is parameterized. A caller-controlled `sort` value like `1; DROP TABLE products--` or `(SELECT CASE WHEN ... END)` executes as raw SQL, enabling data exfiltration or destruction via boolean/time-based injection.\",\"suggestedFix\":\"Whitelist the sort column and direction instead of interpolating user input:\\n```ts\\nconst SORT_COLUMNS = { id: 'id', name: 'name' } as const\\nexport async function search(term: string, sort: keyof typeof SORT_COLUMNS = 'name', dir: 'ASC' | 'DESC' = 'ASC') {\\n  const col = SORT_COLUMNS[sort] ?? 'name'\\n  const d = dir === 'DESC' ? 'DESC' : 'ASC'\\n  return db.query(`SELECT id, name FROM products WHERE name LIKE $1 ORDER BY ${col} ${d}`, ['%' + term + '%'])\\n}\\n```\"}]}",
+        "tests:security-reviewer": "{\n  \"skillName\": \"security-reviewer\",\n  \"findings\": [\n    {\n      \"path\": \"src/api/search.ts\",\n      \"line\": 6,\n      \"severity\": \"high\",\n      \"body\": \"`sort` is interpolated directly into the SQL string (`ORDER BY ${sort}`) while `term` is parameterized, so any caller-controlled sort value is a live SQL injection sink introduced by this change. An attacker can pass e.g. `name; DROP TABLE products--` or a subquery-based blind-extraction payload through `sort` and execute arbitrary SQL; no test file is visible in this PR context, so I couldn't verify whether any test pins rejection of non-allowlisted `sort` values — if one does not exist, the injection can ship silently.\",\n      \"suggestedFix\": \"Map `sort` through an allowlist before building the query and reject anything else, then add a test that asserts an unknown/malicious sort value throws rather than reaching `db.query`:\\n```ts\\nconst SORT_COLUMNS = { name: 'name', id: 'id' } as const\\nexport async function search(term: string, sort: keyof typeof SORT_COLUMNS) {\\n  const col = SORT_COLUMNS[sort]\\n  if (!col) throw new Error('invalid sort')\\n  return db.query(`SELECT id, name FROM products WHERE name LIKE $1 ORDER BY ${col}`, ['%' + term + '%'])\\n}\\n// test: await expect(search('x', 'name; DROP TABLE products--' as any)).rejects.toThrow(); expect(db.query).not.toHaveBeenCalled()\\n```\"\n    }\n  ]\n}"
+      }
+    },
+    "06-perf": {
+      "score": {
+        "caseName": "06-perf",
+        "produced": 7,
+        "realCaught": 1,
+        "realTotal": 1,
+        "noiseFlagged": 0,
+        "noiseTotal": 1,
+        "unmatched": 3,
+        "recall": 1,
+        "precision": 0.25,
+        "noiseRate": 0
+      },
+      "produced": [
+        {
+          "file": "src/lib/orders.ts",
+          "line": null,
+          "description": "src/lib/orders.ts: `ordersForUsers` replaces the single batched `WHERE user_id = ANY($1)` query with a `for` loop that awaits one `db.query(... WHERE user_id = $1 ...)` per element of `userIds`, turning one round-trip into N sequential round-trips (N+1 pattern) whose latency grows linearly with the input size."
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": null,
+          "description": "src/lib/orders.ts (low): the new comment \"Uses 1 + ' + ' for the loop bound\" does not describe the code (the bound is `userIds.length`), which will mislead future readers."
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": null,
+          "description": "The single batched `WHERE user_id = ANY($1)` query is replaced by a sequential per-user loop (lines 6-9), turning one round-trip into N awaited round-trips. For a function named for bulk lookup, latency and DB load now scale linearly with `userIds.length`, which is a performance regression with no functional gain visible in the diff."
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": null,
+          "description": "The new comment on line 4 (\"Uses 1 + ' + ' for the loop bound\") does not describe anything the code does — the loop bound is `userIds.length`. A misleading comment on a hot path costs the next reader time and suggests the change was not fully cleaned up."
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": 7,
+          "description": "The single batched `WHERE user_id = ANY($1)` query was replaced with one sequential `db.query` per user inside the `for` loop, turning this into an N+1 pattern that scales linearly with `userIds.length` in DB round-trips. For a call with hundreds or thousands of user IDs this adds hundreds/thousands of serialized network round-trips and connection-pool checkouts where there used to be one, so latency and DB load grow with input size instead of staying flat."
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": 7,
+          "description": "The single batched `WHERE user_id = ANY($1)` query was replaced with one sequentially-awaited `db.query` per element of `userIds`, which is a textbook N+1: for a caller passing N ids this now issues N serial DB round trips, so latency and connection-pool pressure grow linearly with input size instead of staying constant. No test file appears in this PR context, so I couldn't verify whether anything pins the query count — but this is exactly the behaviour a test must pin, because the function still returns the same rows and a result-only assertion will pass against both the batched and the N+1 version."
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": 8,
+          "description": "`all.push(...rows)` spreads the entire per-user result set into function arguments; a user with a large order history (on the order of ~100k rows, above V8's argument-count limit) makes this throw `RangeError: Maximum call stack size exceeded` rather than returning. Nothing in the visible diff bounds `rows`, and whether real users reach that size couldn't be verified from the diff, so this is a latent failure rather than a confirmed one."
+        }
+      ],
+      "findings": [
+        {
+          "file": "src/lib/orders.ts",
+          "line": null,
+          "description": "src/lib/orders.ts: `ordersForUsers` replaces the single batched `WHERE user_id = ANY($1)` query with a `for` loop that awaits one `db.query(... WHERE user_id = $1 ...)` per element of `userIds`, turning one round-trip into N sequential round-trips (N+1 pattern) whose latency grows linearly with the input size.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The diff clearly changes one batched query into one awaited query per user id, creating linear DB round trips.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The diff clearly changes one batched query into sequential per-user queries, creating a real N+1 performance regression.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          }
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": null,
+          "description": "src/lib/orders.ts: the function signature and return shape (flat array of rows via `all.push(...rows)`) are unchanged, so existing callers do not need updates and no breakage is visible in the diff.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": false,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "This describes no visible breakage rather than identifying a defect.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "This is a non-issue observation that says no caller breakage is visible rather than identifying a defect.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          }
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": null,
+          "description": "src/lib/orders.ts: row ordering now follows the input `userIds` order grouped per user, whereas the previous single query returned rows in whatever order the DB produced; neither version specifies ORDER BY, so any caller relying on the old order may observe a different sequence.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": false,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "Without an ORDER BY the old row order was not a contract, and no visible caller dependency makes this actionable.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "refute",
+                "reason": "Because neither version specifies an order and no caller contract is shown, the claimed ordering concern is speculative.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          }
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": null,
+          "description": "src/lib/orders.ts (low): the new comment \"Uses 1 + ' + ' for the loop bound\" does not describe the code (the bound is `userIds.length`), which will mislead future readers.",
+          "severity": "medium",
+          "taskKey": "verdict",
+          "reviewerName": "verdict",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The comment is visibly nonsensical because the loop bound is userIds.length, so fixing or removing it improves reader accuracy.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The comment is visibly inaccurate, but this is minor cleanup rather than something a busy reviewer needs surfaced separately.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": true
+          }
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": null,
+          "description": "The single batched `WHERE user_id = ANY($1)` query is replaced by a sequential per-user loop (lines 6-9), turning one round-trip into N awaited round-trips. For a function named for bulk lookup, latency and DB load now scale linearly with `userIds.length`, which is a performance regression with no functional gain visible in the diff.",
+          "severity": "high",
+          "taskKey": "attention",
+          "reviewerName": "attention",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The code now performs sequential per-user queries where the previous implementation used one batched query.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The code clearly replaces the bulk lookup with N awaited database calls, which is a meaningful performance regression.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          }
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": null,
+          "description": "The new comment on line 4 (\"Uses 1 + ' + ' for the loop bound\") does not describe anything the code does — the loop bound is `userIds.length`. A misleading comment on a hot path costs the next reader time and suggests the change was not fully cleaned up.",
+          "severity": "low",
+          "taskKey": "attention",
+          "reviewerName": "attention",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The new comment plainly does not describe the code and is a misleading artifact in the changed function.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The comment is plainly misleading, but it is a low-value cleanup note compared with the actual behavioral regression.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": true
+          }
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": 7,
+          "description": "The single batched `WHERE user_id = ANY($1)` query was replaced with one sequential `db.query` per user inside the `for` loop, turning this into an N+1 pattern that scales linearly with `userIds.length` in DB round-trips. For a call with hundreds or thousands of user IDs this adds hundreds/thousands of serialized network round-trips and connection-pool checkouts where there used to be one, so latency and DB load grow with input size instead of staying flat.",
+          "severity": "high",
+          "taskKey": "skill:perf-reviewer",
+          "reviewerName": "perf-reviewer",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The loop issues one serialized db.query per user id, so latency and DB work scale linearly with input size.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The sequential query inside the loop makes database round trips scale linearly with userIds.length.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          }
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": 7,
+          "description": "The single batched `WHERE user_id = ANY($1)` query was replaced with one sequentially-awaited `db.query` per element of `userIds`, which is a textbook N+1: for a caller passing N ids this now issues N serial DB round trips, so latency and connection-pool pressure grow linearly with input size instead of staying constant. No test file appears in this PR context, so I couldn't verify whether anything pins the query count — but this is exactly the behaviour a test must pin, because the function still returns the same rows and a result-only assertion will pass against both the batched and the N+1 version.",
+          "severity": "high",
+          "taskKey": "tests:perf-reviewer",
+          "reviewerName": "perf-reviewer",
+          "verification": {
+            "confirmedBy": 3,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The N+1 performance regression is directly supported by the loop, even though the test-count aside is not needed.",
+                "worth": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "confirm",
+                "reason": "The N+1 query behavior is real and worth surfacing, even though the test-coverage aside is not independently established.",
+                "worth": true
+              }
+            ],
+            "worthFlagging": true
+          }
+        },
+        {
+          "file": "src/lib/orders.ts",
+          "line": 8,
+          "description": "`all.push(...rows)` spreads the entire per-user result set into function arguments; a user with a large order history (on the order of ~100k rows, above V8's argument-count limit) makes this throw `RangeError: Maximum call stack size exceeded` rather than returning. Nothing in the visible diff bounds `rows`, and whether real users reach that size couldn't be verified from the diff, so this is a latent failure rather than a confirmed one.",
+          "severity": "medium",
+          "taskKey": "tests:perf-reviewer",
+          "reviewerName": "perf-reviewer",
+          "verification": {
+            "confirmedBy": 1,
+            "polledModels": 3,
+            "surfaced": true,
+            "perModel": [
+              {
+                "provider": "generator",
+                "verdict": "confirm",
+                "reason": "",
+                "raised": true
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "uncertain",
+                "reason": "The spread could fail for extremely large result sets, but the finding depends on unproven row volumes and admits the condition is unverified.",
+                "worth": false
+              },
+              {
+                "provider": "bridge:codex",
+                "verdict": "uncertain",
+                "reason": "The spread could theoretically fail for extremely large result sets, but the provided context does not show such row counts are reachable.",
+                "worth": false
+              }
+            ],
+            "worthFlagging": false
+          }
+        }
+      ],
+      "variantScores": {
+        "generate-only": {
+          "caseName": "06-perf",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 4,
+          "recall": 1,
+          "precision": 0.2,
+          "noiseRate": 0
+        },
+        "+tests-pass": {
+          "caseName": "06-perf",
+          "produced": 9,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 5,
+          "recall": 1,
+          "precision": 0.16666666666666666,
+          "noiseRate": 0
+        },
+        "+verify": {
+          "caseName": "06-perf",
+          "produced": 5,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 2,
+          "recall": 1,
+          "precision": 0.3333333333333333,
+          "noiseRate": 0
+        },
+        "+triage": {
+          "caseName": "06-perf",
+          "produced": 6,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        },
+        "verify+triage/moot-off": {
+          "caseName": "06-perf",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        },
+        "verify+triage": {
+          "caseName": "06-perf",
+          "produced": 4,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        },
+        "app-default": {
+          "caseName": "06-perf",
+          "produced": 5,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 1,
+          "recall": 1,
+          "precision": 0.5,
+          "noiseRate": 0
+        },
+        "app-default/show-all": {
+          "caseName": "06-perf",
+          "produced": 7,
+          "realCaught": 1,
+          "realTotal": 1,
+          "noiseFlagged": 0,
+          "noiseTotal": 1,
+          "unmatched": 3,
+          "recall": 1,
+          "precision": 0.25,
+          "noiseRate": 0
+        }
+      },
+      "rawByTask": {
+        "verdict": "{\"level\":\"significant-changes\",\"evidence\":[\"src/lib/orders.ts: `ordersForUsers` replaces the single batched `WHERE user_id = ANY($1)` query with a `for` loop that awaits one `db.query(... WHERE user_id = $1 ...)` per element of `userIds`, turning one round-trip into N sequential round-trips (N+1 pattern) whose latency grows linearly with the input size.\",\"src/lib/orders.ts: the function signature and return shape (flat array of rows via `all.push(...rows)`) are unchanged, so existing callers do not need updates and no breakage is visible in the diff.\",\"src/lib/orders.ts: row ordering now follows the input `userIds` order grouped per user, whereas the previous single query returned rows in whatever order the DB produced; neither version specifies ORDER BY, so any caller relying on the old order may observe a different sequence.\",\"src/lib/orders.ts (low): the new comment \\\"Uses 1 + ' + ' for the loop bound\\\" does not describe the code (the bound is `userIds.length`), which will mislead future readers.\"],\"notAnalyzed\":[\"Callers of `ordersForUsers` and the typical size of `userIds` are not in the provided context, so the real-world magnitude of the performance regression couldn't be verified.\",\"`./db` (`db.query` implementation, connection pooling, per-query overhead) was not provided.\",\"No test files were included; couldn't verify whether existing tests cover ordering or batching behavior.\"]}",
+        "attention": "{\"readingOrder\":[\"src/lib/orders.ts\"],\"hotspots\":[{\"path\":\"src/lib/orders.ts\",\"reason\":\"The single batched `WHERE user_id = ANY($1)` query is replaced by a sequential per-user loop (lines 6-9), turning one round-trip into N awaited round-trips. For a function named for bulk lookup, latency and DB load now scale linearly with `userIds.length`, which is a performance regression with no functional gain visible in the diff.\",\"level\":\"high\"},{\"path\":\"src/lib/orders.ts\",\"reason\":\"The new comment on line 4 (\\\"Uses 1 + ' + ' for the loop bound\\\") does not describe anything the code does — the loop bound is `userIds.length`. A misleading comment on a hot path costs the next reader time and suggests the change was not fully cleaned up.\",\"level\":\"low\"}],\"testFlags\":[{\"path\":\"src/lib/orders.ts\",\"note\":\"Query shape and result-aggregation behavior changed (batched ANY query → per-id loop with spread-push), but no test file appears in this diff; inferred from the diff, not measured coverage — couldn't verify whether an existing test elsewhere exercises ordersForUsers with multiple ids or an empty array.\"}]}",
+        "skill:perf-reviewer": "{\n  \"skillName\": \"perf-reviewer\",\n  \"findings\": [\n    {\n      \"path\": \"src/lib/orders.ts\",\n      \"line\": 7,\n      \"severity\": \"high\",\n      \"body\": \"The single batched `WHERE user_id = ANY($1)` query was replaced with one sequential `db.query` per user inside the `for` loop, turning this into an N+1 pattern that scales linearly with `userIds.length` in DB round-trips. For a call with hundreds or thousands of user IDs this adds hundreds/thousands of serialized network round-trips and connection-pool checkouts where there used to be one, so latency and DB load grow with input size instead of staying flat.\",\n      \"suggestedFix\": \"Restore the batched query and return its rows directly:\\n```ts\\nexport async function ordersForUsers(userIds: number[]) {\\n  if (userIds.length === 0) return []\\n  return db.query('SELECT * FROM orders WHERE user_id = ANY($1)', [userIds])\\n}\\n```\\nThis also removes the `all.push(...rows)` spread, which can throw a stack-overflow RangeError when a single user has a very large number of orders.\"\n    }\n  ]\n}",
+        "tests:perf-reviewer": "{\n  \"skillName\": \"perf-reviewer\",\n  \"findings\": [\n    {\n      \"path\": \"src/lib/orders.ts\",\n      \"line\": 7,\n      \"severity\": \"high\",\n      \"body\": \"The single batched `WHERE user_id = ANY($1)` query was replaced with one sequentially-awaited `db.query` per element of `userIds`, which is a textbook N+1: for a caller passing N ids this now issues N serial DB round trips, so latency and connection-pool pressure grow linearly with input size instead of staying constant. No test file appears in this PR context, so I couldn't verify whether anything pins the query count — but this is exactly the behaviour a test must pin, because the function still returns the same rows and a result-only assertion will pass against both the batched and the N+1 version.\",\n      \"suggestedFix\": \"Restore the batched form: `const rows = await db.query('SELECT * FROM orders WHERE user_id = ANY($1)', [userIds]); return rows`. Then add a test that mocks `db.query`, calls `ordersForUsers` with ~50 ids, and asserts `db.query` was called exactly once with the full id array — that assertion fails against the loop implementation and prevents the regression from recurring silently.\"\n    },\n    {\n      \"path\": \"src/lib/orders.ts\",\n      \"line\": 8,\n      \"severity\": \"medium\",\n      \"body\": \"`all.push(...rows)` spreads the entire per-user result set into function arguments; a user with a large order history (on the order of ~100k rows, above V8's argument-count limit) makes this throw `RangeError: Maximum call stack size exceeded` rather than returning. Nothing in the visible diff bounds `rows`, and whether real users reach that size couldn't be verified from the diff, so this is a latent failure rather than a confirmed one.\",\n      \"suggestedFix\": \"Avoid argument spreading for unbounded arrays: `for (const r of rows) all.push(r)` or `all = all.concat(rows)`. (If the batched `ANY($1)` query from the first finding is restored, the accumulation disappears entirely and this goes away.)\"\n    }\n  ]\n}"
+      }
+    }
+  },
+  "gates": {
+    "minRecall": 0.5,
+    "maxNoiseRate": 0.25
+  },
+  "generatedAt": "2026-09-22T22:35:50.161Z"
+}

@@ -17,6 +17,7 @@
 
 import {
   skillReviewPrompt,
+  testsReviewPrompt,
   verdictPrompt,
   attentionPrompt,
   withDeepReviewGuidance,
@@ -25,6 +26,7 @@ import {
   validateSkillReviewResult,
   validateVerdict,
   validateAttention,
+  type FindingVerification,
 } from '../ai/schemas'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
@@ -38,6 +40,13 @@ import {
   DEFAULT_MATCH_CONFIG,
 } from './scorer'
 import { findingsMatch } from '../ai/findingMatch'
+import {
+  surfaceFindings,
+  TESTS_TASK_PREFIX,
+  type EvalFinding,
+  type PipelineStages,
+  type PipelineVariant,
+} from './surface'
 
 // ---------------------------------------------------------------------------
 // Golden-case shapes (mirrors eval/golden/<case>/*.json — see eval/README.md)
@@ -100,10 +109,25 @@ export type CompleteFn = (args: {
  * the produced array), whether it SURVIVED cross-model verification (surfaced).
  * Findings the verify pass demotes are dropped before scoring, so precision /
  * recall / noise-rate are measured WITH cross-model verification.
+ *
+ * `verifications` (optional) carries the FULL aggregated verification per
+ * finding, not just the surface bit. Triage (#226) and the mootness gate (#228)
+ * read `confirmedBy` / `polledModels` / `worthFlagging`, so a verify impl that
+ * returns only `surfaced` makes those two features unmeasurable — which is
+ * exactly what the pre-#226 harness did. New impls should return both.
  */
 export type VerifyFn = (
   findings: ProducedFinding[],
-) => Promise<{ surfaced: boolean[] }>
+) => Promise<{ surfaced: boolean[]; verifications?: (FindingVerification | undefined)[] }>
+
+/**
+ * The simplify pass (#220) over produced findings: returns the plain-English
+ * rewrite per finding (by 0-based index), or undefined where the pass left the
+ * body alone. Injectable for the same reason CompleteFn is.
+ */
+export type SimplifyFn = (
+  findings: ProducedFinding[],
+) => Promise<(string | undefined)[]>
 
 export interface RunCaseOptions {
   /** When true, append the deep-review guidance to each task's system prompt. */
@@ -126,6 +150,25 @@ export interface RunCaseOptions {
   fusionGenerate?: boolean
   /** Per-generator completion functions (one per simulated ensemble model). */
   generators?: { name: string; complete: CompleteFn }[]
+  /**
+   * Run the separate TESTS reviewer pass (#237) in addition to the
+   * implementation pass. Its findings are tagged `tests:<persona>` so a
+   * pipeline variant can include or exclude them.
+   */
+  testsPass?: boolean
+  /** The simplify pass (#220). Its rewrites ride along as `simpleBody`. */
+  simplify?: SimplifyFn
+  /**
+   * Score the produced findings once per named variant (see PIPELINE_VARIANTS)
+   * in addition to the headline `score`. This is how a single, expensive
+   * generation yields an on/off comparison for every post-generation stage.
+   */
+  variants?: readonly PipelineVariant[]
+  /**
+   * The stages the headline `score` is measured under. Defaults to the
+   * pre-existing behavior — everything off — so old callers are unaffected.
+   */
+  stages?: PipelineStages
 }
 
 // ---------------------------------------------------------------------------
@@ -171,23 +214,30 @@ export function packFixture(fixture: GoldenFixture): PackedContext {
  * file path in their text where possible; we keep them file-level (line null)
  * since those tasks are file/PR-scoped, while skill findings carry real lines.
  */
-function skillFindings(raw: unknown): ProducedFinding[] {
+function skillFindings(raw: unknown, taskKey: string, reviewerName: string): EvalFinding[] {
   const valid = validateSkillReviewResult(raw)
   if (valid === null) return []
   return valid.findings.map((f) => ({
     file: f.path,
     line: f.line,
     description: f.body,
+    severity: f.severity,
+    taskKey,
+    reviewerName,
   }))
 }
 
-function attentionFindings(raw: unknown): ProducedFinding[] {
+function attentionFindings(raw: unknown): EvalFinding[] {
   const valid = validateAttention(raw)
   if (valid === null) return []
   return valid.hotspots.map((h) => ({
     file: h.path,
     line: null,
     description: h.reason,
+    // Hotspot `level` uses the same high|medium|low enum as finding severity.
+    severity: h.level,
+    taskKey: 'attention',
+    reviewerName: 'attention',
   }))
 }
 
@@ -197,13 +247,25 @@ function attentionFindings(raw: unknown): ProducedFinding[] {
  * (best-effort). Bullets without a recognizable path are dropped — verdict
  * mostly contributes to attention/skill recall, not as standalone findings.
  */
-function verdictFindings(raw: unknown): ProducedFinding[] {
+function verdictFindings(raw: unknown): EvalFinding[] {
   const valid = validateVerdict(raw)
   if (valid === null) return []
-  const out: ProducedFinding[] = []
+  const out: EvalFinding[] = []
   for (const bullet of valid.evidence) {
     const path = extractPath(bullet)
-    if (path) out.push({ file: path, line: null, description: bullet })
+    if (path) {
+      out.push({
+        file: path,
+        line: null,
+        description: bullet,
+        // Verdict evidence carries no severity of its own. 'medium' is the
+        // neutral choice: under triage it neither forces a bullet inline (as
+        // 'high' would) nor buries every one of them (as 'low' would).
+        severity: 'medium',
+        taskKey: 'verdict',
+        reviewerName: 'verdict',
+      })
+    }
   }
   return out
 }
@@ -230,6 +292,15 @@ export interface CaseRunResult {
   produced: ProducedFinding[]
   /** Raw per-task outputs, for debugging / JSON emission. */
   rawByTask: Record<string, string>
+  /**
+   * Every generated finding with its pipeline inputs (severity, reviewer) and
+   * pipeline outputs (verification, simpleBody) attached — BEFORE any stage
+   * filtered it. This is what makes an on/off comparison possible without
+   * paying for a second generation.
+   */
+  findings: EvalFinding[]
+  /** Per-variant scores, when `options.variants` was given. Keyed by variant key. */
+  variantScores: Record<string, CaseScore>
 }
 
 /**
@@ -250,12 +321,12 @@ export async function runCase(
   const maybeDeep = (system: string): string =>
     options.deep ? withDeepReviewGuidance(system, ['read_file', 'search_code']) : system
 
-  /** Run all three review tasks with one completion fn → flat findings. */
+  /** Run every review task with one completion fn → flat, enriched findings. */
   async function produceFindings(
     completeFn: CompleteFn,
     rawSink?: Record<string, string>,
-  ): Promise<ProducedFinding[]> {
-    const out: ProducedFinding[] = []
+  ): Promise<EvalFinding[]> {
+    const out: EvalFinding[] = []
     {
       const prompts = verdictPrompt(ctx, ci)
       const raw = await completeFn({ system: maybeDeep(prompts.system), user: prompts.user, taskKey: 'verdict' })
@@ -273,12 +344,24 @@ export async function runCase(
       const taskKey = `skill:${skill.name}`
       const raw = await completeFn({ system: maybeDeep(prompts.system), user: prompts.user, taskKey })
       if (rawSink) rawSink[taskKey] = raw
-      out.push(...skillFindings(safeParse(raw)))
+      out.push(...skillFindings(safeParse(raw), taskKey, skill.name))
+    }
+    // The separate TESTS reviewer pass (#237). It reads the WHOLE PR and asks a
+    // different question from the implementation pass, so its findings are a
+    // distinct, additive source — tagged so a variant can exclude them.
+    if (options.testsPass) {
+      for (const skill of goldenCase.fixture.skills ?? []) {
+        const prompts = testsReviewPrompt(ctx, skill)
+        const taskKey = `${TESTS_TASK_PREFIX}${skill.name}`
+        const raw = await completeFn({ system: maybeDeep(prompts.system), user: prompts.user, taskKey })
+        if (rawSink) rawSink[taskKey] = raw
+        out.push(...skillFindings(safeParse(raw), taskKey, skill.name))
+      }
     }
     return out
   }
 
-  let produced: ProducedFinding[]
+  let produced: EvalFinding[]
   if (options.fusionGenerate && options.generators && options.generators.length >= 2) {
     // Plan O 'generate' mode: run the review once per simulated generator, then
     // dedup-merge the union. A finding raised by ANY generator enters the union,
@@ -293,18 +376,67 @@ export async function runCase(
     produced = await produceFindings(complete, rawByTask)
   }
 
-  // Cross-model verification (Plan M / Plan O cross-confirm): drop demoted
-  // findings before scoring so the metrics reflect post-verification surface.
-  let scored = produced
-  if (options.crossVerify && options.verify && produced.length > 0) {
-    const { surfaced } = await options.verify(produced)
-    scored = produced.filter((_, i) => surfaced[i] !== false)
+  // Cross-model verification (Plan M / Plan O cross-confirm). The verdicts are
+  // ATTACHED rather than applied here: a variant decides whether to honor them,
+  // and triage (#226) + the mootness gate (#228) need the full verification,
+  // not just its surface bit.
+  if (options.verify && produced.length > 0) {
+    const { surfaced, verifications } = await options.verify(produced)
+    produced = produced.map((f, i) => {
+      const v = verifications?.[i]
+      if (v) return { ...f, verification: v }
+      // A verify impl that returns only `surfaced` still gets its decision
+      // honored — synthesized as a minimal 1-verifier verification so that the
+      // ONLY thing lost is the triage/worth signal it never produced.
+      if (surfaced[i] === undefined) return f
+      return {
+        ...f,
+        verification: {
+          confirmedBy: surfaced[i] ? 2 : 1,
+          polledModels: 2,
+          surfaced: surfaced[i],
+          perModel: [],
+        },
+      }
+    })
+  }
+
+  // The simplify pass (#220): rewrites ride along as `simpleBody`; whether a
+  // variant SCORES the rewrite is the variant's call.
+  if (options.simplify && produced.length > 0) {
+    const rewrites = await options.simplify(produced)
+    produced = produced.map((f, i) => {
+      const simple = rewrites[i]
+      return simple && simple !== f.description ? { ...f, simpleBody: simple } : f
+    })
   }
 
   const expectation = normalizeExpectation(goldenCase.expected)
+
+  // Headline score. Default stages reproduce the pre-#226 behavior (score
+  // everything) EXCEPT that `crossVerify` still drops demoted findings when a
+  // verify fn ran — the contract callers already depend on.
+  const headlineStages: PipelineStages = options.stages ?? {
+    crossVerify: options.crossVerify === true && options.verify !== undefined,
+    triage: false,
+    mootnessGate: true,
+    simplify: false,
+    testsPass: true,
+  }
+  const scored = surfaceFindings(produced, headlineStages)
   const score = scoreCase(goldenCase.name, scored, expectation, match)
 
-  return { score, produced: scored, rawByTask }
+  const variantScores: Record<string, CaseScore> = {}
+  for (const variant of options.variants ?? []) {
+    variantScores[variant.key] = scoreCase(
+      goldenCase.name,
+      surfaceFindings(produced, variant.stages),
+      expectation,
+      match,
+    )
+  }
+
+  return { score, produced: scored, rawByTask, findings: produced, variantScores }
 }
 
 /**
@@ -313,11 +445,11 @@ export async function runCase(
  * description) collapse; everything else is kept. The representative is the first
  * encountered. This is the eval-harness analog of the app's mergeGeneratorFindings.
  */
-export function mergeProducedUnion(
-  perGenerator: ProducedFinding[][],
+export function mergeProducedUnion<T extends ProducedFinding>(
+  perGenerator: T[][],
   match: MatchConfig = DEFAULT_MATCH_CONFIG,
-): ProducedFinding[] {
-  const union: ProducedFinding[] = []
+): T[] {
+  const union: T[] = []
   for (const list of perGenerator) {
     for (const f of list) {
       if (!union.some((u) => findingsMatch(u, f, match))) union.push(f)

@@ -6,13 +6,15 @@
         "path": "src/api/search.ts",
         "line": 6,
         "severity": "high",
-        "body": "SQL injection: `sort` is interpolated directly into the ORDER BY clause. Use an allow-list of column names instead of raw concatenation."
+        "body": "SQL injection: `sort` is interpolated directly into the ORDER BY clause. Use an allow-list of column names instead of raw concatenation.",
+        "suggestedFix": "Map `sort` through an allow-list before it reaches the SQL, e.g. `const col = ({name:'name',created:'created_at'})[sort] ?? 'created_at'`, and interpolate `col`."
       },
       {
         "path": "src/api/search.ts",
         "line": 7,
         "severity": "medium",
-        "body": "The LIKE term concatenation looks like SQL injection; the search term flows into the query."
+        "body": "The LIKE term concatenation looks like SQL injection; the search term flows into the query.",
+        "suggestedFix": "No clean fix — the term is already bound as the `$1` parameter, so there is nothing to change here."
       }
     ]
   },

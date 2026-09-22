@@ -6,7 +6,8 @@
         "path": "src/lib/paginate.ts",
         "line": 8,
         "severity": "high",
-        "body": "Off-by-one: `end = start + size - 1` combined with slice's exclusive end drops the last item on every page; use `start + size`."
+        "body": "Off-by-one: `end = start + size - 1` combined with slice's exclusive end drops the last item on every page; use `start + size`.",
+        "suggestedFix": "Change line 8 to `const end = start + size` — `slice` already excludes the end index, so no -1 is needed."
       }
     ]
   },
