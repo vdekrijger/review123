@@ -578,6 +578,30 @@ describe('buildChangeStrip', () => {
     expect(strip.decisionCount).toBe(MAX_STRIP_DECISIONS + 3)
   })
 
+  it('is not informative for a single unnamed change — the file IS its own summary', () => {
+    const patch = '@@ -1,2 +1,3 @@\n ctx\n+  doThing()\n tail'
+    const file = fileOf(patch, 'config/values.ts')
+    const strip = buildChangeStrip(file, classifyFileHunks({ filename: file.filename, patch }))
+    expect(strip.entries).toHaveLength(1)
+    expect(strip.informative).toBe(false)
+  })
+
+  it('is informative as soon as a symbol names the change', () => {
+    const patch = '@@ -1,2 +1,3 @@ export function doThing() {\n ctx\n+  return 1\n tail'
+    const file = fileOf(patch)
+    const strip = buildChangeStrip(file, classifyFileHunks({ filename: file.filename, patch }))
+    expect(strip.entries).toHaveLength(1)
+    expect(strip.entries[0].isSymbol).toBe(true)
+    expect(strip.informative).toBe(true)
+  })
+
+  it('is informative when nothing substantive changed', () => {
+    const patch = '@@ -1,2 +1,2 @@\n-  const a = 1\n+    const a = 1'
+    const file = fileOf(patch)
+    const strip = buildChangeStrip(file, classifyFileHunks({ filename: file.filename, patch }))
+    expect(strip.informative).toBe(true)
+  })
+
   it('is deterministic across repeated builds', () => {
     const file = fileOf(MIXED)
     const one = buildChangeStrip(file, classifyFileHunks({ filename: file.filename, patch: file.patch }))

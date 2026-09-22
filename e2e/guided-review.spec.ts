@@ -164,3 +164,117 @@ test('inspect: Risk first orders by attention need, tails mechanical files, mark
   ).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('details.attention-tail')).toHaveCount(1)
 })
+
+// ---------------------------------------------------------------------------
+// Within-file attention: the per-hunk classifier (src/lib/guide/hunkAttention)
+// ---------------------------------------------------------------------------
+//
+// Fixture: ONE file holding one genuinely interesting change buried among
+// mechanical churn — a re-indent hunk, the real new branch, and an added
+// import. Asserts the reviewer is pointed at the decision point:
+//   1. the file card's "what changed" strip names the real change by symbol
+//      and folds the churn to a count;
+//   2. the mechanical hunks are RECEDED while the real change stays bright;
+//   3. a marker names why, and "Show normally" restores that hunk fully;
+//   4. the toolbar off switch makes the whole layer inert.
+
+const PR_NUMBER_HUNKS = 92
+const APP_REVIEW_PATH_HUNKS = `/review/github/${OWNER}/${REPO}/${PR_NUMBER_HUNKS}`
+
+const COMPACTOR_PATCH = [
+  '@@ -1,4 +1,4 @@',
+  ' const header = 1',
+  '-  const spacing = 2',
+  '-  const padding = 3',
+  '+    const spacing = 2',
+  '+    const padding = 3',
+  ' const footer = 4',
+  '@@ -40,2 +40,3 @@ export function resolveCompactor() {',
+  ' const pre = 1',
+  "+  if (mode === 'wide') return wideCompactor",
+  ' const post = 2',
+  '@@ -80,2 +80,3 @@',
+  " import a from './a'",
+  "+import b from './b'",
+  ' const tail = 1',
+].join('\n')
+
+test('inspect: within a file, the strip names the real change and mechanical hunks recede', async ({ page }) => {
+  await page.route('**/*posthog.com/**', (route) => route.abort())
+  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+
+  await page.route('**/api.github.com/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER_HUNKS}`) {
+      return route.fulfill({
+        json: {
+          title: 'Hunk attention test PR',
+          state: 'open', merged: false, body: null,
+          base: { sha: BASE_SHA, repo: { private: false } },
+          head: { sha: HEAD_SHA },
+          changed_files: 1,
+        },
+      })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER_HUNKS}/files`) {
+      return route.fulfill({
+        json: [
+          { filename: 'src/compactor.ts', status: 'modified', patch: COMPACTOR_PATCH, additions: 4, deletions: 2 },
+        ],
+      })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/commits/${HEAD_SHA}/check-runs`) {
+      return route.fulfill({ json: { total_count: 0, check_runs: [] } })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER_HUNKS}/comments`) {
+      return route.fulfill({ json: [] })
+    }
+    return route.fulfill({ status: 404, json: { message: 'Not Found' } })
+  })
+
+  await page.route('**/api.deepseek.com/**', (route) => route.abort())
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, { deepseekKey: '', diffMode: 'unified', railCollapsed: true, focusMode: 'off' })
+
+  await page.goto(APP_REVIEW_PATH_HUNKS)
+  await expect(page.getByRole('heading', { name: /Hunk attention test PR/i })).toBeVisible({
+    timeout: 10_000,
+  })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.locator('article.file-diff')).toHaveCount(1)
+
+  // 1. The strip names the DECISION point by symbol and folds the churn.
+  const strip = page.getByTestId('change-strip')
+  await expect(strip).toContainText('What changed')
+  await expect(strip.getByTestId('change-strip-entry').filter({ hasText: 'resolveCompactor' })).toHaveCount(1)
+  await expect(strip).toContainText('1 formatting hunk')
+  await expect(strip).toContainText('1 import hunk')
+
+  // 2. The mechanical hunks recede; the real change stays bright.
+  const formattingRow = page.locator('.diff-line-content').filter({ hasText: 'const spacing = 2' }).first()
+  await expect(formattingRow).toHaveClass(/hunk-receded/)
+  const importRow = page.locator('.diff-line-content').filter({ hasText: "from './b'" }).first()
+  await expect(importRow).toHaveClass(/hunk-receded/)
+  const realChangeRow = page.locator('.diff-line-content').filter({ hasText: 'wideCompactor' }).first()
+  await expect(realChangeRow).not.toHaveClass(/hunk-receded/)
+
+  // 3. The marker names WHY, and one click restores that hunk fully.
+  const formattingMarker = page.getByTestId('hunk-marker').filter({ hasText: 'formatting only' })
+  await expect(formattingMarker).toHaveCount(1)
+  await formattingMarker.getByTestId('hunk-marker-restore').click()
+  await expect(formattingRow).not.toHaveClass(/hunk-receded/)
+  await expect(page.getByTestId('hunk-marker').filter({ hasText: 'formatting only' })).toHaveCount(0)
+  // Restoring ONE hunk leaves the others receded — it is not a global switch.
+  await expect(importRow).toHaveClass(/hunk-receded/)
+
+  // 4. The off switch makes the whole layer inert.
+  await page.getByTestId('hunk-attention-toggle').click()
+  await expect(page.getByTestId('hunk-attention-toggle')).toContainText('Hunk focus: off')
+  await expect(page.getByTestId('change-strip')).toHaveCount(0)
+  await expect(page.getByTestId('hunk-marker')).toHaveCount(0)
+  await expect(page.locator('.hunk-receded')).toHaveCount(0)
+})

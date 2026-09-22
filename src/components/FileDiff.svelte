@@ -1164,7 +1164,7 @@
          symbols the diff already gives us (#95) plus the per-hunk
          classification, with the mechanical churn folded down to a count.
          Every entry jumps to its hunk. -->
-    {#if hunkAttentionOn && changeStrip.entries.length > 0}
+    {#if hunkAttentionOn && changeStrip.informative}
       <div class="change-strip" data-testid="change-strip" aria-label="What changed in {file.filename}">
         <span class="change-strip-title">
           {changeStrip.nothingSubstantive ? 'Nothing substantive' : 'What changed'}

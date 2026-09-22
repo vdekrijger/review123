@@ -622,6 +622,14 @@ export interface ChangeStrip {
   nothingSubstantive: boolean
   decisionCount: number
   mechanicalCount: number
+  /**
+   * Whether the strip tells the reviewer anything the diff below does not.
+   * A single unnamed decision hunk ("Lines 1–3 · +2") is padding — a file with
+   * one change IS its own summary — so the caller renders nothing. True as
+   * soon as there is a named symbol, a second entry, or churn worth calling
+   * mechanical.
+   */
+  informative: boolean
 }
 
 function rangeLabel(hunk: DiffHunk): string {
@@ -745,10 +753,13 @@ export function buildChangeStrip(
     })
   }
 
+  const nothingSubstantive = hunks.length > 0 && decisions.length === 0
   return {
     entries,
-    nothingSubstantive: hunks.length > 0 && decisions.length === 0,
+    nothingSubstantive,
     decisionCount: decisions.length,
     mechanicalCount: mechanical.length,
+    informative:
+      entries.length > 1 || nothingSubstantive || (entries.length === 1 && entries[0].isSymbol),
   }
 }
