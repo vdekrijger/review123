@@ -29,6 +29,7 @@ import { llmToolLoop } from './llmToolLoop'
 import { setTransientRetryPolicyForTests } from './transientRetry'
 import { setAiProvider, setAiModel, setDeepseekKey, getSettings } from '../settings/settings'
 import { BRIDGE_STORAGE_KEY } from '../bridge/storage'
+import { BRIDGE_START_COMMAND } from '../bridge/install'
 import { MAX_INFLIGHT_LLM_CALLS } from './concurrencyGate'
 
 const TOKEN = 'pairing-token-0000000000000000000000000000'
@@ -268,6 +269,17 @@ describe('bridge transport — failures', () => {
     })
     // Not one byte goes anywhere: there is nothing to call.
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  // The error line is an INSTRUCTION, so it must name the command the user
+  // actually ran. Since #239 that is the downloaded release bundle, not the
+  // checkout-only `pnpm bridge` (still offered in Settings as the
+  // build-it-yourself fallback, but never as the thing to run mid-review).
+  it('tells the user to start the bridge the way Settings told them to install it', () => {
+    expect(BRIDGE_UNREACHABLE_MESSAGE).toContain(BRIDGE_START_COMMAND)
+    expect(BRIDGE_UNREACHABLE_MESSAGE).not.toContain('pnpm bridge')
+    // Still an error line, not documentation.
+    expect(BRIDGE_UNREACHABLE_MESSAGE.length).toBeLessThan(200)
   })
 
   it('fails HONESTLY when the bridge stops answering mid-review — no silent paid fallback', async () => {

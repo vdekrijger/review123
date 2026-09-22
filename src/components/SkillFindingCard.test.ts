@@ -17,6 +17,7 @@ import userEvent from '@testing-library/user-event'
 import SkillFindingCard from './SkillFindingCard.svelte'
 import type { AskFocus } from '../lib/ai/tasks'
 import { reanchorDrag } from '../lib/findings/reanchor.svelte'
+import { describeFixEligibility } from '../lib/bridge/fixLoop'
 
 function renderCard(props: Partial<Parameters<typeof render>[1]> & Record<string, unknown> = {}) {
   return render(SkillFindingCard, {
@@ -866,5 +867,48 @@ describe('SkillFindingCard — "judged minor by verification" chip (mootness gat
     renderCard({ severity: 'high', verification: verification(false) })
     expect(screen.getByText('✓ verified')).toBeInTheDocument()
     expect(screen.getByTestId('finding-moot-chip')).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// "Send to agent" (#243 deferred it: the cards are rendered two components
+// away from the panel that owns the fix run).
+//
+// PRESENCE IS THE GATE. The parent answers both questions — is this finding
+// eligible, and is a write-enabled bridge ready — and the card either gets a
+// callback or does not. It never renders a disabled button for a feature the
+// user has not set up.
+// ---------------------------------------------------------------------------
+
+describe('SkillFindingCard — send to agent', () => {
+  it('shows NOTHING when the parent passes no handler — absent, not disabled', () => {
+    renderCard({ suggestedFix: 'Escape it with textContent.' })
+    expect(screen.queryByTestId('finding-send-to-agent')).toBeNull()
+    // Not a hidden or disabled variant either.
+    expect(screen.queryByText(/send to agent/i)).toBeNull()
+  })
+
+  it('joins the existing action row and calls back on click', async () => {
+    const onSendToAgent = vi.fn()
+    const { container } = renderCard({
+      suggestedFix: 'Escape it with textContent.',
+      onSendToAgent,
+    })
+
+    const btn = screen.getByTestId('finding-send-to-agent')
+    // Same row as Add as draft / Dismiss — one action among the others.
+    expect(btn.closest('.skill-finding-actions')).toBe(container.querySelector('.skill-finding-actions'))
+    expect(btn).not.toBeDisabled()
+
+    await userEvent.click(btn)
+    expect(onSendToAgent).toHaveBeenCalledTimes(1)
+  })
+
+  it('says what pressing it does, in the routing rule’s own words', () => {
+    renderCard({ onSendToAgent: vi.fn() })
+    expect(screen.getByTestId('finding-send-to-agent')).toHaveAttribute(
+      'title',
+      describeFixEligibility('eligible'),
+    )
   })
 })

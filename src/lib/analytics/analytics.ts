@@ -23,7 +23,13 @@ const EVENTS = {
   // PRIVACY DECISION (finding simplify): 'rewrites' is the integer count of
   // finding bodies the simplify pass rewrote — a count only, never finding
   // text, code, or file paths. Added for rewrite-rate observability.
-  ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls', 'chunks', 'partial', 'clusters', 'rewrites'],
+  // PRIVACY DECISION (#237 reviewer passes): 'pass' is 'implementation' |
+  // 'tests' — WHICH reviewer pass a 'skill-review' task belonged to. A fixed
+  // two-value enum naming a code path, never a file path, persona name,
+  // finding, or any code content. Without it the two passes are one
+  // indistinguishable blob in the task metrics, even though they have
+  // different prompts, different contexts and very different costs.
+  ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls', 'chunks', 'partial', 'clusters', 'rewrites', 'pass'],
   // PRIVACY DECISION (error-detail surfacing): 'reason_detail' is the concrete
   // upstream failure text behind the coarse 'reason' kind — the provider's OWN
   // error body (e.g. "insufficient quota", "maximum context length exceeded")
@@ -42,7 +48,10 @@ const EVENTS = {
   // reply" / "the JSON did not match the expected shape", plus whether the
   // reply was cut off at the output limit). No new property is needed: the
   // truncation signal rides inside that same classified sentence.
-  ai_task_failed: ['task', 'reason', 'reason_detail', 'partial'],
+  // 'pass' rides here for the same reason it rides on ai_task_completed: a
+  // failure rate that cannot tell the agentic whole-PR tests pass from the
+  // scoped implementation pass is not a failure rate anyone can act on.
+  ai_task_failed: ['task', 'reason', 'reason_detail', 'partial', 'pass'],
   // PRIVACY DECISION (robust big-PR story): fired when the story task degrades
   // to the deterministic structural walkthrough (AI ordering failed or returned
   // an unusable result). Carries only 'task' ('story') and 'reason' — a
@@ -151,6 +160,20 @@ const EVENTS = {
   drawer_opened: [],
   // Carries no content — fired when the user turns ON "Hide whitespace changes".
   whitespace_hidden: [],
+  // PRIVACY DECISION (#241 per-hunk attention): the within-file attention layer
+  // recedes hunks it classified as MECHANICAL behind a marker. Both events say
+  // whether that classifier is earning its place, and neither can say anything
+  // about the code it classified:
+  //   - hunk_restored.'changed' : integer count of CHANGED LINES in the hunk the
+  //     user un-receded — the same number already printed on the marker. A size,
+  //     not a location: never the path, the hunk index, the line numbers, the
+  //     classifier's summary, or one character of the diff. It answers "are
+  //     people rescuing big hunks (the classifier is wrong) or one-liners?".
+  //   - hunk_focus_toggled.'enabled' : boolean — the new state of the Inspect
+  //     toolbar toggle. Unlike focus_mode_on (ON only), BOTH directions matter
+  //     here: turning the layer off is the signal that it is getting in the way.
+  hunk_restored: ['changed'],
+  hunk_focus_toggled: ['enabled'],
   // Carries no content — fired when the user turns ON focus mode (any non-off).
   focus_mode_on: [],
   rail_expanded: [],
@@ -212,6 +235,33 @@ const EVENTS = {
   // any file content. Added so we can see whether the bridge is adopted at all
   // and which CLI the inference path has to support first.
   bridge_connected: ['inference_clis', 'has_files'],
+  // PRIVACY DECISION (agent fix loop, #243): the fix loop hands findings to a
+  // coding agent on the user's own machine and gets back commits. Almost
+  // everything it touches is disqualified by definition — the finding text, its
+  // path and line, the agent's intent sentence, the files it changed, the diff,
+  // the commit shas, the test command and its output. NONE of that is sent.
+  // What is sent is the SHAPE of the run:
+  //   - 'findings' : integer count of findings dispatched in this batch.
+  //   - 'cli'      : 'claude' | 'codex' — the hard-coded BRIDGE_CLIS enum, the
+  //                  same value already sent as bridge_connected.inference_clis.
+  // Added so the single most expensive action in the product ("did anyone run
+  // it, and with what?") is measurable at all.
+  bridge_fix_dispatched: ['findings', 'cli'],
+  // The same run's OUTCOME. Counts and fixed enums only:
+  //   - 'outcome'      : 'done' | 'failed' | 'cancelled'.
+  //   - 'failure'      : the FixFailureKind enum ('unreachable', 'timeout',
+  //                      'write-disabled', …) — present only when 'failed'. A
+  //                      classified cause, never the bridge's own detail text
+  //                      (which can quote a CLI's stderr).
+  //   - 'changes'      : integer count of commits handed back.
+  //   - 'skipped'      : integer count of findings that produced no commit.
+  //   - 'stop_reason'  : the BridgeFixStopReason enum — why the loop stopped.
+  //   - 'tests_passed' : integer count of changes whose test run passed.
+  //   - 'tests_failed' : integer count whose test run failed.
+  //   - 'duration_ms'  : elapsed ms (same convention as ai_task_completed).
+  // A fix run is minutes long and mostly succeeds or mostly does not; these
+  // counts say which, and nothing about the code involved.
+  bridge_fix_settled: ['outcome', 'failure', 'changes', 'skipped', 'stop_reason', 'tests_passed', 'tests_failed', 'duration_ms'],
 } as const
 
 export type EventName = keyof typeof EVENTS

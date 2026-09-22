@@ -263,6 +263,24 @@ describe('resolveTaskMode (Plan J — per-task run resolution)', () => {
     expect(DEEP_REVIEW_MAX_TOOL_CALLS).toBe(8)
     expect(DEEP_REVIEW_MAX_FETCHED_BYTES).toBe(150_000)
   })
+
+  // The BYTES follow the source; the CALL budget does not, and that asymmetry
+  // is a decision, not an oversight. `maxToolCalls` bounds LLM ROUNDS, each of
+  // which re-sends the whole conversation — a local `open()` makes round 9 no
+  // cheaper than round 8. See the DEEP_REVIEW_LOCAL_MAX_FETCHED_BYTES comment.
+  it('the local budget moves the BYTES only — the call budget is source-independent', () => {
+    const local = { ...makeSource(), local: true }
+    expect(fetchBudgetFor(makeSource())).toBe(DEEP_REVIEW_MAX_FETCHED_BYTES)
+    expect(fetchBudgetFor(local)).toBe(DEEP_REVIEW_LOCAL_MAX_FETCHED_BYTES)
+    // There is exactly ONE call budget, and it is the provider one.
+    expect(DEEP_REVIEW_MAX_TOOL_CALLS).toBe(8)
+    // The local byte budget is precisely what that call budget can fetch at the
+    // per-file cap, so locally the bytes stop binding and the calls are the
+    // single ceiling — raising the calls would silently raise both.
+    expect(DEEP_REVIEW_LOCAL_MAX_FETCHED_BYTES).toBe(
+      DEEP_REVIEW_MAX_TOOL_CALLS * DEEP_REVIEW_FILE_CAP_BYTES,
+    )
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -21,19 +21,18 @@
     BRIDGE_STORAGE_KEY,
   } from '../../lib/bridge/bridge.svelte'
   import { DEFAULT_BRIDGE_PORT } from '../../lib/bridge/protocol'
+  // Shared with the mid-review "bridge is not responding" error (llm.ts), so
+  // the two surfaces can never name different commands.
+  import {
+    BRIDGE_DOWNLOAD_COMMAND,
+    BRIDGE_README_URL,
+    BRIDGE_REPO_URL,
+    BRIDGE_START_COMMAND,
+  } from '../../lib/bridge/install'
 
   let token = $state('')
   let portInput = $state(String(bridgeState.port))
   let busy = $state(false)
-
-  // The prebuilt single-file bundle (bridge/scripts/bundle.mjs), published on
-  // GitHub Releases. `/releases/latest/download/` always resolves to the newest
-  // release's asset, so this URL never needs a version bump here.
-  const DOWNLOAD_URL = 'https://github.com/vdekrijger/review123/releases/latest/download/bridge.mjs'
-  const REPO_URL = 'https://github.com/vdekrijger/review123'
-  const README_URL = 'https://github.com/vdekrijger/review123/blob/main/bridge/README.md'
-  /** Where the download lands. Stable, so step 2 works from any repo. */
-  const LOCAL_PATH = '~/review123-bridge.mjs'
 
   // Re-probe when this section mounts. main.ts already probes at app start
   // (inference routes through the bridge, so the connection has to be known
@@ -51,6 +50,13 @@
   const inferReady = $derived(bridgeAvailable('infer'))
   /** Both grounding routes. An older bridge has neither. */
   const filesReady = $derived(bridgeAvailable('files') && bridgeAvailable('search'))
+  /**
+   * `capabilities.fix` — the bridge's `--allow-write` flag, and the ONLY
+   * authorisation for the fix loop. It is not a release-readiness boolean like
+   * the other capabilities: it is a process flag the person at the terminal
+   * typed, which is exactly why this section states it rather than hiding it.
+   */
+  const writeEnabled = $derived(bridgeAvailable('fix'))
   const repoState = $derived(bridgeState.git)
 
   /**
@@ -146,6 +152,20 @@
         <a href="#ai-models">AI models</a> to use it instead of an API key.
       {/if}
     </p>
+    <p class="field-note" data-testid="bridge-write-note">
+      {#if writeEnabled}
+        Write mode is on (<code>--allow-write</code>): a finding with a concrete fix can go
+        straight to your coding agent, which fixes it in a scratch git worktree, runs your
+        tests, and hands back one commit per finding for you to review and cherry-pick. Your
+        checkout, branch, index and uncommitted work are never touched, and nothing is pushed.
+      {:else}
+        This bridge is <strong>read-only</strong>. Restart it with <code>--allow-write</code>
+        to let review123 hand findings to your coding agent — it works in a scratch git
+        worktree, runs your tests, and hands back one commit per finding; your checkout,
+        branch, index and uncommitted work are never touched, and nothing is pushed. Nothing
+        on this page can turn it on: the flag is typed at the terminal or it does not happen.
+      {/if}
+    </p>
     <p class="field-note" data-testid="bridge-grounding-note">
       {#if !filesReady}
         This bridge is too old to serve repo files, so reviews will read code
@@ -186,18 +206,18 @@
         <strong>Get the bridge.</strong> Download the single file once, then run it
         inside whichever repo you want to review. Needs Node 22+ and nothing else.
       </p>
-      <pre class="cmd"><code>curl -fsSL {DOWNLOAD_URL} -o {LOCAL_PATH}
-node {LOCAL_PATH} --root .</code></pre>
+      <pre class="cmd"><code>{BRIDGE_DOWNLOAD_COMMAND}
+{BRIDGE_START_COMMAND}</code></pre>
       <p class="field-note">
         Prefer to build it yourself? Clone
-        <a href={REPO_URL} target="_blank" rel="noopener noreferrer">the repo</a> and run
+        <a href={BRIDGE_REPO_URL} target="_blank" rel="noopener noreferrer">the repo</a> and run
         <code>pnpm install</code>, then <code>pnpm bridge</code> — fair warning, that
         first install pulls this app's entire dev toolchain (Playwright included) to
         compile a package that has no dependencies of its own.
       </p>
       <p class="field-note">
         Every flag, and the full security model, are in
-        <a href={README_URL} target="_blank" rel="noopener noreferrer">bridge/README.md</a>.
+        <a href={BRIDGE_README_URL} target="_blank" rel="noopener noreferrer">bridge/README.md</a>.
         The token is stored in this browser under <code>{BRIDGE_STORAGE_KEY}</code>.
       </p>
     </div>

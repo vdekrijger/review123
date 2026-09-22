@@ -935,6 +935,8 @@ import {
   GROUNDED_NOTE_MAX_CHARS,
   GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_ROUND,
   GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND,
+  GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND_LOCAL,
+  searchCallsPerRound,
   GROUNDED_VERIFY_MAX_FETCHED_BYTES,
   GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_VERIFIER,
 } from './crossVerify'
@@ -1050,6 +1052,43 @@ describe('wrapGroundedExecutor — budget caps', () => {
     expect(refused.content).toMatch(/search|quota/i)
     // Non-search lookups still run under the remaining round budget.
     expect((await wrapped('read_file', { path: 'src/a.ts' })).ok).toBe(true)
+  })
+
+  // The 2 exists because GitHub's /search/code allows ~10 a minute. With the
+  // bridge answering, a search is ripgrep over the user's own tree — that
+  // reason is gone, and a verifier that runs out of searches votes "uncertain"
+  // on exactly the absence claims searching was meant to settle.
+  it('LOCAL rounds get the higher search cap; github rounds are untouched', async () => {
+    expect(searchCallsPerRound('github')).toBe(GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND)
+    expect(searchCallsPerRound('local')).toBe(GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND_LOCAL)
+    expect(GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND_LOCAL).toBeGreaterThan(
+      GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND,
+    )
+    // Unmetered is not unlimited: a search result is re-sent every round, so
+    // the cap still leaves room inside the round total for real read_file work.
+    expect(GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND_LOCAL).toBeLessThan(
+      GROUNDED_VERIFY_MAX_TOOL_CALLS_PER_ROUND,
+    )
+
+    const round = createGroundedRoundBudget('local')
+    expect(round.searchCap).toBe(GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND_LOCAL)
+    const exec = vi.fn(async () => ({ ok: true, content: 'hits' }))
+    const wrapped = wrapGroundedExecutor(exec, round)
+    // The GitHub cap is not the ceiling any more…
+    for (let i = 0; i < GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND_LOCAL; i++) {
+      expect((await wrapped('search_code', { query: `q${i}` })).ok).toBe(true)
+    }
+    // …but there IS still a ceiling, and it refuses honestly.
+    const refused = await wrapped('search_code', { query: 'one too many' })
+    expect(refused.ok).toBe(false)
+    expect(refused.content).toMatch(/context cost/i)
+    expect(refused.content).not.toMatch(/quota/i)
+  })
+
+  it('defaults to the quota-safe cap when the caller does not say where searches land', () => {
+    const round = createGroundedRoundBudget()
+    expect(round.source).toBe('github')
+    expect(round.searchCap).toBe(GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND)
   })
 
   it('per-verifier BYTE cap: a fresh wrapper on the same round has its own byte budget', async () => {

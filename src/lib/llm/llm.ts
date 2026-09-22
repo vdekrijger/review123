@@ -39,6 +39,7 @@ import {
   requestSignals as sharedRequestSignals,
 } from '../net/signals'
 import { readStoredBridge } from '../bridge/storage'
+import { BRIDGE_START_COMMAND } from '../bridge/install'
 import {
   bridgeUrl,
   parseBridgeError,
@@ -1122,9 +1123,17 @@ export const BRIDGE_JSON_INSTRUCTION =
 export const BRIDGE_NOT_PAIRED_MESSAGE =
   'No local bridge is paired. Open Settings → Local bridge and paste the pairing token the bridge printed.'
 
-/** Shown when the bridge was paired but is not answering — the mid-review case. */
+/**
+ * Shown when the bridge was paired but is not answering — the mid-review case.
+ *
+ * It names the command from Settings → Local bridge (lib/bridge/install.ts),
+ * because that is the one the user actually ran: since #239 the primary install
+ * is the downloaded release bundle, and `pnpm bridge` is the build-it-yourself
+ * fallback. Telling someone mid-review to run a command from a checkout they
+ * may not have would be a detour, not an instruction.
+ */
 export const BRIDGE_UNREACHABLE_MESSAGE =
-  'The local bridge is not responding. Start it in your repo (pnpm bridge), or pick an API provider in Settings → AI models.'
+  `The local bridge is not responding. Start it in your repo (${BRIDGE_START_COMMAND}), or pick an API provider in Settings → AI models.`
 
 /**
  * Map a bridge failure onto an LlmError.

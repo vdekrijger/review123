@@ -952,7 +952,13 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
    */
   function makeGroundedVerify(onActivity?: (line: string) => void): VerifyFn {
     if (deepReview === undefined) return singlePassVerify
-    const round = createGroundedRoundBudget()
+    // The round's search cap follows WHO answers its searches. `deepReview.local`
+    // is the same flag `fetchBudgetFor` already reads — decided once per run in
+    // runInput.ts — so the two grounding budgets can never disagree about the
+    // source. A mid-run bridge failure still falls back per call (localOrProvider
+    // latches it); it only leaves this round on the more generous cap, which
+    // costs tokens, never a wrong source.
+    const round = createGroundedRoundBudget(deepReview.local === true ? 'local' : 'github')
     return async (cfg: ProviderConfig, findings: VerifiableFinding[]) => {
       const provider = getProvider(cfg.providerId)
       if (!provider || !modelSupportsTools(cfg.model)) return singlePassVerify(cfg, findings)
@@ -3187,6 +3193,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           duration_ms: Math.round(performance.now() - t0),
           cached: true,
           deep: true,
+          pass,
         })
         onUpdate?.()
         return
@@ -3204,6 +3211,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           task: 'skill-review',
           duration_ms: Math.round(performance.now() - t0),
           cached: true,
+          pass,
         })
         onUpdate?.()
         return
@@ -3343,6 +3351,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         task: 'skill-review',
         duration_ms: Math.round(performance.now() - t0),
         cached: false,
+        pass,
         ...(skillUsage?.total_tokens !== undefined ? { tokens: skillUsage.total_tokens } : {}),
         ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
@@ -3373,7 +3382,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           ...(info.errorDetail ? { errorDetail: info.errorDetail } : {}),
         },
       }
-      track('ai_task_failed', failureProps('skill-review', info))
+      track('ai_task_failed', { ...failureProps('skill-review', info), pass })
     }
     onUpdate?.()
   }

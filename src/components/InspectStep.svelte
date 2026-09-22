@@ -31,7 +31,7 @@
   import { applySimplify } from '../lib/ai/simplify'
   import { rankFindings, getFindingsShowAll, setFindingsShowAll } from '../lib/ai/findingRank'
   import AgentFixPanel, { type FixCandidateEntry } from './AgentFixPanel.svelte'
-  import { fixEligibility } from '../lib/bridge/fixLoop'
+  import { currentFixReadiness, fixEligibility } from '../lib/bridge/fixLoop'
   import { listSkills } from '../lib/skills/skills'
   import { recordDismissal, type DismissReason } from '../lib/skills/calibration'
   import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
@@ -920,6 +920,30 @@
     }
     return out
   })
+  /**
+   * The card-level "Send to agent" affordance (#243 deferred it: the cards are
+   * rendered by FileDiff / StorySlideshow, two components away from the panel).
+   *
+   * BOTH gates are answered here, once, and the answer is a value the cards
+   * either get or do not — they never render a disabled button:
+   *   - eligibility: `fixCandidates` already IS the eligible set (concrete fix,
+   *     primary tier, not dismissed, phase-scoped);
+   *   - readiness: `currentFixReadiness` — a write-enabled bridge, a CLI, and a
+   *     checkout on this PR's head. Read live, so pairing one mid-review lights
+   *     the buttons up exactly as it lights up the panel.
+   * The panel remains the single owner of run state; the card just asks it.
+   */
+  let fixPanel = $state<{ sendOne: (key: string) => void } | null>(null)
+  const fixReady = $derived(currentHeadSha ? currentFixReadiness(currentHeadSha).ready : false)
+  const agentFix = $derived(
+    fixReady && fixCandidates.length > 0
+      ? {
+          keys: new Set(fixCandidates.map((c) => c.key)),
+          send: (key: string) => fixPanel?.sendOne(key),
+        }
+      : null,
+  )
+
   const triagePrimaryCount = $derived(findingTriage.primary.length)
   const triageSecondaryCount = $derived(findingTriage.secondary.length)
   const triageTotalCount = $derived(triagePrimaryCount + triageSecondaryCount)
@@ -1561,6 +1585,7 @@
       {askDisabledReason}
       onReply={replyFn}
       skillFindings={lineSkillFindingsByPath.get(file.filename) ?? []}
+      {agentFix}
       onAddSkillFindingDraft={(finding) => addFindingAsDraft({ findingPath: file.filename, line: finding.line, body: finding.body, key: finding.key, skillName: finding.skillName, side: finding.side, originalBody: finding.originalBody })}
       onDismissSkillFinding={(key, reason) => dismissFinding(key, reason)}
       whitespace={whitespaceByPath.get(file.filename) ?? null}
@@ -1635,7 +1660,7 @@
     aria-pressed={hunkAttentionOn}
     data-testid="hunk-attention-toggle"
     title="Within a file: list the decision points and recede the mechanical hunks (formatting, imports, comments, renames, fixture data). Nothing is ever hidden — a receded hunk restores with one click."
-    onclick={() => toggleHunkAttention()}
+    onclick={() => track('hunk_focus_toggled', { enabled: toggleHunkAttention() })}
   >{hunkAttentionOn ? 'Hunk focus: on' : 'Hunk focus: off'}</button>
   {#if hideWhitespace && whitespaceToggleEnabled && whitespaceOnlyCount > 0}
     <span class="ws-only-note" role="status">
@@ -1913,7 +1938,7 @@
        bridge is connected (see AgentFixPanel) — with none paired it is not
        even a hint, the same rule the grounding indicator follows. -->
   {#if currentHeadSha}
-    <AgentFixPanel headSha={currentHeadSha} candidates={fixCandidates} />
+    <AgentFixPanel headSha={currentHeadSha} candidates={fixCandidates} bind:this={fixPanel} />
   {/if}
 
 {/if}
@@ -1947,6 +1972,7 @@
     {contentsMap}
     lineSkillFindingsByPath={lineSkillFindingsByPath}
     fileLevelSuggestionsByPath={fileLevelSuggestionsByPath}
+    {agentFix}
     dismissedKeys={dismissedKeys}
     addedDraftKeys={addedDraftKeys}
     whitespaceByPath={whitespaceByPath}

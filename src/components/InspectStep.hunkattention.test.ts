@@ -15,6 +15,7 @@ import {
   _resetHunkAttentionPrefForTest,
 } from '../lib/guide/hunkAttentionPref.svelte'
 import { _resetSettingsStateForTest } from '../lib/settings/settingsState.svelte'
+import { track, _setCaptureForTest } from '../lib/analytics/analytics'
 
 Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
   value: () => ({ font: '', measureText: () => ({ width: 0 }) }),
@@ -116,5 +117,38 @@ describe('InspectStep — the hunk-focus toggle', () => {
     const strips = screen.getAllByTestId('change-strip')
     expect(strips.length).toBeGreaterThan(0)
     expect(strips[0].textContent).toContain('resolveCompactor')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Analytics (#241 deferred these: the event union was outside its fence)
+// ---------------------------------------------------------------------------
+
+describe('InspectStep — hunk-focus analytics', () => {
+  const captured: { event: string; props: Record<string, unknown> }[] = []
+
+  beforeEach(() => {
+    captured.length = 0
+    _setCaptureForTest((event, props) => captured.push({ event, props }))
+  })
+
+  it('reports BOTH directions of the toggle — turning it off is the signal', async () => {
+    renderInspect()
+    await settle()
+
+    await userEvent.click(screen.getByTestId('hunk-attention-toggle'))
+    await settle()
+    await userEvent.click(screen.getByTestId('hunk-attention-toggle'))
+    await settle()
+
+    expect(captured.filter((c) => c.event === 'hunk_focus_toggled').map((c) => c.props)).toEqual([
+      { enabled: false },
+      { enabled: true },
+    ])
+  })
+
+  it('sends the new state and nothing else', () => {
+    track('hunk_focus_toggled', { enabled: false, path: 'src/compact.ts', hunk: 3 } as never)
+    expect(captured.at(-1)).toEqual({ event: 'hunk_focus_toggled', props: { enabled: false } })
   })
 })

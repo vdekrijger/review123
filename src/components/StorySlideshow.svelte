@@ -82,6 +82,7 @@
     dismissedKeys = new Set(),
     addedDraftKeys = new Set(),
     whitespaceByPath = new Map(),
+    agentFix = null,
     onAddDraft,
     onRemoveDraft,
     onAddSkillFindingDraft,
@@ -103,6 +104,15 @@
     resolvedCommentIds?: Set<number>
     contentsMap?: Map<string, { before: string | null; after: string | null }> | null
     lineSkillFindingsByPath?: Map<string, SkillFinding[]>
+    /**
+     * The card-level "Send to agent" affordance (#243) — forwarded verbatim to
+     * every FileDiff this walkthrough renders, and to the file-level cards
+     * above them, so story mode offers exactly what Files mode offers. Null (no
+     * write-enabled, head-matching bridge) means no card shows the action.
+     * File-level findings are never eligible — the routing rule excludes them —
+     * so their cards simply never match the key set.
+     */
+    agentFix?: { keys: Set<string>; send: (key: string) => void } | null
     /**
      * File-level (null-line) reviewer findings per path — rendered as cards above
      * each file's diff (parity with Files mode), so a reviewer chip that counts a
@@ -514,6 +524,9 @@
                       {askFn}
                       askPath={path}
                       askExcerpt={fileLevelExcerpt(path, suggestion.line)}
+                      onSendToAgent={agentFix && agentFix.keys.has(suggestion.key)
+                        ? () => agentFix.send(suggestion.key)
+                        : null}
                     />
                   </div>
                 {/if}
@@ -538,6 +551,7 @@
               {askDisabledReason}
               onReply={replyFn}
               skillFindings={lineSkillFindingsByPath.get(path) ?? []}
+              {agentFix}
               onAddSkillFindingDraft={(finding) => onAddSkillFindingDraft(path, finding)}
               {onDismissSkillFinding}
               whitespace={whitespaceByPath.get(path) ?? null}

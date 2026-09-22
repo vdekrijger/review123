@@ -43,6 +43,7 @@
     type FixFailure,
   } from '../lib/bridge/fixLoop'
   import { MAX_FIX_FINDINGS, type BridgeFixFinding, type BridgeFixResponse } from '../lib/bridge/protocol'
+  import { track } from '../lib/analytics/analytics'
 
   /** One eligible finding, as the parent knows it. */
   export interface FixCandidateEntry {
@@ -149,17 +150,64 @@
     run = { status: 'running', count: chosen.length }
     abort = new AbortController()
 
-    // No analytics event here yet: the event-name union lives in
-    // src/lib/analytics, which this change deliberately does not touch.
+    // Analytics: counts and enums only. Nothing about the findings being fixed,
+    // the code, the commits or the agent's own words ever leaves this machine —
+    // see the PRIVACY DECISION block on bridge_fix_* in lib/analytics.
+    const t0 = performance.now()
+    track('bridge_fix_dispatched', { findings: chosen.length, cli: readiness.cli })
+
     const outcome = await runBridgeFix(readiness.cli, headSha, chosen.map(toWire), {
       signal: abort.signal,
     })
     abort = null
 
+    if (outcome.ok) {
+      const changes = outcome.response.changes
+      track('bridge_fix_settled', {
+        outcome: 'done',
+        changes: changes.length,
+        skipped: outcome.response.skipped.length,
+        stop_reason: outcome.response.stopReason,
+        tests_passed: changes.filter((c) => c.tests?.status === 'passed').length,
+        tests_failed: changes.filter((c) => c.tests?.status === 'failed').length,
+        duration_ms: Math.round(performance.now() - t0),
+      })
+    } else {
+      // A user cancellation is not a failure — the same distinction the
+      // transport already makes, kept in the metric so an abandoned run never
+      // reads as a broken one.
+      const cancelled = outcome.failure.kind === 'cancelled'
+      track('bridge_fix_settled', {
+        outcome: cancelled ? 'cancelled' : 'failed',
+        // The classified KIND only. `failure.detail` can quote the bridge's or
+        // a CLI's own message and is never sent.
+        ...(cancelled ? {} : { failure: outcome.failure.kind }),
+        duration_ms: Math.round(performance.now() - t0),
+      })
+    }
+
     run = outcome.ok
       ? { status: 'done', response: outcome.response }
       : { status: 'failed', failure: outcome.failure }
   }
+
+  /**
+   * Send ONE finding, from outside the panel — the "Send to agent" action on
+   * the finding card itself (#243 shipped that path only as the panel's "only
+   * this" button, because the cards are rendered two components away).
+   *
+   * The panel stays the single owner of run state, so there is exactly one
+   * place a fix run can be in flight and exactly one place its result renders.
+   * The view scrolls to it, because a click that starts a multi-minute job
+   * somewhere off-screen is a click that looks like it did nothing.
+   */
+  export function sendOne(key: string): void {
+    if (run.status === 'running') return
+    void dispatch([key])
+    sectionEl?.scrollIntoView({ block: 'nearest' })
+  }
+
+  let sectionEl: HTMLElement | null = $state(null)
 
   function cancel(): void {
     abort?.abort()
@@ -194,7 +242,7 @@
 </script>
 
 {#if visible}
-  <section class="agent-fix" data-testid="agent-fix-panel" data-ready={readiness.ready}>
+  <section class="agent-fix" data-testid="agent-fix-panel" data-ready={readiness.ready} bind:this={sectionEl}>
     <header class="afx-head">
       <h3 class="afx-title">Fix with your agent</h3>
       <p class="afx-readiness" data-testid="agent-fix-readiness" data-reason={readiness.reason}>

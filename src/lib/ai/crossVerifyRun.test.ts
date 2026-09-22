@@ -20,6 +20,10 @@ import {
   setAiPanel,
 } from '../settings/settings'
 import { djb2 } from '../viewed/viewed.svelte'
+import {
+  GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND,
+  GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND_LOCAL,
+} from './crossVerify'
 
 const PACKED_CTX: PackedContext = {
   text: 'pr context',
@@ -940,6 +944,50 @@ describe('grounded verification in runSkillReviews', () => {
 
     // Usage accrual: generation (15) + the verifier loop (30).
     expect(run.skillReviews[0].state.usage).toEqual({ prompt_tokens: 30, completion_tokens: 15, total_tokens: 45 })
+  })
+
+  // The round's search cap follows the SOURCE, and the source is the same
+  // `deepReview.local` flag the fetch-bytes budget already reads.
+  it.each([
+    ['github', false, GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND],
+    ['local', true, GROUNDED_VERIFY_MAX_SEARCH_CALLS_PER_ROUND_LOCAL],
+  ] as const)('a %s-grounded round searches up to its own cap, then refuses honestly', async (_name, local, cap) => {
+    setAiProvider('deepseek')
+    setDeepseekKey('k')
+    setAnthropicKey('a')
+
+    const { addSkill } = await import('../skills/skills')
+    addSkill('My Reviewer', 'find bugs')
+
+    let allowed = 0
+    let refusal = ''
+    const llmToolLoop = vi.fn().mockImplementation(async (opts: {
+      executeTool: (name: string, args: Record<string, unknown>) => Promise<{ ok: boolean; content: string }>
+    }) => {
+      // Spend the round's search budget one call at a time until it refuses.
+      for (let i = 0; i < 12; i++) {
+        const r = await opts.executeTool('search_code', { query: `q${i}` })
+        if (!r.ok) {
+          refusal = r.content
+          break
+        }
+        allowed++
+      }
+      return {
+        content: JSON.stringify({ verdicts: [{ id: 'src/foo.ts:10:' + djb2('a real bug here'), verdict: 'confirm', reason: 'ok' }] }),
+        usage: undefined,
+        toolCallsUsed: allowed,
+      }
+    })
+
+    const run = createAiRun(
+      { ...makeInput(), deepReview: { ...groundedDeepSource(), local } },
+      makeDeps({ llmJsonWithRepairFor: vi.fn(), llmToolLoop }),
+    )
+    await run.runSkillReviews()
+
+    expect(allowed).toBe(cap)
+    expect(refusal).toMatch(local ? /context cost/i : /search quota/i)
   })
 
   it('streams the "grounded with N lookups" activity line while verifying', async () => {
