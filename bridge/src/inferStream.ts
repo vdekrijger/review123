@@ -383,7 +383,18 @@ export async function runStreamInference(
   }
 
   // 0700 so no other user on a shared machine can read the system prompt.
-  const tmpDir = await mkdtemp(join(tmpdir(), 'review123-bridge-'))
+  // Created INSIDE its own guard rather than beside the try below: this
+  // function promises never to throw, and a full disk here would otherwise
+  // reject after the 200 was committed — a cut stream with no terminal event,
+  // which a client can only report as "the bridge died".
+  let tmpDir: string
+  try {
+    tmpDir = await mkdtemp(join(tmpdir(), 'review123-bridge-'))
+  } catch {
+    fail('cli-failed', 'The bridge could not create a working directory for the CLI.')
+    return
+  }
+
   try {
     const invocation = buildInvocation(cli, req, tmpDir, fileContext, { stream: true })
     if (invocation.systemFile !== null) {
