@@ -3,7 +3,7 @@
  * Inspect step (Files mode).
  *
  * Fixture: a PR mixing a HIGH-risk file (large added churn in an auth path),
- * a small normal file, a generated lockfile, and a tests-only file. Asserts:
+ * a small normal file, a generated lockfile, and a rename-only file. Asserts:
  *   1. Default stays Narrative — current order (generated sink), NO tail.
  *   2. Switching to "Risk first" orders attention files highest-risk first
  *      and collapses the mechanical files into ONE low-attention tail,
@@ -14,6 +14,11 @@
  *   4. The choice persists per-browser across a reload.
  *
  * Same GitHub-mocking strategy as generated-files.spec.ts.
+ *
+ * FIXTURE NOTE: the second mechanical file is a RENAME-ONLY file, not a test
+ * file. Review phases (e2e/review-phases.spec.ts) split a mixed PR into an
+ * Implementation and a Tests phase, so a test file here would make every
+ * assertion below a test of two features at once.
  */
 
 import { test, expect } from '@playwright/test'
@@ -43,11 +48,6 @@ const LOCK_PATCH = `@@ -1,2 +1,4 @@
 +  left-pad: 1.3.0
 +  chalk: 5.0.0`
 
-const TEST_PATCH = `@@ -1,2 +1,3 @@
- it('works', () => {
-   expect(1).toBe(1)
-+  expect(2).toBe(2)
- })`
 
 test('inspect: Risk first orders by attention need, tails mechanical files, mark-all works', async ({ page }) => {
   await page.route('**/*posthog.com/**', (route) => route.abort())
@@ -77,7 +77,8 @@ test('inspect: Risk first orders by attention need, tails mechanical files, mark
           { filename: 'pnpm-lock.yaml', status: 'modified', patch: LOCK_PATCH, additions: 2, deletions: 0 },
           // HIGH deterministic risk: added file, 400 added lines, auth path.
           { filename: 'src/auth/core.ts', status: 'added', patch: AUTH_PATCH, additions: 400, deletions: 0 },
-          { filename: 'src/util.test.ts', status: 'modified', patch: TEST_PATCH, additions: 1, deletions: 0 },
+          // Rename with zero churn — mechanical, and NOT a test file (phases).
+          { filename: 'src/renamed.ts', status: 'renamed', previous_filename: 'src/old.ts', additions: 0, deletions: 0 },
         ],
       })
     }
@@ -132,7 +133,7 @@ test('inspect: Risk first orders by attention need, tails mechanical files, mark
   await expect(tail).not.toHaveAttribute('open', '')
   await expect(tail).toContainText('2 low-attention files — skim or mark all viewed')
   await expect(tail).toContainText('1 lockfile')
-  await expect(tail).toContainText('1 tests only')
+  await expect(tail).toContainText('1 rename only')
 
   // 3. One-click "Mark all 2 viewed" (works from the collapsed summary).
   await tail.getByRole('button', { name: 'Mark all 2 viewed' }).click()
@@ -141,10 +142,10 @@ test('inspect: Risk first orders by attention need, tails mechanical files, mark
   await tail.locator('.attention-tail-label').click()
   await expect(tail).toHaveAttribute('open', '')
   await expect(page.getByRole('checkbox', { name: 'Mark pnpm-lock.yaml as viewed' })).toBeChecked()
-  await expect(page.getByRole('checkbox', { name: 'Mark src/util.test.ts as viewed' })).toBeChecked()
+  await expect(page.getByRole('checkbox', { name: 'Mark src/renamed.ts as viewed' })).toBeChecked()
   // Tail files carry their why-mechanical chips.
   await expect(tail.locator('.triage-chip').filter({ hasText: 'lockfile' })).toHaveCount(1)
-  await expect(tail.locator('.triage-chip').filter({ hasText: 'tests only' })).toHaveCount(1)
+  await expect(tail.locator('.triage-chip').filter({ hasText: 'rename only' })).toHaveCount(1)
 
   // Attention progress does NOT move — tail files aren't attention files.
   await expect(page.getByTestId('attention-progress')).toHaveText(/0 of 2 attention files reviewed/)
