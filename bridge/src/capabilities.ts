@@ -77,14 +77,21 @@ export async function detectInferenceClis(deps: CapabilityDeps): Promise<string[
 /**
  * The full capability block for `/v1/health`.
  *
- * `files` and `search` are route-READINESS flags and are false while those
- * routes answer 501. The follow-up PRs flip them in the same commit that
- * implements the route, so a client that trusts the flag can never call a
- * route that is not there.
+ * `infer`, `files` and `search` are route-READINESS flags. Each flips in the
+ * same commit that implements its route, so a client that trusts the flag can
+ * never call a route that is not there. `infer` is true from the inference PR
+ * onwards; `files`/`search` still answer 501.
+ *
+ * `infer` is TRUE EVEN WHEN NO CLI IS DETECTED, and that is not a bug: the two
+ * signals answer different questions. `infer` says "this bridge understands the
+ * route"; `inference` says "and here is what it could run". A client needs
+ * both, and gets a precise `cli-unavailable` error instead of a confusing 501
+ * when it asks for a CLI that is not installed.
  */
 export async function detectCapabilities(deps: CapabilityDeps): Promise<BridgeCapabilities> {
   return {
     inference: await detectInferenceClis(deps),
+    infer: true,
     files: false,
     search: false,
   }

@@ -13,7 +13,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { basename } from 'node:path'
 import { detectCapabilities, defaultCapabilityDeps, type CapabilityDeps } from './capabilities.js'
-import { handleRequest, type BridgeRequest, type HandlerContext } from './handler.js'
+import { defaultInfer, handleRequest, type BridgeRequest, type HandlerContext } from './handler.js'
 import { MAX_BODY_BYTES, REQUEST_TIMEOUT_MS } from './protocol.js'
 
 /** The address the bridge binds. Not configurable — see the header comment. */
@@ -26,6 +26,8 @@ export interface BridgeServerOptions {
   extraOrigins?: string[]
   version: string
   capabilityDeps?: CapabilityDeps
+  /** Overrides the real `/v1/infer` worker. Tests only — see handler.ts. */
+  infer?: HandlerContext['infer']
 }
 
 /** Build the handler context (also used directly by tests). */
@@ -39,6 +41,7 @@ export function createContext(opts: BridgeServerOptions): HandlerContext {
     extraOrigins: opts.extraOrigins ?? [],
     capabilities: () => detectCapabilities(deps),
     version: opts.version,
+    infer: opts.infer ?? defaultInfer(opts.realRoot),
   }
 }
 

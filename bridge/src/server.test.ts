@@ -22,6 +22,8 @@ let bridge: BridgeServer
 let server: Server
 let port: number
 let root: string
+/** Flipped per-test so /v1/health and /v1/infer see the same detected list. */
+let claudeInstalled = false
 
 beforeAll(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'bridge-server-')))
@@ -32,7 +34,15 @@ beforeAll(async () => {
     port: 0,
     realRoot: root,
     version: '0.1.0',
-    capabilityDeps: { env: { PATH: '' }, isExecutable: async () => false },
+    // A non-empty PATH so the detector actually consults `isExecutable`
+    // (empty PATH entries are skipped — see capabilities.ts).
+    capabilityDeps: { env: { PATH: '/bin' }, isExecutable: async () => claudeInstalled },
+    // No CLI is spawned over HTTP: the socket shell's job is to carry the
+    // handler's answer, and infer.test.ts owns the subprocess behaviour.
+    infer: async (req) =>
+      req.prompt === 'boom'
+        ? { ok: false as const, code: 'cli-failed' as const, message: 'The claude CLI exited with code 1.' }
+        : { ok: true as const, text: `echo:${req.prompt}`, truncated: false, durationMs: 7 },
   })
   server = bridge.server
   port = await listenLoopback(bridge, 0)
@@ -74,7 +84,7 @@ describe('GET /v1/health over HTTP', () => {
     expect(body['ok']).toBe(true)
     expect(body['protocol']).toBe(PROTOCOL_VERSION)
     expect(body['root']).toBe(root.split('/').pop())
-    expect(body['capabilities']).toEqual({ inference: [], files: false, search: false })
+    expect(body['capabilities']).toEqual({ inference: [], infer: true, files: false, search: false })
   })
 
   it('ignores a query string when routing', async () => {
@@ -111,8 +121,93 @@ describe('preflight over HTTP', () => {
   })
 })
 
+describe('POST /v1/infer over HTTP', () => {
+  it('405s a GET — the route is POST-only', async () => {
+    const res = await call('/v1/infer', { headers: auth() })
+    expect(res.status).toBe(405)
+    expect(res.headers.get('allow')).toBe('POST, OPTIONS')
+  })
+
+  it('401s without the pairing token — auth runs before anything is spawned', async () => {
+    const res = await call('/v1/infer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cli: 'claude', prompt: 'hello' }),
+    })
+    expect(res.status).toBe(401)
+  })
+
+  it('403s a disallowed Origin with no CORS headers at all', async () => {
+    const res = await call('/v1/infer', {
+      method: 'POST',
+      headers: auth({ 'Content-Type': 'application/json', Origin: 'https://evil.test' }),
+      body: JSON.stringify({ cli: 'claude', prompt: 'hello' }),
+    })
+    expect(res.status).toBe(403)
+    expect(res.headers.get('access-control-allow-origin')).toBeNull()
+  })
+
+  it('400s a body that names no known CLI', async () => {
+    const res = await call('/v1/infer', {
+      method: 'POST',
+      headers: auth({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ cli: 'rm -rf /', prompt: 'hello' }),
+    })
+    expect(res.status).toBe(400)
+    expect((await res.json() as Record<string, unknown>)['error']).toBe('bad-request')
+  })
+
+  it('503s when the named CLI is not on PATH', async () => {
+    claudeInstalled = false
+    const res = await call('/v1/infer', {
+      method: 'POST',
+      headers: auth({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ cli: 'claude', prompt: 'hello' }),
+    })
+    expect(res.status).toBe(503)
+    expect((await res.json() as Record<string, unknown>)['error']).toBe('cli-unavailable')
+  })
+
+  it('answers 200 with the InferResponse shape when the CLI succeeds', async () => {
+    claudeInstalled = true
+    try {
+      const res = await call('/v1/infer', {
+        method: 'POST',
+        headers: auth({ 'Content-Type': 'application/json', Origin: REVIEW123_ORIGIN }),
+        body: JSON.stringify({ cli: 'claude', prompt: 'hello' }),
+      })
+      expect(res.status).toBe(200)
+      expect(res.headers.get('access-control-allow-origin')).toBe(REVIEW123_ORIGIN)
+      expect(await res.json()).toEqual({
+        ok: true,
+        cli: 'claude',
+        text: 'echo:hello',
+        truncated: false,
+        durationMs: 7,
+      })
+    } finally {
+      claudeInstalled = false
+    }
+  })
+
+  it('502s a CLI failure with the honest cli-failed code', async () => {
+    claudeInstalled = true
+    try {
+      const res = await call('/v1/infer', {
+        method: 'POST',
+        headers: auth({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ cli: 'claude', prompt: 'boom' }),
+      })
+      expect(res.status).toBe(502)
+      expect((await res.json() as Record<string, unknown>)['error']).toBe('cli-failed')
+    } finally {
+      claudeInstalled = false
+    }
+  })
+})
+
 describe('reserved routes over HTTP', () => {
-  it.each(['/v1/infer', '/v1/files', '/v1/search'])('%s answers 501', async (path) => {
+  it.each(['/v1/files', '/v1/search'])('%s answers 501', async (path) => {
     const res = await call(path, {
       method: 'POST',
       headers: auth({ 'Content-Type': 'application/json' }),
