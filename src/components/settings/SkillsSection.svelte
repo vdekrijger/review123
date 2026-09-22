@@ -12,7 +12,7 @@
   import { llmJsonWithRepair } from '../../lib/llm/llm'
   import { githubProvider } from '../../lib/provider/github'
   import { gitlabProvider } from '../../lib/provider/gitlab'
-  import { PROVIDER_KEY_FIELDS } from '../../lib/llm/config'
+  import { providerCredential } from '../../lib/llm/config'
   import { getProvider } from '../../lib/llm/providers'
   import { settingsState } from '../../lib/settings/settingsState.svelte'
   import { setAutoRunReviewers } from '../../lib/settings/settings'
@@ -88,8 +88,11 @@
   // or saving a key in the AI models section above updates the gate and the
   // provider name live instead of staying frozen at the mount-time value
   // (which defaulted to DeepSeek).
+  // providerCredential covers the LOCAL BRIDGE too, whose credential is the
+  // pairing token rather than a settings key field — so selecting the bridge
+  // opens this gate exactly as saving an API key does.
   const hasAiKey = $derived(
-    !!settingsState.current[PROVIDER_KEY_FIELDS[settingsState.current.aiProvider]],
+    (settingsState.current, providerCredential(settingsState.current.aiProvider) !== null),
   )
   const aiProviderName = $derived(
     getProvider(settingsState.current.aiProvider)?.displayName ?? 'your AI provider',

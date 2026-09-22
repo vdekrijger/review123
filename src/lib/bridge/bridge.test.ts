@@ -11,7 +11,9 @@ import {
   BRIDGE_STORAGE_KEY,
   _resetBridgeForTest,
   bridgeAvailable,
+  bridgeCanInfer,
   bridgeCredentials,
+  bridgeInferenceClis,
   bridgeState,
   connectBridge,
   disconnectBridge,
@@ -29,7 +31,7 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     ok: true,
     protocol: PROTOCOL_VERSION,
     root: 'review123',
-    capabilities: { inference: ['claude'], files: false, search: false },
+    capabilities: { inference: ['claude'], infer: true, files: false, search: false },
     version: '0.1.0',
     ...overrides,
   }
@@ -182,7 +184,7 @@ describe('connectBridge — user-initiated pairing', () => {
 
     expect(ok).toBe(true)
     expect(bridgeState.status).toBe('connected')
-    expect(bridgeState.capabilities).toEqual({ inference: ['claude'], files: false, search: false })
+    expect(bridgeState.capabilities).toEqual({ inference: ['claude'], infer: true, files: false, search: false })
     expect(bridgeState.version).toBe('0.1.0')
     expect(readStoredBridge()).toEqual({ token: TOKEN, port: 7321 })
   })
@@ -204,7 +206,7 @@ describe('connectBridge — user-initiated pairing', () => {
 
   it('fires bridge_connected exactly once, with capabilities only', async () => {
     fetchMock.mockResolvedValue(
-      jsonResponse(healthBody({ capabilities: { inference: ['claude', 'codex'], files: true, search: true } })),
+      jsonResponse(healthBody({ capabilities: { inference: ['claude', 'codex'], infer: true, files: true, search: true } })),
     )
 
     await connectBridge(TOKEN, 7321)
@@ -299,39 +301,76 @@ describe('disconnectBridge', () => {
   })
 })
 
-describe('bridgeAvailable', () => {
-  it('is false for every capability while disconnected', () => {
-    expect(bridgeAvailable('inference')).toBe(false)
+describe('bridgeAvailable — ROUTE readiness only', () => {
+  it('is false for every route while disconnected', () => {
+    expect(bridgeAvailable('infer')).toBe(false)
     expect(bridgeAvailable('files')).toBe(false)
     expect(bridgeAvailable('search')).toBe(false)
   })
 
-  it('reflects the connected bridge capability flags', async () => {
+  it('reflects the connected bridge route-readiness flags', async () => {
     fetchMock.mockResolvedValue(
-      jsonResponse(healthBody({ capabilities: { inference: ['codex'], files: true, search: false } })),
+      jsonResponse(healthBody({ capabilities: { inference: ['codex'], infer: true, files: true, search: false } })),
     )
     await connectBridge(TOKEN, 7321)
 
-    expect(bridgeAvailable('inference')).toBe(true)
+    expect(bridgeAvailable('infer')).toBe(true)
     expect(bridgeAvailable('files')).toBe(true)
     expect(bridgeAvailable('search')).toBe(false)
   })
 
-  it('is false for inference when no CLI was detected', async () => {
+  it('tracks READINESS, not detection: infer stays true with no CLI installed', async () => {
     fetchMock.mockResolvedValue(
-      jsonResponse(healthBody({ capabilities: { inference: [], files: true, search: true } })),
+      jsonResponse(healthBody({ capabilities: { inference: [], infer: true, files: true, search: true } })),
     )
     await connectBridge(TOKEN, 7321)
-    expect(bridgeAvailable('inference')).toBe(false)
+    expect(bridgeAvailable('infer')).toBe(true)
+    expect(bridgeInferenceClis()).toEqual([])
   })
 
   it('goes false again after a disconnect', async () => {
     fetchMock.mockResolvedValue(
-      jsonResponse(healthBody({ capabilities: { inference: ['claude'], files: true, search: true } })),
+      jsonResponse(healthBody({ capabilities: { inference: ['claude'], infer: true, files: true, search: true } })),
     )
     await connectBridge(TOKEN, 7321)
     disconnectBridge()
     expect(bridgeAvailable('files')).toBe(false)
+  })
+})
+
+describe('bridgeInferenceClis + bridgeCanInfer', () => {
+  it('reports no CLIs while disconnected', () => {
+    expect(bridgeInferenceClis()).toEqual([])
+    expect(bridgeCanInfer('claude')).toBe(false)
+  })
+
+  it('reports the detected CLIs from the connected bridge', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(healthBody({ capabilities: { inference: ['claude', 'codex'], infer: true, files: false, search: false } })),
+    )
+    await connectBridge(TOKEN, 7321)
+    expect(bridgeInferenceClis()).toEqual(['claude', 'codex'])
+    expect(bridgeCanInfer('claude')).toBe(true)
+    expect(bridgeCanInfer('codex')).toBe(true)
+  })
+
+  it('needs BOTH halves: a live route AND that CLI detected', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(healthBody({ capabilities: { inference: ['codex'], infer: true, files: false, search: false } })),
+    )
+    await connectBridge(TOKEN, 7321)
+    expect(bridgeCanInfer('claude')).toBe(false)
+    expect(bridgeCanInfer('codex')).toBe(true)
+  })
+
+  it('is false for every CLI when the bridge predates the infer route', async () => {
+    // An OLDER bridge: same protocol version, no `infer` flag, CLIs detected.
+    fetchMock.mockResolvedValue(
+      jsonResponse(healthBody({ capabilities: { inference: ['claude'], files: false, search: false } })),
+    )
+    await connectBridge(TOKEN, 7321)
+    expect(bridgeAvailable('infer')).toBe(false)
+    expect(bridgeCanInfer('claude')).toBe(false)
   })
 })
 
@@ -377,6 +416,16 @@ describe('parseHealth', () => {
     expect(parseHealth(healthBody())).toEqual(healthBody())
   })
 
+  it('reads a MISSING infer flag as false, so an older bridge still pairs', () => {
+    const older = healthBody({ capabilities: { inference: ['claude'], files: false, search: false } })
+    expect(parseHealth(older)?.capabilities).toEqual({
+      inference: ['claude'],
+      infer: false,
+      files: false,
+      search: false,
+    })
+  })
+
   it.each([
     ['null', null],
     ['a string', 'ok'],
@@ -384,8 +433,9 @@ describe('parseHealth', () => {
     ['a missing protocol', { ...healthBody(), protocol: undefined }],
     ['a non-string root', healthBody({ root: 42 })],
     ['missing capabilities', { ...healthBody(), capabilities: undefined }],
-    ['a non-array inference list', healthBody({ capabilities: { inference: 'claude', files: false, search: false } })],
-    ['a non-boolean files flag', healthBody({ capabilities: { inference: [], files: 'yes', search: false } })],
+    ['a non-array inference list', healthBody({ capabilities: { inference: 'claude', infer: true, files: false, search: false } })],
+    ['a non-boolean files flag', healthBody({ capabilities: { inference: [], infer: true, files: 'yes', search: false } })],
+    ['a non-boolean infer flag', healthBody({ capabilities: { inference: [], infer: 'yes', files: false, search: false } })],
   ])('rejects %s', (_label, value) => {
     expect(parseHealth(value)).toBeNull()
   })

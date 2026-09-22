@@ -57,7 +57,12 @@ export interface GitlabOAuth {
   expiresAt: number
 }
 
-export type AiProvider = 'deepseek' | 'openai' | 'anthropic' | 'gemini' | 'openrouter'
+/**
+ * The inference source. `'bridge'` is the optional LOCAL BRIDGE — not a vendor
+ * API but the user's own Claude Code / Codex CLI, driven over 127.0.0.1. It has
+ * no API-key field: its credential is the bridge pairing token.
+ */
+export type AiProvider = 'deepseek' | 'openai' | 'anthropic' | 'gemini' | 'openrouter' | 'bridge'
 
 /**
  * Emergent fusion mode (Plan P). Derived from the panel's generator count — it
@@ -603,7 +608,7 @@ function coerce(raw: unknown): Partial<Settings> {
   if (typeof deepseekKey === 'string' || deepseekKey === null) result.deepseekKey = deepseekKey
 
   const aiProvider = obj['aiProvider']
-  if (aiProvider === 'deepseek' || aiProvider === 'openai' || aiProvider === 'anthropic' || aiProvider === 'gemini' || aiProvider === 'openrouter') {
+  if (aiProvider === 'deepseek' || aiProvider === 'openai' || aiProvider === 'anthropic' || aiProvider === 'gemini' || aiProvider === 'openrouter' || aiProvider === 'bridge') {
     result.aiProvider = aiProvider
   }
 

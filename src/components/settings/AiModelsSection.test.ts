@@ -55,10 +55,17 @@ function providerCard(displayName: string): HTMLElement {
   return card as HTMLElement
 }
 
+/**
+ * The API providers. The LOCAL BRIDGE is excluded from every key-field loop
+ * because it HAS no API key — its credential is the bridge pairing token, and
+ * its card is asserted separately in its own describe block below.
+ */
+const API_PROVIDERS = PROVIDERS.filter((p) => p.id !== 'bridge')
+
 describe('AiModelsSection — provider context cards (layout)', () => {
-  it('renders one card per provider, each containing its radio, model dropdown, key field and Save & test button', () => {
+  it('renders one card per API provider, each containing its radio, model dropdown, key field and Save & test button', () => {
     render(AiModelsSection)
-    for (const p of PROVIDERS) {
+    for (const p of API_PROVIDERS) {
       const card = within(providerCard(p.displayName))
       expect(card.getByRole('radio', { name: p.displayName })).toBeInTheDocument()
       expect(card.getByLabelText(new RegExp(`${p.displayName} model`, 'i'))).toBeInTheDocument()
@@ -72,7 +79,8 @@ describe('AiModelsSection — provider context cards (layout)', () => {
   it('each SMALL-list card dropdown is a <select> listing ONLY that provider models with the default selected', () => {
     render(AiModelsSection)
     // The four curated providers keep the plain <select>; OpenRouter (300+) uses
-    // the searchable combobox instead (asserted separately).
+    // the searchable combobox instead (asserted separately). The bridge's
+    // two-CLI list is a <select> too.
     for (const p of PROVIDERS.filter((pr) => pr.id !== 'openrouter')) {
       const select = screen.getByLabelText(new RegExp(`${p.displayName} model`, 'i')) as HTMLSelectElement
       expect(select.tagName).toBe('SELECT')
@@ -262,9 +270,9 @@ describe('AiModelsSection — per-card model dropdown', () => {
 })
 
 describe('AiModelsSection — key fields', () => {
-  it('renders a masked key input per provider with the provider keyHint placeholder', () => {
+  it('renders a masked key input per API provider with the provider keyHint placeholder', () => {
     render(AiModelsSection)
-    for (const p of PROVIDERS) {
+    for (const p of API_PROVIDERS) {
       const input = screen.getByLabelText(new RegExp(`${p.displayName} API key`, 'i')) as HTMLInputElement
       expect(input.type).toBe('password')
       expect(input.placeholder).toBe(p.keyHint)
@@ -335,9 +343,9 @@ describe('AiModelsSection — key fields', () => {
 })
 
 describe('AiModelsSection — Save & test connection button', () => {
-  it('renders a Save & test button per provider', () => {
+  it('renders a Save & test button per API provider', () => {
     render(AiModelsSection)
-    for (const p of PROVIDERS) {
+    for (const p of API_PROVIDERS) {
       expect(
         screen.getByRole('button', { name: new RegExp(`save & test ${p.displayName}`, 'i') }),
       ).toBeInTheDocument()
@@ -654,9 +662,9 @@ describe('AiModelsSection — show/hide key toggle', () => {
     return screen.getByLabelText(name) as HTMLInputElement
   }
 
-  it('every provider key field has a "Show key" eye toggle (aria-pressed=false, masked input)', () => {
+  it('every API provider key field has a "Show key" eye toggle (aria-pressed=false, masked input)', () => {
     render(AiModelsSection)
-    for (const p of PROVIDERS) {
+    for (const p of API_PROVIDERS) {
       const card = within(providerCard(p.displayName))
       const toggle = card.getByRole('button', { name: 'Show key' })
       expect(toggle).toHaveAttribute('aria-pressed', 'false')
@@ -968,5 +976,63 @@ describe('AiModelsSection — credits remaining (capability-gated balance)', () 
 
     resolveFetch({ currency: 'USD', total: 95 })
     await waitFor(() => expect(screen.getByText(/credits:\s*\$95\.00/i)).toBeInTheDocument())
+  })
+})
+
+// ===========================================================================
+// The LOCAL BRIDGE as an inference source
+//
+// It is a provider in the picker like any other, but it is NOT a vendor API:
+// no key field, no credits row, and a status line instead. These tests pin the
+// differences that a user would actually notice.
+// ===========================================================================
+
+describe('AiModelsSection — the local bridge source', () => {
+  it('renders a radio for it alongside the API providers', () => {
+    render(AiModelsSection)
+    expect(screen.getByRole('radio', { name: 'Local bridge' })).toBeInTheDocument()
+  })
+
+  it('offers the two CLIs as its "models"', () => {
+    render(AiModelsSection)
+    const select = screen.getByLabelText(/local bridge model/i) as HTMLSelectElement
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(['claude', 'codex'])
+    expect(select.value).toBe('claude')
+  })
+
+  it('shows NO API key field — there is no key to paste', () => {
+    render(AiModelsSection)
+    const card = within(providerCard('Local bridge'))
+    expect(card.queryByLabelText(/local bridge api key/i)).toBeNull()
+    expect(card.queryByRole('button', { name: 'Show key' })).toBeNull()
+  })
+
+  it('shows NO credits row — a subscription has no per-key balance to read', () => {
+    render(AiModelsSection)
+    expect(screen.queryByTestId('balance-bridge')).toBeNull()
+  })
+
+  it('says it is not paired when no bridge has ever been connected', () => {
+    render(AiModelsSection)
+    expect(screen.getByTestId('bridge-source-status')).toHaveTextContent(/no bridge paired yet/i)
+  })
+
+  it('its button says Test, not Save & test — nothing is being saved', () => {
+    render(AiModelsSection)
+    const card = within(providerCard('Local bridge'))
+    expect(card.getByRole('button', { name: /^test local bridge connection$/i })).toBeInTheDocument()
+    expect(card.queryByRole('button', { name: /save & test/i })).toBeNull()
+  })
+
+  it('states that deep review is not available over it', () => {
+    render(AiModelsSection)
+    const card = providerCard('Local bridge')
+    expect(card.textContent).toMatch(/deep \(agentic\) review is not\s+available over the bridge/i)
+  })
+
+  it('selecting it persists aiProvider — no key needed to choose it', async () => {
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('radio', { name: 'Local bridge' }))
+    expect(getSettings().aiProvider).toBe('bridge')
   })
 })

@@ -16,8 +16,16 @@
 
 import { MODEL_CATALOG } from './modelCatalog'
 
-export type LlmProviderId = 'deepseek' | 'openai' | 'anthropic' | 'gemini' | 'openrouter'
-export type LlmTransport = 'openai-compat' | 'anthropic' | 'gemini'
+export type LlmProviderId = 'deepseek' | 'openai' | 'anthropic' | 'gemini' | 'openrouter' | 'bridge'
+
+/**
+ * The API providers — everything except the local bridge. MODEL_CATALOG is
+ * keyed by this, because the bridge's "models" are CLI ids, not a vendor
+ * lineup, and the daily OpenRouter sync must never touch them.
+ */
+export type ApiProviderId = Exclude<LlmProviderId, 'bridge'>
+
+export type LlmTransport = 'openai-compat' | 'anthropic' | 'gemini' | 'bridge'
 
 export interface LlmModelDef {
   id: string
@@ -97,6 +105,42 @@ export function computeBudgetTokens(contextWindowTokens: number): number {
   return contextWindowTokens - MAX_OUTPUT_TOKENS - 2_000
 }
 
+/**
+ * The LOCAL BRIDGE's "model" lineup — which CLI to drive, not which model.
+ *
+ * Hand-authored here rather than in MODEL_CATALOG: these are process names, the
+ * daily OpenRouter sync has nothing to say about them, and regenerating the
+ * catalog must never drop them.
+ *
+ * Three fields carry real weight:
+ *
+ * - NO `pricing`. Inference on the user's own subscription has no per-token
+ *   list price we could honestly quote, and estimateCostUsd returns null
+ *   without it — so the UI shows tokens and no fabricated dollar figure.
+ * - `supportsTools: false`. `claude -p` is ITSELF an agent with its own tools;
+ *   wrapping it in review123's tool loop would be an agent driving an agent
+ *   through a text pipe, with two conflicting tool vocabularies. The flag makes
+ *   the existing deep-review gates (run.svelte.ts, deepReview.ts) route those
+ *   tasks to the single-pass path automatically, with no call-site change.
+ * - `contextWindowTokens` is deliberately CONSERVATIVE. The real window belongs
+ *   to whichever model the user's CLI is configured for, which the bridge never
+ *   reports, so the packer is given a budget every current option can hold.
+ */
+export const BRIDGE_MODELS: LlmModelDef[] = [
+  {
+    id: 'claude',
+    label: 'Claude Code CLI',
+    contextWindowTokens: 200_000,
+    supportsTools: false,
+  },
+  {
+    id: 'codex',
+    label: 'Codex CLI',
+    contextWindowTokens: 200_000,
+    supportsTools: false,
+  },
+]
+
 // The per-provider model lineup lives in ./modelCatalog (MODEL_CATALOG), a
 // single typed catalog the daily sync script regenerates against OpenRouter's
 // public models API. Each provider below sources its `models` from
@@ -168,6 +212,20 @@ export const PROVIDERS: LlmProviderDef[] = [
     defaultModel: 'deepseek/deepseek-chat-v3.1',
     keyHint: 'sk-or-...',
     models: MODEL_CATALOG.openrouter,
+  },
+  {
+    id: 'bridge',
+    displayName: 'Local bridge',
+    // Not an HTTP vendor at all: the "request" is a POST to 127.0.0.1 that
+    // makes the bridge spawn the user's own CLI. baseUrl is unused — the
+    // address comes from the stored pairing (port), never from a constant.
+    transport: 'bridge',
+    baseUrl: '',
+    defaultModel: 'claude',
+    // There is no key to paste: the credential is the bridge pairing token,
+    // stored by the Local bridge settings section.
+    keyHint: '',
+    models: BRIDGE_MODELS,
   },
 ]
 
