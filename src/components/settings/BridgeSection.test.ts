@@ -80,9 +80,40 @@ describe('BridgeSection — never paired', () => {
     expect(screen.getByLabelText(/bridge pairing token/i)).toHaveAttribute('type', 'password')
   })
 
-  it('says how to start the bridge', () => {
+  // The install copy is the whole point of shipping a prebuilt artifact: the
+  // primary route must be a command you can paste, not "clone the repo".
+  it('leads with the one-line download, not the checkout', () => {
     render(BridgeSection)
-    expect(screen.getByRole('region', { name: /local bridge/i })).toHaveTextContent(/pnpm bridge/)
+    const install = screen.getByTestId('bridge-install')
+    expect(install).toHaveTextContent(
+      'curl -fsSL https://github.com/vdekrijger/review123/releases/latest/download/bridge.mjs -o ~/review123-bridge.mjs',
+    )
+    expect(install).toHaveTextContent('node ~/review123-bridge.mjs --root .')
+  })
+
+  it('still offers the clone route, and is honest that it is heavy', () => {
+    render(BridgeSection)
+    const install = screen.getByTestId('bridge-install')
+    expect(install).toHaveTextContent(/pnpm bridge/)
+    expect(install).toHaveTextContent(/entire dev toolchain/i)
+  })
+
+  it('links the bridge docs and the repo on main', () => {
+    render(BridgeSection)
+    const install = screen.getByTestId('bridge-install')
+    expect(within(install).getByRole('link', { name: /bridge\/README\.md/i })).toHaveAttribute(
+      'href',
+      'https://github.com/vdekrijger/review123/blob/main/bridge/README.md',
+    )
+    expect(within(install).getByRole('link', { name: /the repo/i })).toHaveAttribute(
+      'href',
+      'https://github.com/vdekrijger/review123',
+    )
+  })
+
+  it('keeps saying where the token is stored', () => {
+    render(BridgeSection)
+    expect(screen.getByTestId('bridge-install')).toHaveTextContent(BRIDGE_STORAGE_KEY)
   })
 })
 
