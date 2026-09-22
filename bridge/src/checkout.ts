@@ -101,6 +101,26 @@ export function stateFileFor(realRoot: string, home?: string): string {
 /** Bumped only if the on-disk shape changes incompatibly. */
 const STATE_FILE_VERSION = 1
 
+/**
+ * A branch name this module is willing to put in a git argv.
+ *
+ * WHY THIS IS STRICTER THAN IT LOOKS NECESSARY. `runRestore` ends with
+ * `git checkout <branch> --`, and git parses FLAGS BEFORE the `--` separator —
+ * `--` only divides refs from paths. So a branch literally named `-f` or
+ * `--force` would be read as a flag, not as a ref, and the one promise this
+ * module makes is that no force ever reaches git.
+ *
+ * Git itself refuses to create such a branch, so this cannot arise from a
+ * normal repository. But the name is read back from a JSON file on disk, and
+ * "the file on disk is always what we wrote" is an assumption, not a
+ * guarantee. Validating here makes the promise structural instead of
+ * inherited: it holds even if the record is corrupted or hand-edited.
+ *
+ * The pattern also excludes git's own illegal refname characters, so a value
+ * that passes here is one `git check-ref-format` would accept.
+ */
+const SAFE_BRANCH_RE = /^[A-Za-z0-9_.][A-Za-z0-9._\-/]{0,199}$/
+
 interface StoredPriorState extends StackPriorState {
   version: number
   /**
@@ -152,7 +172,12 @@ export async function readPriorState(
   if (typeof recordedAt !== 'string') return null
 
   return {
-    branch: typeof branch === 'string' && branch !== '' ? branch : null,
+    // A branch we cannot vouch for is read as "they were detached", NOT as a
+    // name to hand git. That degrades to restoring by SHA — which lands them
+    // at exactly the same commit — instead of putting an unvalidated string in
+    // an argv position where git parses flags. See SAFE_BRANCH_RE.
+    branch:
+      typeof branch === 'string' && branch !== '' && SAFE_BRANCH_RE.test(branch) ? branch : null,
     head,
     recordedAt,
     checkedOutRef,
@@ -693,7 +718,12 @@ export async function runRestore(
   }
 
   // ---- Where are we going back to? ----
-  const wantBranch = prior.branch !== null && !req.detachToSha
+  // The SAFE_BRANCH_RE check is repeated here, at the point where the name
+  // actually becomes an argv element, so the "no flag can reach git" invariant
+  // is local to the line that could break it rather than inherited from a
+  // reader three hundred lines away.
+  const wantBranch =
+    prior.branch !== null && SAFE_BRANCH_RE.test(prior.branch) && !req.detachToSha
   if (wantBranch && !(await branchExists(realRoot, prior.branch as string, run))) {
     throw new CheckoutError(
       'prior-gone',

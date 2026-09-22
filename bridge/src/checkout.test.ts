@@ -402,6 +402,46 @@ describe('the prior-state record', () => {
     const home = await scratch('home')
     await expect(clearPriorState('/repo/nothing', home)).resolves.toBeUndefined()
   })
+
+  /**
+   * `runRestore` ends with `git checkout <branch> --`, and git parses FLAGS
+   * BEFORE that separator — `--` divides refs from paths, not refs from
+   * flags. A branch literally named `-f` or `--force` would therefore be read
+   * as a flag, which would break the one promise this module makes.
+   *
+   * Git will not create such a branch, so it cannot arise from a normal
+   * repository. But the name is read back from a JSON file, and "the file is
+   * always what we wrote" is an assumption rather than a guarantee. These
+   * tests pin the validation that makes the promise structural.
+   */
+  it('refuses a flag-shaped branch name in the record, degrading to the SHA', async () => {
+    const home = await scratch('home')
+    const { stateFileFor } = await import('./checkout.js')
+    for (const branch of ['-f', '--force', '-q', '--exec=rm -rf /']) {
+      await writePriorState('/repo/a', { ...sample, branch }, home)
+      // Written as-is by us, but READ BACK as "they were detached" — which
+      // restores to the same commit without putting it in an argv.
+      const read = await readPriorState('/repo/a', home)
+      expect(read).not.toBeNull()
+      expect(read?.branch).toBeNull()
+      expect(read?.head).toBe(sample.head)
+    }
+    // And the same for a hand-edited file that never went through the writer.
+    await writeFile(
+      stateFileFor('/repo/a', home),
+      JSON.stringify({ ...sample, branch: '--upload-pack=evil', version: 1, root: '/repo/a' }),
+      'utf8',
+    )
+    expect((await readPriorState('/repo/a', home))?.branch).toBeNull()
+  })
+
+  it('still accepts the branch names people actually use', async () => {
+    const home = await scratch('home')
+    for (const branch of ['main', 'feat/thing', 'release-1.2.3', 'user/fix_bug', '.hidden']) {
+      await writePriorState('/repo/a', { ...sample, branch }, home)
+      expect((await readPriorState('/repo/a', home))?.branch).toBe(branch)
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
