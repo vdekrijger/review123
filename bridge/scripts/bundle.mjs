@@ -31,6 +31,7 @@ export const ESBUILD_VERSION = '0.28.2'
 const HERE = dirname(fileURLToPath(import.meta.url))
 export const BRIDGE_DIR = resolve(HERE, '..')
 export const ENTRY = join(BRIDGE_DIR, 'src', 'cli.ts')
+export const TSCONFIG = join(BRIDGE_DIR, 'tsconfig.json')
 export const OUT_DIR = join(BRIDGE_DIR, 'dist', 'bundle')
 /** dist/ is gitignored — the bundle is a build product, never committed. */
 export const OUT_FILE = join(OUT_DIR, 'bridge.mjs')
@@ -110,8 +111,18 @@ function gitProvenance() {
   return dirty ? `${sha}-dirty` : sha
 }
 
-function runEsbuild(outfile) {
-  const args = [
+/**
+ * Exported so a test can assert the bridge's OWN tsconfig is pinned.
+ *
+ * Without `--tsconfig` esbuild walks up from the entry and settles on the
+ * repo-root tsconfig — the browser SPA's, a DOM type world that extends
+ * `@tsconfig/svelte`, a package that is not even installed on a fresh clone
+ * (esbuild warns about exactly that). It does not change today's emit, but
+ * letting a Node artifact's compile settings be decided by the browser app's
+ * tsconfig is a silent breakage waiting for whoever edits that file next.
+ */
+export function esbuildArgs(outfile) {
+  return [
     'dlx',
     `esbuild@${ESBUILD_VERSION}`,
     ENTRY,
@@ -119,9 +130,13 @@ function runEsbuild(outfile) {
     '--platform=node',
     '--target=node22',
     '--format=esm',
+    `--tsconfig=${TSCONFIG}`,
     `--outfile=${outfile}`,
   ]
-  const result = spawnSync('pnpm', args, { stdio: 'inherit' })
+}
+
+function runEsbuild(outfile) {
+  const result = spawnSync('pnpm', esbuildArgs(outfile), { stdio: 'inherit' })
   if (result.error) throw result.error
   if (result.status !== 0) {
     throw new Error(`esbuild exited with code ${result.status}`)

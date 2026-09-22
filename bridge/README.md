@@ -56,6 +56,9 @@ the commit it was built from, and the bundler version.
 
 To check what you downloaded, rebuild it and diff: the bundle carries **no
 build timestamp**, so a given commit always produces byte-identical output.
+That is not a claim, it is measured — `bridge-v0.1.0` was built three times
+(macOS/Node 26, an ubuntu-latest runner on Node 22, and a fresh shallow clone)
+and all three produced sha256 `89bebe80…a4a2`.
 
 ### From a checkout
 
@@ -483,8 +486,18 @@ never claim a version different from the one it reports in `/v1/health`.
 
 Tag `bridge-v<version>` and push it: `.github/workflows/bridge-release.yml`
 runs on that tag and **only** on that tag — it bundles and uploads the asset,
-and refuses to publish when the tag does not match `package.json`. It needs no
-`pnpm install`, so it costs about a minute of Actions time.
+and refuses to publish when the tag does not match `package.json`. Re-running
+it on an existing tag re-uploads the asset rather than failing.
+
+It calls `node bridge/scripts/bundle.mjs` directly rather than
+`pnpm bridge:bundle`, because pnpm's script runner installs the workspace
+first: on a fresh runner that is the SPA's whole dev tree for a bundle that
+needs none of it. Invoked directly, the script needs no `node_modules` at all.
+
+Note that creating a release through the API (`gh release create`) also creates
+the tag, which fires this workflow. That is harmless — it rebuilds the same
+bytes and re-uploads them — but it does mean a "local" release still costs one
+short run unless you delete the workflow's trigger first.
 
 By hand, when Actions minutes are short (this is how `bridge-v0.1.0` was cut):
 
