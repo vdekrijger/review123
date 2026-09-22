@@ -18,7 +18,11 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
     realRoot: '/private/tmp/checkouts/review123',
     rootName: 'review123',
     extraOrigins: [],
-    capabilities: async () => ({ inference: ['claude'], infer: true, files: true, search: true }),
+    // READ-ONLY BY DEFAULT. Every test in this file that does not explicitly
+    // pass `allowWrite: true` is asserting the behaviour of a bridge the user
+    // started without the flag — which is the overwhelming majority of them.
+    allowWrite: false,
+    capabilities: async () => ({ inference: ['claude'], infer: true, files: true, search: true, fix: false }),
     version: '0.1.0',
     // Default stubs: the handler's own tests never spawn a CLI, open a file or
     // walk a tree. infer/files/search.test.ts own those mechanics; this file
@@ -26,6 +30,17 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
     infer: async () => ({ ok: true as const, text: 'stub answer', truncated: false, durationMs: 3 }),
     files: async () => ({ ok: true as const, files: [], missing: [], skipped: [] }),
     search: async () => ({ ok: true as const, matches: [], truncated: false }),
+    fix: async () => ({
+      ok: true as const,
+      baseSha: HEAD_SHA,
+      branch: 'review123/fix/1234567890ab',
+      changes: [],
+      skipped: [],
+      rounds: 1,
+      stopReason: 'all-addressed' as const,
+      tests: null,
+      durationMs: 5,
+    }),
     repoState: async () => ({ head: HEAD_SHA, branch: 'main', dirty: false }),
     ...overrides,
   }
@@ -61,7 +76,7 @@ describe('GET /v1/health', () => {
       ok: true,
       protocol: PROTOCOL_VERSION,
       root: 'review123',
-      capabilities: { inference: ['claude'], infer: true, files: true, search: true },
+      capabilities: { inference: ['claude'], infer: true, files: true, search: true, fix: false },
       git: { head: HEAD_SHA, branch: 'main', dirty: false },
       version: '0.1.0',
     })
@@ -87,12 +102,13 @@ describe('GET /v1/health', () => {
 
   it('re-probes capabilities per request so a newly installed CLI shows up', async () => {
     let installed: string[] = []
-    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, files: true, search: true }) })
+    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, files: true, search: true, fix: false }) })
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
       inference: [],
       infer: true,
       files: true,
       search: true,
+      fix: false,
     })
     installed = ['codex']
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
@@ -100,6 +116,7 @@ describe('GET /v1/health', () => {
       infer: true,
       files: true,
       search: true,
+      fix: false,
     })
   })
 })
@@ -319,7 +336,7 @@ describe('POST /v1/infer', () => {
   it('503s a KNOWN cli that is not installed — checked before the worker runs', async () => {
     let spawnedAnyway = false
     const context = ctx({
-      capabilities: async () => ({ inference: [], infer: true, files: false, search: false }),
+      capabilities: async () => ({ inference: [], infer: true, files: false, search: false, fix: false }),
       infer: async () => {
         spawnedAnyway = true
         return { ok: true as const, text: '', truncated: false, durationMs: 0 }
@@ -547,5 +564,142 @@ describe('unknown routes and caps', () => {
     // rather than as payload-too-large. That distinction is the assertion.
     expect(res.status).toBe(400)
     expect(parse(res.body)['error']).toBe('bad-request')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// POST /v1/fix — the one route that writes, and the gate in front of it.
+// ---------------------------------------------------------------------------
+
+const FIX_BODY = {
+  cli: 'claude',
+  headSha: HEAD_SHA,
+  findings: [
+    { id: 'f1', path: 'src/a.ts', line: 3, severity: 'high', body: 'unescaped input', suggestedFix: 'escape it' },
+  ],
+}
+
+function fixReq(body: unknown = FIX_BODY, overrides: Partial<BridgeRequest> = {}): BridgeRequest {
+  return req({
+    method: 'POST',
+    path: '/v1/fix',
+    body: Buffer.from(JSON.stringify(body)),
+    ...overrides,
+  })
+}
+
+describe('POST /v1/fix — the --allow-write gate', () => {
+  // THE RULE: writing is granted at the terminal. A web origin cannot turn it
+  // on, and cannot get past this without it.
+  it('REFUSES with 403 write-disabled on a bridge started without --allow-write', async () => {
+    const res = await handleRequest(fixReq(), ctx())
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('write-disabled')
+    expect(parse(res.body)['message']).toContain('--allow-write')
+  })
+
+  it('refuses BEFORE the worker runs — a read-only bridge never reaches the fix machinery', async () => {
+    let ran = false
+    const res = await handleRequest(
+      fixReq(),
+      ctx({
+        fix: async () => {
+          ran = true
+          throw new Error('must never be reached')
+        },
+      }),
+    )
+    expect(res.status).toBe(403)
+    expect(ran).toBe(false)
+  })
+
+  it('refuses a MALFORMED body with 403 too — the gate is before parsing', async () => {
+    const res = await handleRequest(fixReq({ nonsense: true }), ctx())
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('write-disabled')
+  })
+
+  it('nothing in the REQUEST can turn writing on', async () => {
+    for (const forged of [
+      { ...FIX_BODY, allowWrite: true },
+      { ...FIX_BODY, capabilities: { fix: true } },
+      { ...FIX_BODY, write: 'yes' },
+    ]) {
+      expect((await handleRequest(fixReq(forged), ctx())).status).toBe(403)
+    }
+  })
+
+  it('answers 200 once the bridge WAS started with the flag', async () => {
+    const res = await handleRequest(fixReq(), ctx({ allowWrite: true }))
+    expect(res.status).toBe(200)
+    const payload = parse(res.body)
+    expect(payload['ok']).toBe(true)
+    expect(payload['branch']).toBe('review123/fix/1234567890ab')
+    expect(payload['stopReason']).toBe('all-addressed')
+    expect(payload['cli']).toBe('claude')
+  })
+})
+
+describe('POST /v1/fix — the other gates still apply', () => {
+  const write = { allowWrite: true }
+
+  it('still requires the pairing token', async () => {
+    const res = await handleRequest(fixReq(FIX_BODY, { headers: { authorization: undefined } }), ctx(write))
+    expect(res.status).toBe(401)
+  })
+
+  it('still refuses an origin outside the allowlist', async () => {
+    const res = await handleRequest(
+      fixReq(FIX_BODY, { headers: { origin: 'https://evil.test' } }),
+      ctx(write),
+    )
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('forbidden-origin')
+  })
+
+  it('still refuses a rebound Host', async () => {
+    const res = await handleRequest(fixReq(FIX_BODY, { headers: { host: 'evil.test' } }), ctx(write))
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('forbidden-host')
+  })
+
+  it('answers 405 to a GET, so the route is never reported as missing', async () => {
+    const res = await handleRequest(req({ method: 'GET', path: '/v1/fix' }), ctx(write))
+    expect(res.status).toBe(405)
+    expect(res.headers['Allow']).toBe('POST, OPTIONS')
+  })
+
+  it('validates the body, and says which field is wrong', async () => {
+    const res = await handleRequest(
+      fixReq({ ...FIX_BODY, findings: [{ ...FIX_BODY.findings[0], suggestedFix: '' }] }),
+      ctx(write),
+    )
+    expect(res.status).toBe(400)
+    expect(parse(res.body)['message']).toContain('suggestedFix is required')
+  })
+
+  it('refuses a CLI that is not installed, with 503 rather than a confusing 501', async () => {
+    const res = await handleRequest(
+      fixReq({ ...FIX_BODY, cli: 'codex' }),
+      ctx({ ...write, capabilities: async () => ({ inference: ['claude'], infer: true, files: true, search: true, fix: true }) }),
+    )
+    expect(res.status).toBe(503)
+    expect(parse(res.body)['error']).toBe('cli-unavailable')
+  })
+
+  it('maps the worker’s failures onto their own statuses', async () => {
+    const cases = [
+      ['head-unknown', 409],
+      ['worktree-failed', 500],
+      ['timeout', 504],
+    ] as const
+    for (const [code, status] of cases) {
+      const res = await handleRequest(
+        fixReq(),
+        ctx({ ...write, fix: async () => ({ ok: false as const, code, message: 'nope' }) }),
+      )
+      expect(res.status).toBe(status)
+      expect(parse(res.body)['error']).toBe(code)
+    }
   })
 })

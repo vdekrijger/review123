@@ -14,6 +14,7 @@
  *   POST /v1/infer
  *   POST /v1/files
  *   POST /v1/search
+ *   POST /v1/fix     (ONLY when the bridge was started with --allow-write)
  */
 
 /** Wire protocol revision. Bumped only on a breaking change to these shapes. */
@@ -137,6 +138,18 @@ export interface BridgeCapabilities {
   infer: boolean
   files: boolean
   search: boolean
+  /**
+   * `/v1/fix` — the ONE route that writes. Unlike its three siblings it is NOT
+   * simply "true from the release that implements it": it reports whether this
+   * PROCESS was started with `--allow-write`.
+   *
+   * That difference is the whole safety model. Write capability is granted at
+   * the command line by the person sitting at the terminal; a web origin can
+   * never turn it on, and cannot even ask. With the flag absent the route
+   * answers `403 write-disabled` and this flag is `false`, so a client learns
+   * the truth before it offers the user a button.
+   */
+  fix: boolean
 }
 
 /**
@@ -213,6 +226,23 @@ export type BridgeErrorCode =
   | 'cli-unavailable'
   /** The CLI ran and failed: non-zero exit, or an error result it reported. */
   | 'cli-failed'
+  /**
+   * `/v1/fix` was called on a bridge started WITHOUT `--allow-write`. Not a
+   * 404 and not a 501: the route exists and is understood, it is simply not
+   * authorised — and only the person at the terminal can authorise it.
+   */
+  | 'write-disabled'
+  /**
+   * The scratch git worktree could not be created (or reused). The user's own
+   * checkout is untouched by definition — the failure happened before any
+   * agent ran.
+   */
+  | 'worktree-failed'
+  /**
+   * The commit the request names is not in the local object store, so a
+   * worktree cannot be created at it. Fetch or check out the PR locally first.
+   */
+  | 'head-unknown'
 
 /** Every non-2xx response body has this shape. */
 export interface ErrorResponse {
@@ -389,4 +419,277 @@ export interface SearchResponse {
    * — so it is one honest boolean rather than three.
    */
   truncated: boolean
+}
+
+// ---------------------------------------------------------------------------
+// `POST /v1/fix` — the agent fix loop. IMPLEMENTED, and the ONE route that
+// writes anything anywhere. See fix.ts and bridge/README.md § 7.
+// ---------------------------------------------------------------------------
+
+/**
+ * Hard cap on findings one `/v1/fix` request may carry.
+ *
+ * Every finding costs a full CLI turn on the user's subscription, so this is a
+ * spend guard as much as a memory one. Over the cap is a `bad-request`, never
+ * a silent trim: a caller that sent twelve findings and silently got eight
+ * would show the user a "done" surface that quietly dropped four.
+ */
+export const MAX_FIX_FINDINGS = 10
+
+/**
+ * Hard ceiling on fix→re-check ROUNDS PER FINDING, and the default.
+ *
+ * A round is one agent turn. Round 1 makes the change; a further round happens
+ * ONLY when the test command failed afterwards, and hands the agent its own
+ * failure to repair. That loop oscillates in the wild — round 2 "fixes" round
+ * 1, round 3 puts it back — so it is capped hard, and stopped early when a
+ * round changes nothing or reproduces a state an earlier round already
+ * produced. Three is enough for one honest follow-up and short enough that a
+ * loop cannot burn an afternoon of subscription quota.
+ *
+ * `FixRequest.maxRounds` may only LOWER it.
+ */
+export const MAX_FIX_ROUNDS = 3
+
+/** Per-FINDING CLI budget when the request names none. */
+export const DEFAULT_FIX_TIMEOUT_MS = 300_000
+
+/** Ceiling on `FixRequest.timeoutMs`. Anything larger is clamped to this. */
+export const MAX_FIX_TIMEOUT_MS = 600_000
+
+/**
+ * Wall-clock budget for the WHOLE loop, across every round and finding. The
+ * per-finding budget bounds one turn; this bounds the request. On expiry the
+ * loop stops with `stopReason: 'budget-exhausted'` and returns the commits it
+ * already has — a partial honest answer, never an error that throws the
+ * finished work away.
+ */
+export const FIX_TOTAL_BUDGET_MS = 1_800_000
+
+/** Wall-clock budget for one test-command run. */
+export const FIX_TEST_TIMEOUT_MS = 600_000
+
+/** Cap on the test output carried back per run (tail, sanitized). */
+export const MAX_FIX_TEST_OUTPUT_BYTES = 64 * 1024
+
+/**
+ * Cap on ONE change's returned patch. A fix that needs more than this is not a
+ * small attributed diff any more, and the response says so with `truncated`
+ * rather than shipping a megabyte into a browser tab.
+ */
+export const MAX_FIX_DIFF_BYTES = 256 * 1024
+
+/** Cap on the sanitized one-line intent the agent reports per change. */
+export const FIX_INTENT_MAX_CHARS = 400
+
+/**
+ * The ref namespace every scratch branch lives in. Nothing outside this prefix
+ * is ever created, moved or deleted by the bridge.
+ */
+export const FIX_BRANCH_PREFIX = 'review123/fix/'
+
+/**
+ * ONE proposed finding, as the browser sends it.
+ *
+ * THIS IS DATA, NOT INSTRUCTIONS. Every field here is text a language model
+ * wrote while reviewing a diff. The bridge frames it to the coding agent as a
+ * claim to EVALUATE and requires the agent to be able to refuse it — a finding
+ * that says "delete the auth check" must be refusable. See fix.ts.
+ */
+export interface FixFinding {
+  /**
+   * The CALLER's own opaque id, echoed back on every change and skip so the
+   * browser can put each result next to the card it came from. Never
+   * interpreted by the bridge.
+   */
+  id: string
+  /** Repo-relative path the finding anchors to. Confined like every path. */
+  path: string
+  /** 1-based line, or null for a file-level finding. */
+  line: number | null
+  severity: 'high' | 'medium' | 'low'
+  /** The finding text. */
+  body: string
+  /**
+   * The finding's CONCRETE fix. Required here, which is the routing rule made
+   * structural: a finding whose fix is the honest "No clean fix — <tradeoff>"
+   * is a judgment call for a human and the browser never sends it.
+   */
+  suggestedFix: string
+}
+
+/**
+ * `POST /v1/fix` — hand selected findings to the user's local coding agent,
+ * let it fix them IN ISOLATION, and return the resulting commits as a diff.
+ *
+ * SAFETY INVARIANTS (each has a test):
+ *   1. Refused with `403 write-disabled` unless the bridge process was started
+ *      with `--allow-write`. A web origin cannot turn writing on.
+ *   2. All work happens in a dedicated scratch worktree created from `headSha`.
+ *      The user's checkout, branch, index and uncommitted work are never
+ *      touched.
+ *   3. Nothing is pushed and nothing lands on any branch the user uses. The
+ *      route produces commits in the scratch worktree and RETURNS them.
+ *   4. Every existing gate still applies: loopback bind, pairing token,
+ *      exact-origin CORS, Host anti-rebinding, repo confinement, caps.
+ *   5. The request carries no command, argv, cwd or environment — exactly like
+ *      `/v1/infer`. The test command is DETECTED by the bridge or set with the
+ *      `--test-command` flag at the terminal; it is deliberately not a request
+ *      field, because that would be arbitrary command execution from a web
+ *      origin wearing a different hat.
+ */
+export interface FixRequest {
+  /** Which detected CLI to drive. Must appear in `capabilities.inference`. */
+  cli: 'claude' | 'codex'
+  /**
+   * The 40-hex commit the scratch worktree is created from — the PR's head.
+   * Validated as a full sha, so it can never be mistaken for a git flag, and
+   * checked to exist locally (`head-unknown` when it does not).
+   */
+  headSha: string
+  /** 1..MAX_FIX_FINDINGS proposed findings. */
+  findings: FixFinding[]
+  /** Rounds to allow. Clamped to [1, MAX_FIX_ROUNDS]; absent → MAX_FIX_ROUNDS. */
+  maxRounds?: number
+  /** Per-finding CLI budget; clamped to [1, MAX_FIX_TIMEOUT_MS]. */
+  timeoutMs?: number
+}
+
+/** How a test run ended. `skipped` means the bridge never ran one. */
+export type FixTestStatus = 'passed' | 'failed' | 'unrunnable' | 'timeout' | 'skipped'
+
+export interface FixTestOutcome {
+  status: FixTestStatus
+  /**
+   * The command as argv, joined for display — e.g. "pnpm test". Present even
+   * when `unrunnable`/`skipped` is the answer, so the UI can say WHICH command
+   * it could not run. Empty only when no command was ever determined.
+   */
+  command: string
+  durationMs: number
+  /**
+   * Sanitized tail of the run's output, capped. Absolute paths are stripped
+   * exactly as `/v1/infer` strips them from CLI stderr.
+   */
+  output: string
+  /**
+   * Set when `status` is `unrunnable` or `skipped`: the honest reason, e.g.
+   * "no test script in package.json". Absent otherwise.
+   */
+  detail?: string
+}
+
+/** ONE finding's fix: one commit, its intent, its files, its patch. */
+export interface FixChange {
+  /** The caller's `FixFinding.id`, echoed. */
+  findingId: string
+  /** Full 40-hex sha of the commit in the scratch worktree. */
+  commit: string
+  /** The commit's subject line. */
+  subject: string
+  /**
+   * The agent's own one-line account of WHAT it changed and WHY — the thing
+   * the human actually reviews. Never invented by the bridge: when the agent
+   * gave none, this is its final message, trimmed.
+   */
+  intent: string
+  /** Repo-relative paths the commit touches. */
+  files: string[]
+  /** The commit's patch (`git show`), capped at MAX_FIX_DIFF_BYTES. */
+  diff: string
+  /** True when `diff` was cut at the cap. */
+  truncated: boolean
+  /** Agent turns this finding took. 1 means it was right first time. */
+  rounds: number
+  /** Why THIS finding's fix→re-check loop ended. See FixStopReason. */
+  stopReason: FixStopReason
+  /**
+   * The test result for the tree AT THIS COMMIT, or null when the bridge ran
+   * no test for it. A fix that breaks the suite is reported as `failed` here —
+   * it is never hidden, and never quietly dropped from the response.
+   */
+  tests: FixTestOutcome | null
+}
+
+/**
+ * Why one finding produced no commit. Every value is a DIFFERENT thing to tell
+ * the user, which is why there is no generic "failed".
+ *
+ * - `refused`       — the agent evaluated the finding and judged it wrong, out
+ *                     of scope or harmful, and said so. The GOOD outcome for a
+ *                     bad finding; `detail` carries its reason.
+ * - `no-change`     — the agent reported success but the tree is identical.
+ * - `agent-failed`  — the CLI errored or could not be started.
+ * - `timeout`       — the per-finding budget expired and the child was killed.
+ * - `forbidden-path`— the finding's path escapes the repo root.
+ * - `budget`        — the loop's total wall clock ran out before its turn.
+ */
+export type FixSkipReason =
+  | 'refused'
+  | 'no-change'
+  | 'agent-failed'
+  | 'timeout'
+  | 'forbidden-path'
+  | 'budget'
+
+export interface FixSkip {
+  findingId: string
+  reason: FixSkipReason
+  /** One sanitized sentence: the agent's reason, or the bridge's. */
+  detail: string
+}
+
+/**
+ * Why a fix→re-check loop stopped. Reported ALWAYS, never reconstructed by the
+ * client from counts — the same discipline `decideGrounding` uses for its
+ * reasons.
+ *
+ * - `all-addressed`    — the loop finished on its own terms: the change was
+ *                        made and the tests were not failing. The normal end.
+ * - `round-cap`        — `maxRounds` turns ran and the tests were still
+ *                        failing. The commit is RETURNED anyway, with its red
+ *                        test result, because hiding it would be worse.
+ * - `no-progress`      — a round left the tree exactly as the previous round
+ *                        did. Running it again would produce the same nothing.
+ * - `repeat-diff`      — a round reproduced a tree an earlier round already
+ *                        produced: the loop is oscillating.
+ * - `budget-exhausted` — FIX_TOTAL_BUDGET_MS expired. Whatever landed is
+ *                        returned; the rest are skipped with reason `budget`.
+ *
+ * On `FixChange` it is that ONE finding's reason. On `FixResponse` it is the
+ * run's: `budget-exhausted` when the clock ran out, otherwise the strongest
+ * reason any single finding hit (round-cap ▸ repeat-diff ▸ no-progress ▸
+ * all-addressed), so a summary line never reads greener than the detail.
+ */
+export type FixStopReason =
+  | 'all-addressed'
+  | 'round-cap'
+  | 'no-progress'
+  | 'repeat-diff'
+  | 'budget-exhausted'
+
+export interface FixResponse {
+  ok: true
+  cli: string
+  /** The commit the scratch worktree was created from (echoes `headSha`). */
+  baseSha: string
+  /**
+   * The scratch branch, e.g. "review123/fix/abc1234def0". It lives in the
+   * user's repo — this is the one ref the bridge creates — so every returned
+   * `commit` is cherry-pickable from their own checkout. Nothing is pushed.
+   */
+  branch: string
+  /** One entry per finding that produced a commit, in commit order. */
+  changes: FixChange[]
+  /** One entry per finding that produced none, with WHY. */
+  skipped: FixSkip[]
+  /** The most rounds any single finding needed. 0 when nothing ran. */
+  rounds: number
+  stopReason: FixStopReason
+  /**
+   * The test result for the FINAL state of the scratch branch, or null when no
+   * test was run at all. Per-commit results live on each change.
+   */
+  tests: FixTestOutcome | null
+  durationMs: number
 }

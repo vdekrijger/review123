@@ -92,7 +92,15 @@ describe('GET /v1/health over HTTP', () => {
     expect(body['ok']).toBe(true)
     expect(body['protocol']).toBe(PROTOCOL_VERSION)
     expect(body['root']).toBe(root.split('/').pop())
-    expect(body['capabilities']).toEqual({ inference: [], infer: true, files: true, search: true })
+    // `fix: false` because this server was built without `allowWrite` — the
+    // health document reports the flag, never a hard-coded readiness boolean.
+    expect(body['capabilities']).toEqual({
+      inference: [],
+      infer: true,
+      files: true,
+      search: true,
+      fix: false,
+    })
     expect(body['git']).toEqual({ head: 'a'.repeat(40), branch: 'main', dirty: false })
   })
 
