@@ -36,6 +36,8 @@
   import { classifyFile } from '../lib/diff/diffFile'
   import { classifyFile as classifyAttention, sortRiskFirst, pathCompare, type FileTriage } from '../lib/guide/triage'
   import { getInspectSort, setInspectSort, type InspectSort } from '../lib/guide/sortPref'
+  import { createPhaseStore, partitionFilesByPhase, type ReviewPhase } from '../lib/guide/phase.svelte'
+  import { pairStepTests } from '../lib/diff/symbolTests'
   import { isGeneratedFile, sortGeneratedLast } from '../lib/diff/generated'
   import StorySlideshow from './StorySlideshow.svelte'
   import Skeleton from './Skeleton.svelte'
@@ -44,7 +46,7 @@
   import { matchStoryPath } from '../lib/ai/schemas'
   import type { StoryOrderResult, GraphResult } from '../lib/ai/schemas'
   import type { PanelStatus } from '../lib/ai/run.svelte'
-  import { findingAnchorHash, pruneAnchorOverrides } from '../lib/findings/reanchor.svelte'
+  import { findingAnchorHash, pruneAnchorOverrides, currentPrKey } from '../lib/findings/reanchor.svelte'
 
   let {
     files,
@@ -284,20 +286,127 @@
     return isGeneratedFile(f.filename, contentsMap?.get(f.filename))
   }
 
+  // ---------------------------------------------------------------------------
+  // Review phases (Files mode only — deterministic, no LLM)
+  // ---------------------------------------------------------------------------
+  // The reviewer reads the IMPLEMENTATION first (non-test code), signs it off,
+  // and only then reviews the TESTS against that settled implementation. The
+  // two phases ask different questions, so the step stops mixing them.
+  //
+  // The partition is lib/guide/phase's partitionFilesByPhase → isTestFile, the
+  // SAME detector triage.ts uses for its "tests only" reason (no second
+  // heuristic). Phase state is per-PR and persisted (lib/guide/phase.svelte);
+  // App.svelte remounts this route per PR identity, so the key is read once.
+  //
+  // STORY MODE: phases do NOT apply — a story is a narrative walkthrough of
+  // the WHOLE change, and splitting it would break its own ordering. phaseFiles
+  // falls back to every file there, so the slideshow is untouched.
+  const phaseStore = createPhaseStore(currentPrKey())
+
+  const phaseParts = $derived(partitionFilesByPhase(files))
+  const implPhaseFiles = $derived(phaseParts.implementation)
+  const testPhaseFiles = $derived(phaseParts.tests)
+
+  // Phases only engage when the PR ACTUALLY splits: a PR with no test files (or
+  // one with nothing but test files, where an Implementation phase would be an
+  // empty screen) gets the unchanged single list and no selector.
+  const phaseApplies = $derived(!showStory && implPhaseFiles.length > 0 && testPhaseFiles.length > 0)
+
+  const activePhase = $derived<ReviewPhase>(phaseApplies ? phaseStore.phase : 'implementation')
+  const testsPhaseActive = $derived(phaseApplies && activePhase === 'tests')
+
+  /** The files the whole Files-mode surface works on. All files when phases don't apply. */
+  const phaseFiles = $derived(
+    !phaseApplies ? files : activePhase === 'tests' ? testPhaseFiles : implPhaseFiles,
+  )
+  const phasePathSet = $derived(new Set(phaseFiles.map((f) => f.filename)))
+
+  // Files deferred to the OTHER phase — surfaced as an honest count so a
+  // reviewer never wonders where files went.
+  const deferredFiles = $derived(
+    !phaseApplies ? [] : activePhase === 'tests' ? implPhaseFiles : testPhaseFiles,
+  )
+
+  /** Approval staleness: new commits landed since the implementation was signed off. */
+  const approvalStale = $derived(phaseApplies && phaseStore.isStale(currentHeadSha))
+
+  // Switching phase closes the low-attention tail: it belongs to the list you
+  // were looking at, and re-opening it per phase is the honest default.
+  // (No analytics here — EVENTS lives in the analytics module, which this
+  // change deliberately does not touch.)
+  function selectPhase(phase: ReviewPhase): void {
+    phaseStore.select(phase)
+    tailOpen = false
+  }
+
+  function approveImplementationPhase(): void {
+    phaseStore.approve(currentHeadSha)
+    tailOpen = false
+  }
+
+  function reopenImplementationPhase(): void {
+    phaseStore.reopen()
+    tailOpen = false
+  }
+
+  /** "12 Mar 2025, 14:03" — the approval timestamp, rendered calmly. */
+  function formatApprovedAt(at: number | undefined): string {
+    if (typeof at !== 'number') return ''
+    try {
+      return new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+    } catch {
+      return ''
+    }
+  }
+
+  function shortSha(sha: string | undefined): string {
+    return sha ? sha.slice(0, 7) : ''
+  }
+
+  // Built as strings, not inline {#if} fragments: Svelte trims the whitespace
+  // around block boundaries, which silently glued "…15:31" to "at abc1234".
+  const approvedAtSha = $derived(
+    phaseStore.headShaAtApproval ? ` at ${shortSha(phaseStore.headShaAtApproval)}` : '',
+  )
+  const approvedNoteText = $derived(
+    `Implementation approved ${formatApprovedAt(phaseStore.implApprovedAt)}${approvedAtSha}.`,
+  )
+
+  // Tests-phase cross-reference (src/lib/diff/symbolTests, #95): which changed
+  // implementation files have a test IN THIS PR naming their changed symbols.
+  // Deterministic, reuses the story-mode pairing engine, and renders only when
+  // it actually resolved something — an empty map (no fetched test contents,
+  // no extractable symbols) shows nothing rather than a misleading "0 of N".
+  const testCoverageByImplFile = $derived.by(() => {
+    if (!testsPhaseActive) return new Map<string, string[]>()
+    const pairings = pairStepTests({
+      stepFiles: implPhaseFiles,
+      testFiles: testPhaseFiles,
+      contentsMap: contentsMap ?? null,
+    })
+    const map = new Map<string, string[]>()
+    for (const [implFile, entries] of pairings) {
+      const testFiles = [...new Set(entries.flatMap((p) => p.tests.map((t) => t.testFile)))].sort(pathCompare)
+      if (testFiles.length > 0) map.set(implFile, testFiles)
+    }
+    return map
+  })
+
   // File ordering per readingOrder (EC-12e), then generated files sunk last.
   // The generated sink is a STABLE post-pass: it preserves the reading-order /
   // file order WITHIN the generated and non-generated groups.
+  // (Scoped to phaseFiles — the reading order is applied WITHIN the phase.)
   const orderedFiles = $derived.by(() => {
     let base: PrFile[]
     if (!readingOrder.length) {
-      base = files
+      base = phaseFiles
     } else {
-      const fileSet = new Set(files.map(f => f.filename))
-      // Only use readingOrder entries that exist in files
+      const fileSet = new Set(phaseFiles.map(f => f.filename))
+      // Only use readingOrder entries that exist in the phase's files
       const validOrder = readingOrder.filter(p => fileSet.has(p))
       const orderedPaths = new Set(validOrder)
-      const listedFiles = validOrder.map(p => files.find(f => f.filename === p)!).filter(Boolean)
-      const unlistedFiles = files.filter(f => !orderedPaths.has(f.filename))
+      const listedFiles = validOrder.map(p => phaseFiles.find(f => f.filename === p)!).filter(Boolean)
+      const unlistedFiles = phaseFiles.filter(f => !orderedPaths.has(f.filename))
       base = [...listedFiles, ...unlistedFiles]
     }
     return sortGeneratedLast(base, fileIsGenerated)
@@ -328,7 +437,7 @@
   // sensitive-path) risk is still non-low. Low-risk files get no chip at all.
   const fileRiskByPath = $derived.by(() => {
     const map = new Map<string, { level: RiskLevel; show: boolean }>()
-    for (const f of files) {
+    for (const f of phaseFiles) {
       const hotspotLevel = hotspotMap.get(f.filename)?.level ?? null
       const findings = (skillSuggestionsByPath.get(f.filename) ?? []).map((s) => ({
         severity: s.severity,
@@ -364,7 +473,7 @@
   // override (a flagged or high-risk file is NEVER buried in the tail).
   const triageByPath = $derived.by(() => {
     const map = new Map<string, FileTriage>()
-    for (const f of files) {
+    for (const f of phaseFiles) {
       const level = fileRiskByPath.get(f.filename)?.level ?? 'low'
       const findings = (skillSuggestionsByPath.get(f.filename) ?? []).map((s) => ({
         severity: s.severity,
@@ -375,12 +484,14 @@
     return map
   })
 
-  // Attention (novel) files — the denominator of the progress line.
-  const attentionFiles = $derived(files.filter((f) => triageByPath.get(f.filename)?.attention !== 'mechanical'))
+  // Attention (novel) files — the denominator of the progress line. Scoped to
+  // the active phase, so "M of N attention files reviewed" counts only what the
+  // reviewer can actually see right now.
+  const attentionFiles = $derived(phaseFiles.filter((f) => triageByPath.get(f.filename)?.attention !== 'mechanical'))
 
   // Mechanical files, path-sorted for a deterministic tail order.
   const tailFiles = $derived(
-    files
+    phaseFiles
       .filter((f) => triageByPath.get(f.filename)?.attention === 'mechanical')
       .slice()
       .sort((a, b) => pathCompare(a.filename, b.filename)),
@@ -544,7 +655,9 @@
       for (const review of skillReviews) {
         if (review.state.status !== 'done' || !review.state.value) continue
         const result = review.state.value as { findings?: { path: string }[] }
-        const firstValid = result.findings?.find(f => prPathSet.has(f.path))
+        // Only scroll to a file the ACTIVE PHASE renders — otherwise the jump
+        // silently no-ops on a card that isn't in the DOM.
+        const firstValid = result.findings?.find(f => prPathSet.has(f.path) && phasePathSet.has(f.path))
         if (firstValid) {
           const slug = slugify(firstValid.path)
           const el = document.getElementById(`file-${slug}`)
@@ -633,6 +746,36 @@
     return map
   })
 
+  // PHASE-SCOPED view of the suggestions above. A finding belongs to the phase
+  // of the FILE IT ANCHORS TO: a finding on a test file is not lost in the
+  // Implementation phase, it simply belongs to (and is counted in) the Tests
+  // phase. Everything the reviewer SEES — inline cards, file-level cards, the
+  // triage ranking, the chip popover's jump targets — reads this map, so we
+  // never render a finding pointing at a file that isn't on screen.
+  //
+  // skillSuggestionsByPath above stays COMPLETE on purpose: the anchor-override
+  // prune below needs the whole finding set or it would eat the other phase's
+  // overrides.
+  const phaseSuggestionsByPath = $derived.by(() => {
+    if (!phaseApplies) return skillSuggestionsByPath
+    const map = new Map<string, SuggestionEntry[]>()
+    for (const [path, suggestions] of skillSuggestionsByPath) {
+      if (phasePathSet.has(path)) map.set(path, suggestions)
+    }
+    return map
+  })
+
+  /** Findings sitting on the OTHER phase's files — disclosed, never silently dropped. */
+  const deferredFindingCount = $derived.by(() => {
+    if (!phaseApplies) return 0
+    let n = 0
+    for (const [path, suggestions] of skillSuggestionsByPath) {
+      if (phasePathSet.has(path)) continue
+      n += suggestions.filter((s) => !dismissedKeys.has(s.key) && !addedDraftKeys.has(s.key)).length
+    }
+    return n
+  })
+
   // Re-anchor housekeeping: once at least one reviewer has settled, drop stored
   // anchor overrides whose finding no longer exists (a re-run changed/removed
   // it — the override is an orphan; the fresh run may have fixed the line
@@ -661,7 +804,7 @@
   // visual hide, the decision is still recorded as 'accepted'.
   const fileLevelSuggestionsByPath = $derived.by(() => {
     const map = new Map<string, SuggestionEntry[]>()
-    for (const [path, suggestions] of skillSuggestionsByPath) {
+    for (const [path, suggestions] of phaseSuggestionsByPath) {
       const fileLevelOnly = suggestions.filter(s => s.line === null && !dismissedKeys.has(s.key) && !addedDraftKeys.has(s.key))
       if (fileLevelOnly.length > 0) map.set(path, fileLevelOnly)
     }
@@ -680,7 +823,7 @@
   // -------------------------------------------------------------------------
   const findingTriage = $derived.by(() => {
     const entries: (SuggestionEntry & { path: string })[] = []
-    for (const suggestions of skillSuggestionsByPath.values()) {
+    for (const suggestions of phaseSuggestionsByPath.values()) {
       for (const s of suggestions) {
         if (s.line === null) continue
         if (dismissedKeys.has(s.key) || addedDraftKeys.has(s.key)) continue
@@ -710,7 +853,7 @@
   // "N more findings" group inside FileDiff instead of rendering inline.
   const lineSkillFindingsByPath = $derived.by(() => {
     const map = new Map<string, SkillFinding[]>()
-    for (const [path, suggestions] of skillSuggestionsByPath) {
+    for (const [path, suggestions] of phaseSuggestionsByPath) {
       const lineOnly = suggestions
         .filter(s => s.line !== null && !dismissedKeys.has(s.key) && !addedDraftKeys.has(s.key))
         .map(s => ({
@@ -753,7 +896,10 @@
       const findings = effectiveFindingsBySkill.get(review.skillId) ?? []
       const entries: NavFinding[] = []
       for (const finding of findings) {
-        if (!prPathSet.has(finding.path)) continue
+        // Phase-scoped: a popover entry must be able to JUMP to its card, and a
+        // card for another phase's file isn't rendered. The finding is not lost
+        // — it lists (and jumps) in the phase its file belongs to.
+        if (!prPathSet.has(finding.path) || !phasePathSet.has(finding.path)) continue
         const key = `${review.skillId}:${finding.path}:${finding.line}:${finding.body.slice(0, 30)}`
         // Hide a finding once it's been dismissed or added as a draft — same
         // visual-hide rule the inline/file-level cards used (decision still recorded).
@@ -1665,6 +1811,108 @@
     {diagrams}
   />
 {:else}
+  <!-- Review-phase bar (Files mode, mixed PRs only): Implementation → Tests.
+       Nothing is hidden dishonestly — the deferred count is always stated, the
+       Tests phase is reachable before approval as a labelled PREVIEW, and an
+       approval made against an older head sha says so. -->
+  {#if phaseApplies}
+    <div class="phase-bar" data-testid="phase-bar">
+      <div class="phase-switch" role="group" aria-label="Review phase">
+        <button
+          class="phase-btn"
+          class:phase-active={!testsPhaseActive}
+          aria-pressed={!testsPhaseActive}
+          data-testid="phase-btn-implementation"
+          title="Review the implementation first — test files are deferred to the Tests phase"
+          onclick={() => selectPhase('implementation')}
+        >Implementation <span class="phase-count">{implPhaseFiles.length}</span></button>
+        <button
+          class="phase-btn"
+          class:phase-active={testsPhaseActive}
+          aria-pressed={testsPhaseActive}
+          data-testid="phase-btn-tests"
+          title={phaseStore.implApproved
+            ? 'Review the tests against the implementation you approved'
+            : 'Unlocked by approving the implementation — you can still preview the tests now'}
+          onclick={() => selectPhase('tests')}
+        >
+          Tests <span class="phase-count">{testPhaseFiles.length}</span>
+          {#if !phaseStore.implApproved}<span class="phase-lock" aria-label="not unlocked yet" title="Preview — the implementation isn't approved yet">🔒</span>{/if}
+        </button>
+      </div>
+
+      <div class="phase-note-col">
+        {#if !testsPhaseActive}
+          <p class="phase-note" data-testid="phase-deferred-note">
+            {deferredFiles.length} test file{deferredFiles.length === 1 ? '' : 's'} — reviewed in the Tests phase{#if deferredFindingCount > 0}, with {deferredFindingCount} finding{deferredFindingCount === 1 ? '' : 's'} counted there{/if}.
+          </p>
+          {#if phaseStore.implApproved}
+            <p class="phase-note phase-note-approved" data-testid="phase-approved-note">{approvedNoteText}</p>
+          {/if}
+        {:else}
+          <p class="phase-note" data-testid="phase-tests-lead">
+            {#if phaseStore.implApproved}
+              Review these {phaseFiles.length} test file{phaseFiles.length === 1 ? '' : 's'} against the implementation you approved{approvedAtSha} — do they actually pin the behaviour?
+            {:else}
+              Previewing the tests — the implementation isn't approved yet.
+            {/if}
+          </p>
+          <p class="phase-note" data-testid="phase-tests-deferred-note">
+            {deferredFiles.length} implementation file{deferredFiles.length === 1 ? '' : 's'} hidden here{#if deferredFindingCount > 0}, with {deferredFindingCount} finding{deferredFindingCount === 1 ? '' : 's'} counted in the Implementation phase{/if}.
+          </p>
+        {/if}
+      </div>
+
+      <div class="phase-actions">
+        {#if !testsPhaseActive}
+          <button
+            type="button"
+            class="phase-approve"
+            data-testid="phase-approve"
+            title="Sign off the implementation and move on to the tests — always reversible"
+            onclick={approveImplementationPhase}
+          >{phaseStore.implApproved ? 'Re-approve implementation' : 'Implementation looks good'}</button>
+        {:else}
+          <button
+            type="button"
+            class="phase-reopen"
+            data-testid="phase-reopen"
+            title="Go back to the implementation — this clears the approval"
+            onclick={reopenImplementationPhase}
+          >Re-open implementation</button>
+        {/if}
+      </div>
+    </div>
+
+    {#if approvalStale}
+      <p class="phase-stale" role="status" data-testid="phase-stale-note">
+        New commits since you approved the implementation — the sign-off was for {shortSha(phaseStore.headShaAtApproval)}, the PR is now at {shortSha(currentHeadSha)}.
+        <button
+          type="button"
+          class="phase-stale-btn"
+          data-testid="phase-stale-reopen"
+          onclick={reopenImplementationPhase}
+        >Re-open Implementation</button>
+      </p>
+    {/if}
+
+    {#if testsPhaseActive && testCoverageByImplFile.size > 0}
+      <details class="phase-coverage" data-testid="phase-coverage">
+        <summary class="phase-coverage-summary">
+          Tests in this PR name changed symbols in {testCoverageByImplFile.size} of {implPhaseFiles.length} implementation file{implPhaseFiles.length === 1 ? '' : 's'}
+        </summary>
+        <ul class="phase-coverage-list">
+          {#each [...testCoverageByImplFile] as [implFile, testFiles] (implFile)}
+            <li><code>{implFile}</code> → {testFiles.join(', ')}</li>
+          {/each}
+        </ul>
+        <p class="phase-coverage-caveat">
+          A deterministic symbol↔test name match over the files in this PR. Files not listed may still be covered by tests outside this PR.
+        </p>
+      </details>
+    {/if}
+  {/if}
+
   <!-- Files-mode guide bar: the deterministic sort control (Narrative | Risk
        first) + the attention-progress line. Story mode never shows this — its
        narrative IS its ordering. -->
@@ -1709,8 +1957,10 @@
               title="Close file tree (Escape)"
             >✕</button>
           </div>
+          <!-- Scoped to the active phase: the tree must never offer a file the
+               list below isn't rendering (the click would land nowhere). -->
           <FileTree
-            {files}
+            files={phaseFiles}
             {attention}
             {viewedStore}
             {activePath}
@@ -2591,6 +2841,152 @@
   /* File-level (null-line) finding cards stack above the FileDiff */
   .file-level-finding {
     margin-bottom: 0.4rem;
+  }
+
+  /* ---- Review phases (Files mode): Implementation → Tests -------------- */
+
+  .phase-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.9rem;
+    margin-bottom: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--surface-raised);
+  }
+
+  /* Same pill treatment as the sort / Story|Files switches — one language. */
+  .phase-switch {
+    display: inline-flex;
+    gap: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    padding: 0.15rem;
+    background: var(--surface);
+  }
+  .phase-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.2rem 0.8rem;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .phase-btn.phase-active {
+    background: var(--accent);
+    color: var(--surface, #fff);
+  }
+  .phase-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .phase-count {
+    font-variant-numeric: tabular-nums;
+    opacity: 0.75;
+  }
+  .phase-lock {
+    font-size: 0.7rem;
+    line-height: 1;
+  }
+
+  .phase-note-col {
+    flex: 1 1 16rem;
+    min-width: 0;
+  }
+  .phase-note {
+    margin: 0;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    color: var(--text-muted);
+  }
+  .phase-note-approved {
+    opacity: 0.85;
+  }
+
+  .phase-actions {
+    margin-left: auto;
+  }
+  .phase-approve,
+  .phase-reopen,
+  .phase-stale-btn {
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.25rem 0.7rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-subtle);
+    background: var(--surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s;
+  }
+  .phase-approve:hover,
+  .phase-reopen:hover,
+  .phase-stale-btn:hover {
+    color: var(--text);
+    border-color: var(--text-muted);
+  }
+  .phase-approve:focus-visible,
+  .phase-reopen:focus-visible,
+  .phase-stale-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .phase-stale {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.6rem;
+    margin: 0 0 0.5rem;
+    padding: 0.45rem 0.75rem;
+    border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+
+  .phase-coverage {
+    margin: 0 0 0.5rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--surface-raised);
+  }
+  .phase-coverage-summary {
+    padding: 0.4rem 0.75rem;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    user-select: none;
+  }
+  .phase-coverage-summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  .phase-coverage-list {
+    margin: 0;
+    padding: 0 0.75rem 0.25rem 1.6rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+  .phase-coverage-list code {
+    font-size: 0.95em;
+  }
+  .phase-coverage-caveat {
+    margin: 0;
+    padding: 0 0.75rem 0.5rem;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    opacity: 0.85;
   }
 
   /* ---- Risk-guided flow (Files mode): sort control + progress + tail ---- */

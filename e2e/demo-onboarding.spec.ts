@@ -82,10 +82,17 @@ test('landing CTA opens the demo with banner, summary, verdict, finding — no e
   // DEMOTED / minor findings: no per-card "lower confidence" chrome — they
   // collapse into per-file groups, reported by the review-level triage line.
   await expect(page.getByText(/lower confidence/i)).toHaveCount(0)
+  // PHASE NOTE: the Inspect step opens in the Implementation phase, so the
+  // demo's finding on src/search/useSearch.test.ts is counted in the Tests
+  // phase (the bar states the deferral). What is triaged here: 1 inline
+  // (confirmed, useSearch.ts) + 1 collapsed (demoted, config.ts).
   const triageLine = page.getByTestId('findings-triage-line')
-  await expect(triageLine).toContainText('Showing 1 of 3 findings')
-  await expect(triageLine).toContainText('2 minor or low-confidence collapsed')
-  await expect(page.getByTestId('secondary-findings')).toHaveCount(2)
+  await expect(triageLine).toContainText('Showing 1 of 2 findings')
+  await expect(triageLine).toContainText('1 minor or low-confidence collapsed')
+  await expect(page.getByTestId('secondary-findings')).toHaveCount(1)
+  await expect(page.getByTestId('phase-deferred-note')).toContainText(
+    '1 test file — reviewed in the Tests phase',
+  )
 
   // Story mode: the Inspect step exposes a Story|Files flow toggle (the demo
   // ships a canned multi-layer walkthrough). Switching to Story renders the

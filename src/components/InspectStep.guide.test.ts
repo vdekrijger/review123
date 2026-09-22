@@ -13,6 +13,14 @@
  *   - "Mark all N viewed" marks tail files; a manual un-view sticks on
  *     repeat clicks (bulk-marked-once guard)
  *   - the progress line: "M of N attention files reviewed"
+ *
+ * FIXTURE NOTE: the mechanical file here is a rename-only file, NOT a test
+ * file. Review phases (src/lib/guide/phase.svelte) split a mixed PR into an
+ * Implementation and a Tests phase, so a test file in this fixture would make
+ * every assertion below a test of two features at once. The sort/tail behaviour
+ * WITHIN each phase — including a test file reaching the Tests-phase tail — is
+ * covered in InspectStep.phase.test.ts; the "tests only" mechanical reason
+ * itself is covered in src/lib/guide/triage.test.ts.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
@@ -44,7 +52,7 @@ function makeFile(filename: string, overrides: Partial<PrFile> = {}): PrFile {
  *   src/mid.ts       modified +320               → MEDIUM (novel)
  *   src/app.ts       modified +5                 → LOW    (novel)
  *   pnpm-lock.yaml   lockfile                    → mechanical (tail)
- *   src/util.test.ts tests-only                  → mechanical (tail)
+ *   src/renamed.ts   rename, zero churn          → mechanical (tail)
  */
 function makeMixedFiles(): PrFile[] {
   return [
@@ -52,7 +60,7 @@ function makeMixedFiles(): PrFile[] {
     makeFile('pnpm-lock.yaml', { additions: 40 }),
     makeFile('src/auth/big.ts', { status: 'added', additions: 400 }),
     makeFile('src/mid.ts', { additions: 320 }),
-    makeFile('src/util.test.ts', { additions: 12 }),
+    makeFile('src/renamed.ts', { status: 'renamed', additions: 0, deletions: 0 }),
   ]
 }
 
@@ -105,7 +113,7 @@ describe('InspectStep — Narrative (default) order unchanged', () => {
       'file-src-app-ts',
       'file-src-auth-big-ts',
       'file-src-mid-ts',
-      'file-src-util-test-ts',
+      'file-src-renamed-ts',
       'file-pnpm-lock-yaml', // generated sink: lockfile last, order otherwise untouched
     ])
     expect(container.querySelector('.attention-tail')).toBeNull()
@@ -126,8 +134,8 @@ describe('InspectStep — Risk first ordering + tail', () => {
     expect(tail.open).toBe(false)
     expect(tail.textContent).toContain('2 low-attention files — skim or mark all viewed')
     expect(tail.textContent).toContain('1 lockfile')
-    expect(tail.textContent).toContain('1 tests only')
-    expect(tailCardIds(container)).toEqual(['file-pnpm-lock-yaml', 'file-src-util-test-ts'])
+    expect(tail.textContent).toContain('1 rename only')
+    expect(tailCardIds(container)).toEqual(['file-pnpm-lock-yaml', 'file-src-renamed-ts'])
   })
 
   it('tie-breaks equal-risk files by path (stable + deterministic)', async () => {
@@ -167,7 +175,7 @@ describe('InspectStep — Risk first ordering + tail', () => {
 
     // The lockfile carries a finding → surfaced in the MAIN list, not buried.
     expect(mainCardIds(container)).toContain('file-pnpm-lock-yaml')
-    expect(tailCardIds(container)).toEqual(['file-src-util-test-ts'])
+    expect(tailCardIds(container)).toEqual(['file-src-renamed-ts'])
     expect(container.querySelector('.attention-tail')!.textContent).toContain('1 low-attention file')
   })
 })
@@ -180,7 +188,7 @@ describe('InspectStep — Mark all viewed (tail)', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Mark all 2 viewed' }))
 
     expect(viewedStore.isViewed('pnpm-lock.yaml', PATCH)).toBe(true)
-    expect(viewedStore.isViewed('src/util.test.ts', PATCH)).toBe(true)
+    expect(viewedStore.isViewed('src/renamed.ts', PATCH)).toBe(true)
     // Attention files stay untouched.
     expect(viewedStore.isViewed('src/auth/big.ts', PATCH)).toBe(false)
   })
@@ -200,7 +208,7 @@ describe('InspectStep — Mark all viewed (tail)', () => {
     // …and a repeat bulk click does NOT fight that choice.
     await fireEvent.click(screen.getByRole('button', { name: 'Mark all 2 viewed' }))
     expect(viewedStore.isViewed('pnpm-lock.yaml', PATCH)).toBe(false)
-    expect(viewedStore.isViewed('src/util.test.ts', PATCH)).toBe(true)
+    expect(viewedStore.isViewed('src/renamed.ts', PATCH)).toBe(true)
   })
 })
 

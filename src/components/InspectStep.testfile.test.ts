@@ -1,15 +1,30 @@
+/**
+ * InspectStep — the test-file display modes (highlight / dim / normal).
+ *
+ * PHASE NOTE: these fixtures mix an implementation file with a test file, so
+ * review phases (src/lib/guide/phase.svelte) engage and the Implementation
+ * phase — the default — hides the test file entirely. The display modes style
+ * a RENDERED test file, so each case puts the component in the Tests phase
+ * first. That the Implementation phase hides it is covered in
+ * InspectStep.phase.test.ts.
+ */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render } from '@testing-library/svelte'
 import InspectStep from './InspectStep.svelte'
 import type { PrFile } from '../lib/github/types'
 import { setTestFileDisplay } from '../lib/settings/settings'
+import { setReviewPhase } from '../lib/guide/phase.svelte'
 
 Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
   value: () => ({ font: '', measureText: () => ({ width: 0 }) }),
   writable: true,
 })
 
-beforeEach(() => { localStorage.clear() })
+beforeEach(() => {
+  localStorage.clear()
+  // Standalone renders fall into the 'local' phase bucket (currentPrKey()).
+  setReviewPhase('local', 'tests')
+})
 
 const PATCH = '@@ -1 +1 @@\n-old\n+new'
 

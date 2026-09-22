@@ -159,10 +159,14 @@ describe('Demo route', () => {
     // The Performance reviewer's demoted finding (flagged by 1/5, refuted) and
     // the Pragmatic reviewer's lone low note collapse into per-file secondary
     // groups — the old inline "flagged by 1/5 · lower confidence" chrome is gone.
+    // PHASE NOTE: the Inspect step opens in the Implementation phase, so the
+    // demo's third line-bearing finding (on src/search/useSearch.test.ts) is
+    // counted in the Tests phase, not here. What remains: 1 inline (the
+    // confirmed useSearch.ts finding) + 1 collapsed (the demoted config.ts one).
     expect(screen.queryByText(/flagged by 1\/5/i)).toBeNull()
     expect(screen.queryByText(/lower confidence/i)).toBeNull()
     const groups = document.querySelectorAll('[data-testid="secondary-findings"]')
-    expect(groups.length).toBe(2)
+    expect(groups.length).toBe(1)
     for (const group of groups) {
       expect(group.querySelector('summary')?.textContent).toContain('1 more finding — low confidence or minor')
     }
@@ -170,10 +174,11 @@ describe('Demo route', () => {
     const demoted = screen.getByText(/A fixed 250ms debounce may feel sluggish/i)
     expect(demoted.closest('[data-testid="secondary-findings"]')).not.toBeNull()
 
-    // Review-level triage line: 1 of 3 line-bearing findings inline + Show all.
+    // Review-level triage line: 1 of the 2 Implementation-phase line-bearing
+    // findings inline + Show all.
     const line = document.querySelector('[data-testid="findings-triage-line"]')
-    expect(line?.textContent).toContain('Showing 1 of 3 findings')
-    expect(line?.textContent).toContain('2 minor or low-confidence collapsed')
+    expect(line?.textContent).toContain('Showing 1 of 2 findings')
+    expect(line?.textContent).toContain('1 minor or low-confidence collapsed')
     expect(line?.querySelector('[data-testid="findings-show-all"]')).not.toBeNull()
 
     expect(externalFetchCalls()).toEqual([])
