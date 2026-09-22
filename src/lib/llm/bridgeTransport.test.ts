@@ -685,21 +685,30 @@ describe('bridge transport — streaming failures', () => {
     })
   })
 
-  it('a mid-stream error event classifies by its CODE, exactly as the status would', async () => {
-    useBridge()
-    vi.stubGlobal(
-      'fetch',
-      streamFetch([
-        ndjson({ type: 'start', cli: 'claude', streaming: true }),
-        ndjson({ type: 'delta', text: 'started' }),
-        ndjson({ type: 'error', error: 'timeout', message: 'The claude CLI did not finish in time.' }),
-      ]),
-    )
-    await expect(llmStream({ system: 'S', user: 'U' }, () => {})).rejects.toMatchObject({
-      kind: 'timeout',
-      message: 'The claude CLI did not finish in time.',
-    })
-  })
+  // A real bridge keys this `code` (verified live); `error` is the alias every
+  // other bridge error body uses. Both must classify, or a failure arrives at
+  // the panel unclassified.
+  it.each([
+    ['code', 'code'],
+    ['error', 'error'],
+  ])(
+    'a mid-stream error event keyed by `%s` classifies by its CODE, exactly as the status would',
+    async (_label, field) => {
+      useBridge()
+      vi.stubGlobal(
+        'fetch',
+        streamFetch([
+          ndjson({ type: 'start', cli: 'claude', streaming: true }),
+          ndjson({ type: 'delta', text: 'started' }),
+          ndjson({ type: 'error', [field]: 'timeout', message: 'The claude CLI did not finish in time.' }),
+        ]),
+      )
+      await expect(llmStream({ system: 'S', user: 'U' }, () => {})).rejects.toMatchObject({
+        kind: 'timeout',
+        message: 'The claude CLI did not finish in time.',
+      })
+    },
+  )
 
   it('a mid-stream cli-failed does NOT carry a retry status — a retry would re-emit the deltas', async () => {
     useBridge()

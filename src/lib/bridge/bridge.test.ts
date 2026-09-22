@@ -675,10 +675,16 @@ describe('parseInferStreamEvent', () => {
     expect(done).not.toHaveProperty('usage')
   })
 
-  it('reads an error event and its code, and sanitizes the message it will render', () => {
+  // `code` is what a real bridge sends — verified against a live one. `error`
+  // is the spelling every OTHER bridge error body uses, so it is accepted as
+  // an alias; reading only one of the two would silently unclassify a failure.
+  it.each([
+    ['`code`, as the bridge actually sends it', 'code'],
+    ['`error`, the alias every other bridge error body uses', 'error'],
+  ])('reads an error event keyed by %s, and sanitizes the message it will render', (_label, field) => {
     const NUL = String.fromCharCode(0)
     expect(
-      parseInferStreamEvent(line({ type: 'error', error: 'timeout', message: `too${NUL} slow` })),
+      parseInferStreamEvent(line({ type: 'error', [field]: 'timeout', message: `too${NUL} slow` })),
     ).toEqual({ type: 'error', code: 'timeout', message: 'too slow' })
   })
 

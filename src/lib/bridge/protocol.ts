@@ -355,7 +355,13 @@ export function parseInferStreamEvent(line: string): InferStreamEvent | null {
       return done
     }
     case 'error': {
-      const code = raw['error'] ?? raw['code']
+      // The bridge sends `code` here — verified against a live bridge. `error`
+      // is accepted as an alias because that is the field name on every OTHER
+      // bridge error body (the non-2xx envelope), so it is the spelling a
+      // hand-rolled proxy or a future revision is most likely to reach for.
+      // Reading one field and silently dropping the other would turn a
+      // classified failure into an unclassified one.
+      const code = raw['code'] ?? raw['error']
       const message = raw['message']
       return {
         type: 'error',
