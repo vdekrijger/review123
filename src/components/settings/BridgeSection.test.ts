@@ -178,6 +178,37 @@ describe('BridgeSection — connecting', () => {
     expect(note).toHaveTextContent(/whenever a pr's head matches that commit/i)
   })
 
+  // WRITE MODE (#243). `--allow-write` is the entire authorisation model for
+  // the fix loop, and it is typed at the terminal — so the settings surface
+  // states which mode the user is in and what it permits, rather than leaving
+  // them to discover it from a 403 mid-review.
+  it('says plainly that the bridge is read-only, and how to change that', async () => {
+    await connectWith(healthBody())
+    const note = screen.getByTestId('bridge-write-note')
+    expect(note).toHaveTextContent(/read-only/i)
+    expect(note).toHaveTextContent(/--allow-write/)
+    // What it would permit, and what it never touches.
+    expect(note).toHaveTextContent(/scratch git worktree/i)
+    expect(note).toHaveTextContent(/one commit per finding/i)
+    expect(note).toHaveTextContent(/never touched/i)
+    expect(note).toHaveTextContent(/nothing is pushed/i)
+    // And that no browser affordance can enable it.
+    expect(note).toHaveTextContent(/typed at the terminal/i)
+  })
+
+  it('says write mode is ON when the bridge reports capabilities.fix', async () => {
+    await connectWith(
+      healthBody({
+        capabilities: { inference: ['claude'], infer: true, files: true, search: true, fix: true },
+      }),
+    )
+    const note = screen.getByTestId('bridge-write-note')
+    expect(note).toHaveTextContent(/write mode is on/i)
+    expect(note).toHaveTextContent(/--allow-write/)
+    expect(note).toHaveTextContent(/scratch git worktree/i)
+    expect(note).not.toHaveTextContent(/read-only/i)
+  })
+
   it('says a DIRTY checkout is dirty', async () => {
     await connectWith(healthBody({ git: { head: HEAD_SHA, branch: 'main', dirty: true } }))
     expect(screen.getByTestId('bridge-grounding-note')).toHaveTextContent(/uncommitted changes/i)

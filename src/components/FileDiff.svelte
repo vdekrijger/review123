@@ -130,6 +130,15 @@
      */
     skillFindings?: SkillFinding[]
     /**
+     * The card-level "Send to agent" affordance (#243). Null — the common case
+     * — means no write-enabled, head-matching bridge is ready, and no finding
+     * card shows the action at all. When present, `keys` is the set of finding
+     * keys the routing rule found ELIGIBLE (concrete fix, primary tier), and
+     * `send` hands one to the AgentFixPanel, which owns the run. FileDiff makes
+     * no judgement of its own here — it only routes the answer to the cards.
+     */
+    agentFix?: { keys: Set<string>; send: (key: string) => void } | null
+    /**
      * Called when the user clicks "Add as draft" on a skill finding inside
      * FileDiff. `line`/`side` are the finding's EFFECTIVE anchor — a
      * user-corrected (re-anchored) finding reports its corrected location, so
@@ -193,7 +202,7 @@
     currentHeadSha?: string
   }
 
-  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, expandFn = null, askDisabledReason = null, skillFindings = [], onAddSkillFindingDraft, onDismissSkillFinding, onReply = null, whitespace = null, sticky = true, forceExpanded = false, currentHeadSha = undefined }: Props = $props()
+  let { file, mode, drafts = [], comments = [], resolvedCommentIds = new Set(), onAddDraft, onRemoveDraft, viewed = false, changedSinceViewed = false, onToggleViewed, contents, askFn = null, expandFn = null, askDisabledReason = null, skillFindings = [], agentFix = null, onAddSkillFindingDraft, onDismissSkillFinding, onReply = null, whitespace = null, sticky = true, forceExpanded = false, currentHeadSha = undefined }: Props = $props()
 
   // Test-file display (must be declared before collapsed)
   const testFileDisplay = $derived<TestFileDisplay>(settingsState.current.testFileDisplay)
@@ -933,6 +942,12 @@
     return map
   })
 
+  /** Per-card "Send to agent" handler, or null when this finding is not eligible. */
+  function agentFixFor(key: string): (() => void) | null {
+    if (!agentFix || !agentFix.keys.has(key)) return null
+    return () => agentFix.send(key)
+  }
+
   /** Jump to a strip entry's hunk (reuses the symbol click-through jump). */
   function jumpToStripEntry(entry: { line: number; side: 'LEFT' | 'RIGHT' }): void {
     jumpToDiffLine(file.filename, entry.line, entry.side === 'LEFT' ? 'old' : 'new')
@@ -1357,6 +1372,7 @@
                 movedFrom={finding.movedFrom ?? null}
                 onUndoMove={finding.movedFrom ? () => undoMoveFinding(finding) : null}
                 onMoveToLine={(line) => moveFindingToLine(finding, line)}
+                onSendToAgent={agentFixFor(finding.key)}
                 {askFn}
                 askPath={file.filename}
                 askExcerpt={file.patch ? excerptAround(file.patch, finding.line, splitSideToSide(side), 6) : ''}
@@ -1456,6 +1472,7 @@
             movedFrom={finding.movedFrom ?? null}
             onUndoMove={finding.movedFrom ? () => undoMoveFinding(finding) : null}
             onMoveToLine={(line) => moveFindingToLine(finding, line)}
+            onSendToAgent={agentFixFor(finding.key)}
           />
         {/each}
       </div>
@@ -1495,6 +1512,7 @@
               movedFrom={finding.movedFrom ?? null}
               onUndoMove={finding.movedFrom ? () => undoMoveFinding(finding) : null}
               onMoveToLine={(line) => moveFindingToLine(finding, line)}
+              onSendToAgent={agentFixFor(finding.key)}
               {askFn}
               askPath={file.filename}
               askExcerpt={anchoredHere && file.patch ? excerptAround(file.patch, finding.line, finding.anchorSide, 6) : ''}

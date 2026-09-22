@@ -191,6 +191,24 @@
       : { status: 'failed', failure: outcome.failure }
   }
 
+  /**
+   * Send ONE finding, from outside the panel — the "Send to agent" action on
+   * the finding card itself (#243 shipped that path only as the panel's "only
+   * this" button, because the cards are rendered two components away).
+   *
+   * The panel stays the single owner of run state, so there is exactly one
+   * place a fix run can be in flight and exactly one place its result renders.
+   * The view scrolls to it, because a click that starts a multi-minute job
+   * somewhere off-screen is a click that looks like it did nothing.
+   */
+  export function sendOne(key: string): void {
+    if (run.status === 'running') return
+    void dispatch([key])
+    sectionEl?.scrollIntoView({ block: 'nearest' })
+  }
+
+  let sectionEl: HTMLElement | null = $state(null)
+
   function cancel(): void {
     abort?.abort()
     abort = null
@@ -224,7 +242,7 @@
 </script>
 
 {#if visible}
-  <section class="agent-fix" data-testid="agent-fix-panel" data-ready={readiness.ready}>
+  <section class="agent-fix" data-testid="agent-fix-panel" data-ready={readiness.ready} bind:this={sectionEl}>
     <header class="afx-head">
       <h3 class="afx-title">Fix with your agent</h3>
       <p class="afx-readiness" data-testid="agent-fix-readiness" data-reason={readiness.reason}>

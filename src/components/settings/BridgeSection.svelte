@@ -50,6 +50,13 @@
   const inferReady = $derived(bridgeAvailable('infer'))
   /** Both grounding routes. An older bridge has neither. */
   const filesReady = $derived(bridgeAvailable('files') && bridgeAvailable('search'))
+  /**
+   * `capabilities.fix` — the bridge's `--allow-write` flag, and the ONLY
+   * authorisation for the fix loop. It is not a release-readiness boolean like
+   * the other capabilities: it is a process flag the person at the terminal
+   * typed, which is exactly why this section states it rather than hiding it.
+   */
+  const writeEnabled = $derived(bridgeAvailable('fix'))
   const repoState = $derived(bridgeState.git)
 
   /**
@@ -143,6 +150,20 @@
       {:else}
         Ready to run reviews. Pick <strong>Local bridge</strong> under
         <a href="#ai-models">AI models</a> to use it instead of an API key.
+      {/if}
+    </p>
+    <p class="field-note" data-testid="bridge-write-note">
+      {#if writeEnabled}
+        Write mode is on (<code>--allow-write</code>): a finding with a concrete fix can go
+        straight to your coding agent, which fixes it in a scratch git worktree, runs your
+        tests, and hands back one commit per finding for you to review and cherry-pick. Your
+        checkout, branch, index and uncommitted work are never touched, and nothing is pushed.
+      {:else}
+        This bridge is <strong>read-only</strong>. Restart it with <code>--allow-write</code>
+        to let review123 hand findings to your coding agent — it works in a scratch git
+        worktree, runs your tests, and hands back one commit per finding; your checkout,
+        branch, index and uncommitted work are never touched, and nothing is pushed. Nothing
+        on this page can turn it on: the flag is typed at the terminal or it does not happen.
       {/if}
     </p>
     <p class="field-note" data-testid="bridge-grounding-note">

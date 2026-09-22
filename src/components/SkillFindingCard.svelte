@@ -25,6 +25,7 @@
   import { isMajorityVerified, isJudgedMoot, MOOT_SECONDARY_LABEL } from '../lib/ai/findingRank'
   import { reanchorDrag, REANCHOR_DND_MIME } from '../lib/findings/reanchor.svelte'
   import type { DismissReason } from '../lib/skills/calibration'
+  import { describeFixEligibility } from '../lib/bridge/fixLoop'
 
   interface Props {
     skillName: string
@@ -137,9 +138,23 @@
      * error). Targets the new-file (RIGHT) side — drag supports both sides.
      */
     onMoveToLine?: ((line: number) => boolean) | null
+    /**
+     * Hand THIS finding to the user's own coding agent over the local bridge
+     * (#243). It joins the action row beside Add as draft / Dismiss / Move /
+     * Ask AI — the card is where the user has just read the finding, so it is
+     * where the decision to delegate it belongs.
+     *
+     * PRESENCE IS THE GATE. The parent supplies this only for a finding the
+     * routing rule found ELIGIBLE (a concrete `suggestedFix`, primary tier)
+     * AND when a write-enabled bridge is actually ready to run it. Every other
+     * case passes null and the button is simply not there — a greyed-out
+     * affordance for a feature the user has not set up is clutter, and the
+     * panel already explains every named refusal in one place.
+     */
+    onSendToAgent?: (() => void) | null
   }
 
-  let { skillName, severity, body, simpleBody = undefined, suggestedFix = undefined, verification = undefined, raisedBy = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss, askFn = null, askPath = undefined, askExcerpt = undefined, mergedFrom = undefined, mergedReason = undefined, coveredByDraft = undefined, anchorHash = null, movedFrom = null, onUndoMove = null, onMoveToLine = null }: Props = $props()
+  let { skillName, severity, body, simpleBody = undefined, suggestedFix = undefined, verification = undefined, raisedBy = undefined, line = null, anchored = false, added = false, compact = false, findingKey = null, onAdd, onDismiss, askFn = null, askPath = undefined, askExcerpt = undefined, mergedFrom = undefined, mergedReason = undefined, coveredByDraft = undefined, anchorHash = null, movedFrom = null, onUndoMove = null, onMoveToLine = null, onSendToAgent = null }: Props = $props()
 
   // ---- Simplify pass: simplified-vs-original body (per-card state) ---------
   // A toggle exists only when a rewrite is present AND actually differs from
@@ -499,6 +514,19 @@
         aria-label="Move this finding to another diff line"
         data-testid="finding-move-btn"
       >Move to line…</button>
+    {/if}
+    {#if onSendToAgent}
+      <!-- Present only when this finding is eligible AND a write-enabled,
+           head-matching bridge is ready (the parent decides both). Never
+           rendered disabled — see the onSendToAgent prop. -->
+      <button
+        type="button"
+        class="skill-agent-btn"
+        title={describeFixEligibility('eligible')}
+        aria-label="Send this finding to your local coding agent"
+        data-testid="finding-send-to-agent"
+        onclick={() => onSendToAgent?.()}
+      >Send to agent</button>
     {/if}
     {#if hasAsk}
       <button
@@ -1106,5 +1134,23 @@
     border-color: var(--accent);
     color: var(--accent);
     opacity: 1;
+  }
+
+  /* Same weight as its siblings: delegating a finding is one of the row's
+     ordinary actions, not a call to action. */
+  .skill-agent-btn {
+    font-size: 0.78rem;
+    padding: 0.18rem 0.55rem;
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.85;
+  }
+
+  .skill-agent-btn:hover {
+    opacity: 1;
+    background: var(--surface-raised);
   }
 </style>
