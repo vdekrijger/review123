@@ -162,12 +162,26 @@ export function loadDecisions(): Decisions {
   }
 }
 
-function saveDecisions(decisions: Decisions): void {
+/**
+ * Persist, evicting the oldest entries beyond the cap.
+ *
+ * `protectedId` is the entry this write is ABOUT, and it always survives its
+ * own save. Without that, a ledger carrying timestamps from the future — a
+ * clock that moved backwards, storage edited by hand, a record copied between
+ * machines — would silently evict the decision the user just made, which reads
+ * as the button not working.
+ */
+function saveDecisions(decisions: Decisions, protectedId?: string): void {
   const entries = Object.entries(decisions)
-  const kept =
-    entries.length > STANDING_RULE_DECISIONS_MAX
-      ? entries.sort((a, b) => b[1].decidedAt - a[1].decidedAt).slice(0, STANDING_RULE_DECISIONS_MAX)
-      : entries
+  let kept = entries
+  if (entries.length > STANDING_RULE_DECISIONS_MAX) {
+    const sorted = [...entries].sort((a, b) => b[1].decidedAt - a[1].decidedAt)
+    kept = sorted.slice(0, STANDING_RULE_DECISIONS_MAX)
+    if (protectedId !== undefined && !kept.some(([id]) => id === protectedId)) {
+      const entry = decisions[protectedId]
+      if (entry) kept = [[protectedId, entry], ...kept.slice(0, STANDING_RULE_DECISIONS_MAX - 1)]
+    }
+  }
   try {
     localStorage.setItem(STANDING_RULE_DECISIONS_KEY, JSON.stringify(Object.fromEntries(kept)))
   } catch {
@@ -194,8 +208,9 @@ export function decideRule(
     decidedAt: Date.now(),
   }
   const decisions = loadDecisions()
-  decisions[ruleId(rule.rule)] = entry
-  saveDecisions(decisions)
+  const id = ruleId(rule.rule)
+  decisions[id] = entry
+  saveDecisions(decisions, id)
   return entry
 }
 

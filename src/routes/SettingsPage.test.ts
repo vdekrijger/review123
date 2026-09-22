@@ -103,6 +103,11 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('region', { name: /local bridge/i })).toBeInTheDocument()
   })
 
+  it('renders the Standing rules section', () => {
+    render(SettingsPage)
+    expect(screen.getByRole('region', { name: /standing rules/i })).toBeInTheDocument()
+  })
+
   it('keeps Reviewer skills LAST — the scrollspy bottom rule activates the last section', () => {
     render(SettingsPage)
     const nav = screen.getByRole('navigation', { name: /settings sections/i })
@@ -112,6 +117,7 @@ describe('SettingsPage', () => {
       'Providers & access',
       'Local bridge',
       'AI models',
+      'Standing rules',
       'Reviewer skills',
     ])
   })
@@ -228,6 +234,7 @@ describe('SettingsPage scrollspy', () => {
       'providers',
       'bridge',
       'ai-models',
+      'standing-rules',
       'skills',
     ])
   })
@@ -246,6 +253,7 @@ describe('SettingsPage scrollspy', () => {
     stubSectionTop('providers', 100)
     stubSectionTop('bridge', 500)
     stubSectionTop('ai-models', 700)
+    stubSectionTop('standing-rules', 1000)
     stubSectionTop('skills', 1300)
     getObserverCallback()()
     await vi.waitFor(() => {
@@ -260,6 +268,7 @@ describe('SettingsPage scrollspy', () => {
     stubSectionTop('providers', -1000)
     stubSectionTop('bridge', -600)
     stubSectionTop('ai-models', -200)
+    stubSectionTop('standing-rules', 120)
     stubSectionTop('skills', 450) // short last section: below midline (400)
     setScrollY(2200) // 2200 + 800 = 3000 = scrollHeight
     getObserverCallback()()
@@ -277,6 +286,7 @@ describe('SettingsPage scrollspy', () => {
     stubSectionTop('providers', 350) // already above the midline (400)!
     stubSectionTop('bridge', 620)
     stubSectionTop('ai-models', 900)
+    stubSectionTop('standing-rules', 1200)
     stubSectionTop('skills', 1500)
     getObserverCallback()()
     await Promise.resolve()
@@ -291,6 +301,7 @@ describe('SettingsPage scrollspy', () => {
     stubSectionTop('providers', 100)
     stubSectionTop('bridge', 500)
     stubSectionTop('ai-models', 700)
+    stubSectionTop('standing-rules', 1000)
     stubSectionTop('skills', 1300)
     getObserverCallback()()
     await vi.waitFor(() => {
@@ -301,6 +312,7 @@ describe('SettingsPage scrollspy', () => {
     stubSectionTop('providers', 350)
     stubSectionTop('bridge', 620)
     stubSectionTop('ai-models', 900)
+    stubSectionTop('standing-rules', 1200)
     stubSectionTop('skills', 1500)
     window.dispatchEvent(new Event('scroll'))
     await vi.waitFor(() => {
@@ -318,6 +330,7 @@ describe('SettingsPage scrollspy', () => {
     stubSectionTop('providers', 100)
     stubSectionTop('bridge', 500)
     stubSectionTop('ai-models', 700)
+    stubSectionTop('standing-rules', 1000)
     stubSectionTop('skills', 1300)
     getObserverCallback()()
     await Promise.resolve()
@@ -341,6 +354,7 @@ describe('SettingsPage scrollspy', () => {
       stubSectionTop('providers', 100)
       stubSectionTop('bridge', 500)
       stubSectionTop('ai-models', 700)
+      stubSectionTop('standing-rules', 1000)
       stubSectionTop('skills', 1300)
       vi.advanceTimersByTime(1500) // beyond the suppression window
       getObserverCallback()()

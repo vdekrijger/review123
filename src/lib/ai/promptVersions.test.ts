@@ -65,6 +65,7 @@ describe('PROMPT_VERSIONS map', () => {
         'riskJudge',
         'convergence',
         'simplify',
+        'standingRules',
       ].sort(),
     )
   })
@@ -81,11 +82,23 @@ describe('PROMPT_VERSIONS map', () => {
     }
   })
 
-  it('post-migration tasks start at ≥1 (simplify, intent, outcomes and skillsTests have their own version history)', () => {
+  it('post-migration tasks start at ≥1 (simplify, intent, outcomes, skillsTests and standingRules have their own version history)', () => {
     expect(PROMPT_VERSIONS.simplify).toBeGreaterThanOrEqual(1)
     expect(PROMPT_VERSIONS.intent).toBeGreaterThanOrEqual(1)
     expect(PROMPT_VERSIONS.outcomes).toBeGreaterThanOrEqual(1)
     expect(PROMPT_VERSIONS.skillsTests).toBeGreaterThanOrEqual(1)
+    expect(PROMPT_VERSIONS.standingRules).toBeGreaterThanOrEqual(1)
+  })
+
+  it('the standing-rules distillation is a NEW entry, never a bump of an existing one', () => {
+    // Adding a settings-time task must leave EVERY review task's cache warm.
+    // If a future change to the standing-rules prompt bumps a neighbour
+    // instead of its own entry, this fails.
+    expect(PROMPT_VERSIONS.standingRules).toBe(1)
+    expect(PROMPT_VERSIONS.skills).toBe(29)
+    expect(PROMPT_VERSIONS.verdict).toBe(28)
+    expect(PROMPT_VERSIONS.simplify).toBe(1)
+    expect(PROMPT_VERSIONS.summary).toBe(26)
   })
 
   it('the tests reviewer pass is a NEW entry, never a bump of skills (#237)', () => {
@@ -209,6 +222,21 @@ describe('cache-key stability (migration: global v26 → per-task map)', () => {
     const hash = djb2(fingerprint + '||' + draftFingerprint)
     expect(cacheKey(PR, 'convergence:' + hash, promptVersionFor('convergence'))).toBe(
       `owner/repo#1@abc123|convergence:${hash}|v26`,
+    )
+  })
+
+  it('standing rules (settings-time — its version keys the STORED record, not a PR cache entry)', () => {
+    // The distillation is account-level, so it has no PR key and never reaches
+    // aiCache. What its version DOES gate is the localStorage record in
+    // standingRulesStore.ts, which stamps the version it was produced under so
+    // a prompt change marks a stored distillation stale rather than silently
+    // serving rules the current prompt would no longer produce. The map entry
+    // is asserted here because this file is the one place the map is pinned.
+    expect(promptVersionFor('standingRules')).toBe(1)
+    // And it composes with cacheKey like any other task id, so a future
+    // per-PR use of the same prompt would not collide with a sibling.
+    expect(cacheKey(PR, 'standing-rules', promptVersionFor('standingRules'))).toBe(
+      'owner/repo#1@abc123|standing-rules|v1',
     )
   })
 
