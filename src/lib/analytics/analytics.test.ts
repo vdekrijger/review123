@@ -40,6 +40,29 @@ describe('analytics privacy choke-point', () => {
     expect(capture.mock.calls[0][1]).toEqual({ task: 'summary', duration_ms: 1200, cached: false })
   })
 
+  // #237 split reviewers into an implementation pass and an on-demand tests
+  // pass. 'pass' names WHICH code path ran — a two-value enum, nothing more.
+  it('ai_task events carry the reviewer pass, and still nothing else', () => {
+    track('ai_task_completed', {
+      task: 'skill-review',
+      duration_ms: 900,
+      cached: false,
+      pass: 'tests',
+      // Everything a reviewer task also knows, and must never send:
+      skill: 'Security Reviewer',
+      path: 'src/secret.ts',
+      body: 'unsanitized input',
+    } as never)
+    expect(capture.mock.calls[0][1]).toEqual({
+      task: 'skill-review', duration_ms: 900, cached: false, pass: 'tests',
+    })
+
+    track('ai_task_failed', { task: 'skill-review', reason: 'timeout', pass: 'implementation', prompt: 'leak' } as never)
+    expect(capture.mock.calls[1][1]).toEqual({
+      task: 'skill-review', reason: 'timeout', pass: 'implementation',
+    })
+  })
+
   it('ai_finding_accepted carries ids/enums/counts only — NO finding content', () => {
     track('ai_finding_accepted', {
       reviewer: 'bug-hunter',

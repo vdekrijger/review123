@@ -3187,6 +3187,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           duration_ms: Math.round(performance.now() - t0),
           cached: true,
           deep: true,
+          pass,
         })
         onUpdate?.()
         return
@@ -3204,6 +3205,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           task: 'skill-review',
           duration_ms: Math.round(performance.now() - t0),
           cached: true,
+          pass,
         })
         onUpdate?.()
         return
@@ -3343,6 +3345,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
         task: 'skill-review',
         duration_ms: Math.round(performance.now() - t0),
         cached: false,
+        pass,
         ...(skillUsage?.total_tokens !== undefined ? { tokens: skillUsage.total_tokens } : {}),
         ...(deep.enabled ? { deep: true, tool_calls: toolCallsUsed ?? 0 } : {}),
       })
@@ -3373,7 +3376,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           ...(info.errorDetail ? { errorDetail: info.errorDetail } : {}),
         },
       }
-      track('ai_task_failed', failureProps('skill-review', info))
+      track('ai_task_failed', { ...failureProps('skill-review', info), pass })
     }
     onUpdate?.()
   }

@@ -23,7 +23,13 @@ const EVENTS = {
   // PRIVACY DECISION (finding simplify): 'rewrites' is the integer count of
   // finding bodies the simplify pass rewrote — a count only, never finding
   // text, code, or file paths. Added for rewrite-rate observability.
-  ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls', 'chunks', 'partial', 'clusters', 'rewrites'],
+  // PRIVACY DECISION (#237 reviewer passes): 'pass' is 'implementation' |
+  // 'tests' — WHICH reviewer pass a 'skill-review' task belonged to. A fixed
+  // two-value enum naming a code path, never a file path, persona name,
+  // finding, or any code content. Without it the two passes are one
+  // indistinguishable blob in the task metrics, even though they have
+  // different prompts, different contexts and very different costs.
+  ai_task_completed: ['task', 'duration_ms', 'cached', 'tokens', 'deep', 'tool_calls', 'chunks', 'partial', 'clusters', 'rewrites', 'pass'],
   // PRIVACY DECISION (error-detail surfacing): 'reason_detail' is the concrete
   // upstream failure text behind the coarse 'reason' kind — the provider's OWN
   // error body (e.g. "insufficient quota", "maximum context length exceeded")
@@ -42,7 +48,10 @@ const EVENTS = {
   // reply" / "the JSON did not match the expected shape", plus whether the
   // reply was cut off at the output limit). No new property is needed: the
   // truncation signal rides inside that same classified sentence.
-  ai_task_failed: ['task', 'reason', 'reason_detail', 'partial'],
+  // 'pass' rides here for the same reason it rides on ai_task_completed: a
+  // failure rate that cannot tell the agentic whole-PR tests pass from the
+  // scoped implementation pass is not a failure rate anyone can act on.
+  ai_task_failed: ['task', 'reason', 'reason_detail', 'partial', 'pass'],
   // PRIVACY DECISION (robust big-PR story): fired when the story task degrades
   // to the deterministic structural walkthrough (AI ordering failed or returned
   // an unusable result). Carries only 'task' ('story') and 'reason' — a

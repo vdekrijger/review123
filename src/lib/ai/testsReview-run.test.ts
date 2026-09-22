@@ -554,3 +554,76 @@ describe('tests reviewer pass — retry', () => {
     expect(retried[0].user).toBe(IMPL_CTX.text)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Per-pass analytics
+//
+// The two passes have different prompts, different contexts and very different
+// costs (the tests pass is agentic over the whole PR). Without `pass` on the
+// task events they are one indistinguishable 'skill-review' blob.
+// ---------------------------------------------------------------------------
+
+/** The skill-review task events of one name a run emitted, in order. */
+function skillEvents(deps: ReturnType<typeof makeDeps>, name: string): Record<string, unknown>[] {
+  return deps.track.mock.calls
+    .filter((c: unknown[]) => c[0] === name)
+    .map((c: unknown[]) => c[1] as Record<string, unknown>)
+    .filter((p) => p['task'] === 'skill-review')
+}
+
+describe('reviewer pass analytics', () => {
+  it("tags the implementation pass's task event with pass: 'implementation'", async () => {
+    seedSettings()
+    addSkill('Security Reviewer', 'sec content')
+    const deps = makeDeps()
+    const { pack } = makePack()
+
+    await createAiRun(makeInput(pack), deps).runSkillReviews()
+
+    const events = skillEvents(deps, 'ai_task_completed')
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ task: 'skill-review', cached: false, pass: 'implementation' })
+  })
+
+  it("tags the tests pass's task event with pass: 'tests'", async () => {
+    seedSettings()
+    addSkill('Security Reviewer', 'sec content')
+    const deps = makeDeps()
+    const { pack } = makePack()
+
+    await createAiRun(makeInput(pack), deps).runTestsReview()
+
+    const events = skillEvents(deps, 'ai_task_completed')
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ task: 'skill-review', pass: 'tests' })
+  })
+
+  it('tags a CACHE HIT with the pass it was a hit for', async () => {
+    seedSettings()
+    addSkill('Security Reviewer', 'sec content')
+    const deps = makeDeps()
+    deps.getCached = vi.fn().mockResolvedValue(TESTS_RESULT)
+    const { pack } = makePack()
+
+    await createAiRun(makeInput(pack), deps).runTestsReview()
+
+    const events = skillEvents(deps, 'ai_task_completed')
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ cached: true, pass: 'tests' })
+  })
+
+  it('tags a FAILURE with its pass, so the two failure rates can be told apart', async () => {
+    seedSettings()
+    addSkill('Security Reviewer', 'sec content')
+    const deps = makeDeps()
+    deps.llmJsonWithRepairWithUsage = vi.fn().mockRejectedValue(new Error('boom'))
+    deps.llmToolLoop = vi.fn().mockRejectedValue(new Error('boom'))
+    const { pack } = makePack()
+
+    await createAiRun(makeInput(pack), deps).runTestsReview()
+
+    const events = skillEvents(deps, 'ai_task_failed')
+    expect(events.length).toBeGreaterThan(0)
+    for (const e of events) expect(e['pass']).toBe('tests')
+  })
+})
