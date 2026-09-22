@@ -211,6 +211,59 @@ describe('RunPrPanel — the untrusted-code confirmation', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
+  // ---- The wired path: `relation`, straight off PrMeta.repoRelation --------
+
+  it('skips the confirmation when the PROVIDER proved it is same-repo', async () => {
+    const user = userEvent.setup()
+    await setup({ props: { relation: 'same-repo' } })
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        git: { head: HEAD_SHA, branch: null, dirty: false },
+        prior: { branch: 'main', head: OTHER_SHA, recordedAt: '', checkedOutRef: PR_REF, checkedOutSha: HEAD_SHA, stashRef: null },
+        stash: null,
+        app: { url: 'http://localhost:8010', source: 'posthog', reachable: true, detail: '' },
+      }),
+    )
+    await user.click(screen.getByTestId('runpr-checkout'))
+    expect(screen.queryByTestId('runpr-trust-dialog')).not.toBeInTheDocument()
+  })
+
+  // The smooth path is not a SILENT path: it still says where the code is
+  // from, and makes no claim beyond that.
+  it('says where a same-repo branch lives, without calling it safe', async () => {
+    await setup({ props: { relation: 'same-repo' } })
+    const note = screen.getByTestId('runpr-trust-note')
+    expect(note).toHaveTextContent(/lives in the repository itself/i)
+    expect(note).toHaveTextContent(/not a fork/i)
+    expect(note).not.toHaveTextContent(/\bsafe\b/i)
+    expect(note).not.toHaveTextContent(/\btrusted\b/i)
+  })
+
+  it.each([
+    ['a fork', 'fork'],
+    ['an unknown provenance', 'unknown'],
+  ] as const)('still confirms for %s, and shows no reassuring note', async (_label, relation) => {
+    const user = userEvent.setup()
+    await setup({ props: { relation } })
+    expect(screen.queryByTestId('runpr-trust-note')).not.toBeInTheDocument()
+    await user.click(screen.getByTestId('runpr-checkout'))
+    expect(screen.getByTestId('runpr-trust-dialog')).toBeInTheDocument()
+  })
+
+  /**
+   * STALE CACHE. A `PrMeta` from a build older than `repoRelation` has no such
+   * key, so Review passes `undefined`. That must land on the confirmation, not
+   * on the smooth path.
+   */
+  it('confirms when the relation is absent (a PrMeta from an older build)', async () => {
+    const user = userEvent.setup()
+    await setup({ props: { relation: undefined } })
+    expect(screen.queryByTestId('runpr-trust-note')).not.toBeInTheDocument()
+    await user.click(screen.getByTestId('runpr-checkout'))
+    expect(screen.getByTestId('runpr-trust-text')).toHaveTextContent(/cannot confirm/)
+  })
+
   it('accepting sends the checkout WITH the acknowledgement', async () => {
     const user = userEvent.setup()
     await setup()

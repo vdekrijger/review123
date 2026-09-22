@@ -39,6 +39,7 @@
     trustNeedsConfirmation,
     type CheckoutTrust,
   } from '../lib/bridge/runPr.svelte'
+  import type { PrRepoRelation } from '../lib/github/types'
 
   interface Props {
     /** The PR's head sha — what the bridge's head must equal to be "on" it. */
@@ -50,12 +51,20 @@
      */
     prRef: string | null
     /**
-     * The PR's head and base repository identities, when the provider supplies
-     * them. Absent today across all three providers, which makes the trust
-     * answer `unverified` — treated exactly like a fork. See
+     * The PR's head and base repository identities, when the caller holds the
+     * raw pair rather than the provider's derived answer. See
      * `decideCheckoutTrust`.
      */
     repos?: { head: string | null; base: string | null }
+    /**
+     * `PrMeta.repoRelation` — the provider's own, provider-agnostic answer to
+     * "is this branch in this repository?". This is how Review wires it.
+     *
+     * Absent is NOT same-repo: a `PrMeta` from a build older than the field
+     * has no such key, and reads as `unverified` — the fork-grade
+     * confirmation, unchanged.
+     */
+    relation?: PrRepoRelation
     /**
      * Whether the embedded preview panel is open (the toggle state lives in
      * Review, beside the deploy preview's). Offered here as well as on
@@ -67,11 +76,16 @@
     onTogglePanel?: () => void
   }
 
-  let { headSha, prRef, repos, panelOpen = false, onTogglePanel }: Props = $props()
+  let { headSha, prRef, repos, relation, panelOpen = false, onTogglePanel }: Props = $props()
 
   const readiness = $derived(currentCheckoutReadiness(headSha))
   const onPr = $derived(stackState.onPrBranch(headSha))
-  const trust = $derived<CheckoutTrust>(decideCheckoutTrust(repos === undefined ? {} : { repos }))
+  const trust = $derived<CheckoutTrust>(
+    decideCheckoutTrust({
+      ...(repos === undefined ? {} : { repos }),
+      ...(relation === undefined ? {} : { relation }),
+    }),
+  )
   const app = $derived(stackState.app)
 
   /**
@@ -226,6 +240,15 @@
       {#if readiness.reason === 'tree-dirty'}
         <span class="runpr-note runpr-warn" data-testid="runpr-dirty-note">
           {dirtyCount} uncommitted change{dirtyCount === 1 ? '' : 's'}
+        </span>
+      {/if}
+      {#if trust === 'same-repo'}
+        <!-- The smooth path still SAYS why it is smooth. It makes one claim —
+             where the branch lives — and never the claim the user would
+             actually like to hear, that the code is safe: a same-repo branch
+             is still code about to run on this machine. -->
+        <span class="runpr-note" data-testid="runpr-trust-note">
+          {describeCheckoutTrust(trust)}
         </span>
       {/if}
     {:else}
