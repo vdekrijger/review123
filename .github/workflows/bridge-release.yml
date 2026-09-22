@@ -1,0 +1,84 @@
+# Publishes the single-file local bridge (`bridge.mjs`) to GitHub Releases.
+#
+# TRIGGER: pushing a `bridge-v*` tag, and NOTHING else. No push-to-main, no
+# pull_request, no schedule — this repo's Actions budget is not spent on
+# anything that runs per commit.
+#
+# It needs no `pnpm install`: the bridge is a zero-dependency package and
+# bridge/scripts/bundle.mjs pulls esbuild through `pnpm dlx` at a pinned
+# version. Checkout + setup-node + bundle + upload is roughly a minute.
+#
+# The FIRST release (bridge-v0.1.0) was cut locally, for the same budget
+# reason, and cutting one by hand stays fully supported:
+#
+#   pnpm bridge:bundle
+#   gh release create bridge-v0.1.1 bridge/dist/bundle/bridge.mjs --title … --notes …
+
+name: Bridge release
+
+on:
+  push:
+    tags:
+      - 'bridge-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # bundle.mjs itself refuses to build when bridge/package.json and the
+      # BRIDGE_VERSION in src/cli.ts disagree.
+      - name: Bundle bridge.mjs
+        run: pnpm bridge:bundle
+
+      # A release titled 0.2.0 that ships a 0.1.0 binary is exactly the kind of
+      # lie a download-and-run artifact must not tell.
+      - name: Check the tag matches the bridge version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./bridge/package.json').version")
+          if [ "${TAG#bridge-v}" != "$version" ]; then
+            echo "::error::tag $TAG does not match bridge version $version"
+            exit 1
+          fi
+
+      - name: Publish the artifact to the tag's release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" bridge/dist/bundle/bridge.mjs --clobber
+            exit 0
+          fi
+          # Quoted heredoc: no shell expansion, so backticks stay literal.
+          cat > /tmp/bridge-notes.md <<'NOTES'
+          The optional [local bridge](https://github.com/REPO_SLUG/blob/main/bridge/README.md) as a single self-contained file. Node 22+; no other dependencies.
+
+          ```sh
+          curl -fsSL https://github.com/REPO_SLUG/releases/latest/download/bridge.mjs -o ~/review123-bridge.mjs
+          node ~/review123-bridge.mjs --root .
+          ```
+
+          Run it inside the repo you want to serve. It binds `127.0.0.1` only and requires the pairing token it prints on every request.
+
+          **While it runs it grants https://review123.dev read access to that repo**, to anyone holding that token. It never writes to the repo and never reads outside it; the token dies with the process. The full security model is in [bridge/README.md](https://github.com/REPO_SLUG/blob/main/bridge/README.md).
+          NOTES
+          sed -i "s|REPO_SLUG|$REPO|g" /tmp/bridge-notes.md
+          gh release create "$TAG" bridge/dist/bundle/bridge.mjs \
+            --title "review123 local bridge ${TAG#bridge-v}" \
+            --notes-file /tmp/bridge-notes.md

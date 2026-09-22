@@ -117,6 +117,21 @@ pnpm dev
 | `pnpm test:watch` | Vitest in watch mode |
 | `pnpm build` | Production build → `dist/` |
 | `pnpm preview` | Serve the production build locally |
+| `pnpm bridge` | Build and run the optional local bridge against the current directory |
+| `pnpm bridge:bundle` | Bundle the bridge into the single-file `bridge/dist/bundle/bridge.mjs` release artifact |
+
+---
+
+## Local bridge (optional)
+
+The [local bridge](bridge/README.md) is a small, optional process you run inside a repo on your own machine. While it runs, review123 can send reviews through the **Claude Code or Codex CLI you already pay for** instead of a per-token API key, and read the working tree directly instead of going through a rate-limited provider API. Nothing in review123 requires it — with no bridge running the app behaves exactly as it does today. Grab the prebuilt single file (Node 22+, no other dependencies), then run it in whichever repo you want to review:
+
+```bash
+curl -fsSL https://github.com/vdekrijger/review123/releases/latest/download/bridge.mjs -o ~/review123-bridge.mjs
+node ~/review123-bridge.mjs --root .
+```
+
+Paste the pairing token it prints into **Settings → Local bridge**. Security posture in one sentence: it binds `127.0.0.1` only, requires that token on every request, never writes to your repo or reads outside it — but while it runs it does grant `https://review123.dev` **read access to that repo** to anyone holding the token, which is why the token is per-process and dies when you Ctrl-C. The full model, every flag, and the protocol are in [`bridge/README.md`](bridge/README.md); `pnpm bridge:bundle` rebuilds the artifact from source so you can diff what you downloaded.
 
 ---
 

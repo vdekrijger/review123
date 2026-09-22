@@ -37,14 +37,39 @@ already pay for: pick **Local bridge** under Settings → AI models.
 
 ## Run it
 
-Node 22 or newer. From the repo you want to serve:
+Node 22 or newer, and nothing else — the package declares no dependencies.
+
+### The prebuilt file (recommended)
+
+Every release ships `bridge.mjs`, the whole bridge bundled into one
+self-contained ESM file. Download it once, then run it inside whichever repo
+you want to serve:
 
 ```sh
-# from a review123 checkout — compiles the package, then runs it against the cwd
+curl -fsSL https://github.com/vdekrijger/review123/releases/latest/download/bridge.mjs -o ~/review123-bridge.mjs
+node ~/review123-bridge.mjs --root .
+```
+
+`/releases/latest/download/` always resolves to the newest release, so that URL
+does not need a version in it. The file's header comment records the version,
+the commit it was built from, and the bundler version.
+
+To check what you downloaded, rebuild it and diff: the bundle carries **no
+build timestamp**, so a given commit always produces byte-identical output.
+
+### From a checkout
+
+```sh
+pnpm install                         # heavy: the whole SPA dev toolchain
 pnpm bridge                          # = pnpm --filter @review123/bridge start
 ```
 
-Or, inside some **other** repo, after building the package once
+Honest warning: that `pnpm install` pulls review123's entire dev tree —
+Playwright, vitest, svelte-check, Vite — purely so `tsc` can emit `dist/` for a
+package with zero dependencies of its own. It is the right route if you are
+changing the bridge, and the wrong one if you just want to run it.
+
+Inside some **other** repo, after building the package once
 (`pnpm --filter @review123/bridge build`):
 
 ```sh
@@ -55,6 +80,8 @@ The package intentionally has no root workspace dependency, so there is no
 `node_modules/.bin/review123-bridge` shim: linking a bin whose `dist/` may not
 be built yet is a way to break `pnpm install` on a fresh checkout (and on the
 Vercel deploy), which is a bad trade for a shorter command.
+
+### Either way
 
 It prints a banner with the pairing token:
 
@@ -427,6 +454,7 @@ The canonical TypeScript source for all of the above is
 ```sh
 pnpm --filter @review123/bridge check   # tsc --noEmit over src + tests
 pnpm --filter @review123/bridge build   # tsc -> dist/
+pnpm bridge:bundle                      # esbuild -> dist/bundle/bridge.mjs
 pnpm exec vitest run bridge/            # the bridge's tests only
 ```
 
@@ -434,3 +462,38 @@ The package declares **no dependencies** — Node built-ins only. Its tests run
 inside the repo's single `pnpm test` suite (each spec carries a
 `// @vitest-environment node` docblock), and `pnpm check` chains into its
 typecheck, so CI covers it with no workflow change.
+
+### The release bundle
+
+`pnpm bridge:bundle` (`scripts/bundle.mjs`) bundles `src/cli.ts` into one
+~31 KiB ESM file at `dist/bundle/bridge.mjs`. `dist/` is gitignored — the
+artifact is built, never committed.
+
+esbuild is pulled through `pnpm dlx` at a **pinned** version rather than added
+as a root devDependency. Only this script and the release workflow ever bundle,
+so making every `pnpm install` — CI's node-22/26 matrix, the e2e job, the
+Vercel deploy, every contributor — carry a ~10 MB platform binary they never
+execute would re-create the exact cost the prebuilt file exists to remove.
+
+The script refuses to build if `package.json`'s `version` and the
+`BRIDGE_VERSION` constant in `src/cli.ts` disagree, so a published artifact can
+never claim a version different from the one it reports in `/v1/health`.
+
+### Cutting a release
+
+Tag `bridge-v<version>` and push it: `.github/workflows/bridge-release.yml`
+runs on that tag and **only** on that tag — it bundles and uploads the asset,
+and refuses to publish when the tag does not match `package.json`. It needs no
+`pnpm install`, so it costs about a minute of Actions time.
+
+By hand, when Actions minutes are short (this is how `bridge-v0.1.0` was cut):
+
+```sh
+pnpm bridge:bundle
+gh release create bridge-v0.1.0 bridge/dist/bundle/bridge.mjs \
+  --title "review123 local bridge 0.1.0" --notes-file <notes>
+```
+
+Release notes must say what the README says above: the file binds loopback
+only, requires the pairing token, and grants `https://review123.dev` **read**
+access to the repo it is started in.

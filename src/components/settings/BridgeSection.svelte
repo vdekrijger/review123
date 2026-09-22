@@ -26,6 +26,15 @@
   let portInput = $state(String(bridgeState.port))
   let busy = $state(false)
 
+  // The prebuilt single-file bundle (bridge/scripts/bundle.mjs), published on
+  // GitHub Releases. `/releases/latest/download/` always resolves to the newest
+  // release's asset, so this URL never needs a version bump here.
+  const DOWNLOAD_URL = 'https://github.com/vdekrijger/review123/releases/latest/download/bridge.mjs'
+  const REPO_URL = 'https://github.com/vdekrijger/review123'
+  const README_URL = 'https://github.com/vdekrijger/review123/blob/main/bridge/README.md'
+  /** Where the download lands. Stable, so step 2 works from any repo. */
+  const LOCAL_PATH = '~/review123-bridge.mjs'
+
   // Re-probe when this section mounts. main.ts already probes at app start
   // (inference routes through the bridge, so the connection has to be known
   // before Settings is ever opened); this second probe is about FRESHNESS —
@@ -143,11 +152,26 @@
       <p class="error" role="alert">{bridgeState.error}</p>
     {/if}
 
-    <p class="field-note">
-      Start it from a review123 checkout with <code>pnpm bridge</code>, or point it
-      at any repo with <code>node bridge/dist/cli.js --root .</code>. The token is
-      stored in this browser under <code>{BRIDGE_STORAGE_KEY}</code>.
-    </p>
+    <div class="install" data-testid="bridge-install">
+      <p class="field-note">
+        <strong>Get the bridge.</strong> Download the single file once, then run it
+        inside whichever repo you want to review. Needs Node 22+ and nothing else.
+      </p>
+      <pre class="cmd"><code>curl -fsSL {DOWNLOAD_URL} -o {LOCAL_PATH}
+node {LOCAL_PATH} --root .</code></pre>
+      <p class="field-note">
+        Prefer to build it yourself? Clone
+        <a href={REPO_URL} target="_blank" rel="noopener noreferrer">the repo</a> and run
+        <code>pnpm install</code>, then <code>pnpm bridge</code> — fair warning, that
+        first install pulls this app's entire dev toolchain (Playwright included) to
+        compile a package that has no dependencies of its own.
+      </p>
+      <p class="field-note">
+        Every flag, and the full security model, are in
+        <a href={README_URL} target="_blank" rel="noopener noreferrer">bridge/README.md</a>.
+        The token is stored in this browser under <code>{BRIDGE_STORAGE_KEY}</code>.
+      </p>
+    </div>
   {/if}
 </section>
 
@@ -298,5 +322,27 @@
     font-size: 0.8em;
     line-height: 1.5;
     color: var(--text-muted);
+  }
+
+  .install a {
+    color: inherit;
+  }
+
+  /* The one thing in this section people have to copy. pre-wrap rather than a
+     horizontal scroller so the whole URL is visible in a narrow settings
+     panel — soft wrapping inserts no newlines, so a selection still pastes as
+     the two real commands. */
+  .cmd {
+    margin: 0.4rem 0 0;
+    padding: 0.6rem 0.7rem;
+    background: var(--surface-raised);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.75em;
+    line-height: 1.6;
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 </style>

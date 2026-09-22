@@ -14,6 +14,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json && pnpm --filter @review123/bridge check",
     "test": "vitest run --passWithNoTests",
     "bridge": "pnpm --filter @review123/bridge start",
+    "bridge:bundle": "node bridge/scripts/bundle.mjs",
     "test:watch": "vitest",
     "eval": "node eval/run-eval.mts",
     "eval:capture": "node eval/capture-case.mts"
