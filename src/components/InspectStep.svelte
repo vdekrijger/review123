@@ -6,7 +6,7 @@
   import type { DiffMode } from '../lib/settings/settings'
   import { getSettings, setTreeOpen, setFocusMode, type FocusMode } from '../lib/settings/settings'
   import { settingsState } from '../lib/settings/settingsState.svelte'
-  import { formatUsageLabel } from '../lib/ai/tokenCost'
+  import { formatUsageLabel, formatTokens } from '../lib/ai/tokenCost'
   import { activeProviderHasKey, panelMode } from '../lib/llm/config'
   import type { DiffWidth } from '../lib/settings/settings'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
@@ -25,6 +25,7 @@
   import { scrollToFileCard, jumpToFinding } from '../lib/diff/jumpToFile'
   import { observeDiffColHeight } from '../lib/tree/diffColHeight'
   import type { SkillReviewEntry, AskFocus, PanelState, ConvergenceValue, SimplifyValue } from '../lib/ai/run.svelte'
+  import { isTestsPassEntryId, baseSkillId } from '../lib/ai/run.svelte'
   import type { SkillReviewResult, SkillFinding as SchemaSkillFinding } from '../lib/ai/schemas'
   import { applyConvergence, mergedReviewerLabel, type ReviewerFindings } from '../lib/ai/convergence'
   import { applySimplify } from '../lib/ai/simplify'
@@ -63,9 +64,11 @@
     resolvedCommentIds = new Set(),
     contentsMap = null,
     skillReviews = [],
+    testReviews = [],
     convergence = null,
     simplify = null,
     runSkillReviewsFn = null,
+    runTestsReviewFn = null,
     onRetrySkill = null,
     askFn = null,
     expandFn = null,
@@ -113,6 +116,15 @@
     /** Skill reviews from the AI run — populated after runSkillReviews() */
     skillReviews?: SkillReviewEntry[]
     /**
+     * Reviewer entries from the ON-DEMAND tests pass (AiRun.testReviews, #237).
+     * Empty until the user clicks "Review the tests". Kept a SEPARATE prop (not
+     * folded into skillReviews upstream) so the implementation pass's findings
+     * survive the tests pass — switching back to the Implementation phase must
+     * still show them. Their entry ids carry the tests-pass suffix, so the two
+     * passes never collide on finding keys, popover tokens or retry targets.
+     */
+    testReviews?: SkillReviewEntry[]
+    /**
      * Cross-reviewer convergence pass state (AiRun.convergence). When 'done',
      * the pure merge is applied HERE (fingerprint-guarded) — reviewer entries
      * are never mutated, so a failed/absent pass renders originals unchanged.
@@ -128,8 +140,14 @@
     /** Optional callback to trigger runSkillReviews on the AiRun instance */
     runSkillReviewsFn?: (() => void) | null
     /**
-     * Re-runs JUST one reviewer (the error-chip retry). Receives the skillId of
-     * the errored reviewer; wired to AiRun.retrySkill. null → retry unavailable.
+     * Triggers the ON-DEMAND tests pass (AiRun.runTestsReview). Wired only in
+     * the Tests phase; null → the action is not offered.
+     */
+    runTestsReviewFn?: (() => void) | null
+    /**
+     * Re-runs JUST one reviewer (the error-chip retry). Receives the ENTRY id
+     * of the errored reviewer (tests-pass entries carry their suffix); wired to
+     * AiRun.retrySkill, which routes by that id. null → retry unavailable.
      */
     onRetrySkill?: ((skillId: string) => void) | null
     /**
@@ -646,13 +664,23 @@
   // Build a Set of paths in this PR for filtering
   const prPathSet = $derived(new Set(files.map(f => f.filename)))
 
+  // BOTH reviewer passes (#237), in one list. The implementation pass runs
+  // automatically over the non-test files; the tests pass runs on demand over
+  // the whole PR. Their entry ids never collide (tests entries carry the
+  // tests-pass suffix), so everything downstream — the convergence merge, the
+  // simplify rewrite, per-finding keys, popover tokens, the triage ranking,
+  // decision telemetry and the status bar — treats them uniformly. WHERE a
+  // finding SHOWS is decided by the phase of the file it anchors to, not by
+  // which pass raised it (phaseSuggestionsByPath below).
+  const allReviews = $derived([...skillReviews, ...testReviews])
+
   // Auto-scroll to first finding's file when a run completes with findings
   let prevRunning = $state(false)
   $effect(() => {
     const nowRunning = isRunning
     if (prevRunning && !nowRunning) {
       // Run just finished — find first finding across all done reviews
-      for (const review of skillReviews) {
+      for (const review of allReviews) {
         if (review.state.status !== 'done' || !review.state.value) continue
         const result = review.state.value as { findings?: { path: string }[] }
         // Only scroll to a file the ACTIVE PHASE renders — otherwise the jump
@@ -681,7 +709,7 @@
   // failed/skipped/stale pass renders the original findings byte-identically.
   const effectiveFindingsBySkill = $derived.by(() => {
     const reviewers: ReviewerFindings[] = []
-    for (const review of skillReviews) {
+    for (const review of allReviews) {
       if (review.state.status !== 'done' || !review.state.value || typeof review.state.value === 'string') continue
       const value = review.state.value as SkillReviewResult
       // Defensive on odd cached values — degrade to "no findings", never throw.
@@ -718,7 +746,7 @@
 
   const skillSuggestionsByPath = $derived.by(() => {
     const map = new Map<string, SuggestionEntry[]>()
-    for (const review of skillReviews) {
+    for (const review of allReviews) {
       if (review.state.status !== 'done' || !review.state.value) continue
       const findings = effectiveFindingsBySkill.get(review.skillId) ?? []
       for (const finding of findings) {
@@ -785,7 +813,7 @@
   // the run results), so a dismiss doesn't lose a correction. An in-progress
   // run (no reviewer done yet → empty suggestion map) never prunes.
   $effect(() => {
-    const anyDone = skillReviews.some((r) => r.state.status === 'done')
+    const anyDone = allReviews.some((r) => r.state.status === 'done')
     if (!anyDone) return
     const live = new Set<string>()
     for (const suggestions of skillSuggestionsByPath.values()) {
@@ -891,7 +919,7 @@
 
   const navFindingsBySkill = $derived.by(() => {
     const map = new Map<string, NavFinding[]>()
-    for (const review of skillReviews) {
+    for (const review of allReviews) {
       if (review.state.status !== 'done' || !review.state.value) continue
       const findings = effectiveFindingsBySkill.get(review.skillId) ?? []
       const entries: NavFinding[] = []
@@ -1067,14 +1095,19 @@
 
   const decisionMetaByKey = $derived.by(() => {
     const map = new Map<string, DecisionMeta>()
-    for (const review of skillReviews) {
+    for (const review of allReviews) {
       if (review.state.status !== 'done' || !review.state.value) continue
       const findings = effectiveFindingsBySkill.get(review.skillId) ?? []
       for (const finding of findings) {
         const key = `${review.skillId}:${finding.path}:${finding.line}:${finding.body.slice(0, 30)}`
         const v = finding.verification
         map.set(key, {
-          reviewer: review.skillId,
+          // The BASE skill id, not the entry id: a persona is one reviewer
+          // across both passes, so a reasoned dismissal in the tests pass must
+          // teach the SAME calibration ledger executeSkillReview reads back
+          // (buildCalibrationBlock keys on the skill id). Suffixed ids would
+          // write to a ledger nobody reads.
+          reviewer: baseSkillId(review.skillId),
           severity: finding.severity,
           path: finding.path,
           body: finding.body,
@@ -1238,18 +1271,53 @@
 
   // Run "in progress": a batch is still working if ANY reviewer is actively
   // running (loading) OR still waiting for a concurrency slot (queued). Both
-  // keep the "Run my reviewers" button disabled/busy.
-  const isRunning = $derived(skillReviews.some(e => e.state.status === 'loading' || e.state.status === 'queued'))
+  // keep the run buttons disabled/busy. Covers BOTH passes — the two are never
+  // run concurrently on purpose (they share provider rate limits).
+  const isRunning = $derived(allReviews.some(e => e.state.status === 'loading' || e.state.status === 'queued'))
 
   // How many reviewers are in flight — drives the single global "Running… (N)"
   // indicator and the aria-live announcement (announces the count, not each
   // per-reviewer activity line, so screen readers aren't spammed). Only the
   // loading reviewers count as "running"; queued ones are counted separately.
-  const runningCount = $derived(skillReviews.filter(e => e.state.status === 'loading').length)
+  const runningCount = $derived(allReviews.filter(e => e.state.status === 'loading').length)
 
   // How many reviewers are waiting for a concurrency slot (queued) — drives the
   // muted "Waiting (N)" region and its own aria-live count.
-  const queuedCount = $derived(skillReviews.filter(e => e.state.status === 'queued').length)
+  const queuedCount = $derived(allReviews.filter(e => e.state.status === 'queued').length)
+
+  // ---------------------------------------------------------------------------
+  // The on-demand TESTS pass (#237)
+  // ---------------------------------------------------------------------------
+  // Offered ONLY in the Tests phase, and only when reviewers are offered at all
+  // (same skills-mode + key gates as the automatic pass). It never fires by
+  // itself: this is the expensive pass — every enabled reviewer, agentic — so
+  // the user decides when to spend it, and the cost is stated BEFORE the click.
+  const showTestsReviewAction = $derived(
+    testsPhaseActive && !skillsOff && enabledSkillCount > 0 && hasKey && runTestsReviewFn !== null,
+  )
+  /** True once the tests pass has produced entries (run, or running). */
+  const testsReviewStarted = $derived(testReviews.length > 0)
+  const testsReviewRunning = $derived(
+    testReviews.some(e => e.state.status === 'loading' || e.state.status === 'queued'),
+  )
+  /** Honest cost hint shown BEFORE the click — what the click will actually spend. */
+  const testsReviewCostHint = $derived(
+    `${enabledSkillCount} reviewer${enabledSkillCount === 1 ? '' : 's'} · agentic · runs on demand`,
+  )
+  // Actual spend AFTER the run, when the user has opted into cost display.
+  const showCost = $derived(settingsState.current.showTokenCost)
+  const testsReviewTokens = $derived(
+    testReviews.reduce((sum, e) => sum + (e.state.usage?.total_tokens ?? 0), 0),
+  )
+
+  /**
+   * True when this status-bar row belongs to the on-demand TESTS pass. Both
+   * passes run the SAME personas, so without this tag two rows would read
+   * identically; the tag says which question that row answered.
+   */
+  function isTestsPassRow(entry: SkillReviewEntry): boolean {
+    return isTestsPassEntryId(entry.skillId)
+  }
 
   // Latest activity line for a running reviewer (deep mode). We show ONLY the
   // most recent line per row — truncated with ellipsis via CSS — rather than the
@@ -1529,13 +1597,19 @@
   {/if}
 </div>
 
-{#if skillReviews.length > 0}
-  {@const runningEntries = skillReviews.filter(e => e.state.status === 'loading')}
-  {@const queuedEntries = skillReviews.filter(e => e.state.status === 'queued')}
+<!-- The reviewer run status bar covers BOTH passes (#237): the automatic
+     implementation pass and the on-demand tests pass get identical treatment —
+     running rows with their activity log, queued rows, settled chips with
+     finding counts, cancelled chips and real retry buttons. Tests-pass rows
+     carry a small "tests" tag, because both passes run the SAME personas and
+     the tag is the only thing that says which question the row answered. -->
+{#if allReviews.length > 0}
+  {@const runningEntries = allReviews.filter(e => e.state.status === 'loading')}
+  {@const queuedEntries = allReviews.filter(e => e.state.status === 'queued')}
   <!-- 'cancelled' is settled too: the reviewer stopped, so it belongs in this
        region rather than vanishing from the run status bar entirely (it is in
        none of running/queued). Its chip is quiet, never the error chip. -->
-  {@const settledEntries = skillReviews.filter(e => e.state.status === 'done' || e.state.status === 'error' || e.state.status === 'cancelled')}
+  {@const settledEntries = allReviews.filter(e => e.state.status === 'done' || e.state.status === 'error' || e.state.status === 'cancelled')}
 
   <!-- RUNNING region: a BOUNDED, ALIGNED list of compact one-line rows. Each row
        is a small spinner + the reviewer NAME + (deep mode) ONLY its latest
@@ -1554,6 +1628,7 @@
           <li class="skill-running-row">
             <Spinner size="0.7em" />
             <span class="skill-running-name">{entry.name}</span>
+            {#if isTestsPassRow(entry)}<span class="skill-pass-tag" title="On-demand tests pass">tests</span>{/if}
             {#if activity}
               {#if expanded}
                 <ul class="skill-running-fulllog" aria-label="{entry.name} activity">
@@ -1592,6 +1667,7 @@
         {#each queuedEntries as entry (entry.skillId)}
           <li class="skill-waiting-row">
             <span class="skill-waiting-name">{entry.name}</span>
+            {#if isTestsPassRow(entry)}<span class="skill-pass-tag" title="On-demand tests pass">tests</span>{/if}
             <span class="skill-status-chip chip-queued" aria-label="Waiting for a slot">queued</span>
           </li>
         {/each}
@@ -1637,6 +1713,7 @@
       {#each settledEntries as entry (entry.skillId)}
         <span class="skill-run-entry">
           <span class="skill-run-name">{entry.name}</span>
+          {#if isTestsPassRow(entry)}<span class="skill-pass-tag" title="On-demand tests pass">tests</span>{/if}
           {#if entry.state.status === 'done'}
             <!-- Chip count mirrors the popover (navFindingsFor already drops
                  dismissed / added-as-draft findings) — so dismissing the last
@@ -1910,6 +1987,41 @@
           A deterministic symbol↔test name match over the files in this PR. Files not listed may still be covered by tests outside this PR.
         </p>
       </details>
+    {/if}
+
+    <!-- The ON-DEMAND tests reviewer pass (#237). It is NOT the automatic run:
+         the automatic one read the implementation only, on purpose. This one
+         runs EVERY enabled reviewer agentically over the whole PR — the tests
+         AND the implementation they exercise — to answer "do these tests pin
+         the behaviour, and does the code still make sense?". Expensive, so the
+         cost is stated before the click and never spent without one. -->
+    {#if showTestsReviewAction}
+      <div class="tests-review-bar" data-testid="tests-review-bar">
+        <button
+          type="button"
+          class="tests-review-btn"
+          class:running={testsReviewRunning}
+          data-testid="tests-review-run"
+          disabled={isRunning}
+          aria-busy={testsReviewRunning}
+          title="Run every enabled reviewer over the tests, with the implementation as context. Reads the repo as it goes, so it costs more than the implementation pass."
+          onclick={() => !isRunning && runTestsReviewFn?.()}
+        >
+          {#if testsReviewRunning}
+            <Spinner size="0.75em" />Reviewing the tests…
+          {:else if testsReviewStarted}
+            Review the tests again
+          {:else}
+            Review the tests
+          {/if}
+        </button>
+        <span class="tests-review-hint" data-testid="tests-review-hint">{testsReviewCostHint}</span>
+        {#if showCost && !testsReviewRunning && testsReviewTokens > 0}
+          <span class="tests-review-cost" data-testid="tests-review-cost">
+            {formatTokens(testsReviewTokens)} tokens used
+          </span>
+        {/if}
+      </div>
     {/if}
   {/if}
 
@@ -2516,6 +2628,21 @@
     font-weight: 500;
   }
 
+  /* Marks a status-bar row as belonging to the on-demand TESTS pass (#237).
+     Both passes run the same personas, so without the tag two rows read
+     identically. */
+  .skill-pass-tag {
+    flex: none;
+    padding: 0.05rem 0.3rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    font-size: 0.62rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+  }
+
   .skill-running-head {
     display: flex;
     align-items: center;
@@ -2986,6 +3113,44 @@
     padding: 0 0.75rem 0.5rem;
     font-size: 0.72rem;
     color: var(--text-muted);
+    opacity: 0.85;
+  }
+
+  /* ---- On-demand tests reviewer pass (#237) ---- */
+  .tests-review-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.6rem;
+    margin: 0 0 0.6rem;
+  }
+  .tests-review-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.75rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .tests-review-btn:hover:not(:disabled) {
+    background: var(--surface-raised);
+  }
+  .tests-review-btn:disabled {
+    cursor: default;
+    opacity: 0.85;
+  }
+  .tests-review-hint,
+  .tests-review-cost {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+  .tests-review-cost {
     opacity: 0.85;
   }
 

@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { validateSkillReviewResult } from './schemas'
-import { skillReviewPrompt } from './tasks'
+import { skillReviewPrompt, testsReviewPrompt, TESTS_REVIEW_MARKER } from './tasks'
 import type { PackedContext } from '../context/pack'
 
 // ---------------------------------------------------------------------------
@@ -439,5 +439,119 @@ describe('skillReviewPrompt — dismissal calibration (v29)', () => {
     expect(system).toContain('Existing PR comments')
     expect(system).toContain('PAST DISMISSED FINDINGS')
     expect(system.indexOf('Existing PR comments')).toBeLessThan(system.indexOf('PAST DISMISSED FINDINGS'))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// testsReviewPrompt — the on-demand TESTS pass (#237)
+// ---------------------------------------------------------------------------
+
+describe('testsReviewPrompt', () => {
+  const prompt = (name = 'Security', content = '## Security\nCheck for XSS.') =>
+    testsReviewPrompt(makeCtx(), { name, content })
+
+  it('carries the stable dispatch marker so a tests-pass call is identifiable', () => {
+    expect(prompt().system).toContain(TESTS_REVIEW_MARKER)
+    // …and the implementation prompt deliberately does NOT.
+    expect(skillReviewPrompt(makeCtx(), { name: 'Security', content: 'c' }).system).not.toContain(
+      TESTS_REVIEW_MARKER,
+    )
+  })
+
+  it('is a DIFFERENT prompt from the implementation pass for the same persona', () => {
+    const impl = skillReviewPrompt(makeCtx(), { name: 'S', content: 'persona' }).system
+    const tests = testsReviewPrompt(makeCtx(), { name: 'S', content: 'persona' }).system
+    expect(tests).not.toBe(impl)
+  })
+
+  it('user message is still the packed context (the whole PR is passed in by the caller)', () => {
+    expect(testsReviewPrompt(makeCtx('impl + tests context'), { name: 'S', content: 'c' }).user).toBe(
+      'impl + tests context',
+    )
+  })
+
+  it('keeps the persona framing: name + fenced content, this persona only', () => {
+    const content = '## Security\nLook for SQL injection.'
+    const { system } = prompt('Security', content)
+    expect(system).toContain('Persona name: Security')
+    expect(system).toContain(content)
+    expect(system).toMatch(/Do not adopt any other reviewer perspective/)
+  })
+
+  it("states the pass's three jobs — tests pin behaviour, coverage of what matters, the implementation itself", () => {
+    const { system } = prompt()
+    expect(system).toMatch(/DO THE TESTS PIN THE BEHAVIOUR/i)
+    expect(system).toMatch(/would each test actually FAIL/i)
+    expect(system).toMatch(/IS WHAT MATTERS COVERED/i)
+    expect(system).toMatch(/DOES THE IMPLEMENTATION STILL MAKE SENSE/i)
+  })
+
+  it('says the implementation is present as context and already signed off', () => {
+    const { system } = prompt()
+    expect(system).toMatch(/BOTH the test files and the implementation they exercise/)
+    expect(system).toMatch(/already been reviewed and signed off/)
+  })
+
+  it('allows a finding to anchor on the IMPLEMENTATION file, not just the tests', () => {
+    const { system } = prompt()
+    expect(system).toMatch(/a finding about the IMPLEMENTATION is in scope here/)
+    expect(system).toMatch(/Never invent a path/)
+  })
+
+  it('refuses coverage-for-its-own-sake — the bar is a behaviour that could break silently', () => {
+    const { system } = prompt()
+    expect(system).toMatch(/Coverage is not a target/)
+    expect(system).toMatch(/Never ask for a coverage percentage/)
+  })
+
+  it('keeps the SHARED rules: anti-fatigue, the 5-finding cap, severity, solutions', () => {
+    const { system } = prompt()
+    // The anti-fatigue block — the same shared constant the implementation pass uses.
+    expect(system).toMatch(/Evidence gate/i)
+    expect(system).toMatch(/severity × confidence/i)
+    expect(system).toMatch(/lower-confidence observations omitted/i)
+    expect(system).toMatch(/no praise padding, no methodology narration/i)
+    // Cap, severity honesty and the required solution.
+    expect(system).toMatch(/at most 5 findings/i)
+    expect(system).toContain('0–5')
+    expect(system).toMatch(/"high", "medium", or "low"/)
+    expect(system).toMatch(/ACTIONABLE \(solutions required\)/)
+    expect(system).toMatch(/suggestedFix: REQUIRED for every finding/)
+    expect(system).toMatch(/No clean fix —/)
+  })
+
+  it('states that silence is a GOOD outcome (no padding to look thorough)', () => {
+    const { system } = prompt()
+    expect(system).toMatch(/empty findings array/)
+    expect(system).toMatch(/never pad the list to look thorough/)
+  })
+
+  it('emits the same SkillReviewResult JSON shape, pinned to the persona name', () => {
+    const { system } = prompt('SecurityReviewer')
+    expect(system).toContain('"skillName": "SecurityReviewer"')
+    expect(system).toMatch(/skillName: must be exactly "SecurityReviewer"/)
+    expect(system).toMatch(/Do not include any text outside the JSON object/)
+  })
+
+  it('appends the existing-comments and calibration sections, in that order', () => {
+    const { system } = testsReviewPrompt(
+      makeCtx(),
+      { name: 'S', content: 'persona' },
+      ['an existing human comment'],
+      'PAST DISMISSED FINDINGS — you previously dismissed:\n- [noise] a nitpick (in a.ts)',
+    )
+    expect(system).toContain('Existing PR comments')
+    expect(system).toContain('an existing human comment')
+    expect(system).toContain('PAST DISMISSED FINDINGS')
+    expect(system.indexOf('Existing PR comments')).toBeLessThan(system.indexOf('PAST DISMISSED FINDINGS'))
+  })
+
+  it('omits both optional sections when absent/empty (no stray whitespace sections)', () => {
+    const bare = testsReviewPrompt(makeCtx(), { name: 'S', content: 'c' }).system
+    expect(bare).not.toContain('Existing PR comments')
+    expect(bare).not.toContain('PAST DISMISSED FINDINGS')
+    // An empty comment list and a whitespace-only ledger contribute NOTHING —
+    // the prompt is byte-identical to the bare one.
+    expect(testsReviewPrompt(makeCtx(), { name: 'S', content: 'c' }, [], '   ').system).toBe(bare)
   })
 })

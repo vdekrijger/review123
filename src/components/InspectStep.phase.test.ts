@@ -16,7 +16,7 @@
  *   - a head-sha change after approval surfaces honestly with a re-open action
  *   - per-PR persistence across a remount
  */
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import { tick } from 'svelte'
 import InspectStep from './InspectStep.svelte'
@@ -24,6 +24,11 @@ import type { PrFile } from '../lib/github/types'
 import type { SkillReviewEntry } from '../lib/ai/run.svelte'
 import { createViewedStore } from '../lib/viewed/viewed.svelte'
 import { approveImplementation, getPhaseRecord, setReviewPhase } from '../lib/guide/phase.svelte'
+import { TESTS_PASS_ID_SUFFIX } from '../lib/ai/run.svelte'
+import { addSkill, listSkills, removeSkill } from '../lib/skills/skills'
+import { setAiTaskMode, setShowTokenCost } from '../lib/settings/settings'
+import { listCalibration } from '../lib/skills/calibration'
+import { _resetSettingsStateForTest } from '../lib/settings/settingsState.svelte'
 
 // Minimal canvas stub so FileDiff doesn't throw in jsdom
 Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
@@ -33,6 +38,9 @@ Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
 
 beforeEach(() => {
   localStorage.clear()
+  // settingsState caches the parsed settings; a raw localStorage write is
+  // invisible to it without this reset (the repo-wide idiom).
+  _resetSettingsStateForTest()
 })
 
 const PATCH = '@@ -1 +1 @@\n-old\n+new'
@@ -433,5 +441,194 @@ describe('InspectStep — phase persistence', () => {
     const { container } = render(InspectStep, { props: baseProps() })
     expect(screen.getByTestId('phase-btn-implementation').getAttribute('aria-pressed')).toBe('true')
     expect(cardIds(container)).toEqual(['file-src-app-ts', 'file-src-auth-big-ts'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The on-demand TESTS reviewer pass (#237)
+// ---------------------------------------------------------------------------
+
+/**
+ * Tests-pass entries (AiRun.testReviews). Their ids carry the tests-pass
+ * suffix, exactly as the run produces them, so the component's identity
+ * handling is exercised for real rather than approximated.
+ */
+function makeTestsPassReviews(): SkillReviewEntry[] {
+  return [
+    {
+      skillId: 'skill-1' + TESTS_PASS_ID_SUFFIX,
+      name: 'Security Reviewer',
+      state: {
+        status: 'done',
+        value: {
+          skillName: 'Security Reviewer',
+          findings: [
+            { path: 'src/app.test.ts', line: 1, severity: 'medium', body: 'Tests-pass finding: asserts on the mock' },
+          ],
+        },
+        usage: { prompt_tokens: 900, completion_tokens: 100, total_tokens: 1000 },
+      },
+    } as SkillReviewEntry,
+  ]
+}
+
+function withKeyAndSkill(): void {
+  localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test' }))
+  addSkill('Security', 'check for XSS')
+}
+
+describe('InspectStep — the on-demand tests reviewer pass', () => {
+  afterEach(() => {
+    listSkills().forEach((s) => removeSkill(s.id))
+  })
+
+  it('is NOT offered in the Implementation phase — that pass already ran, scoped', () => {
+    withKeyAndSkill()
+    render(InspectStep, { props: baseProps({ runTestsReviewFn: () => {} }) })
+    expect(screen.queryByTestId('tests-review-run')).not.toBeInTheDocument()
+  })
+
+  it('is offered in the Tests phase, with an honest cost hint BEFORE the click', async () => {
+    withKeyAndSkill()
+    addSkill('Performance', 'check for N+1')
+    render(InspectStep, { props: baseProps({ runTestsReviewFn: () => {} }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+
+    expect(screen.getByTestId('tests-review-run')).toBeInTheDocument()
+    // The click is expensive; say what it costs before it is spent.
+    expect(screen.getByTestId('tests-review-hint').textContent).toContain('2 reviewers · agentic · runs on demand')
+  })
+
+  it('clicking it calls runTestsReviewFn — it never fires on its own', async () => {
+    withKeyAndSkill()
+    const runTestsReviewFn = vi.fn()
+    render(InspectStep, { props: baseProps({ runTestsReviewFn }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+
+    expect(runTestsReviewFn).not.toHaveBeenCalled()
+    await fireEvent.click(screen.getByTestId('tests-review-run'))
+    expect(runTestsReviewFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('is not offered when the skills task mode is off', async () => {
+    withKeyAndSkill()
+    setAiTaskMode('skills', 'off')
+    _resetSettingsStateForTest()
+    render(InspectStep, { props: baseProps({ runTestsReviewFn: () => {} }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+    expect(screen.queryByTestId('tests-review-run')).not.toBeInTheDocument()
+  })
+
+  it('is not offered without an API key', async () => {
+    addSkill('Security', 'check for XSS')
+    render(InspectStep, { props: baseProps({ runTestsReviewFn: () => {} }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+    expect(screen.queryByTestId('tests-review-run')).not.toBeInTheDocument()
+  })
+
+  it('renders tests-pass findings in the Tests phase and keeps them out of Implementation', async () => {
+    withKeyAndSkill()
+    render(InspectStep, { props: baseProps({ testReviews: makeTestsPassReviews() }) })
+
+    // Implementation phase: the tests-pass finding anchors to a test file, so
+    // it is counted in the Tests phase — disclosed, never rendered here.
+    expect(screen.queryByText(/Tests-pass finding: asserts on the mock/)).not.toBeInTheDocument()
+    expect(screen.getByTestId('phase-deferred-note').textContent).toContain('1 finding counted there')
+
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+    expect(screen.getByText(/Tests-pass finding: asserts on the mock/)).toBeInTheDocument()
+  })
+
+  it('shows BOTH passes’ findings, each in its own phase', async () => {
+    withKeyAndSkill()
+    const props = baseProps({ skillReviews: makeSkillReviews(), testReviews: makeTestsPassReviews() })
+    render(InspectStep, { props })
+
+    expect(screen.getByText(/Impl finding: unchecked input/)).toBeInTheDocument()
+    expect(screen.queryByText(/Tests-pass finding: asserts on the mock/)).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+    expect(screen.getByText(/Tests-pass finding: asserts on the mock/)).toBeInTheDocument()
+    expect(screen.getByText(/Test finding: assertion never runs/)).toBeInTheDocument()
+    expect(screen.queryByText(/Impl finding: unchecked input/)).not.toBeInTheDocument()
+  })
+
+  it('gives tests-pass reviewers the same status bar, tagged so the rows are distinguishable', async () => {
+    withKeyAndSkill()
+    render(InspectStep, { props: baseProps({ skillReviews: makeSkillReviews(), testReviews: makeTestsPassReviews() }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+
+    const bar = document.querySelector('.skill-run-status-bar')!
+    expect(bar).toBeInTheDocument()
+    // Both passes' chips are present — the implementation pass's results are
+    // never wiped by the tests pass.
+    expect(bar.querySelectorAll('.skill-run-entry').length).toBe(2)
+    // …and exactly one of them is tagged as the tests pass.
+    expect(bar.querySelectorAll('.skill-pass-tag').length).toBe(1)
+  })
+
+  it('shows the actual spend after the run only when showTokenCost is on', async () => {
+    withKeyAndSkill()
+    setShowTokenCost(true)
+    _resetSettingsStateForTest()
+    render(InspectStep, { props: baseProps({ runTestsReviewFn: () => {}, testReviews: makeTestsPassReviews() }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+    // Uses the repo's shared formatTokens (locale-independent by design).
+    expect(screen.getByTestId('tests-review-cost').textContent).toContain('1.0k tokens used')
+  })
+
+  it('hides the spend when showTokenCost is off (the default)', async () => {
+    withKeyAndSkill()
+    render(InspectStep, { props: baseProps({ runTestsReviewFn: () => {}, testReviews: makeTestsPassReviews() }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+    expect(screen.queryByTestId('tests-review-cost')).not.toBeInTheDocument()
+  })
+
+  it('a reasoned dismissal in the tests pass teaches the PERSONA, not a suffixed ghost ledger', async () => {
+    withKeyAndSkill()
+    const skillId = listSkills()[0].id
+    // The finding must carry the reviewer's REAL skill id so the ledger it
+    // feeds is the one executeSkillReview reads back (buildCalibrationBlock).
+    const entries: SkillReviewEntry[] = [
+      {
+        skillId: skillId + TESTS_PASS_ID_SUFFIX,
+        name: 'Security Reviewer',
+        state: {
+          status: 'done',
+          value: {
+            skillName: 'Security Reviewer',
+            findings: [
+              { path: 'src/app.test.ts', line: 1, severity: 'low', body: 'Tests-pass nitpick worth dismissing' },
+            ],
+          },
+        },
+      } as SkillReviewEntry,
+    ]
+    render(InspectStep, { props: baseProps({ testReviews: entries }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+
+    await fireEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    await fireEvent.click(screen.getByTestId('dismiss-not-real'))
+
+    // The ledger is keyed by the persona, NOT by the tests-pass entry id.
+    expect(listCalibration(skillId)).toHaveLength(1)
+    expect(listCalibration(skillId + TESTS_PASS_ID_SUFFIX)).toHaveLength(0)
+  })
+
+  it('a tests-pass retry hands back the SUFFIXED entry id, so the run re-runs the right pass', async () => {
+    withKeyAndSkill()
+    const onRetrySkill = vi.fn()
+    const errored: SkillReviewEntry[] = [
+      {
+        skillId: 'skill-1' + TESTS_PASS_ID_SUFFIX,
+        name: 'Security Reviewer',
+        state: { status: 'error', error: 'Rate limited.' },
+      } as SkillReviewEntry,
+    ]
+    render(InspectStep, { props: baseProps({ testReviews: errored, onRetrySkill }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+
+    await fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    expect(onRetrySkill).toHaveBeenCalledWith('skill-1' + TESTS_PASS_ID_SUFFIX)
   })
 })

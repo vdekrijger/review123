@@ -19,6 +19,8 @@
 
 import { LLM_CONFIG } from '../llm/config'
 import { packContext } from '../context/pack'
+import type { PackScope } from '../context/pack'
+import { filesForPhase } from '../guide/phase.svelte'
 import { buildCoachCodeContext } from './coachContext'
 import type { AiRunInput } from './run.svelte'
 import type { PrMeta, PrFile } from '../github/types'
@@ -49,6 +51,28 @@ export function aiPrKey(
 /** Context-pack token budget — the route's long-standing formula, extracted. */
 export function aiBudgetTokens(): number {
   return LLM_CONFIG.contextWindowTokens - LLM_CONFIG.maxOutputTokens - 2000
+}
+
+/**
+ * The files one PackScope packs (#237 — phase-scoped reviewers).
+ *
+ * - 'all' (and undefined) returns the CALLER'S OWN ARRAY, untouched. That
+ *   identity is the guarantee that every task still packing 'all' — summary,
+ *   attention, diagrams, story, verdict, alternatives, intent, outcomes,
+ *   riskJudge, ask, coach — gets a byte-identical context and cache key.
+ * - 'implementation' returns the non-test files, via the SAME
+ *   `filesForPhase`/`isTestFile` partition the Implementation review phase
+ *   shows (lib/guide/phase.svelte) — deliberately never a second heuristic.
+ *
+ * TEST-ONLY PRs fall back to the full list: a PR whose every file is a test has
+ * no implementation side, and handing the reviewers an EMPTY context would be
+ * strictly worse than the unscoped behaviour. There is nothing to defer there —
+ * the phase bar doesn't even engage (InspectStep's `phaseApplies`).
+ */
+export function scopeFilesForPack(files: PrFile[], scope: PackScope | undefined): PrFile[] {
+  if (scope !== 'implementation') return files
+  const implementation = filesForPhase(files, 'implementation')
+  return implementation.length > 0 ? implementation : files
 }
 
 /**
@@ -100,10 +124,15 @@ export function buildAiRunInput(w: AiRunWiring): AiRunInput {
     // PR title + body — the stated intent the intent check verifies the diff
     // against (skip-when-empty handled inside the run).
     meta: { title: meta.title, body: meta.body },
-    pack: async () => {
+    // Scope-aware pack (#237). Called with no argument — or 'all' — this is the
+    // byte-identical pack the route has always built; 'implementation' narrows
+    // the file list (contents, CI and budget are unchanged) so the automatic
+    // reviewer pass reads only the code under review. The run memoizes PER
+    // SCOPE, so switching review phase never re-packs.
+    pack: async (scope?: PackScope) => {
       const contents = await w.getContents()
       const ci = await w.getCi()
-      return packContext({ files, contents, ci, budgetTokens })
+      return packContext({ files: scopeFilesForPack(files, scope), contents, ci, budgetTokens })
     },
     ci: () => w.getCi(),
     ask: w.ask,
