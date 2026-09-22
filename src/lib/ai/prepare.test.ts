@@ -18,7 +18,7 @@
  *  - skills phase: reviewers run in prepare (with existing comments fetched)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   preparePr,
   cancelPrepare,
@@ -32,6 +32,10 @@ import {
   _resetPrepareForTest,
 } from './prepare.svelte'
 import { LlmError } from '../llm/llm'
+import { CONTENTS_FILE_LIMIT, CONTENTS_FILE_LIMIT_LOCAL } from '../context/pack'
+import { _resetBridgeForTest, connectBridge } from '../bridge/bridge.svelte'
+import { _resetGroundingForTest } from '../bridge/grounding'
+import { PROTOCOL_VERSION } from '../bridge/protocol'
 import type { PrMeta, PrFile } from '../github/types'
 import type { CiSummary } from '../github/checks'
 import type { ReviewProvider } from '../provider/types'
@@ -584,5 +588,95 @@ describe('preparePr — skill reviewers', () => {
     await preparePr(TARGET, d.asPrepareDeps())
     expect(d.provider.getComments).not.toHaveBeenCalled()
     expect([...d.cache.keys()].some((k) => k.includes('|skill:'))).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Local grounding (#242) — prepare reads the local checkout on the SAME terms
+// the Review route does. Deferred then only because prepare was outside that
+// PR's fence; the deep-review tools already routed through the seam, but the
+// CONTEXT PACK — which feeds every task — did not.
+// ---------------------------------------------------------------------------
+
+describe('preparePr — local grounding', () => {
+  const TOKEN = 'pairing-token-0000000000000000000000000000'
+  const fetchMock = vi.fn()
+
+  function health(git: unknown): Response {
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        protocol: PROTOCOL_VERSION,
+        root: 'review123',
+        capabilities: { inference: ['claude'], infer: true, files: true, search: true },
+        git,
+        version: '0.1.0',
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )
+  }
+
+  beforeEach(() => {
+    _resetBridgeForTest()
+    _resetGroundingForTest()
+    fetchMock.mockReset()
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    _resetBridgeForTest()
+    _resetGroundingForTest()
+  })
+
+  /**
+   * A PR whose head is a REAL sha — the bridge's /v1/health only reports (and
+   * protocol.ts only parses) 40-hex shas, so the fixture's short head could
+   * never match one however the checkout sat.
+   */
+  const LOCAL_HEAD = 'abc1234567890abcdef1234567890abcdef12345'
+  function shaProvider(): ReviewProvider {
+    return makeProvider({ getPrMeta: vi.fn().mockResolvedValue({ ...META, headSha: LOCAL_HEAD }) })
+  }
+
+  /** The (repo, files, meta, limit, opts) fetchContents got. */
+  function contentsCall(d: ReturnType<typeof makeDeps>) {
+    const call = d.fetchContents.mock.calls[0] as unknown[]
+    return { limit: call[3] as number | undefined, opts: call[4] as { readAtHead?: unknown } | undefined }
+  }
+
+  it('with NO bridge the contents fetch is unchanged — the provider path, the provider limit', async () => {
+    const d = makeDeps()
+    await preparePr(TARGET, d.asPrepareDeps())
+
+    const { limit, opts } = contentsCall(d)
+    expect(limit).toBe(CONTENTS_FILE_LIMIT)
+    expect(opts?.readAtHead).toBeUndefined()
+  })
+
+  it('reads the local checkout when its head matches THIS PR, with the local file limit', async () => {
+    fetchMock.mockResolvedValueOnce(health({ head: LOCAL_HEAD, branch: 'feat/x', dirty: false }))
+    await connectBridge(TOKEN, 7321)
+
+    const d = makeDeps({ provider: shaProvider() })
+    await preparePr(TARGET, d.asPrepareDeps())
+
+    const { limit, opts } = contentsCall(d)
+    expect(limit).toBe(CONTENTS_FILE_LIMIT_LOCAL)
+    expect(typeof opts?.readAtHead).toBe('function')
+  })
+
+  it('falls back to the provider when the checkout is on another commit', async () => {
+    fetchMock.mockResolvedValueOnce(
+      health({ head: 'def4567890abcdef1234567890abcdef12345678', branch: 'main', dirty: false }),
+    )
+    await connectBridge(TOKEN, 7321)
+
+    const d = makeDeps({ provider: shaProvider() })
+    await preparePr(TARGET, d.asPrepareDeps())
+
+    const { limit, opts } = contentsCall(d)
+    expect(limit).toBe(CONTENTS_FILE_LIMIT)
+    expect(opts?.readAtHead).toBeUndefined()
   })
 })

@@ -42,6 +42,12 @@
  *    per-task catch semantics apply unchanged. A prepare with failed tasks
  *    reports a calm, retryable error row; re-preparing re-runs only the
  *    missing tasks (errors are never cached).
+ *  - Local grounding: a prepare reads the user's own checkout on exactly the
+ *    same terms the Review route does — only when a bridge is connected AND its
+ *    head sha equals this PR's. The head is known as soon as getPrMeta answers,
+ *    which is before any context is packed, so the decision is as informed here
+ *    as it is on the route. On a mismatch (the ordinary case for a queue row)
+ *    it falls back to the provider exactly as before.
  *  - Persistence: "prepared" is recorded per PR identity in localStorage
  *    (LRU-bounded) with the head SHA and the queue item's updatedAt. The
  *    Ready ✓ renders only while the queue item's updatedAt still matches —
@@ -52,8 +58,12 @@
  */
 
 import { createAiRun, type AiRun, type PanelState } from './run.svelte'
-import { buildAiRunInput, type ContentsMap } from './runInput'
-import { fetchContents as defaultFetchContents } from '../context/pack'
+import { buildAiRunInput, localHeadReader, type ContentsMap } from './runInput'
+import {
+  fetchContents as defaultFetchContents,
+  CONTENTS_FILE_LIMIT,
+  CONTENTS_FILE_LIMIT_LOCAL,
+} from '../context/pack'
 import { providerFor } from '../provider/registry'
 import { activeProviderHasKey } from '../llm/config'
 import { getSettings } from '../settings/settings'
@@ -457,9 +467,24 @@ export async function preparePr(target: PrepareTarget, deps: PrepareDeps = {}): 
     let contentsNow: ContentsMap | null = null
     const getContents = (): Promise<ContentsMap> => {
       if (!contentsPromise) {
-        contentsPromise = (deps.fetchContents ?? defaultFetchContents)({ owner, repo }, files, meta).catch(
-          () => new Map(),
-        )
+        // LOCAL GROUNDING (#242), wired exactly as the Review route wires it.
+        //
+        // "No PR is open" is about the QUEUE ROW, not about this function: the
+        // head sha is known the moment getPrMeta answers, and getContents is
+        // only ever called afterwards (from pack(), inside run.start()). So the
+        // decision here is made on the same fact the route's is, and the same
+        // rule applies — a checkout on another commit is a head mismatch and
+        // falls back to the provider. Prepare's deep-review tools have routed
+        // through this seam since #242 (buildAiRunInput); only the CONTEXT PACK
+        // was left on the provider, which is the one that feeds every task.
+        const readAtHead = localHeadReader(meta.headSha)
+        contentsPromise = (deps.fetchContents ?? defaultFetchContents)(
+          { owner, repo },
+          files,
+          meta,
+          readAtHead ? CONTENTS_FILE_LIMIT_LOCAL : CONTENTS_FILE_LIMIT,
+          readAtHead ? { readAtHead } : {},
+        ).catch(() => new Map())
         void contentsPromise.then((m) => {
           contentsNow = m
         })
