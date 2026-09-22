@@ -243,10 +243,11 @@
    * Stop the run in flight.
    *
    * It ABORTS — the signal reaches the transport's fetch, so the request is
-   * torn down rather than merely ignored. Over the bridge that closes the HTTP
-   * connection to 127.0.0.1; the bridge does not yet stop the CLI it spawned,
-   * which is why the calm line says so instead of implying the machine went
-   * quiet.
+   * torn down rather than merely ignored. Over the bridge, closing that HTTP
+   * connection to 127.0.0.1 is also what stops the CLI: since #249 the bridge
+   * treats a client disconnect as a kill (SIGTERM, then SIGKILL after a grace
+   * period, on `/v1/infer` and `/v1/infer/stream` alike), so cancelling really
+   * does make the machine go quiet — which is what the calm line now says.
    *
    * The state flips HERE rather than waiting for the aborted promise to settle:
    * a stop the user has to wait for is not a stop, and nothing that arrives
@@ -447,9 +448,7 @@
       Cancelled before it finished — nothing was distilled{#if record}, and the rules you already
         have are untouched{/if}.
       {#if cancelledSource === 'bridge'}
-        The request to the bridge was dropped, but the CLI it started on your machine keeps
-        running until it finishes or hits its own time limit — the bridge cannot stop it mid-run
-        yet.
+        The bridge also stops the CLI it started on your machine.
       {/if}
     </p>
   {/if}

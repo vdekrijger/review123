@@ -539,7 +539,7 @@ describe('cancelling a run', () => {
     expect(note).not.toHaveTextContent(/user aborted/i)
   })
 
-  it('says honestly that the bridge cannot stop the CLI it started', async () => {
+  it('says that cancelling also stops the CLI the bridge started', async () => {
     fakeBridge.clis = ['claude']
     fakeBridge.inferReady = true
     fakeBridge.token = 'tok'
@@ -553,9 +553,28 @@ describe('cancelling a run', () => {
     render(StandingRulesSection)
     await startRun()
     await userEvent.click(cancelButton() as HTMLElement)
-    expect(await screen.findByTestId('standing-rules-cancelled')).toHaveTextContent(
-      /keeps running until it finishes/i,
-    )
+    const note = await screen.findByTestId('standing-rules-cancelled')
+    expect(note).toHaveTextContent(/also stops the CLI it started on your machine/i)
+    // The claim #248 had to make — that the CLI runs on without us — became
+    // false in #249, which kills the child on client disconnect. Pin its
+    // absence so the retracted wording cannot creep back.
+    expect(note).not.toHaveTextContent(/keeps running|cannot stop/i)
+    // Still calm: a status line, never the red chip or an alert.
+    expect(screen.queryByTestId('standing-rules-error')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('says nothing about a local CLI when the run went over the API', async () => {
+    hangingRun()
+    render(StandingRulesSection)
+    await startRun()
+    await userEvent.click(cancelButton() as HTMLElement)
+
+    // There is no CLI on the user's machine to stop on the API route, so the
+    // bridge-only clause must not appear.
+    const note = await screen.findByTestId('standing-rules-cancelled')
+    expect(note).toHaveTextContent(/cancelled before it finished/i)
+    expect(note).not.toHaveTextContent(/on your machine/i)
   })
 
   it('leaves the previous distillation AND its decisions exactly as they were', async () => {
