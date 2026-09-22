@@ -336,6 +336,52 @@ describe('InspectStep — findings belong to their file\'s phase', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Tests-phase cross-reference (src/lib/diff/symbolTests)
+// ---------------------------------------------------------------------------
+
+describe('InspectStep — Tests-phase coverage cross-reference', () => {
+  /** An impl file adding `buildKey`, plus a test file whose title names it. */
+  function pairingProps() {
+    const files = [
+      makeFile('src/keys.ts', { patch: '@@ -1,2 +1,3 @@\n const a = 1\n+const buildKey = (x) => x + 1' }),
+      makeFile('src/keys.test.ts'),
+    ]
+    const contentsMap = new Map<string, { before: string | null; after: string | null }>([
+      [
+        'src/keys.test.ts',
+        {
+          before: null,
+          after: ["describe('keys', () => {", "  it('buildKey adds one', () => {", '    expect(1).toBe(1)', '  })', '})'].join('\n'),
+        },
+      ],
+    ])
+    return baseProps({ files, changedFiles: 2, contentsMap })
+  }
+
+  it('lists which implementation files a test in this PR names, with the caveat', async () => {
+    render(InspectStep, { props: pairingProps() })
+    // Not shown in the Implementation phase — it answers a Tests-phase question.
+    expect(screen.queryByTestId('phase-coverage')).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+    const coverage = screen.getByTestId('phase-coverage')
+    expect(coverage.textContent).toContain(
+      'Tests in this PR name changed symbols in 1 of 1 implementation file',
+    )
+    expect(coverage.textContent).toContain('src/keys.ts')
+    expect(coverage.textContent).toContain('src/keys.test.ts')
+    expect(coverage.textContent).toContain('may still be covered by tests outside this PR')
+  })
+
+  it('renders nothing rather than a misleading "0 of N" when nothing pairs', async () => {
+    // No contents fetched for the test file → the matcher cannot resolve anything.
+    render(InspectStep, { props: baseProps() })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+    expect(screen.queryByTestId('phase-coverage')).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // New commits after approval
 // ---------------------------------------------------------------------------
 
