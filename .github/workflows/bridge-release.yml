@@ -6,7 +6,9 @@
 #
 # It needs no `pnpm install`: the bridge is a zero-dependency package and
 # bridge/scripts/bundle.mjs pulls esbuild through `pnpm dlx` at a pinned
-# version. Checkout + setup-node + bundle + upload is roughly a minute.
+# version. Checkout + setup-node + bundle + upload runs in well under a
+# minute (the bridge-v0.1.0 run took 23s, and that one still paid for an
+# install this workflow no longer does).
 #
 # The FIRST release (bridge-v0.1.0) was cut locally, for the same budget
 # reason, and cutting one by hand stays fully supported:
@@ -36,10 +38,16 @@ jobs:
         with:
           node-version: 22
 
+      # `node …/bundle.mjs`, NOT `pnpm bridge:bundle`: pnpm's script runner
+      # installs the workspace first, which on a fresh runner means the SPA's
+      # whole dev tree (282 packages) for a bundle that needs none of it.
+      # Invoked directly the script needs no node_modules at all — esbuild
+      # comes from `pnpm dlx` inside it. Same output either way.
+      #
       # bundle.mjs itself refuses to build when bridge/package.json and the
       # BRIDGE_VERSION in src/cli.ts disagree.
       - name: Bundle bridge.mjs
-        run: pnpm bridge:bundle
+        run: node bridge/scripts/bundle.mjs
 
       # A release titled 0.2.0 that ships a 0.1.0 binary is exactly the kind of
       # lie a download-and-run artifact must not tell.

@@ -16,6 +16,7 @@ import {
   SOURCE_URL,
   assertVersionsAgree,
   buildHeader,
+  esbuildArgs,
   readCliVersion,
   stripLeadingHashbang,
 } from './bundle.mjs'
@@ -75,6 +76,25 @@ describe('bundle header', () => {
     expect(header).toContain('https://review123.dev read access to that repo')
     expect(header).toContain('pairing token')
     expect(header).toContain('binds 127.0.0.1 only')
+  })
+})
+
+describe('esbuild invocation', () => {
+  const args = esbuildArgs('/out/bridge.mjs')
+
+  it('pins the bundler version instead of floating on latest', () => {
+    expect(args).toContain(`esbuild@${ESBUILD_VERSION}`)
+  })
+
+  // Left to itself esbuild walks up to the repo-root tsconfig — the browser
+  // SPA's, which extends a package a fresh clone has not installed. A Node
+  // artifact must not inherit its compile settings from the web app.
+  it('pins the bridge’s own tsconfig, not the repo-root SPA one', () => {
+    expect(args).toContain(`--tsconfig=${join(BRIDGE_DIR, 'tsconfig.json')}`)
+  })
+
+  it('targets Node 22 ESM, matching the package engines field', () => {
+    expect(args).toEqual(expect.arrayContaining(['--platform=node', '--target=node22', '--format=esm']))
   })
 })
 
