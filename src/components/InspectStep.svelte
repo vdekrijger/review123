@@ -30,6 +30,8 @@
   import { applyConvergence, mergedReviewerLabel, type ReviewerFindings } from '../lib/ai/convergence'
   import { applySimplify } from '../lib/ai/simplify'
   import { rankFindings, getFindingsShowAll, setFindingsShowAll } from '../lib/ai/findingRank'
+  import AgentFixPanel, { type FixCandidateEntry } from './AgentFixPanel.svelte'
+  import { fixEligibility } from '../lib/bridge/fixLoop'
   import { listSkills } from '../lib/skills/skills'
   import { recordDismissal, type DismissReason } from '../lib/skills/calibration'
   import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
@@ -877,6 +879,47 @@
   })
 
   const secondaryFindingKeys = $derived(new Set(findingTriage.secondary.map((s) => s.key)))
+
+  // -------------------------------------------------------------------------
+  // Agent fix loop (src/lib/bridge/fixLoop) — which findings may be handed to
+  // the user's own coding agent.
+  //
+  // TWO GATES, both borrowed rather than invented:
+  //   1. the #228 routing rule — a CONCRETE `suggestedFix`, not the honest
+  //      "No clean fix — <tradeoff>" form, which is a judgment call for a human
+  //      and is never auto-sent;
+  //   2. the #226 PRIMARY tier — a finding the ranking collapsed is, by
+  //      construction, not worth a CLI turn on the user's subscription.
+  //
+  // Built from `findingTriage.primary`, so it inherits two properties for free:
+  // dismissed/added findings are already excluded (dismissing one stops it
+  // being offered), and the set is PHASE-SCOPED exactly like every other
+  // finding surface. That is deliberate rather than an implementation-phase
+  // restriction: the panel offers precisely the findings on screen, so a Tests
+  // phase can hand over its own findings without a second rule to remember.
+  //
+  // Null-line (file-level) findings are NOT offered: they are unranked, they
+  // live only in the reviewer-chip popover, and an agent given a whole-file
+  // finding has nowhere concrete to start.
+  // -------------------------------------------------------------------------
+  const fixCandidates = $derived.by((): FixCandidateEntry[] => {
+    const out: FixCandidateEntry[] = []
+    for (const s of findingTriage.primary) {
+      if (fixEligibility({ suggestedFix: s.suggestedFix, tier: 'primary' }) !== 'eligible') continue
+      out.push({
+        key: s.key,
+        skillName: s.skillName,
+        path: s.findingPath,
+        line: s.line,
+        severity: s.severity,
+        // The ORIGINAL body, never `simpleBody`: the plain-English rewrite is
+        // display-only, and every non-display consumer reads `body`.
+        body: s.body,
+        suggestedFix: s.suggestedFix!,
+      })
+    }
+    return out
+  })
   const triagePrimaryCount = $derived(findingTriage.primary.length)
   const triageSecondaryCount = $derived(findingTriage.secondary.length)
   const triageTotalCount = $derived(triagePrimaryCount + triageSecondaryCount)
@@ -1862,6 +1905,15 @@
         onclick={toggleFindingsShowAll}
       >Show all</button>
     </p>
+  {/if}
+
+  <!-- AGENT FIX LOOP: findings with a concrete fix go straight to the user's
+       own coding agent over the bridge, which fixes them in a scratch worktree
+       and hands back one commit each. The panel renders itself only when a
+       bridge is connected (see AgentFixPanel) — with none paired it is not
+       even a hint, the same rule the grounding indicator follows. -->
+  {#if currentHeadSha}
+    <AgentFixPanel headSha={currentHeadSha} candidates={fixCandidates} />
   {/if}
 
 {/if}
