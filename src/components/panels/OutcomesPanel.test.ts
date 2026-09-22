@@ -18,6 +18,7 @@ function makeRun(overrides: Partial<AiRun>): AiRun {
     story: { status: 'idle' },
     riskJudge: { status: 'idle' },
     skillReviews: [],
+    testReviews: [],
     convergence: { status: 'idle' },
     simplify: { status: 'idle' },
     totalUsage: undefined,
@@ -30,6 +31,7 @@ function makeRun(overrides: Partial<AiRun>): AiRun {
     ask: async () => ({ ok: false, error: 'no-key' }),
     expandComment: async () => ({ ok: false, error: 'no-key' }),
     runSkillReviews: async () => {},
+    runTestsReview: async () => {},
     retrySkill: async () => {},
     ...overrides,
   }

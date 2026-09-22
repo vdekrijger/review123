@@ -69,6 +69,28 @@ export interface PackContextInput {
   budgetTokens: number
 }
 
+/**
+ * WHICH SLICE of a PR a caller wants packed (#237 — phase-scoped reviewers).
+ *
+ * `packContext` itself is pure over `files` and knows nothing about phases;
+ * this type just names the two slices the AI run asks for, so the scope can be
+ * threaded through `AiRunInput.pack` without either side importing the other.
+ *
+ * - 'all'            — every changed file. The DEFAULT and the ONLY slice the
+ *                      ~10 automatic tasks (summary, attention, diagrams,
+ *                      story, verdict, alternatives, intent, outcomes,
+ *                      riskJudge, ask, coach) ever use. Their context and
+ *                      cache keys are unaffected by scoping.
+ * - 'implementation' — non-test files only (the Implementation review phase).
+ *                      Used by the automatic skill-reviewer pass so reviewers
+ *                      read the code under review, not the tests that will get
+ *                      their own on-demand pass.
+ *
+ * The TESTS pass deliberately has no scope of its own: judging tests requires
+ * the implementation as context, so it packs 'all' and shares that memo.
+ */
+export type PackScope = 'all' | 'implementation'
+
 // ---------------------------------------------------------------------------
 // Token estimator (documented heuristic — EC-16j multibyte exact is nice-to-have)
 // ---------------------------------------------------------------------------

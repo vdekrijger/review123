@@ -245,6 +245,31 @@ export function resolveTaskMode(
   return { run: true, deep: false, ...(avail.note ? { note: avail.note } : {}) }
 }
 
+/**
+ * Resolve a task that is ALWAYS agentic when it runs (#237 — the on-demand
+ * TESTS reviewer pass).
+ *
+ * It still honours the OFF switch — `aiTaskModes[task] === 'off'` means the
+ * user turned this family of work off, and an on-demand pass must respect that
+ * exactly as the automatic one does. But 'standard' does NOT demote it: the
+ * pass is expensive and deliberate, the user asked for it by clicking, and its
+ * whole value is reading the repo around the tests. So anything other than
+ * 'off' resolves to deep — subject only to HARNESS availability, which is a
+ * fact about the wiring and the model, not a preference:
+ * - no tool source wired / model can't call tools → { run: true, deep: false }
+ *   plus the same honest note resolveTaskMode produces, so the UI says why.
+ */
+export function resolveAgenticTaskMode(
+  task: AiTaskId,
+  source: DeepReviewSource | undefined,
+): TaskModeResolution {
+  const mode: AiTaskMode = getSettings().aiTaskModes[task] ?? 'standard'
+  if (mode === 'off') return { run: false, deep: false }
+  const avail = deepHarnessAvailable(source)
+  if (avail.enabled) return { run: true, deep: true }
+  return { run: true, deep: false, ...(avail.note ? { note: avail.note } : {}) }
+}
+
 // ---------------------------------------------------------------------------
 // Toolkit
 // ---------------------------------------------------------------------------

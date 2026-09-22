@@ -11,7 +11,7 @@
 
 import { activeLlmConfig, activeProviderHasKey, crossModelVerifyEffective, verifierProviderConfigs, resolveEnsemble, fusionGenerateEffective, fusionParticipants, fusionGenerators, type FusionParticipant } from '../llm/config'
 import { estimateTokens } from '../context/pack'
-import type { PackedContext } from '../context/pack'
+import type { PackedContext, PackScope } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import {
   llmStream as defaultLlmStream,
@@ -53,6 +53,7 @@ import {
   createDeepReviewToolkit,
   createDeepReviewCache,
   resolveTaskMode,
+  resolveAgenticTaskMode,
   DEEP_REVIEW_MAX_TOOL_CALLS,
 } from './deepReview'
 import type { DeepReviewSource } from './deepReview'
@@ -81,6 +82,7 @@ import {
   askPrompt,
   expandCommentPrompt,
   skillReviewPrompt,
+  testsReviewPrompt,
   convergencePrompt,
   simplifyPrompt,
   withDeepReviewGuidance,
@@ -262,6 +264,44 @@ export interface SkillReviewEntry {
 }
 
 /**
+ * Which REVIEWER PASS an entry belongs to (#237 — phase-scoped reviewers).
+ *
+ * - 'implementation' — the automatic pass (`runSkillReviews`). Scoped to the
+ *   implementation files; runs at the user's configured `skills` mode.
+ * - 'tests' — the on-demand pass (`runTestsReview`). Never fires by itself;
+ *   packs the WHOLE PR (the tests are judged against the implementation) and
+ *   always runs agentically when the harness allows.
+ */
+export type ReviewerPass = 'implementation' | 'tests'
+
+/**
+ * Entry-id suffix marking a TESTS-pass reviewer entry.
+ *
+ * Both passes run the same personas, so their entries would otherwise collide
+ * on `skillId` — which is the identity everything downstream keys off: the
+ * keyed `{#each}` blocks, the per-finding `key`, the chip popover token, the
+ * suppression prefix, and `retrySkill`. Suffixing the tests-pass entry keeps
+ * the two passes' findings, chips and retries independent while letting them
+ * share one convergence/simplify/triage pipeline.
+ */
+export const TESTS_PASS_ID_SUFFIX = '@tests'
+
+/** The entry id a reviewer gets in `pass`. */
+export function reviewerEntryId(skillId: string, pass: ReviewerPass): string {
+  return pass === 'tests' ? skillId + TESTS_PASS_ID_SUFFIX : skillId
+}
+
+/** True when this entry id belongs to the on-demand tests pass. */
+export function isTestsPassEntryId(entryId: string): boolean {
+  return entryId.endsWith(TESTS_PASS_ID_SUFFIX)
+}
+
+/** The underlying skill id behind an entry id (identity for non-tests entries). */
+export function baseSkillId(entryId: string): string {
+  return isTestsPassEntryId(entryId) ? entryId.slice(0, -TESTS_PASS_ID_SUFFIX.length) : entryId
+}
+
+/**
  * Honest note about comments the coach could NOT grade. The coach batches
  * drafts into chunks (one LLM call each); when SOME chunks fail but others
  * succeed we return the succeeded reviews PLUS this note so the UI can show the
@@ -325,6 +365,13 @@ export interface AiRun {
   readonly outcomes: PanelState<ExpectedOutcomesResult>
   readonly story: PanelState<StoryOrderResult>
   readonly skillReviews: SkillReviewEntry[]
+  /**
+   * Reviewer entries from the ON-DEMAND tests pass (#237). Empty until the
+   * user clicks "Review the tests" — nothing populates it automatically. Its
+   * entry ids carry TESTS_PASS_ID_SUFFIX so they never collide with the
+   * implementation pass's.
+   */
+  readonly testReviews: SkillReviewEntry[]
   /**
    * Cross-reviewer finding convergence: one cheap single-pass call after ALL
    * reviewers settle that clusters findings describing the same underlying
@@ -397,11 +444,20 @@ export interface AiRun {
    */
   runSkillReviews(onUpdate?: () => void, existingComments?: string[], opts?: { autoRetry?: number }): Promise<void>
   /**
-   * Re-run exactly one reviewer by skill id (the error-chip retry). Sets only
-   * that reviewer's entry to loading and re-invokes its review through the
-   * normal cache-miss path; sibling reviews and drafts are untouched.
+   * Run the ON-DEMAND tests pass: every enabled reviewer, agentically (harness
+   * permitting) whatever the user's `skills` deep setting, over the WHOLE-PR
+   * context, under the tests-specific prompt. Never called automatically — the
+   * user clicks it. Respects the `skills` off switch: 'off' → no-op.
    */
-  retrySkill(skillId: string, onUpdate?: () => void, existingComments?: string[]): Promise<void>
+  runTestsReview(onUpdate?: () => void, existingComments?: string[]): Promise<void>
+  /**
+   * Re-run exactly one reviewer by ENTRY id (the error-chip retry). Pass back
+   * the `skillId` the entry rendered with: a TESTS_PASS_ID_SUFFIX id retries
+   * that reviewer's tests-pass entry, any other id its implementation-pass
+   * entry. Sets only that entry to loading and re-invokes its review through
+   * the normal cache-miss path; sibling reviews and drafts are untouched.
+   */
+  retrySkill(entryIdOrSkillId: string, onUpdate?: () => void, existingComments?: string[]): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -419,7 +475,13 @@ export interface AiRunInput {
    * tokens) rather than erroring.
    */
   meta?: { title: string; body: string | null }
-  pack: () => Promise<PackedContext>
+  /**
+   * Pack the PR context for one SCOPE (#237 — phase-scoped reviewers).
+   * Called with no argument (or 'all') it MUST return exactly the full-PR
+   * context it always has — every automatic task depends on that. Callers that
+   * ignore the argument therefore stay correct; they simply never get scoping.
+   */
+  pack: (scope?: PackScope) => Promise<PackedContext>
   ci: () => Promise<CiSummary | null>
   ask: () => Promise<boolean>
   /**
@@ -757,6 +819,28 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // Skill review entries — populated on-demand by runSkillReviews()
   let skillReviewsState = $state<SkillReviewEntry[]>([])
 
+  // TESTS-pass reviewer entries (#237) — populated ONLY by runTestsReview(),
+  // which nothing calls automatically. A separate array (rather than reusing
+  // the one above) is what lets the implementation pass's findings SURVIVE the
+  // tests pass: switching back to the Implementation phase must still show
+  // them. Entry ids carry TESTS_PASS_ID_SUFFIX so the two passes never collide
+  // on the identity everything downstream keys off.
+  let testReviewsState = $state<SkillReviewEntry[]>([])
+
+  /** The live entry array for one pass (re-read each call — both are reassigned). */
+  function passEntries(pass: ReviewerPass): SkillReviewEntry[] {
+    return pass === 'tests' ? testReviewsState : skillReviewsState
+  }
+
+  /**
+   * Every settled reviewer entry across BOTH passes. The convergence, simplify
+   * and cost pipelines read this: a tests-pass finding gets the same
+   * clustering, plain-English rewrite and cost accounting as any other.
+   */
+  function allReviewerEntries(): SkillReviewEntry[] {
+    return [...skillReviewsState, ...testReviewsState]
+  }
+
   // Cross-reviewer convergence pass state (runs after all reviewers settle).
   // The reviewer entries above are NEVER mutated by the pass — loss-proof.
   const convergenceState = $state<PanelState<ConvergenceValue>>({ status: 'idle' })
@@ -776,7 +860,15 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
   // Packed context — kept in closure so retry can reuse it without re-packing
   // (unless the initial pack failed, in which case retry re-packs)
+  //
+  // Two memo slots, ONE per PackScope (#237). `packedCtx` is the full-PR pack
+  // every automatic task uses — unchanged, and still the only one `start()`,
+  // `retry()`, `ask()` and `coach()` ever touch. `packedCtxImpl` is the
+  // implementation-only pack the automatic reviewer pass uses. Separate slots
+  // mean each scope packs AT MOST ONCE per run: switching review phase, or
+  // retrying one reviewer, never re-packs.
   let packedCtx: PackedContext | null = null
+  let packedCtxImpl: PackedContext | null = null
 
   /**
    * THE task-failure funnel: every task catch lands here. Sets the panel's
@@ -1244,6 +1336,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     idx: number,
     deep: boolean,
     onUpdate?: () => void,
+    pass: ReviewerPass = 'implementation',
   ): Promise<{ result: SkillReviewResult; usage: LlmUsage | undefined; models: VerdictModelBreakdown[] } | null> {
     try {
       // Plan P: generators GENERATE; ALL participants (generators + verifiers)
@@ -1253,7 +1346,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       const generators = fusionGenerators()
       if (generators.length < 2) return null
       const note = (line: string): void => {
-        const entry = skillReviewsState[idx]
+        const entry = passEntries(pass)[idx]
         entry.state = { ...entry.state, activity: [...(entry.state.activity ?? []), line] }
         onUpdate?.()
       }
@@ -2572,11 +2665,22 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // Internal: get or obtain packed context
   // ---------------------------------------------------------------------------
 
-  async function getPackedContext(): Promise<PackedContext | null> {
-    if (packedCtx !== null) return packedCtx
+  /**
+   * The packed context for one scope, memoized per scope (#237).
+   *
+   * Default 'all' is the pack every automatic task has always used — same
+   * call, same memo slot, same bytes. 'implementation' packs the non-test
+   * files into its OWN slot, so the two never overwrite each other and neither
+   * is packed twice.
+   */
+  async function getPackedContext(scope: PackScope = 'all'): Promise<PackedContext | null> {
+    if (scope === 'implementation') {
+      if (packedCtxImpl !== null) return packedCtxImpl
+    } else if (packedCtx !== null) return packedCtx
     try {
-      const ctx = await pack()
-      packedCtx = ctx
+      const ctx = scope === 'implementation' ? await pack('implementation') : await pack()
+      if (scope === 'implementation') packedCtxImpl = ctx
+      else packedCtx = ctx
       return ctx
     } catch (err) {
       // Packing failures go through the SAME classification as every task
@@ -3016,7 +3120,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
    * rate limit carrying Retry-After; cleared at the start of every attempt.
    * Read by the auto-retry loop to pace the next round (autoRetryDelayMs).
    */
-  const reviewerRetryAfterMs = new Map<number, number>()
+  const reviewerRetryAfterMs = new Map<string, number>()
+
+  /** Retry-After map key — pass-scoped so the two passes' entry indices never collide. */
+  function retryAfterKey(pass: ReviewerPass, idx: number): string {
+    return `${pass}:${idx}`
+  }
 
   async function executeSkillReview(
     ctx: PackedContext,
@@ -3025,9 +3134,15 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     deep: { enabled: boolean; note?: string },
     onUpdate?: () => void,
     existingComments?: string[],
+    pass: ReviewerPass = 'implementation',
   ): Promise<void> {
+    // Which pass this entry belongs to decides three things and NOTHING else:
+    // the prompt (skillReviewPrompt vs testsReviewPrompt), the cache segment +
+    // prompt version, and which entry array the outcome is written to.
+    const entries = () => passEntries(pass)
+    const entryId = reviewerEntryId(skill.id, pass)
     // Fresh attempt: any Retry-After from a PRIOR attempt is stale.
-    reviewerRetryAfterMs.delete(idx)
+    reviewerRetryAfterMs.delete(retryAfterKey(pass, idx))
     // Dismissal calibration: this reviewer's ledger of dismissed-with-reason
     // findings, pre-built as the prompt's "PAST DISMISSED FINDINGS" section
     // (sanitized + capped in buildCalibrationBlock). '' when the ledger is
@@ -3041,12 +3156,19 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // marker so they never collide with single-pass results for the same
     // skill content.
     const contentHash = djb2(skill.content + calibration)
-    const key = cacheKey(prKey, 'skill:' + contentHash + (deep.enabled ? '|deep' : ''), promptVersionFor('skills'))
+    // Pass discriminant (#237): the TESTS pass is a DIFFERENT prompt over a
+    // DIFFERENT context, so it gets its own cache segment ('|tests') AND its own
+    // prompt version (PROMPT_VERSIONS.skillsTests). The two passes can therefore
+    // never overwrite each other's result for the same persona, and editing one
+    // prompt leaves the other's cache warm.
+    const passSegment = pass === 'tests' ? '|tests' : ''
+    const passVersion = promptVersionFor(pass === 'tests' ? 'skillsTests' : 'skills')
+    const key = cacheKey(prKey, 'skill:' + contentHash + passSegment + (deep.enabled ? '|deep' : ''), passVersion)
     // Companion entry holding this reviewer's per-model breakdown (Plan N),
     // keyed off the SAME content hash with a '|models' discriminant. Persisted
     // alongside the skill result and restored on a cache hit so the Step-3 cost+
     // performance table is repopulated for a previously-reviewed PR.
-    const skillModelsKey = cacheKey(prKey, 'skill:' + contentHash + (deep.enabled ? '|deep' : '') + '|models', promptVersionFor('skills'))
+    const skillModelsKey = cacheKey(prKey, 'skill:' + contentHash + passSegment + (deep.enabled ? '|deep' : '') + '|models', passVersion)
 
     const t0 = performance.now()
 
@@ -3055,8 +3177,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       const hit = await getCached<DeepCached<SkillReviewResult>>(key)
       if (hit !== null) {
         const models = await getCached<VerdictModelBreakdown[]>(skillModelsKey)
-        skillReviewsState[idx] = {
-          skillId: skill.id,
+        entries()[idx] = {
+          skillId: entryId,
           name: skill.name,
           state: { status: 'done', value: hit.result, toolCallsUsed: hit.toolCallsUsed, ...(hit.usage ? { usage: hit.usage } : {}), ...(models && models.length ? { models } : {}) },
         }
@@ -3073,8 +3195,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       const hit = await getCached<SkillReviewResult>(key)
       if (hit !== null) {
         const models = await getCached<VerdictModelBreakdown[]>(skillModelsKey)
-        skillReviewsState[idx] = {
-          skillId: skill.id,
+        entries()[idx] = {
+          skillId: entryId,
           name: skill.name,
           state: { status: 'done', value: hit, ...(deep.note ? { note: deep.note } : {}), ...(models && models.length ? { models } : {}) },
         }
@@ -3088,7 +3210,13 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       }
     }
 
-    const prompts = skillReviewPrompt(ctx, { name: skill.name, content: skill.content }, existingComments, calibration || undefined)
+    // The pass's prompt. Both share the persona framing, the evidence/severity/
+    // solution rules, ANTI_FATIGUE_RULES and the existing-comments + calibration
+    // sections; only the JOB the reviewer is given differs.
+    const prompts =
+      pass === 'tests'
+        ? testsReviewPrompt(ctx, { name: skill.name, content: skill.content }, existingComments, calibration || undefined)
+        : skillReviewPrompt(ctx, { name: skill.name, content: skill.content }, existingComments, calibration || undefined)
 
     try {
       let skillResult: SkillReviewResult = { skillName: skill.name, findings: [] }
@@ -3104,7 +3232,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // verifier — honoring the user's configured roles.
       let fusionHandled = false
       if (fusionGenerateEffective()) {
-        const fused = await fuseSkillReview(prompts, skill.name, idx, deep.enabled, onUpdate)
+        const fused = await fuseSkillReview(prompts, skill.name, idx, deep.enabled, onUpdate, pass)
         if (fused) {
           skillResult = fused.result
           skillUsage = fused.usage
@@ -3116,7 +3244,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       if (!fusionHandled) {
       if (deep.enabled) {
         const deepOutcome = await runDeepJson<SkillReviewResult>(prompts, validateSkillReviewResult, (line) => {
-          const entry = skillReviewsState[idx]
+          const entry = entries()[idx]
           entry.state = { ...entry.state, activity: [...(entry.state.activity ?? []), line] }
           onUpdate?.()
         }, {
@@ -3157,7 +3285,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
           ...(f.suggestedFix ? { suggestedFix: f.suggestedFix } : {}),
         })),
         (line) => {
-          const entry = skillReviewsState[idx]
+          const entry = entries()[idx]
           entry.state = { ...entry.state, activity: [...(entry.state.activity ?? []), line] }
           onUpdate?.()
         },
@@ -3199,8 +3327,8 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // Persist this reviewer's per-model breakdown so a future cache hit can
       // repopulate the Step-3 cost+performance table.
       await setCached<VerdictModelBreakdown[]>(skillModelsKey, skillModels ?? [])
-      skillReviewsState[idx] = {
-        skillId: skill.id,
+      entries()[idx] = {
+        skillId: entryId,
         name: skill.name,
         state: {
           status: 'done',
@@ -3223,21 +3351,21 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // Record the provider's Retry-After (rate limits only) so the auto-retry
       // loop can pace the next round instead of re-dispatching immediately.
       if (err instanceof LlmError && err.kind === 'rate-limited' && typeof err.retryAfterMs === 'number') {
-        reviewerRetryAfterMs.set(idx, err.retryAfterMs)
+        reviewerRetryAfterMs.set(retryAfterKey(pass, idx), err.retryAfterMs)
       }
       // Cancelled reviewer: the calm state, no error copy, no analytics —
       // same contract as failTask for the auto tasks.
       if (isCancellation(err)) {
-        skillReviewsState[idx] = {
-          skillId: skill.id,
+        entries()[idx] = {
+          skillId: entryId,
           name: skill.name,
           state: { status: 'cancelled' },
         }
         onUpdate?.()
         return
       }
-      skillReviewsState[idx] = {
-        skillId: skill.id,
+      entries()[idx] = {
+        skillId: entryId,
         name: skill.name,
         state: {
           status: 'error',
@@ -3262,7 +3390,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // Reviewers that settled 'done' with a real result object. Defensive on the
     // findings array — a malformed cached value must degrade to "no findings",
     // never throw (loss-proof includes surviving weird cache content).
-    const reviewers: ReviewerFindings[] = skillReviewsState
+    // BOTH passes (#237): a tests-pass finding clusters against the
+    // implementation-pass findings exactly like any sibling reviewer's would.
+    const reviewers: ReviewerFindings[] = allReviewerEntries()
       .filter((e) => e.state.status === 'done' && typeof e.state.value === 'object' && e.state.value !== null)
       .map((e) => {
         const value = e.state.value as SkillReviewResult
@@ -3363,7 +3493,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
 
     // Reviewers that settled 'done' with a real result object — same defensive
     // collection as the convergence pass (weird cache content must never throw).
-    const rawReviewers: ReviewerFindings[] = skillReviewsState
+    const rawReviewers: ReviewerFindings[] = allReviewerEntries()
       .filter((e) => e.state.status === 'done' && typeof e.state.value === 'object' && e.state.value !== null)
       .map((e) => {
         const value = e.state.value as SkillReviewResult
@@ -3452,13 +3582,15 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const allowed = await gateAi({ repo, isPrivate, ask: askConsent })
     if (!allowed) return
 
-    // Get context (best-effort — reuse if already packed)
-    if (packedCtx === null) {
-      const ctx = await getPackedContext()
-      if (ctx === null) return
-    }
-
-    const ctx = packedCtx!
+    // Context SCOPED to the implementation (#237): the reviewers read the code
+    // under review, not the tests — those get their own on-demand pass
+    // (runTestsReview) with the implementation included as context. Smaller
+    // context → cheaper, faster, far less timeout risk. Memoized in its own
+    // slot, so the automatic tasks' full-PR pack is untouched and neither is
+    // packed twice. (A test-only PR falls back to the full list — see
+    // scopeFilesForPack.)
+    const ctx = await getPackedContext('implementation')
+    if (ctx === null) return
 
     // Load enabled skills at call time
     const skills = listSkills().filter((s) => s.enabled)
@@ -3530,7 +3662,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       if (errored.length === 0) break
 
       const observed = errored
-        .map(({ idx }) => reviewerRetryAfterMs.get(idx))
+        .map(({ idx }) => reviewerRetryAfterMs.get(retryAfterKey('implementation', idx)))
         .filter((v): v is number => typeof v === 'number')
       const delayMs = autoRetryDelayMs(round, observed)
       if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
@@ -3565,9 +3697,17 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // targeted entry is touched — sibling reviews and drafts are never disturbed.
   // ---------------------------------------------------------------------------
 
-  async function retrySkill(skillId: string, onUpdate?: () => void, existingComments?: string[]): Promise<void> {
-    // Plan J: skills 'off' → reviewers are not offered; nothing to retry.
-    const skillsMode = resolveTaskMode('skills', deepReview)
+  async function retrySkill(entryIdOrSkillId: string, onUpdate?: () => void, existingComments?: string[]): Promise<void> {
+    // Which pass the chip belongs to is carried BY THE ENTRY ID (#237): the UI
+    // hands back exactly the id it rendered, so one retry entry point serves
+    // both passes and InspectStep needs no second prop.
+    const pass: ReviewerPass = isTestsPassEntryId(entryIdOrSkillId) ? 'tests' : 'implementation'
+    const skillId = baseSkillId(entryIdOrSkillId)
+
+    // Mode gate. The tests pass is ALWAYS agentic when it runs, but it shares
+    // the `skills` off-switch: 'off' → reviewers are not offered at all.
+    const skillsMode =
+      pass === 'tests' ? resolveAgenticTaskMode('skills', deepReview) : resolveTaskMode('skills', deepReview)
     if (!skillsMode.run) return
 
     // No-key / consent gates: identical to the batch path.
@@ -3575,17 +3715,15 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const allowed = await gateAi({ repo, isPrivate, ask: askConsent })
     if (!allowed) return
 
-    // Locate the existing entry. If runSkillReviews never ran, there's nothing
+    // Locate the existing entry. If the pass never ran, there's nothing
     // to retry — the error chip only renders after a batch run.
-    const idx = skillReviewsState.findIndex((e) => e.skillId === skillId)
+    const idx = passEntries(pass).findIndex((e) => e.skillId === entryIdOrSkillId)
     if (idx === -1) return
 
-    // Re-use the already-packed context (re-pack if the initial pack failed).
-    if (packedCtx === null) {
-      const ctx = await getPackedContext()
-      if (ctx === null) return
-    }
-    const ctx = packedCtx!
+    // Re-use the already-packed context for this pass (re-pack if it failed).
+    // The tests pass reads the WHOLE PR; the implementation pass its own scope.
+    const ctx = await getPackedContext(pass === 'tests' ? 'all' : 'implementation')
+    if (ctx === null) return
 
     // Resolve the skill content fresh (the user may have edited it since the run).
     const skill = listSkills().find((s) => s.id === skillId)
@@ -3594,14 +3732,14 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const deep = { enabled: skillsMode.deep, note: skillsMode.note }
 
     // Set just this entry to loading — clears the prior error/activity.
-    skillReviewsState[idx] = {
-      skillId: skill.id,
+    passEntries(pass)[idx] = {
+      skillId: entryIdOrSkillId,
       name: skill.name,
       state: { status: 'loading', ...(deep.note ? { note: deep.note } : {}) },
     }
     onUpdate?.()
 
-    await executeSkillReview(ctx, skill, idx, deep, onUpdate, existingComments)
+    await executeSkillReview(ctx, skill, idx, deep, onUpdate, existingComments, pass)
 
     // The finding set changed → recompute the convergence pass. Any previous
     // value is fingerprint-guarded, so until this settles the UI simply renders
@@ -3611,6 +3749,88 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // ...and the simplify pass follows it (same fingerprint guard: until it
     // settles the fresh findings render their original bodies, never a stale
     // rewrite).
+    await runSimplifyPass(onUpdate)
+  }
+
+  // ---------------------------------------------------------------------------
+  // runTestsReview() — the ON-DEMAND tests pass (#237).
+  //
+  // NOTHING calls this automatically: not start(), not the early auto-start in
+  // Review.svelte, not the headless prepare-ahead path. The user clicks
+  // "Review the tests" in the Tests phase, having already read (and usually
+  // approved) the implementation. That is deliberate — this is the expensive
+  // pass, and its question only makes sense once the implementation is settled.
+  //
+  // What it sends, and why:
+  //   - EVERY enabled reviewer, not a subset. The user's explicit choice: the
+  //     same lenses that judged the code should judge its tests.
+  //   - The WHOLE-PR context (PackScope 'all' — the same memo the automatic
+  //     tasks already warmed, so this costs no extra packing). Judging whether
+  //     a test pins behaviour is impossible without the behaviour.
+  //   - testsReviewPrompt, under its own PROMPT_VERSIONS.skillsTests, in its
+  //     own '|tests' cache segment.
+  //   - AGENTICALLY (the deep tool loop) whenever the harness allows, whatever
+  //     the user's `skills` deep setting says: reading the test's neighbours and
+  //     the code it covers is the whole job. Existing budgets and the per-round
+  //     window ladder apply unchanged — no new limits are invented here.
+  // ---------------------------------------------------------------------------
+
+  async function runTestsReview(onUpdate?: () => void, existingComments?: string[]): Promise<void> {
+    // Shares the `skills` off-switch: reviewers off means reviewers off, and an
+    // on-demand pass must respect that exactly as the automatic one does.
+    // Anything else resolves to agentic — harness permitting, with the same
+    // honest note when the active model cannot call tools.
+    const mode = resolveAgenticTaskMode('skills', deepReview)
+    if (!mode.run) return
+
+    // No-key gate + consent gate: the same gates the automatic pass runs.
+    if (!activeProviderHasKey()) return
+    const allowed = await gateAi({ repo, isPrivate, ask: askConsent })
+    if (!allowed) return
+
+    // FULL-PR context: the implementation is the context the tests are judged
+    // against. Shares the memo slot every automatic task already filled.
+    const ctx = await getPackedContext('all')
+    if (ctx === null) return
+
+    const skills = listSkills().filter((s) => s.enabled)
+    if (skills.length === 0) return
+
+    const deep = { enabled: mode.deep, ...(mode.note ? { note: mode.note } : {}) }
+
+    // The finding set is about to change → invalidate the two derived passes
+    // (both are fingerprint-guarded anyway, so nothing stale can render).
+    convergenceState.status = 'idle'
+    convergenceState.value = undefined
+    convergenceState.error = undefined
+    convergenceState.errorDetail = undefined
+    simplifyState.status = 'idle'
+    simplifyState.value = undefined
+    simplifyState.error = undefined
+    simplifyState.errorDetail = undefined
+
+    // Entries land in their OWN array, so the implementation pass's findings
+    // survive: switching back to the Implementation phase still shows them.
+    testReviewsState = skills.map((skill) => ({
+      skillId: reviewerEntryId(skill.id, 'tests'),
+      name: skill.name,
+      state: { status: 'queued' as const, ...(deep.note ? { note: deep.note } : {}) },
+    }))
+    onUpdate?.()
+
+    await mapWithConcurrency(skills, REVIEWER_CONCURRENCY, async (skill, idx) => {
+      testReviewsState[idx] = {
+        skillId: reviewerEntryId(skill.id, 'tests'),
+        name: skill.name,
+        state: { status: 'loading', ...(deep.note ? { note: deep.note } : {}) },
+      }
+      onUpdate?.()
+      await executeSkillReview(ctx, skill, idx, deep, onUpdate, existingComments, 'tests')
+    })
+
+    // Convergence + simplify run over BOTH passes' findings, so a tests-pass
+    // finding is clustered and rewritten exactly like any other.
+    await runConvergencePass(onUpdate)
     await runSimplifyPass(onUpdate)
   }
 
@@ -3630,6 +3850,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     get outcomes() { return outcomesState },
     get story() { return storyState },
     get skillReviews() { return skillReviewsState },
+    get testReviews() { return testReviewsState },
     get convergence() { return convergenceState },
     get simplify() { return simplifyState },
     get totalUsage(): LlmUsage | undefined {
@@ -3638,7 +3859,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       let total: LlmUsage | undefined
       const states = [summaryState, attentionState, diagramsState, verdictState, testsState, alternativesState, intentState, outcomesState, storyState, riskJudgeState, convergenceState, simplifyState]
       for (const s of states) total = addUsage(total, s.usage)
-      for (const e of skillReviewsState) total = addUsage(total, e.state.usage)
+      for (const e of allReviewerEntries()) total = addUsage(total, e.state.usage)
       // Coach and expand are on-demand (never among the core tasks); fold in
       // their usage so the per-PR total reflects their cost too.
       total = addUsage(total, coachUsage)
@@ -3652,7 +3873,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // per-model performance (verdict + all reviewers).
       return aggregateModelPerformance([
         verdictModelsState,
-        ...skillReviewsState.map((e) => e.state.models ?? []),
+        ...allReviewerEntries().map((e) => e.state.models ?? []),
       ])
     },
     get modelCostBreakdown(): ModelCostRow[] {
@@ -3746,8 +3967,10 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
       // Reviewers: per-model rows when an ensemble ran; else attribute the
       // reviewer's total usage to the active model as a GENERATOR (it produced
       // the findings — a reviewer is finding-generation, not narration).
-      for (const e of skillReviewsState) {
-        const task = `Reviewer: ${e.name}`
+      for (const e of allReviewerEntries()) {
+        // The tests pass is a SECOND run of the same persona — label it so the
+        // cost table shows which pass the tokens went to.
+        const task = isTestsPassEntryId(e.skillId) ? `Reviewer: ${e.name} (tests)` : `Reviewer: ${e.name}`
         const models = e.state.models ?? []
         if (models.length > 0) {
           addModelRows(models, task)
@@ -3764,6 +3987,7 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     ask,
     expandComment,
     runSkillReviews,
+    runTestsReview,
     retrySkill,
   }
 }
