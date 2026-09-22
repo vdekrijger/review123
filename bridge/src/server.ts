@@ -13,8 +13,17 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { basename } from 'node:path'
 import { detectCapabilities, defaultCapabilityDeps, type CapabilityDeps } from './capabilities.js'
-import { defaultInfer, handleRequest, type BridgeRequest, type HandlerContext } from './handler.js'
+import {
+  defaultFiles,
+  defaultInfer,
+  defaultRepoState,
+  defaultSearch,
+  handleRequest,
+  type BridgeRequest,
+  type HandlerContext,
+} from './handler.js'
 import { MAX_BODY_BYTES, REQUEST_TIMEOUT_MS } from './protocol.js'
+import { ripgrepProbe } from './search.js'
 
 /** The address the bridge binds. Not configurable — see the header comment. */
 export const LOOPBACK_HOST = '127.0.0.1'
@@ -28,6 +37,12 @@ export interface BridgeServerOptions {
   capabilityDeps?: CapabilityDeps
   /** Overrides the real `/v1/infer` worker. Tests only — see handler.ts. */
   infer?: HandlerContext['infer']
+  /** Overrides the real `/v1/files` worker. Tests only. */
+  files?: HandlerContext['files']
+  /** Overrides the real `/v1/search` worker. Tests only. */
+  search?: HandlerContext['search']
+  /** Overrides the real repo-state probe. Tests only. */
+  repoState?: HandlerContext['repoState']
 }
 
 /** Build the handler context (also used directly by tests). */
@@ -42,6 +57,12 @@ export function createContext(opts: BridgeServerOptions): HandlerContext {
     capabilities: () => detectCapabilities(deps),
     version: opts.version,
     infer: opts.infer ?? defaultInfer(opts.realRoot),
+    files: opts.files ?? defaultFiles(opts.realRoot),
+    // The ripgrep probe is re-run per search, exactly as capability detection
+    // is re-run per health request, so installing `rg` does not need a bridge
+    // restart to take effect.
+    search: opts.search ?? defaultSearch(opts.realRoot, ripgrepProbe(deps)),
+    repoState: opts.repoState ?? defaultRepoState(opts.realRoot),
   }
 }
 

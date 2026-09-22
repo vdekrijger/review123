@@ -9,6 +9,7 @@ import { REVIEW123_ORIGIN } from './cors.js'
 
 const TOKEN = 'test-token-0000000000000000000000000000000'
 const PORT = 7321
+const HEAD_SHA = '1234567890abcdef1234567890abcdef12345678'
 
 function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
   return {
@@ -17,11 +18,15 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
     realRoot: '/private/tmp/checkouts/review123',
     rootName: 'review123',
     extraOrigins: [],
-    capabilities: async () => ({ inference: ['claude'], infer: true, files: false, search: false }),
+    capabilities: async () => ({ inference: ['claude'], infer: true, files: true, search: true }),
     version: '0.1.0',
-    // Default stub: the handler's own tests never spawn a CLI. infer.test.ts
-    // owns the process mechanics; this file owns the protocol gates.
+    // Default stubs: the handler's own tests never spawn a CLI, open a file or
+    // walk a tree. infer/files/search.test.ts own those mechanics; this file
+    // owns the protocol gates.
     infer: async () => ({ ok: true as const, text: 'stub answer', truncated: false, durationMs: 3 }),
+    files: async () => ({ ok: true as const, files: [], missing: [], skipped: [] }),
+    search: async () => ({ ok: true as const, matches: [], truncated: false }),
+    repoState: async () => ({ head: HEAD_SHA, branch: 'main', dirty: false }),
     ...overrides,
   }
 }
@@ -56,7 +61,8 @@ describe('GET /v1/health', () => {
       ok: true,
       protocol: PROTOCOL_VERSION,
       root: 'review123',
-      capabilities: { inference: ['claude'], infer: true, files: false, search: false },
+      capabilities: { inference: ['claude'], infer: true, files: true, search: true },
+      git: { head: HEAD_SHA, branch: 'main', dirty: false },
       version: '0.1.0',
     })
   })
@@ -81,20 +87,67 @@ describe('GET /v1/health', () => {
 
   it('re-probes capabilities per request so a newly installed CLI shows up', async () => {
     let installed: string[] = []
-    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, files: false, search: false }) })
+    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, files: true, search: true }) })
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
       inference: [],
       infer: true,
-      files: false,
-      search: false,
+      files: true,
+      search: true,
     })
     installed = ['codex']
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
       inference: ['codex'],
       infer: true,
-      files: false,
-      search: false,
+      files: true,
+      search: true,
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The repo state — the field the whole grounding feature turns on. Every case
+// is exercised here as DATA, so the handler's promise ("report it, never guess
+// it") is pinned without needing four real checkouts. gitState.test.ts owns
+// the git mechanics that produce these shapes.
+// ---------------------------------------------------------------------------
+
+describe('GET /v1/health — repo state', () => {
+  it('reports a clean checkout on a branch', async () => {
+    const res = await handleRequest(req(), ctx())
+    expect(parse(res.body)['git']).toEqual({ head: HEAD_SHA, branch: 'main', dirty: false })
+  })
+
+  it('reports a DIRTY checkout as dirty — never smooths it over', async () => {
+    const context = ctx({ repoState: async () => ({ head: HEAD_SHA, branch: 'main', dirty: true }) })
+    expect(parse((await handleRequest(req(), context)).body)['git']).toEqual({
+      head: HEAD_SHA,
+      branch: 'main',
+      dirty: true,
+    })
+  })
+
+  it('reports a detached HEAD as a null branch, with the sha still present', async () => {
+    const context = ctx({ repoState: async () => ({ head: HEAD_SHA, branch: null, dirty: false }) })
+    expect(parse((await handleRequest(req(), context)).body)['git']).toEqual({
+      head: HEAD_SHA,
+      branch: null,
+      dirty: false,
+    })
+  })
+
+  it('reports NULL when the root is not a repo — not a fabricated sha, not an error', async () => {
+    const context = ctx({ repoState: async () => null })
+    const res = await handleRequest(req(), context)
+    expect(res.status).toBe(200)
+    expect(parse(res.body)['git']).toBeNull()
+  })
+
+  it('re-reads the repo state per request, so switching branches needs no restart', async () => {
+    let head = HEAD_SHA
+    const context = ctx({ repoState: async () => ({ head, branch: 'main', dirty: false }) })
+    expect((parse((await handleRequest(req(), context)).body)['git'] as { head: string }).head).toBe(HEAD_SHA)
+    head = 'f'.repeat(40)
+    expect((parse((await handleRequest(req(), context)).body)['git'] as { head: string }).head).toBe('f'.repeat(40))
   })
 })
 
@@ -360,21 +413,108 @@ describe('POST /v1/infer', () => {
   })
 })
 
-describe('reserved routes', () => {
-  it.each(['/v1/files', '/v1/search'])('%s answers 501 not-implemented', async (path) => {
-    const res = await handleRequest(req({ method: 'POST', path, body: Buffer.from('{}') }), ctx())
-    expect(res.status).toBe(501)
+describe('POST /v1/files', () => {
+  it('returns the worker’s answer verbatim, including the empty-but-present arrays', async () => {
+    const res = await handleRequest(
+      req({ method: 'POST', path: '/v1/files', body: Buffer.from(JSON.stringify({ paths: ['a.ts'] })) }),
+      ctx({
+        files: async () => ({
+          ok: true as const,
+          files: [{ path: 'a.ts', bytes: 3, truncated: false, content: 'abc', encoding: 'utf-8' as const }],
+          missing: ['b.ts'],
+          skipped: [{ path: 'logo.png', reason: 'binary' as const }],
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
     expect(parse(res.body)).toEqual({
-      ok: false,
-      error: 'not-implemented',
-      message: expect.stringContaining(path),
+      ok: true,
+      files: [{ path: 'a.ts', bytes: 3, truncated: false, content: 'abc', encoding: 'utf-8' }],
+      missing: ['b.ts'],
+      skipped: [{ path: 'logo.png', reason: 'binary' }],
     })
   })
 
-  it('405s a reserved route reached with the wrong method', async () => {
+  it('400s a body with no paths, before the worker is ever called', async () => {
+    let called = false
+    const res = await handleRequest(
+      req({ method: 'POST', path: '/v1/files', body: Buffer.from('{}') }),
+      ctx({
+        files: async () => {
+          called = true
+          return { ok: true as const, files: [], missing: [], skipped: [] }
+        },
+      }),
+    )
+    expect(res.status).toBe(400)
+    expect(parse(res.body)['error']).toBe('bad-request')
+    expect(called).toBe(false)
+  })
+
+  it('403s a confinement refusal — the whole request, not a dropped path', async () => {
+    const res = await handleRequest(
+      req({
+        method: 'POST',
+        path: '/v1/files',
+        body: Buffer.from(JSON.stringify({ paths: ['../../etc/passwd'] })),
+      }),
+      ctx({
+        files: async () => ({
+          ok: false as const,
+          code: 'forbidden-path' as const,
+          message: 'Path is outside the repo: ../../etc/passwd',
+        }),
+      }),
+    )
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('forbidden-path')
+  })
+
+  it('405s /v1/files reached with the wrong method', async () => {
     const res = await handleRequest(req({ method: 'GET', path: '/v1/files' }), ctx())
     expect(res.status).toBe(405)
     expect(res.headers['Allow']).toBe('POST, OPTIONS')
+  })
+})
+
+describe('POST /v1/search', () => {
+  it('returns the worker’s matches and its truncation flag', async () => {
+    const res = await handleRequest(
+      req({ method: 'POST', path: '/v1/search', body: Buffer.from(JSON.stringify({ query: 'foo' })) }),
+      ctx({
+        search: async () => ({
+          ok: true as const,
+          matches: [{ path: 'src/a.ts', line: 3, column: 5, preview: 'const foo = 1' }],
+          truncated: true,
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(parse(res.body)).toEqual({
+      ok: true,
+      matches: [{ path: 'src/a.ts', line: 3, column: 5, preview: 'const foo = 1' }],
+      truncated: true,
+    })
+  })
+
+  it('400s an empty query, before the worker is ever called', async () => {
+    let called = false
+    const res = await handleRequest(
+      req({ method: 'POST', path: '/v1/search', body: Buffer.from(JSON.stringify({ query: '' })) }),
+      ctx({
+        search: async () => {
+          called = true
+          return { ok: true as const, matches: [], truncated: false }
+        },
+      }),
+    )
+    expect(res.status).toBe(400)
+    expect(called).toBe(false)
+  })
+
+  it('405s /v1/search reached with the wrong method', async () => {
+    const res = await handleRequest(req({ method: 'GET', path: '/v1/search' }), ctx())
+    expect(res.status).toBe(405)
   })
 })
 
@@ -398,11 +538,14 @@ describe('unknown routes and caps', () => {
     expect(parse(res.body)['error']).toBe('payload-too-large')
   })
 
-  it('accepts a body right at the cap', async () => {
+  it('accepts a body right at the cap — it gets past the cap gate and is judged on content', async () => {
     const res = await handleRequest(
       req({ method: 'POST', path: '/v1/files', body: Buffer.alloc(MAX_BODY_BYTES) }),
       ctx(),
     )
-    expect(res.status).toBe(501)
+    // A buffer of NULs is not JSON, so the route rejects it as a bad request
+    // rather than as payload-too-large. That distinction is the assertion.
+    expect(res.status).toBe(400)
+    expect(parse(res.body)['error']).toBe('bad-request')
   })
 })

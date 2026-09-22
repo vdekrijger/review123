@@ -15,28 +15,40 @@
  *   5. Body cap.                                 413.
  *   6. Route.                                    200 / 501 / 404.
  *
- * Every gate above still applies to `/v1/infer`: no origin outside the
- * allowlist, no request without the pairing token, and no rebound hostname ever
- * reaches the code that spawns a process.
+ * Every gate above still applies to `/v1/infer`, `/v1/files` and `/v1/search`:
+ * no origin outside the allowlist, no request without the pairing token, and no
+ * rebound hostname ever reaches the code that spawns a process or opens a file.
  */
 
 import { extractBearer, tokenMatches } from './auth.js'
 import { corsHeaders, isAllowedHost, isAllowedOrigin } from './cors.js'
+import {
+  parseFilesRequest,
+  readFiles,
+  statusForFilesError,
+  type FilesOutcome,
+} from './files.js'
+import { readGitState } from './gitState.js'
 import {
   parseInferRequest,
   runInference,
   statusForInferError,
   type InferOutcome,
 } from './infer.js'
+import { parseSearchRequest, runSearch } from './search.js'
 import {
   MAX_BODY_BYTES,
   PROTOCOL_VERSION,
   type BridgeCapabilities,
   type BridgeErrorCode,
   type ErrorResponse,
+  type FilesRequest,
+  type GitState,
   type HealthResponse,
   type InferRequest,
   type InferResponse,
+  type SearchRequest,
+  type SearchResponse,
 } from './protocol.js'
 
 /** The subset of an incoming HTTP request the protocol actually looks at. */
@@ -79,12 +91,37 @@ export interface HandlerContext {
    * one installed to run the suite).
    */
   infer: (req: InferRequest, availableClis: readonly string[]) => Promise<InferOutcome>
+  /** Runs `/v1/files`. Injected for the same reason `infer` is. */
+  files: (req: FilesRequest) => Promise<FilesOutcome>
+  /** Runs `/v1/search`. Injected for the same reason `infer` is. */
+  search: (req: SearchRequest) => Promise<SearchResponse>
+  /**
+   * The working tree's repo state for `/v1/health`, or null when it cannot be
+   * established. Injected so the handler's tests can exercise every state
+   * (clean, dirty, detached, no repo) as data, with no real checkout.
+   */
+  repoState: () => Promise<GitState | null>
 }
 
 /** The real worker, used unless a test injects its own. */
 export function defaultInfer(realRoot: string) {
   return (req: InferRequest, availableClis: readonly string[]): Promise<InferOutcome> =>
     runInference(req, { realRoot, availableClis })
+}
+
+/** The real `/v1/files` worker, used unless a test injects its own. */
+export function defaultFiles(realRoot: string) {
+  return (req: FilesRequest): Promise<FilesOutcome> => readFiles(realRoot, req)
+}
+
+/** The real `/v1/search` worker, used unless a test injects its own. */
+export function defaultSearch(realRoot: string, hasRipgrep: () => Promise<boolean>) {
+  return (req: SearchRequest): Promise<SearchResponse> => runSearch(realRoot, req, { hasRipgrep })
+}
+
+/** The real repo-state probe, used unless a test injects its own. */
+export function defaultRepoState(realRoot: string) {
+  return (): Promise<GitState | null> => readGitState(realRoot)
 }
 
 const JSON_HEADERS = {
@@ -110,11 +147,16 @@ function fail(
   return json(status, payload, extra)
 }
 
-/** Routes that exist in the contract but answer 501 until their PR lands. */
-const RESERVED_ROUTES = new Set(['/v1/files', '/v1/search'])
-
-/** POST routes that are actually implemented. Used for the 405 check. */
-const POST_ROUTES = new Set(['/v1/infer'])
+/**
+ * Every POST route in protocol v1. Used for the 405 check, so a GET to a real
+ * route is told the METHOD is wrong rather than that the route is missing.
+ *
+ * There is no longer a RESERVED set: `/v1/files` and `/v1/search` were the last
+ * two 501s and they are implemented below. The `not-implemented` error CODE
+ * stays in the contract (codes are additive within v1, and clients still
+ * recognise it) — it is simply no longer produced by any route.
+ */
+const POST_ROUTES = new Set(['/v1/infer', '/v1/files', '/v1/search'])
 
 /** Parse a request body as JSON, or null. Never throws. */
 function parseJsonBody(body: Buffer | null): unknown {
@@ -174,12 +216,16 @@ export async function handleRequest(
       // Basename only — never the absolute path (see protocol.ts).
       root: ctx.rootName,
       capabilities: await ctx.capabilities(),
+      // The field local grounding turns on. Null is a normal answer (not a
+      // repo, no commits, no git) and the client must read it as "no match
+      // provable" — never as an error, and never as permission to guess.
+      git: await ctx.repoState(),
       version: ctx.version,
     }
     return json(200, payload, cors)
   }
 
-  if (POST_ROUTES.has(req.path) || RESERVED_ROUTES.has(req.path)) {
+  if (POST_ROUTES.has(req.path)) {
     if (req.method !== 'POST') {
       return fail(405, 'method-not-allowed', `${req.path} accepts POST.`, { ...cors, Allow: 'POST, OPTIONS' })
     }
@@ -220,13 +266,27 @@ export async function handleRequest(
     return json(200, payload, cors)
   }
 
-  if (RESERVED_ROUTES.has(req.path)) {
-    return fail(
-      501,
-      'not-implemented',
-      `${req.path} is reserved by protocol v${PROTOCOL_VERSION} and is not implemented yet.`,
-      cors,
-    )
+  if (req.method === 'POST' && req.path === '/v1/files') {
+    const parsed = parseFilesRequest(parseJsonBody(req.body))
+    if ('error' in parsed) return fail(400, 'bad-request', parsed.error, cors)
+
+    // Confinement lives in the worker (it needs the filesystem), so this is
+    // where a path escape becomes a 403. One bad path fails the WHOLE request:
+    // a caller must never be able to mistake "refused" for "missing".
+    const outcome = await ctx.files(parsed)
+    if (outcome.ok !== true) {
+      return fail(statusForFilesError(outcome.code), outcome.code, outcome.message, cors)
+    }
+    return json(200, outcome, cors)
+  }
+
+  if (req.method === 'POST' && req.path === '/v1/search') {
+    const parsed = parseSearchRequest(parseJsonBody(req.body))
+    if ('error' in parsed) return fail(400, 'bad-request', parsed.error, cors)
+
+    // Search names no paths, so there is no confinement step: both backends are
+    // rooted at the repo and neither follows a symlink out of it.
+    return json(200, await ctx.search(parsed), cors)
   }
 
   return fail(404, 'not-found', `No route ${req.method} ${req.path} in protocol v${PROTOCOL_VERSION}.`, cors)

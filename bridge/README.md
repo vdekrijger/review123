@@ -25,13 +25,22 @@ with no bridge running the app behaves exactly as it does today.
 
 ## Status
 
-Protocol **v1**. `GET /v1/health` and `POST /v1/infer` are implemented.
-`POST /v1/files` and `POST /v1/search` are **reserved**: their shapes are fixed
-(below) and the routes answer `501 not-implemented` until the follow-up PRs
-land.
+Protocol **v1**, complete. `GET /v1/health`, `POST /v1/infer`, `POST /v1/files`
+and `POST /v1/search` are all implemented — nothing answers `501` any more.
 
-With `/v1/infer` live, review123 can run its reviews through the CLI you
-already pay for: pick **Local bridge** under Settings → AI models.
+- With `/v1/infer` live, review123 runs its reviews through the CLI you already
+  pay for: pick **Local bridge** under Settings → AI models.
+- With `/v1/files` and `/v1/search` live, it grounds those reviews in **your
+  working tree** instead of the provider API — no rate limit, no 20k-line cap,
+  and the whole repo rather than just the diff.
+
+> **Local grounding only happens when your checkout matches the PR.**
+> `/v1/health` reports the tree's `head` sha, `branch` and whether it is
+> `dirty`, and review123 uses local files **only** when `head` equals the PR's
+> head sha. On a mismatch it falls back to the provider API and says so on
+> screen. Grounding a review of PR #123 in `main`'s copy of a file would be
+> silently wrong — worse than not having the bridge at all — so the bridge
+> reports its state and the browser refuses to guess.
 
 ---
 
@@ -206,6 +215,22 @@ produced by **stat-ing PATH entries for an executable file**, not by spawning
 `which` and not by making a model call. Probing a CLI by running it would burn
 the user's subscription quota just to render a settings page.
 
+Two other places spawn a process, and both stay inside the same promise:
+
+- **`git`, for `/v1/health`'s repo state** (`gitState.ts`). Three invocations,
+  every argv a hard-coded literal, every one **read-only**: `rev-parse --verify
+  HEAD`, `rev-parse --abbrev-ref HEAD`, `status --porcelain`. No request field
+  is ever appended — `readGitState` takes no request input at all — and there
+  is deliberately no code path in the file that can check out, fetch, reset or
+  stash. It runs with `GIT_OPTIONAL_LOCKS=0`, so a health probe cannot take the
+  index lock out from under a command you are running yourself.
+- **`rg`, for `/v1/search`** (`search.ts`). Again `spawn` with an argv array and
+  no shell. The query is carried by `-e`, so a search for `--version` is a
+  *pattern*, never a flag; `--` then ends option parsing before the search path.
+  `--no-follow` means a symlink out of the repo cannot smuggle outside content
+  into a result. If `rg` is absent (or fails), a bounded JS walk answers
+  instead, so the route never depends on it.
+
 ### 5a. It INVOKES your CLI — it never borrows its credentials
 
 The bridge runs `claude` / `codex` as a subprocess and lets each authenticate
@@ -227,12 +252,19 @@ state; Settings → AI models → *Test* does a real one-turn round-trip instead
 | Cap | Value |
 | --- | --- |
 | Request body | 1 MiB (`413` — enforced **while streaming**, never buffered first) |
-| File bytes returned (reserved `/v1/files`) | 2 MiB per file |
 | Request RECEIVE timeout | 30 s (`server.requestTimeout`) |
 | Headers timeout | 10 s (slow-loris budget) |
 | `/v1/infer` per-call budget | 120 s default, 600 s ceiling |
 | `/v1/infer` stdout buffered | 4 MiB, then the child is killed and `truncated: true` |
-| `files` content inlined per call | 256 KiB total |
+| `/v1/infer` `files` content inlined per call | 256 KiB total |
+| `/v1/files` paths per request | 200 (over the cap is a `400`, never a silent trim) |
+| `/v1/files` bytes per file | 2 MiB (`maxBytes` clamps below it) |
+| `/v1/files` bytes per response | 4 MiB across all files |
+| `/v1/search` results | 200 default, 1000 ceiling |
+| `/v1/search` wall clock | 15 s, then whatever was found comes back `truncated: true` |
+| `/v1/search` file size | files over 1 MiB are not searched |
+| `/v1/search` files scanned (JS fallback) | 20 000 |
+| `git` probes behind `/v1/health` | 5 s, then the state is reported as `null` |
 
 `server.requestTimeout` bounds how long a client may take to **send** a request,
 not how long the bridge may take to answer — which is why a multi-minute CLI
@@ -292,9 +324,14 @@ must fall back on `message`, never crash.
   "root": "your-repo",          // BASENAME only, never the absolute path
   "capabilities": {
     "inference": ["claude"],    // CLIs DETECTED on PATH — see below
-    "infer": true,              // route READINESS — /v1/infer is implemented
-    "files": false,             // route READINESS — false while /v1/files 501s
-    "search": false
+    "infer": true,              // route READINESS — one flag per route
+    "files": true,
+    "search": true              // true even without ripgrep: a JS walk answers
+  },
+  "git": {                      // the working tree RIGHT NOW — or null
+    "head": "9f1c…",            // full 40-char sha
+    "branch": "feat/thing",     // null on a detached HEAD
+    "dirty": false              // any `git status --porcelain` output at all
   },
   "version": "0.1.0"
 }
@@ -307,13 +344,29 @@ must fall back on `message`, never crash.
 - `infer`, `files` and `search` are **route-readiness** booleans, one per route
   and named after it. Each flips *in the same commit that implements its
   route*, so a client that trusts the flag can never call a route that is not
-  there. `infer` is `true`; `files`/`search` are still `false`.
+  there. All three are `true` — v1 is complete.
+
+`search` is `true` whether or not `ripgrep` is installed. The flag reports
+whether the **route** exists, never how fast it will be; conflating the two
+would make a client refuse a search that works perfectly well.
 
 `infer` is `true` **even when `inference` is empty**, and that is not a bug: the
 two answer different questions. `infer` says "this bridge understands the
 route"; `inference` says "and here is what it could run". A client needs both —
 and asking for a CLI that is not installed gets a precise `cli-unavailable`
 rather than a confusing `501`.
+
+**`git` is the field local grounding turns on.** It is the working tree's state
+*right now*, from three read-only `git` commands (§5). `null` means the root is
+not a repository, has no commits yet, or `git` did not answer — and a client
+must read `null` as **"no match is provable"**, never as permission to guess.
+
+review123 uses `/v1/files` and `/v1/search` for a review **only when `head`
+equals that PR's head sha**. On any mismatch it falls back to the provider API
+and names both shas on screen. A `dirty` tree is still used when the head
+matches — you may well be mid-work, and that is a legitimate thing to review —
+but the UI flags it once, because a finding grounded in uncommitted code is a
+real possibility the reviewer should know about.
 
 **Authentication state is deliberately not reported.** The only cheap signals
 ("a credentials file exists", "an API-key env var is set") lie routinely —
@@ -401,42 +454,61 @@ reads the subscription, which would defeat the entire point of the bridge.
   appends a format instruction and runs the answer through its existing
   extract-and-repair ladder.
 
-### `POST /v1/files` — reserved (`501`)
+### `POST /v1/files` — implemented
 
 Read file contents from the actual working tree — no 20k-line cap, no API quota,
 and files that are not part of the PR diff.
 
 ```ts
 interface FilesRequest {
-  paths: string[]           // repo-relative, confined to the root
+  paths: string[]           // repo-relative, confined to the root; max 200
   maxBytes?: number         // per file; clamped to 2 MiB
 }
 
 interface FilesResponse {
   ok: true
   files: {
-    path: string
+    path: string            // echoed back exactly as you asked for it
     bytes: number           // size on disk, NOT of `content`
     truncated: boolean
     content: string
     encoding: 'utf-8'
   }[]
   missing: string[]         // requested but absent — not an error
+  skipped: { path: string; reason: 'binary' | 'not-a-file' | 'unreadable' }[]
 }
 ```
 
-### `POST /v1/search` — reserved (`501`)
+**Every** path goes through the confinement check (§4), one at a time, before
+anything is opened — and one bad path fails the **whole** request with `403
+forbidden-path` rather than quietly dropping out of the results. A caller must
+never be able to mistake *refused* for *missing*.
+
+A requested path lands in exactly one of the three buckets, never two:
+
+- `files` — readable text. `truncated` is honest, including when the response's
+  4 MiB total budget (not the per-file cap) was what cut it. A cut that lands
+  mid-codepoint drops the incomplete sequence rather than emitting a `U+FFFD`
+  the user's file never contained.
+- `missing` — nothing is there. Per the contract this is **not** an error.
+- `skipped` — something is there but it yields no text. A `binary` file (a NUL
+  in the first 8 KB, the same heuristic git uses) is reported, never decoded:
+  handing a reviewer mojibake and calling it source is worse than saying
+  nothing. `skipped` is **additive within v1** — a client that reads only
+  `files` and `missing` still works, it just cannot explain the gap.
+
+### `POST /v1/search` — implemented
 
 Content search across the working tree, replacing the rate-limited provider
 code-search.
 
 ```ts
 interface SearchRequest {
-  query: string
+  query: string             // literal by default
   regex?: boolean
-  caseSensitive?: boolean
-  maxResults?: number       // clamped by the bridge
-  include?: string[]        // repo-relative globs
+  caseSensitive?: boolean   // default: insensitive
+  maxResults?: number       // default 200, ceiling 1000
+  include?: string[]        // repo-relative globs; max 20
 }
 
 interface SearchResponse {
@@ -445,6 +517,24 @@ interface SearchResponse {
   truncated: boolean
 }
 ```
+
+`line` and `column` are **1-based**, and `column` counts characters, not bytes.
+`truncated` covers all three ways a result set gets cut — `maxResults`, the
+20 000-file scan budget, and the 15 s wall clock — as one honest boolean,
+because a caller's response to each is the same: *there may be more*.
+
+**Two backends, one contract.** `ripgrep` is used when `rg` is on `PATH`
+(faster, and it implements `.gitignore` properly); otherwise a bounded JS walk
+applies the documented common subset — comments, `!` negation, trailing `/`,
+leading `/`, `*`/`?`/`**`, `[abc]`, nested `.gitignore` files, last-match-wins.
+Not supported: `.git/info/exclude`, the global `core.excludesFile`, and rules
+from directories above the served root. A miss means the fallback searches a
+file git would have ignored — noisier, never wrong, and never outside the repo.
+Neither backend follows a symlink, and `.git` and `node_modules` are always
+skipped. If `rg` is present but fails, the walker runs instead and the caller
+cannot tell the difference.
+
+A malformed `regex` is a `400` you can act on, not a mystery two layers down.
 
 The canonical TypeScript source for all of the above is
 [`src/protocol.ts`](src/protocol.ts); the browser client mirrors it in

@@ -75,14 +75,19 @@ describe('detectInferenceClis', () => {
 })
 
 describe('detectCapabilities', () => {
-  it('reports files/search as NOT ready while their routes answer 501, and infer as READY', async () => {
+  it('reports every v1 route as READY — all three are implemented', async () => {
     const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']))
-    expect(caps).toEqual({ inference: ['claude'], infer: true, files: false, search: false })
+    expect(caps).toEqual({ inference: ['claude'], infer: true, files: true, search: true })
+  })
+
+  it('reports search READY with nothing on PATH — the route falls back to a JS walk', async () => {
+    const caps = await detectCapabilities(stubDeps(['/bin'], []))
+    expect(caps.search).toBe(true)
   })
 
   it('reports infer READY even with no CLI detected — readiness and detection are different questions', async () => {
     const caps = await detectCapabilities(stubDeps(['/bin'], []))
-    expect(caps).toEqual({ inference: [], infer: true, files: false, search: false })
+    expect(caps).toEqual({ inference: [], infer: true, files: true, search: true })
   })
 })
 
