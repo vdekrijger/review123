@@ -26,6 +26,7 @@ import {
   toggleHunkAttention,
   _resetHunkAttentionPrefForTest,
 } from '../lib/guide/hunkAttentionPref.svelte'
+import { track, _setCaptureForTest } from '../lib/analytics/analytics'
 
 // jsdom has no canvas — the diff library probes getContext for measurement.
 Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
@@ -266,5 +267,47 @@ describe('hunk-attention preference', () => {
   it('reads a corrupt entry as on', () => {
     localStorage.setItem('review123:hunk-attention', 'not json')
     expect(getHunkAttentionEnabled()).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Analytics (#241 deferred this: the event union was outside its fence)
+//
+// Restoring a receded hunk is the classifier being OVERRULED, so it is the one
+// interaction worth counting here. What it reports is the hunk's SIZE — never
+// its path, its index, its lines, the classifier's summary, or any code.
+// ---------------------------------------------------------------------------
+
+describe('FileDiff — hunk_restored analytics', () => {
+  const captured: { event: string; props: Record<string, unknown> }[] = []
+
+  beforeEach(() => {
+    captured.length = 0
+    _setCaptureForTest((event, props) => captured.push({ event, props }))
+  })
+
+  it('reports the restored hunk’s changed-line count, and nothing that locates it', async () => {
+    render(FileDiff, { props: { file: makeFile(), mode: 'unified' } })
+    await settle()
+    // The marker prints "2 lines"; the event must carry that same number.
+    expect(screen.getByTestId('hunk-marker').textContent).toContain('2 lines')
+
+    await userEvent.click(screen.getByTestId('hunk-marker-restore'))
+    await settle()
+
+    const events = captured.filter((c) => c.event === 'hunk_restored')
+    expect(events).toHaveLength(1)
+    expect(events[0].props).toEqual({ changed: 2 })
+  })
+
+  it('fires nothing until the user actually overrules the classifier', async () => {
+    render(FileDiff, { props: { file: makeFile(), mode: 'unified' } })
+    await settle()
+    expect(captured.filter((c) => c.event === 'hunk_restored')).toHaveLength(0)
+  })
+
+  it('strips anything that is not the count', () => {
+    track('hunk_restored', { changed: 4, path: 'src/compact.ts', index: 0, summary: 'formatting only' } as never)
+    expect(captured.at(-1)).toEqual({ event: 'hunk_restored', props: { changed: 4 } })
   })
 })

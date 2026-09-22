@@ -1635,7 +1635,7 @@
     aria-pressed={hunkAttentionOn}
     data-testid="hunk-attention-toggle"
     title="Within a file: list the decision points and recede the mechanical hunks (formatting, imports, comments, renames, fixture data). Nothing is ever hidden — a receded hunk restores with one click."
-    onclick={() => toggleHunkAttention()}
+    onclick={() => track('hunk_focus_toggled', { enabled: toggleHunkAttention() })}
   >{hunkAttentionOn ? 'Hunk focus: on' : 'Hunk focus: off'}</button>
   {#if hideWhitespace && whitespaceToggleEnabled && whitespaceOnlyCount > 0}
     <span class="ws-only-note" role="status">

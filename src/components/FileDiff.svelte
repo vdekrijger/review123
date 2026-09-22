@@ -893,8 +893,15 @@
   /** Mechanical hunks the user has explicitly restored (session-only). */
   let restoredHunks = $state<Set<number>>(new Set())
 
-  function restoreHunk(index: number): void {
+  /**
+   * Un-recede one mechanical hunk. `changed` is the count already printed on
+   * the marker — reported so the classifier's precision is measurable (people
+   * rescuing large hunks means it is receding real work), never the path, the
+   * index, the lines, or any code. See lib/analytics/analytics.ts.
+   */
+  function restoreHunk(index: number, changed: number): void {
     restoredHunks = new Set([...restoredHunks, index])
+    track('hunk_restored', { changed })
   }
 
   // A new patch (refresh, revision switch, whitespace toggle) invalidates the
@@ -1315,7 +1322,7 @@
               type="button"
               class="hunk-marker-restore"
               data-testid="hunk-marker-restore"
-              onclick={() => restoreHunk(marker.index)}
+              onclick={() => restoreHunk(marker.index, marker.changed)}
             >Show normally</button>
           </div>
         {/if}

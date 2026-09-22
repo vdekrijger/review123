@@ -160,6 +160,20 @@ const EVENTS = {
   drawer_opened: [],
   // Carries no content — fired when the user turns ON "Hide whitespace changes".
   whitespace_hidden: [],
+  // PRIVACY DECISION (#241 per-hunk attention): the within-file attention layer
+  // recedes hunks it classified as MECHANICAL behind a marker. Both events say
+  // whether that classifier is earning its place, and neither can say anything
+  // about the code it classified:
+  //   - hunk_restored.'changed' : integer count of CHANGED LINES in the hunk the
+  //     user un-receded — the same number already printed on the marker. A size,
+  //     not a location: never the path, the hunk index, the line numbers, the
+  //     classifier's summary, or one character of the diff. It answers "are
+  //     people rescuing big hunks (the classifier is wrong) or one-liners?".
+  //   - hunk_focus_toggled.'enabled' : boolean — the new state of the Inspect
+  //     toolbar toggle. Unlike focus_mode_on (ON only), BOTH directions matter
+  //     here: turning the layer off is the signal that it is getting in the way.
+  hunk_restored: ['changed'],
+  hunk_focus_toggled: ['enabled'],
   // Carries no content — fired when the user turns ON focus mode (any non-off).
   focus_mode_on: [],
   rail_expanded: [],
