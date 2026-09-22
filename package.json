@@ -11,8 +11,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check": "svelte-check --tsconfig ./tsconfig.json && pnpm --filter @review123/bridge check",
     "test": "vitest run --passWithNoTests",
+    "bridge": "pnpm --filter @review123/bridge start",
     "test:watch": "vitest",
     "eval": "node eval/run-eval.mts",
     "eval:capture": "node eval/capture-case.mts"
@@ -45,6 +46,7 @@
     "@testing-library/svelte": "^5.3.1",
     "@testing-library/user-event": "^14.6.1",
     "@tsconfig/svelte": "^5.0.8",
+    "@types/node": "^22.19.0",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^29.1.1",
     "svelte-check": "^4.6.0",
