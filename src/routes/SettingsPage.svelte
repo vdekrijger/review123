@@ -5,6 +5,7 @@
   import ProvidersSection from '../components/settings/ProvidersSection.svelte'
   import BridgeSection from '../components/settings/BridgeSection.svelte'
   import AiModelsSection from '../components/settings/AiModelsSection.svelte'
+  import StandingRulesSection from '../components/settings/StandingRulesSection.svelte'
   import SkillsSection from '../components/settings/SkillsSection.svelte'
 
   let { section }: { section?: string } = $props()
@@ -17,6 +18,9 @@
     // which 'Reviewer skills' is asserted to be.
     { id: 'bridge', label: 'Local bridge' },
     { id: 'ai-models', label: 'AI models' },
+    // Account-level, not per-PR: the standing-rules knowledge base is distilled
+    // from the whole review history, so it belongs here rather than in a review.
+    { id: 'standing-rules', label: 'Standing rules' },
     { id: 'skills', label: 'Reviewer skills' },
   ] as const
 
@@ -137,6 +141,7 @@
       <ProvidersSection />
       <BridgeSection />
       <AiModelsSection />
+      <StandingRulesSection />
       <SkillsSection />
     </main>
   </div>

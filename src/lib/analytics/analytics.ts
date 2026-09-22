@@ -262,6 +262,43 @@ const EVENTS = {
   // A fix run is minutes long and mostly succeeds or mostly does not; these
   // counts say which, and nothing about the code involved.
   bridge_fix_settled: ['outcome', 'failure', 'changes', 'skipped', 'stop_reason', 'tests_passed', 'tests_failed', 'duration_ms'],
+  // PRIVACY DECISION (standing rules): the distillation reads the user's OWN
+  // review comments, their dismissal ledger, and their unsent draft comments,
+  // and returns rules written in their vocabulary. Its permitted ceiling was
+  // "rule text and evidence counts"; we send LESS THAN THAT, deliberately.
+  //
+  // A distilled rule paraphrases the user's own review comments, so it can
+  // and will name internal modules, services, and conventions ("Put billing
+  // logic in AcmeLedgerService, never in the webhook handler"). That is a
+  // private repo identifier wearing a sentence, and #232's boundary does not
+  // stop being the boundary because the sentence is short. So NO rule text,
+  // NO evidence excerpts, NO repo or path, ever. Counts and fixed enums only:
+  //   - 'source'      : 'bridge' | 'api' — WHERE the distillation ran. The
+  //                     whole point of the local-first seam is unmeasurable
+  //                     without it, and it says nothing about the corpus.
+  //   - 'rules'       : integer count of rules returned.
+  //   - 'do' / 'avoid': integer counts per kind — the asked-for vs rejected
+  //                     split, which is the feature's central claim.
+  //   - 'comments' / 'dismissals' / 'drafts' : integer SIZES of the three
+  //                     corpus streams. Sizes, never contents.
+  //   - 'duration_ms' : elapsed ms (same convention as ai_task_completed).
+  standing_rules_distilled: ['source', 'rules', 'do', 'avoid', 'comments', 'dismissals', 'drafts', 'duration_ms'],
+  // Fired when the user accepts or rejects ONE proposed rule. The accept/reject
+  // rate is the only real precision measure this feature has — and it needs no
+  // rule text to be useful. Fixed enums and one boolean:
+  //   - 'decision' : 'accepted' | 'rejected'.
+  //   - 'kind'     : 'do' | 'avoid' — the two kinds may well be judged very
+  //                  differently, and a blended rate would hide that.
+  //   - 'edited'   : boolean — did the user rewrite the rule before accepting
+  //                  it. An accepted-but-rewritten rule is a near miss, not a
+  //                  hit; the WORDS of the rewrite are never sent.
+  standing_rules_decided: ['decision', 'kind', 'edited'],
+  // Fired when the accepted rules leave the app. Carries only 'method'
+  // ('clipboard' | 'download') and 'rules' (integer count) — never the
+  // exported text, the filename the user chooses, or where it lands. The app
+  // does not write to any file on the user's machine, so there is nothing
+  // further to report.
+  standing_rules_exported: ['method', 'rules'],
 } as const
 
 export type EventName = keyof typeof EVENTS
