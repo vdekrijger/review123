@@ -84,7 +84,15 @@ async function seedCorpus(page: import('@playwright/test').Page) {
   )
 }
 
-async function stubExternal(page: import('@playwright/test').Page) {
+/**
+ * Lets ONE distillation request hang, so the in-flight state is real and the
+ * Cancel has something to stop. `release` is filled in while the request is
+ * parked; calling it lets the handler finish after the browser has already
+ * dropped the request.
+ */
+type HangControl = { on: boolean; release: (() => void) | null }
+
+async function stubExternal(page: import('@playwright/test').Page, hang?: HangControl) {
   await page.route('**/*posthog.com/**', (route) => route.abort())
   await page.route('**/us.i.posthog.com/**', (route) => route.abort())
   // No GitHub token is seeded, so the harvest degrades to the local streams.
@@ -99,6 +107,17 @@ async function stubExternal(page: import('@playwright/test').Page) {
     }
     const system = body?.messages?.find((m) => m.role === 'system')?.content ?? ''
     if (system.includes("turning a reviewer's own past corrections into standing orders")) {
+      if (hang?.on) {
+        await new Promise<void>((resolve) => {
+          hang.release = resolve
+        })
+        try {
+          return await route.abort('failed')
+        } catch {
+          // The page aborted it first — that IS the cancel under test.
+          return
+        }
+      }
       return route.fulfill({
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -229,6 +248,61 @@ test.describe('standing rules', () => {
     await page.getByTestId('standing-rules-section').getByRole('button', { name: /re-run/i }).click()
     await expect(page.getByTestId('standing-rule')).toHaveCount(1, { timeout: 15_000 })
     await expect(page.getByTestId('standing-rule')).toContainText(KEPT_RULE)
+  })
+
+  test('a run in flight can be STOPPED — calmly, without losing the rules already there', async ({
+    page,
+  }) => {
+    // The distillation is one multi-minute call over the bridge. This is the
+    // whole point of the Cancel: the user changes their mind, and pays nothing
+    // for it — not the spinner, not the rules they already decided on.
+    const hang: HangControl = { on: false, release: null }
+    await stubExternal(page, hang)
+    await seedCorpus(page)
+
+    const section = await openStandingRules(page)
+    await section.getByRole('button', { name: /check what's there/i }).click()
+    await expect(page.getByTestId('standing-rules-cost')).toBeVisible({ timeout: 5_000 })
+
+    // A first, complete run — the result the cancel must not destroy.
+    await section.getByRole('button', { name: /distil rules/i }).click()
+    await expect(page.getByTestId('standing-rules-result')).toBeVisible({ timeout: 15_000 })
+    await page.getByTestId('standing-rule').first().getByRole('button', { name: /accept rule/i }).click()
+    await expect(page.getByTestId('standing-rule-decided')).toContainText(/accepted/i)
+
+    // No Cancel while nothing is running.
+    await expect(page.getByTestId('standing-rules-cancel')).toHaveCount(0)
+
+    // A second run, parked in flight.
+    hang.on = true
+    await section.getByRole('button', { name: /re-run/i }).click()
+    const cancel = page.getByTestId('standing-rules-cancel')
+    await expect(cancel).toBeVisible({ timeout: 10_000 })
+
+    // Keyboard-operable: focused and activated without a mouse.
+    await cancel.focus()
+    await page.keyboard.press('Enter')
+
+    // CALM: a status line, never the error chip.
+    await expect(page.getByTestId('standing-rules-cancelled')).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByTestId('standing-rules-cancelled')).toContainText(/cancelled before it finished/i)
+    await expect(page.getByTestId('standing-rules-error')).toHaveCount(0)
+    await expect(page.getByTestId('standing-rules-cancel')).toHaveCount(0)
+
+    // The previous distillation and its decision are untouched, on screen and
+    // in storage.
+    await expect(page.getByTestId('standing-rules-result')).toBeVisible()
+    await expect(page.getByTestId('standing-rule')).toHaveCount(2)
+    await expect(page.getByTestId('standing-rule-decided')).toContainText(/accepted/i)
+    expect(await page.evaluate((k) => localStorage.getItem(k), RULES_KEY)).toContain(KEPT_RULE)
+
+    // Let the parked request go, and re-run: no stuck state, no stale note.
+    hang.on = false
+    hang.release?.()
+    await section.getByRole('button', { name: /re-run/i }).click()
+    await expect(page.getByTestId('standing-rules-cancelled')).toHaveCount(0, { timeout: 15_000 })
+    await expect(page.getByTestId('standing-rule')).toHaveCount(2)
+    await expect(page.getByTestId('standing-rules-result')).toBeVisible()
   })
 
   test('a thin corpus says so instead of inventing rules, and the run stays disabled', async ({

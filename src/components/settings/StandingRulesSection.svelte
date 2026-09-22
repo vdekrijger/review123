@@ -48,6 +48,7 @@
     provenanceLine,
     STANDING_RULES_FILENAME,
     type Decisions,
+    type DistillSource,
     type StandingRulesRecord,
   } from '../../lib/skills/standingRulesStore'
 
@@ -88,6 +89,28 @@
   let error = $state<string | null>(null)
   let exported = $state<string | null>(null)
 
+  /**
+   * CANCELLATION. The distillation is ONE call that takes minutes over the
+   * bridge, so it needs a stop — and a stop is not a failure:
+   *   - the calm line below is a muted note, never the red `error` chip, and
+   *     never carries the engine's own "The user aborted a request." text
+   *     (the #233/#234 rule, which the transport already enforces);
+   *   - the previous distillation is left EXACTLY as it was. Cancelling must
+   *     not cost the user accepted rules they already decided on;
+   *   - analytics records it as an outcome, not a failure (see the PRIVACY
+   *     DECISION block on standing_rules_distilled).
+   *
+   * `runSeq` supersedes the in-flight run so its late outcome — whatever it
+   * turns out to be — can never write state after a cancel. That is what keeps
+   * a re-run immediate: the UI is calm the moment the button is pressed, and
+   * nothing arrives later to undo it.
+   */
+  let cancelled = $state(false)
+  let cancelledSource = $state<DistillSource | null>(null)
+  let distillAbort: AbortController | null = null
+  let runSeq = 0
+  let inFlight: { source: DistillSource; counts: CorpusCounts; startedAt: number } | null = null
+
   let editingId = $state<string | null>(null)
   let editText = $state('')
 
@@ -121,6 +144,8 @@
   async function handlePreview() {
     previewing = true
     error = null
+    cancelled = false
+    cancelledSource = null
     previewNote = null
     previewBlocked = null
     try {
@@ -153,17 +178,34 @@
       return
     }
     const route = built.route
+    const counts = countCorpus(corpus)
+    const seq = ++runSeq
+    const controller = new AbortController()
+    distillAbort = controller
+    inFlight = { source: route.source, counts, startedAt: Date.now() }
     running = true
     error = null
+    // A previous distillation is NOT cleared here: it stays on screen while the
+    // new one runs, so a cancel (or a failure) leaves the user where they were.
+    cancelled = false
+    cancelledSource = null
     exported = null
     const startedAt = Date.now()
     try {
-      const outcome = await distillStandingRules(corpus, route, { llmJsonWithRepairFor })
+      const outcome = await distillStandingRules(corpus, route, { llmJsonWithRepairFor }, controller.signal)
+      // Superseded by a cancel (or by a newer run): its result is not ours to
+      // render, and the calm state it left behind stands.
+      if (seq !== runSeq) return
+      if (!outcome.ok && outcome.cancelled) {
+        // An abort we did not press the button for — the page tearing the
+        // request down, say. Still a stop, so still the calm path.
+        settleCancelled(outcome.source, startedAt, counts)
+        return
+      }
       if (!outcome.ok) {
         error = outcome.error
         return
       }
-      const counts = countCorpus(corpus)
       const next: StandingRulesRecord = {
         promptVersion: PROMPT_VERSIONS.standingRules,
         distilledAt: Date.now(),
@@ -175,6 +217,7 @@
       saveStandingRules(next)
       record = next
       track('standing_rules_distilled', {
+        outcome: 'done',
         source: outcome.source,
         rules: outcome.rules.length,
         do: outcome.rules.filter((r) => r.kind === 'do').length,
@@ -185,10 +228,57 @@
         duration_ms: Date.now() - startedAt,
       })
     } catch (e) {
+      if (seq !== runSeq) return
       error = (e as Error).message
     } finally {
-      running = false
+      if (seq === runSeq) {
+        running = false
+        distillAbort = null
+        inFlight = null
+      }
     }
+  }
+
+  /**
+   * Stop the run in flight.
+   *
+   * It ABORTS — the signal reaches the transport's fetch, so the request is
+   * torn down rather than merely ignored. Over the bridge that closes the HTTP
+   * connection to 127.0.0.1; the bridge does not yet stop the CLI it spawned,
+   * which is why the calm line says so instead of implying the machine went
+   * quiet.
+   *
+   * The state flips HERE rather than waiting for the aborted promise to settle:
+   * a stop the user has to wait for is not a stop, and nothing that arrives
+   * afterwards can write over it (the `runSeq` guard above).
+   */
+  function handleCancel() {
+    if (!running) return
+    const run = inFlight
+    runSeq++
+    distillAbort?.abort()
+    distillAbort = null
+    inFlight = null
+    running = false
+    if (run) settleCancelled(run.source, run.startedAt, run.counts)
+  }
+
+  /** The one calm landing for a stopped run — state and metric in one place. */
+  function settleCancelled(source: DistillSource, startedAt: number, counts: CorpusCounts): void {
+    running = false
+    error = null
+    cancelled = true
+    cancelledSource = source
+    // An abandoned run is not a failed one. Counts and enums only, and no rule
+    // counts — there are none.
+    track('standing_rules_distilled', {
+      outcome: 'cancelled',
+      source,
+      comments: counts.reviewComments,
+      dismissals: counts.dismissals,
+      drafts: counts.drafts,
+      duration_ms: Date.now() - startedAt,
+    })
   }
 
   // ---- Per-rule decisions ------------------------------------------------
@@ -229,6 +319,8 @@
   function handleDiscard() {
     clearStandingRules()
     record = null
+    cancelled = false
+    cancelledSource = null
     previewCounts = null
     previewCorpus = null
     previewBlocked = null
@@ -311,6 +403,22 @@
         {#if running}<Spinner size="0.8em" />Distilling…{:else if record}Re-run{:else}Distil rules{/if}
       </button>
     {/if}
+    <!--
+      Only while a run is in flight. A multi-minute call with no way out is a
+      trap; a real <button> is the affordance, so it is in the tab order and
+      answers Enter/Space like every other control here.
+    -->
+    {#if running}
+      <button
+        type="button"
+        class="secondary-btn"
+        onclick={handleCancel}
+        aria-label="Cancel the distillation"
+        data-testid="standing-rules-cancel"
+      >
+        Cancel
+      </button>
+    {/if}
   </div>
 
   {#if previewCounts}
@@ -329,6 +437,21 @@
   {/if}
   {#if error}
     <p class="error" role="alert" data-testid="standing-rules-error">{error}</p>
+  {/if}
+  <!--
+    A stopped run is reported CALMLY: a muted status line, not the red chip and
+    not role="alert". Nothing broke — the user changed their mind.
+  -->
+  {#if cancelled}
+    <p class="field-note" role="status" data-testid="standing-rules-cancelled">
+      Cancelled before it finished — nothing was distilled{#if record}, and the rules you already
+        have are untouched{/if}.
+      {#if cancelledSource === 'bridge'}
+        The request to the bridge was dropped, but the CLI it started on your machine keeps
+        running until it finishes or hits its own time limit — the bridge cannot stop it mid-run
+        yet.
+      {/if}
+    </p>
   {/if}
 
   {#if record}

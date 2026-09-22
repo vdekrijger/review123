@@ -267,7 +267,16 @@ describe('running the distillation', () => {
   it('reports counts and the source to analytics — and never a rule or an excerpt', async () => {
     await runIt()
     const event = events.find((e) => e.event === 'standing_rules_distilled')
-    expect(event?.props).toMatchObject({ source: 'api', rules: 2, do: 1, avoid: 1, comments: 20, dismissals: 1, drafts: 1 })
+    expect(event?.props).toMatchObject({
+      outcome: 'done',
+      source: 'api',
+      rules: 2,
+      do: 1,
+      avoid: 1,
+      comments: 20,
+      dismissals: 1,
+      drafts: 1,
+    })
     const payload = JSON.stringify(event?.props)
     expect(payload).not.toContain('domain module')
     expect(payload).not.toContain('this belongs in the domain layer')
@@ -434,6 +443,198 @@ describe('export', () => {
     render(StandingRulesSection)
     await userEvent.click(screen.getByRole('button', { name: /discard distillation/i }))
     await waitFor(() => expect(screen.queryByTestId('standing-rules-result')).not.toBeInTheDocument())
+    expect(localStorage.getItem(STANDING_RULES_KEY)).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Cancelling a run
+//
+// The distillation is ONE call that takes minutes over the bridge. A stop that
+// only hides the spinner is not a stop, and a stop that costs the user the
+// rules they already accepted is worse than none.
+// ---------------------------------------------------------------------------
+
+describe('cancelling a run', () => {
+  /**
+   * A distillation that never settles on its own — the real shape of the
+   * problem. It resolves as CANCELLED if (and only if) its signal aborts, the
+   * way the module classifies an aborted transport.
+   */
+  function hangingRun() {
+    const signals: (AbortSignal | undefined)[] = []
+    distillMock.mockImplementation((_corpus: unknown, _route: unknown, _deps: unknown, signal?: AbortSignal) => {
+      signals.push(signal)
+      return new Promise((resolve) => {
+        signal?.addEventListener('abort', () =>
+          resolve({ ok: false, cancelled: true, source: 'api', sourceLabel: 'DeepSeek' }),
+        )
+      })
+    })
+    return signals
+  }
+
+  async function startRun() {
+    await userEvent.click(screen.getByRole('button', { name: /check what's there/i }))
+    await screen.findByTestId('standing-rules-cost')
+    await userEvent.click(screen.getByRole('button', { name: /distil rules|re-run/i }))
+    return screen.findByTestId('standing-rules-cancel')
+  }
+
+  function cancelButton() {
+    return screen.queryByRole('button', { name: /cancel the distillation/i })
+  }
+
+  it('offers no Cancel while nothing is running', async () => {
+    render(StandingRulesSection)
+    expect(cancelButton()).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /check what's there/i }))
+    await screen.findByTestId('standing-rules-cost')
+    expect(cancelButton()).not.toBeInTheDocument()
+  })
+
+  it('offers no Cancel once the run has finished', async () => {
+    render(StandingRulesSection)
+    await userEvent.click(screen.getByRole('button', { name: /check what's there/i }))
+    await screen.findByTestId('standing-rules-cost')
+    await userEvent.click(screen.getByRole('button', { name: /distil rules/i }))
+    await screen.findByTestId('standing-rules-result')
+    expect(cancelButton()).not.toBeInTheDocument()
+  })
+
+  it('shows a Cancel while the run is in flight, and ABORTS the call when pressed', async () => {
+    const signals = hangingRun()
+    render(StandingRulesSection)
+    await startRun()
+    expect(signals[0]?.aborted).toBe(false)
+
+    await userEvent.click(cancelButton() as HTMLElement)
+    // The signal handed to the distillation really fired — the request is torn
+    // down, not merely ignored.
+    expect(signals[0]?.aborted).toBe(true)
+    await waitFor(() => expect(cancelButton()).not.toBeInTheDocument())
+  })
+
+  it('is operable from the keyboard, like every other control here', async () => {
+    const signals = hangingRun()
+    render(StandingRulesSection)
+    const button = await startRun()
+    button.focus()
+    expect(button).toHaveFocus()
+    await userEvent.keyboard('{Enter}')
+    expect(signals[0]?.aborted).toBe(true)
+  })
+
+  it('lands on a CALM state — no error chip, no alert, no blame', async () => {
+    hangingRun()
+    render(StandingRulesSection)
+    await startRun()
+    await userEvent.click(cancelButton() as HTMLElement)
+
+    const note = await screen.findByTestId('standing-rules-cancelled')
+    expect(note).toHaveTextContent(/cancelled before it finished/i)
+    expect(screen.queryByTestId('standing-rules-error')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    // Never the engine's own text, which blames a user who stopped their own run.
+    expect(note).not.toHaveTextContent(/user aborted/i)
+  })
+
+  it('says honestly that the bridge cannot stop the CLI it started', async () => {
+    fakeBridge.clis = ['claude']
+    fakeBridge.inferReady = true
+    fakeBridge.token = 'tok'
+    distillMock.mockImplementation((_c: unknown, _r: unknown, _d: unknown, signal?: AbortSignal) => {
+      return new Promise((resolve) => {
+        signal?.addEventListener('abort', () =>
+          resolve({ ok: false, cancelled: true, source: 'bridge', sourceLabel: 'Claude Code on this machine' }),
+        )
+      })
+    })
+    render(StandingRulesSection)
+    await startRun()
+    await userEvent.click(cancelButton() as HTMLElement)
+    expect(await screen.findByTestId('standing-rules-cancelled')).toHaveTextContent(
+      /keeps running until it finishes/i,
+    )
+  })
+
+  it('leaves the previous distillation AND its decisions exactly as they were', async () => {
+    seedRecord()
+    hangingRun()
+    render(StandingRulesSection)
+    await userEvent.click(within(screen.getAllByTestId('standing-rule')[0]).getByRole('button', { name: /accept rule/i }))
+    const storedBefore = localStorage.getItem(STANDING_RULES_KEY)
+    const decisionsBefore = localStorage.getItem(STANDING_RULE_DECISIONS_KEY)
+
+    await startRun()
+    await userEvent.click(cancelButton() as HTMLElement)
+    await screen.findByTestId('standing-rules-cancelled')
+
+    expect(screen.getByTestId('standing-rules-result')).toBeInTheDocument()
+    expect(screen.getAllByTestId('standing-rule')).toHaveLength(2)
+    expect(within(screen.getAllByTestId('standing-rule')[0]).getByTestId('standing-rule-decided')).toHaveTextContent(
+      /accepted/i,
+    )
+    expect(localStorage.getItem(STANDING_RULES_KEY)).toBe(storedBefore)
+    expect(localStorage.getItem(STANDING_RULE_DECISIONS_KEY)).toBe(decisionsBefore)
+  })
+
+  it('reports the cancel as an OUTCOME, never as a failure, and still sends no rule text', async () => {
+    hangingRun()
+    render(StandingRulesSection)
+    await startRun()
+    await userEvent.click(cancelButton() as HTMLElement)
+    await screen.findByTestId('standing-rules-cancelled')
+
+    const distilled = events.filter((e) => e.event === 'standing_rules_distilled')
+    expect(distilled).toHaveLength(1)
+    expect(distilled[0].props).toMatchObject({
+      outcome: 'cancelled',
+      source: 'api',
+      comments: 20,
+      dismissals: 1,
+      drafts: 1,
+    })
+    // No rule counts: there are no rules. And nothing that could carry content.
+    expect(distilled[0].props).not.toHaveProperty('rules')
+    expect(distilled[0].props).not.toHaveProperty('do')
+    expect(JSON.stringify(distilled[0].props)).not.toContain('domain module')
+    // And no failure event of any kind was emitted.
+    expect(events.map((e) => e.event)).not.toContain('ai_task_failed')
+  })
+
+  it('re-runs immediately afterwards — no stuck spinner, no stale cancel note', async () => {
+    hangingRun()
+    render(StandingRulesSection)
+    await startRun()
+    await userEvent.click(cancelButton() as HTMLElement)
+    await screen.findByTestId('standing-rules-cancelled')
+
+    distillMock.mockReset()
+    distillMock.mockResolvedValue({ ok: true, rules: RULES, source: 'api', sourceLabel: 'DeepSeek' })
+    await userEvent.click(screen.getByRole('button', { name: /distil rules/i }))
+
+    await screen.findByTestId('standing-rules-result')
+    expect(screen.queryByTestId('standing-rules-cancelled')).not.toBeInTheDocument()
+    expect(cancelButton()).not.toBeInTheDocument()
+    expect(screen.getAllByTestId('standing-rule')).toHaveLength(2)
+  })
+
+  it('a late outcome from a cancelled run can never write over the calm state', async () => {
+    // The abort races the answer: the provider may already have replied. The
+    // user stopped the run, so that answer is not theirs to be shown.
+    const late: { settle: ((v: unknown) => void) | null } = { settle: null }
+    distillMock.mockImplementation(
+      () => new Promise((resolve) => (late.settle = resolve as (v: unknown) => void)),
+    )
+    render(StandingRulesSection)
+    await startRun()
+    await userEvent.click(cancelButton() as HTMLElement)
+    await screen.findByTestId('standing-rules-cancelled')
+
+    late.settle?.({ ok: true, rules: RULES, source: 'api', sourceLabel: 'DeepSeek' })
+    await waitFor(() => expect(screen.getByTestId('standing-rules-cancelled')).toBeInTheDocument())
+    expect(screen.queryByTestId('standing-rules-result')).not.toBeInTheDocument()
     expect(localStorage.getItem(STANDING_RULES_KEY)).toBeNull()
   })
 })

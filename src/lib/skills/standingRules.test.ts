@@ -321,4 +321,83 @@ describe('distillStandingRules', () => {
     const opts = llmJsonWithRepairFor.mock.calls[0][1] as { signal?: AbortSignal }
     expect(opts.signal).toBe(controller.signal)
   })
+
+  // -------------------------------------------------------------------------
+  // Cancellation is NOT failure. A stopped run carries no error string at all,
+  // so no surface can render the calm case as a red one — and no failure
+  // wording ("did not fall back to a paid provider") gets attached to a run the
+  // user simply stopped.
+  // -------------------------------------------------------------------------
+
+  it('a cancelled run is reported as CANCELLED, with no error text to render', async () => {
+    const llmJsonWithRepairFor = vi.fn(async (_cfg: unknown, _opts: unknown, _validate: unknown) => {
+      throw new LlmError('aborted', 'The request was cancelled.')
+    })
+    const controller = new AbortController()
+    controller.abort()
+    const outcome = await distillStandingRules(
+      CORPUS,
+      bridgeRoute,
+      { llmJsonWithRepairFor: llmJsonWithRepairFor as never },
+      controller.signal,
+    )
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) throw new Error('unreachable')
+    expect(outcome.cancelled).toBe(true)
+    expect(outcome.error).toBeUndefined()
+    // The route is still reported, so the UI can say what it was doing.
+    expect(outcome.source).toBe('bridge')
+    expect(outcome.sourceLabel).toBe('Claude Code on this machine')
+  })
+
+  it("classifies the transport's 'aborted' kind as a cancellation even without a signal", async () => {
+    const llmJsonWithRepairFor = vi.fn(async (_cfg: unknown, _opts: unknown, _validate: unknown) => {
+      throw new LlmError('aborted', 'The request was cancelled.')
+    })
+    const outcome = await distillStandingRules(CORPUS, apiRoute, { llmJsonWithRepairFor: llmJsonWithRepairFor as never })
+    if (outcome.ok) throw new Error('unreachable')
+    expect(outcome.cancelled).toBe(true)
+  })
+
+  it('a RAW engine AbortError that escaped a transport unmapped is still a cancellation', async () => {
+    const llmJsonWithRepairFor = vi.fn(async (_cfg: unknown, _opts: unknown, _validate: unknown) => {
+      // Exactly what Blink throws — and exactly the text that must never reach
+      // the UI (#233/#234).
+      throw new DOMException('The user aborted a request.', 'AbortError')
+    })
+    const outcome = await distillStandingRules(CORPUS, apiRoute, { llmJsonWithRepairFor: llmJsonWithRepairFor as never })
+    if (outcome.ok) throw new Error('unreachable')
+    expect(outcome.cancelled).toBe(true)
+    expect(JSON.stringify(outcome)).not.toMatch(/user aborted/i)
+  })
+
+  it('a TIMEOUT is still a failure — the model was slow, nobody stopped anything', async () => {
+    const llmJsonWithRepairFor = vi.fn(async (_cfg: unknown, _opts: unknown, _validate: unknown) => {
+      throw new LlmError('timeout', 'The request timed out.')
+    })
+    const outcome = await distillStandingRules(CORPUS, bridgeRoute, { llmJsonWithRepairFor: llmJsonWithRepairFor as never })
+    if (outcome.ok) throw new Error('unreachable')
+    expect(outcome.cancelled).toBeFalsy()
+    expect(outcome.error).toContain('The request timed out.')
+  })
+
+  it('once the caller aborted, whatever the transport throws is a cancellation, not a bridge failure', async () => {
+    // The abort tears the fetch down, and engines report the fallout
+    // inconsistently. The user stopped the run; they must not be told their
+    // bridge broke.
+    const llmJsonWithRepairFor = vi.fn(async (_cfg: unknown, _opts: unknown, _validate: unknown) => {
+      throw new LlmError('network', 'The local bridge is not responding.')
+    })
+    const controller = new AbortController()
+    controller.abort()
+    const outcome = await distillStandingRules(
+      CORPUS,
+      bridgeRoute,
+      { llmJsonWithRepairFor: llmJsonWithRepairFor as never },
+      controller.signal,
+    )
+    if (outcome.ok) throw new Error('unreachable')
+    expect(outcome.cancelled).toBe(true)
+    expect(outcome.error).toBeUndefined()
+  })
 })
