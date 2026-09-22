@@ -1053,3 +1053,347 @@ test('fix loop: a checkout on another commit is told so, not quietly used', asyn
   await expect(readiness).toContainText(HEAD_SHA.slice(0, 7))
   await expect(page.getByTestId('agent-fix-send')).toHaveCount(0)
 })
+
+// ===========================================================================
+// RUN THIS PR — check the pull request out in the user's own repo so the dev
+// server they already have running serves it.
+//
+// This is the only feature that moves the user's working tree, and it has its
+// own grant (--allow-checkout) precisely so that enabling the fix loop does
+// not silently enable it. These tests walk the whole round trip — check out,
+// indicator, preview points local, restore — and pin the two gates that must
+// never soften: the flag, and the "this runs its code" confirmation.
+// ===========================================================================
+
+/** The commit the PR ref resolves to once checked out — the PR's own head. */
+const CHECKED_OUT_SHA = HEAD_SHA
+/** Where the user's checkout sits before anything happens. */
+const MAIN_SHA = 'fee1111111111111111111111111111111111111'
+const LOCAL_APP_URL = 'http://localhost:8010'
+
+interface StackStubOptions {
+  /** `--allow-checkout`. False → capabilities.checkout false and a 403. */
+  checkoutEnabled: boolean
+  /** Start already ON the pull request, to test the indicator and restore. */
+  startOnPr?: boolean
+  /** Is the dev server answering? */
+  appReachable?: boolean
+  /** Make the checkout call refuse with this. */
+  refuse?: { status: number; error: string; message: string; dirtyPaths?: string[]; dirtyCount?: number }
+  /** Report the tree as dirty, with these paths. */
+  dirty?: string[]
+}
+
+/**
+ * Stub a bridge that speaks the stack routes.
+ *
+ * Stateful on purpose: a checkout flips the stubbed tree onto the PR and a
+ * restore flips it back, so the test drives the SAME transitions the real
+ * thing does rather than asserting against three unrelated fixtures.
+ */
+async function stubBridgeStack(page: Page, opts: StackStubOptions) {
+  await page.addInitScript(
+    ({ health, config }) => {
+      const realFetch = window.fetch.bind(window)
+      const calls: { url: string; body: string | null }[] = []
+      ;(window as unknown as { __bridgeCalls: typeof calls }).__bridgeCalls = calls
+
+      const json = (payload: unknown, status = 200) =>
+        new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } })
+
+      // The stub's own mutable world.
+      let onPr = config.startOnPr
+      let prior: unknown = config.startOnPr
+        ? {
+            branch: 'main',
+            head: config.mainSha,
+            recordedAt: '2026-01-01T00:00:00.000Z',
+            checkedOutRef: 'refs/pull/42/head',
+            checkedOutSha: config.prSha,
+            stashRef: null,
+          }
+        : null
+
+      const app = () => ({
+        url: config.appUrl,
+        source: 'posthog',
+        reachable: config.appReachable,
+        detail: 'This is a PostHog checkout, whose dev stack is fronted at port 8010.',
+      })
+      const git = () =>
+        onPr
+          ? { head: config.prSha, branch: null, dirty: false }
+          : { head: config.mainSha, branch: 'main', dirty: config.dirty.length > 0 }
+
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+        if (!url.includes('127.0.0.1')) return realFetch(input as RequestInfo, init)
+
+        const body = typeof init?.body === 'string' ? init.body : null
+        calls.push({ url, body })
+
+        if (url.includes('/v1/health')) return Promise.resolve(json(health))
+        if (url.includes('/v1/files')) {
+          const asked = (JSON.parse(body ?? '{}') as { paths?: string[] }).paths ?? []
+          return Promise.resolve(json({ ok: true, files: [], missing: asked, skipped: [] }))
+        }
+        if (url.includes('/v1/stack')) {
+          return Promise.resolve(
+            json({
+              ok: true,
+              git: git(),
+              dirtyPaths: onPr ? [] : config.dirty,
+              dirtyCount: onPr ? 0 : config.dirty.length,
+              prior,
+              app: app(),
+              checkoutEnabled: config.checkoutEnabled,
+            }),
+          )
+        }
+        if (url.includes('/v1/checkout')) {
+          if (!config.checkoutEnabled) {
+            return Promise.resolve(
+              json(
+                {
+                  ok: false,
+                  error: 'checkout-disabled',
+                  message:
+                    'This bridge may not change your working tree. Restart it with --allow-checkout. (--allow-write does not enable this.)',
+                },
+                403,
+              ),
+            )
+          }
+          if (config.refuse) {
+            return Promise.resolve(json({ ok: false, ...config.refuse }, config.refuse.status))
+          }
+          onPr = true
+          prior = {
+            branch: 'main',
+            head: config.mainSha,
+            recordedAt: '2026-01-01T00:00:00.000Z',
+            checkedOutRef: 'refs/pull/42/head',
+            checkedOutSha: config.prSha,
+            stashRef: null,
+          }
+          return Promise.resolve(json({ ok: true, git: git(), prior, stash: null, app: app() }))
+        }
+        if (url.includes('/v1/restore')) {
+          if (!config.checkoutEnabled) {
+            return Promise.resolve(
+              json({ ok: false, error: 'checkout-disabled', message: 'read-only' }, 403),
+            )
+          }
+          onPr = false
+          prior = null
+          return Promise.resolve(json({ ok: true, git: git(), prior: null, stash: null, app: app() }))
+        }
+        return Promise.resolve(json({ ok: false, error: 'not-found', message: 'no' }, 404))
+      }
+    },
+    {
+      health: healthBody({
+        capabilities: {
+          inference: ['claude'],
+          infer: true,
+          files: true,
+          search: true,
+          // The fix grant is ON in every one of these fixtures, so that
+          // "checkout is refused" can never be explained by a read-only bridge.
+          fix: true,
+          checkout: opts.checkoutEnabled,
+        },
+        git: { head: MAIN_SHA, branch: 'main', dirty: false },
+      }),
+      config: {
+        checkoutEnabled: opts.checkoutEnabled,
+        startOnPr: opts.startOnPr === true,
+        appReachable: opts.appReachable !== false,
+        appUrl: LOCAL_APP_URL,
+        mainSha: MAIN_SHA,
+        prSha: CHECKED_OUT_SHA,
+        refuse: opts.refuse ?? null,
+        dirty: opts.dirty ?? [],
+      },
+    },
+  )
+}
+
+async function openReview(page: Page) {
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({
+    timeout: 10_000,
+  })
+}
+
+test('run this PR: check out → indicator → preview points at the local app → restore', async ({
+  page,
+}) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await stubBridgeStack(page, { checkoutEnabled: true })
+  await seedPairing(page)
+
+  await openReview(page)
+
+  // ---- Before: the action is offered, and nothing has been checked out ----
+  const panel = page.getByTestId('runpr-panel')
+  await expect(panel).toBeVisible({ timeout: 10_000 })
+  await expect(panel).toHaveAttribute('data-on-pr', 'false')
+  await page.getByTestId('runpr-checkout').click()
+
+  // ---- The untrusted-code confirmation, which is NOT optional ----
+  const trust = page.getByTestId('runpr-trust-dialog')
+  await expect(trust).toBeVisible()
+  await expect(page.getByTestId('runpr-trust-text')).toContainText(/runs its code on your machine/i)
+  await page.getByTestId('runpr-trust-accept').click()
+
+  // ---- After: the indicator, and a way into the running app ----
+  await expect(panel).toHaveAttribute('data-on-pr', 'true', { timeout: 10_000 })
+  await expect(page.getByTestId('runpr-on-pr')).toContainText(/checked out here/i)
+  await expect(page.getByTestId('runpr-open-app')).toHaveAttribute('href', LOCAL_APP_URL)
+  // The way home is named, not implied.
+  await expect(page.getByTestId('runpr-restore')).toContainText('Restore main')
+
+  // What the bridge was actually sent: a ref and the acknowledgement. No
+  // command, no cwd, no environment.
+  const sent = JSON.parse(
+    (
+      await page.evaluate(
+        () => (window as unknown as { __bridgeCalls: { url: string; body: string | null }[] }).__bridgeCalls,
+      )
+    ).find((c) => c.url.includes('/v1/checkout'))!.body ?? '{}',
+  )
+  expect(Object.keys(sent).sort()).toEqual(['acknowledgeUntrusted', 'ref'])
+  expect(sent.ref).toBe(`refs/pull/${PR_NUMBER}/head`)
+  expect(sent.acknowledgeUntrusted).toBe(true)
+
+  // ---- The preview panel now frames the LOCAL app, not a deployment ----
+  await page.getByTestId('runpr-panel-toggle').click()
+  const preview = page.locator('.preview-panel')
+  await expect(preview).toBeVisible()
+  await expect(preview).toHaveAttribute('data-source', 'local')
+  await expect(page.getByTestId('preview-source')).toHaveAttribute('data-reason', 'local-live')
+  await expect(page.getByTestId('preview-panel-title')).toContainText(/your local app/i)
+  // It always says WHICH source, and names the URL.
+  await expect(page.getByTestId('preview-source')).toContainText(LOCAL_APP_URL)
+
+  // ---- Restore: back to the branch, indicator gone ----
+  await page.getByTestId('runpr-restore').click()
+  await expect(panel).toHaveAttribute('data-on-pr', 'false', { timeout: 10_000 })
+  await expect(page.getByTestId('runpr-on-pr')).toHaveCount(0)
+  await expect(page.getByTestId('runpr-checkout')).toBeVisible()
+  // …and the preview panel stops claiming local. This fixture has no deploy
+  // preview either, so there is nothing left to frame and the panel closes
+  // rather than sitting there empty — the important half being that it never
+  // goes on showing a "local app" that is no longer serving this PR.
+  await expect(page.locator('.preview-panel')).toHaveCount(0)
+})
+
+test('run this PR: a bridge WITHOUT --allow-checkout is never offered one', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  // Note `fix: true` inside the stub: writing IS granted. Only --allow-checkout
+  // is off, which is exactly the confusion this separate flag exists to prevent.
+  await stubBridgeStack(page, { checkoutEnabled: false })
+  await seedPairing(page)
+
+  await openReview(page)
+
+  const reason = page.getByTestId('runpr-reason')
+  await expect(reason).toBeVisible({ timeout: 10_000 })
+  await expect(reason).toHaveAttribute('data-reason', 'checkout-disabled')
+  // It names the right flag AND rules out the one they already have.
+  await expect(reason).toContainText('--allow-checkout')
+  await expect(reason).toContainText('--allow-write does not enable this')
+  // No way in.
+  await expect(page.getByTestId('runpr-checkout')).toHaveCount(0)
+
+  // THE INVARIANT: the route was never called.
+  const calls = await page.evaluate(
+    () => (window as unknown as { __bridgeCalls: { url: string; body: string | null }[] }).__bridgeCalls,
+  )
+  expect(calls.filter((c) => c.url.includes('/v1/checkout'))).toEqual([])
+})
+
+test('run this PR: a dirty tree is named file by file before anything is stashed', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await stubBridgeStack(page, {
+    checkoutEnabled: true,
+    dirty: ['src/feature.ts', 'notes.md'],
+  })
+  await seedPairing(page)
+
+  await openReview(page)
+
+  await expect(page.getByTestId('runpr-dirty-note')).toContainText('2 uncommitted changes')
+  await page.getByTestId('runpr-checkout').click()
+  await page.getByTestId('runpr-trust-accept').click()
+
+  // The stash prompt LISTS the files. A prompt that said "you have
+  // uncommitted changes" without naming them would ask for trust the user
+  // cannot check.
+  const list = page.getByTestId('runpr-dirty-list')
+  await expect(list).toBeVisible()
+  await expect(list).toContainText('src/feature.ts')
+  await expect(list).toContainText('notes.md')
+
+  // Backing out sends nothing at all.
+  await page.getByTestId('runpr-stash-cancel').click()
+  const calls = await page.evaluate(
+    () => (window as unknown as { __bridgeCalls: { url: string; body: string | null }[] }).__bridgeCalls,
+  )
+  expect(calls.filter((c) => c.url.includes('/v1/checkout'))).toEqual([])
+})
+
+test('run this PR: cancelling the untrusted-code prompt checks nothing out', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await stubBridgeStack(page, { checkoutEnabled: true })
+  await seedPairing(page)
+
+  await openReview(page)
+
+  await page.getByTestId('runpr-checkout').click()
+  await expect(page.getByTestId('runpr-trust-dialog')).toBeVisible()
+  await page.getByTestId('runpr-trust-cancel').click()
+
+  await expect(page.getByTestId('runpr-trust-dialog')).toHaveCount(0)
+  await expect(page.getByTestId('runpr-panel')).toHaveAttribute('data-on-pr', 'false')
+  const calls = await page.evaluate(
+    () => (window as unknown as { __bridgeCalls: { url: string; body: string | null }[] }).__bridgeCalls,
+  )
+  expect(calls.filter((c) => c.url.includes('/v1/checkout'))).toEqual([])
+})
+
+test('run this PR: checked out but the dev server is down says so, and does not claim local', async ({
+  page,
+}) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await stubBridgeStack(page, { checkoutEnabled: true, startOnPr: true, appReachable: false })
+  await seedPairing(page)
+
+  await openReview(page)
+
+  await expect(page.getByTestId('runpr-panel')).toHaveAttribute('data-on-pr', 'true', {
+    timeout: 10_000,
+  })
+  // Honest about the port it tried, rather than a dead "Open your app" link.
+  await expect(page.getByTestId('runpr-app-down')).toContainText(LOCAL_APP_URL)
+  await expect(page.getByTestId('runpr-open-app')).toHaveCount(0)
+})
+
+test('run this PR: with no bridge paired the surface does not exist at all', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await recordBridgeCalls(page)
+
+  await openReview(page)
+
+  await expect(page.getByTestId('runpr-panel')).toHaveCount(0)
+  // Zero-cost absence: nothing was asked of 127.0.0.1.
+  const calls = await page.evaluate(() => (window as unknown as { __bridgeCalls: string[] }).__bridgeCalls)
+  expect(calls).toEqual([])
+})

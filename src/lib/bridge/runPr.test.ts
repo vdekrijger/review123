@@ -23,6 +23,7 @@ import {
   describeCheckoutTrust,
   describePreviewSource,
   describeStackFailure,
+  prRefForProvider,
   refreshStack,
   restoreCheckout,
   short,
@@ -292,6 +293,39 @@ describe('short', () => {
   it('abbreviates a sha and says "unknown" rather than printing null', () => {
     expect(short(PR_HEAD)).toBe('abc1234')
     expect(short(null)).toBe('unknown')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 1b. Which ref to fetch
+// ---------------------------------------------------------------------------
+
+describe('prRefForProvider', () => {
+  it('knows the GitHub and GitLab shapes', () => {
+    expect(prRefForProvider('github', 42)).toBe('refs/pull/42/head')
+    expect(prRefForProvider('gitlab', 7)).toBe('refs/merge-requests/7/head')
+  })
+
+  // Bitbucket Cloud publishes no fetchable PR ref. Inventing one would produce
+  // a `ref-unknown` failure that reads like a broken git remote, so the UI is
+  // told the truth and disables the action.
+  it('is NULL for Bitbucket rather than inventing a ref that 404s', () => {
+    expect(prRefForProvider('bitbucket', 42)).toBeNull()
+  })
+
+  it('refuses a number that is not a positive integer', () => {
+    expect(prRefForProvider('github', 0)).toBeNull()
+    expect(prRefForProvider('github', -1)).toBeNull()
+    expect(prRefForProvider('github', 1.5)).toBeNull()
+    expect(prRefForProvider('github', Number.NaN)).toBeNull()
+  })
+
+  // Whatever it produces has to survive the bridge's own guard, which is what
+  // makes a flag-shaped value impossible by construction.
+  it('always produces something starting with refs/', () => {
+    for (const provider of ['github', 'gitlab'] as const) {
+      expect(prRefForProvider(provider, 1)).toMatch(/^refs\//)
+    }
   })
 })
 

@@ -576,7 +576,7 @@
           <SectionStatus status={run.outcomes.status} error={run.outcomes.error} errorDetail={run.outcomes.errorDetail} title={section.title} />
         </summary>
         <div class="detail-body">
-          <OutcomesPanel {run} {files} {contentsMap} {onhotspot} />
+          <OutcomesPanel {run} {files} {contentsMap} {onhotspot} headSha={meta.headSha} />
         </div>
       </details>
 
