@@ -4,7 +4,13 @@
  */
 import { describe, it, expect } from 'vitest'
 import { CheckoutError } from './checkout.js'
-import { handleRequest, type BridgeRequest, type HandlerContext } from './handler.js'
+import {
+  handleRequest,
+  handleStreamRequest,
+  type BridgeRequest,
+  type HandlerContext,
+  type StreamSink,
+} from './handler.js'
 import { MAX_BODY_BYTES, PROTOCOL_VERSION, type HealthResponse } from './protocol.js'
 import { REVIEW123_ORIGIN } from './cors.js'
 
@@ -1090,5 +1096,270 @@ describe('the checkout family — the other gates still apply', () => {
       ctx(allow),
     )
     expect(res.status).toBe(204)
+  })
+})
+
+// ===========================================================================
+// POST /v1/infer/stream — the gates, and the pivot at the status line.
+//
+// The route answers incrementally, so it does not return a BridgeResponse and
+// is exercised through a StreamSink that collects what it wrote. What it has
+// to prove here is that it runs the SAME ladder /v1/infer runs — a rebound
+// host, a foreign origin, a missing token refused identically — and that
+// anything decidable BEFORE the CLI starts is still a real HTTP status rather
+// than a 200 with the failure buried inside it.
+// ===========================================================================
+
+interface CapturedStream {
+  readonly status: number
+  readonly headers: Record<string, string>
+  readonly chunks: string[]
+  readonly ended: boolean
+  readonly sink: StreamSink
+}
+
+function capture(signal: AbortSignal = new AbortController().signal): CapturedStream {
+  const state = { status: 0, headers: {} as Record<string, string>, chunks: [] as string[], ended: false }
+  const sink: StreamSink = {
+    head: (status, headers) => {
+      state.status = status
+      state.headers = headers
+    },
+    write: (chunk) => {
+      state.chunks.push(chunk)
+    },
+    end: () => {
+      state.ended = true
+    },
+    signal,
+  }
+  return {
+    get status() {
+      return state.status
+    },
+    get headers() {
+      return state.headers
+    },
+    get chunks() {
+      return state.chunks
+    },
+    get ended() {
+      return state.ended
+    },
+    sink,
+  }
+}
+
+/** Every NDJSON event the sink received, parsed. */
+function events(c: CapturedStream): Record<string, unknown>[] {
+  return c.chunks
+    .join('')
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+}
+
+function streamReq(overrides: Partial<BridgeRequest> = {}): BridgeRequest {
+  return req({
+    method: 'POST',
+    path: '/v1/infer/stream',
+    body: Buffer.from(JSON.stringify({ cli: 'claude', prompt: 'hi' })),
+    ...overrides,
+  })
+}
+
+describe('POST /v1/infer/stream — the SAME gates as every other route', () => {
+  it('refuses a rebound Host with 403 and NO CORS headers', async () => {
+    const c = capture()
+    await handleStreamRequest(streamReq({ headers: { host: 'evil.example.com' } }), ctx(), c.sink)
+    expect(c.status).toBe(403)
+    expect(parse(c.chunks.join(''))['error']).toBe('forbidden-host')
+    expect(c.headers['Access-Control-Allow-Origin']).toBeUndefined()
+    expect(c.ended).toBe(true)
+  })
+
+  it('refuses a foreign Origin with 403 and NO CORS headers', async () => {
+    const c = capture()
+    await handleStreamRequest(streamReq({ headers: { origin: 'https://evil.example.com' } }), ctx(), c.sink)
+    expect(c.status).toBe(403)
+    expect(parse(c.chunks.join(''))['error']).toBe('forbidden-origin')
+    expect(c.headers['Access-Control-Allow-Origin']).toBeUndefined()
+  })
+
+  it('refuses a missing or wrong token with 401 — with CORS, so the browser can READ it', async () => {
+    for (const authorization of [undefined, 'Bearer wrong-token']) {
+      const c = capture()
+      await handleStreamRequest(streamReq({ headers: { authorization } }), ctx(), c.sink)
+      expect(c.status).toBe(401)
+      expect(parse(c.chunks.join(''))['error']).toBe('unauthorized')
+      expect(c.headers['Access-Control-Allow-Origin']).toBe(REVIEW123_ORIGIN)
+    }
+  })
+
+  it('refuses an over-cap body with 413, before the CLI is even named', async () => {
+    const c = capture()
+    await handleStreamRequest(streamReq({ body: Buffer.alloc(MAX_BODY_BYTES + 1) }), ctx(), c.sink)
+    expect(c.status).toBe(413)
+    expect(parse(c.chunks.join(''))['error']).toBe('payload-too-large')
+  })
+
+  it('answers the CORS preflight without auth, like every other route', async () => {
+    const c = capture()
+    await handleStreamRequest(
+      streamReq({ method: 'OPTIONS', headers: { authorization: undefined } }),
+      ctx(),
+      c.sink,
+    )
+    expect(c.status).toBe(204)
+    expect(c.headers['Access-Control-Allow-Origin']).toBe(REVIEW123_ORIGIN)
+  })
+
+  it('answers 405 to a GET, so the route never reads as missing', async () => {
+    // Through handleRequest, because that is where a non-POST actually lands.
+    const res = await handleRequest(req({ method: 'GET', path: '/v1/infer/stream' }), ctx())
+    expect(res.status).toBe(405)
+    expect(res.headers['Allow']).toBe('POST, OPTIONS')
+  })
+})
+
+describe('POST /v1/infer/stream — what is decided BEFORE the status line', () => {
+  it('a malformed body is a real 400, not a 200 with an error inside it', async () => {
+    const c = capture()
+    await handleStreamRequest(streamReq({ body: Buffer.from('{"cli":"nope"}') }), ctx(), c.sink)
+    expect(c.status).toBe(400)
+    expect(parse(c.chunks.join(''))['error']).toBe('bad-request')
+  })
+
+  it('an uninstalled CLI is a real 503, re-probed per call', async () => {
+    const c = capture()
+    await handleStreamRequest(
+      streamReq(),
+      ctx({
+        capabilities: async () => ({
+          inference: ['codex'],
+          infer: true,
+          inferStream: true,
+          files: true,
+          search: true,
+          fix: false,
+          checkout: false,
+        }),
+      }),
+      c.sink,
+    )
+    expect(c.status).toBe(503)
+    expect(parse(c.chunks.join(''))['error']).toBe('cli-unavailable')
+  })
+})
+
+describe('POST /v1/infer/stream — the NDJSON framing', () => {
+  it('commits 200 application/x-ndjson and writes one JSON document per line', async () => {
+    const c = capture()
+    await handleStreamRequest(streamReq(), ctx(), c.sink)
+    expect(c.status).toBe(200)
+    expect(c.headers['Content-Type']).toBe('application/x-ndjson')
+    expect(c.headers['Cache-Control']).toBe('no-store')
+    expect(c.headers['X-Content-Type-Options']).toBe('nosniff')
+    expect(c.headers['Access-Control-Allow-Origin']).toBe(REVIEW123_ORIGIN)
+    for (const chunk of c.chunks) {
+      expect(chunk.endsWith('\n')).toBe(true)
+      expect(() => JSON.parse(chunk.trimEnd())).not.toThrow()
+    }
+    expect(events(c).map((e) => e['type'])).toEqual(['start', 'delta', 'done'])
+    expect(c.ended).toBe(true)
+  })
+
+  it('writes each event as its OWN write, so a reader sees them as they happen', async () => {
+    const c = capture()
+    await handleStreamRequest(
+      streamReq(),
+      ctx({
+        inferStream: async (_req, _clis, emit) => {
+          emit({ type: 'start', cli: 'claude', streaming: true })
+          emit({ type: 'delta', text: 'a' })
+          emit({ type: 'delta', text: 'b' })
+          emit({ type: 'done', text: 'ab', truncated: false, durationMs: 1 })
+        },
+      }),
+      c.sink,
+    )
+    // Four events, four writes — never one buffered blob at the end.
+    expect(c.chunks).toHaveLength(4)
+  })
+
+  it('hands the worker the detected CLI list and the parsed request', async () => {
+    let seen: { cli: string; prompt: string } | null = null
+    let clis: readonly string[] = []
+    const c = capture()
+    await handleStreamRequest(
+      streamReq({ body: Buffer.from(JSON.stringify({ cli: 'claude', prompt: 'review this' })) }),
+      ctx({
+        inferStream: async (request, available, emit) => {
+          seen = { cli: request.cli, prompt: request.prompt }
+          clis = available
+          emit({ type: 'done', text: '', truncated: false, durationMs: 0 })
+        },
+      }),
+      c.sink,
+    )
+    expect(seen).toEqual({ cli: 'claude', prompt: 'review this' })
+    expect(clis).toEqual(['claude'])
+  })
+})
+
+describe('POST /v1/infer/stream — a client that went away', () => {
+  it('forwards the disconnect signal to the worker', async () => {
+    const controller = new AbortController()
+    const c = capture(controller.signal)
+    let received: AbortSignal | null = null
+    await handleStreamRequest(
+      streamReq(),
+      ctx({
+        inferStream: async (_req, _clis, _emit, signal) => {
+          received = signal
+        },
+      }),
+      c.sink,
+    )
+    expect(received).toBe(controller.signal)
+  })
+
+  it('stops writing once the client is gone, instead of filling a dead socket', async () => {
+    const controller = new AbortController()
+    const c = capture(controller.signal)
+    await handleStreamRequest(
+      streamReq(),
+      ctx({
+        inferStream: async (_req, _clis, emit) => {
+          emit({ type: 'start', cli: 'claude', streaming: true })
+          emit({ type: 'delta', text: 'before' })
+          controller.abort()
+          emit({ type: 'delta', text: 'after' })
+          emit({ type: 'done', text: 'x', truncated: false, durationMs: 1 })
+        },
+      }),
+      c.sink,
+    )
+    expect(events(c).map((e) => e['type'])).toEqual(['start', 'delta'])
+    expect(c.chunks.join('')).not.toContain('after')
+  })
+
+  it('awaits the worker even after the client is gone — that await is what reaps the child', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const c = capture(controller.signal)
+    let finished = false
+    await handleStreamRequest(
+      streamReq(),
+      ctx({
+        inferStream: async () => {
+          await new Promise((r) => setTimeout(r, 20))
+          finished = true
+        },
+      }),
+      c.sink,
+    )
+    expect(finished).toBe(true)
+    expect(c.ended).toBe(true)
   })
 })
