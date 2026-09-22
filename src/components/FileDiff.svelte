@@ -38,6 +38,13 @@
     REANCHOR_DND_MIME,
     type ReanchorMove,
   } from '../lib/findings/reanchor.svelte'
+  import {
+    classifyFileHunks,
+    buildChangeStrip,
+    hunkAnchor,
+    type HunkAttentionResult,
+  } from '../lib/guide/hunkAttention'
+  import { hunkAttentionPref } from '../lib/guide/hunkAttentionPref.svelte'
 
   /** A skill finding scoped to a specific line in this file */
   export interface SkillFinding {
@@ -335,6 +342,11 @@
    * the span-aware classifier.
    */
   function decorateRows(root: HTMLElement): void {
+    decorateNoiseRows(root)
+    decorateHunkRows(root)
+  }
+
+  function decorateNoiseRows(root: HTMLElement): void {
     // Nothing to dim when focus is off, or for a non-generated file with no
     // recognised language. Generated files dim regardless of language.
     if (focusMode === 'off' || (noiseLang === null && !isGenerated)) {
@@ -346,6 +358,33 @@
     decorateColumn([...root.querySelectorAll('.diff-line-content')])
     decorateColumn([...root.querySelectorAll('.diff-line-old-content')])
     decorateColumn([...root.querySelectorAll('.diff-line-new-content')])
+  }
+
+  /**
+   * Per-HUNK attention dimming (src/lib/guide/hunkAttention). Mechanical hunks
+   * — formatting, imports, comments, a consistent rename, fixture data — have
+   * their content cells RECEDED with the exact same idiom focus mode uses
+   * (opacity only, hover restores, text stays selectable and anchorable).
+   * Nothing is ever hidden or made unreachable, and one click on the hunk's
+   * marker restores it fully.
+   *
+   * Rows are matched to hunks by SOURCE line number (the same attributes the
+   * focus-dim pass reads), so expanded-context rows — which are outside every
+   * hunk — are never touched, in unified and split alike.
+   */
+  function decorateHunkRows(root: HTMLElement): void {
+    const index = mechanicalRowIndex
+    const cells = [
+      ...root.querySelectorAll('.diff-line-content'),
+      ...root.querySelectorAll('.diff-line-old-content'),
+      ...root.querySelectorAll('.diff-line-new-content'),
+    ]
+    for (const cell of cells) {
+      const nums = cellRowNums(cell)
+      let hunkIndex = nums.new > 0 ? index.get(`R:${nums.new}`) : undefined
+      if (hunkIndex === undefined && nums.old > 0) hunkIndex = index.get(`L:${nums.old}`)
+      cell.classList.toggle('hunk-receded', hunkIndex !== undefined && !restoredHunks.has(hunkIndex))
+    }
   }
 
   /**
@@ -810,6 +849,88 @@
     return group.reduce((n, t) => n + 1 + t.replies.length, 0)
   }
 
+  // ---- Per-hunk attention (src/lib/guide/hunkAttention, deterministic) ----
+  // Attention guidance ACROSS files (risk-first order, the mechanical tail,
+  // phases) is good; WITHIN a file it was weak — risk is per file, so one real
+  // change buried in 200 lines of formatting still read as uniformly "high
+  // attention". classifyFileHunks classifies each HUNK instead, so the reviewer
+  // reads decision points rather than lines.
+  //
+  // Pure computation: no LLM, no AI task, zero tokens. A hunk carrying a
+  // reviewer finding, a draft comment or a risk-heuristic hit is ALWAYS a
+  // decision, whatever its shape (the module enforces that).
+  //
+  // Off switch: hunkAttentionPref (localStorage review123:hunk-attention,
+  // toggled from the Inspect toolbar). Off → this whole layer is inert and the
+  // file renders exactly as it did before.
+  const hunkAttentionOn = $derived(hunkAttentionPref.enabled)
+
+  /**
+   * The patch AS RENDERED. Whitespace hiding swaps in a recomputed patch, and
+   * the hunk geometry must describe the rows the reviewer actually sees.
+   */
+  const renderedPatch = $derived(whitespace?.kind === 'recomputed' ? whitespace.patch : file.patch)
+
+  const EMPTY_HUNK_ATTENTION: HunkAttentionResult = { hunks: [], classifications: [] }
+
+  const hunkAttention = $derived.by((): HunkAttentionResult => {
+    if (!hunkAttentionOn || kind !== 'diff' || wsCollapsed || !renderedPatch) return EMPTY_HUNK_ATTENTION
+    return classifyFileHunks({
+      filename: file.filename,
+      patch: renderedPatch,
+      // EFFECTIVE finding anchors (re-anchor overrides applied) — a finding the
+      // user moved protects the hunk it was moved TO.
+      findings: placedSkillFindings.map((f) => ({ line: f.line, side: f.anchorSide })),
+      drafts: drafts.map((d) => ({ line: d.line, side: d.side })),
+    })
+  })
+
+  /** The file card's "what changed" list — decision points, then the churn. */
+  const changeStrip = $derived.by(() =>
+    buildChangeStrip({ ...file, patch: renderedPatch }, hunkAttention),
+  )
+
+  /** Mechanical hunks the user has explicitly restored (session-only). */
+  let restoredHunks = $state<Set<number>>(new Set())
+
+  function restoreHunk(index: number): void {
+    restoredHunks = new Set([...restoredHunks, index])
+  }
+
+  // A new patch (refresh, revision switch, whitespace toggle) invalidates the
+  // hunk indices the restores refer to — start clean rather than un-receding an
+  // unrelated hunk that happens to share an index. The `lastRestorePatch` guard
+  // is load-bearing: this effect also DEPENDS on restoredHunks (it reads .size),
+  // so without it a restore would immediately undo itself.
+  let lastRestorePatch: string | undefined = undefined
+  $effect(() => {
+    const patch = renderedPatch
+    if (patch === lastRestorePatch) return
+    lastRestorePatch = patch
+    if (restoredHunks.size > 0) restoredHunks = new Set()
+  })
+
+  /**
+   * "R:<newLine>" / "L:<oldLine>" → index of the MECHANICAL hunk that owns the
+   * row. Built once per classification so the DOM decorate pass is a lookup.
+   */
+  const mechanicalRowIndex = $derived.by(() => {
+    const map = new Map<string, number>()
+    for (const h of hunkAttention.hunks) {
+      if (hunkAttention.classifications[h.index].attention !== 'mechanical') continue
+      for (const l of h.lines) {
+        if (l.newNum > 0) map.set(`R:${l.newNum}`, h.index)
+        if (l.oldNum > 0) map.set(`L:${l.oldNum}`, h.index)
+      }
+    }
+    return map
+  })
+
+  /** Jump to a strip entry's hunk (reuses the symbol click-through jump). */
+  function jumpToStripEntry(entry: { line: number; side: 'LEFT' | 'RIGHT' }): void {
+    jumpToDiffLine(file.filename, entry.line, entry.side === 'LEFT' ? 'old' : 'new')
+  }
+
   // ---- extendData — per-line annotation entries (drafts + skill findings) --
   // NOTE: @git-diff-view's unified-mode DiffUnifiedExtendLine shipped with an
   // inverted isHidden condition (extend rows only rendered for collapsed
@@ -821,6 +942,11 @@
     drafts: Draft[]
     findings: PlacedSkillFinding[]
     threads: Thread[]
+    /**
+     * Marker for a RECEDED mechanical hunk that starts here — names why the
+     * hunk is dimmed and restores it on click. Null on every other line.
+     */
+    hunkMarker: { index: number; summary: string; changed: number } | null
   }
 
   const extendData = $derived.by(() => {
@@ -828,7 +954,7 @@
     const newFile: Record<string, { data: ExtendEntry }> = {}
     const entryAt = (map: Record<string, { data: ExtendEntry }>, line: number): ExtendEntry => {
       const key = String(line)
-      if (!map[key]) map[key] = { data: { drafts: [], findings: [], threads: [] } }
+      if (!map[key]) map[key] = { data: { drafts: [], findings: [], threads: [], hunkMarker: null } }
       return map[key].data
     }
     for (const d of drafts) {
@@ -859,6 +985,20 @@
     for (const t of anchoredThreads) {
       const map = t.root.side === 'LEFT' ? oldFile : newFile
       entryAt(map, t.root.line!).threads.push(t)
+    }
+    // One marker per RECEDED mechanical hunk, anchored on the rendered line
+    // just above its first change. A hunk carrying a finding or a draft is
+    // never mechanical, so a marker can never collide with one of those cards.
+    for (const h of hunkAttention.hunks) {
+      if (hunkAttention.classifications[h.index].attention !== 'mechanical') continue
+      if (restoredHunks.has(h.index)) continue
+      const anchor = hunkAnchor(h)
+      if (!anchor) continue
+      entryAt(anchor.side === 'LEFT' ? oldFile : newFile, anchor.line).hunkMarker = {
+        index: h.index,
+        summary: hunkAttention.classifications[h.index].summary,
+        changed: h.lines.filter((l) => l.marker !== ' ').length,
+      }
     }
     return { oldFile, newFile }
   })
@@ -1019,13 +1159,51 @@
     {:else if wsActive}
       <p class="ws-inline-note" role="note">Line comments are disabled while whitespace changes are hidden — turn off "Hide whitespace" to comment on exact lines.</p>
     {/if}
+    <!-- Per-file "what changed" strip (src/lib/guide/hunkAttention): the
+         file's DECISION points, named deterministically from the changed
+         symbols the diff already gives us (#95) plus the per-hunk
+         classification, with the mechanical churn folded down to a count.
+         Every entry jumps to its hunk. -->
+    {#if hunkAttentionOn && changeStrip.entries.length > 0}
+      <div class="change-strip" data-testid="change-strip" aria-label="What changed in {file.filename}">
+        <span class="change-strip-title">
+          {changeStrip.nothingSubstantive ? 'Nothing substantive' : 'What changed'}
+        </span>
+        {#if changeStrip.nothingSubstantive}
+          <span class="change-strip-note">every hunk here is mechanical</span>
+        {/if}
+        <ul class="change-strip-list">
+          {#each changeStrip.entries as entry (`${entry.attention}|${entry.hunkIndex}|${entry.label}`)}
+            <li class="change-strip-item" class:is-mechanical={entry.attention === 'mechanical'}>
+              <button
+                type="button"
+                class="change-strip-jump"
+                data-testid="change-strip-entry"
+                data-attention={entry.attention}
+                data-hunk-index={entry.hunkIndex}
+                onclick={() => jumpToStripEntry(entry)}
+              >
+                {#if entry.isSymbol}
+                  <code class="change-strip-label">{entry.label}</code>
+                {:else}
+                  <span class="change-strip-label">{entry.label}</span>
+                {/if}
+                {#if entry.detail}
+                  <span class="change-strip-detail">{entry.detail}</span>
+                {/if}
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       class="focus-dim-host"
       class:reanchor-dragging={reanchorDragActive}
       data-focus-mode={focusMode}
-      use:focusDim={[focusMode, file.filename, mode, isGenerated]}
+      use:focusDim={[focusMode, file.filename, mode, isGenerated, hunkAttentionOn, mechanicalRowIndex, restoredHunks]}
       onclick={handleDiffClick}
       ondragover={handleFindingDragOver}
       ondrop={handleFindingDrop}
@@ -1125,6 +1303,22 @@
 
       {#snippet renderExtendLine({ lineNumber, side, data })}
         {@const entry = data as ExtendEntry}
+        <!-- Receded-hunk marker: names WHY this block is dimmed and restores
+             it fully on click. The code itself is never hidden — the marker is
+             an explanation, not a collapse. -->
+        {#if entry?.hunkMarker}
+          {@const marker = entry.hunkMarker}
+          <div class="hunk-marker" data-testid="hunk-marker" data-hunk-index={marker.index}>
+            <span class="hunk-marker-why">{marker.summary}</span>
+            <span class="hunk-marker-count">{marker.changed} line{marker.changed === 1 ? '' : 's'}</span>
+            <button
+              type="button"
+              class="hunk-marker-restore"
+              data-testid="hunk-marker-restore"
+              onclick={() => restoreHunk(marker.index)}
+            >Show normally</button>
+          </div>
+        {/if}
         {#if entry?.drafts?.length}
           {@const flashKey = `${lineNumber}|${splitSideToSide(side)}`}
           <div class="draft-annotations inline-annotation" data-testid="inline-annotations" data-line={lineNumber} class:flash={flashKeys.has(flashKey)} aria-label="Draft comments at line {lineNumber}">
@@ -1471,6 +1665,106 @@
   .focus-dim-host :global(.diff-line-new-content.dimmed-noise):hover {
     opacity: 1;
   }
+
+  /* Per-hunk attention — MECHANICAL hunks recede. Deliberately the SAME idiom
+     and the same 0.45 opacity focus mode uses for code noise (one visual
+     language, not two): opacity only, so the code stays selectable,
+     comment-anchorable and a drop target for a dragged finding; hover restores
+     it for a glance; the hunk's marker restores it for good. Nothing is ever
+     hidden. When a row is BOTH noise and mechanical the opacity does not
+     compound — the two rules set the same value. */
+  .focus-dim-host :global(.diff-line-content.hunk-receded),
+  .focus-dim-host :global(.diff-line-old-content.hunk-receded),
+  .focus-dim-host :global(.diff-line-new-content.hunk-receded) {
+    opacity: 0.45;
+    transition: opacity 0.12s ease;
+  }
+  .focus-dim-host :global(.diff-line-content.hunk-receded):hover,
+  .focus-dim-host :global(.diff-line-old-content.hunk-receded):hover,
+  .focus-dim-host :global(.diff-line-new-content.hunk-receded):hover {
+    opacity: 1;
+  }
+
+  /* The receded hunk's one-line marker, rendered inline in the diff through
+     the same extendData mechanism drafts and findings use. */
+  .hunk-marker {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    background: var(--surface-raised);
+    border-top: 1px solid var(--hairline);
+    border-bottom: 1px solid var(--hairline);
+  }
+  .hunk-marker-why { font-weight: 600; letter-spacing: 0.02em; }
+  .hunk-marker-count { opacity: 0.8; font-family: var(--font-mono); }
+  .hunk-marker-restore {
+    margin-left: auto;
+    background: none;
+    border: 1px solid var(--hairline);
+    border-radius: 3px;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    padding: 0.05rem 0.4rem;
+    cursor: pointer;
+  }
+  .hunk-marker-restore:hover { color: var(--text); border-color: var(--text-muted); }
+
+  /* ---- Per-file "what changed" strip ---- */
+  .change-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.5rem;
+    padding: 0.35rem 0.8rem;
+    background: var(--surface-raised);
+    border-bottom: 1px solid var(--hairline);
+    font-size: 0.75rem;
+  }
+  .change-strip-title {
+    color: var(--text-muted);
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    font-size: 0.66rem;
+  }
+  .change-strip-note { color: var(--text-muted); font-style: italic; }
+  .change-strip-list {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.15rem 0.1rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  /* A middot between entries — a compact, scannable line rather than a list. */
+  .change-strip-item + .change-strip-item::before {
+    content: '·';
+    color: var(--text-muted);
+    padding: 0 0.35rem;
+  }
+  .change-strip-item { display: inline-flex; align-items: baseline; }
+  .change-strip-item.is-mechanical { opacity: 0.65; }
+  .change-strip-jump {
+    background: none;
+    border: none;
+    padding: 0.05rem 0.15rem;
+    margin: 0;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.3rem;
+    border-radius: 3px;
+  }
+  .change-strip-jump:hover { background: color-mix(in srgb, var(--hairline) 45%, transparent); }
+  .change-strip-jump:hover .change-strip-label { text-decoration: underline; }
+  code.change-strip-label { font-family: var(--font-mono); font-size: 0.73rem; }
+  .change-strip-detail { color: var(--text-muted); font-family: var(--font-mono); font-size: 0.7rem; }
   /* ---- Symbol click-through (Tier 1) ---- */
   /* Hover affordance: identifier-ish highlighted tokens hint clickability.
      Keyword/string/comment/literal tokens are excluded to mirror the click

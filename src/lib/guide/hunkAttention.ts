@@ -603,6 +603,8 @@ export interface ChangeStripEntry {
   attention: HunkAttention
   /** Primary text: a changed symbol, a line range, or a mechanical group. */
   label: string
+  /** True when `label` is a real code symbol (render it as code, not prose). */
+  isSymbol: boolean
   /** Secondary text: the hunk summary (empty for group/overflow entries). */
   detail: string
   /** Hunk this entry jumps to. */
@@ -688,9 +690,11 @@ export function buildChangeStrip(
   for (const hunk of decisions.slice(0, MAX_STRIP_DECISIONS)) {
     const anchor = hunkAnchor(hunk)
     if (!anchor) continue
+    const symbol = symbolForHunk(hunk, symbols)
     entries.push({
       attention: 'decision',
-      label: symbolForHunk(hunk, symbols) ?? rangeLabel(hunk),
+      label: symbol ?? rangeLabel(hunk),
+      isSymbol: symbol !== null,
       detail: classifications[hunk.index].summary,
       hunkIndex: hunk.index,
       line: anchor.line,
@@ -706,6 +710,7 @@ export function buildChangeStrip(
       entries.push({
         attention: 'decision',
         label: `${overflow.length} more section${overflow.length === 1 ? '' : 's'}`,
+        isSymbol: false,
         detail: '',
         hunkIndex: overflow[0].index,
         line: anchor.line,
@@ -731,6 +736,7 @@ export function buildChangeStrip(
     entries.push({
       attention: 'mechanical',
       label: `${group.length} ${HUNK_KIND_GROUP_LABEL[kind]} hunk${group.length === 1 ? '' : 's'}`,
+      isSymbol: false,
       detail: '',
       hunkIndex: group[0].index,
       line: anchor.line,
