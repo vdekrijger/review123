@@ -49,6 +49,18 @@ export interface BridgeCapabilities {
    * reads as `false`.
    */
   fix: boolean
+  /**
+   * `/v1/checkout` and `/v1/restore` — the routes that move the USER'S OWN
+   * working tree, so their dev server serves the pull request. Reports the
+   * bridge's `--allow-checkout` flag.
+   *
+   * A SEPARATE GRANT FROM `fix`, and the browser must treat it as one. The fix
+   * loop writes only inside an isolated scratch worktree; this switches the
+   * branch under a running dev stack. Someone who started their bridge with
+   * `--allow-write` has NOT consented to this, so no code here may fall back
+   * from one flag to the other. Absent or non-boolean reads as `false`.
+   */
+  checkout: boolean
 }
 
 /** The CLIs the bridge knows how to drive. Mirrors bridge/src/capabilities.ts. */
@@ -108,17 +120,46 @@ export type BridgeErrorCode =
   | 'worktree-failed'
   /** The PR's head commit is not in the local object store. */
   | 'head-unknown'
+  /** `/v1/checkout` or `/v1/restore` without `--allow-checkout`. */
+  | 'checkout-disabled'
+  /** The working tree has uncommitted changes; the body carries `dirtyPaths`. */
+  | 'tree-dirty'
+  /** The remote does not have that ref. */
+  | 'ref-unknown'
+  /** git itself refused the checkout. Nothing was forced or discarded. */
+  | 'checkout-failed'
+  /** `/v1/restore` with nothing recorded for this repo. */
+  | 'no-prior-state'
+  /** The recorded branch was deleted; restoring detached needs `detachToSha`. */
+  | 'prior-gone'
+  /** HEAD moved since the checkout; restoring needs `acknowledgeMoved`. */
+  | 'moved-since'
+  /** A checkout was sent without `acknowledgeUntrusted`. */
+  | 'untrusted-unacknowledged'
 
 /** A parsed non-2xx bridge body. `code` is null when it was not one we know. */
 export interface BridgeErrorBody {
   code: BridgeErrorCode | null
   message: string
+  /**
+   * On `tree-dirty` only: the repo-relative paths a stash would move.
+   *
+   * Carried so a stash confirmation can name EXACTLY what it is about to
+   * touch. A prompt that says "you have uncommitted changes, stash them?"
+   * without listing them asks the user to trust a claim they cannot check —
+   * which is the one thing a destructive-looking action must never do.
+   */
+  dirtyPaths: string[]
+  /** On `tree-dirty` only: the true total, which may exceed `dirtyPaths`. */
+  dirtyCount: number
 }
 
 const KNOWN_ERROR_CODES: readonly string[] = [
   'bad-request', 'unauthorized', 'forbidden-origin', 'forbidden-host', 'forbidden-path',
   'not-found', 'method-not-allowed', 'not-implemented', 'payload-too-large', 'timeout',
   'cli-unavailable', 'cli-failed', 'write-disabled', 'worktree-failed', 'head-unknown',
+  'checkout-disabled', 'tree-dirty', 'ref-unknown', 'checkout-failed', 'no-prior-state',
+  'prior-gone', 'moved-since', 'untrusted-unacknowledged',
 ]
 
 /**
@@ -127,13 +168,23 @@ const KNOWN_ERROR_CODES: readonly string[] = [
  * so `message` is length-capped and stripped of control characters.
  */
 export function parseBridgeError(value: unknown): BridgeErrorBody {
-  if (typeof value !== 'object' || value === null) return { code: null, message: '' }
+  const empty = { code: null, message: '', dirtyPaths: [], dirtyCount: 0 }
+  if (typeof value !== 'object' || value === null) return empty
   const raw = value as Record<string, unknown>
   const code = raw['error']
   const message = raw['message']
+  const paths = raw['dirtyPaths']
+  const count = raw['dirtyCount']
+  const dirtyPaths = Array.isArray(paths)
+    ? paths.filter((p): p is string => typeof p === 'string').map((p) => sanitizeLabel(p, 300))
+    : []
   return {
     code: typeof code === 'string' && KNOWN_ERROR_CODES.includes(code) ? (code as BridgeErrorCode) : null,
     message: typeof message === 'string' ? sanitizeLabel(message, 300) : '',
+    dirtyPaths,
+    // A count we cannot read falls back to what we CAN see, never to zero: a
+    // "0 files" stash prompt beside a non-empty list would be nonsense.
+    dirtyCount: typeof count === 'number' && Number.isFinite(count) ? count : dirtyPaths.length,
   }
 }
 
@@ -371,7 +422,7 @@ export function parseSearchResponse(value: unknown): BridgeSearchResponse | null
  * call this route?" — even though the bridge answers it from a flag rather
  * than from a release number.
  */
-export type BridgeCapability = 'infer' | 'files' | 'search' | 'fix'
+export type BridgeCapability = 'infer' | 'files' | 'search' | 'fix' | 'checkout'
 
 /** The loopback URL for a bridge route. Always 127.0.0.1 — never `localhost`. */
 export function bridgeUrl(port: number, path: string): string {
@@ -413,6 +464,11 @@ export function parseHealth(value: unknown): BridgeHealth | null {
   // must never render as the permissive answer.
   const fixReady = capsRaw['fix']
   if (fixReady !== undefined && typeof fixReady !== 'boolean') return null
+  // `checkout` is additive the same way, and read with the same strictness for
+  // the same reason: it authorises moving the user's working tree, so anything
+  // other than a literal `true` must read as false.
+  const checkoutReady = capsRaw['checkout']
+  if (checkoutReady !== undefined && typeof checkoutReady !== 'boolean') return null
 
   return {
     ok: true,
@@ -424,6 +480,7 @@ export function parseHealth(value: unknown): BridgeHealth | null {
       files: capsRaw['files'],
       search: capsRaw['search'],
       fix: fixReady === true,
+      checkout: checkoutReady === true,
     },
     git: parseGitState(raw['git']),
     version: sanitizeLabel(raw['version'], 40),
@@ -690,4 +747,186 @@ function sanitizeLabel(value: string, maxLength: number): string {
     if (!isControl) out += ch
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// `GET /v1/stack`, `POST /v1/checkout`, `POST /v1/restore` — run this PR
+// against the app the user already has running. MIRROR of bridge/src/protocol.ts.
+// ---------------------------------------------------------------------------
+
+/**
+ * A checkout fetches a ref and then the user's dev server RUNS it, so the
+ * request is allowed to take a while: a cold fetch of a large repo's PR ref is
+ * the slow part, and failing at thirty seconds would just make the user retry
+ * the same slow thing.
+ */
+export const CHECKOUT_REQUEST_TIMEOUT_MS = 3 * 60 * 1000
+
+/** How the bridge worked out where the dev server is. See bridge/src/appUrl.ts. */
+export type BridgeAppUrlSource = 'flag' | 'posthog' | 'package-json' | 'unknown'
+
+export interface BridgeStackApp {
+  /** Loopback URL of the dev server, or null when `source` is 'unknown'. */
+  url: string | null
+  source: BridgeAppUrlSource
+  /** Did a TCP connect succeed just now? Always false when `url` is null. */
+  reachable: boolean
+  /** Why it is unknown, or how the port was read. The bridge's own sentence. */
+  detail: string
+}
+
+/** The state the tree was in before a checkout moved it. */
+export interface BridgeStackPrior {
+  branch: string | null
+  head: string
+  recordedAt: string
+  checkedOutRef: string
+  checkedOutSha: string
+  /** The stash entry created to clear the tree, as a sha. Null when none. */
+  stashRef: string | null
+}
+
+/** A stash the bridge created (on checkout) or applied (on restore). */
+export interface BridgeStackStash {
+  action: 'created' | 'applied'
+  ref: string
+  /** The command the USER runs to remove the entry. The bridge never does. */
+  dropCommand: string
+}
+
+export interface BridgeStackState {
+  git: BridgeGitState | null
+  dirtyPaths: string[]
+  dirtyCount: number
+  prior: BridgeStackPrior | null
+  app: BridgeStackApp
+  /** Mirrors `capabilities.checkout` — the `--allow-checkout` flag. */
+  checkoutEnabled: boolean
+}
+
+export interface BridgeStackAction {
+  git: BridgeGitState
+  prior: BridgeStackPrior | null
+  stash: BridgeStackStash | null
+  app: BridgeStackApp
+}
+
+const APP_SOURCES: readonly string[] = ['flag', 'posthog', 'package-json', 'unknown']
+
+/**
+ * Narrow the `app` block.
+ *
+ * An unreadable block becomes the honest `unknown`/unreachable answer rather
+ * than null, so a caller always has something to render. `reachable` is forced
+ * false whenever there is no URL: an unprobed port can never be reported as
+ * up, the same rule `parseGitState` applies to `dirty`.
+ */
+function parseStackApp(value: unknown): BridgeStackApp {
+  const unknown: BridgeStackApp = { url: null, source: 'unknown', reachable: false, detail: '' }
+  if (typeof value !== 'object' || value === null) return unknown
+  const raw = value as Record<string, unknown>
+  const source = raw['source']
+  const url = raw['url']
+  const safeUrl = typeof url === 'string' && url !== '' ? sanitizeLabel(url, 300) : null
+  return {
+    url: safeUrl,
+    source: typeof source === 'string' && APP_SOURCES.includes(source)
+      ? (source as BridgeAppUrlSource)
+      : 'unknown',
+    reachable: safeUrl !== null && raw['reachable'] === true,
+    detail: typeof raw['detail'] === 'string' ? sanitizeLabel(raw['detail'], 400) : '',
+  }
+}
+
+/** Cap on rendered dirty paths, mirroring the bridge's MAX_DIRTY_PATHS. */
+const MAX_DIRTY_PATHS = 100
+
+function parseDirtyPaths(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((p): p is string => typeof p === 'string')
+    .slice(0, MAX_DIRTY_PATHS)
+    .map((p) => sanitizeLabel(p, 300))
+}
+
+/**
+ * Narrow the recorded prior state.
+ *
+ * Returns null for every doubtful case, exactly like `parseGitState`: this
+ * value drives a "Restore main" button, and a half-read record would offer the
+ * user a way home that does not go anywhere.
+ */
+export function parseStackPrior(value: unknown): BridgeStackPrior | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+  const head = raw['head']
+  const checkedOutSha = raw['checkedOutSha']
+  if (typeof head !== 'string' || !SHA_RE.test(head.toLowerCase())) return null
+  if (typeof checkedOutSha !== 'string' || !SHA_RE.test(checkedOutSha.toLowerCase())) return null
+  const branch = raw['branch']
+  const stashRef = raw['stashRef']
+  const ref = raw['checkedOutRef']
+  const recordedAt = raw['recordedAt']
+  return {
+    branch: typeof branch === 'string' && branch !== '' ? sanitizeLabel(branch, 200) : null,
+    head: head.toLowerCase(),
+    recordedAt: typeof recordedAt === 'string' ? sanitizeLabel(recordedAt, 40) : '',
+    checkedOutRef: typeof ref === 'string' ? sanitizeLabel(ref, 200) : '',
+    checkedOutSha: checkedOutSha.toLowerCase(),
+    stashRef:
+      typeof stashRef === 'string' && SHA_RE.test(stashRef.toLowerCase())
+        ? stashRef.toLowerCase()
+        : null,
+  }
+}
+
+function parseStackStash(value: unknown): BridgeStackStash | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+  const ref = raw['ref']
+  if (typeof ref !== 'string' || !SHA_RE.test(ref.toLowerCase())) return null
+  return {
+    action: raw['action'] === 'applied' ? 'applied' : 'created',
+    ref: ref.toLowerCase(),
+    dropCommand: typeof raw['dropCommand'] === 'string' ? sanitizeLabel(raw['dropCommand'], 200) : '',
+  }
+}
+
+/** Narrow a `GET /v1/stack` body. Null when it is not one. */
+export function parseStackResponse(value: unknown): BridgeStackState | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+  if (raw['ok'] !== true) return null
+  const dirtyPaths = parseDirtyPaths(raw['dirtyPaths'])
+  const count = raw['dirtyCount']
+  return {
+    git: parseGitState(raw['git']),
+    dirtyPaths,
+    dirtyCount: typeof count === 'number' && Number.isFinite(count) ? count : dirtyPaths.length,
+    prior: parseStackPrior(raw['prior']),
+    app: parseStackApp(raw['app']),
+    // A capability read from silence must never be the permissive answer.
+    checkoutEnabled: raw['checkoutEnabled'] === true,
+  }
+}
+
+/**
+ * Narrow a `POST /v1/checkout` or `/v1/restore` body.
+ *
+ * `git` is REQUIRED here, unlike in `/v1/stack`: an action that reports
+ * success has by definition moved the tree, so a response that cannot say
+ * where the tree now is has not told us the one thing we asked.
+ */
+export function parseStackAction(value: unknown): BridgeStackAction | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+  if (raw['ok'] !== true) return null
+  const git = parseGitState(raw['git'])
+  if (git === null) return null
+  return {
+    git,
+    prior: parseStackPrior(raw['prior']),
+    stash: parseStackStash(raw['stash']),
+    app: parseStackApp(raw['app']),
+  }
 }
