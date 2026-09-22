@@ -37,6 +37,7 @@
  */
 
 import { classifyFetchFailure, requestSignals } from '../net/signals'
+import { deriveRepoRelation, type PrMeta, type PrRepoRelation } from '../github/types'
 import { bridgeAvailable, bridgeCredentials, bridgeState } from './bridge.svelte'
 import {
   CHECKOUT_REQUEST_TIMEOUT_MS,
@@ -219,20 +220,28 @@ export function prRefForProvider(
  *                   the risk.
  * - `unverified`  — this build cannot tell. SAME confirmation as a fork.
  *
- * WHY `unverified` IS TREATED LIKE A FORK, AND WHY IT IS THE ANSWER TODAY.
+ * WHY `unverified` IS TREATED LIKE A FORK.
  *
  * Checking a ref out and letting a dev stack autoreload it IS running that
  * code — `postinstall` scripts, config files, test fixtures and all. For a
  * fork that is a stranger's code running against the user's real database.
  *
- * The provider layer does not currently carry the head-repo / base-repo pair
- * that would settle the question (`PrMeta` has no such field, across three
- * providers), so `repos` is absent at every call site in this build and the
- * answer is `unverified` everywhere. That is deliberate rather than
- * unfinished: an unknown provenance must never render as the reassuring
- * answer, exactly as `parseGitState` defaults `dirty` to true. Wiring the real
- * field in later turns the smooth path on for same-repo branches WITHOUT
- * loosening anything here — this function already handles it.
+ * An unknown provenance must therefore never render as the reassuring answer,
+ * exactly as `parseGitState` defaults `dirty` to true. `unverified` is not a
+ * softer `fork`: it buys nothing and costs the same confirmation.
+ *
+ * WHAT CHANGED, AND WHAT DELIBERATELY DID NOT.
+ *
+ * `PrMeta` now carries the head/base repository identities and the derived
+ * `repoRelation` (see `deriveRepoRelation` in lib/github/types), populated by
+ * all three provider adapters. So a PR whose branch PROVABLY lives in the
+ * repository itself now answers `same-repo` and skips the confirmation — the
+ * common case, and the only one that got smoother.
+ *
+ * Nothing else moved. `fork` still confirms; a deleted head repo (GitHub sends
+ * `head.repo: null`, GitLab `source_project_id: null`) still confirms; a
+ * `PrMeta` from a build older than these fields has neither key, reads as
+ * `unknown`, and still confirms.
  */
 export type CheckoutTrust = 'same-repo' | 'fork' | 'unverified'
 
@@ -242,17 +251,35 @@ export interface CheckoutTrustInput {
    * them (e.g. "octocat/hello" and "octocat/hello"). Absent → `unverified`.
    */
   repos?: { head: string | null; base: string | null }
+  /**
+   * The provider's own, already-derived answer — `PrMeta.repoRelation`. This
+   * is the wired path; `repos` remains for a caller holding only the raw pair.
+   * Absent (an old cached `PrMeta` has no such key) → `unverified`, never
+   * `same-repo`.
+   */
+  relation?: PrRepoRelation
 }
 
-/** THE TRUST RULE, as a pure function. */
+/**
+ * THE TRUST RULE, as a pure function.
+ *
+ * One rule, one place: the provider-agnostic relation decides, and `unknown`
+ * maps to `unverified` — the provider layer reports a FACT it could not
+ * establish, this layer turns that into the POLICY of asking anyway.
+ */
 export function decideCheckoutTrust(input: CheckoutTrustInput): CheckoutTrust {
-  const repos = input.repos
-  if (repos == null) return 'unverified'
-  const { head, base } = repos
-  // Either side missing is not evidence of sameness, so it is not treated as any.
-  if (typeof head !== 'string' || head === '') return 'unverified'
-  if (typeof base !== 'string' || base === '') return 'unverified'
-  return head.toLowerCase() === base.toLowerCase() ? 'same-repo' : 'fork'
+  const relation = input.relation ?? deriveRepoRelation(input.repos?.head, input.repos?.base)
+  return relation === 'unknown' ? 'unverified' : relation
+}
+
+/**
+ * Read a `PrMeta` — including one built before `repoRelation` existed — as a
+ * trust input. The cast-free way for a caller to avoid re-deriving the rule.
+ */
+export function checkoutTrustInputFor(
+  meta: PrMeta | null | undefined,
+): CheckoutTrustInput {
+  return { relation: meta?.repoRelation ?? 'unknown' }
 }
 
 /** Does this trust level require an explicit, risk-naming confirmation? */
@@ -264,7 +291,10 @@ export function trustNeedsConfirmation(trust: CheckoutTrust): boolean {
 export function describeCheckoutTrust(trust: CheckoutTrust): string {
   switch (trust) {
     case 'same-repo':
-      return 'This branch lives in the repository itself.'
+      // One claim, and only the one that was actually proven: WHERE the branch
+      // lives. Not that it is safe, not that its author is trusted — a
+      // same-repo branch is still code that is about to run on this machine.
+      return 'This branch lives in the repository itself — not a fork.'
     case 'fork':
       return 'This pull request comes from a FORK. Checking it out runs its code on your machine — your dev server will load it, and any install or build step in it will run, against your real local database and credentials. Only continue if you have read this diff and trust its author.'
     case 'unverified':

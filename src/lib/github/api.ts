@@ -1,5 +1,5 @@
 import { ghFetch, ghFetchPage } from './client'
-import { GithubApiError, type PrFile, type PrMeta } from './types'
+import { GithubApiError, deriveRepoRelation, type PrFile, type PrMeta } from './types'
 import type { PrRef } from './parse'
 
 export interface RawPrFile {
@@ -13,20 +13,30 @@ export interface RawPrFile {
 
 interface RawPr {
   title: string; state: 'open' | 'closed'; merged: boolean; body: string | null
-  base: { sha: string; repo?: { private: boolean } }
-  head: { sha: string }
+  // `repo` is NULLABLE, not merely optional. GitHub's current OpenAPI
+  // description types both sides as a plain (non-nullable) `repository`, but
+  // the live API disagrees: scanning the first 500 closed PRs of nodejs/node
+  // returns `head.repo: null` for 155 of them — every PR whose fork has since
+  // been deleted. The key is present with a null value, so `?.` is the guard
+  // that actually works here, and `full_name` may be absent besides.
+  base: { sha: string; repo?: { private: boolean; full_name?: string } | null }
+  head: { sha: string; repo?: { full_name?: string } | null }
   changed_files: number
   user?: { login: string } | null
 }
 
 export async function getPrMeta(ref: PrRef): Promise<PrMeta> {
   const pr = await ghFetch<RawPr>(`/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`)
+  const headRepo = pr.head.repo?.full_name ?? null
+  const baseRepo = pr.base.repo?.full_name ?? null
   return {
     title: pr.title, state: pr.state, merged: pr.merged, body: pr.body,
     baseSha: pr.base.sha, headSha: pr.head.sha,
     private: pr.base.repo?.private ?? false,
     changedFiles: pr.changed_files,
     authorLogin: pr.user?.login ?? null,
+    headRepo, baseRepo,
+    repoRelation: deriveRepoRelation(headRepo, baseRepo),
   }
 }
 

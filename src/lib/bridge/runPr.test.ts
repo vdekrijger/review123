@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   _resetStackForTest,
   checkoutPr,
+  checkoutTrustInputFor,
   currentCheckoutReadiness,
   decideCheckout,
   decideCheckoutTrust,
@@ -37,6 +38,16 @@ import {
 import { _resetBridgeForTest, connectBridge } from './bridge.svelte'
 import { BRIDGE_STORAGE_KEY } from './storage'
 import type { BridgeStackApp, BridgeStackState } from './protocol'
+import type { PrMeta, PrRepoRelation } from '../github/types'
+
+/** A PrMeta carrying just the provenance answer these tests care about. */
+function metaWith(repoRelation: PrRepoRelation): PrMeta {
+  return {
+    title: 'T', state: 'open', merged: false, body: null,
+    baseSha: 'b1', headSha: 'h1', private: false, changedFiles: 2,
+    authorLogin: 'octocat', headRepo: null, baseRepo: null, repoRelation,
+  }
+}
 
 const PR_HEAD = 'abc1234567890abcdef1234567890abcdef12345'
 const OTHER_HEAD = 'def4567890abcdef1234567890abcdef12345678'
@@ -343,7 +354,7 @@ describe('decideCheckoutTrust', () => {
     expect(decideCheckoutTrust({ repos: { head: 'stranger/hello', base: 'octo/hello' } })).toBe('fork')
   })
 
-  // THE DEFAULT, and the one that applies everywhere in this build today.
+  // THE DEFAULT whenever nothing was proven.
   it('is UNVERIFIED when the provider gave no repository identities', () => {
     expect(decideCheckoutTrust({})).toBe('unverified')
     expect(decideCheckoutTrust({ repos: { head: null, base: 'octo/hello' } })).toBe('unverified')
@@ -351,11 +362,55 @@ describe('decideCheckoutTrust', () => {
     expect(decideCheckoutTrust({ repos: { head: '', base: '' } })).toBe('unverified')
   })
 
+  // ---- The wired path: PrMeta.repoRelation ---------------------------------
+
+  it('takes the provider\'s own relation when it has one', () => {
+    expect(decideCheckoutTrust({ relation: 'same-repo' })).toBe('same-repo')
+    expect(decideCheckoutTrust({ relation: 'fork' })).toBe('fork')
+    // The provider layer says "unknown" (a fact); this layer says "unverified"
+    // (a policy: ask anyway).
+    expect(decideCheckoutTrust({ relation: 'unknown' })).toBe('unverified')
+  })
+
+  it('reads a PrMeta through checkoutTrustInputFor', () => {
+    expect(decideCheckoutTrust(checkoutTrustInputFor(metaWith('same-repo')))).toBe('same-repo')
+    expect(decideCheckoutTrust(checkoutTrustInputFor(metaWith('fork')))).toBe('fork')
+    expect(decideCheckoutTrust(checkoutTrustInputFor(metaWith('unknown')))).toBe('unverified')
+    expect(decideCheckoutTrust(checkoutTrustInputFor(null))).toBe('unverified')
+  })
+
+  /**
+   * STALE CACHE. A `PrMeta` produced by a build from before `repoRelation`
+   * existed has no such key. It must degrade to the confirmation — not crash,
+   * and above all not be read as same-repo.
+   */
+  it('treats a PrMeta from before these fields existed as UNVERIFIED', () => {
+    const stale = {
+      title: 'T', state: 'open' as const, merged: false, body: null,
+      baseSha: 'b1', headSha: 'h1', private: false, changedFiles: 2,
+      authorLogin: 'octocat',
+    } satisfies Omit<PrMeta, 'headRepo' | 'baseRepo' | 'repoRelation'>
+    expect(decideCheckoutTrust(checkoutTrustInputFor(stale))).toBe('unverified')
+    expect(trustNeedsConfirmation(decideCheckoutTrust(checkoutTrustInputFor(stale)))).toBe(true)
+  })
+
   it('requires a confirmation for anything that is not PROVABLY same-repo', () => {
     expect(trustNeedsConfirmation('same-repo')).toBe(false)
     expect(trustNeedsConfirmation('fork')).toBe(true)
     // An unknown provenance must never render as the reassuring answer.
     expect(trustNeedsConfirmation('unverified')).toBe(true)
+  })
+
+  // The whole matrix in one place: exactly ONE state skips the confirmation.
+  it.each([
+    ['a same-repo branch', { relation: 'same-repo' as const }, false],
+    ['a fork', { relation: 'fork' as const }, true],
+    ['an unknown relation', { relation: 'unknown' as const }, true],
+    ['a deleted head repo', { repos: { head: null, base: 'octo/hello' } }, true],
+    ['a fork by identity', { repos: { head: 'stranger/x', base: 'octo/x' } }, true],
+    ['nothing at all (old cached meta)', {}, true],
+  ])('%s: confirmation required = %s', (_label, input, expected) => {
+    expect(trustNeedsConfirmation(decideCheckoutTrust(input))).toBe(expected)
   })
 })
 
@@ -375,8 +430,14 @@ describe('describeCheckoutTrust', () => {
     expect(describeCheckoutTrust('unverified')).toMatch(/treated as if it does/)
   })
 
-  it('is calm and short for a same-repo branch', () => {
-    expect(describeCheckoutTrust('same-repo')).not.toMatch(/FORK/)
+  // HONEST, not reassuring. It says where the branch lives — the one thing
+  // that was actually proven — and never that the code is safe to run.
+  it('is calm and short for a same-repo branch, and claims nothing more', () => {
+    const sentence = describeCheckoutTrust('same-repo')
+    expect(sentence).not.toMatch(/FORK/)
+    expect(sentence).toMatch(/lives in the repository itself/i)
+    expect(sentence).not.toMatch(/\bsafe\b/i)
+    expect(sentence).not.toMatch(/\btrusted?\b/i)
   })
 })
 

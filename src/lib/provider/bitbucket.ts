@@ -16,6 +16,7 @@
 import { bbFetch, bbFetchRaw, bbFetchAll, BitbucketApiError } from './bitbucketClient'
 import { getSettings } from '../settings/settings'
 import type { ReviewProvider, PrRefX, ParseResult, ProviderCapabilities } from './types'
+import { deriveRepoRelation } from '../github/types'
 import type { PrMeta, PrFile } from '../github/types'
 import type { CiSummary } from '../github/checks'
 import type { PrComment } from '../github/comments'
@@ -117,8 +118,14 @@ interface BbPrMeta {
   title: string
   state: 'OPEN' | 'MERGED' | 'DECLINED' | 'SUPERSEDED'
   description: string | null
-  source: { commit: { hash: string }; repository: { is_private: boolean } }
-  destination: { commit: { hash: string } }
+  // `repository` is OPTIONAL on both endpoints. Bitbucket's own swagger types
+  // `source`/`destination` as a `pullrequest_endpoint` whose `repository` is
+  // not in any required list, and it is absent once the source repo is gone.
+  // `full_name` is "workspace/repo-slug" — the workspace half is what differs
+  // for a fork (a Bitbucket fork usually KEEPS the slug), so the full name is
+  // the comparison that works and the slug alone is not.
+  source: { commit: { hash: string }; repository?: { is_private?: boolean; full_name?: string } | null }
+  destination: { commit: { hash: string }; repository?: { full_name?: string } | null }
   author?: { uuid?: string | null; nickname?: string | null } | null
 }
 
@@ -263,6 +270,8 @@ export const bitbucketProvider: ReviewProvider = {
     const data = await bbFetch<BbPrMeta>(
       `${repoPath(ref)}/pullrequests/${ref.number}`,
     )
+    const headRepo = data.source?.repository?.full_name ?? null
+    const baseRepo = data.destination?.repository?.full_name ?? null
     return {
       title: data.title,
       state: bbStateToStatus(data.state),
@@ -275,6 +284,8 @@ export const bitbucketProvider: ReviewProvider = {
       // UUID is the stable identity post-GDPR; nickname is a display fallback.
       // Must stay in the same identity space as getViewerLogin().
       authorLogin: data.author?.uuid ?? data.author?.nickname ?? null,
+      headRepo, baseRepo,
+      repoRelation: deriveRepoRelation(headRepo, baseRepo),
     }
   },
 

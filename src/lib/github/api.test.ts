@@ -11,7 +11,8 @@ const META = {
 describe('github api', () => {
   it('getPrMeta maps fields incl. repo privacy', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
-      ...META, base: { ...META.base, repo: { private: true } },
+      ...META, base: { ...META.base, repo: { private: true, full_name: 'a/b' } },
+      head: { ...META.head, repo: { full_name: 'a/b' } },
       user: { login: 'octocat' },
     })))
     const meta = await getPrMeta({ owner: 'a', repo: 'b', number: 1 })
@@ -19,6 +20,7 @@ describe('github api', () => {
       title: 'T', state: 'open', merged: false, body: null,
       baseSha: 'b1', headSha: 'h1', private: true, changedFiles: 2,
       authorLogin: 'octocat',
+      headRepo: 'a/b', baseRepo: 'a/b', repoRelation: 'same-repo',
     })
   })
 
@@ -26,6 +28,71 @@ describe('github api', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(META)))
     const meta = await getPrMeta({ owner: 'a', repo: 'b', number: 1 })
     expect(meta.authorLogin).toBeNull()
+  })
+
+  // ---- Where the code comes from (fork detection) -------------------------
+  // Shapes taken from the live API, not from the OpenAPI description — see the
+  // RawPr comment: the description types `head.repo` as non-nullable and the
+  // API returns null anyway.
+
+  describe('getPrMeta head/base repository identity', () => {
+    async function metaFor(pr: Record<string, unknown>) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(pr)))
+      return getPrMeta({ owner: 'a', repo: 'b', number: 1 })
+    }
+
+    it('calls a branch in the repository itself SAME-REPO', async () => {
+      const meta = await metaFor({
+        ...META,
+        base: { sha: 'b1', repo: { private: false, full_name: 'sveltejs/svelte' } },
+        head: { sha: 'h1', repo: { full_name: 'sveltejs/svelte' } },
+      })
+      expect(meta).toMatchObject({
+        headRepo: 'sveltejs/svelte', baseRepo: 'sveltejs/svelte', repoRelation: 'same-repo',
+      })
+    })
+
+    it('calls a branch in someone else\'s repository a FORK', async () => {
+      const meta = await metaFor({
+        ...META,
+        base: { sha: 'b1', repo: { private: false, full_name: 'sveltejs/svelte' } },
+        head: { sha: 'h1', repo: { full_name: 'Dextheking1/svelte' } },
+      })
+      expect(meta).toMatchObject({
+        headRepo: 'Dextheking1/svelte', baseRepo: 'sveltejs/svelte', repoRelation: 'fork',
+      })
+    })
+
+    // A DELETED fork. GitHub keeps the `repo` key and sets it to null — 155 of
+    // the first 500 closed PRs on nodejs/node look exactly like this. Nothing
+    // is proven, so nothing is assumed.
+    it('is UNKNOWN when head.repo is null (the fork was deleted)', async () => {
+      const meta = await metaFor({
+        ...META,
+        base: { sha: 'b1', repo: { private: false, full_name: 'nodejs/node' } },
+        head: { sha: 'h1', repo: null, label: 'mathiasbynens:patch-1' },
+      })
+      expect(meta.headRepo).toBeNull()
+      expect(meta.baseRepo).toBe('nodejs/node')
+      expect(meta.repoRelation).toBe('unknown')
+    })
+
+    // Old cached response / a payload that simply omits the field.
+    it('is UNKNOWN when the payload carries no repo identities at all', async () => {
+      const meta = await metaFor(META)
+      expect(meta.headRepo).toBeNull()
+      expect(meta.baseRepo).toBeNull()
+      expect(meta.repoRelation).toBe('unknown')
+    })
+
+    it('never reads a half-known pair as same-repo', async () => {
+      const meta = await metaFor({
+        ...META,
+        base: { sha: 'b1', repo: { private: false } }, // repo present, full_name absent
+        head: { sha: 'h1', repo: { full_name: 'a/b' } },
+      })
+      expect(meta.repoRelation).toBe('unknown')
+    })
   })
 
   it('getPrFiles traverses pagination via Link header (EC-05i)', async () => {

@@ -817,6 +817,7 @@
         <RunPrPanel
           headSha={load.state.meta.headSha}
           prRef={prRefForProvider(prRefX.provider, number)}
+          relation={load.state.meta.repoRelation}
           panelOpen={previewPanelOpen}
           onTogglePanel={togglePreviewPanel}
         />

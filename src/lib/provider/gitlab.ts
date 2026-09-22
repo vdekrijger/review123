@@ -18,6 +18,7 @@ import { apiTimeoutMessage, REQUEST_CANCELLED_MESSAGE } from '../net/signals'
 import { getSettings } from '../settings/settings'
 import { resolveGitlabToken } from '../auth/gitlabAuth'
 import type { ReviewProvider, PrRefX, ParseResult, ProviderCapabilities, QueueItem } from './types'
+import { deriveRepoRelation } from '../github/types'
 import type { PrMeta, PrFile } from '../github/types'
 import type { CiSummary } from '../github/checks'
 import type { PrComment } from '../github/comments'
@@ -99,6 +100,26 @@ function projectId(ref: PrRefX): string {
   return encodeURIComponent(`${ref.owner}/${ref.repo}`)
 }
 
+/**
+ * The head/base repository identity of a merge request, as PrMeta carries it.
+ *
+ * GitLab gives numeric project ids, so they are stringified — PrMeta's
+ * `headRepo`/`baseRepo` are opaque per provider and only ever compared with
+ * each other. A missing or null id (deleted source fork) stays null, which
+ * `deriveRepoRelation` reads as `unknown`, never as same-repo. Project id 0 is
+ * not a valid GitLab id, so a falsy-but-present id is treated as absent.
+ */
+function repoIdentity(mr: {
+  source_project_id?: number | null
+  target_project_id?: number | null
+}): Pick<PrMeta, 'headRepo' | 'baseRepo' | 'repoRelation'> {
+  const asId = (v: number | null | undefined): string | null =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0 ? String(v) : null
+  const headRepo = asId(mr.source_project_id)
+  const baseRepo = asId(mr.target_project_id)
+  return { headRepo, baseRepo, repoRelation: deriveRepoRelation(headRepo, baseRepo) }
+}
+
 /** Paginate all items from a GitLab list endpoint (max 50 pages / ~5000 items). */
 async function fetchAll<T>(startPath: string): Promise<T[]> {
   const all: T[] = []
@@ -143,6 +164,21 @@ interface GlMrMeta {
   changes_count: string | null
   blocking_discussions_resolved: boolean
   author?: { username: string } | null
+  /**
+   * The project the SOURCE branch lives in, and the one being merged into.
+   * GitLab identifies them by numeric id only — the MR payload carries no path
+   * for the source project, so an id is the identity available without a
+   * second round trip (and it survives a project rename, which a path does
+   * not).
+   *
+   * NULLABLE despite the docs. GitLab's API reference types both as plain
+   * `integer`, but the live API disagrees: 16 of the first 100 MRs on
+   * gitlab-org/gitlab-foss come back with `source_project_id: null` — closed
+   * MRs whose source fork has since been deleted, the exact analogue of
+   * GitHub's `head.repo: null`.
+   */
+  source_project_id?: number | null
+  target_project_id?: number | null
 }
 
 interface GlDiff {
@@ -494,6 +530,7 @@ export const gitlabProvider: ReviewProvider = {
       private: false, // GitLab REST /projects/:id doesn't expose visibility in MR payload; treat as non-private
       changedFiles: mr.changes_count != null ? Number(mr.changes_count) : 0,
       authorLogin: mr.author?.username ?? null,
+      ...repoIdentity(mr),
     }
   },
 

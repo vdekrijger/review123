@@ -329,6 +329,67 @@ describe('getPrMeta', () => {
     expect(meta.private).toBe(true)
   })
 
+  // ---- Where the code comes from (fork detection) -------------------------
+  // Bitbucket puts the repository on each endpoint as
+  // `source.repository.full_name` / `destination.repository.full_name`, shaped
+  // "workspace/repo-slug". Shapes below are from live responses on
+  // bitbucketpipelines/official-pipes; `repository` is optional in Bitbucket's
+  // own swagger (not in any required list), so it can be missing.
+  describe('head/base repository identity', () => {
+    const withRepos = (source: unknown, destination: unknown) => ({
+      ...rawPr,
+      source: { commit: { hash: 'abc123456789' }, repository: source },
+      destination: { commit: { hash: 'def456789012' }, repository: destination },
+    })
+
+    it('calls a branch in the repository itself SAME-REPO', async () => {
+      mockBbFetch.mockResolvedValue(withRepos(
+        { is_private: false, full_name: 'bitbucketpipelines/official-pipes' },
+        { full_name: 'bitbucketpipelines/official-pipes' },
+      ))
+      const meta = await bitbucketProvider.getPrMeta(REF)
+      expect(meta).toMatchObject({
+        headRepo: 'bitbucketpipelines/official-pipes',
+        baseRepo: 'bitbucketpipelines/official-pipes',
+        repoRelation: 'same-repo',
+      })
+    })
+
+    // A Bitbucket fork KEEPS the repo slug and changes only the workspace, so
+    // the workspace half is the whole difference. Comparing the slug would
+    // call this same-repo.
+    it('calls a fork in another workspace a FORK, even with an identical slug', async () => {
+      mockBbFetch.mockResolvedValue(withRepos(
+        { is_private: false, full_name: 'hoolisoftware/official-pipes' },
+        { full_name: 'bitbucketpipelines/official-pipes' },
+      ))
+      const meta = await bitbucketProvider.getPrMeta(REF)
+      expect(meta).toMatchObject({
+        headRepo: 'hoolisoftware/official-pipes',
+        baseRepo: 'bitbucketpipelines/official-pipes',
+        repoRelation: 'fork',
+      })
+    })
+
+    it('is UNKNOWN when the source repository is gone (null)', async () => {
+      mockBbFetch.mockResolvedValue(withRepos(null, { full_name: 'bitbucketpipelines/official-pipes' }))
+      const meta = await bitbucketProvider.getPrMeta(REF)
+      expect(meta.headRepo).toBeNull()
+      expect(meta.baseRepo).toBe('bitbucketpipelines/official-pipes')
+      expect(meta.repoRelation).toBe('unknown')
+    })
+
+    // The pre-existing fixture: `source.repository` with no full_name, no
+    // `destination.repository` at all. An older payload looks like this.
+    it('is UNKNOWN when the payload carries no full names', async () => {
+      mockBbFetch.mockResolvedValue(rawPr)
+      const meta = await bitbucketProvider.getPrMeta(REF)
+      expect(meta.headRepo).toBeNull()
+      expect(meta.baseRepo).toBeNull()
+      expect(meta.repoRelation).toBe('unknown')
+    })
+  })
+
   it('calls the correct endpoint', async () => {
     mockBbFetch.mockResolvedValue(rawPr)
     await bitbucketProvider.getPrMeta(REF)

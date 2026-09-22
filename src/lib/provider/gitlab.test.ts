@@ -256,6 +256,59 @@ describe('getPrMeta', () => {
     expect(meta.headSha).toBe('')
     expect(meta.changedFiles).toBe(0)
   })
+
+  // ---- Where the code comes from (fork detection) -------------------------
+  // GitLab identifies the two projects by NUMERIC ID and gives no path for the
+  // source project, so the ids are what PrMeta carries (stringified). Shapes
+  // below are taken from live gitlab.com responses — see the nullability note
+  // in GlMrMeta: the documented type is a plain `integer`, and the API sends
+  // null anyway.
+  describe('head/base project identity', () => {
+    const base = {
+      title: 'My MR',
+      state: 'opened' as const,
+      description: null,
+      diff_refs: { base_sha: 'b', head_sha: 'h', start_sha: 's' },
+      changes_count: '1',
+    }
+
+    it('calls an MR from a branch in the project itself SAME-REPO', async () => {
+      vi.stubGlobal('fetch', mockFetch({ ...base, source_project_id: 13083, target_project_id: 13083 }))
+      const meta = await gitlabProvider.getPrMeta(REF)
+      expect(meta).toMatchObject({ headRepo: '13083', baseRepo: '13083', repoRelation: 'same-repo' })
+    })
+
+    it('calls an MR from another project a FORK', async () => {
+      vi.stubGlobal('fetch', mockFetch({ ...base, source_project_id: 73200868, target_project_id: 13083 }))
+      const meta = await gitlabProvider.getPrMeta(REF)
+      expect(meta).toMatchObject({ headRepo: '73200868', baseRepo: '13083', repoRelation: 'fork' })
+    })
+
+    // The deleted-source-fork case: 16 of the first 100 MRs on
+    // gitlab-org/gitlab-foss come back exactly like this.
+    it('is UNKNOWN when source_project_id is null (the source fork was deleted)', async () => {
+      vi.stubGlobal('fetch', mockFetch({ ...base, source_project_id: null, target_project_id: 13083 }))
+      const meta = await gitlabProvider.getPrMeta(REF)
+      expect(meta.headRepo).toBeNull()
+      expect(meta.baseRepo).toBe('13083')
+      expect(meta.repoRelation).toBe('unknown')
+    })
+
+    it('is UNKNOWN when the payload omits the project ids entirely', async () => {
+      vi.stubGlobal('fetch', mockFetch(base))
+      const meta = await gitlabProvider.getPrMeta(REF)
+      expect(meta.headRepo).toBeNull()
+      expect(meta.baseRepo).toBeNull()
+      expect(meta.repoRelation).toBe('unknown')
+    })
+
+    // 0 is not a GitLab project id. Two absent ids must not "match".
+    it('never reads two missing ids as the same project', async () => {
+      vi.stubGlobal('fetch', mockFetch({ ...base, source_project_id: 0, target_project_id: 0 }))
+      const meta = await gitlabProvider.getPrMeta(REF)
+      expect(meta.repoRelation).toBe('unknown')
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------
