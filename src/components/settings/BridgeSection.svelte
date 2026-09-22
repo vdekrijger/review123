@@ -21,19 +21,18 @@
     BRIDGE_STORAGE_KEY,
   } from '../../lib/bridge/bridge.svelte'
   import { DEFAULT_BRIDGE_PORT } from '../../lib/bridge/protocol'
+  // Shared with the mid-review "bridge is not responding" error (llm.ts), so
+  // the two surfaces can never name different commands.
+  import {
+    BRIDGE_DOWNLOAD_COMMAND,
+    BRIDGE_README_URL,
+    BRIDGE_REPO_URL,
+    BRIDGE_START_COMMAND,
+  } from '../../lib/bridge/install'
 
   let token = $state('')
   let portInput = $state(String(bridgeState.port))
   let busy = $state(false)
-
-  // The prebuilt single-file bundle (bridge/scripts/bundle.mjs), published on
-  // GitHub Releases. `/releases/latest/download/` always resolves to the newest
-  // release's asset, so this URL never needs a version bump here.
-  const DOWNLOAD_URL = 'https://github.com/vdekrijger/review123/releases/latest/download/bridge.mjs'
-  const REPO_URL = 'https://github.com/vdekrijger/review123'
-  const README_URL = 'https://github.com/vdekrijger/review123/blob/main/bridge/README.md'
-  /** Where the download lands. Stable, so step 2 works from any repo. */
-  const LOCAL_PATH = '~/review123-bridge.mjs'
 
   // Re-probe when this section mounts. main.ts already probes at app start
   // (inference routes through the bridge, so the connection has to be known
@@ -186,18 +185,18 @@
         <strong>Get the bridge.</strong> Download the single file once, then run it
         inside whichever repo you want to review. Needs Node 22+ and nothing else.
       </p>
-      <pre class="cmd"><code>curl -fsSL {DOWNLOAD_URL} -o {LOCAL_PATH}
-node {LOCAL_PATH} --root .</code></pre>
+      <pre class="cmd"><code>{BRIDGE_DOWNLOAD_COMMAND}
+{BRIDGE_START_COMMAND}</code></pre>
       <p class="field-note">
         Prefer to build it yourself? Clone
-        <a href={REPO_URL} target="_blank" rel="noopener noreferrer">the repo</a> and run
+        <a href={BRIDGE_REPO_URL} target="_blank" rel="noopener noreferrer">the repo</a> and run
         <code>pnpm install</code>, then <code>pnpm bridge</code> — fair warning, that
         first install pulls this app's entire dev toolchain (Playwright included) to
         compile a package that has no dependencies of its own.
       </p>
       <p class="field-note">
         Every flag, and the full security model, are in
-        <a href={README_URL} target="_blank" rel="noopener noreferrer">bridge/README.md</a>.
+        <a href={BRIDGE_README_URL} target="_blank" rel="noopener noreferrer">bridge/README.md</a>.
         The token is stored in this browser under <code>{BRIDGE_STORAGE_KEY}</code>.
       </p>
     </div>
