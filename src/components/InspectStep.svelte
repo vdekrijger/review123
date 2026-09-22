@@ -363,6 +363,15 @@
     return sha ? sha.slice(0, 7) : ''
   }
 
+  // Built as strings, not inline {#if} fragments: Svelte trims the whitespace
+  // around block boundaries, which silently glued "…15:31" to "at abc1234".
+  const approvedAtSha = $derived(
+    phaseStore.headShaAtApproval ? ` at ${shortSha(phaseStore.headShaAtApproval)}` : '',
+  )
+  const approvedNoteText = $derived(
+    `Implementation approved ${formatApprovedAt(phaseStore.implApprovedAt)}${approvedAtSha}.`,
+  )
+
   // Tests-phase cross-reference (src/lib/diff/symbolTests, #95): which changed
   // implementation files have a test IN THIS PR naming their changed symbols.
   // Deterministic, reuses the story-mode pairing engine, and renders only when
@@ -1838,14 +1847,12 @@
             {deferredFiles.length} test file{deferredFiles.length === 1 ? '' : 's'} — reviewed in the Tests phase{#if deferredFindingCount > 0}, with {deferredFindingCount} finding{deferredFindingCount === 1 ? '' : 's'} counted there{/if}.
           </p>
           {#if phaseStore.implApproved}
-            <p class="phase-note phase-note-approved" data-testid="phase-approved-note">
-              Implementation approved {formatApprovedAt(phaseStore.implApprovedAt)}{#if phaseStore.headShaAtApproval} at {shortSha(phaseStore.headShaAtApproval)}{/if}.
-            </p>
+            <p class="phase-note phase-note-approved" data-testid="phase-approved-note">{approvedNoteText}</p>
           {/if}
         {:else}
           <p class="phase-note" data-testid="phase-tests-lead">
             {#if phaseStore.implApproved}
-              Review these {phaseFiles.length} test file{phaseFiles.length === 1 ? '' : 's'} against the implementation you approved{#if phaseStore.headShaAtApproval} at {shortSha(phaseStore.headShaAtApproval)}{/if} — do they actually pin the behaviour?
+              Review these {phaseFiles.length} test file{phaseFiles.length === 1 ? '' : 's'} against the implementation you approved{approvedAtSha} — do they actually pin the behaviour?
             {:else}
               Previewing the tests — the implementation isn't approved yet.
             {/if}
