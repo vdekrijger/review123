@@ -27,6 +27,7 @@ import { approveImplementation, getPhaseRecord, setReviewPhase } from '../lib/gu
 import { TESTS_PASS_ID_SUFFIX } from '../lib/ai/run.svelte'
 import { addSkill, listSkills, removeSkill } from '../lib/skills/skills'
 import { setAiTaskMode, setShowTokenCost } from '../lib/settings/settings'
+import { listCalibration } from '../lib/skills/calibration'
 import { _resetSettingsStateForTest } from '../lib/settings/settingsState.svelte'
 
 // Minimal canvas stub so FileDiff doesn't throw in jsdom
@@ -581,6 +582,37 @@ describe('InspectStep — the on-demand tests reviewer pass', () => {
     render(InspectStep, { props: baseProps({ runTestsReviewFn: () => {}, testReviews: makeTestsPassReviews() }) })
     await fireEvent.click(screen.getByTestId('phase-btn-tests'))
     expect(screen.queryByTestId('tests-review-cost')).not.toBeInTheDocument()
+  })
+
+  it('a reasoned dismissal in the tests pass teaches the PERSONA, not a suffixed ghost ledger', async () => {
+    withKeyAndSkill()
+    const skillId = listSkills()[0].id
+    // The finding must carry the reviewer's REAL skill id so the ledger it
+    // feeds is the one executeSkillReview reads back (buildCalibrationBlock).
+    const entries: SkillReviewEntry[] = [
+      {
+        skillId: skillId + TESTS_PASS_ID_SUFFIX,
+        name: 'Security Reviewer',
+        state: {
+          status: 'done',
+          value: {
+            skillName: 'Security Reviewer',
+            findings: [
+              { path: 'src/app.test.ts', line: 1, severity: 'low', body: 'Tests-pass nitpick worth dismissing' },
+            ],
+          },
+        },
+      } as SkillReviewEntry,
+    ]
+    render(InspectStep, { props: baseProps({ testReviews: entries }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+
+    await fireEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    await fireEvent.click(screen.getByTestId('dismiss-not-real'))
+
+    // The ledger is keyed by the persona, NOT by the tests-pass entry id.
+    expect(listCalibration(skillId)).toHaveLength(1)
+    expect(listCalibration(skillId + TESTS_PASS_ID_SUFFIX)).toHaveLength(0)
   })
 
   it('a tests-pass retry hands back the SUFFIXED entry id, so the run re-runs the right pass', async () => {

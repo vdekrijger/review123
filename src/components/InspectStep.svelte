@@ -25,7 +25,7 @@
   import { scrollToFileCard, jumpToFinding } from '../lib/diff/jumpToFile'
   import { observeDiffColHeight } from '../lib/tree/diffColHeight'
   import type { SkillReviewEntry, AskFocus, PanelState, ConvergenceValue, SimplifyValue } from '../lib/ai/run.svelte'
-  import { isTestsPassEntryId } from '../lib/ai/run.svelte'
+  import { isTestsPassEntryId, baseSkillId } from '../lib/ai/run.svelte'
   import type { SkillReviewResult, SkillFinding as SchemaSkillFinding } from '../lib/ai/schemas'
   import { applyConvergence, mergedReviewerLabel, type ReviewerFindings } from '../lib/ai/convergence'
   import { applySimplify } from '../lib/ai/simplify'
@@ -1102,7 +1102,12 @@
         const key = `${review.skillId}:${finding.path}:${finding.line}:${finding.body.slice(0, 30)}`
         const v = finding.verification
         map.set(key, {
-          reviewer: review.skillId,
+          // The BASE skill id, not the entry id: a persona is one reviewer
+          // across both passes, so a reasoned dismissal in the tests pass must
+          // teach the SAME calibration ledger executeSkillReview reads back
+          // (buildCalibrationBlock keys on the skill id). Suffixed ids would
+          // write to a ledger nobody reads.
+          reviewer: baseSkillId(review.skillId),
           severity: finding.severity,
           path: finding.path,
           body: finding.body,
