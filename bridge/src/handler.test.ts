@@ -170,7 +170,7 @@ describe('auth gate', () => {
     expect(res.headers['Access-Control-Allow-Origin']).toBe(REVIEW123_ORIGIN)
   })
 
-  it('401s the reserved routes too — auth runs before routing', async () => {
+  it('401s the grounding routes too — auth runs before routing', async () => {
     for (const path of ['/v1/infer', '/v1/files', '/v1/search']) {
       const res = await handleRequest(
         req({ method: 'POST', path, headers: { authorization: undefined }, body: Buffer.from('{}') }),

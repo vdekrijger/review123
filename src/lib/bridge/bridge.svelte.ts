@@ -42,6 +42,7 @@ import {
   parseHealth,
   type BridgeCapabilities,
   type BridgeCapability,
+  type BridgeGitState,
   type BridgeHealth,
 } from './protocol'
 
@@ -70,6 +71,12 @@ interface BridgeHolder {
   status: BridgeStatus
   capabilities: BridgeCapabilities | null
   root: string | null
+  /**
+   * The served tree's state, or null when it could not be established (not a
+   * repo, no commits, an older bridge). Local grounding compares `head`
+   * against the PR's head sha and refuses to guess when this is null.
+   */
+  repoState: BridgeGitState | null
   version: string | null
   /** Only ever set by a USER-initiated connect. Silent probes leave it null. */
   error: string | null
@@ -84,6 +91,7 @@ function initialHolder(): BridgeHolder {
     status: 'disconnected',
     capabilities: null,
     root: null,
+    repoState: null,
     version: null,
     error: null,
     port: stored?.port ?? DEFAULT_BRIDGE_PORT,
@@ -103,6 +111,9 @@ export const bridgeState = {
   },
   get root(): string | null {
     return holder.root
+  },
+  get git(): BridgeGitState | null {
+    return holder.repoState
   },
   get version(): string | null {
     return holder.version
@@ -199,6 +210,7 @@ function applyHealth(health: BridgeHealth, port: number): void {
   holder.status = 'connected'
   holder.capabilities = health.capabilities
   holder.root = health.root
+  holder.repoState = health.git
   holder.version = health.version
   holder.error = null
   holder.port = port
@@ -209,6 +221,7 @@ function applyDisconnected(): void {
   holder.status = 'disconnected'
   holder.capabilities = null
   holder.root = null
+  holder.repoState = null
   holder.version = null
 }
 
@@ -235,6 +248,7 @@ export async function connectBridge(token: string, port: number = DEFAULT_BRIDGE
     holder.error = describeProbeFailure(result.failure, holder.port)
     holder.capabilities = null
     holder.root = null
+    holder.repoState = null
     holder.version = null
     // The token is NOT persisted on failure — a bad token should not come back
     // to haunt the next page load.
@@ -337,6 +351,7 @@ export function _resetBridgeForTest(): void {
   holder.status = fresh.status
   holder.capabilities = fresh.capabilities
   holder.root = fresh.root
+  holder.repoState = fresh.repoState
   holder.version = fresh.version
   holder.error = fresh.error
   holder.port = fresh.port

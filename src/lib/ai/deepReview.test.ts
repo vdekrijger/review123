@@ -15,7 +15,9 @@ import {
   DEEP_REVIEW_MAX_TOOL_CALLS,
   DEEP_REVIEW_MAX_FETCHED_BYTES,
   DEEP_REVIEW_FILE_CAP_BYTES,
+  DEEP_REVIEW_LOCAL_MAX_FETCHED_BYTES,
   DEEP_REVIEW_TRUNCATION_MARKER,
+  fetchBudgetFor,
 } from './deepReview'
 import type { DeepReviewSource } from './deepReview'
 
@@ -118,6 +120,49 @@ describe('createDeepReviewToolkit — file reads', () => {
     expect(fourth.ok).toBe(false)
     expect(fourth.content).toContain('budget exhausted')
     expect(DEEP_REVIEW_MAX_FETCHED_BYTES).toBe(150_000)
+  })
+
+  // The one budget local grounding legitimately moves. 150 KB was paying for
+  // HTTPS round trips against a quota'd API; off the user's own disk there are
+  // none, and what remains is a TOKEN ceiling (see fetchBudgetFor).
+  it('gives a LOCAL source the larger fetch budget', async () => {
+    const chunk = 'y'.repeat(DEEP_REVIEW_FILE_CAP_BYTES) // 50KB per read
+    const toolkit = createDeepReviewToolkit(
+      makeSource({ getFileAtHead: vi.fn().mockResolvedValue(chunk), local: true }),
+    )
+
+    // The 4th read would have been refused on the provider budget.
+    for (let i = 0; i < 8; i++) {
+      expect((await toolkit.executeTool('read_file', { path: `f${i}.ts` })).ok).toBe(true)
+    }
+    const ninth = await toolkit.executeTool('read_file', { path: 'f9.ts' })
+    expect(ninth.ok).toBe(false)
+    expect(ninth.content).toContain('budget exhausted')
+  })
+
+  it('quotes the budget it ACTUALLY enforced, not a hard-coded 150 KB', async () => {
+    const chunk = 'y'.repeat(DEEP_REVIEW_FILE_CAP_BYTES)
+    const local = createDeepReviewToolkit(
+      makeSource({ getFileAtHead: vi.fn().mockResolvedValue(chunk), local: true }),
+    )
+    for (let i = 0; i < 8; i++) await local.executeTool('read_file', { path: `f${i}.ts` })
+    expect((await local.executeTool('read_file', { path: 'x.ts' })).content).toContain('400 KB')
+  })
+
+  it('fetchBudgetFor picks by source, and treats an ABSENT flag as remote', () => {
+    expect(fetchBudgetFor(makeSource())).toBe(DEEP_REVIEW_MAX_FETCHED_BYTES)
+    expect(fetchBudgetFor(makeSource({ local: false }))).toBe(DEEP_REVIEW_MAX_FETCHED_BYTES)
+    expect(fetchBudgetFor(makeSource({ local: true }))).toBe(DEEP_REVIEW_LOCAL_MAX_FETCHED_BYTES)
+  })
+
+  it('does NOT raise the per-FILE cap for a local source — that is a prompt-shape rule', async () => {
+    const big = 'z'.repeat(DEEP_REVIEW_FILE_CAP_BYTES * 2)
+    const toolkit = createDeepReviewToolkit(
+      makeSource({ getFileAtHead: vi.fn().mockResolvedValue(big), local: true }),
+    )
+    const result = await toolkit.executeTool('read_file', { path: 'big.ts' })
+    expect(result.ok).toBe(true)
+    expect(result.content).toContain(DEEP_REVIEW_TRUNCATION_MARKER.trim())
   })
 })
 

@@ -21,7 +21,7 @@ import {
   isValidPort,
   readStoredBridge,
 } from './bridge.svelte'
-import { DEFAULT_BRIDGE_PORT, PROTOCOL_VERSION, bridgeUrl, parseHealth } from './protocol'
+import { DEFAULT_BRIDGE_PORT, PROTOCOL_VERSION, bridgeUrl, parseGitState, parseHealth } from './protocol'
 import { _setCaptureForTest } from '../analytics/analytics'
 
 const TOKEN = 'pairing-token-0000000000000000000000000000'
@@ -31,11 +31,15 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     ok: true,
     protocol: PROTOCOL_VERSION,
     root: 'review123',
-    capabilities: { inference: ['claude'], infer: true, files: false, search: false },
+    capabilities: { inference: ['claude'], infer: true, files: true, search: true },
+    git: { head: HEAD_SHA, branch: 'main', dirty: false },
     version: '0.1.0',
     ...overrides,
   }
 }
+
+/** A plausible 40-hex commit id for the health fixtures. */
+const HEAD_SHA = 'abc1234567890abcdef1234567890abcdef12345'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -184,7 +188,8 @@ describe('connectBridge — user-initiated pairing', () => {
 
     expect(ok).toBe(true)
     expect(bridgeState.status).toBe('connected')
-    expect(bridgeState.capabilities).toEqual({ inference: ['claude'], infer: true, files: false, search: false })
+    expect(bridgeState.capabilities).toEqual({ inference: ['claude'], infer: true, files: true, search: true })
+    expect(bridgeState.git).toEqual({ head: HEAD_SHA, branch: 'main', dirty: false })
     expect(bridgeState.version).toBe('0.1.0')
     expect(readStoredBridge()).toEqual({ token: TOKEN, port: 7321 })
   })
@@ -425,6 +430,67 @@ describe('parseHealth', () => {
       search: false,
     })
   })
+
+  it('reads a MISSING git field as null, so a pre-grounding bridge still pairs', () => {
+    const older: Record<string, unknown> = { ...healthBody() }
+    delete older['git']
+    const parsed = parseHealth(older)
+    expect(parsed).not.toBeNull()
+    expect(parsed?.git).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The repo state — the field local grounding turns on. Every doubtful input
+// must narrow to NULL, because a state we cannot read is a state we cannot
+// match, and an unmatched state means the review grounds from the provider.
+// ---------------------------------------------------------------------------
+
+describe('parseGitState', () => {
+  it('accepts a well-formed state', () => {
+    expect(parseGitState({ head: HEAD_SHA, branch: 'main', dirty: false })).toEqual({
+      head: HEAD_SHA,
+      branch: 'main',
+      dirty: false,
+    })
+  })
+
+  it('lowercases the sha so a comparison is not case-sensitive', () => {
+    expect(parseGitState({ head: HEAD_SHA.toUpperCase(), branch: 'm', dirty: false })?.head).toBe(HEAD_SHA)
+  })
+
+  it('reads a null branch as a detached HEAD', () => {
+    expect(parseGitState({ head: HEAD_SHA, branch: null, dirty: false })?.branch).toBeNull()
+  })
+
+  it('treats a MISSING dirty flag as DIRTY — unknown never renders as reassuring', () => {
+    expect(parseGitState({ head: HEAD_SHA, branch: 'main' })?.dirty).toBe(true)
+    expect(parseGitState({ head: HEAD_SHA, branch: 'main', dirty: 'no' })?.dirty).toBe(true)
+  })
+
+  it.each([
+    ['null', null],
+    ['a string', 'deadbeef'],
+    ['no head', { branch: 'main', dirty: false }],
+    ['a short sha', { head: 'abc1234', branch: 'main', dirty: false }],
+    ['a non-hex sha', { head: 'z'.repeat(40), branch: 'main', dirty: false }],
+    ['a non-string head', { head: 12345, branch: 'main', dirty: false }],
+  ])('rejects %s as null', (_label, value) => {
+    expect(parseGitState(value)).toBeNull()
+  })
+
+  it('strips control characters out of a branch name before it can be rendered', () => {
+    const BELL = String.fromCharCode(7)
+    expect(parseGitState({ head: HEAD_SHA, branch: `fe${BELL}at`, dirty: false })?.branch).toBe('feat')
+  })
+
+  it('reads a branch that is nothing BUT control characters as detached, not as empty', () => {
+    const NUL = String.fromCharCode(0)
+    expect(parseGitState({ head: HEAD_SHA, branch: NUL, dirty: false })?.branch).toBeNull()
+  })
+})
+
+describe('parseHealth — remaining shape rules', () => {
 
   it.each([
     ['null', null],

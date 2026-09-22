@@ -20,11 +20,15 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     ok: true,
     protocol: PROTOCOL_VERSION,
     root: 'review123',
-    capabilities: { inference: ['claude', 'codex'], infer: true, files: false, search: false },
+    capabilities: { inference: ['claude', 'codex'], infer: true, files: true, search: true },
+    git: { head: HEAD_SHA, branch: 'main', dirty: false },
     version: '0.1.0',
     ...overrides,
   }
 }
+
+/** A plausible 40-hex commit id for the health fixtures. */
+const HEAD_SHA = 'abc1234567890abcdef1234567890abcdef12345'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -163,10 +167,40 @@ describe('BridgeSection — connecting', () => {
     expect(within(note).getByRole('link', { name: /ai models/i })).toHaveAttribute('href', '#ai-models')
   })
 
-  it('is still honest that FILE reads are not wired up', async () => {
+  // The section cannot say whether grounding WILL be local — that depends on
+  // which PR is open, and none is. So it states the fact (where the checkout
+  // is) and the rule (head must match), and lets GroundingIndicator answer the
+  // question for a specific PR.
+  it('names the checkout the bridge is serving, with the short sha', async () => {
     await connectWith(healthBody())
-    expect(screen.getByTestId('bridge-inference-note')).toHaveTextContent(
-      /reading repo files through the bridge is not wired up yet/i,
+    const note = screen.getByTestId('bridge-grounding-note')
+    expect(note).toHaveTextContent(/checked out at main \(abc1234\)/i)
+    expect(note).toHaveTextContent(/whenever a pr's head matches that commit/i)
+  })
+
+  it('says a DIRTY checkout is dirty', async () => {
+    await connectWith(healthBody({ git: { head: HEAD_SHA, branch: 'main', dirty: true } }))
+    expect(screen.getByTestId('bridge-grounding-note')).toHaveTextContent(/uncommitted changes/i)
+  })
+
+  it('names a detached HEAD as such rather than inventing a branch', async () => {
+    await connectWith(healthBody({ git: { head: HEAD_SHA, branch: null, dirty: false } }))
+    expect(screen.getByTestId('bridge-grounding-note')).toHaveTextContent(/detached head/i)
+  })
+
+  it('says plainly when the served directory is not a repo', async () => {
+    await connectWith(healthBody({ git: null }))
+    expect(screen.getByTestId('bridge-grounding-note')).toHaveTextContent(
+      /not a git repository.*read code from github/i,
+    )
+  })
+
+  it('tells the user to update a bridge with no grounding routes', async () => {
+    await connectWith(
+      healthBody({ capabilities: { inference: ['claude'], infer: true, files: false, search: false } }),
+    )
+    expect(screen.getByTestId('bridge-grounding-note')).toHaveTextContent(
+      /too old to serve repo files/i,
     )
   })
 

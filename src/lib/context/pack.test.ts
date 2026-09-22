@@ -736,3 +736,123 @@ describe('packContext — storyFiles (compact story summary)', () => {
     expect(result.storyFiles).toEqual([])
   })
 })
+
+// ---------------------------------------------------------------------------
+// fetchContents with a LOCAL head reader (the bridge grounding seam).
+//
+// The contract is narrow on purpose: the working tree holds the HEAD, not the
+// base, so a local reader answers the after side only — and a local reader
+// that fails must leave the review exactly as it would have been without one.
+// ---------------------------------------------------------------------------
+
+describe('fetchContents — local head reader', () => {
+  const META: Pick<PrMeta, 'baseSha' | 'headSha'> = { baseSha: 'base123', headSha: 'head456' }
+  const REPO = { owner: 'acme', repo: 'app' }
+
+  beforeEach(() => {
+    vi.mocked(getFileAtRef).mockReset()
+    vi.mocked(getFileAtRef).mockImplementation(async (_repo, path, ref) => `remote ${path}@${ref}`)
+  })
+
+  it('takes the AFTER side from the reader and the BEFORE side from the provider', async () => {
+    const readAtHead = vi.fn().mockResolvedValue(new Map([['src/foo.ts', 'local after']]))
+    const files = [makeFile('src/foo.ts', { status: 'modified', additions: 1, deletions: 1 })]
+
+    const result = await fetchContents(REPO, files, META, 30, { readAtHead })
+
+    expect(result.get('src/foo.ts')).toEqual({
+      before: 'remote src/foo.ts@base123',
+      after: 'local after',
+    })
+  })
+
+  it('asks the reader ONCE for the whole batch, not once per file', async () => {
+    const readAtHead = vi.fn().mockResolvedValue(new Map())
+    const files = [
+      makeFile('a.ts', { status: 'modified', additions: 3, deletions: 0 }),
+      makeFile('b.ts', { status: 'modified', additions: 2, deletions: 0 }),
+      makeFile('c.ts', { status: 'modified', additions: 1, deletions: 0 }),
+    ]
+
+    await fetchContents(REPO, files, META, 30, { readAtHead })
+
+    expect(readAtHead).toHaveBeenCalledTimes(1)
+    expect([...(readAtHead.mock.calls[0]![0] as string[])].sort()).toEqual(['a.ts', 'b.ts', 'c.ts'])
+  })
+
+  it('makes NO provider call for the head ref when the reader answers', async () => {
+    const readAtHead = vi.fn().mockResolvedValue(new Map([['src/foo.ts', 'local']]))
+    const files = [makeFile('src/foo.ts', { status: 'modified', additions: 1, deletions: 1 })]
+
+    await fetchContents(REPO, files, META, 30, { readAtHead })
+
+    expect(vi.mocked(getFileAtRef).mock.calls.map((c) => c[2])).toEqual(['base123'])
+  })
+
+  it('reads an ADDED file entirely from the reader — there is no before side', async () => {
+    const readAtHead = vi.fn().mockResolvedValue(new Map([['new.ts', 'brand new']]))
+    const files = [makeFile('new.ts', { status: 'added', additions: 9, deletions: 0 })]
+
+    const result = await fetchContents(REPO, files, META, 30, { readAtHead })
+
+    expect(result.get('new.ts')).toEqual({ before: null, after: 'brand new' })
+    expect(vi.mocked(getFileAtRef)).not.toHaveBeenCalled()
+  })
+
+  it('never asks the reader about a REMOVED file — it is not in the tree', async () => {
+    const readAtHead = vi.fn().mockResolvedValue(new Map())
+    const files = [makeFile('gone.ts', { status: 'removed', additions: 0, deletions: 9 })]
+
+    await fetchContents(REPO, files, META, 30, { readAtHead })
+
+    expect(readAtHead).toHaveBeenCalledWith([])
+  })
+
+  it('maps a path the reader could not read to null, not to a stale value', async () => {
+    const readAtHead = vi.fn().mockResolvedValue(new Map([['src/foo.ts', null]]))
+    const files = [makeFile('src/foo.ts', { status: 'modified', additions: 1, deletions: 1 })]
+
+    const result = await fetchContents(REPO, files, META, 30, { readAtHead })
+
+    expect(result.get('src/foo.ts')!.after).toBeNull()
+  })
+
+  it('FALLS BACK to the provider for the whole batch when the reader throws', async () => {
+    const readAtHead = vi.fn().mockRejectedValue(new Error('bridge went away'))
+    const files = [makeFile('src/foo.ts', { status: 'modified', additions: 1, deletions: 1 })]
+
+    const result = await fetchContents(REPO, files, META, 30, { readAtHead })
+
+    // Byte-for-byte the no-reader behaviour: a dead bridge never strands a review.
+    expect(result.get('src/foo.ts')).toEqual({
+      before: 'remote src/foo.ts@base123',
+      after: 'remote src/foo.ts@head456',
+    })
+  })
+
+  it('uses a renamed file’s NEW path for the head read and its OLD path for the base', async () => {
+    const readAtHead = vi.fn().mockResolvedValue(new Map())
+    const files = [
+      makeFile('new/name.ts', {
+        status: 'renamed',
+        previousFilename: 'old/name.ts',
+        additions: 1,
+        deletions: 1,
+      }),
+    ]
+
+    await fetchContents(REPO, files, META, 30, { readAtHead })
+
+    expect(readAtHead).toHaveBeenCalledWith(['new/name.ts'])
+    expect(vi.mocked(getFileAtRef).mock.calls[0]![1]).toBe('old/name.ts')
+  })
+
+  it('behaves exactly as before when no reader is supplied', async () => {
+    const files = [makeFile('src/foo.ts', { status: 'modified', additions: 1, deletions: 1 })]
+    const result = await fetchContents(REPO, files, META)
+    expect(result.get('src/foo.ts')).toEqual({
+      before: 'remote src/foo.ts@base123',
+      after: 'remote src/foo.ts@head456',
+    })
+  })
+})

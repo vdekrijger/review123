@@ -470,8 +470,55 @@ function joinPath(dir: string, rel: string): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * A batch reader for the files AT THE PR'S HEAD, when one is available.
+ *
+ * This is the seam the local bridge plugs into (lib/bridge/grounding.ts). It
+ * covers the AFTER side only, and deliberately so: the working tree holds the
+ * head, not the base, so `before` still comes from the provider. Halving the
+ * per-file GETs is the honest win — inventing a local answer for a commit that
+ * is not checked out would not be.
+ *
+ * Returns a map from every requested path to its content, or null when there
+ * is none. Throwing is a legitimate answer: the caller falls back.
+ */
+export type HeadContentReader = (paths: string[]) => Promise<Map<string, string | null>>
+
+/**
+ * Files fetched per review through the PROVIDER. 30 files × 2 refs = 60 GETs at
+ * a concurrency of 4 — a politeness budget against a rate-limited API, not a
+ * statement about how many files a reviewer benefits from reading.
+ */
+export const CONTENTS_FILE_LIMIT = 30
+
+/**
+ * The same limit when the HEAD side comes from the user's local checkout.
+ *
+ * This IS a cap worth relaxing (unlike the line caps in symbolIndex.ts, which
+ * are main-thread parse budgets and do not care where bytes came from): the
+ * whole after-side becomes ONE batched `/v1/files` call, so the 30 was paying
+ * for round trips that no longer happen.
+ *
+ * 80, not unlimited, and the reason is the prompt rather than the disk. Every
+ * file read here competes for the same context-window budget in packContext,
+ * which trims by token count anyway — reading 500 files would just mean
+ * discarding 420 of them after paying to read them. 80 covers essentially
+ * every real PR while keeping the batch inside the bridge's own 200-path cap.
+ */
+export const CONTENTS_FILE_LIMIT_LOCAL = 80
+
+export interface FetchContentsOptions {
+  /**
+   * Overrides where the HEAD-side content comes from. Absent (the default) =
+   * the provider API, exactly as before. Supplied and then failing = the
+   * caller falls back to the provider for that batch; a review is never
+   * stranded because a local process went away mid-run.
+   */
+  readAtHead?: HeadContentReader
+}
+
+/**
  * For the top `limit` files by patch size (descending), fetch before and after
- * content from GitHub with a concurrency cap of 4 concurrent requests.
+ * content with a concurrency cap of 4 concurrent requests.
  *
  * - Added files: skip before fetch
  * - Removed files: skip after fetch
@@ -482,12 +529,14 @@ function joinPath(dir: string, rel: string): string {
  * @param files    full PR file list
  * @param meta     PrMeta supplying baseSha / headSha
  * @param limit    max files to fetch (default 30)
+ * @param opts     optional HEAD-side source override (see FetchContentsOptions)
  */
 export async function fetchContents(
   repo: { owner: string; repo: string },
   files: PrFile[],
   meta: Pick<PrMeta, 'baseSha' | 'headSha'>,
   limit = 30,
+  opts: FetchContentsOptions = {},
 ): Promise<Map<string, { before: string | null; after: string | null }>> {
   // Sort by patch size descending (additions + deletions as proxy)
   const sorted = [...files].sort(
@@ -518,8 +567,29 @@ export async function fetchContents(
     result.set(file.filename, { before: null, after: null })
   }
 
+  // ---- The HEAD side, in ONE batch, when a local reader is wired ----
+  //
+  // The provider path is one GET per file; the local reader takes the whole
+  // list at once. So the after-side tasks are lifted out of the concurrency
+  // queue entirely and answered in a single call. If that call fails the tasks
+  // go straight back into the queue below — the review is never stranded.
+  let remaining = tasks
+  if (opts.readAtHead) {
+    const afterTasks = tasks.filter((t) => t.side === 'after')
+    try {
+      const local = await opts.readAtHead(afterTasks.map((t) => t.path))
+      for (const task of afterTasks) {
+        result.get(task.filename)!.after = local.get(task.path) ?? null
+      }
+      remaining = tasks.filter((t) => t.side !== 'after')
+    } catch {
+      // Fall through with `remaining` untouched: every task, after side
+      // included, is fetched from the provider exactly as it always was.
+    }
+  }
+
   // Run with concurrency cap of 4
-  await runWithConcurrency(4, tasks, async (task) => {
+  await runWithConcurrency(4, remaining, async (task) => {
     const content = await getFileAtRef(repo, task.path, task.ref)
     const entry = result.get(task.filename)!
     if (task.side === 'before') {

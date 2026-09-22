@@ -49,6 +49,28 @@
   const clis = $derived(bridgeState.capabilities?.inference ?? [])
   /** Route readiness — an older bridge answers /v1/health but not /v1/infer. */
   const inferReady = $derived(bridgeAvailable('infer'))
+  /** Both grounding routes. An older bridge has neither. */
+  const filesReady = $derived(bridgeAvailable('files') && bridgeAvailable('search'))
+  const repoState = $derived(bridgeState.git)
+
+  /**
+   * What the paired checkout is sitting on, in the shas a user can check.
+   *
+   * This section cannot say whether grounding will be LOCAL — that depends on
+   * which PR is open, and no PR is open here. So it reports the fact and the
+   * rule, and lets the review page (GroundingIndicator) answer the question
+   * for a specific PR. Overstating it here would be the exact dishonesty the
+   * head-matching rule exists to prevent.
+   */
+  const checkoutLine = $derived.by(() => {
+    if (!filesReady) return null
+    if (repoState === null) {
+      return 'That directory is not a git repository, so its files cannot be matched to a PR — reviews will read code from GitHub.'
+    }
+    const where = repoState.branch === null ? 'a detached HEAD' : repoState.branch
+    const dirty = repoState.dirty ? ', with uncommitted changes' : ''
+    return `Checked out at ${where} (${repoState.head.slice(0, 7)})${dirty}. Reviews read code from here whenever a PR's head matches that commit, and from GitHub whenever it does not.`
+  })
 
   const statusLine = $derived.by(() => {
     switch (bridgeState.status) {
@@ -122,7 +144,14 @@
       {:else}
         Ready to run reviews. Pick <strong>Local bridge</strong> under
         <a href="#ai-models">AI models</a> to use it instead of an API key.
-        Reading repo files through the bridge is not wired up yet.
+      {/if}
+    </p>
+    <p class="field-note" data-testid="bridge-grounding-note">
+      {#if !filesReady}
+        This bridge is too old to serve repo files, so reviews will read code
+        from GitHub. Update it and restart.
+      {:else}
+        {checkoutLine}
       {/if}
     </p>
     <button type="button" class="secondary-btn" onclick={handleDisconnect}>Disconnect</button>

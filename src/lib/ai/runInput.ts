@@ -19,7 +19,15 @@
 
 import { LLM_CONFIG } from '../llm/config'
 import { packContext } from '../context/pack'
-import type { PackScope } from '../context/pack'
+import type { HeadContentReader, PackScope } from '../context/pack'
+import {
+  findLocalReferences,
+  groundingIsLocal,
+  noteGroundingFailure,
+  readLocalFile,
+  readLocalFiles,
+  searchLocalCode,
+} from '../bridge/grounding'
 import { filesForPhase } from '../guide/phase.svelte'
 import { buildCoachCodeContext } from './coachContext'
 import type { AiRunInput } from './run.svelte'
@@ -73,6 +81,50 @@ export function scopeFilesForPack(files: PrFile[], scope: PackScope | undefined)
   if (scope !== 'implementation') return files
   const implementation = filesForPhase(files, 'implementation')
   return implementation.length > 0 ? implementation : files
+}
+
+// ---------------------------------------------------------------------------
+// Local grounding (the bridge) — decided ONCE per read, never cached
+// ---------------------------------------------------------------------------
+
+/**
+ * The HEAD-side content reader for `fetchContents`, or undefined when local
+ * grounding is not live for this PR.
+ *
+ * `groundingIsLocal` is re-asked at CALL time, not at wiring time: a bridge
+ * can be started, stopped, or moved to another branch while a review page is
+ * open, and a decision frozen at mount would keep claiming local long after
+ * the checkout moved. Every failure latches through `noteGroundingFailure`, so
+ * one dead bridge does not cost every later read a 20 s timeout.
+ */
+export function localHeadReader(headSha: string): HeadContentReader | undefined {
+  if (!groundingIsLocal(headSha)) return undefined
+  return async (paths) => {
+    try {
+      return await readLocalFiles(headSha, paths)
+    } catch (err) {
+      noteGroundingFailure(headSha)
+      throw err
+    }
+  }
+}
+
+/**
+ * Wrap one local tool call so a mid-review bridge failure is a FALLBACK, never
+ * a dead review: the failure is latched and `fallback` (the provider) answers.
+ */
+async function localOrProvider<T>(
+  headSha: string,
+  local: () => Promise<T>,
+  fallback: () => Promise<T>,
+): Promise<T> {
+  if (!groundingIsLocal(headSha)) return fallback()
+  try {
+    return await local()
+  } catch {
+    noteGroundingFailure(headSha)
+    return fallback()
+  }
 }
 
 /**
@@ -139,14 +191,56 @@ export function buildAiRunInput(w: AiRunWiring): AiRunInput {
     // Deep review (Plan G): verification tools wired from the active VCS
     // provider. Only used when the deep task modes are on; search is
     // capability-gated by provider method presence (GitHub-only in v1).
+    //
+    // GROUNDING SOURCE (the bridge): read_file and the two search tools prefer
+    // the user's own checkout when its head matches this PR's, and fall back to
+    // the provider otherwise — or mid-call, if the bridge goes away. Only the
+    // HEAD ref can be served locally: the base commit is not checked out, so
+    // read_file_at_base stays on the provider unconditionally.
+    //
+    // search_code and find_references are offered whenever EITHER source can
+    // answer. That matters for a signed-out user: GitHub's /search/code needs
+    // auth, so before this the tools simply did not exist for them; with a
+    // matching local checkout they do.
     deepReview: {
-      getFileAtHead: (path: string) => provider.getFileAtRef({ owner, repo }, path, meta.headSha),
+      // Decided ONCE, at input-build time, purely to pick the fetch-bytes
+      // budget (deepReview.ts fetchBudgetFor). The per-CALL routing below
+      // re-asks `groundingIsLocal` every time, so a bridge that dies mid-run
+      // still falls back — this flag only ever costs a slightly generous
+      // budget, never a wrong source.
+      local: groundingIsLocal(meta.headSha),
+      getFileAtHead: (path: string) =>
+        localOrProvider(
+          meta.headSha,
+          () => readLocalFile(meta.headSha, path),
+          () => provider.getFileAtRef({ owner, repo }, path, meta.headSha),
+        ),
       getFileAtBase: (path: string) => provider.getFileAtRef({ owner, repo }, path, meta.baseSha),
-      ...(provider.searchCode
-        ? { searchCode: (query: string) => provider.searchCode!({ owner, repo }, query) }
+      ...(provider.searchCode || groundingIsLocal(meta.headSha)
+        ? {
+            searchCode: (query: string) =>
+              localOrProvider(
+                meta.headSha,
+                () => searchLocalCode(query),
+                () =>
+                  provider.searchCode
+                    ? provider.searchCode({ owner, repo }, query)
+                    : Promise.resolve('Code search is not available for this provider.'),
+              ),
+          }
         : {}),
-      ...(provider.findReferences
-        ? { findReferences: (symbol: string) => provider.findReferences!({ owner, repo }, symbol) }
+      ...(provider.findReferences || groundingIsLocal(meta.headSha)
+        ? {
+            findReferences: (symbol: string) =>
+              localOrProvider(
+                meta.headSha,
+                () => findLocalReferences(symbol),
+                () =>
+                  provider.findReferences
+                    ? provider.findReferences({ owner, repo }, symbol)
+                    : Promise.resolve('Reference search is not available for this provider.'),
+              ),
+          }
         : {}),
     },
     // Per-comment code context for the coach (v16): the actual code at each

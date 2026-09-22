@@ -150,12 +150,16 @@ async function seedPairing(page: Page, port = 7321) {
   )
 }
 
+/** A plausible 40-hex commit id for the health fixtures. */
+const BRIDGE_HEAD = 'abc1234567890abcdef1234567890abcdef12345'
+
 function healthBody(overrides: Record<string, unknown> = {}) {
   return {
     ok: true,
     protocol: 1,
     root: 'review123',
-    capabilities: { inference: ['claude', 'codex'], infer: true, files: false, search: false },
+    capabilities: { inference: ['claude', 'codex'], infer: true, files: true, search: true },
+    git: { head: BRIDGE_HEAD, branch: 'main', dirty: false },
     version: '0.1.0',
     ...overrides,
   }
@@ -206,11 +210,39 @@ test('paired + bridge running: shows the repo, the detected CLIs and the port', 
   await expect(page.getByTestId('bridge-root')).toHaveText('review123')
   await expect(page.getByTestId('bridge-clis')).toHaveText('claude, codex')
   await expect(page.getByTestId('bridge-section')).toContainText('127.0.0.1:7321')
-  // Inference IS wired up now; file reads still are not, and the copy says so.
   await expect(page.getByTestId('bridge-inference-note')).toContainText(/ready to run reviews/i)
-  await expect(page.getByTestId('bridge-inference-note')).toContainText(
-    /reading repo files through the bridge is not wired up yet/i,
+  // Grounding: the section states WHERE the checkout is and the rule that
+  // decides whether a given PR reads from it. It deliberately does not promise
+  // "local" — no PR is open here, so it cannot know.
+  await expect(page.getByTestId('bridge-grounding-note')).toContainText(/checked out at main \(abc1234\)/i)
+  await expect(page.getByTestId('bridge-grounding-note')).toContainText(/head matches that commit/i)
+})
+
+test('a bridge with no grounding routes is told to update, not silently trusted', async ({ page }) => {
+  await blockExternal(page)
+  await stubBridge(
+    page,
+    healthBody({ capabilities: { inference: ['claude'], infer: true, files: false, search: false } }),
   )
+  await seedPairing(page)
+
+  await openSettings(page)
+
+  await expect(page.getByTestId('bridge-grounding-note')).toContainText(/too old to serve repo files/i, {
+    timeout: 5_000,
+  })
+})
+
+test('a bridge serving a non-repo says so, instead of implying it can ground a review', async ({ page }) => {
+  await blockExternal(page)
+  await stubBridge(page, healthBody({ git: null }))
+  await seedPairing(page)
+
+  await openSettings(page)
+
+  await expect(page.getByTestId('bridge-grounding-note')).toContainText(/not a git repository/i, {
+    timeout: 5_000,
+  })
 })
 
 test('an OLDER bridge — health but no infer route — is told to update, not silently used', async ({
@@ -327,8 +359,10 @@ test('the rest of the app is unchanged with no bridge: the landing page still lo
 const OWNER = 'testorg'
 const REPO = 'testrepo'
 const PR_NUMBER = 42
-const HEAD_SHA = 'abc1234567890'
-const BASE_SHA = 'def0987654321'
+// A real 40-hex sha, because grounding compares it against the one the bridge
+// reports and the client refuses anything that is not a full commit id.
+const HEAD_SHA = BRIDGE_HEAD
+const BASE_SHA = 'def0987654321fedcba0987654321fedcba09876'
 const APP_REVIEW_PATH = `/review/github/${OWNER}/${REPO}/${PR_NUMBER}`
 
 const PATCH = `@@ -1,3 +1,4 @@
@@ -473,4 +507,164 @@ test('bridge DOWN mid-review: an honest error, and still no silent paid fallback
   // their own subscription.
   const paid = await page.evaluate(() => (window as unknown as { __paidCalls: string[] }).__paidCalls)
   expect(paid).toEqual([])
+})
+
+// ===========================================================================
+// GROUNDING through the bridge — where a review's code comes from.
+//
+// The rule these tests exist for: local files are used ONLY when the bridge's
+// head sha equals the PR's. A mismatch must fall back to GitHub AND say so,
+// because a silent fallback is indistinguishable from the far worse failure —
+// silently grounding a review in another branch's code.
+// ===========================================================================
+
+/**
+ * Stub `/v1/health` plus `/v1/files`, recording every loopback call so a test
+ * can assert not only what happened but what did NOT.
+ */
+async function stubBridgeGrounding(
+  page: Page,
+  opts: { health: Record<string, unknown>; contents?: Record<string, string> },
+) {
+  await page.addInitScript(
+    ({ health, contents }) => {
+      const realFetch = window.fetch.bind(window)
+      const calls: { url: string; body: string | null }[] = []
+      ;(window as unknown as { __bridgeCalls: typeof calls }).__bridgeCalls = calls
+
+      const json = (payload: unknown, status = 200) =>
+        new Response(JSON.stringify(payload), {
+          status,
+          headers: { 'Content-Type': 'application/json' },
+        })
+
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+        if (!url.includes('127.0.0.1')) return realFetch(input as RequestInfo, init)
+
+        const body = typeof init?.body === 'string' ? init.body : null
+        calls.push({ url, body })
+
+        if (url.includes('/v1/health')) return Promise.resolve(json(health))
+
+        if (url.includes('/v1/files')) {
+          const asked = (JSON.parse(body ?? '{}') as { paths?: string[] }).paths ?? []
+          const files = asked
+            .filter((p) => p in contents)
+            .map((p) => ({
+              path: p,
+              bytes: contents[p]!.length,
+              truncated: false,
+              content: contents[p]!,
+              encoding: 'utf-8',
+            }))
+          const missing = asked.filter((p) => !(p in contents))
+          return Promise.resolve(json({ ok: true, files, missing, skipped: [] }))
+        }
+        return Promise.resolve(json({ ok: false, error: 'not-found', message: 'no' }, 404))
+      }
+    },
+    { health: opts.health, contents: opts.contents ?? {} },
+  )
+}
+
+/** File content only the LOCAL bridge serves — GitHub's copy is different. */
+const LOCAL_ONLY_CONTENT = 'const fromLocalCheckout = true\n'
+
+test('head MATCHES: the review reads code from the local checkout, and says so', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await stubBridgeGrounding(page, {
+    health: healthBody(),
+    contents: { 'src/feature.ts': LOCAL_ONLY_CONTENT },
+  })
+  await seedPairing(page)
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({
+    timeout: 10_000,
+  })
+
+  const indicator = page.getByTestId('grounding-indicator')
+  await expect(indicator).toHaveAttribute('data-mode', 'local', { timeout: 10_000 })
+  await expect(indicator).toHaveAttribute('data-reason', 'local-clean')
+  await expect(page.getByTestId('grounding-label')).toContainText(/local checkout/i)
+
+  // Not just the label: the bridge was actually asked for the file.
+  const calls = await page.evaluate(
+    () => (window as unknown as { __bridgeCalls: { url: string; body: string | null }[] }).__bridgeCalls,
+  )
+  const fileCalls = calls.filter((c) => c.url.includes('/v1/files'))
+  expect(fileCalls.length).toBeGreaterThan(0)
+  expect(fileCalls.some((c) => (c.body ?? '').includes('src/feature.ts'))).toBe(true)
+})
+
+test('head MISMATCH: the review falls back to GitHub and names both shas', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  // The user's terminal is on main; this PR is not.
+  await stubBridgeGrounding(page, {
+    health: healthBody({
+      git: { head: 'fee1111111111111111111111111111111111111', branch: 'main', dirty: false },
+    }),
+    contents: { 'src/feature.ts': LOCAL_ONLY_CONTENT },
+  })
+  await seedPairing(page)
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({
+    timeout: 10_000,
+  })
+
+  const indicator = page.getByTestId('grounding-indicator')
+  await expect(indicator).toHaveAttribute('data-mode', 'github', { timeout: 10_000 })
+  await expect(indicator).toHaveAttribute('data-reason', 'head-mismatch')
+
+  // The sentence names the branch and BOTH short shas, so the user can act on it.
+  const why = page.getByTestId('grounding-why')
+  await expect(why).toContainText('main')
+  await expect(why).toContainText('fee1111')
+  await expect(why).toContainText(HEAD_SHA.slice(0, 7))
+
+  // THE INVARIANT: not one file was read from the wrong checkout.
+  const calls = await page.evaluate(
+    () => (window as unknown as { __bridgeCalls: { url: string; body: string | null }[] }).__bridgeCalls,
+  )
+  expect(calls.filter((c) => c.url.includes('/v1/files'))).toEqual([])
+})
+
+test('a DIRTY matching checkout is used, but flagged as possibly-uncommitted code', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await stubBridgeGrounding(page, {
+    health: healthBody({ git: { head: HEAD_SHA, branch: 'feat/thing', dirty: true } }),
+    contents: { 'src/feature.ts': LOCAL_ONLY_CONTENT },
+  })
+  await seedPairing(page)
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({
+    timeout: 10_000,
+  })
+
+  const indicator = page.getByTestId('grounding-indicator')
+  await expect(indicator).toHaveAttribute('data-reason', 'local-dirty', { timeout: 10_000 })
+  await expect(page.getByTestId('grounding-why')).toContainText(/in no commit of this PR/i)
+})
+
+test('with NO bridge paired, the review says nothing about grounding at all', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await recordBridgeCalls(page)
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Test PR: add feature/i })).toBeVisible({
+    timeout: 10_000,
+  })
+
+  // Reading from GitHub is the unremarkable default; telling someone who has
+  // never heard of the bridge that they are "falling back" is noise, not honesty.
+  await expect(page.getByTestId('grounding-indicator')).toHaveCount(0)
+  const calls = await page.evaluate(() => (window as unknown as { __bridgeCalls: string[] }).__bridgeCalls)
+  expect(calls).toEqual([])
 })

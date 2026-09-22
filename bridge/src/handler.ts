@@ -13,7 +13,7 @@
  *   4. Auth        — bearer token.               401, CORS headers if the
  *                    origin was allowed, so the browser can READ the 401.
  *   5. Body cap.                                 413.
- *   6. Route.                                    200 / 501 / 404.
+ *   6. Route.                                    200 / 4xx / 404.
  *
  * Every gate above still applies to `/v1/infer`, `/v1/files` and `/v1/search`:
  * no origin outside the allowlist, no request without the pairing token, and no

@@ -333,6 +333,15 @@ function walkPatch(patch: string | undefined): PatchText {
 /**
  * Full-contents safety cap: a fetched file larger than this many lines falls
  * back to patch-only indexing so a giant generated file can't stall the UI.
+ *
+ * LEFT ALONE by local (bridge) grounding, which was considered and rejected.
+ * The obvious reading — "local files are free, so the cap can go" — mistakes
+ * what the cap is for. It bounds how many lines this index parses ON THE MAIN
+ * THREAD, and a 200k-line generated file costs the same milliseconds of
+ * blocked UI whether it arrived over HTTPS or off the user's own SSD. The only
+ * caps local grounding legitimately relaxes are the ones that were paying for
+ * the NETWORK: the per-review file count in pack.ts and the deep-review fetch
+ * budgets in deepReview.ts. Those moved; this one did not.
  */
 const MAX_FULL_CONTENT_LINES = 20_000
 
