@@ -5,7 +5,8 @@ Companion to [`ui-audit.md`](./ui-audit.md) (the findings, `F1`-`F18`) and
 its page refs).
 
 **Status: Phase 1 shipped. Phase 2 in progress — Batches 2A, 2B and 2C shipped,
-Batch 2D's first slice shipped with more to come. Phase 3 shipped.**
+Batch 2D's first slice shipped with more to come. Phase 3 shipped, and its one
+deferred item is now closed — measured, and deliberately not changed.**
 
 Phase 1 landed as one PR — see [Phase 1 — as shipped](#p1-shipped) for what
 changed against what this document proposed, and for the measurements taken from
@@ -20,7 +21,9 @@ Batch 2D's opening slice is in [Batch 2D — as shipped](#b2d-shipped), with the
 ledger that measures every later slice. Phase 3 closes the diff viewer in
 [Phase 3 — as shipped](#p3-shipped): it settles the recede question Phase 1
 deliberately left open, and it confirms Batch 2B's suspicion about
-`SymbolPopover.svelte` — measured, that was a live bug.
+`SymbolPopover.svelte` — measured, that was a live bug. Its deferred item 4
+closes in [Phase 3, item 4 — measured, not changed](#p3-item4), which disproves
+one of the audit's own claims and ships a measurement instead of a change.
 
 The screenshots in [`./shots/`](./shots/) are the **after** state of the most
 recent batch to touch each surface. The six diff shots
@@ -1367,7 +1370,9 @@ settled. Touching it earlier means re-doing it after every other batch.
    This is the only change that puts a real floor under focus mode and hunk
    attention, and it is why 0.55 is an interim fix rather than the answer.
 4. **Side-by-side density** — it inherits unified's padding at half the column
-   width; give it its own decision (p.59).
+   width; give it its own decision (p.59). *(Decided: measured, not changed —
+   see [item 4](#p3-item4). The premise about the padding is true; the
+   conclusion drawn from it is not.)*
 5. Keep what works: the row grouping (gutter / number / marker / content as one
    group, rubric A3) and the marker + line-number status redundancy (rubric B2)
    are the best-executed parts of the app. Do not regress them.
@@ -1383,7 +1388,9 @@ the patch only where it does not.
 ### Phase 3 — as shipped
 
 Items 1, 2, 3 and 5 shipped. **Item 4 (side-by-side density) is deliberately not
-in this PR** — see the bottom of this section. One PR, seven commits along the
+in this PR** — see the bottom of this section. *(It closed later, in
+[item 4 — measured, not changed](#p3-item4): the measurement it was waiting for
+said not to change anything.)* One PR, seven commits along the
 item seams, plus a merge of [Batch 2D's first slice](#b2d-shipped), which landed
 on `main` while this was in flight and needed three hand-resolved conflicts
 (recorded in that merge commit).
@@ -1612,7 +1619,9 @@ looked like a product bug.
   the vendored components' Tailwind classes rather than in a custom property,
   and this PR is already a palette change across four files. Splitting it keeps
   both reviewable. It is also the one Phase 3 item with no contrast component,
-  so nothing else was waiting on it.
+  so nothing else was waiting on it. **Closed in [item 4 — measured, not
+  changed](#p3-item4)**, which found that the padding is identical between the
+  modes and that split's density is bounded by column width instead.
 - **Batch 2D's ratchet baseline is unchanged by this PR**, and it is worth
   recording what the ratchet actually sees here, because the brief for Phase 3
   assumed otherwise. `FileDiff.svelte` is `emFont: 0` — the diff viewer's `em`
@@ -1634,6 +1643,120 @@ looked like a product bug.
   pre-refactor state; the two places it undercounts (three light syntax failures
   rather than five, and the body ink as a per-element colour rather than an
   inherited base) are corrected here instead.
+
+<a id="p3-item4"></a>
+
+### Phase 3, item 4 — side-by-side density: measured, not changed
+
+The deferred item, closed. **No pixel changed.** What shipped is the measurement
+that was owed, plus [`e2e/diff-density.spec.ts`](../../e2e/diff-density.spec.ts)
+— a gate on the relationships, so the decision stays checked rather than
+remembered.
+
+**The audit's stated mechanism is disproven.** [The density
+entry](./ui-audit.md#density-of-the-review-surfaces) says side-by-side "inherits
+the same padding as unified at half the column width, **so each pane's code sits
+tighter against its gutter**." The first clause is true; the second does not
+follow and is not what the browser reports. Measured in the built app at
+1440x1000, `/demo` step 2, both themes (spacing is theme-independent — every
+number below is identical in light and dark):
+
+| | unified | split, per pane |
+|---|---|---|
+| gutter cell padding | 10px / 10px | 10px / 10px |
+| content cell padding | 0 / 10px | 0 / 10px |
+| marker inset (`pl-[2.0em]`) | 28px | 28px |
+| line-number ink → code text | **38px** | **38px** |
+| font-size / line-height | 14px / 22.4px (1.6) | 14px / 22.4px (1.6) |
+| unwrapped row height | 22.39px | 22.39px |
+
+Nothing sits tighter against anything. Split and unified are one surface with
+one density, declared once — which is what rubric A1 asks for. The failure A1
+actually describes ("dense merely because it inherited tight padding") does not
+apply either: the audit's own [What passes](./ui-audit.md#what-passes) calls the
+diff body "the best-executed surface in the app," so the density was chosen, and
+split uses the chosen one.
+
+**What does differ is the column left over, and that is a width question.**
+
+| at 1440x1000 | code column | columns of code | rows that wrap | source rows per 1000px |
+|---|---|---|---|---|
+| unified, centered | 892px | 106 | 0 % | **44.7** |
+| split, centered | 430px | **51** | 16.2 % | **38.4** |
+| unified, full-width | 1259px | 149 | 0 % | 44.7 |
+| split, full-width | 614px | **72** | 4.1 % | **42.9** |
+
+Split is 14 % less dense than unified at the default width and 3.9 % less at
+full width, and the whole of that difference is wrapping — 16.2 % of split's
+rows against none of unified's, at 1.16 visual lines per source row. A wrapped
+row is the real cost: its second visual line has no line number and no marker,
+so it spends a row of height while breaking rubric A3's grouping for that line,
+and `word-break: break-all` splits identifiers mid-word (`strin|g`, `ab|orted`
+in [the shot](./shots/step2-inspect-split-light.png)).
+
+**So padding is the wrong lever, by two orders of magnitude.** Everything
+reclaimable inside a pane is the 7px of dead space before the marker box; across
+both panes that is 14px, or **1.7 characters of 51**. The width setting is worth
+**21 characters**, and the app already ships it — `diffWidth: full` in
+Appearance, which closes 72 % of the gap. Re-tuning the vendored padding to buy
+1.7 characters would spend the marker inset that A3's grouping depends on, and
+would fork split's density from unified's to chase a rounding error. Hence: no
+change.
+
+<a id="p3-seam"></a>
+
+**The one genuine soft spot, recorded rather than fixed.** In split there are
+two `[number | marker | code]` groups on one row, so the seam between the panes
+is a group boundary and p.83 / p.86 apply: the space around a group must exceed
+the space inside it. Measured, the seam is **21px** (10px content padding + 1px
+divider + 10px gutter padding) against a largest within-pane gap of **~19.8px**
+(line-number ink → marker ink). It clears the rule — by 6 %. Under p.61-62's own
+standard (adjacent values must differ by ~25 % or the choice is arbitrary), a
+6 % margin is not a relationship a reader can perceive; the boundary is really
+carried by the 1px `--hairline` divider, which measures 1.41:1 (light) and
+1.31:1 (dark) against the grounds it separates.
+
+It is left alone deliberately, and both available fixes are worse:
+
+- **Widening the seam** costs code width in the mode that is already
+  width-starved — [Batch 2D's mistake](#b2d-shipped) exactly, a gutter made
+  wider in the mode whose purpose is fitting more across.
+- **Thickening the divider to 2px** (p.50-51 is the applicable rule) re-forks
+  `--hairline`, which the app decided once and [Phase 3](#p3-shipped) spent its
+  effort unforking.
+
+And the grouping is redundantly carried anyway, the way rubric B2 asks: the
+line numbers restart, the marker column restarts, and on changed rows the two
+panes carry different tints. The 6 % margin is therefore recorded, and pinned by
+the spec, rather than tuned.
+
+**Verification.** Three tests x two themes, all measuring rendered output in the
+built app. Mutation-checked in the browser with five effective mutations, each
+caught: split-only content padding (4 failures), `--diff-border--` reverted to
+the vendor's `#e1e1e1` (the hairline assertion alone), the divider removed, a
+split-only marker inset, and pane asymmetry. A sixth was **inert**, and is the
+useful one for the next person: setting `border-left-color` from a stylesheet
+changes nothing, because the vendored markup writes it inline as
+`var(--diff-border--)` — the seam divider is reachable only through that custom
+property, not through a selector.
+
+`patches/@git-diff-view__svelte.patch` was not opened, and `src/` is
+byte-identical to Phase 3's. The six diff screenshots stay Phase 3's: no
+rendered pixel changed, so re-capturing them would be churn against a 2.5 MB
+set.
+
+**Deferred from here, as product decisions rather than spacing ones:**
+
+- **Split wastes half its width on single-sided files.** In [the
+  shot](./shots/step2-inspect-split-light.png) the first file is all-add, so the
+  entire left pane is an empty placeholder — 50 % of the viewer showing nothing
+  while the right pane wraps. Falling back to unified for single-sided files (or
+  letting the populated pane take the full width) is a real improvement and a
+  real UX fork; it wants its own decision, not a rider on a measurement.
+- **Whether `diffWidth: full` should be the default**, given it is worth 21
+  columns per pane in split and ~12 % more source rows per screen. That is a
+  whole-app default, adjacent to "does not change `:root { font-size: 15px }`"
+  below.
 
 ---
 
