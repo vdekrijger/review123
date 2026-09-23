@@ -1,0 +1,26 @@
+{
+  "real": [
+    {
+      "file": "src/lib/memoCache.ts",
+      "line": 16,
+      "description": "unit confusion in the new default: ttlMs falls back to DEFAULT_TTL_MINUTES, which is 5, so an omitted argument yields a five-MILLISECOND lifetime instead of five minutes and the cache stops holding anything"
+    },
+    {
+      "file": "src/lib/memoCache.ts",
+      "line": 27,
+      "description": "off-by-one bound: slice(0, count - 1) returns one fewer key than the caller asked for"
+    }
+  ],
+  "noise": [
+    {
+      "file": "src/lib/memoCache.ts",
+      "line": 3,
+      "description": "the Entry interface is not exported — export it so callers can name the type"
+    },
+    {
+      "file": "src/lib/memoCache.ts",
+      "line": 26,
+      "description": "spreading entries.entries() copies the whole map on every call — iterate lazily instead"
+    }
+  ]
+}

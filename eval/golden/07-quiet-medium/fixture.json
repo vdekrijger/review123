@@ -1,0 +1,17 @@
+{
+  "name": "07-quiet-medium",
+  "files": [
+    {
+      "path": "src/lib/memoCache.ts",
+      "patch": "@@ -1,14 +1,28 @@\n-const TTL_MS = 5 * 60_000\n+const DEFAULT_TTL_MINUTES = 5\n\n interface Entry<T> {\n   value: T\n   storedAt: number\n }\n\n-/** Return the cached value for `key`, or undefined once it has expired. */\n-export function readEntry<T>(entries: Map<string, Entry<T>>, key: string, now: number): T | undefined {\n+/**\n+ * Return the cached value for `key`, or undefined once it has expired.\n+ * Callers can now pass their own TTL; the default stays at five minutes.\n+ */\n+export function readEntry<T>(\n+  entries: Map<string, Entry<T>>,\n+  key: string,\n+  now: number,\n+  ttlMs: number = DEFAULT_TTL_MINUTES,\n+): T | undefined {\n   const hit = entries.get(key)\n   if (!hit) return undefined\n-  if (now - hit.storedAt > TTL_MS) return undefined\n+  if (now - hit.storedAt > ttlMs) return undefined\n   return hit.value\n }\n+\n+/** The `count` most recently stored keys, newest first. */\n+export function recentKeys<T>(entries: Map<string, Entry<T>>, count: number): string[] {\n+  const sorted = [...entries.entries()].sort((a, b) => b[1].storedAt - a[1].storedAt)\n+  return sorted.slice(0, count - 1).map(([key]) => key)\n+}",
+      "contentBefore": "const TTL_MS = 5 * 60_000\n\ninterface Entry<T> {\n  value: T\n  storedAt: number\n}\n\n/** Return the cached value for `key`, or undefined once it has expired. */\nexport function readEntry<T>(entries: Map<string, Entry<T>>, key: string, now: number): T | undefined {\n  const hit = entries.get(key)\n  if (!hit) return undefined\n  if (now - hit.storedAt > TTL_MS) return undefined\n  return hit.value\n}\n",
+      "contentAfter": "const DEFAULT_TTL_MINUTES = 5\n\ninterface Entry<T> {\n  value: T\n  storedAt: number\n}\n\n/**\n * Return the cached value for `key`, or undefined once it has expired.\n * Callers can now pass their own TTL; the default stays at five minutes.\n */\nexport function readEntry<T>(\n  entries: Map<string, Entry<T>>,\n  key: string,\n  now: number,\n  ttlMs: number = DEFAULT_TTL_MINUTES,\n): T | undefined {\n  const hit = entries.get(key)\n  if (!hit) return undefined\n  if (now - hit.storedAt > ttlMs) return undefined\n  return hit.value\n}\n\n/** The `count` most recently stored keys, newest first. */\nexport function recentKeys<T>(entries: Map<string, Entry<T>>, count: number): string[] {\n  const sorted = [...entries.entries()].sort((a, b) => b[1].storedAt - a[1].storedAt)\n  return sorted.slice(0, count - 1).map(([key]) => key)\n}\n"
+    }
+  ],
+  "skills": [
+    {
+      "name": "bug-hunter",
+      "content": "You are a correctness-focused reviewer. Flag off-by-one errors, boundary mistakes, unit and type confusion, null/undefined hazards, and logic bugs that change observable behavior. Ignore style and naming."
+    }
+  ]
+}

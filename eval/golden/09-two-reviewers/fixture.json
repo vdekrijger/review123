@@ -1,0 +1,21 @@
+{
+  "name": "09-two-reviewers",
+  "files": [
+    {
+      "path": "src/lib/drafts.ts",
+      "patch": "@@ -1,9 +1,13 @@\n import { store } from './store'\n import { metrics } from './metrics'\n\n-/** Persist a draft and record that it was saved. */\n+/**\n+ * Persist a draft and record that it was saved. The editor calls this on every\n+ * keystroke, so the handler no longer blocks on the round-trip to storage.\n+ */\n export async function saveDraft(draft: Draft): Promise<void> {\n   validate(draft)\n-  await store.put(draft.id, draft)\n+  // Fire the write and let the editor carry on.\n+  store.put(draft.id, draft)\n   metrics.increment('draft.saved')\n }",
+      "contentBefore": "import { store } from './store'\nimport { metrics } from './metrics'\n\n/** Persist a draft and record that it was saved. */\nexport async function saveDraft(draft: Draft): Promise<void> {\n  validate(draft)\n  await store.put(draft.id, draft)\n  metrics.increment('draft.saved')\n}\n",
+      "contentAfter": "import { store } from './store'\nimport { metrics } from './metrics'\n\n/**\n * Persist a draft and record that it was saved. The editor calls this on every\n * keystroke, so the handler no longer blocks on the round-trip to storage.\n */\nexport async function saveDraft(draft: Draft): Promise<void> {\n  validate(draft)\n  // Fire the write and let the editor carry on.\n  store.put(draft.id, draft)\n  metrics.increment('draft.saved')\n}\n"
+    }
+  ],
+  "skills": [
+    {
+      "name": "bug-hunter",
+      "content": "You are a correctness-focused reviewer. Flag off-by-one errors, boundary mistakes, unawaited promises, null/undefined hazards, and logic bugs that change observable behavior. Ignore style and naming."
+    },
+    {
+      "name": "reliability-reviewer",
+      "content": "You review for production reliability: lost writes, silent failures, unhandled rejections, and telemetry that reports success the system cannot actually guarantee. Ignore style, naming and performance micro-optimizations."
+    }
+  ]
+}

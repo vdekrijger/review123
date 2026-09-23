@@ -27,7 +27,16 @@ import {
   validateVerdict,
   validateAttention,
   type FindingVerification,
+  type SkillFinding,
 } from '../ai/schemas'
+import {
+  enumerateFindings,
+  toAppliedClusters,
+  applyConvergence,
+  type ConvergenceClusters,
+  type ConvergenceFindingInput,
+  type ReviewerFindings,
+} from '../ai/convergence'
 import type { PackedContext } from '../context/pack'
 import type { CiSummary } from '../github/checks'
 import {
@@ -129,6 +138,23 @@ export type SimplifyFn = (
   findings: ProducedFinding[],
 ) => Promise<(string | undefined)[]>
 
+/**
+ * The cross-REVIEWER convergence pass (#206), injectable for the same reason
+ * CompleteFn is. It receives the enumerated finding rows (positional ids
+ * `f0…fN`, exactly as `convergence.ts` defines them — the harness rebuilds the
+ * same enumeration to apply the result) and returns the clusters of ids that
+ * describe the SAME underlying issue, or null when the pass produced nothing
+ * usable (invalid output → the pass is skipped, originals stand).
+ *
+ * Convergence is the one shipped stage the 2026-09-22 baseline could not
+ * measure at all: it merges ACROSS reviewer personas, and every fixture then
+ * had exactly one persona. It stays inert on a single-persona case — nothing
+ * to converge — so only a multi-persona fixture exercises it.
+ */
+export type ConvergeFn = (
+  inputs: ConvergenceFindingInput[],
+) => Promise<ConvergenceClusters | null>
+
 export interface RunCaseOptions {
   /** When true, append the deep-review guidance to each task's system prompt. */
   deep?: boolean
@@ -158,6 +184,13 @@ export interface RunCaseOptions {
   testsPass?: boolean
   /** The simplify pass (#220). Its rewrites ride along as `simpleBody`. */
   simplify?: SimplifyFn
+  /**
+   * The cross-reviewer convergence pass (#206). Its merge is ATTACHED, not
+   * applied: the primary gains `mergedFrom`, every absorbed sibling gains
+   * `absorbedBy` and STAYS in the list, so the `convergence` stage flag is a
+   * real on/off switch instead of a decision already baked in.
+   */
+  converge?: ConvergeFn
   /**
    * Score the produced findings once per named variant (see PIPELINE_VARIANTS)
    * in addition to the headline `score`. This is how a single, expensive
@@ -401,6 +434,13 @@ export async function runCase(
     })
   }
 
+  // Cross-reviewer convergence (#206). Same contract as verification: the merge
+  // is ATTACHED, never applied, so `stages.convergence` decides whether the
+  // absorbed siblings disappear and whether triage sees the agreement.
+  if (options.converge && produced.length > 1) {
+    produced = await attachConvergence(produced, options.converge)
+  }
+
   // The simplify pass (#220): rewrites ride along as `simpleBody`; whether a
   // variant SCORES the rewrite is the variant's call.
   if (options.simplify && produced.length > 0) {
@@ -418,6 +458,9 @@ export async function runCase(
   // verify fn ran — the contract callers already depend on.
   const headlineStages: PipelineStages = options.stages ?? {
     crossVerify: options.crossVerify === true && options.verify !== undefined,
+    // Same rule as crossVerify: the stage is on exactly when the pass ran, so a
+    // caller that never wired convergence is unaffected by its existence.
+    convergence: options.converge !== undefined,
     triage: false,
     mootnessGate: true,
     simplify: false,
@@ -437,6 +480,121 @@ export async function runCase(
   }
 
   return { score, produced: scored, rawByTask, findings: produced, variantScores }
+}
+
+/** The EvalFinding → SkillFinding view the app's convergence logic consumes. */
+function toSkillFinding(f: EvalFinding): SkillFinding {
+  return {
+    path: f.file,
+    line: f.line,
+    severity: f.severity,
+    body: f.description,
+    ...(f.verification ? { verification: f.verification } : {}),
+  }
+}
+
+/**
+ * Run the cross-reviewer convergence pass (#206) over the REVIEWER findings and
+ * ATTACH its result instead of applying it.
+ *
+ * Reuses the app's own logic end to end — `enumerateFindings` for the id scheme
+ * and fingerprint, `toAppliedClusters` + `applyConvergence` for the merge — so
+ * this measures the shipped pass rather than a re-implementation of it. The one
+ * deliberate difference: `applyConvergence` DELETES absorbed siblings, and the
+ * eval needs them kept so the stage can be switched off. They are therefore
+ * marked `absorbedBy` and left in place; `surfaceFindings` drops them when the
+ * `convergence` stage is on.
+ *
+ * Only findings from the reviewer passes take part (the implementation pass and
+ * the separate tests pass, exactly as in the app) — the PR-level verdict and
+ * attention tasks are not reviewer entries and never converge.
+ *
+ * Any failure — a throwing pass, invalid clusters, a fingerprint mismatch — is
+ * a NO-OP that returns the input unchanged, mirroring the app's rule that a
+ * failed convergence pass renders the originals rather than losing anything.
+ */
+async function attachConvergence(
+  produced: EvalFinding[],
+  converge: ConvergeFn,
+): Promise<EvalFinding[]> {
+  const isReviewerFinding = (f: EvalFinding): boolean =>
+    f.taskKey.startsWith('skill:') || f.taskKey.startsWith(TESTS_TASK_PREFIX)
+
+  // Group the eligible findings by reviewer, keeping a stable order: the
+  // flattened order IS the positional id order (f0…fN) both the prompt and
+  // applyConvergence use.
+  const byReviewer = new Map<string, number[]>()
+  produced.forEach((f, i) => {
+    if (!isReviewerFinding(f)) return
+    const name = f.reviewerName ?? f.taskKey
+    const bucket = byReviewer.get(name)
+    if (bucket) bucket.push(i)
+    else byReviewer.set(name, [i])
+  })
+  if (byReviewer.size < 2) return produced // nothing to converge ACROSS
+
+  const order: number[] = []
+  const reviewers: ReviewerFindings[] = []
+  for (const [name, indices] of byReviewer) {
+    order.push(...indices)
+    reviewers.push({ skillId: name, name, findings: indices.map((i) => toSkillFinding(produced[i])) })
+  }
+
+  const { inputs, fingerprint } = enumerateFindings(reviewers)
+  let clusters: ConvergenceClusters | null
+  try {
+    clusters = await converge(inputs)
+  } catch {
+    return produced
+  }
+  if (clusters === null || clusters.clusters.length === 0) return produced
+
+  // No user drafts in a golden fixture, so every cluster is a reviewer merge.
+  const applied = toAppliedClusters(clusters, new Map())
+  if (applied.length === 0) return produced
+
+  const merged = applyConvergence(reviewers, { fingerprint, clusters: applied })
+  if (merged === reviewers) return produced // fingerprint mismatch → no-op
+
+  // Rebuild the id → produced-index map, then walk the merged lists: they are
+  // the same order with the absorbed ids removed, so surviving ids line up
+  // positionally with the merged findings.
+  const absorbedBy = new Map<string, string>()
+  for (const cluster of applied) {
+    if (cluster.coveredBy) continue
+    for (const id of cluster.members) {
+      if (id !== cluster.primary) absorbedBy.set(id, cluster.primary)
+    }
+  }
+  const survivingIds = order.map((_, j) => `f${j}`).filter((id) => !absorbedBy.has(id))
+  const mergedFlat = merged.flatMap((r) => r.findings)
+  if (survivingIds.length !== mergedFlat.length) return produced // defensive
+
+  // Stamp every finding the pass considered with its own positional id, so a
+  // later stage can tell whether an absorbed finding's primary is still present.
+  const out = [...produced]
+  order.forEach((target, j) => {
+    out[target] = { ...out[target], convergenceId: `f${j}` }
+  })
+  survivingIds.forEach((id, k) => {
+    const m = mergedFlat[k]
+    if (!m.mergedFrom && !m.coveredByDraft) return
+    const target = order[Number(id.slice(1))]
+    out[target] = {
+      ...out[target],
+      ...(m.mergedFrom ? { mergedFrom: m.mergedFrom } : {}),
+      ...(m.coveredByDraft ? { coveredByDraft: m.coveredByDraft } : {}),
+      ...(m.severity !== out[target].severity ? { mergedSeverity: m.severity } : {}),
+      ...(m.verification && m.verification !== out[target].verification
+        ? { mergedVerification: m.verification }
+        : {}),
+    }
+  })
+  for (const [id, primary] of absorbedBy) {
+    const target = order[Number(id.slice(1))]
+    out[target] = { ...out[target], absorbedBy: primary }
+  }
+  return out
 }
 
 /**

@@ -1,0 +1,21 @@
+{
+  "real": [
+    {
+      "file": "src/lib/drafts.ts",
+      "line": 11,
+      "description": "store.put is no longer awaited, so saveDraft resolves before the write lands and draft.saved counts saves that may never have happened"
+    }
+  ],
+  "noise": [
+    {
+      "file": "src/lib/drafts.ts",
+      "line": 2,
+      "description": "importing metrics here couples persistence to telemetry — inject the recorder instead"
+    },
+    {
+      "file": "src/lib/drafts.ts",
+      "line": 10,
+      "description": "comment style: prefer a doc comment over an inline one"
+    }
+  ]
+}

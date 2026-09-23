@@ -1,0 +1,40 @@
+{
+  "skill:bug-hunter": {
+    "skillName": "bug-hunter",
+    "findings": [
+      {
+        "path": "src/lib/range.ts",
+        "line": 3,
+        "severity": "low",
+        "body": "Copy-paste slip: the template interpolates `${min}` twice, so the message never reports the upper bound — `assertInRange(7, 1, 5)` throws \"7 is outside 1..1\".",
+        "suggestedFix": "Interpolate the second bound: `` `${value} is outside ${min}..${max}` ``."
+      },
+      {
+        "path": "src/lib/range.ts",
+        "line": 13,
+        "severity": "low",
+        "body": "The rethrow drops the caught error entirely — `err` is bound and never used, so the detail it carried is lost to whoever debugs this.",
+        "suggestedFix": "Attach it: `throw new RangeError(`invalid port: ${raw}`, { cause: err })`."
+      }
+    ]
+  },
+  "attention": {
+    "readingOrder": [
+      "src/lib/range.ts"
+    ],
+    "hotspots": [],
+    "testFlags": [
+      {
+        "path": "src/lib/range.ts",
+        "note": "No test asserts on the error text or the preserved cause (inferred, not measured)."
+      }
+    ]
+  },
+  "verdict": {
+    "level": "significant-changes",
+    "evidence": [
+      "src/lib/range.ts: the new bounds message interpolates the lower bound twice, so it never reports the upper one."
+    ],
+    "notAnalyzed": []
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "skill:bug-hunter": {
+    "skillName": "bug-hunter",
+    "findings": [
+      {
+        "path": "src/lib/drafts.ts",
+        "line": 11,
+        "severity": "medium",
+        "body": "The `await` was dropped: `store.put` still returns a promise, so `saveDraft` resolves before the write lands and a rejected write surfaces as an unhandled rejection rather than reaching the caller.",
+        "suggestedFix": "Either restore `await store.put(...)`, or keep it non-blocking deliberately with `void store.put(...).catch(reportWriteFailure)`."
+      }
+    ]
+  },
+  "skill:reliability-reviewer": {
+    "skillName": "reliability-reviewer",
+    "findings": [
+      {
+        "path": "src/lib/drafts.ts",
+        "line": 12,
+        "severity": "medium",
+        "body": "This counter now reports a save the system cannot guarantee — the put on the previous line is no longer awaited, so `draft.saved` increments even when the write fails.",
+        "suggestedFix": "Increment after the write settles, inside the promise chain, so the metric only counts writes that actually landed."
+      }
+    ]
+  },
+  "attention": {
+    "readingOrder": [
+      "src/lib/drafts.ts"
+    ],
+    "hotspots": [
+      {
+        "path": "src/lib/drafts.ts",
+        "level": "medium",
+        "reason": "The storage write is no longer awaited, so the function reports success before the write has landed."
+      }
+    ],
+    "testFlags": []
+  },
+  "verdict": {
+    "level": "significant-changes",
+    "evidence": [
+      "src/lib/drafts.ts: store.put is no longer awaited, so saveDraft resolves before the write completes."
+    ],
+    "notAnalyzed": []
+  }
+}
