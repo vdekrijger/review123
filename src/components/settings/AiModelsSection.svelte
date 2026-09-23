@@ -11,7 +11,8 @@
   import { PROVIDERS, getProvider, getModelDef, type ApiProviderId, type LlmProviderId } from '../../lib/llm/providers'
   import { bridgeState, bridgeCanInfer } from '../../lib/bridge/bridge.svelte'
   import { llmTestConnection, LlmError } from '../../lib/llm/llm'
-  import { activeProviderHasKey, providerIsUsable, resolvePanel } from '../../lib/llm/config'
+  import { activeProviderHasKey, providerIsUsable, resolvePanel, globalBridgeModel } from '../../lib/llm/config'
+  import { isValidModelId } from '../../lib/bridge/protocol'
   import { verifierVotesCanDemote } from '../../lib/ai/crossVerify'
   import { providerSupportsBalance, fetchProviderBalance, formatBalance, type ProviderBalance } from '../../lib/llm/balance'
   import { track } from '../../lib/analytics/analytics'
@@ -185,14 +186,80 @@
     const rows = panelParticipants.map((p) => ({ ...p }))
     const prov = getProvider(providerId)
     rows[i] = { ...rows[i], provider: providerId, model: prov?.defaultModel ?? rows[i].model }
+    // A per-row model belongs to the bridge CLI it was chosen for; carrying it
+    // onto another provider (or another CLI) would be meaningless.
+    delete rows[i].bridgeModel
+    delete bridgeModelDrafts[i]
     commitPanel(rows)
   }
 
   function onRowModel(i: number, modelId: string) {
     const rows = panelParticipants.map((p) => ({ ...p }))
+    if (rows[i].provider === 'bridge' && rows[i].model !== modelId) {
+      // The CLI changed. `fable` means something to `claude` and nothing to
+      // `codex`, so the model chosen for the old CLI does not carry over.
+      delete rows[i].bridgeModel
+      delete bridgeModelDrafts[i]
+    }
     rows[i].model = modelId
     commitPanel(rows)
   }
+
+  /**
+   * What the user has TYPED into a bridge row's model box, keyed by row index.
+   *
+   * The box cannot read straight from the stored panel: a malformed id is not
+   * persisted (setAiPanel drops it, so the row falls back to the global), and a
+   * field rendered from stored state would therefore erase itself under the
+   * cursor the moment an intermediate keystroke was invalid. Same split
+   * BridgeSection uses for the global field, one per row.
+   */
+  let bridgeModelDrafts = $state<Record<number, string>>({})
+
+  /** The text to SHOW in row i's model box: the live draft, else what is stored. */
+  function bridgeModelText(i: number, row: PanelParticipant): string {
+    return bridgeModelDrafts[i] ?? row.bridgeModel ?? ''
+  }
+
+  /** True when row i's typed model would be refused — mirrors BridgeSection. */
+  function bridgeModelInvalid(i: number): boolean {
+    const draft = bridgeModelDrafts[i]
+    return draft !== undefined && draft.trim() !== '' && !isValidModelId(draft.trim())
+  }
+
+  /**
+   * Commit a bridge row's model. Blank or malformed stores nothing, which means
+   * INHERIT the global default — the same "a typo degrades to today's
+   * behaviour" rule setBridgeModel follows, rather than persisting a value the
+   * bridge would reject on every call.
+   */
+  function onRowBridgeModel(i: number, value: string) {
+    bridgeModelDrafts[i] = value
+    const trimmed = value.trim()
+    const rows = panelParticipants.map((p) => ({ ...p }))
+    if (isValidModelId(trimmed)) rows[i].bridgeModel = trimmed
+    else delete rows[i].bridgeModel
+    commitPanel(rows)
+  }
+
+  /** Placeholder for a bridge row: what it inherits when left blank. */
+  const inheritedBridgeModel = $derived.by(() => {
+    void settingsState.current
+    return globalBridgeModel()
+  })
+  const bridgeModelPlaceholder = $derived(
+    inheritedBridgeModel ? `inherits ${inheritedBridgeModel}` : "the CLI's own default",
+  )
+
+  /**
+   * How many rows run a CLI through the local bridge. Two or more means one
+   * subscription seat is answering several calls per task, which is worth
+   * saying once where it is configured (#238 declined to enlist the bridge as
+   * an automatic verifier for the same reason).
+   */
+  const bridgeRowCount = $derived(
+    panelParticipants.filter((p) => p.provider === 'bridge' && providerKeyed('bridge')).length,
+  )
 
   /** Toggle a row's role. Refuses to drop the LAST generator (≥1 constraint). */
   function setRowRole(i: number, role: ParticipantRole) {
@@ -215,6 +282,9 @@
 
   function removeParticipant(i: number) {
     if (panelParticipants.length <= 1) return
+    // Drafts are keyed by ROW INDEX, and removing a row shifts every index
+    // after it — a stale draft would then be shown against a different row.
+    bridgeModelDrafts = {}
     const rows = panelParticipants.filter((_, idx) => idx !== i).map((r) => ({ ...r }))
     // If removal left no generator, promote the first remaining row.
     if (!rows.some((r) => r.role === 'generator') && rows.length > 0) rows[0] = { ...rows[0], role: 'generator' }
@@ -634,7 +704,9 @@
       <strong>Verifiers</strong> check them. The mode is automatic: one generator = the others
       verify (precision); two or more generators = every generator finds independently and the
       union is merged + cross-confirmed (recall — catches more, costs more). You can use several
-      models of the same provider on one key (e.g. Opus generates, Sonnet + Haiku verify).
+      models of the same provider on one key (e.g. Opus generates, Sonnet + Haiku verify) — and on
+      the <strong>local bridge</strong> several models of one CLI on one subscription, by giving each
+      bridge row its own model (e.g. Fable generates, Opus verifies).
     </p>
 
     <div class="panel-presets" role="group" aria-label="Role presets">
@@ -708,6 +780,29 @@
               {/each}
             </select>
           {/if}
+          {#if row.provider === 'bridge'}
+            <!--
+              The bridge's "models" are CLI process names, so the select above
+              picks the BINARY and this picks the model it runs. Free text, not
+              a dropdown: neither CLI publishes a stable list of accepted model
+              ids, so a baked-in one would be wrong within weeks (#253). The
+              datalist only SUGGESTS — any id is still accepted.
+            -->
+            <input
+              class="ensemble-bridge-model"
+              class:model-invalid-input={bridgeModelInvalid(i)}
+              type="text"
+              list={row.model === 'claude' ? 'bridge-claude-aliases' : undefined}
+              value={bridgeModelText(i, row)}
+              oninput={(e) => onRowBridgeModel(i, (e.currentTarget as HTMLInputElement).value)}
+              aria-label="Model for {getModelDef(getProvider('bridge')!, row.model)?.label ?? row.model}"
+              aria-invalid={bridgeModelInvalid(i)}
+              placeholder={bridgeModelPlaceholder}
+              autocomplete="off"
+              spellcheck="false"
+              data-testid="panel-bridge-model-{i}"
+            />
+          {/if}
           {#if panelParticipants.length > 1}
             <button
               type="button"
@@ -719,9 +814,34 @@
           {#if !keyed}
             <span class="ensemble-nokey">{noCredentialHint(row.provider)}</span>
           {/if}
+          {#if bridgeModelInvalid(i)}
+            <span class="ensemble-nokey model-invalid" data-testid="panel-bridge-model-invalid-{i}"
+              >That isn't a model id — letters, digits and <code>. _ : / -</code>. Until it is fixed
+              this row {inheritedBridgeModel ? `runs ${inheritedBridgeModel}` : "uses the CLI's own default"}.</span
+            >
+          {/if}
         </li>
       {/each}
     </ul>
+    <!--
+      SUGGESTIONS, not an allowlist: these three are the aliases `claude --model`
+      documents in its own --help ("an alias for the latest model"), so they
+      track the CLI rather than a list we would have to maintain. The input
+      accepts any id regardless; an unknown one is rejected by the CLI, with the
+      CLI's own error. `codex` gets no datalist — its --help publishes no values,
+      and guessing some would be exactly the stale list #253 refused to ship.
+    -->
+    <datalist id="bridge-claude-aliases">
+      <option value="fable"></option>
+      <option value="opus"></option>
+      <option value="sonnet"></option>
+    </datalist>
+    {#if bridgeRowCount > 1}
+      <p class="deep-review-hint" data-testid="panel-bridge-seat-note">
+        {bridgeRowCount} rows run through the local bridge, so a task makes at least {bridgeRowCount}
+        CLI calls against that one subscription. They count against its own rate limits, not an API bill.
+      </p>
+    {/if}
     {#if crossVerifyAvailable && !panelCanOverturn}
       <p class="ensemble-thin-poll" data-testid="ensemble-thin-poll">
         <strong>Two models can agree, but they cannot outvote each other.</strong> When one model
@@ -1189,6 +1309,29 @@
     background: none;
     min-width: 12rem;
     flex: 1 1 12rem;
+  }
+  /* A bridge row's model box: a text input, deliberately not a dropdown, since
+     neither CLI publishes a stable list of ids. It matches the chrome of the
+     CLI picker beside it because (CLI, model) is really one choice. */
+  .ensemble-bridge-model {
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: var(--surface-raised);
+    color: var(--text);
+    font-size: 0.82em;
+    min-width: 8rem;
+    flex: 1 1 8rem;
+  }
+  .ensemble-bridge-model::placeholder {
+    color: var(--text-muted);
+    opacity: 0.8;
+  }
+  .ensemble-bridge-model.model-invalid-input {
+    border-color: var(--danger, #b3261e);
+  }
+  .ensemble-nokey.model-invalid {
+    color: var(--danger, #b3261e);
   }
   .ensemble-remove {
     background: none;

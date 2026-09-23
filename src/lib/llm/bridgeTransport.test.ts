@@ -18,6 +18,7 @@ import {
   llmStream,
   llmStreamWithUsage,
   llmJsonWithRepair,
+  llmJsonWithRepairFor,
   llmTestConnection,
   LlmError,
   BRIDGE_JSON_INSTRUCTION,
@@ -30,7 +31,8 @@ import {
 } from './llm'
 import { llmToolLoop } from './llmToolLoop'
 import { setTransientRetryPolicyForTests } from './transientRetry'
-import { setAiProvider, setAiModel, setBridgeModel, setDeepseekKey, getSettings } from '../settings/settings'
+import { setAiProvider, setAiModel, setBridgeModel, setDeepseekKey, setAiPanel, getSettings, type PanelParticipant } from '../settings/settings'
+import { resolvePanel, verifierProviderConfigs } from './config'
 import { BRIDGE_STORAGE_KEY } from '../bridge/storage'
 import { BRIDGE_START_COMMAND } from '../bridge/install'
 import { MAX_INFLIGHT_LLM_CALLS } from './concurrencyGate'
@@ -1161,5 +1163,181 @@ describe('bridge transport — llmTestConnection', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(errorResponse('cli-unavailable', 503, 'not installed')))
 
     await expect(llmTestConnection('bridge')).rejects.toMatchObject({ kind: 'no-key' })
+  })
+})
+
+
+// ===========================================================================
+// PER-ROW MODELS — several models of one CLI on one subscription
+//
+// The global bridgeModel (#253) gave every bridge call the SAME model, so a
+// panel of one generator and two verifiers all ran the same thing and the one
+// arrangement the bridge makes uniquely affordable — "review with Fable, then
+// validate with Opus, on one seat" — was inexpressible. A row's identity is
+// now (CLI, model): `model` picks the binary, `bridgeModel` picks what it runs.
+//
+// These tests assert the OUTBOUND InferRequest.model per participant, because
+// that is the only place the claim is actually settled. Everything upstream
+// (panel → resolvePanel → ProviderConfig) is just how it gets there.
+// ===========================================================================
+
+describe('bridge transport — per-row models', () => {
+  const genRow = (cli: string, bridgeModel?: string): PanelParticipant => ({
+    provider: 'bridge',
+    model: cli,
+    role: 'generator',
+    ...(bridgeModel === undefined ? {} : { bridgeModel }),
+  })
+  const verRow = (cli: string, bridgeModel?: string): PanelParticipant => ({
+    provider: 'bridge',
+    model: cli,
+    role: 'verifier',
+    ...(bridgeModel === undefined ? {} : { bridgeModel }),
+  })
+
+  /** The model each call actually asked the bridge for, in call order. */
+  function modelsSent(fetchMock: ReturnType<typeof vi.fn>): (string | undefined)[] {
+    return fetchMock.mock.calls.map((c) => {
+      const body = JSON.parse((c[1] as RequestInit).body as string) as Record<string, unknown>
+      return body['model'] as string | undefined
+    })
+  }
+
+  it('runs the generator and EACH verifier on its own model in one review', async () => {
+    useBridge()
+    // One seat, one CLI, three different models — the whole point.
+    setAiPanel({ participants: [genRow('claude', 'fable'), verRow('claude', 'opus'), verRow('claude', 'sonnet')] })
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse(inferBody({ text: '{"ok":true}' })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    // The generator goes through the ACTIVE path (this is verify mode: the run
+    // layer generates with the active config), each verifier through its own
+    // resolved ProviderConfig — exactly as a real review dispatches them.
+    await llmComplete({ system: 'S', user: 'generate' })
+    for (const cfg of verifierProviderConfigs()) {
+      await llmJsonWithRepairFor(cfg, { system: 'S', user: 'verify' }, (x) => x as Record<string, unknown>)
+    }
+
+    expect(modelsSent(fetchMock)).toEqual(['fable', 'opus', 'sonnet'])
+    // ...and all three were the same CLI on the same pairing token. Nothing
+    // about this needed a second provider or a second key.
+    const clis = fetchMock.mock.calls.map(
+      (c) => (JSON.parse((c[1] as RequestInit).body as string) as Record<string, unknown>)['cli'],
+    )
+    expect(clis).toEqual(['claude', 'claude', 'claude'])
+  })
+
+  it('carries a per-row model onto the STREAMING route too, so the same row runs the same model', async () => {
+    useBridge()
+    setAiPanel({ participants: [genRow('claude', 'fable')] })
+    // A one-shot 404 on the stream route is a different test; here the stream
+    // route answers, and must carry the generator row's model.
+    _resetBridgeStreamModeForTest()
+    const fetchMock = streamFetch(happyStream())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmStream({ system: 'S', user: 'U' }, () => {})
+
+    expect(modelsSent(fetchMock)[0]).toBe('fable')
+  })
+
+  // -------------------------------------------------------------------------
+  // BACKWARD COMPATIBILITY. A panel stored before per-row models existed has
+  // rows carrying only a CLI id. Those rows must keep behaving EXACTLY as they
+  // did — which means inheriting the global bridgeModel, not losing it.
+  // -------------------------------------------------------------------------
+  it('a row with no model of its own inherits the global default — an OLD panel still works', async () => {
+    useBridge()
+    setBridgeModel('opus')
+    // Exactly the shape a pre-#254 panel round-trips to: CLI id, no bridgeModel.
+    setAiPanel({ participants: [genRow('claude'), verRow('claude')] })
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse(inferBody({ text: '{"ok":true}' })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmComplete({ system: 'S', user: 'generate' })
+    for (const cfg of verifierProviderConfigs()) {
+      await llmJsonWithRepairFor(cfg, { system: 'S', user: 'verify' }, (x) => x as Record<string, unknown>)
+    }
+
+    expect(modelsSent(fetchMock)).toEqual(['opus', 'opus'])
+  })
+
+  it('mixes inherited and explicit rows — a blank row falls back while its neighbour does not', async () => {
+    useBridge()
+    setBridgeModel('sonnet')
+    setAiPanel({ participants: [genRow('claude', 'fable'), verRow('claude')] })
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse(inferBody({ text: '{"ok":true}' })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmComplete({ system: 'S', user: 'generate' })
+    for (const cfg of verifierProviderConfigs()) {
+      await llmJsonWithRepairFor(cfg, { system: 'S', user: 'verify' }, (x) => x as Record<string, unknown>)
+    }
+
+    expect(modelsSent(fetchMock)).toEqual(['fable', 'sonnet'])
+  })
+
+  it('sends no model at all when neither the row nor the global names one', async () => {
+    useBridge()
+    setAiPanel({ participants: [genRow('claude')] })
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse(inferBody()))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmComplete({ system: 'S', user: 'U' })
+
+    expect(sentBody(fetchMock)).not.toHaveProperty('model')
+  })
+
+  // -------------------------------------------------------------------------
+  // THE SECURITY GATE (#253). The model id is the only caller-supplied string
+  // that reaches the bridge's argv, so `--model --dangerously-skip-permissions`
+  // would smuggle a switch. localStorage is user-writable, so the per-row value
+  // gets the same treatment as the global one, on READ.
+  // -------------------------------------------------------------------------
+  it('never puts a flag-shaped per-row model on the wire', async () => {
+    useBridge()
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({
+        aiProvider: 'bridge',
+        aiModel: 'claude',
+        aiPanel: {
+          participants: [
+            { provider: 'bridge', model: 'claude', role: 'generator', bridgeModel: '--dangerously-skip-permissions' },
+          ],
+        },
+      }),
+    )
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse(inferBody()))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmComplete({ system: 'S', user: 'U' })
+
+    // The row is KEPT (it still names a real CLI) — only the smuggled value is
+    // dropped, so the row degrades to the global default rather than vanishing.
+    expect(sentBody(fetchMock)).not.toHaveProperty('model')
+    expect(resolvePanel().generators.length).toBe(1)
+  })
+
+  it('drops a per-row model with shell metacharacters, keeping the row', async () => {
+    useBridge()
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({
+        aiProvider: 'bridge',
+        aiModel: 'claude',
+        bridgeModel: 'opus',
+        aiPanel: {
+          participants: [{ provider: 'bridge', model: 'claude', role: 'generator', bridgeModel: 'opus; rm -rf /' }],
+        },
+      }),
+    )
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse(inferBody()))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmComplete({ system: 'S', user: 'U' })
+
+    // Falls back to the (valid) global rather than to the injected string.
+    expect(sentBody(fetchMock)['model']).toBe('opus')
   })
 })

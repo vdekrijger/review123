@@ -204,7 +204,8 @@ describe('resolvePanel / resolveEnsemble — Plan P unified panel', () => {
 // Plan P — emergent mode + multi-generator gating
 // ---------------------------------------------------------------------------
 
-import { fusionGenerateEffective, fusionParticipants, fusionGenerators } from './config'
+import { fusionGenerateEffective, fusionParticipants, fusionGenerators, activeBridgeModel, globalBridgeModel } from './config'
+import { setAiModel, setBridgeModel } from '../settings/settings'
 
 describe('fusionGenerateEffective — Plan P emergent gating', () => {
   it('default (1 generator) → false even with 2+ keys (byte-identical to verify)', () => {
@@ -485,5 +486,132 @@ describe('crossModelVerifyEffective with the bridge as generator', () => {
     setCrossModelVerify(true)
     expect(crossModelVerifyEffective()).toBe(true)
     expect(verifierProviderConfigs().map((c) => c.providerId)).toEqual(['openai'])
+  })
+})
+
+// ===========================================================================
+// PER-ROW BRIDGE MODELS
+//
+// For the bridge a row's `model` is the CLI to spawn (a process name), so
+// `bridgeModel` carries the other half of its identity: which model that CLI
+// runs. resolvePanel is where the two-step inheritance happens — the row's own
+// choice, else the global bridgeModel — and it happens exactly once, so no
+// consumer downstream has to re-litigate "row or global?".
+// ===========================================================================
+
+describe('per-row bridge models', () => {
+  const TOKEN = 'pairing-token-0000000000000000000000000000'
+  /** Pair a bridge the way the settings section does. */
+  function pairBridge(): void {
+    localStorage.setItem(BRIDGE_STORAGE_KEY, JSON.stringify({ token: TOKEN, port: 7321 }))
+  }
+  const bridgeGen = (cli: string, bridgeModel?: string): PanelParticipant =>
+    ({ provider: 'bridge', model: cli, role: 'generator', ...(bridgeModel ? { bridgeModel } : {}) })
+  const bridgeVer = (cli: string, bridgeModel?: string): PanelParticipant =>
+    ({ provider: 'bridge', model: cli, role: 'verifier', ...(bridgeModel ? { bridgeModel } : {}) })
+
+  it('resolves each row to its OWN model — one CLI, one seat, three models', () => {
+    pairBridge()
+    setAiPanel({ participants: [bridgeGen('claude', 'fable'), bridgeVer('claude', 'opus'), bridgeVer('claude', 'sonnet')] })
+    const { generators, verifiers } = resolvePanel()
+    expect(generators.map((g) => g.bridgeModel)).toEqual(['fable'])
+    expect(verifiers.map((v) => v.bridgeModel)).toEqual(['opus', 'sonnet'])
+    // All three are the same CLI — only the model differs.
+    expect([...generators, ...verifiers].map((p) => p.model.id)).toEqual(['claude', 'claude', 'claude'])
+  })
+
+  it('a row with no model of its own INHERITS the global — an old panel is unchanged', () => {
+    pairBridge()
+    setBridgeModel('opus')
+    setAiPanel({ participants: [bridgeGen('claude'), bridgeVer('claude')] })
+    const { generators, verifiers } = resolvePanel()
+    expect(generators[0].bridgeModel).toBe('opus')
+    expect(verifiers[0].bridgeModel).toBe('opus')
+  })
+
+  it('an explicit row OVERRIDES the global; a blank sibling still inherits it', () => {
+    pairBridge()
+    setBridgeModel('sonnet')
+    setAiPanel({ participants: [bridgeGen('claude', 'fable'), bridgeVer('claude')] })
+    const { generators, verifiers } = resolvePanel()
+    expect(generators[0].bridgeModel).toBe('fable')
+    expect(verifiers[0].bridgeModel).toBe('sonnet')
+  })
+
+  it('leaves bridgeModel undefined when neither row nor global names one', () => {
+    pairBridge()
+    setAiPanel({ participants: [bridgeGen('claude')] })
+    // undefined, not '': the transport must send no --model flag at all, or the
+    // bridge would build `--model ''` and the CLI reject every call.
+    expect(resolvePanel().generators[0].bridgeModel).toBeUndefined()
+    expect(globalBridgeModel()).toBeUndefined()
+  })
+
+  it('never attaches a bridgeModel to a non-bridge participant', () => {
+    setAnthropicKey('a')
+    setBridgeModel('opus')
+    setAiPanel({ participants: [gen('anthropic', 'claude-opus-4-8'), ver('anthropic', 'claude-sonnet-4-6')] })
+    const { generators, verifiers } = resolvePanel()
+    expect(generators[0].bridgeModel).toBeUndefined()
+    expect(verifiers[0].bridgeModel).toBeUndefined()
+  })
+
+  it('carries the model onto EXTRA generators, which verify as well as generate', () => {
+    // verifierProviderConfigs folds generators past the first into the verifier
+    // list; they must keep their own model on the way through.
+    pairBridge()
+    setAiPanel({ participants: [bridgeGen('claude', 'fable'), bridgeGen('claude', 'opus')] })
+    expect(verifierProviderConfigs().map((v) => v.bridgeModel)).toEqual(['opus'])
+  })
+
+  // -------------------------------------------------------------------------
+  // THE ACTIVE PATH. In verify mode the run layer GENERATES with the active
+  // config (not a per-participant one), so without activeBridgeModel a model
+  // chosen on the generator row would be silently ignored and "Fable
+  // generates, Opus verifies" would only half-work.
+  // -------------------------------------------------------------------------
+  it('activeBridgeModel follows the PRIMARY GENERATOR row, not the global', () => {
+    pairBridge()
+    setBridgeModel('sonnet')
+    setAiProvider('bridge')
+    setAiModel('claude')
+    setAiPanel({ participants: [bridgeGen('claude', 'fable'), bridgeVer('claude', 'opus')] })
+    expect(activeBridgeModel('claude')).toBe('fable')
+  })
+
+  it('activeBridgeModel falls back to the global for a DIFFERENT CLI', () => {
+    // A model chosen for `codex` is never handed to `claude`.
+    pairBridge()
+    setBridgeModel('sonnet')
+    setAiPanel({ participants: [bridgeGen('codex', 'gpt-5-codex')] })
+    expect(activeBridgeModel('claude')).toBe('sonnet')
+  })
+
+  it('activeBridgeModel falls back to the global when the generator is not the bridge', () => {
+    pairBridge()
+    setAnthropicKey('a')
+    setBridgeModel('opus')
+    setAiPanel({ participants: [gen('anthropic', 'claude-opus-4-8'), bridgeVer('claude', 'fable')] })
+    expect(activeBridgeModel('claude')).toBe('opus')
+  })
+
+  it('the DEFAULT panel (no custom panel) still gets the global — #253 unchanged', () => {
+    pairBridge()
+    setBridgeModel('opus')
+    setAiProvider('bridge')
+    setAiModel('claude')
+    expect(resolvePanel().generators[0].bridgeModel).toBe('opus')
+    expect(activeBridgeModel('claude')).toBe('opus')
+  })
+
+  it('DISAMBIGUATES two bridge rows that differ only by model', () => {
+    // Both are "Local bridge" running "claude"; collapsing them would merge two
+    // genuinely different reviewers into one name in every raisedBy attribution.
+    pairBridge()
+    setAiPanel({ participants: [bridgeGen('claude', 'fable'), bridgeVer('claude', 'opus')] })
+    const names = fusionParticipants().map((p) => p.generator)
+    expect(new Set(names).size).toBe(2)
+    expect(names[0]).toContain('fable')
+    expect(names[1]).toContain('opus')
   })
 })

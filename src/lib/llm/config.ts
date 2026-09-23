@@ -11,6 +11,7 @@
 
 import { getSettings } from '../settings/settings'
 import { readStoredBridge } from '../bridge/storage'
+import { isValidModelId } from '../bridge/protocol'
 import { PROVIDERS, getProvider, getModelDef, computeBudgetTokens } from './providers'
 import type { ApiProviderId, LlmProviderDef, LlmModelDef, LlmProviderId } from './providers'
 import type { ProviderConfig } from './llm'
@@ -143,6 +144,16 @@ export interface ResolvedParticipant {
   providerId: LlmProviderId
   model: LlmModelDef
   key: string
+  /**
+   * LOCAL BRIDGE ONLY — the EFFECTIVE model this row's CLI should run, already
+   * resolved: the row's own choice, else the global `bridgeModel` default.
+   * `undefined` means send no `--model` flag at all, so the CLI keeps whatever
+   * model it is configured with (byte-identical to pre-#253 behaviour).
+   *
+   * `model` above is the CLI to spawn; this is which model that CLI runs. Two
+   * rows can therefore share a CLI and differ only here — which is the point.
+   */
+  bridgeModel?: string
 }
 
 /** A fully-resolved ensemble ready for the run layer. */
@@ -159,6 +170,47 @@ function providerKey(providerId: LlmProviderId): string | null {
 }
 
 /**
+ * The GLOBAL bridge model default (#253) — the model every bridge call used
+ * before rows could choose their own. `''` (its default) → `undefined`, i.e.
+ * no `--model` flag.
+ *
+ * Re-validated here as well as on read from localStorage: this string is the
+ * only caller-supplied value that reaches the bridge's argv, and the cost of
+ * checking it once more at the point of use is nothing next to the cost of
+ * being wrong about where it was last checked.
+ */
+export function globalBridgeModel(): string | undefined {
+  const v = getSettings().bridgeModel
+  return v !== '' && isValidModelId(v) ? v : undefined
+}
+
+/**
+ * The EFFECTIVE bridge model for one panel row: its own choice, else the
+ * global default. Non-bridge rows never have one.
+ *
+ * This is where inheritance happens, and it happens ONCE — every consumer
+ * downstream (ProviderConfig, the transport) receives an already-resolved
+ * value, so "row or global?" is never re-litigated at a call site. A panel
+ * stored before per-row models existed has no `bridgeModel` on any row and so
+ * resolves, every row, to exactly the global it used to get.
+ */
+function resolveBridgeModel(providerId: LlmProviderId, rowModel: string | undefined): string | undefined {
+  if (providerId !== 'bridge') return undefined
+  const own = rowModel?.trim() ?? ''
+  if (own !== '' && isValidModelId(own)) return own
+  return globalBridgeModel()
+}
+
+/**
+ * Spread helper: `{ bridgeModel }` only when there IS one. Keeps an
+ * `bridgeModel: undefined` key off every non-bridge config, so deep-equality
+ * assertions and JSON round-trips see the same object shape they always did.
+ */
+function bridgeModelField(model: string | undefined): { bridgeModel?: string } {
+  return model === undefined ? {} : { bridgeModel: model }
+}
+
+/**
  * The DEFAULT panel (Plan P): active provider+model as the SOLE generator;
  * other keyed providers' default models as verifiers (PROVIDERS order, capped).
  * Synthesized when no custom `aiPanel` is stored — byte-identical to #128/#130.
@@ -168,7 +220,14 @@ function defaultResolvedPanel(): ResolvedPanel {
   const active = activeLlmConfig()
   const activeKey = providerKey(active.provider.id)
   const generators: ResolvedParticipant[] = activeKey
-    ? [{ providerId: active.provider.id, model: active.model, key: activeKey }]
+    ? [{
+        providerId: active.provider.id,
+        model: active.model,
+        key: activeKey,
+        // The default panel's sole generator IS the active config, so a bridge
+        // active provider inherits the global model exactly as it did before.
+        ...bridgeModelField(resolveBridgeModel(active.provider.id, undefined)),
+      }]
     : []
   const verifiers: ProviderConfig[] = []
   for (const provider of PROVIDERS) {
@@ -222,14 +281,39 @@ export function resolvePanel(): ResolvedPanel {
     const key = providerKey(provider.id)
     if (!key) continue
     const model = getModelDef(provider, p.model) ?? provider.models[0]
+    // (CLI, model) is the bridge row's identity: `model` is the CLI to spawn,
+    // `bridgeModel` which model it runs. Resolved here so both roles get it.
+    const bridge = bridgeModelField(resolveBridgeModel(provider.id, p.bridgeModel))
     if (p.role === 'generator') {
-      generators.push({ providerId: provider.id, model, key })
+      generators.push({ providerId: provider.id, model, key, ...bridge })
     } else {
-      verifiers.push({ providerId: provider.id, model, key })
+      verifiers.push({ providerId: provider.id, model, key, ...bridge })
     }
     total += 1
   }
   return { generators, verifiers }
+}
+
+/**
+ * Which model the bridge should run on the ACTIVE path — llm.ts's
+ * `dispatchComplete` / `dispatchStream`, for the CLI `cliId`.
+ *
+ * The active path has no panel row to consult: it is reached through
+ * `activeLlmConfig()`, which knows only `aiProvider` + `aiModel`. But in VERIFY
+ * mode (one generator) that call IS the panel's primary generator — the run
+ * layer generates with the ACTIVE config and only VERIFIES through
+ * per-participant configs. So a model chosen on the generator ROW would be
+ * silently ignored unless the active path looks it up, and "Fable generates,
+ * Opus verifies" — the whole point of per-row models — would half-work.
+ *
+ * Hence: the primary generator's resolved model when that generator is a bridge
+ * row running THIS CLI, else the global default. Matching on the CLI keeps it
+ * honest — a model the user picked for `codex` is never handed to `claude`.
+ */
+export function activeBridgeModel(cliId: string): string | undefined {
+  const primary = resolvePanel().generators[0]
+  if (primary?.providerId === 'bridge' && primary.model.id === cliId) return primary.bridgeModel
+  return globalBridgeModel()
 }
 
 /**
@@ -257,6 +341,7 @@ export function verifierProviderConfigs(): ProviderConfig[] {
     providerId: g.providerId,
     model: g.model,
     key: g.key,
+    ...bridgeModelField(g.bridgeModel),
   }))
   return [...verifiers, ...extraGenerators]
 }
@@ -309,6 +394,20 @@ function providerName(id: LlmProviderId): string {
 }
 
 /**
+ * What distinguishes one participant of the same provider from another, for the
+ * raisedBy / impact label.
+ *
+ * For an API provider that is the model id and nothing else. For the BRIDGE the
+ * model id is the CLI — two bridge rows can both be `claude` and differ only in
+ * which model that CLI runs, which is exactly the configuration per-row models
+ * exist to allow. Labelling both of them "Local bridge (claude)" would collapse
+ * two genuinely different reviewers into one name in every attribution.
+ */
+function participantModelLabel(cfg: ProviderConfig): string {
+  return cfg.bridgeModel ? `${cfg.model.id} ${cfg.bridgeModel}` : cfg.model.id
+}
+
+/**
  * All panel participants as fusion participants for the multi-generator path
  * (generators first, then verifiers), each tagged with its provider display name
  * (for raisedBy). Every participant both VERIFIES findings it didn't raise; only
@@ -323,7 +422,7 @@ export function fusionParticipants(): FusionParticipant[] {
   for (const g of generators) {
     out.push({
       generator: providerName(g.providerId),
-      cfg: { providerId: g.providerId, model: g.model, key: g.key },
+      cfg: { providerId: g.providerId, model: g.model, key: g.key, ...bridgeModelField(g.bridgeModel) },
     })
   }
   for (const v of verifiers) {
@@ -333,7 +432,7 @@ export function fusionParticipants(): FusionParticipant[] {
   const counts = new Map<string, number>()
   for (const p of out) counts.set(p.generator, (counts.get(p.generator) ?? 0) + 1)
   for (const p of out) {
-    if ((counts.get(p.generator) ?? 0) > 1) p.generator = `${p.generator} (${p.cfg.model.id})`
+    if ((counts.get(p.generator) ?? 0) > 1) p.generator = `${p.generator} (${participantModelLabel(p.cfg)})`
   }
   return out
 }

@@ -85,6 +85,23 @@ export interface PanelParticipant {
   model: string
   /** Whether this participant GENERATES findings or only VERIFIES them. */
   role: ParticipantRole
+  /**
+   * LOCAL BRIDGE ONLY — which model that row's CLI should run (`--model <id>`).
+   *
+   * A row's identity is (CLI, model), and `model` above can only carry the
+   * FIRST half: for the bridge, the provider's "models" are process names
+   * (`claude` / `codex`), so without this field every bridge row in a panel
+   * resolved to the same model and "Fable generates, Opus verifies on one
+   * subscription" was inexpressible.
+   *
+   * Absent or empty means INHERIT the global `settings.bridgeModel` — which is
+   * why this is optional rather than defaulted: a panel stored before this
+   * field existed has rows with only a CLI id, and those rows must keep
+   * behaving exactly as they did (see coercePanelParticipant).
+   *
+   * Ignored for non-bridge providers, where `model` is already the model id.
+   */
+  bridgeModel?: string
 }
 
 /**
@@ -407,13 +424,25 @@ function coerceProviderModel(raw: unknown): { provider: AiProvider; model: strin
   return { provider: provider as AiProvider, model }
 }
 
-/** Coerce one panel participant (provider+model+role); null when invalid. */
+/** Coerce one panel participant (provider+model+role[+bridgeModel]); null when invalid. */
 function coercePanelParticipant(raw: unknown): PanelParticipant | null {
   const pm = coerceProviderModel(raw)
   if (!pm) return null
   const role = (raw as Record<string, unknown>)['role']
   if (role !== 'generator' && role !== 'verifier') return null
-  return { provider: pm.provider, model: pm.model, role }
+  const base: PanelParticipant = { provider: pm.provider, model: pm.model, role }
+  if (pm.provider !== 'bridge') return base
+  // localStorage is user-writable and this string ends up on the bridge's argv
+  // (`--model <id>`), so it is re-validated on READ, not just where it was
+  // typed — `--dangerously-skip-permissions` in a hand-edited panel must not
+  // smuggle a switch past the UI. A bad value DROPS THE FIELD rather than the
+  // row: the row then inherits the global default, which is the same "degrade
+  // to today's behaviour" rule setBridgeModel already follows for a typo.
+  const bridgeModel = (raw as Record<string, unknown>)['bridgeModel']
+  if (typeof bridgeModel !== 'string') return base
+  const trimmed = bridgeModel.trim()
+  if (trimmed === '' || !isValidModelId(trimmed)) return base
+  return { ...base, bridgeModel: trimmed }
 }
 
 /** Coerce one legacy ensemble participant (provider+model only). */
@@ -940,12 +969,29 @@ export const setCrossModelVerify = (v: boolean) => save({ crossModelVerify: v })
  * list has no generator, the first participant is promoted (defensive — the UI
  * also guards this).
  */
+/**
+ * Normalize one participant on the WRITE path: a bridge row keeps only a
+ * well-formed per-row model, and a non-bridge row never carries one at all.
+ *
+ * The read path (coercePanelParticipant) already refuses a bad id, so this is
+ * the second end of the same gate rather than the only one — it stops a
+ * malformed id being PERSISTED in the first place, so the editor never shows a
+ * stored value that resolution would silently ignore. Blank/invalid drops the
+ * field, which means "inherit the global bridgeModel".
+ */
+function sanitizePanelParticipant(p: PanelParticipant): PanelParticipant {
+  const { bridgeModel, ...rest } = p
+  if (p.provider !== 'bridge' || typeof bridgeModel !== 'string') return { ...rest }
+  const trimmed = bridgeModel.trim()
+  return isValidModelId(trimmed) ? { ...rest, bridgeModel: trimmed } : { ...rest }
+}
+
 export function setAiPanel(panel: AiPanel | null): void {
   if (panel === null) {
     save({ aiPanel: null })
     return
   }
-  const participants = panel.participants.map((p) => ({ ...p }))
+  const participants = panel.participants.map(sanitizePanelParticipant)
   if (participants.length > 0 && !participants.some((p) => p.role === 'generator')) {
     participants[0] = { ...participants[0], role: 'generator' }
   }
@@ -960,7 +1006,7 @@ export function setAiPanel(panel: AiPanel | null): void {
  */
 export function setPanelOneGenerator(participants: PanelParticipant[]): void {
   if (participants.length === 0) return
-  const next = participants.map((p, i) => ({ ...p, role: (i === 0 ? 'generator' : 'verifier') as ParticipantRole }))
+  const next = participants.map((p, i) => sanitizePanelParticipant({ ...p, role: (i === 0 ? 'generator' : 'verifier') as ParticipantRole }))
   save({ aiPanel: { participants: next } })
 }
 
@@ -971,7 +1017,7 @@ export function setPanelOneGenerator(participants: PanelParticipant[]): void {
  */
 export function setPanelAllGenerate(participants: PanelParticipant[]): void {
   if (participants.length === 0) return
-  const next = participants.map((p) => ({ ...p, role: 'generator' as ParticipantRole }))
+  const next = participants.map((p) => sanitizePanelParticipant({ ...p, role: 'generator' as ParticipantRole }))
   save({ aiPanel: { participants: next } })
 }
 export const setDiffMode = (mode: DiffMode) => save({ diffMode: mode })
