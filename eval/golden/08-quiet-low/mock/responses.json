@@ -13,7 +13,7 @@
         "path": "src/lib/range.ts",
         "line": 13,
         "severity": "low",
-        "body": "The rethrow drops the caught error entirely — `err` is bound and never used, so the detail it carried is lost to whoever debugs this.",
+        "body": "The catch block discards the caught error: `err` is never rethrown or attached as a cause, so the original RangeError bounds detail is dropped and callers cannot tell why the port was rejected.",
         "suggestedFix": "Attach it: `throw new RangeError(`invalid port: ${raw}`, { cause: err })`."
       }
     ]

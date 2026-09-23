@@ -8,7 +8,7 @@
     {
       "file": "src/lib/range.ts",
       "line": 13,
-      "description": "the rethrow discards the caught error: err is never attached as the cause, so which bound was violated is lost"
+      "description": "the catch block discards the caught error and rethrows a generic message, dropping the original RangeError bounds detail"
     }
   ],
   "noise": [
