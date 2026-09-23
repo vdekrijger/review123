@@ -11,7 +11,9 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import {
   _resetGroundingForTest,
   currentGrounding,
+  decideBridgeAgentic,
   decideGrounding,
+  describeBridgeAgentic,
   describeGrounding,
   findLocalReferences,
   groundingIsLocal,
@@ -482,5 +484,78 @@ describe('search', () => {
   it('THROWS when the bridge stops answering, so the caller can fall back', async () => {
     fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))
     await expect(searchLocal('target')).rejects.toThrow(/did not answer/i)
+  })
+})
+
+// ===========================================================================
+// Agentic readiness — can deep review run over this bridge at all?
+// ===========================================================================
+
+describe('decideBridgeAgentic', () => {
+  it('is ready when a connected bridge understands the agentic request', () => {
+    expect(decideBridgeAgentic(snapshot())).toEqual({ ready: true, reason: 'ready' })
+  })
+
+  it('is not ready with no bridge, and says which', () => {
+    expect(decideBridgeAgentic(snapshot({ connected: false }))).toEqual({
+      ready: false,
+      reason: 'no-bridge',
+    })
+    expect(decideBridgeAgentic(snapshot({ capabilities: null }))).toEqual({
+      ready: false,
+      reason: 'no-bridge',
+    })
+  })
+
+  /**
+   * THE CASE THIS FUNCTION EXISTS FOR.
+   *
+   * `agentic` is an ADDITIVE request field. A bridge predating it does not
+   * reject it — it ignores it, runs the ordinary tool-less completion and
+   * answers 200 with a perfectly good single-pass review. Offering deep review
+   * against such a bridge therefore fails SILENTLY: the user gets a shallow
+   * answer labelled deep, and nothing downstream can tell. So the decision is
+   * made from the capability, before anything is offered.
+   */
+  it('is not ready against a bridge too old to have the route, which would answer tool-less', () => {
+    const older = decideBridgeAgentic(
+      snapshot({ capabilities: { ...ALL_READY, inferAgentic: false } }),
+    )
+    expect(older).toEqual({ ready: false, reason: 'route-missing' })
+  })
+
+  it('does not depend on either WRITE grant — deep review is read-only', () => {
+    // A user who never typed --allow-write or --allow-checkout must still get
+    // deep review. Reading is not writing.
+    const readOnly = decideBridgeAgentic(
+      snapshot({ capabilities: { ...ALL_READY, fix: false, checkout: false } }),
+    )
+    expect(readOnly.ready).toBe(true)
+  })
+
+  it('does not depend on the head sha — it is a capability, not a grounding decision', () => {
+    // Whether the checkout MATCHES the PR is decideGrounding's question. This
+    // one only asks whether the CLI can be given its tools at all.
+    expect(decideBridgeAgentic(snapshot({ git: null })).ready).toBe(true)
+  })
+})
+
+describe('describeBridgeAgentic', () => {
+  it('says nothing when it works', () => {
+    expect(describeBridgeAgentic({ ready: true, reason: 'ready' })).toBeNull()
+  })
+
+  it('gives every failure an actionable sentence', () => {
+    const missing = describeBridgeAgentic({ ready: false, reason: 'route-missing' })
+    expect(missing).toMatch(/too old/i)
+    // It must say what to DO, not merely what is wrong.
+    expect(missing).toMatch(/update/i)
+    expect(describeBridgeAgentic({ ready: false, reason: 'no-bridge' })).toMatch(/no local bridge/i)
+  })
+
+  it('says it fell back to standard review, so the panel is never unexplained', () => {
+    for (const reason of ['no-bridge', 'route-missing'] as const) {
+      expect(describeBridgeAgentic({ ready: false, reason })).toMatch(/standard review/i)
+    }
   })
 })

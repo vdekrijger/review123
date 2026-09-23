@@ -459,6 +459,44 @@ describe('POST /v1/infer', () => {
     expect(parse((await handleRequest(inferReq({ cli: 'claude', prompt: 'hi' }), ctx())).body)).not.toHaveProperty('usage')
   })
 
+  it('forwards the agentic flag to the worker instead of deciding for it', async () => {
+    let seen: unknown
+    const spy = ctx({
+      infer: async (request) => {
+        seen = request.agentic
+        return { ok: true as const, text: 'a', truncated: false, durationMs: 1 }
+      },
+    })
+    await handleRequest(inferReq({ cli: 'claude', prompt: 'hi', agentic: true }), spy)
+    expect(seen).toBe(true)
+    await handleRequest(inferReq({ cli: 'claude', prompt: 'hi' }), spy)
+    expect(seen).toBeUndefined()
+  })
+
+  it('includes the agentic report ONLY when the worker produced one', async () => {
+    // Its ABSENCE is the signal a client reads as "this was a plain
+    // completion" — the same thing an older bridge sends for an agentic
+    // request it does not understand. So it must never be synthesized here.
+    const withReport = ctx({
+      infer: async () => ({
+        ok: true as const, text: 'a', truncated: false, durationMs: 1,
+        agentic: { tools: ['Read', 'Glob', 'Grep'], toolCallsAtLeast: 2, denied: 0 },
+      }),
+    })
+    expect(
+      parse((await handleRequest(inferReq({ cli: 'claude', prompt: 'hi', agentic: true }), withReport)).body),
+    ).toHaveProperty('agentic', { tools: ['Read', 'Glob', 'Grep'], toolCallsAtLeast: 2, denied: 0 })
+    expect(
+      parse((await handleRequest(inferReq({ cli: 'claude', prompt: 'hi' }), ctx())).body),
+    ).not.toHaveProperty('agentic')
+  })
+
+  it('400s a non-boolean agentic rather than reading it as truthy', async () => {
+    const res = await handleRequest(inferReq({ cli: 'claude', prompt: 'hi', agentic: 'yes' }), ctx())
+    expect(res.status).toBe(400)
+    expect(parse(res.body)['error']).toBe('bad-request')
+  })
+
   it('405s a GET', async () => {
     const res = await handleRequest(req({ method: 'GET', path: '/v1/infer' }), ctx())
     expect(res.status).toBe(405)

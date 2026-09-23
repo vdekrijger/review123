@@ -530,6 +530,22 @@ export function bridgeCredentials(): StoredBridge | null {
   return holder.status === 'connected' ? readStoredBridge() : null
 }
 
+/**
+ * FOR TESTS ONLY: put the module in the CONNECTED state with these
+ * capabilities, without a fetch round trip.
+ *
+ * It exists for the consumers that only care WHICH capabilities are live —
+ * deepReview.ts's harness gate, most of all, whose whole job is to read
+ * `inferAgentic` before offering deep review. Driving those through
+ * connectBridge would make every such test a health-payload fixture test
+ * instead, and the payload parsing is already covered where it belongs.
+ */
+export function _setBridgeConnectedForTest(capabilities: BridgeCapabilities): void {
+  holder.status = 'connected'
+  holder.capabilities = capabilities
+  holder.paired = true
+}
+
 /** FOR TESTS ONLY: reset module state so each test starts from a clean slate. */
 export function _resetBridgeForTest(): void {
   const fresh = initialHolder()

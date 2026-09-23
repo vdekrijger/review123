@@ -30,6 +30,7 @@ import {
   bridgeUrl,
   parseGitState,
   parseHealth,
+  parseInferResponse,
   parseInferStreamEvent,
 } from './protocol'
 import { _setCaptureForTest } from '../analytics/analytics'
@@ -874,5 +875,43 @@ describe('parseInferStreamEvent', () => {
     ['a done with a non-numeric duration', '{"type":"done","text":"x","truncated":false,"durationMs":"1"}'],
   ])('SKIPS %s rather than failing the stream', (_label, raw) => {
     expect(parseInferStreamEvent(raw)).toBeNull()
+  })
+})
+
+describe('parseInferResponse — the agentic report', () => {
+  function body(agentic: unknown): Record<string, unknown> {
+    return { ok: true, cli: 'claude', text: 'a', truncated: false, durationMs: 1, agentic }
+  }
+
+  it('reads a well-formed report', () => {
+    const parsed = parseInferResponse(body({ tools: ['Read', 'Glob'], toolCallsAtLeast: 3, denied: 1 }))
+    expect(parsed?.agentic).toEqual({ tools: ['Read', 'Glob'], toolCallsAtLeast: 3, denied: 1 })
+  })
+
+  it('accepts codex’s EMPTY tool list — not nameable is not the same as none', () => {
+    expect(parseInferResponse(body({ tools: [] }))?.agentic).toEqual({ tools: [] })
+  })
+
+  /**
+   * The presence of this report is what lets the app tell a user their review
+   * read their own working tree. So anything that is not a well-formed report
+   * is dropped ENTIRELY rather than half-read: "we could not tell" has to
+   * resolve to "not grounded", never to a partial claim.
+   */
+  it('drops a malformed report rather than half-reading it', () => {
+    for (const bad of [null, 'yes', 42, {}, { tools: 'Read' }, { tools: [1, 2] }]) {
+      expect(parseInferResponse(body(bad))?.agentic).toBeUndefined()
+    }
+  })
+
+  it('leaves a malformed COUNT absent rather than coercing it to zero', () => {
+    // Absent means "unreported"; 0 is a claim that the CLI used no tools.
+    const parsed = parseInferResponse(body({ tools: ['Read'], toolCallsAtLeast: -1, denied: 'lots' }))
+    expect(parsed?.agentic).toEqual({ tools: ['Read'] })
+  })
+
+  it('is ABSENT for an ordinary tool-less answer, which is how an old bridge reads', () => {
+    const plain = { ok: true, cli: 'claude', text: 'a', truncated: false, durationMs: 1 }
+    expect(parseInferResponse(plain)?.agentic).toBeUndefined()
   })
 })
