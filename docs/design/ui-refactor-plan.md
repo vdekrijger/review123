@@ -5,8 +5,8 @@ Companion to [`ui-audit.md`](./ui-audit.md) (the findings, `F1`-`F18`) and
 its page refs).
 
 **Status: Phase 1 shipped. Phase 2 in progress — Batches 2A, 2B and 2C shipped,
-Batch 2D's first slice shipped with more to come. Phase 3 shipped, and its one
-deferred item is now closed — measured, and deliberately not changed.**
+Batch 2D's first two slices shipped with more to come. Phase 3 shipped, and its
+one deferred item is now closed — measured, and deliberately not changed.**
 
 Phase 1 landed as one PR — see [Phase 1 — as shipped](#p1-shipped) for what
 changed against what this document proposed, and for the measurements taken from
@@ -18,7 +18,11 @@ the audit's own measurements ([F8](./ui-audit.md#f8)). Batch 2A closes Phase 2's
 form work in [Batch 2A — as shipped](#b2a-shipped), which corrects one of *this
 document's* items — [F14](./ui-audit.md#f14) had already been fixed, by Phase 1.
 Batch 2D's opening slice is in [Batch 2D — as shipped](#b2d-shipped), with the
-ledger that measures every later slice. Phase 3 closes the diff viewer in
+ledger that measures every later slice; its second slice
+([slice 2](#b2d-slice2)) takes the two things that slice deliberately left
+open — it **decides** [F18](./ui-audit.md#f18) rather than freezing it
+([the weight set](#f18-decided)), and converges the hand-copied settings cards
+onto `.card`. Phase 3 closes the diff viewer in
 [Phase 3 — as shipped](#p3-shipped): it settles the recede question Phase 1
 deliberately left open, and it confirms Batch 2B's suspicion about
 `SymbolPopover.svelte` — measured, that was a live bug. Its deferred item 4
@@ -26,10 +30,14 @@ closes in [Phase 3, item 4 — measured, not changed](#p3-item4), which disprove
 one of the audit's own claims and ships a measurement instead of a change.
 
 The screenshots in [`./shots/`](./shots/) are the **after** state of the most
-recent batch to touch each surface. The six diff shots
-(`step2-inspect-unified-*`, `step2-inspect-split-*` and `focus-dim-*`, the last
-pair still byte-identical to the unified pair) are **Phase 3's**; the other
-eight are **Batch 2D's first slice**. The pre-Phase-1 before state is in git
+recent batch to touch each surface. `settings-models-*` and `landing-*` are
+**Batch 2D's second slice**; the six diff shots (`step2-inspect-unified-*`,
+`step2-inspect-split-*` and `focus-dim-*`, the last pair still byte-identical to
+the unified pair) are **Phase 3's**; `step1-understand-*` is **Batch 2D's first
+slice**. The six diff/step shots are one slice stale — slice 2 changed `.btn`
+and `<strong>` on every surface but could not faithfully re-shoot a mocked PR
+fixture that lives only inside an e2e spec; see
+[its deferred list](#b2d-slice2). The pre-Phase-1 before state is in git
 history at commit `38b9e9a`; at commit `038e6d4`, the pre-Batch-2B state of
 `step1-understand-*.png` and the pre-Batch-2C state of the settings page and the
 Inspect step; at commit `1e2de30`, the pre-Batch-2A state of all fourteen; at
@@ -1286,6 +1294,15 @@ in `shots/settings-models-light.png`:
   `offScaleWeight` column now stops a fifth weight arriving and the two surplus
   ones spreading, which is what a ratchet is for when the decision behind a
   number has not been taken yet.
+  > **Decided in [slice 2](#b2d-slice2): [the weight set](#f18-decided).** The
+  > fork was resolved in 2A's favour — its 500 survives re-examination and is
+  > kept, now as a *rule* (`--text-xs` **and** `--text-secondary` together)
+  > rather than a blessed call site. The surplus was elsewhere, as suspected:
+  > weight competing with a border, a fill or a hue that had already done the
+  > job. `offScaleWeight` 83 → 74, which is every site inside that slice's
+  > fence. Slice 2 also found [F18's invisible half](#f18-strong): `<strong>`
+  > rendered at 700 with **no rule anywhere in the app**, so nineteen of the
+  > twenty-one 700s on `/settings` were never in this count at all.
 
 **Deferred out of Batch 2D's first slice, deliberately:**
 
@@ -1308,6 +1325,13 @@ in `shots/settings-models-light.png`:
   its four siblings on the same page, which is Batch 2A's recorded lesson in a
   new costume. It needs a slice that takes all five, or converges them onto
   `.card`. **This is the highest-value follow-up in the batch.**
+  > **Done in [slice 2](#b2d-slice2) — and there were SIX, not five.**
+  > `SkillsSection` carries a seventh-identical copy under a class selector
+  > (`.skills-section`) rather than the `section` element, which is why the grep
+  > that produced this count missed it. All six converged onto `.card`, keeping
+  > only `margin-bottom`. Adopting it was **not** a no-op: the copies carried
+  > `--hairline` in *both* themes, which is precisely the rule
+  > [Batch 2B](#b2b-border) had already corrected.
 - **`line-height`.** F6 records 21 distinct line-heights alongside the sizes
   (19 after this PR). A line-height scale is a ratio, not a length, and adding
   it here would have made the first ratchet reading un-actionable.
@@ -1343,6 +1367,195 @@ in `shots/settings-models-light.png`:
 - Screenshots: **all 14 re-captured**. The capture method was validated by
   reproducing the committed pre-change `step1-understand-light.png` height
   (1105px) exactly before capturing the new set.
+
+---
+
+<a id="b2d-slice2"></a>
+
+### Batch 2D — as shipped (slice 2: the weight set and the settings card)
+
+Slice 1 deliberately left two things open and said so. This slice closes both.
+One of them was a **decision**, not a migration, and the owner delegated it.
+
+<a id="f18-decided"></a>
+
+#### F18 — the weight set, decided
+
+**The set is 400 and 600, plus one named exception at 500.**
+
+```
+400  body, and anything whose emphasis is already carried by another axis
+     — size, colour, position, a border, a fill, a shape.
+600  emphasis: headings, the active nav item, a group label.
+500  ONLY where BOTH --text-xs and --text-secondary are already in play.
+```
+
+**Batch 2A's 500 stays, and the re-examination is why.** Slice 1 froze F18
+because collapsing to two weights would overturn
+[2A's stated choice](#b2a-f11) of 500 for the 12px secondary `.field-label`.
+Tested rather than assumed, 2A's reasoning holds: at 11.25px in a secondary ink,
+size and colour have *both* already gone down, and stroke is the only axis left
+holding the glyph together. Weight there is not adding emphasis — it is paying
+back a little of what two other axes just took away.
+
+The surplus was indeed elsewhere, exactly as suspected: **weight competing with
+an axis that had already done the job** (p.44). Nine sites, each with the axis
+that displaced it:
+
+| site | was | now | what already carried it |
+|---|---|---|---|
+| `app.css .btn` | 500 | **400** | the box: a 3.5:1 `--border-control` rim (2A item 1), a fill, padding, a radius — and full `--text` ink, so nothing was taken away to pay back |
+| `app.css .chip` | 500 | **400** | the pill: a 999px radius, a fill, a status tint |
+| `BridgeSection .primary-btn/.secondary-btn` | 500 | **400** | the same object as `.btn`; they must not read heavier than it on the same page |
+| `AppearanceSection .reset-btn` | 500 | **400** | a bordered, padded, radiused control |
+| `ProvidersSection .chip-check` | 700 | **400** | a green hue no other text on the page carries (p.48-49) |
+| `ModelCombobox .combobox-result-lab` | 700 | **600** | uppercase + 0.04em tracking + `--text-muted`; it IS a heading, so it takes the emphasis weight, but 700-against-600 at 11.25px buys nothing |
+| `Bridge`/`Appearance`/`StandingRules` notes | `normal` | **400** | nothing — `normal` *is* 400, and a second spelling is a weight the ratchet cannot count |
+
+`SkillsSection .mine-provider-label` **keeps** its 500 and now actually meets the
+rule it always claimed to. It was `0.8rem` — a step off the scale and a step
+*above* `--text-xs` — so its own comment ("the same label treatment") was true in
+spirit and false in fact.
+
+**There are no `--weight-*` tokens, and that absence is the decision.** A weight
+is a choice between two values, not a scale; naming it would make a third easy to
+add. It would also **launder the ratchet**, which skips `var()` values by design —
+spelling 500 as a token would zero `offScaleWeight` without changing one rendered
+pixel.
+
+<a id="f18-strong"></a>
+
+**F18's invisible half, and it is the finding of this slice.** Abolishing 700 in
+the stylesheet does not abolish it on the *page*. `<strong>` and `<b>` had no
+rule anywhere in this app, so they rendered at the UA's `bolder` — 700 — where
+no grep and no ratchet that reads CSS can see them. Measured on `/settings` in
+the built app: **21 text runs rendered at 700, and nineteen of them were
+`<strong>`.** One rule in `app.css` closes it. This is the same shape as slice
+1's UA-monospace finding (13.3333px, 78 occurrences, declared nowhere), and the
+two together are the argument for measuring the rendered page and not only the
+source.
+
+Rendered weights on `/settings` after this slice: **400**, **500** (18 runs, all
+of them `.field-label` — every one the earned exception), **600**, and two
+remaining 700s, both in `SettingsPage.svelte` (`.settings-title` and one anchor),
+which is outside this slice's fence.
+
+#### The settings card — all six, converged onto `.card`
+
+Slice 1 called this its highest-value follow-up and counted **five** copies.
+**There were six.** `SkillsSection` is the only one written under a class
+selector (`.skills-section`) rather than the `section` element, so the grep that
+produced the count walked straight past it. *The citation is a starting point,
+the grep is the set* — the third batch in a row to learn it.
+
+All six move together, because moving one would have made that section visibly
+differ from its five siblings on the same page. Each now carries
+`class="card"` and keeps exactly one line of its own, `margin-bottom:
+var(--space-5)`: the gap to the next card is the **page's** rhythm, and `.card`
+deliberately owns no margin — a test says so, because six sections silently
+doubling their gap is what would happen if it ever grew one.
+
+**Adopting `.card` was not a no-op**, and every difference is the primitive
+applying a rule the hand-copies predated. Measured with `getComputedStyle` in the
+built app at 1440×1000, `/settings`, against a build of `origin/main`:
+
+| | before (all six) | after (all six) |
+|---|---|---|
+| background | `rgba(0,0,0,0)` — none | `--surface` |
+| border, light | `1px solid var(--hairline)` | `1px solid transparent` |
+| border, dark | `1px solid var(--hairline)` | **unchanged** |
+| radius | 10px | 8px |
+| padding | 15px 18.75px | 11.25px 15px (`--space-3`/`--space-4`) |
+| shadow | none | `--elevation-1` |
+| margin-bottom | 22.5px | 22.5px (unchanged, now a token) |
+
+The border row is [Batch 2B's rule](#b2b-border) reaching the last surface that
+had not taken it. Boundary contrast on `/settings`, measured against the page
+ground:
+
+| | light before | light after | dark before | dark after |
+|---|---|---|---|---|
+| rim vs page ground | **1.33** | — (transparent) | **1.43** | **1.43** (kept) |
+| surface vs page ground | — (transparent) | **1.06** | — (transparent) | **1.08** |
+| `--elevation-1`, tight part | — | **1.31** | — | **1.06** |
+
+Stated honestly: in **light** the shadow at 1.31 does not *beat* the 1.33 rim it
+replaces — it is a wash on that one axis — but the card also gains a background
+shift it never had, so the boundary is carried by **two** cues instead of one and
+the page stops reading as six outlined rectangles. In **dark** nothing is given
+up at all: the rim is kept at 1.43 and both other cues are added on top. That
+asymmetry is the whole point of 2B's `light-dark(transparent, var(--hairline))`.
+
+**On 2B's claim that it styled `.glance-card` so adopting `.card` would be a
+no-op: verified, and qualified.** It holds for background, border and radius, and
+*exactly* for padding — `0.75rem`/`1rem` **is** `--space-3`/`--space-4`. It does
+not hold for elevation: `.glance-card` takes `--elevation-2` deliberately, to
+outrank the detail panels below it, and adds its own flex layout. So the claim is
+true of the card's **skin** and false of its **depth**, which is a deliberate
+divergence rather than drift. `.glance-card` is left alone.
+
+#### The ledger
+
+| ledger | after slice 1 | after this slice |
+|---|---|---|
+| `emFont` | 96 | 96 |
+| `offScaleFont` | 546 | **545** |
+| `offScaleSpace` | 1299 | **1281** |
+| `offScaleWeight` | 83 | **74** |
+| files off the scale | 61 of 64 | **60 of 64** |
+
+`settings/ModelCombobox.svelte` **leaves the baseline entirely** — the first
+settings file to finish. Page height on `/settings`: **6064px → 6019px**.
+
+**Why `offScaleWeight` stops at 74 and not lower: the fence.** Of the 83, only
+**12 were inside this slice's files**; nine of those are gone and the three that
+remain are the earned exception. The other 71 sit in step components and panels
+(`VerdictStep` 11, `UnderstandStep` 10, `InspectStep` 8, `panels/*` 14, and a
+long tail) that parallel agents own. The decision above is the rule those slices
+should apply; the ratchet holds them at today's count meanwhile.
+
+#### Verification that shipped with it
+
+- **`src/components/design-system-primitives.test.ts` — 12 new guards.** F18
+  (7): `app.css` declares only 400/500/600; no `normal`/`bold` spelling in the
+  fence; **every 500 sits on text demoted in both size and colour**; the
+  exception is still actually taken, so the rule cannot pass vacuously with no
+  500s left; `.btn`/`.chip` are pinned at 400; no settings section declares 700;
+  and the glob really reaches the sections. The card (5): all six sections are
+  found and wear `class="card"`; none re-declares the card chrome (a
+  section-level rule may carry `margin-bottom` and nothing else); `.card` keeps
+  2B's border rule, a `--surface` background, `--elevation-1` and scale padding;
+  and `.card` carries no margin. Mutation-checked: putting `.btn` back to 500
+  turns exactly two of them red, and the failure names the site and which axis it
+  is missing.
+- **Screenshots: four re-captured** (`settings-models-*`, `landing-*`). The
+  capture recipe is not committed anywhere, so it was reverse-engineered and
+  **validated against `origin/main` before use**, the way slice 1 validated its
+  own: full page at a 1440×1000 viewport, `deviceScaleFactor` 1, then
+  `sips --resampleWidth 780` for the settings page. Rebuilding `main` reproduced
+  the committed `settings-models-light.png` at 780×3284 against its committed
+  780×3282, and `landing-light.png` at 1440×1000 exactly.
+
+#### Deferred out of this slice, deliberately
+
+- **The other 71 `offScaleWeight` declarations**, all outside the fence. Not a
+  sweep: the rule above is per-site, and slice 1's `.picker-quick` near-miss is
+  the standing warning about blind ones.
+- **The six review-flow shots** (`step1-understand-*`, `step2-inspect-*`,
+  `focus-dim-*`). They *are* affected — `.btn` and `<strong>` appear on all of
+  them — but each is driven by a mocked PR fixture that exists only inside an
+  e2e spec, and no capture script is committed. Shooting them against an invented
+  fixture would make the set internally inconsistent and destroy the before/after
+  comparison the directory exists for. **The real fix is a committed capture
+  script**, which is its own small piece of work.
+- **`SettingsPage.svelte`'s two remaining 700s** (`.settings-title` and one
+  anchor) — outside the fence, and the only 700s still rendering on `/settings`.
+- **`SkillsSection`'s `0.8rem` siblings.** Only `.mine-provider-label` moved to a
+  scale step, because it was the one the weight rule had to be true of. The other
+  27 `em` font-sizes in that file are a type-migration slice, not a weight one.
+- **Everything slice 1 deferred that this slice did not name** stands unchanged:
+  the control primitives' padding, `:root { font-size: 15px }`, `line-height`,
+  the two `margin: -1px` nudges, and the UA monospace default.
 
 ---
 

@@ -566,11 +566,14 @@
     margin-top: var(--space-1);
   }
 
+  /* F18. 600, not 700: this IS a heading, so it takes the emphasis weight —
+     but uppercase + 0.04em tracking + --text-muted already rank it, and 700
+     against 600 at 11.25px is a fourth weight buying an invisible difference. */
   .combobox-result-lab {
     display: block;
     padding: var(--space-1) var(--space-2);
     font-size: var(--text-xs);
-    font-weight: 700;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);

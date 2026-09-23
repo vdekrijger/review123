@@ -150,7 +150,7 @@
   }
 </script>
 
-<section id="providers" aria-label="Providers and access">
+<section id="providers" aria-label="Providers and access" class="card">
   <h2 class="section-label">Providers &amp; access</h2>
 
   {#if githubOauthConnected}
@@ -241,11 +241,13 @@
 <style>
   /* Bounded section card: the Save button at the bottom visibly belongs to
      THIS section's fields — never floating between sections. */
+  /* The settings card IS the .card primitive in app.css — this section wears it
+     via class="card" instead of re-declaring it (it was written out
+     byte-identically in all SIX sections of this page). What stays here is the
+     one thing .card deliberately does not own: the gap to the next card, which
+     is the PAGE's rhythm, not the card's chrome. */
   section {
-    margin-bottom: 1.5rem;
-    border: 1px solid var(--hairline);
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
+    margin-bottom: var(--space-5);
   }
 
   /* A real <h2> (F13/rubric D1) styled down to the label it already was.
@@ -285,9 +287,12 @@
     color: var(--text);
   }
 
+  /* F18. 400: the check is a GREEN glyph — a hue no other text on the page
+     carries, which is emphasis enough on its own (p.48-49 warns the other way
+     round: don't let a mark outrank the label beside it). */
   .chip-check {
     color: var(--ok, #1a7f37);
-    font-weight: 700;
+    font-weight: 400;
   }
 
   .chip-signout {

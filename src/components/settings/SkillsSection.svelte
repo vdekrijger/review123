@@ -202,7 +202,7 @@
   }
 </script>
 
-<section id="skills" aria-label="Reviewer skills" class="skills-section">
+<section id="skills" aria-label="Reviewer skills" class="card skills-section">
   <h2 class="section-label">Reviewer skills</h2>
 
   <label class="auto-run-label">
@@ -449,11 +449,17 @@
 
 <style>
   /* Bounded section card — skills persist on toggle/add, no Save button. */
+  /* The settings card IS the .card primitive in app.css — this section wears it
+     via class="card" instead of re-declaring it (it was written out
+     byte-identically in all SIX sections of this page). What stays here is the
+     one thing .card deliberately does not own: the gap to the next card, which
+     is the PAGE's rhythm, not the card's chrome.
+
+     This was the SIXTH copy, and the reason the plan's count said five: it is
+     the only one written under a class selector rather than `section`, so the
+     grep that found the others walked straight past it. */
   .skills-section {
-    margin-bottom: 1.5rem;
-    border: 1px solid var(--hairline);
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
+    margin-bottom: var(--space-5);
   }
 
   /* A real <h2> (F13/rubric D1) styled down to the label it already was.
@@ -749,7 +755,12 @@
      own text, --text-secondary rather than --text-muted, which is where this
      section's hints live. */
   .mine-provider-label {
-    font-size: 0.8rem;
+    /* F18. The ONE standing 500 exception outside app.css, and it now actually
+       MEETS the rule it always claimed to: --text-xs together with
+       --text-secondary. It was 0.8rem (12px) — a step off the scale and a step
+       ABOVE --text-xs, so the comment above was true in spirit and false in
+       fact. Both axes are down; weight is what keeps the stroke legible. */
+    font-size: var(--text-xs);
     font-weight: 500;
     color: var(--text-secondary);
     flex-shrink: 0;
