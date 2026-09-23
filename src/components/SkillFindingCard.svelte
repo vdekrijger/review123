@@ -618,7 +618,7 @@
 
   .skill-finding.severity-low {
     border-color: var(--border-subtle);
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
   }
 
   .skill-finding-header {
@@ -659,7 +659,7 @@
   }
 
   .severity-chip-low {
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     color: var(--text-muted);
     border: 1px solid var(--border-subtle);
   }
@@ -682,7 +682,7 @@
     font-weight: 600;
     padding: 0.1rem 0.45rem;
     border-radius: 999px;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     color: var(--text-muted);
     border: 1px solid var(--border-subtle);
     white-space: nowrap;
@@ -714,7 +714,7 @@
     font-weight: 600;
     padding: 0.1rem 0.45rem;
     border-radius: 999px;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     color: var(--text-muted);
     border: 1px dashed var(--border-subtle);
     white-space: nowrap;
@@ -729,7 +729,7 @@
     margin: 0 0 0.45rem;
     padding: 0.35rem 0.5rem;
     border-left: 2px solid var(--border-subtle);
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     border-radius: 0 4px 4px 0;
     font-size: 0.82rem;
   }
@@ -782,7 +782,7 @@
   .skill-finding.covered-collapsed {
     border-style: dashed;
     border-color: var(--border-subtle);
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     opacity: 0.72;
     padding: 0.25rem 0.5rem;
   }
@@ -817,7 +817,7 @@
     font-weight: 600;
     padding: 0.1rem 0.45rem;
     border-radius: 999px;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     color: var(--text-muted);
     border: 1px dashed var(--border-subtle);
     white-space: nowrap;
@@ -952,7 +952,7 @@
 
   .skill-move-btn:hover {
     opacity: 1;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
   }
 
   .skill-move-btn.active {
@@ -1025,13 +1025,13 @@
      VerdictPanel evidence (overriding MarkdownView's neutral defaults). */
   .skill-finding-body :global(code) {
     font-size: 0.85em;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     padding: 0.1em 0.3em;
     border-radius: 3px;
   }
 
   .skill-finding-body :global(pre) {
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     padding: 0.5rem;
     border-radius: 4px;
     overflow-x: auto;
@@ -1083,7 +1083,7 @@
 
   .skill-dismiss-btn:hover {
     opacity: 1;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
   }
 
   /* ---- Dismiss-with-reason row (dismissal calibration) ----
@@ -1111,7 +1111,7 @@
   .dismiss-reason-btn:focus-visible {
     color: inherit;
     border-style: solid;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
   }
 
   .skill-ask-btn {
@@ -1127,7 +1127,7 @@
 
   .skill-ask-btn:hover {
     opacity: 1;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
   }
 
   .skill-ask-btn.active {
@@ -1151,6 +1151,6 @@
 
   .skill-agent-btn:hover {
     opacity: 1;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
   }
 </style>

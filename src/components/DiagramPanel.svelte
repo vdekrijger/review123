@@ -675,7 +675,7 @@
 
   .toggle-btn:hover {
     opacity: 1;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
   }
 
   .diagram-container--full {

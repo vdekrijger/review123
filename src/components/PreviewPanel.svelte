@@ -215,7 +215,7 @@
     color: var(--text-muted);
     padding: 0.4rem 0.75rem;
     border-bottom: 1px solid var(--hairline);
-    background: var(--surface-raised, #141a28);
+    background: var(--surface-sunken, #141a28);
   }
 
   .preview-fallback a {

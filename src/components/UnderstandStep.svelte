@@ -677,11 +677,16 @@
 
   /* ===== Glance Card ===== */
 
+  /* The primary card on the step: it carries the verdict, the stats and the
+     one-line summary, so it LEADS the ten detail panels below it rather than
+     matching them (audit F9). Depth is what ranks it — elevation step 2 against
+     the panels' 1-or-nothing. Otherwise this is the .card primitive in app.css
+     inlined; it drops its border for the same reason .card does (p.206-209). */
   .glance-card {
     background: var(--surface);
-    border: 1px solid var(--hairline);
     border-radius: 8px;
     padding: 0.75rem 1rem;
+    box-shadow: var(--elevation-2);
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
@@ -742,7 +747,7 @@
     font-weight: 500;
     padding: 0.2rem 0.5rem;
     border-radius: 10px;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     white-space: nowrap;
   }
 
@@ -1164,12 +1169,49 @@
     color: var(--text);
   }
 
-  /* ===== Detail panels ===== */
+  /* ===== Detail panels =====
+   *
+   * Ten of these render in a column on this step and, before Batch 2B, they
+   * were ten IDENTICAL bordered boxes — same size, weight, border, background
+   * and spacing — with nothing to say which to open first (audit F9), and ten
+   * borders doing work that space and depth do better (p.206-209).
+   *
+   * The rank is now open-vs-closed. That axis is used because it is the one
+   * that always means something and that survives the reader reordering the
+   * list in settings (see panels/sectionRegistry.ts):
+   *
+   *   closed — chrome. No box at all, just a summary row on the page ground.
+   *            Ten of them read as a list of ten things to choose from rather
+   *            than as ten panels competing for the same attention.
+   *   open   — content. Comes FORWARD onto --surface, which is lighter than
+   *            --bg in BOTH themes (the flat-design depth cue, p.167-168),
+   *            and takes elevation step 1.
+   *
+   * The border is gone in both states: the background shift plus the shadow
+   * separate an open panel from the page (p.207-208), and the .understand-step
+   * column gap separates the closed ones from each other (p.209).
+   *
+   * Above them, .glance-card takes elevation step 2, so the page now reads in
+   * three depths — the primary card, then an opened panel, then the flat list —
+   * instead of one.
+   */
 
   .detail-panel {
-    border: 1px solid var(--hairline);
     border-radius: 6px;
     overflow: hidden;
+  }
+
+  .detail-panel[open] {
+    background: var(--surface);
+    box-shadow: var(--elevation-1);
+  }
+
+  /* The border used to be the only thing outlining the hit target. With it
+     gone, hover is what tells the reader a closed row is a control. The well
+     colour is the correct one here: a pressed/hovered row goes BACK, not
+     forward (p.167-168). */
+  .detail-panel > summary:hover {
+    background: var(--surface-sunken);
   }
 
   /* Title takes the row; the header status indicator sits at the far right so
