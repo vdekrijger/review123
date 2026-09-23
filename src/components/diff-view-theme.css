@@ -1,0 +1,241 @@
+/*
+ * src/components/diff-view-theme.css — the diff viewer, repainted in the app's
+ * palette. Imported by FileDiff.svelte immediately after the vendored
+ * `@git-diff-view/svelte/styles/diff-view.css`, which it overrides.
+ *
+ * ── Why this file exists (audit F5, plan Phase 3) ────────────────────────────
+ *
+ * @git-diff-view ships GitHub's palette whole. Measured in the built app before
+ * this file: the dark context ground was #0d1117 — a THIRD dark grey meeting
+ * --bg #14161a and --surface #1b1e24 within a few pixels; body ink was pure
+ * #ffffff (278 elements) / #000000 (200 elements) rather than --text; the row
+ * tints were #dafbe1 / #ffebe9 against the legend chips' #dcffe4 / #ffe5e5, two
+ * greens and two reds for one meaning; and #0969d2 painted the add-comment
+ * widget on EVERY line — 78 instances of a second, unrelated accent.
+ *
+ * ── Why it is CSS and not a patch (plan's risk note) ─────────────────────────
+ *
+ * The library resolves every ground through a custom property
+ * (dist/utils/color.js names them; the components emit `var(--diff-…--)` into
+ * inline styles), so the whole structural palette re-points from outside with
+ * no patch at all. patches/@git-diff-view__svelte.patch stays exactly what it
+ * was — one behavioural fix to an inverted `isHidden` condition — and this
+ * change adds nothing to the rebase cost of the next upgrade.
+ *
+ * ── Why every selector starts with `:root` ───────────────────────────────────
+ *
+ * The vendored rules are theme-scoped: `.diff-tailwindcss-wrapper[data-theme="light"]
+ * .diff-line-syntax-raw .hljs-keyword`. Ours must out-specify them and must NOT
+ * depend on stylesheet order (the library's CSS is imported from a component, so
+ * its position relative to app.css is a bundler detail). `:root` is a
+ * pseudo-class, so prefixing it adds exactly one class-level unit to every
+ * selector — a uniform +1 over each vendored rule it mirrors, whether that rule
+ * has one class or three. `[data-theme]` (unqualified) matches both themes,
+ * because the VALUES are light-dark() pairs that resolve themselves.
+ */
+
+/* ── The structural palette: every ground, border and widget → app tokens ── */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-style-root {
+  /* The vendored theme blocks end with a bare `color: black` / `color: white`
+     on this element. It is the inherited base of the ENTIRE viewer subtree, and
+     it is where the audit's "pure #ffffff on 278 elements / #000000 on 200"
+     came from — anything the viewer does not paint explicitly landed on it. */
+  color: var(--syntax-ink);
+
+  /* Grounds. The context ground IS the card's face; the expand/empty rows and
+     the line-number gutter are wells (p.167-168: darker recedes). */
+  --diff-plain-content--: var(--surface);
+  --diff-expand-content--: var(--surface-sunken);
+  --diff-empty-content--: var(--surface-sunken);
+  --diff-plain-lineNumber--: var(--surface-sunken);
+  --diff-expand-lineNumber--: var(--surface-sunken);
+
+  /* One green and one red, shared with the legend chips (audit F5). */
+  --diff-add-content--: var(--legend-added-bg);
+  --diff-del-content--: var(--legend-removed-bg);
+
+  /* The gutter and the word-level highlight are the SAME one step stronger
+     than the row, so the two emphases read as one idea. */
+  --diff-add-lineNumber--: var(--diff-added-emphasis);
+  --diff-del-lineNumber--: var(--diff-removed-emphasis);
+  --diff-add-content-highlight--: var(--diff-added-emphasis);
+  --diff-del-content-highlight--: var(--diff-removed-emphasis);
+
+  /* Line numbers are support copy, not body copy — the palette's middle tier.
+     It is --text-secondary rather than --text-muted because the gutter lands on
+     the two emphasis tints as well, where muted measures 4.16/3.74 (light) and
+     3.60/4.49 (dark). Secondary clears 4.5 on all six: worst 4.86. */
+  --diff-plain-lineNumber-color--: var(--text-secondary);
+  --diff-expand-lineNumber-color--: var(--text-secondary);
+
+  /* The hunk header ("@@ …", expand-hidden-lines) is chrome, not content, so it
+     drops GitHub's blue tint family (#ddf4ff / #b6e3ff) for the app's well. */
+  --diff-hunk-content--: var(--surface-sunken);
+  --diff-hunk-lineNumber--: var(--surface-sunken);
+  --diff-hunk-content-color--: var(--text-muted);
+  --diff-hunk-lineNumber-hover--: var(--accent);
+
+  --diff-border--: var(--hairline);
+
+  /* The 78 #0969d2 add-comment widgets. One accent in this app. */
+  --diff-add-widget--: var(--accent);
+  --diff-add-widget-color--: var(--on-accent);
+
+  /* Not reachable today (the app never enables multi-select) — declared so the
+     feature cannot arrive carrying #f0c000 / #2588fa from the vendor's
+     fallbacks. */
+  --diff-multi-select-bg: var(--legend-changed-bg);
+  --diff-multi-select-border: var(--accent);
+
+  /* The library's own base ink for the un-tokenised half of a highlighted line
+     (`.diff-line-syntax-raw *`), which is where the pure #000/#fff came from. */
+  --diff-view-light: var(--syntax-recede-ink, var(--syntax-ink));
+  --diff-view-dark: var(--syntax-recede-ink, var(--syntax-ink));
+}
+
+/*
+ * Body ink for the content cells themselves — this is the path a line takes
+ * when it is NOT syntax-highlighted (`.diff-line-content-raw`), which the
+ * `--diff-view-*` variables above do not reach.
+ *
+ * `.diff-line-extend-content` is deliberately NOT listed: that cell hosts OUR
+ * inline UI (drafts, findings, the receded-hunk marker), which already paints
+ * from the app's tokens and must not inherit a code ink.
+ */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-content,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-old-content,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-new-content {
+  color: var(--syntax-recede-ink, var(--syntax-ink));
+}
+
+/*
+ * ── The syntax set ──────────────────────────────────────────────────────────
+ *
+ * Every rule below mirrors a vendored `hljs-*` rule and replaces its literal
+ * with a token, through ONE indirection:
+ *
+ *     var(--syntax-recede-ink, var(--syntax-<role>))
+ *
+ * When `--syntax-recede-ink` is in scope the whole row paints in that single
+ * ink; when it is not, each token keeps its role colour. That is the
+ * ink-substitution recede (plan P1-4(b)) — and it is why a receded row needs
+ * exactly ONE declaration in FileDiff.svelte rather than a specificity fight
+ * with fifteen syntax rules.
+ *
+ * The role groups are prettylights', unchanged, so an upstream selector added
+ * to a group keeps working.
+ */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs {
+  color: var(--syntax-recede-ink, var(--syntax-ink));
+  /* the vendored rule paints a hardcoded #ffffff/#0d1117 here, which would
+     punch a white slab through an added row's tint */
+  background: transparent;
+}
+
+/* prettylights-syntax-keyword */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-doctag,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-keyword,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-meta .hljs-keyword,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-template-tag,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-template-variable,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-type,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-variable.language_ {
+  color: var(--syntax-recede-ink, var(--syntax-keyword));
+}
+
+/* prettylights-syntax-entity */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-title,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-title.class_,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-title.class_.inherited__,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-title.function_ {
+  color: var(--syntax-recede-ink, var(--syntax-entity));
+}
+
+/* prettylights-syntax-constant */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-attr,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-attribute,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-literal,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-meta,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-number,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-operator,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-variable,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-selector-attr,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-selector-class,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-selector-id {
+  color: var(--syntax-recede-ink, var(--syntax-constant));
+}
+
+/* prettylights-syntax-string */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-regexp,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-string,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-meta .hljs-string {
+  color: var(--syntax-recede-ink, var(--syntax-string));
+}
+
+/* prettylights-syntax-variable */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-built_in,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-symbol {
+  color: var(--syntax-recede-ink, var(--syntax-variable));
+}
+
+/* prettylights-syntax-comment */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-comment,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-code,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-formula {
+  color: var(--syntax-recede-ink, var(--syntax-comment));
+}
+
+/* prettylights-syntax-entity-tag */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-name,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-quote,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-selector-tag,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-selector-pseudo {
+  color: var(--syntax-recede-ink, var(--syntax-tag));
+}
+
+/* prettylights-syntax-storage-modifier-import / markup italic / markup bold */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-subst,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-emphasis,
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-strong {
+  color: var(--syntax-recede-ink, var(--syntax-ink));
+}
+
+/* prettylights-syntax-markup-heading */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-section {
+  color: var(--syntax-recede-ink, var(--syntax-constant));
+}
+
+/* prettylights-syntax-markup-list */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-bullet {
+  color: var(--syntax-recede-ink, var(--syntax-bullet));
+}
+
+/* prettylights-syntax-markup-inserted / -deleted — a diff INSIDE a code block
+   (a patch in a fenced block, say). Same two chips as the rows around it. */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-addition {
+  color: var(--syntax-recede-ink, var(--legend-added-color));
+  background-color: var(--legend-added-bg);
+}
+:root .diff-tailwindcss-wrapper[data-theme] .diff-line-syntax-raw .hljs-deletion {
+  color: var(--syntax-recede-ink, var(--legend-removed-color));
+  background-color: var(--legend-removed-bg);
+}
+
+/*
+ * ── The add-widget tooltip ──
+ *
+ * The vendored rules hardcode `#555555` for the bubble and `color: white` for
+ * the hover fill. White on --accent measures 2.47:1 in dark — the exact failure
+ * audit F1 found on the app's own buttons — so the hover ink has to follow
+ * --on-accent, and the bubble becomes the standard inverted chip.
+ */
+:root .diff-tailwindcss-wrapper[data-theme] .diff-widget-tooltip:hover {
+  color: var(--on-accent);
+}
+:root .diff-tailwindcss-wrapper[data-theme] .diff-widget-tooltip::after {
+  background-color: var(--text);
+  color: var(--bg);
+}
+:root .diff-tailwindcss-wrapper[data-theme] .diff-widget-tooltip::before {
+  border-right-color: var(--text);
+}

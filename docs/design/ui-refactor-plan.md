@@ -4,8 +4,8 @@ Companion to [`ui-audit.md`](./ui-audit.md) (the findings, `F1`-`F18`) and
 [`refactoring-ui-principles.md`](./refactoring-ui-principles.md) (the rubric and
 its page refs).
 
-**Status: Phase 1 shipped. Phase 2 in progress — Batches 2A, 2B and 2C shipped.
-Batch 2D and Phase 3 are still proposals.**
+**Status: Phase 1 shipped. Phase 2 in progress — Batches 2A, 2B and 2C shipped,
+Batch 2D's first slice shipped with more to come. Phase 3 shipped.**
 
 Phase 1 landed as one PR — see [Phase 1 — as shipped](#p1-shipped) for what
 changed against what this document proposed, and for the measurements taken from
@@ -16,17 +16,24 @@ should inherit its [border rule](#b2b-border) rather than re-litigate it. Batch
 the audit's own measurements ([F8](./ui-audit.md#f8)). Batch 2A closes Phase 2's
 form work in [Batch 2A — as shipped](#b2a-shipped), which corrects one of *this
 document's* items — [F14](./ui-audit.md#f14) had already been fixed, by Phase 1.
+Batch 2D's opening slice is in [Batch 2D — as shipped](#b2d-shipped), with the
+ledger that measures every later slice. Phase 3 closes the diff viewer in
+[Phase 3 — as shipped](#p3-shipped): it settles the recede question Phase 1
+deliberately left open, and it confirms Batch 2B's suspicion about
+`SymbolPopover.svelte` — measured, that was a live bug.
 
 The screenshots in [`./shots/`](./shots/) are the **after** state of the most
-recent batch to touch each surface. **All 14 are Batch 2A's**, because its
-control primitives are global and every screen carries at least one of them. The
-pre-Phase-1 before state is in git history at commit `38b9e9a`; at commit
-`038e6d4`, the pre-Batch-2B state of `step1-understand-*.png` and the
-pre-Batch-2C state of the settings page and the Inspect step; at commit
-`1e2de30`, the pre-Batch-2A state of all fourteen.
+recent batch to touch each surface. The six diff shots
+(`step2-inspect-unified-*`, `step2-inspect-split-*` and `focus-dim-*`, the last
+pair still byte-identical to the unified pair) are **Phase 3's**; the other
+eight are **Batch 2D's first slice**. The pre-Phase-1 before state is in git
+history at commit `38b9e9a`; at commit `038e6d4`, the pre-Batch-2B state of
+`step1-understand-*.png` and the pre-Batch-2C state of the settings page and the
+Inspect step; at commit `1e2de30`, the pre-Batch-2A state of all fourteen; at
+commit `a83a56d`, the pre-Phase-3 state of the six diff shots.
 
-Every token value in the unshipped batches remains *proposed and measured*, not
-applied.
+Batch 2D is the one batch with work still outstanding; its remaining token
+values remain *proposed and measured*, not applied.
 
 ---
 
@@ -1370,6 +1377,263 @@ already a behavioural fix to `DiffUnifiedExtendLine.svelte`; adding palette
 changes to it increases rebase cost on every upgrade. Prefer CSS custom-property
 overrides from `FileDiff.svelte` where the vendored markup allows it, and extend
 the patch only where it does not.
+
+<a id="p3-shipped"></a>
+
+### Phase 3 — as shipped
+
+Items 1, 2, 3 and 5 shipped. **Item 4 (side-by-side density) is deliberately not
+in this PR** — see the bottom of this section. One PR, seven commits along the
+item seams, plus a merge of [Batch 2D's first slice](#b2d-shipped), which landed
+on `main` while this was in flight and needed three hand-resolved conflicts
+(recorded in that merge commit).
+
+**The risk note was over-cautious, and that is the headline.** The patch was not
+touched at all. `@git-diff-view` resolves every one of its grounds through a
+custom property (`dist/utils/color.js` names them; the components emit
+`var(--diff-…--)` into inline styles), so the whole structural palette re-points
+from outside. `patches/@git-diff-view__svelte.patch` is byte-identical to what
+it was — the single behavioural `isHidden` fix — and this change adds nothing to
+the rebase cost of the next upgrade. Inline `extendData` rendering was
+re-verified anyway, in both modes: the receded-hunk marker and the MEDIUM
+finding render inline in the shots, and `guided-review`, `finding-reanchor`,
+`draft-lifecycle` and `skill-reviewers` all pass.
+
+#### Where it lives
+
+A new `src/components/diff-view-theme.css`, imported by `FileDiff.svelte`
+immediately after the vendored sheet. Not the component's `<style>` block,
+because the syntax mapping is ~40 selectors and `SymbolPopover` needs the same
+tokens; not `app.css`, because it is a binding layer, not a palette.
+
+**Every selector is prefixed `:root`.** The vendored rules are theme-scoped
+(`.diff-tailwindcss-wrapper[data-theme="light"] .diff-line-syntax-raw
+.hljs-keyword`), and ours must beat them *without depending on stylesheet order*
+— the library's CSS is imported from a component, so its position relative to
+`app.css` is a bundler detail. `:root` is a pseudo-class, so prefixing it adds
+exactly one class-level unit to every selector: a uniform +1 over each vendored
+rule it mirrors, whether that rule carries one class or three.
+
+#### Item 1 — the palette re-point ([F5](./ui-audit.md#f5))
+
+Twenty bindings, every one asserted in `contrast.test.ts`:
+
+| the viewer's role | was (GitHub) | now |
+|---|---|---|
+| context ground | `#ffffff` / `#0d1117` | `--surface` |
+| expand + empty rows, plain gutter | `#fafafa` / `#161b22` | `--surface-sunken` |
+| added / removed row | `#dafbe1` `#ffebe9` / `#18271f` `#23191c` | `--legend-added-bg` / `--legend-removed-bg` |
+| changed-words highlight, add/del gutter | `#aceebb` `#ffcecb` / `#2f5732` `#713431` | `--diff-added-emphasis` / `--diff-removed-emphasis` |
+| line numbers | `#555555` / `#a0aaab` | `--text-secondary` |
+| hunk header row | `#ddf4ff` `#b6e3ff` `#777777` | `--surface-sunken` + `--text-muted` |
+| hunk expand hover | `#0969da` | `--accent` |
+| border | `#dedede` / `#3d444d` | `--hairline` |
+| **add-comment widget** | **`#0969d2` + `#ffffff`** | **`--accent` + `--on-accent`** |
+| body ink | `#000000` / `#ffffff` | `--syntax-ink` (= `--text`) |
+
+The `#0969d2` widget count in the built app was exactly the audit's **78** per
+file-set in unified (194 in split, which renders both columns). After: **0**
+elements paint any `rgb(9, 105, 21x)`.
+
+**The body ink was not where the audit implied.** It is not a per-element
+colour: each vendored theme block ends with a bare `color: black` / `color:
+white` on `.diff-style-root`, the inherited base of the *entire* subtree. That
+is why 278 elements measured `#ffffff`. Re-pointing the named properties left
+**151 dark elements still inheriting white**; it was caught by sweeping every
+computed colour in the wrapper and flagging anything that is not a resolved app
+token, not by re-reading the declarations that had just been changed. That sweep
+is now an e2e gate.
+
+In dark this is what closes the audit's "three unrelated dark greys meeting
+within a few pixels": the diff body is `--surface` `#1b1e24` inside a card on
+`--bg` `#14161a`, and `#0d1117` is gone. Two greys, each with a job.
+
+#### Item 2 — syntax inside the contrast gate (rubric A4)
+
+**The audit under-counted: four failing tokens, not three, across seven
+(token, ground) pairs.** It measured only the context and added grounds, and it
+missed `.hljs-name` entirely. On the grounds the viewer actually painted:
+
+| token | on context `#ffffff` | on added `#dafbe1` | on removed `#ffebe9` |
+|---|---|---|---|
+| keyword `#d73a49` | 4.57 | **4.11** | **3.99** |
+| comment `#6a737d` | 4.82 | **4.33** | **4.20** |
+| built-in `#e36209` | **3.49** | **3.14** | **3.04** |
+| name/tag `#22863a` | 4.63 | **4.16** | **4.03** |
+
+Five of those seven were confirmed with `getComputedStyle` in the built app; the
+two on the removed row are arithmetic on the same values, because the demo PR
+happens not to delete a line containing a comment or a tag.
+
+GitHub's hues are kept — a reader already knows them — and repaired by the
+*smallest* walk toward black (light) or white (dark) that clears 4.5 on all six
+grounds. Six light values and two dark values moved; the hue is untouched:
+
+```
+light  keyword  #d73a49 -> #ac2f3b     dark  keyword #ff7b72 -> #ff8880
+       variable #e36209 -> #9c4306           comment #8b949e -> #a5acb3
+       comment  #6a737d -> #575f67
+       tag      #22863a -> #1b6c2f
+       constant #005cc5 -> #005ac1   (one step)
+       bullet   #735c0f -> #725b0f   (one step)
+```
+
+Worst ratio across the whole 9x6 matrix (nine inks, six grounds): **4.50 light**
+(`--syntax-constant` on the removed emphasis tint) and **4.50 dark**
+(`--syntax-keyword` on the added emphasis tint), computed in `contrast.test.ts`
+from the shipped token values. Before: 3.04 light. The browser sweep, which only
+sees the combinations the demo PR actually renders, bottoms out at **5.39**
+light and **5.41** dark. Counting (token, ground, state) triples below their
+floor on the Inspect step: **42 before, 0 after** — 14 in light-unified, 14 in
+light-split, 7 in each dark mode.
+
+**The word-level highlight is where the real trade-off was**, and it is worth
+recording because the obvious ordering is wrong. Solving the inks against all
+six grounds *including* a GitHub-strength highlight tint produces a muddy,
+near-black light theme (keyword `#942833`, variable `#863a05`). Solving the inks
+against the four ROW grounds first, then choosing the highlight as the strongest
+tint those inks still clear, leaves almost no room — the removed row is already
+the binding constraint at exactly 4.5. The tints shipped are the smallest mix of
+the legend *border* into the legend *background* whose step off the row reaches
+**1.20:1** — the same step GitHub's own light highlight makes, and the step our
+removed row makes off white (1.19). That fixes the tint, and the inks are solved
+against it.
+
+#### Item 3 — recede by ink substitution ([P1-4](#p1-4)(b))
+
+`--recede-opacity` is **retired**, not merely unused. Phase 1 shipped it as an
+explicitly interim fix and its own test documented why alpha could never work;
+when the real answer lands, leaving the interim token declared is how it comes
+back. Retiring it also halves the app's last copy of the
+[F17](./ui-audit.md#f17) hazard — the two dark-override blocks now carry one
+declaration each, not two.
+
+**Phase 1's diagnosis was right and, if anything, understated: alpha failed in
+BOTH themes.** The plan's table only measured the base ink in dark (4.53, fine).
+Measured on the real syntax:
+
+| receded token | light @0.55 | dark @0.45 |
+|---|---|---|
+| keyword on the removed row | **2.16** | **2.40** |
+| keyword on the context row | **2.31** | **2.39** |
+| title on the added row | **2.45** | **2.73** |
+| string on the context row | 3.44 | 3.34 |
+
+The mechanism is one custom property. Every rule in `diff-view-theme.css` reads
+`var(--syntax-recede-ink, var(--syntax-<role>))`, so a receded cell needs
+**one declaration** — `--syntax-recede-ink: var(--syntax-receded)` — to repaint
+fifteen syntax roles plus the base ink, with no specificity fight. Hover sets it
+to `initial`, which makes the property guaranteed-invalid so every rule falls
+back to its own role token. Focus mode (`.dimmed-noise`) and hunk attention
+(`.hunk-receded`) share the rule, exactly as they shared the alpha.
+
+`--syntax-receded` is **`--text-muted`**, not a new colour. "De-emphasised but
+still readable" is a tier the palette already has, and reusing it keeps receded
+code in the same visual language as every other muted thing in the app.
+
+| | context | sunken | added | removed | add-emph | del-emph |
+|---|---|---|---|---|---|---|
+| light | 5.39 | 4.78 | 5.00 | 4.51 | 4.16 | 3.74 |
+| dark | 5.78 | 5.25 | 4.33 | 5.41 | 3.60 | 4.49 |
+
+Against 2.16-3.34 before, in both themes. It still recedes hard: the step down
+from `--syntax-ink` is 15.80 -> 5.39 in light and 13.39 -> 5.78 in dark.
+
+**Two consequences, both deliberate.** A receded row now keeps its **full
+add/remove tint** — `opacity` on the cell used to fade the cell's own background
+too. The content recedes; the structure does not, so a reader still sees which
+receded lines are additions. And the row is genuinely opaque, which the e2e gate
+asserts, so "recede" can no longer be quietly reintroduced as alpha.
+
+#### The `SymbolPopover` question — Batch 2B was right
+
+[Phase 1](#p1-shipped) deferred it and Batch 2B, having found the identical
+pattern in `SymbolTestPairing` to be a live bug, said to treat this one the same
+way. **It is the same bug**, and the evidence is from the build, not the source:
+driving the real popover to its definition peek and reading `getComputedStyle`
+on all 32 classes the explicit-light block styles, **12 resolve to a different
+colour on the two ways a reader reaches light.** The
+`@media (prefers-color-scheme: light)` copy was missing **14 selectors**, so on
+`auto` + an OS set to light the peek painted:
+
+| class | auto + OS light painted | on the white snippet |
+|---|---|---|
+| `.hljs-template-tag`, `.hljs-template-variable` | `#ff7b72` (dark keyword) | **2.5:1** |
+| `.hljs-attribute`, `.hljs-meta`, `.hljs-operator`, `.hljs-variable`, `.hljs-selector-attr`, `.hljs-selector-class` | `#79c0ff` (dark constant) | **1.9:1** |
+| `.hljs-quote` | `#7ee787` (dark tag) | **1.5:1** |
+| `.hljs-code`, `.hljs-formula` | `#8b949e` (dark comment) | 3.0:1 |
+
+(14 missing selectors, 12 observable divergences: `.hljs-title.class_` and
+`.hljs-meta .hljs-string` also match a shorter selector that *was* present and
+carries the same group colour.)
+
+Three blocks collapsed to one pointing at the new `--syntax-*` tokens.
+Re-measured after: **0 of 32 diverge**. `SymbolTestPairing`'s `light-dark()`
+literals point at the same tokens, so the app now has **one** syntax palette
+where it had three copies of one.
+
+#### Item 5 — what was kept
+
+The row grouping and the marker + line-number redundancy are untouched; the
+before/after shots are otherwise identical in layout. The one visible structural
+change is that the gutter is now a well (`--surface-sunken`) on context rows and
+one emphasis step on changed rows, which is the same "lighter comes forward"
+rule Batch 2B settled.
+
+#### Verification that shipped with it
+
+- **`src/lib/theme/contrast.test.ts` — 103 assertions -> 255.** `DIFF_GROUNDS`
+  was a hand-copied table of the dependency's own hex values with a breadcrumb
+  saying "replace these in Phase 3"; it is token names now, so it cannot go
+  stale behind the app again. Mutation-checked with 8 mutations, each caught:
+  reverting the keyword or variable ink to GitHub's (6 failures each),
+  brightening the receded ink (2), restoring `#0969d2` (2), mis-binding the
+  removed row (1), collapsing an emphasis tint onto its row (3), re-adding
+  `opacity` to the recede path (1), dropping the `:root` prefix (1).
+- **`e2e/diff-palette.spec.ts` — 12 tests**, light/dark x unified/split. The
+  unit test proves the values are right and the bindings are *written*; it
+  cannot prove they *win*, and a rule that is out-specified looks exactly like a
+  rule that is right, in the source. So: every computed colour in the viewer
+  resolves to an app token; a receded row paints one ink at opacity 1 and hover
+  restores the role colours; every rendered token clears its floor on the ground
+  it actually landed on. Mutation-checked in the browser — dropping the `:root`
+  prefix, the entire specificity argument, fails all three.
+
+This is [2A's lesson](#b2a-shipped) applied: two things were caught only by
+measuring rendered output — the 151 elements still inheriting white, and (in the
+spec itself) that at 1280x720 the first receded cell is below the fold, so a
+`mouse.move` to its bounding box never reached it and "hover does not restore"
+looked like a product bug.
+
+#### Deferred, and why
+
+- **Item 4, side-by-side density.** Untouched. It is a spacing decision that
+  needs its own measurement and its own before/after, the cell padding lives in
+  the vendored components' Tailwind classes rather than in a custom property,
+  and this PR is already a palette change across four files. Splitting it keeps
+  both reviewable. It is also the one Phase 3 item with no contrast component,
+  so nothing else was waiting on it.
+- **Batch 2D's ratchet baseline is unchanged by this PR**, and it is worth
+  recording what the ratchet actually sees here, because the brief for Phase 3
+  assumed otherwise. `FileDiff.svelte` is `emFont: 0` — the diff viewer's `em`
+  font-sizes are all in the **vendored** stylesheet and components
+  (`text-[1.2em]` and friends), which are outside `src/` and therefore outside
+  the ratchet's scope by design. What is on the ratchet is
+  `FileDiff.svelte`'s `offScaleFont: 18` / `offScaleSpace: 53`,
+  `SymbolPopover.svelte`'s `19 / 35` and `SymbolTestPairing.svelte`'s `11 / 23`,
+  and Phase 3 moved none of them: it added and removed only `color`
+  declarations, one `transition` property name, and one custom-property
+  declaration. The new `src/components/diff-view-theme.css` is not scanned
+  either — the scope is `src/**/*.svelte` plus `src/app.css` — and it contains
+  no length or font-size to scan.
+
+  Migrating those three files onto the scale is a later 2D slice, and it should
+  stay that way: the shared `--space-*` decision for a code table is a density
+  judgement that wants its own before/after, not a rider on a palette change.
+- **The audit's F5 entry is left as written.** It is the record of the
+  pre-refactor state; the two places it undercounts (three light syntax failures
+  rather than five, and the body ink as a per-element colour rather than an
+  inherited base) are corrected here instead.
 
 ---
 
