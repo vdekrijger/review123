@@ -127,6 +127,63 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('navigation', { name: /settings sections/i })).toBeInTheDocument()
   })
 
+  // ---- Document outline (ui-audit F13, rubric D1) ------------------------
+  // The six section titles used to be <p class="section-label">, so a ~6,000px
+  // page exposed exactly one heading. They are real headings now, styled down
+  // to the same visual weight. These assert the OUTLINE, which is the thing
+  // that regressed silently before — a section added as a <p> fails here.
+
+  it('exposes every settings section as an <h2> under the single <h1>', () => {
+    const { container } = render(SettingsPage)
+    const h1s = Array.from(container.querySelectorAll('h1')).map((h) => h.textContent?.trim())
+    expect(h1s).toEqual(['Settings'])
+
+    const h2s = Array.from(container.querySelectorAll('h2')).map((h) =>
+      h.textContent?.replace(/\s+/g, ' ').trim(),
+    )
+    expect(h2s).toEqual([
+      'Appearance (applies immediately)',
+      'Providers & access',
+      'Local bridge (optional)',
+      'AI models',
+      'Standing rules (for the agents that write your code)',
+      'Reviewer skills',
+    ])
+  })
+
+  it('every section element owns exactly one <h2>, in nav order', () => {
+    const { container } = render(SettingsPage)
+    const navIds = ['appearance', 'providers', 'bridge', 'ai-models', 'standing-rules', 'skills']
+    for (const id of navIds) {
+      const section = container.querySelector(`#${id}`)
+      expect(section, `section #${id} is missing`).toBeTruthy()
+      expect(section!.querySelectorAll('h2')).toHaveLength(1)
+    }
+    // …and no section title escaped the outline as a bare paragraph.
+    expect(container.querySelectorAll('p.section-label')).toHaveLength(0)
+  })
+
+  it('sub-section titles are <h3>, never a level skipped or repeated as <h2>', () => {
+    const { container } = render(SettingsPage)
+    const h3s = Array.from(container.querySelectorAll('h3')).map((h) => h.textContent?.trim())
+    // Sub-headings inside AI models and Reviewer skills. StandingRules' own
+    // per-group <h3>s only render once rules exist, so they are not listed.
+    expect(h3s).toEqual(
+      expect.arrayContaining([
+        'What runs (and how deep)',
+        'Model panel',
+        'Built-in reviewers',
+        'Generate from my reviews',
+      ]),
+    )
+    // Every <h3> sits inside a <section> that has an <h2>: no skipped level.
+    for (const h3 of container.querySelectorAll('h3')) {
+      const section = h3.closest('section')
+      expect(section, `<h3> "${h3.textContent}" is outside any section`).toBeTruthy()
+      expect(section!.querySelector('h2')).toBeTruthy()
+    }
+  })
+
   it('Back button navigates to returnTo path from sessionStorage', async () => {
     sessionStorage.setItem('review123:settingsReturnTo', '/review/github/owner/repo/42')
     render(SettingsPage)

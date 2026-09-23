@@ -362,7 +362,7 @@
 </script>
 
 <section id="standing-rules" aria-label="Standing rules" data-testid="standing-rules-section">
-  <p class="section-label">Standing rules <span class="optional-note">(for the agents that write your code)</span></p>
+  <h2 class="section-label">Standing rules <span class="optional-note">(for the agents that write your code)</span></h2>
 
   <p class="explainer">
     Every review comment you write is a piece of the spec that arrived too late. When you keep
@@ -561,9 +561,13 @@
     padding: 1rem 1.25rem;
   }
 
+  /* A real <h2> (F13/rubric D1) styled down to the label it already was.
+     letter-spacing is pinned back to normal because the global h2/h3 rules
+     tighten it: the outline is the change here, not a single rendered pixel. */
   .section-label {
     font-size: 0.9em;
     font-weight: 600;
+    letter-spacing: normal;
     margin: 0 0 0.4rem;
     color: var(--text);
   }

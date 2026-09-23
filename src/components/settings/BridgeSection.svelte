@@ -130,7 +130,7 @@
 </script>
 
 <section id="bridge" aria-label="Local bridge" data-testid="bridge-section">
-  <p class="section-label">Local bridge <span class="optional-note">(optional)</span></p>
+  <h2 class="section-label">Local bridge <span class="optional-note">(optional)</span></h2>
 
   <p class="explainer">
     Run a small process inside a repo on your machine and review123 can run reviews
@@ -301,9 +301,13 @@
     padding: 1rem 1.25rem;
   }
 
+  /* A real <h2> (F13/rubric D1) styled down to the label it already was.
+     letter-spacing is pinned back to normal because the global h2/h3 rules
+     tighten it: the outline is the change here, not a single rendered pixel. */
   .section-label {
     font-size: 0.9em;
     font-weight: 600;
+    letter-spacing: normal;
     margin: 0 0 0.4rem;
     color: var(--text);
   }

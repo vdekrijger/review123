@@ -492,7 +492,7 @@
 </script>
 
 <section id="ai-models" aria-label="AI models">
-  <p class="section-label">AI models</p>
+  <h2 class="section-label">AI models</h2>
   <p class="apply-note">Provider and model selection applies immediately. API keys are saved per provider with <em>Save &amp; test</em>.</p>
 
   <div class="provider-cards">
@@ -614,7 +614,7 @@
   </div>
 
   <div class="task-modes" aria-label="What runs and how deep">
-    <p class="task-modes-label">What runs (and how deep)</p>
+    <h3 class="task-modes-label">What runs (and how deep)</h3>
     <p class="task-modes-hint">
       Choose per task: <strong>Off</strong> spends no tokens on it, <strong>Standard</strong> is a
       single pass, <strong>Deep</strong> lets the AI read extra files first (slower, more tokens;
@@ -696,7 +696,7 @@
   <!-- Plan P — unified model panel (merges "How models combine" + the ensemble) -->
   <div class="ensemble-editor" class:disabled={!crossModelVerify} data-testid="model-panel">
     <div class="ensemble-head">
-      <span class="ensemble-title">Model panel</span>
+      <h3 class="ensemble-title">Model panel</h3>
       <button type="button" class="ensemble-reset" onclick={resetPanel}>Reset to default</button>
     </div>
     <p class="deep-review-hint">
@@ -876,9 +876,13 @@
     padding: 1rem 1.25rem;
   }
 
+  /* A real <h2> (F13/rubric D1) styled down to the label it already was.
+     letter-spacing is pinned back to normal because the global h2/h3 rules
+     tighten it: the outline is the change here, not a single rendered pixel. */
   .section-label {
     font-size: 0.9em;
     font-weight: 600;
+    letter-spacing: normal;
     margin: 0 0 0.4rem;
     color: var(--text);
   }
@@ -1070,6 +1074,7 @@
   .task-modes-label {
     font-size: 0.9em;
     font-weight: 600;
+    letter-spacing: normal;
     margin: 0 0 0.3rem;
     color: var(--text);
   }
@@ -1231,9 +1236,14 @@
     justify-content: space-between;
     gap: 0.5rem;
   }
+  /* A real <h3> (F13/D1) styled down to the label it already looked like:
+     the UA heading margins would otherwise break the baseline-aligned row. */
   .ensemble-title {
     font-weight: 600;
     font-size: 0.88em;
+    letter-spacing: normal;
+    margin: 0;
+    color: var(--text);
   }
   .ensemble-reset {
     background: none;
