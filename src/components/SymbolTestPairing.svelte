@@ -438,10 +438,29 @@
    *
    * Same engine as the diff (highlight.js → `hljs-*` span classes). The diff
    * viewer scopes its own token colors to its wrapper, so we re-declare the
-   * GitHub prettylights palette here, scoped to the snippet. Defaults are the
-   * DARK palette (the app's base theme); a light override mirrors how app.css
-   * themes — explicit [data-theme='light'] plus the auto prefers-color-scheme
-   * case — so tokens stay readable on the snippet background in BOTH themes.
+   * GitHub prettylights palette here, scoped to the snippet.
+   *
+   * ── ONE declaration per token, light first (Batch 2B) ──
+   *
+   * This used to be THREE blocks: a dark default, an explicit
+   * :root[data-theme='light'] override, and a third copy of that override under
+   * @media (prefers-color-scheme: light) — the component-scope copy of the
+   * hazard Phase 1 removed from app.css (audit F17). Phase 1 recorded it as
+   * "both paths present and correct"; they were NOT. The auto-light copy was
+   * missing thirteen selectors the explicit-light copy had — .hljs-meta
+   * .hljs-keyword, .hljs-template-tag, .hljs-template-variable, .hljs-title
+   * .class_, .hljs-attribute, .hljs-meta, .hljs-operator, .hljs-variable,
+   * .hljs-selector-attr, .hljs-selector-class, .hljs-meta .hljs-string,
+   * .hljs-code, .hljs-formula and .hljs-quote — so a reader on `auto` with an
+   * OS set to light saw those tokens still painted in the DARK palette
+   * (e.g. #ff7b72 salmon keywords on a white snippet). That is exactly the
+   * silent divergence the duplication exists to cause.
+   *
+   * light-dark() makes it unrepresentable: one declaration per colour,
+   * resolved against the color-scheme app.css already sets on :root, so the
+   * explicit and OS-preference paths cannot differ. Light comes first because
+   * light is the authored palette (plan P1-2). e2e/theme-token-parity.spec.ts
+   * proves the two paths agree in a real browser.
    * ------------------------------------------------------------------------- */
   .sym-test-pre :global(.hljs-doctag),
   .sym-test-pre :global(.hljs-keyword),
@@ -449,10 +468,10 @@
   .sym-test-pre :global(.hljs-template-tag),
   .sym-test-pre :global(.hljs-template-variable),
   .sym-test-pre :global(.hljs-type),
-  .sym-test-pre :global(.hljs-variable.language_) { color: #ff7b72; }
+  .sym-test-pre :global(.hljs-variable.language_) { color: light-dark(#d73a49, #ff7b72); }
   .sym-test-pre :global(.hljs-title),
   .sym-test-pre :global(.hljs-title.class_),
-  .sym-test-pre :global(.hljs-title.function_) { color: #d2a8ff; }
+  .sym-test-pre :global(.hljs-title.function_) { color: light-dark(#6f42c1, #d2a8ff); }
   .sym-test-pre :global(.hljs-attr),
   .sym-test-pre :global(.hljs-attribute),
   .sym-test-pre :global(.hljs-literal),
@@ -462,76 +481,21 @@
   .sym-test-pre :global(.hljs-variable),
   .sym-test-pre :global(.hljs-selector-attr),
   .sym-test-pre :global(.hljs-selector-class),
-  .sym-test-pre :global(.hljs-selector-id) { color: #79c0ff; }
+  .sym-test-pre :global(.hljs-selector-id) { color: light-dark(#005cc5, #79c0ff); }
   .sym-test-pre :global(.hljs-regexp),
   .sym-test-pre :global(.hljs-string),
-  .sym-test-pre :global(.hljs-meta .hljs-string) { color: #a5d6ff; }
+  .sym-test-pre :global(.hljs-meta .hljs-string) { color: light-dark(#032f62, #a5d6ff); }
   .sym-test-pre :global(.hljs-built_in),
-  .sym-test-pre :global(.hljs-symbol) { color: #ffa657; }
+  .sym-test-pre :global(.hljs-symbol) { color: light-dark(#e36209, #ffa657); }
   .sym-test-pre :global(.hljs-comment),
   .sym-test-pre :global(.hljs-code),
-  .sym-test-pre :global(.hljs-formula) { color: #8b949e; }
+  .sym-test-pre :global(.hljs-formula) { color: light-dark(#6a737d, #8b949e); }
   .sym-test-pre :global(.hljs-name),
   .sym-test-pre :global(.hljs-quote),
   .sym-test-pre :global(.hljs-selector-tag),
-  .sym-test-pre :global(.hljs-selector-pseudo) { color: #7ee787; }
+  .sym-test-pre :global(.hljs-selector-pseudo) { color: light-dark(#22863a, #7ee787); }
   .sym-test-pre :global(.hljs-emphasis) { font-style: italic; }
   .sym-test-pre :global(.hljs-strong) { font-weight: bold; }
-
-  /* Light palette (GitHub light) — explicit theme + auto preference. */
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-doctag),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-keyword),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-meta .hljs-keyword),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-template-tag),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-template-variable),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-type),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-variable.language_) { color: #d73a49; }
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-title),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-title.class_),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-title.function_) { color: #6f42c1; }
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-attr),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-attribute),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-literal),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-meta),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-number),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-operator),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-variable),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-selector-attr),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-selector-class),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-selector-id) { color: #005cc5; }
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-regexp),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-string),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-meta .hljs-string) { color: #032f62; }
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-built_in),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-symbol) { color: #e36209; }
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-comment),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-code),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-formula) { color: #6a737d; }
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-name),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-quote),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-selector-tag),
-  :global(:root[data-theme='light']) .sym-test-pre :global(.hljs-selector-pseudo) { color: #22863a; }
-
-  @media (prefers-color-scheme: light) {
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-doctag),
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-keyword),
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-type),
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-variable.language_) { color: #d73a49; }
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-title),
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-title.function_) { color: #6f42c1; }
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-attr),
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-literal),
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-number),
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-selector-id) { color: #005cc5; }
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-regexp),
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-string) { color: #032f62; }
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-built_in),
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-symbol) { color: #e36209; }
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-comment) { color: #6a737d; }
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-name),
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-selector-tag),
-    :global(:root:not([data-theme])) .sym-test-pre :global(.hljs-selector-pseudo) { color: #22863a; }
-  }
 
   .sym-test-empty {
     margin: 0;

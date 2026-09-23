@@ -148,6 +148,63 @@
   --legend-unchanged-border:light-dark(#bbbbbb, #3a3f48);
   --legend-unchanged-color: light-dark(#666666, #9a9890);
 
+  /*
+   * ── THE ELEVATION SCALE (Batch 2B; audit F10) ────────────────────────────
+   *
+   * Before this there was no scale: 16 non-focus box-shadow declarations with 9
+   * hand-picked values, one bespoke shadow per component, and NO shadow at all
+   * on .card or on <dialog> — the one case p.159-160 treats as non-negotiable.
+   *
+   * Five steps, matched to purpose (p.158-161): small for things that rest on
+   * the page, medium for dropdowns and popovers, large for modals.
+   *
+   *   1  resting cards and open panels          (barely off the page)
+   *   2  the primary card on a page             (leads its siblings)
+   *   3  menus, tooltips, small popovers
+   *   4  dropdowns and large popovers
+   *   5  modal dialogs
+   *   drawer  edge-anchored overlays, which cast SIDEWAYS, not down
+   *
+   * Each step is TWO shadows (p.163-165): a large soft one for the direct light
+   * plus a tighter darker one for the ambient occlusion at the element's edge.
+   * The tight part fades from --shadow-tight to --shadow-faint as the element
+   * rises, because a thing further off the page touches it less (p.165-166).
+   * The soft part's geometry is the rubric's reference ramp verbatim (p.161):
+   * 0 1px 3px · 0 4px 6px · 0 5px 15px · 0 10px 24px · 0 15px 35px.
+   *
+   * ── WHY THE ALPHAS ARE THEME-DEPENDENT ──
+   * All nine of the values this replaces were 0.18-0.40 BLACK, every one chosen
+   * against the dark ground. A shadow's weight is the luminance drop it makes
+   * in its ground, and that is not the same number on both. Measured against
+   * each theme's page ground:
+   *
+   *     black @ 0.40   on --bg light  →  2.83:1     on --bg dark  →  1.04:1
+   *
+   * — the same declaration lands 2.8x heavier in light, which is why the app
+   * read as sooty there. So light gets a LOW-alpha warm near-black (the
+   * --text ink, not pure black, so the mark stays in the palette's family on
+   * the warm #faf8f4 ground), and dark keeps a high-alpha pure black, which is
+   * the only thing that registers at all on #14161a. Measured for the new ramp:
+   *
+   *     --shadow-tight on --bg light  →  1.32:1     on --bg dark  →  1.03:1
+   *
+   * Dark stays inside the 0.18-0.40 envelope it already had, so no dark surface
+   * gains or loses a shadow it did not have; light is uniformly lighter.
+   */
+  --shadow-tight: light-dark(rgba(31,35,40,.14), rgba(0,0,0,.32));
+  --shadow-soft:  light-dark(rgba(31,35,40,.10), rgba(0,0,0,.22));
+  --shadow-faint: light-dark(rgba(31,35,40,.06), rgba(0,0,0,.14));
+
+  --elevation-1: 0 1px 1px var(--shadow-tight), 0 1px 3px var(--shadow-soft);
+  --elevation-2: 0 1px 2px var(--shadow-tight), 0 4px 6px var(--shadow-soft);
+  --elevation-3: 0 1px 3px var(--shadow-faint), 0 5px 15px var(--shadow-soft);
+  --elevation-4: 0 2px 4px var(--shadow-faint), 0 10px 24px var(--shadow-soft);
+  --elevation-5: 0 2px 6px var(--shadow-faint), 0 15px 35px var(--shadow-soft);
+  /* A drawer slides in from a screen edge, so its shadow falls across the
+     content it covers rather than beneath it: same inks and blurs as step 4,
+     offset along -x instead of +y. */
+  --elevation-drawer: -2px 0 6px var(--shadow-faint), -10px 0 24px var(--shadow-soft);
+
   color-scheme: light dark;
   font-size: 15px;
   line-height: 1.6;
@@ -509,17 +566,53 @@ input[type='radio']:disabled {
    CARD PRIMITIVE
    ═══════════════════════════════════════════ */
 
+/*
+ * ── WHY THE BORDER IS THEME-DEPENDENT, and this is the rule that sets it ──
+ *
+ * p.206-209 says separate with space, a background shift or a shadow BEFORE
+ * reaching for another border. Measured on this app's real grounds, that advice
+ * holds in light and fails in dark:
+ *
+ *   mechanism                    light        dark
+ *   --hairline as a 1px rim      1.33:1       1.31:1
+ *   --surface against --bg       1.06:1       1.08:1
+ *   the elevation-1 shadow       1.58:1       1.08:1
+ *
+ * In light the shadow beats the border outright — stronger AND softer — so the
+ * border is redundant and goes. In dark it does not, and no alpha rescues it:
+ * black on #14161a tops out at 1.07:1 even at 0.40, which is exactly why the
+ * nine values Batch 2B replaced kept climbing toward 0.40 without ever
+ * separating anything. A dark ground has no room below it to cast into.
+ *
+ * So the rim stays in DARK only, and the shadow supports it there instead of
+ * replacing it. One declaration carries both, the same way the palette does.
+ * (Nested light-dark() is deliberate and verified in-browser: it keeps the dark
+ * side pointing at --hairline rather than duplicating its value here.)
+ *
+ * NOTE: this primitive has no call sites today; .glance-card in
+ * UnderstandStep.svelte is a hand-inlined copy of the old rule. Batch 2B
+ * restyles that copy to match, so adopting .card later is a no-op.
+ */
 .card {
   background: var(--surface);
-  border: 1px solid var(--hairline);
+  border: 1px solid light-dark(transparent, var(--hairline));
   border-radius: 8px;
   padding: 0.75rem 1rem;
+  box-shadow: var(--elevation-1);
 }
 
 /* ═══════════════════════════════════════════
    CHIP PRIMITIVE
    ═══════════════════════════════════════════ */
 
+/*
+ * A chip is a LABEL, not an object: it never leaves the plane of the surface it
+ * annotates, so it takes no elevation step (p.158 — a shadow is a z-axis
+ * position, and a chip has none). Its only depth cue is the flat one: a chip
+ * with no status carries --surface-sunken, which is darker than its ground in
+ * light, so an un-set chip reads as receded rather than as a button (p.167-168).
+ * The .legend-* modifiers override the background with their own status tint.
+ */
 .chip {
   display: inline-flex;
   align-items: center;
@@ -528,8 +621,10 @@ input[type='radio']:disabled {
   font-family: var(--font-ui);
   font-size: 0.75rem;
   font-weight: 500;
+  background: var(--surface-sunken);
   border: 1px solid transparent;
   white-space: nowrap;
+  box-shadow: none;
 }
 
 /* ═══════════════════════════════════════════
@@ -574,12 +669,20 @@ details[open] > summary::before {
    DIALOG PRIMITIVE
    ═══════════════════════════════════════════ */
 
+/*
+ * A modal had NO shadow at all before Batch 2B — it sat flat against a page it
+ * is meant to float above, held apart only by a 1.33:1 hairline and the
+ * backdrop. p.159-160 names the modal as the one case where large elevation is
+ * non-negotiable, so it takes the top step of the scale. The border follows the
+ * same theme-dependent rule as .card, and for the same measured reason.
+ */
 dialog {
   background: var(--surface);
-  border: 1px solid var(--hairline);
+  border: 1px solid light-dark(transparent, var(--hairline));
   border-radius: 12px;
   color: var(--text);
   padding: 1.5rem;
+  box-shadow: var(--elevation-5);
   max-width: 480px;
   width: 90vw;
 }

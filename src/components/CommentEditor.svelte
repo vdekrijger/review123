@@ -386,7 +386,7 @@
     background: var(--surface-raised);
     border: 1px solid var(--hairline);
     border-radius: 6px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+    box-shadow: var(--elevation-3);
   }
 
   /* scoped under .toolbar to out-rank the generic .toolbar button rule */

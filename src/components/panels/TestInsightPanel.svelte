@@ -246,7 +246,7 @@
     margin: 0.5rem 0 0.2rem;
     padding: 0.1rem 0.4rem;
     border-radius: 4px;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     border: 1px solid var(--hairline);
     font-family: var(--font-mono, monospace);
     font-size: 0.78rem;
@@ -269,7 +269,7 @@
   }
 
   .tests-gap-general-header:hover {
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     border-color: var(--hairline);
   }
 

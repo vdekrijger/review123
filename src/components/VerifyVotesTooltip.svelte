@@ -219,7 +219,7 @@
     border-radius: 6px;
     background: var(--surface-raised, var(--bg));
     border: 1px solid var(--border-subtle);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+    box-shadow: var(--elevation-3);
     font-size: 0.72rem;
     line-height: 1.35;
     color: var(--text, inherit);

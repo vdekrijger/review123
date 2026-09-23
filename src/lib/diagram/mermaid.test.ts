@@ -574,8 +574,13 @@ describe('graphToMermaid — palette option', () => {
   })
 
   it('palette:"light" changed classDef uses light yellow tokens', () => {
+    // #8f5f00, not the #9a6700 this asserted before Batch 2B. The triple is a
+    // hand-copy of the light "changed" chip, and Phase 1 moved
+    // --legend-changed-color to #8f5f00 because #9a6700 measured 4.45:1 on
+    // #fff5cc, just under the 4.5 floor (audit F16). Mermaid classDef cannot
+    // read a CSS custom property, so the diagram has to re-state the value.
     const { mermaid } = graphToMermaid(allStatusGraph, 'flow', { palette: 'light' })
-    expect(mermaid).toContain('classDef changed fill:#fff5cc,stroke:#d4a72c,color:#9a6700')
+    expect(mermaid).toContain('classDef changed fill:#fff5cc,stroke:#d4a72c,color:#8f5f00')
   })
 
   it('palette:"light" unchanged classDef is unchanged from dark', () => {

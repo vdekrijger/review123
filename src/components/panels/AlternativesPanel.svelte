@@ -94,7 +94,7 @@
   .alternative-approach :global(code) {
     font-size: 0.85em;
     font-weight: 500;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     padding: 0.1em 0.3em;
     border-radius: 3px;
   }
@@ -124,7 +124,7 @@
 
   .assessment-chip.assessment-comparable {
     color: var(--text-muted);
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
   }
 
   .assessment-chip.assessment-alternative-is-better {
@@ -135,7 +135,7 @@
 
   .assessment-chip.assessment-different-goals {
     color: var(--text-muted);
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
   }
 
   .alternative-rationale {

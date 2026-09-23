@@ -125,7 +125,7 @@
   .review-cost {
     margin: 1rem 0;
     padding: 0.75rem 0.85rem;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     border: 1px solid var(--hairline);
     border-radius: 8px;
   }
