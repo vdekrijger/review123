@@ -50,17 +50,68 @@
   --surface-raised: var(--surface-sunken);
 
   /* Decorative separation ONLY — deliberately below the 3:1 non-text floor.
-     Control boundaries use --border-control (audit F11 / SC 1.4.11). */
-  --hairline:       light-dark(#e3dfd6, #2e333b);
+     No warm grey light enough to read as a hairline reaches 3:1, so the
+     decorative and control-boundary roles genuinely need two tokens. */
+  --hairline:       light-dark(#ded9cf, #2e333b);
   --border-subtle:  var(--hairline);
+  /* NEW — the visible boundary of a control (input/select/textarea/checkbox).
+     WCAG 2.1 SC 1.4.11 wants 3:1 for that boundary and --hairline measures 1.33
+     (audit F11). Measured here: 3.53/3.74/3.32 light, 3.79/3.49/3.17 dark on
+     bg/surface/sunken. Phase 2 Batch 2A points the control primitives at it —
+     defining it here is what lets that batch be a one-line change per rule. */
+  --border-control: light-dark(#8d8370, #6b7380);
 
   /* Three text tiers (p.34). */
   --text:           light-dark(#1f2328, #e8e6e1);
+  /* NEW — the middle tier the palette never had, for form labels and support
+     copy that must stay legible without competing with --text. */
+  --text-secondary: light-dark(#4a5158, #b4b1a9);
   --text-muted:     light-dark(#6e6a61, #9a9890);
 
-  --accent:         light-dark(#2e8b78, #4db6a0);
-  --accent-subtle:  light-dark(rgba(46,139,120,.10), rgba(77,182,160,.12));
-  --accent-contrast: light-dark(#ffffff, #0a1410);
+  /* Light accent CHANGED #2e8b78 -> #1f7a66 (audit F3 + F1). #2e8b78 was
+     illegal as text on every light ground (4.13/3.90/3.66, floor 4.5) AND could
+     not carry white as a fill (4.13). #1f7a66 is one step darker on the SAME
+     hue — no rotation at all — and is the only candidate on the ramp that
+     clears 4.5 with margin both as text (5.21/4.91/4.62) and carrying white
+     (5.21), so it repairs both findings with one value. Dark is unchanged. */
+  --accent:         light-dark(#1f7a66, #4db6a0);
+  --accent-subtle:  light-dark(rgba(31,122,102,.10), rgba(77,182,160,.12));
+  /* NEW — the ink that goes ON an --accent fill. It was referenced by six call
+     sites as var(--on-accent, #fff) and NEVER DECLARED, so it fell back to
+     white: 2.47:1 in dark, the worst measurement in the audit, and a hard WCAG
+     failure on live controls (F1). Declaring it fixes that (7.60:1 in dark).
+     It cannot be #ffffff in both themes — an accent that carries white on a
+     light ground does not carry it on a dark one.
+     --accent-contrast is the older name for the same role (F2); it is kept as
+     an alias with identical values so its call sites need no change. */
+  --on-accent:      light-dark(#ffffff, #0a1410);
+  --accent-contrast: var(--on-accent);
+
+  /*
+   * ── Recede opacity — how far de-emphasised CONTENT drops back ──
+   *
+   * NEW, and theme-dependent: 0.45 was tuned against the diff's dark ground and
+   * is 26% harsher on white (audit F4). Light needs 0.55 to restore parity with
+   * dark's 4.53:1 on the context ground; 0.50 is not enough (3.98:1). A number,
+   * not a colour, so it cannot use light-dark() — see the dark blocks below.
+   *
+   * Consumed by focus mode (.dimmed-noise) and per-hunk attention
+   * (.hunk-receded) in FileDiff.svelte — one visual language, one token.
+   *
+   * This is DELIBERATELY not the same token as the 13 bare `opacity: 0.45`
+   * literals elsewhere in the app. Those serve three distinct semantics —
+   * receded content, a disabled control, de-emphasised chrome — and are one
+   * number by coincidence. Folding them together would make them impossible to
+   * tune independently. Phase 2 gives the other two their own tokens.
+   *
+   * HONEST LIMIT: 0.55 restores the BASE ink, not the syntax colours. Alpha
+   * collapses every hue toward the ground at once, and no alpha that still
+   * reads as receded holds 3:1 for coloured syntax (even 0.70 only reaches
+   * 2.74:1 for the light comment token). This is an interim fix; the real
+   * answer is substituting one muted ink for the syntax set on receded rows,
+   * which is Phase 3 (plan P1-4(b)).
+   */
+  --recede-opacity: 0.55;
 
   /* ── Select chevron (stroke matches --text-muted; NOT a colour, so it cannot
      use light-dark() — see the dark override blocks below) ── */
@@ -89,7 +140,10 @@
   --legend-removed-color:   light-dark(#cb2431, #e89898);
   --legend-changed-bg:      light-dark(#fff5cc, #3a2e0e);
   --legend-changed-border:  light-dark(#d4a72c, #c49828);
-  --legend-changed-color:   light-dark(#9a6700, #e8c85a);
+  /* Light CHANGED #9a6700 -> #8f5f00: 4.45:1 on its own tint, just under the
+     4.5 floor (audit F16). #8f5f00 measures 5.04:1 and reads as the same
+     colour. Dark was already 8.14:1 and is unchanged. */
+  --legend-changed-color:   light-dark(#8f5f00, #e8c85a);
   --legend-unchanged-bg:    light-dark(#f0f0f2, #22262d);
   --legend-unchanged-border:light-dark(#bbbbbb, #3a3f48);
   --legend-unchanged-color: light-dark(#666666, #9a9890);
@@ -188,11 +242,13 @@
  * the light-dark() palette above unless it genuinely is not a colour.
  */
 :root[data-theme='dark'] {
+  --recede-opacity: 0.45;
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239a9890' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
+    --recede-opacity: 0.45;
     --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239a9890' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   }
 }
