@@ -651,6 +651,23 @@ h3 {
   letter-spacing: -0.01em;
 }
 
+/*
+ * F18's invisible half. Abolishing 700 in the stylesheet does not abolish it on
+ * the PAGE: <strong> and <b> have no rule anywhere in this app, so they render
+ * at the UA's `bolder` — 700 — and no grep, and no ratchet that reads CSS, can
+ * see them. Measured on /settings in the built app: 21 text runs rendered at
+ * 700, and NINETEEN of them were <strong>.
+ *
+ * This is the same shape as Batch 2D's UA-monospace finding (13.3333px, 78
+ * occurrences, declared nowhere). The emphasis weight is 600, so <strong> takes
+ * it — and inline emphasis inside body copy now matches the headings around it
+ * instead of outweighing them.
+ */
+strong,
+b {
+  font-weight: 600;
+}
+
 /* ═══════════════════════════════════════════
    PROSE CONTEXTS
    Newsreader for AI summaries, PR descriptions,
