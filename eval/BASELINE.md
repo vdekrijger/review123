@@ -3,8 +3,12 @@
 The measured baseline for review123's reviewer output. Everything below comes
 from runs actually executed on the date given; nothing is extrapolated.
 
-**Three measurements live in this file**, newest first, each kept verbatim.
+**Four measurements live in this file**, newest first, each kept verbatim.
 
+- [Measurement 4 (2026-09-24)](#measurement-4--2026-09-24--grounded-verification-deep-review-and-local-grounding)
+  — the three features that had never been measured, measured. Does a verifier
+  that can *read the repo* save the defect cross-model verification keeps
+  killing?
 - [Measurement 3 (2026-09-23)](#measurement-3--2026-09-23--the-unanimity-carve-out-for-low)
   — the first measurement of a *fix*: does letting a unanimously-verified LOW
   stay inline recover the defect Measurement 2 found being eaten?
@@ -20,6 +24,16 @@ just on the numbers.
 ---
 
 ## The headline, in one line
+
+**Measurement 4: no. A verifier that can read the repo does NOT save the
+defect.** Grounded verification was the leading hypothesis for fixing the recall
+loss Measurement 3 diagnosed, and it is measured here for the first time —
+really grounded, with 168/168 agentic requests honoured and ≥721 tool calls
+against a working tree. The recall cost of cross-model verification is
+**identical with and without tools**: raw 9/9 → verified 8/9, in 2 tool-less
+runs and 2 grounded runs, killing the same defect every time. And **deep review
+costs recall at generation**: with tools the generator found 8/9 where it found
+9/9 in all four tool-less runs.
 
 **Measurement 3: the fix is provably correct on the case it was built for and
 provably inert everywhere else — and it did not move recall in either fresh
@@ -38,6 +52,257 @@ costs one real defect out of nine.**
 Measurement 1 reported recall 4/4 in all 22 of its measurements and said, in
 its own honesty section, that the set "could not have detected over-filtering
 if it were happening". It was happening.
+
+---
+
+## Measurement 4 — 2026-09-24 · grounded verification, deep review and local grounding
+
+### Why this measurement exists
+
+Three features had never been measured, and the harness said so rather than
+reporting a zero: **grounded verification (#229)**, **deep review (#82)** and
+**local grounding (#242)**. The stated reason was that the harness drives the
+bridge's `/v1/infer`, which ran the CLI with `--tools ""`, so all three would
+have measured a crippled prompt rather than the feature.
+
+Bridge **0.3.0** (#266) made that premise false: `InferRequest.agentic` runs the
+CLI *with* its own read-only tools. This is the first measurement of any of the
+three.
+
+It exists to answer one question, posed by Measurement 3. That measurement found
+cross-model verification to be the dominant remaining recall cost — it killed a
+real defect before triage ever saw it, on a 1/3 panel vote. The hypothesis worth
+testing was that **a verifier which can read the repo confirms a real defect it
+would otherwise refute**. If that held, grounded verification was the fix.
+
+**It does not hold.** That is the result, and it is reported as measured.
+
+### Run metadata
+
+| | |
+| --- | --- |
+| Date | 2026-09-24 |
+| Commit | `660271f` (branch `feat/eval-agentic`) |
+| Golden set | 9 cases — 9 known-real findings, 17 known-noise (unchanged from Measurement 2) |
+| Transport | local bridge 0.3.0 (`POST /v1/infer`) — no API key, subscription-billed |
+| Bridge root | `eval/.golden-tree` — the fixtures materialized as a real working tree (see below) |
+| Generator | `claude` CLI, via the bridge |
+| Verifiers | `codex` CLI ×2 (`BRIDGE_VERIFY_CLIS=codex,codex`) |
+| Mode | `--live --matrix --concurrency 3`, plus the arm's flags |
+| Runs | **six** — three arms × two runs, all on the same commit |
+| Wall time | 700 s / 704 s (tool-less), 865 s / 830 s (grounded), 672 s / 743 s (deep+grounded) |
+
+The three arms:
+
+| Arm | Flags | Generator tools | Verifier tools | Runs |
+| --- | --- | --- | --- | --- |
+| **A — control** | *(none)* | no | no | 2 |
+| **B — grounded verification (#229)** | `--grounded` | no | **yes** | 2 |
+| **C — + deep review (#82)** | `--grounded --deep` | **yes** | **yes** | 2 |
+
+Arm B isolates grounded verification: the generator is byte-identically the
+tool-less one, so any difference is the verifier panel's. Reproduce with:
+
+```bash
+node eval/materialize-golden.mts
+node bridge/dist/cli.js --root eval/.golden-tree --port 7739 --token-file .bridge-token
+BRIDGE_URL=http://127.0.0.1:7739 BRIDGE_TOKEN_FILE=.bridge-token \
+  BRIDGE_VERIFY_CLIS=codex,codex \
+  pnpm eval -- --live --matrix --concurrency 3 --grounded
+```
+
+### The instrument change this measurement required
+
+**The bridge is served from a materialized fixture tree, not from review123.**
+The golden fixtures are synthetic — `08-quiet-low` reviews `src/lib/range.ts`,
+which does not exist in this repo. An agentic bridge rooted at review123 would
+answer "no such file" to every lookup, and since grounded verification tells the
+verifier to *drop what it cannot confirm*, the panel would have refuted real
+defects for a reason with nothing to do with grounding. That run would have
+produced a large, confident, entirely artefactual recall drop.
+
+So `eval/materialize-golden.mts` writes each fixture's post-change contents into
+`eval/.golden-tree` and the bridge serves that. What the tree is and is not is
+load-bearing for reading the numbers below, and is stated in
+[What this measurement cannot tell you](#what-measurement-4-cannot-tell-you).
+
+### The grounding is real, and it is proved from the responses
+
+`agentic` is an *additive* request field: a bridge older than 0.3.0 ignores it
+and answers `200` with an ordinary tool-less review. So "we sent the flag" proves
+nothing. Every number below is backed by `InferResponse.agentic`, the bridge's
+own report of what the CLI's tools did:
+
+| Arm | Agentic requests | Honoured | Tool calls (lower bound) | Denied |
+| --- | --- | --- | --- | --- |
+| A — control | 0 | — | — | — |
+| B — grounded, run 1 | 18 | **18** | ≥125 | 0 |
+| B — grounded, run 2 | 18 | **18** | ≥159 | 0 |
+| C — deep+grounded, run 1 | 66 (48 gen + 18 ver) | **66** | ≥207 | 0 |
+| C — deep+grounded, run 2 | 66 (48 gen + 18 ver) | **66** | ≥230 | 0 |
+
+**168 of 168 agentic requests honoured, ≥721 tool calls, 0 denials.** Tool counts
+are *lower* bounds by construction (both CLIs under-count; `codex` reports
+commands, and one command may read several files).
+
+**The working tree was byte-identical afterwards** — every file in
+`eval/.golden-tree` checksummed before the first run and after the last. The
+bridge ran with neither `--allow-write` nor `--allow-checkout`.
+
+### A. The headline: grounded verification does not reduce the recall loss
+
+Measured *within* each run, which controls for generator jitter (#254 put
+run-to-run precision jitter at ±22 pp, so a cross-run comparison of levels would
+not be able to see an effect this size):
+
+| run | raw generation | after verification | app-default | recall lost to verification |
+| --- | --- | --- | --- | --- |
+| A control 1 | 9/9 | **8/9** | 8/9 | **1** |
+| A control 2 | 9/9 | **8/9** | 8/9 | **1** |
+| B grounded 1 | 9/9 | **8/9** | 8/9 | **1** |
+| B grounded 2 | 9/9 | **8/9** | 8/9 | **1** |
+| C deep+grounded 1 | **8/9** | 8/9 | 7/9 | 0 |
+| C deep+grounded 2 | **8/9** | 8/9 | 8/9 | 0 |
+
+**Arm B is identical to arm A in every cell.** Giving the verifier panel real
+repo access — ≥125 and ≥159 tool calls respectively — changed the recall cost of
+cross-model verification by exactly nothing, in both runs.
+
+It is the same defect each time: `08-quiet-low`, raw 2/2 → 1/2 after
+verification, in all four runs of arms A and B.
+
+### B. Why it did not help: the defect dies on the *worth* axis, not the truth axis
+
+`08-quiet-low` has two known-real findings. The panel's treatment of them is
+stable across every run, grounded or not:
+
+- **The `${min}..${min}` typo** — confirmed **3/3, unanimously, in all six runs.**
+  Nobody ever refuted it. It was never in danger.
+- **The `catch` block that discards the original error** — refuted **1/3 in all
+  six runs.**
+
+The grounded verifiers' stated reasons are the explanation:
+
+> *"Rewrapping parsePort failures as a generic invalid-port error is not shown to
+> violate any caller contract or requirement."* — `bridge:codex`, grounded run 1
+
+> *"Normalizing all invalid port inputs to `invalid port` is not shown to violate
+> any caller contract or create a real defect."* — `bridge:codex`, tool-less run 2
+
+These are the same refutation, with and without tools. The verifier is not
+failing to check a *fact about the code* — it agrees about what the code does.
+It is making a **judgement that the defect is not worth flagging** (`worth:
+false` on every refuting vote). Repo access can settle "does line 13 really
+discard `err`?"; it cannot settle "does anyone care?".
+
+That is the finding that redirects the next change: **the surviving recall loss
+is a worth-axis disagreement, and grounding is a truth-axis tool.**
+
+### C. Deep review costs recall at generation
+
+Arm C is the first measurement of `--deep` over a transport that really has
+tools, and the result is negative:
+
+- Raw generation was **9/9 in all four runs whose generator was tool-less**
+  (arms A and B).
+- Raw generation was **8/9 in both runs whose generator had tools** (arm C).
+
+Both times the miss is the same one: `08-quiet-low` raw 2/2 → **1/2**. The
+agentic generator never raised the `catch`-block defect at all — the verifier
+panel never got the chance to refute it.
+
+This is consistent with section B rather than a separate phenomenon: given tools,
+*both* ends of the pipeline go looking for a caller that depends on the discarded
+error, fail to find one, and drop the claim. Grounding appears to make the
+reviewer **more conservative**, and the defects it drops first are exactly the
+low-severity, judgement-dependent ones the pipeline was already losing.
+
+`loss(verify)` being 0 in arm C is not an improvement. It is zero because the
+defect was already gone before verification ran.
+
+### D. Precision and noise: no measurable effect
+
+| arm | app-default precision | app-default noise-rate |
+| --- | --- | --- |
+| A control | 36%, 29% | 6% (1/17), 12% (2/17) |
+| B grounded | 28%, 35% | 18% (3/17), 6% (1/17) |
+| C deep+grounded | 33%, 28% | 6% (1/17), 12% (2/17) |
+
+Every arm's two runs straddle every other arm's. The largest arm-to-arm gap is
+well inside #254's measured ±22 pp jitter. **No precision or noise claim is
+supported by this data**, in either direction.
+
+### E. An instrument finding: `groundedNote` is never emitted
+
+The grounded verify prompt asks for a `groundedNote` on any verdict where the
+verifier actually used a tool. Across the four grounded runs:
+
+**0 of 284 verifier votes carried a `groundedNote`** — while the bridge reported
+≥721 tool calls on those same runs.
+
+The verifiers used their tools heavily and never once self-reported doing so. A
+harness that trusted the model's self-report — which is the only signal an
+API-key transport has — would have concluded that grounded verification never
+ran, and it would have been wrong. **The only trustworthy evidence that a run was
+grounded is `InferResponse.agentic`, reported by the bridge rather than by the
+model.**
+
+This is recorded as a measurement, not acted on: changing the prompt to chase the
+field is exactly the move this harness does not make.
+
+### The mock baseline (harness mechanics only)
+
+`pnpm eval` with no flags, on this branch: recall 100% (9/9), precision 82%,
+noise-rate 6% (1/17), 23 findings, PASS — identical to Measurements 2 and 3,
+confirming the transport rewrite did not disturb the scoring plumbing.
+
+### What Measurement 4 cannot tell you
+
+1. **The tree has no callers.** `eval/.golden-tree` is the head state of nine
+   unrelated synthetic PRs in one directory: no callers, no tests beyond those
+   the fixtures name, no history, no dependencies. When a verifier refuted the
+   `catch`-block defect because "no caller contract" required the detail, that
+   was a **true statement about this tree**. Whether the same verifier would
+   confirm the defect in a repo where `parsePort` has twenty callers is
+   **untested, and is the single biggest open question** left by this
+   measurement. It is the difference between "grounding does not help this
+   defect class" and "this tree has nothing to find".
+2. **Two runs per arm.** Enough to show that the tool-less and grounded results
+   are *identical* (2/2 vs 2/2 on the same defect), not enough to bound a small
+   effect. Recall is the signal here; the precision columns are not evidence.
+3. **`codex` ×2 is not a cross-vendor panel.** Two samples of one model, as in
+   Measurements 2 and 3. The `claude` CLI still reproducibly times out on the
+   multi-finding verify payload.
+4. **Deep review's cost is measured at n=2 on one defect.** "Tools make the
+   generator more conservative" is a plausible reading of two runs, not an
+   established rate.
+5. **Dismissal calibration (#230) is still unmeasured** — the fixtures are
+   synthetic and have no dismissal ledger. Unchanged from Measurement 2.
+6. **The mootness gate still has not been observed in its design regime**, for
+   the same one-vendor-panel reason as before.
+
+### Verdict
+
+- **Grounded verification (#229) does not fix the recall problem Measurement 3
+  diagnosed.** Measured on/off, two runs each, identically rooted: the recall
+  cost of cross-model verification is 1 defect in 9 with tools and 1 defect in 9
+  without. This was the leading hypothesis and it is now falsified on this set.
+- **Deep review (#82) measurably costs recall at generation** — 9/9 → 8/9, in
+  both runs that had it — and that cost is invisible in the `loss(verify)`
+  column, which improves for the wrong reason.
+- **Local grounding (#242) works exactly as specified.** 168/168 agentic
+  requests honoured, ≥721 tool calls, 0 denials, working tree byte-identical.
+  The capability is sound; what it buys the *review* is what came back negative.
+- **The surviving recall loss is a worth-axis disagreement.** Every run, grounded
+  or not, unanimously confirms the real typo and refutes the real-but-arguable
+  `catch`-block defect as `worth: false`. That is a judgement, and no amount of
+  repo access changes a judgement.
+- **The next thing worth measuring is a tree with real callers** — it is the one
+  condition under which grounding could plausibly flip a worth-axis vote, and
+  this instrument cannot currently create it.
+
+No threshold, prompt, `PROMPT_VERSIONS` entry or ranking rule was changed in
+response to any number above.
 
 ---
 
@@ -426,6 +691,12 @@ Practical rules for this set:
    (#242) are still unmeasured** — the bridge's `/v1/infer` runs the CLI with
    `--tools ""`, so the tools those features depend on do not exist on this
    transport. Unchanged from Measurement 1.
+   > **SUPERSEDED BY CAPABILITY (2026-09-23, #266 / #267).** The premise stopped
+   > being true after this measurement was taken: bridge 0.3.0 added
+   > `InferRequest.agentic`, which runs the CLI *with* read-only tools. The
+   > limitation above is a correct record of what the transport did on the date
+   > given — it is no longer a statement about the transport today. Measured in
+   > [Measurement 4](#measurement-4--2026-09-23--grounded-verification-deep-review-and-local-grounding).
 5. **Dismissal calibration (#230) is still unmeasured** — the fixtures are
    synthetic and have no dismissal ledger.
 6. **The mootness gate has still never been observed in its design regime**, for
@@ -649,6 +920,11 @@ State these next to any number quoted from this file.
    crippled prompt, not the feature. Needs an API-key transport driving the
    app's real agentic harness.
 4. **Local grounding (#242)** has the same problem, for the same reason.
+   > **SUPERSEDED BY CAPABILITY (2026-09-23, #266 / #267)** — items 3 and 4 both.
+   > Bridge 0.3.0's `InferRequest.agentic` runs the CLI with read-only tools, so
+   > the "those tools do not exist on this transport" premise no longer holds.
+   > The text stays as the correct record of 2026-09-22. Measured in
+   > [Measurement 4](#measurement-4--2026-09-23--grounded-verification-deep-review-and-local-grounding).
 5. **Dismissal calibration (#230) was not measured.** `skillReviewPrompt` takes
    a `calibration` argument built from the user's real dismissal ledger. These
    fixtures are synthetic and have no ledger; inventing one would have produced
