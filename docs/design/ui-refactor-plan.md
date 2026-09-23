@@ -2206,6 +2206,25 @@ centered is real but small (a finding paragraph wrapping at 72ch instead of
 121ch), and re-shooting would dirty the six build-SHA-bearing files described in
 [the capture-script note](#capture-script) for one component's wrap points.
 
+**The honest loose end, named rather than left for someone to notice.** This
+section leans on p.68-70 to argue against shrinking the card — but *the same
+pages* prescribe a remedy for narrow content in a wide area, and it is not "cap
+it and stop": it is **split the content into columns**. After the cap, a
+full-width card is 1372px holding a 583px prose column, and the ~790px to its
+right is empty tint. That is defensible as it stands — the card is a band
+anchored between two diff rows, its width belongs to the diff and not to the
+prose, and the severity tint spanning the full row is doing real signalling
+work — but it is not the same thing as having taken p.68-70's actual advice.
+
+The move it points at is a **two-column card in full mode**: prose left at the
+measure, and the metadata currently stacked above and below it — the chip
+header, the action row, `also flagged as…` — moved into a right-hand column
+instead of spanning. That is a layout decision about the card with its own
+before/after, exactly the kind of thing this change was careful not to bundle,
+and it should not be smuggled in behind a `max-width`. Recorded here so the next
+pass starts from "the columns option was considered and deferred" rather than
+rediscovering it.
+
 ---
 
 ## What this plan deliberately does not do
