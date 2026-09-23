@@ -17,7 +17,7 @@ import { PROTOCOL_VERSION } from './protocol.js'
 import { createBridgeServer, listenLoopback, LOOPBACK_HOST } from './server.js'
 
 /** Kept in step with package.json; printed in /v1/health. */
-export const BRIDGE_VERSION = '0.2.1'
+export const BRIDGE_VERSION = '0.3.0'
 
 export async function main(argv: readonly string[], cwd: string): Promise<number> {
   let options: BridgeOptions
