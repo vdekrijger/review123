@@ -235,13 +235,25 @@
     transition: height 120ms ease;
   }
 
+  /* ui-audit F3 — the emphasis used to run BACKWARDS: the selected item was
+     `--accent` ink on the `--accent-subtle` tint, which measured 3.47:1 before
+     Phase 1 and 4.31:1 after, against 5.08:1 for the five inactive items it is
+     supposed to stand out from. Legal is not the bar (p.142); out-contrasting
+     its siblings is (p.30-31).
+
+     So the accent stops carrying the label and goes back to carrying the
+     INDICATOR — the left bar and the tint — while the active label takes the
+     page's strongest ink plus the emphasis weight. Three redundant signals
+     (ink, weight, bar) instead of one that was the weakest thing in the list. */
   .nav-link.active {
-    color: var(--accent);
+    color: var(--text);
     background: var(--accent-subtle);
+    font-weight: 600;
   }
 
   .nav-link.active::before {
-    height: 65%;
+    width: 3px;
+    height: 70%;
   }
 
   .settings-content {

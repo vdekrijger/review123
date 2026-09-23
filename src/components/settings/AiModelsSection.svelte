@@ -1064,9 +1064,11 @@
   }
 
   /* Plan J: "What runs (and how deep)" per-task mode matrix. */
+  /* Asymmetric padding on purpose: it is what gives the <h3> inside 13.5px
+     above against its 4.5px below (3:1, rubric D2, p.85) — it was 2:1. */
   .task-modes {
     margin: 0.85rem 0 0;
-    padding: 0.6rem 0.85rem;
+    padding: 0.9rem 0.85rem 0.6rem;
     border: 1px solid var(--hairline);
     border-radius: 8px;
   }

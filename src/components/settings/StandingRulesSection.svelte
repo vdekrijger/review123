@@ -667,10 +667,12 @@
     color: var(--text);
   }
 
+  /* 1.15rem above / 0.4rem below = 2.9:1 (rubric D2, p.85); was 2.25:1. */
   .group-title {
     font-size: 0.85em;
     font-weight: 600;
-    margin: 0.9rem 0 0.4rem;
+    letter-spacing: normal;
+    margin: 1.15rem 0 0.4rem;
     color: var(--text);
   }
 

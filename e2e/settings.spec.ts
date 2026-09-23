@@ -805,3 +805,98 @@ test('model panel: ONE section with role toggles + presets, no verify/generate r
   )
   expect(roles2).toEqual(['generator', 'verifier'])
 })
+
+// ---------------------------------------------------------------------------
+// Settings nav emphasis (Batch 2C, ui-audit F3, rubric p.30-31 / p.142).
+//
+// The active nav item used to be `--accent` ink on the `--accent-subtle` tint:
+// 3.47:1 before Phase 1, 4.31:1 after, against 5.08:1 for the five INACTIVE
+// items it exists to stand out from. The hierarchy ran backwards — the selected
+// section was the least legible thing in the nav.
+//
+// These measure the REAL computed colours in the built app (the audit's numbers
+// came from the browser, so the gate does too) and assert the ordering, not a
+// hardcoded ratio: active must clear AA *and* out-contrast its own siblings, in
+// both themes. A future palette change that re-inverts them fails here.
+// ---------------------------------------------------------------------------
+
+/** WCAG contrast of a nav link's ink against its truly composited background. */
+async function navLinkContrast(page: import('@playwright/test').Page, name: string) {
+  return page.evaluate((linkName) => {
+    const lin = (c: number) => {
+      const s = c / 255
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4)
+    }
+    const parse = (css: string) => {
+      const m = css.match(/rgba?\(([^)]+)\)/)
+      if (!m) throw new Error(`cannot parse color: ${css}`)
+      const p = m[1].split(/[, /]+/).filter(Boolean).map(parseFloat)
+      return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }
+    }
+    const over = (fg: ReturnType<typeof parse>, bg: ReturnType<typeof parse>) => ({
+      r: fg.r * fg.a + bg.r * (1 - fg.a),
+      g: fg.g * fg.a + bg.g * (1 - fg.a),
+      b: fg.b * fg.a + bg.b * (1 - fg.a),
+      a: 1,
+    })
+    const lum = (c: { r: number; g: number; b: number }) =>
+      0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+
+    const link = [...document.querySelectorAll('.section-nav a')].find(
+      (a) => a.textContent?.trim() === linkName,
+    ) as HTMLElement | undefined
+    if (!link) throw new Error(`no nav link named ${linkName}`)
+    const cs = getComputedStyle(link)
+
+    // Composite the link's own (possibly translucent) background over the first
+    // opaque ancestor ground, then the ink over that.
+    let ground = parse(getComputedStyle(document.body).backgroundColor)
+    for (let node = link.parentElement; node; node = node.parentElement) {
+      const bg = parse(getComputedStyle(node).backgroundColor)
+      if (bg.a === 1) { ground = bg; break }
+    }
+    const bg = over(parse(cs.backgroundColor), ground)
+    const fg = over(parse(cs.color), bg)
+    const [hi, lo] = [lum(fg), lum(bg)].sort((a, b) => b - a)
+    return {
+      ratio: (hi + 0.05) / (lo + 0.05),
+      color: cs.color,
+      fontWeight: cs.fontWeight,
+      indicatorWidth: getComputedStyle(link, '::before').width,
+    }
+  }, name)
+}
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`settings nav: the ACTIVE item out-contrasts the inactive ones (${theme})`, async ({
+    page,
+  }) => {
+    await blockExternal(page)
+    await page.goto('/settings')
+    await expect(page.getByRole('heading', { name: /^settings$/i })).toBeVisible({ timeout: 5_000 })
+    await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)
+
+    // At the top of the page Appearance is the active item (scrollspy).
+    const nav = page.getByRole('navigation', { name: /settings sections/i })
+    await expect(nav.getByRole('link', { name: 'Appearance' })).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+
+    const active = await navLinkContrast(page, 'Appearance')
+    const inactive = await navLinkContrast(page, 'AI models')
+
+    // 1. Both are legal body text (p.142 / SC 1.4.3).
+    expect(active.ratio).toBeGreaterThanOrEqual(4.5)
+    expect(inactive.ratio).toBeGreaterThanOrEqual(4.5)
+
+    // 2. The ORDERING is the finding: the selected item must be the MORE
+    //    contrasted of the two, not the less. A clear margin, not a tie.
+    expect(active.ratio).toBeGreaterThan(inactive.ratio * 1.5)
+
+    // 3. Weight and the accent indicator bar are the redundant signals that
+    //    carry the selection once the ink is no longer the accent.
+    expect(Number(active.fontWeight)).toBeGreaterThan(Number(inactive.fontWeight))
+    expect(parseFloat(active.indicatorWidth)).toBeGreaterThan(0)
+  })
+}

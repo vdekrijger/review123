@@ -777,7 +777,11 @@
   }
 
   /* ---- Built-in reviewers library ---- */
+  /* margin-top separates this sub-section from the installed-skills list above
+     it: its <h3> had 11.25px above and 6px below (1.9:1), too close to call
+     which side it belonged to. 30px / 6px now (rubric D2, p.85). */
   .builtin-section {
+    margin-top: 1.25rem;
     margin-bottom: 0.75rem;
   }
 

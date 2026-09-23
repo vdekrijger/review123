@@ -259,9 +259,15 @@
     color: var(--text);
   }
 
+  /* margin-top: 0 is load-bearing (rubric D2, p.85). As a <p> this carried the
+     UA 1em top margin, which collapsed with the heading's 0.4rem bottom margin
+     to 13.5px — against 15px above the heading. The section title was floating
+     between its section and its content instead of attaching to the content it
+     introduces. Now 15px above / 6px below. */
   .auth-status {
     font-size: 0.9em;
     color: var(--text-muted);
+    margin-top: 0;
     margin-bottom: 0.75rem;
   }
 
