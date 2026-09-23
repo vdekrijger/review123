@@ -916,18 +916,72 @@ describe('F12 — the label ranks below its value', () => {
     })
   }
 
+  /**
+   * A rule's font-size in rem, FOLLOWING the indirection through the type scale.
+   *
+   * Batch 2D put `var(--text-*)` between the rule and its number, so a test that
+   * only read the literal would silently stop measuring anything. Resolving it
+   * here keeps the assertion pointed at the real size AND makes the test fail if
+   * a rule ever references a step that does not exist.
+   */
+  /** One spacing declaration's length in rem, resolved through --space-*. */
+  const remLength = (body: string, property: string): number | undefined => {
+    const declared = body.match(new RegExp(`${property}:\\s*([^;]+);`))?.[1]?.trim()
+    if (!declared) return undefined
+    const tokenRef = declared.match(/^var\(\s*(--space-\d+)\s*\)$/)
+    if (!tokenRef) return parseFloat(declared.match(/^([\d.]+)rem$/)?.[1] ?? 'NaN')
+    const step = Object.fromEntries(declarations(rootBlock(appCss)))[tokenRef[1]]
+    expect(step, `${property} references ${tokenRef[1]}, which is not declared`).toBeTruthy()
+    return parseFloat(step)
+  }
+
+  const remSize = (selector: string): number | undefined => {
+    const declared = ruleBody(selector).match(/font-size:\s*([^;]+);/)?.[1]?.trim()
+    if (!declared) return undefined
+    const tokenRef = declared.match(/^var\(\s*(--text-[a-z0-9]+)\s*\)$/)
+    if (!tokenRef) return parseFloat(declared.match(/^([\d.]+)rem$/)?.[1] ?? 'NaN')
+    const step = Object.fromEntries(declarations(rootBlock(appCss)))[tokenRef[1]]
+    expect(step, `${selector} references ${tokenRef[1]}, which is not declared`).toBeTruthy()
+    return parseFloat(step)
+  }
+
   it('the .field label is SMALLER than the control value it labels (p.44)', () => {
-    const label = ruleBody('\\.field-label').match(/font-size:\s*([\d.]+)rem/)
-    const field = ruleBody('\\.field').match(/font-size:\s*([\d.]+)rem/)
-    const control = ruleBody(
+    const label = remSize('\\.field-label')
+    const field = remSize('\\.field')
+    const control = remSize(
       'input:not\\(\\[type="radio"\\]\\):not\\(\\[type="checkbox"\\]\\),\\s*\\ntextarea,\\s*\\nselect',
-    ).match(/font-size:\s*([\d.]+)rem/)
-    expect(label?.[1], '.field-label needs an explicit size').toBeTruthy()
-    expect(control?.[1], 'the control primitive needs an explicit size').toBeTruthy()
-    expect(parseFloat(label![1])).toBeLessThan(parseFloat(control![1]))
+    )
+    expect(label, '.field-label needs an explicit size').toBeTruthy()
+    expect(control, 'the control primitive needs an explicit size').toBeTruthy()
+    expect(label!).toBeLessThan(control!)
     // Both spellings of the label — the span and the bare text node in a .field
     // — must agree, or the same form renders two different labels.
-    expect(field?.[1]).toBe(label?.[1])
+    expect(field).toBe(label)
+  })
+
+  it('every sized primitive in app.css takes its size from the type scale', () => {
+    // Batch 2A's recorded lesson, applied to the scale: Phase 1 defined a
+    // contrast-gated token that nothing rendered, and nothing caught it. A scale
+    // that only exists in :root is the same failure. These are the primitives
+    // the whole app inherits from, so they are where it must be true first.
+    const sized = [
+      'h1',
+      'h2',
+      '\\.prose,\\s*\\n\\.prose-md',
+      '\\.btn',
+      'input:not\\(\\[type="radio"\\]\\):not\\(\\[type="checkbox"\\]\\),\\s*\\ntextarea,\\s*\\nselect',
+      '\\.field',
+      '\\.field-label',
+      '\\.chip',
+      'details > summary',
+    ]
+    for (const selector of sized) {
+      expect(ruleBody(selector), selector).toMatch(/font-size:\s*var\(--text-[a-z0-9]+\)/)
+    }
+    // The ONE deliberate exception, and it is the exception on purpose: the root
+    // is 15px, the plan forbids changing it inside a batch, and it cannot
+    // reference a step of a scale that is defined relative to it.
+    expect(ruleBody(':root')).toMatch(/font-size:\s*15px/)
   })
 
   it('the .field label takes --text-secondary, never --text or --text-muted', () => {
@@ -947,12 +1001,14 @@ describe('F12 — the label ranks below its value', () => {
   it('the gap BETWEEN fields is at least 3x the gap inside one (p.83-84)', () => {
     // The audit measured 3.7px inside against 7.5px between — a 2:1 ratio it
     // called unreadable as grouping. Asserted as a RATIO so a later change of
-    // scale step passes as long as the relationship survives.
-    const inside = ruleBody('\\.field').match(/gap:\s*([\d.]+)rem/)
-    const between = ruleBody('\\.field \\+ \\.field').match(/margin-top:\s*([\d.]+)rem/)
-    expect(inside?.[1], '.field needs a gap').toBeTruthy()
-    expect(between?.[1], '.field + .field needs a margin').toBeTruthy()
-    expect(parseFloat(between![1]) / parseFloat(inside![1])).toBeGreaterThanOrEqual(3)
+    // scale step passes as long as the relationship survives — which is exactly
+    // what happened: Batch 2D put var(--space-*) between the rule and its
+    // number, so the lengths are resolved through the scale before comparing.
+    const inside = remLength(ruleBody('\\.field'), 'gap')
+    const between = remLength(ruleBody('\\.field \\+ \\.field'), 'margin-top')
+    expect(inside, '.field needs a gap').toBeTruthy()
+    expect(between, '.field + .field needs a margin').toBeTruthy()
+    expect(between! / inside!).toBeGreaterThanOrEqual(3)
   })
 
   it('--text-secondary is a real declaration, not an alias of another tier', () => {
@@ -1041,5 +1097,85 @@ describe('P1-4 — the disabled opacity is its own token', () => {
     // A disabled control is exempt from the floors, but it must still be
     // PERCEIVABLE — "unavailable", not "absent".
     expect(round2(light), `light measured ${round2(light)}`).toBeGreaterThan(2)
+  })
+})
+
+/**
+ * P1-4 / Batch 2D — the LAST two of the opacity semantics, which closes the set
+ * that one bare `opacity: 0.45` used to carry.
+ *
+ * --chrome-muted-opacity was handed to this batch by Batch 2A (a scale question,
+ * not a form one). --busy-opacity was not in the plan at all: it is the
+ * "deliberate outlier" 2A flagged, promoted from a literal to a token so that
+ * the next sweep of "all the disabled opacities" reads an intention instead of a
+ * number it is tempted to flatten. The grep found TWO sites of it, not the one
+ * the plan named.
+ */
+describe('P1-4 — chrome-muted and busy opacities (Batch 2D)', () => {
+  const root = Object.fromEntries(declarations(rootBlock(appCss)))
+
+  it('all four semantics are separate — three alphas and, since Phase 3, an ink', () => {
+    // disabled / chrome-muted / busy are 0.45 or near it today; that
+    // coincidence is exactly why they must not be aliases.
+    for (const name of ['--disabled-opacity', '--chrome-muted-opacity', '--busy-opacity']) {
+      const value = root[name]
+      expect(value, `${name} is not declared`).toBeTruthy()
+      expect(value, `${name} must not be an alias`).not.toMatch(/^var\(/)
+      const alpha = parseFloat(value)
+      expect(Number.isFinite(alpha), `${name} must be a number`).toBe(true)
+      expect(alpha).toBeGreaterThan(0)
+      expect(alpha).toBeLessThan(1)
+    }
+    // The fourth semantic was --recede-opacity when Batch 2D wrote this. Phase 3
+    // retired it: receded CONTENT is the one of the four with coloured content
+    // underneath, so it is the one alpha could never serve. It is an ink now,
+    // which makes the separation structural rather than merely declared.
+    expect(root['--recede-opacity'], '--recede-opacity is back').toBeUndefined()
+    expect(LIGHT['--syntax-receded']).toMatch(/^#[0-9a-f]{6}$/i)
+    expect(DARK['--syntax-receded']).toMatch(/^#[0-9a-f]{6}$/i)
+  })
+
+  it('no opacity token is theme-split (the F17 hazard is down to one declaration)', () => {
+    // A number cannot use light-dark(), so every theme-dependent number has to
+    // be written out in BOTH dark-override blocks — the duplication Phase 1
+    // removed everywhere else. --recede-opacity used to pay that cost because it
+    // had a 3:1 floor; Phase 3 replaced it with an ink, which CAN use
+    // light-dark(), so the blocks are down to --select-chevron alone.
+    for (const block of [darkOverrideDeclarations(), autoDarkOverrideDeclarations()]) {
+      const names = block.map(([n]) => n)
+      expect(names).not.toContain('--chrome-muted-opacity')
+      expect(names).not.toContain('--busy-opacity')
+      expect(names).not.toContain('--recede-opacity')
+      expect(names).toEqual(['--select-chevron'])
+    }
+  })
+
+  it('busy is well above disabled — a working control must stay readable', () => {
+    // .run-reviewers-btn and .tests-review-btn are `disabled={isRunning}` with
+    // aria-busy: at that moment the label IS the status message ("Running…"),
+    // so dimming it to --disabled-opacity would hide the only thing telling the
+    // user their review is under way. This ORDERING is the assertion; the two
+    // numbers may be retuned as long as it holds.
+    const busy = parseFloat(root['--busy-opacity'])
+    const disabled = parseFloat(root['--disabled-opacity'])
+    expect(busy).toBeGreaterThan(disabled)
+    // And it must still clear the normal-text floor on the ground it sits on,
+    // because unlike a genuinely inactive control it is carrying live copy.
+    for (const [name, palette] of [
+      ['light', LIGHT],
+      ['dark', DARK],
+    ] as const) {
+      const ratio = contrast(palette['--text'], palette['--surface-sunken'], busy)
+      expect(round2(ratio), `${name} busy label measured ${round2(ratio)}`).toBeGreaterThanOrEqual(
+        4.5,
+      )
+    }
+  })
+
+  it('chrome-muted is not an alias of disabled, though they share a number', () => {
+    // Equal today, separately tunable by construction. Quiet resting chrome and
+    // a dead control are different questions and must not move together.
+    expect(root['--chrome-muted-opacity']).not.toBe('var(--disabled-opacity)')
+    expect(root['--disabled-opacity']).not.toBe('var(--chrome-muted-opacity)')
   })
 })

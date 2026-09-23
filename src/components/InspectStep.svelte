@@ -2627,7 +2627,7 @@
     border-color: var(--accent);
   }
   .ws-toggle:disabled {
-    opacity: 0.5;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
   .ws-only-note {
@@ -2738,7 +2738,7 @@
 
   .run-reviewers-btn:disabled {
     cursor: default;
-    opacity: 0.85;
+    opacity: var(--busy-opacity);
   }
 
   /* ---- Running reviewers: bounded, aligned compact list ----
@@ -3352,7 +3352,7 @@
   }
   .tests-review-btn:disabled {
     cursor: default;
-    opacity: 0.85;
+    opacity: var(--busy-opacity);
   }
   .tests-review-hint,
   .tests-review-cost {
@@ -3454,7 +3454,7 @@
     background: var(--surface-hover, color-mix(in srgb, var(--surface-raised) 80%, var(--text) 10%));
   }
   .tail-mark-all:disabled {
-    opacity: 0.5;
+    opacity: var(--disabled-opacity);
     cursor: default;
   }
   .tail-mark-all:focus-visible {

@@ -77,7 +77,7 @@
     flex-shrink: 0;
     align-self: center;
     background: var(--text-muted);
-    opacity: 0.45;
+    opacity: var(--chrome-muted-opacity);
   }
 
   .dot.on {

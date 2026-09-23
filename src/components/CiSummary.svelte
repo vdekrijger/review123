@@ -208,7 +208,7 @@
 
   .ci-refresh-btn:disabled {
     cursor: default;
-    opacity: 0.6;
+    opacity: var(--disabled-opacity);
   }
 
   .ci-annotations {

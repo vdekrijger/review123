@@ -186,7 +186,7 @@
   }
 
   .picker-apply:disabled {
-    opacity: 0.4;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 
@@ -210,7 +210,7 @@
   }
 
   .picker-quick:disabled {
-    opacity: 0.4;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 

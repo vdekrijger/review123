@@ -275,7 +275,10 @@ test('narrow viewport: full-width mode renders a wider diff than centered mode',
   expect(fullBox).not.toBeNull()
 
   // KEY: the diff is genuinely wider in full mode even though 1000px < 70rem.
-  // Gutters collapse from 1rem (15px) to 10px per side → at least ~8px wider.
+  // Gutters collapse from --space-4 (15px) to --space-2 (7.5px) per side →
+  // 15px wider. (Batch 2D: this was 1rem → 10px, an 8px gain; the scale step
+  // that preserves the intention is the one BELOW 10px, not the nearer one
+  // above it — this assertion is what caught that.)
   expect(fullBox!.width).toBeGreaterThanOrEqual(centeredBox!.width + 8)
   // And it starts closer to the viewport edge
   expect(fullBox!.x).toBeLessThan(centeredBox!.x)

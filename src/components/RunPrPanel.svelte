@@ -418,7 +418,7 @@
   }
 
   .runpr-action:disabled {
-    opacity: 0.55;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 
