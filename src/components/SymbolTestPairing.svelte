@@ -458,9 +458,18 @@
    *
    * light-dark() makes it unrepresentable: one declaration per colour,
    * resolved against the color-scheme app.css already sets on :root, so the
-   * explicit and OS-preference paths cannot differ. Light comes first because
-   * light is the authored palette (plan P1-2). e2e/theme-token-parity.spec.ts
+   * explicit and OS-preference paths cannot differ. e2e/theme-token-parity.spec.ts
    * proves the two paths agree in a real browser.
+   *
+   * ── Phase 3: the literals became tokens ──
+   *
+   * Batch 2B had to re-state GitHub's values here because nothing in app.css
+   * held them. Phase 3 authored the syntax set as --syntax-* tokens (for the
+   * diff viewer, audit F5) and contrast-repaired it, so this snippet now points
+   * at the same palette the diff and the symbol peek use — one syntax palette
+   * in the app rather than three copies of one. The values shifted where the
+   * repair moved them: on this snippet's --surface-sunken ground they measure
+   * 5.75-11.73:1 in light and 6.57-12.17:1 in dark (they were 4.03:1 at worst).
    * ------------------------------------------------------------------------- */
   .sym-test-pre :global(.hljs-doctag),
   .sym-test-pre :global(.hljs-keyword),
@@ -468,10 +477,10 @@
   .sym-test-pre :global(.hljs-template-tag),
   .sym-test-pre :global(.hljs-template-variable),
   .sym-test-pre :global(.hljs-type),
-  .sym-test-pre :global(.hljs-variable.language_) { color: light-dark(#d73a49, #ff7b72); }
+  .sym-test-pre :global(.hljs-variable.language_) { color: var(--syntax-keyword); }
   .sym-test-pre :global(.hljs-title),
   .sym-test-pre :global(.hljs-title.class_),
-  .sym-test-pre :global(.hljs-title.function_) { color: light-dark(#6f42c1, #d2a8ff); }
+  .sym-test-pre :global(.hljs-title.function_) { color: var(--syntax-entity); }
   .sym-test-pre :global(.hljs-attr),
   .sym-test-pre :global(.hljs-attribute),
   .sym-test-pre :global(.hljs-literal),
@@ -481,19 +490,19 @@
   .sym-test-pre :global(.hljs-variable),
   .sym-test-pre :global(.hljs-selector-attr),
   .sym-test-pre :global(.hljs-selector-class),
-  .sym-test-pre :global(.hljs-selector-id) { color: light-dark(#005cc5, #79c0ff); }
+  .sym-test-pre :global(.hljs-selector-id) { color: var(--syntax-constant); }
   .sym-test-pre :global(.hljs-regexp),
   .sym-test-pre :global(.hljs-string),
-  .sym-test-pre :global(.hljs-meta .hljs-string) { color: light-dark(#032f62, #a5d6ff); }
+  .sym-test-pre :global(.hljs-meta .hljs-string) { color: var(--syntax-string); }
   .sym-test-pre :global(.hljs-built_in),
-  .sym-test-pre :global(.hljs-symbol) { color: light-dark(#e36209, #ffa657); }
+  .sym-test-pre :global(.hljs-symbol) { color: var(--syntax-variable); }
   .sym-test-pre :global(.hljs-comment),
   .sym-test-pre :global(.hljs-code),
-  .sym-test-pre :global(.hljs-formula) { color: light-dark(#6a737d, #8b949e); }
+  .sym-test-pre :global(.hljs-formula) { color: var(--syntax-comment); }
   .sym-test-pre :global(.hljs-name),
   .sym-test-pre :global(.hljs-quote),
   .sym-test-pre :global(.hljs-selector-tag),
-  .sym-test-pre :global(.hljs-selector-pseudo) { color: light-dark(#22863a, #7ee787); }
+  .sym-test-pre :global(.hljs-selector-pseudo) { color: var(--syntax-tag); }
   .sym-test-pre :global(.hljs-emphasis) { font-style: italic; }
   .sym-test-pre :global(.hljs-strong) { font-weight: bold; }
 

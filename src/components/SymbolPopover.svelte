@@ -519,19 +519,37 @@
   }
   .peek-partial { font-style: italic; }
 
-  /* Syntax-token colors for the peek, scoped like SymbolTestPairing's snippet
-     palette: GitHub prettylights DARK as the base (the app's default theme),
-     with explicit + auto light-theme overrides below. */
+  /*
+   * ── The peek's syntax set (Phase 3; audit F17 + F5) ──
+   *
+   * This used to be THREE blocks — GitHub-dark literals as the base, an
+   * explicit `:root[data-theme='light']` copy, and a
+   * `@media (prefers-color-scheme: light)` copy — and, exactly as Batch 2B
+   * found next door in SymbolTestPairing, the media copy was NOT a copy. It was
+   * missing fourteen selectors (.hljs-meta .hljs-keyword, .hljs-template-tag,
+   * .hljs-template-variable, .hljs-title.class_, .hljs-attribute, .hljs-meta,
+   * .hljs-operator, .hljs-variable, .hljs-selector-attr, .hljs-selector-class,
+   * .hljs-meta .hljs-string, .hljs-code, .hljs-formula, .hljs-quote), so a
+   * reader on `auto` with an OS set to light saw them painted from the DARK
+   * palette. Measured in the built app before this change, TWELVE of the
+   * thirty-two classes resolved to a different colour on the two light paths —
+   * salmon #ff7b72 (2.5:1) and #79c0ff (1.9:1) on a white snippet.
+   *
+   * One declaration per role now, pointing at the app's syntax tokens (which
+   * are light-dark() pairs, so the divergence is unrepresentable rather than
+   * merely fixed). The peek's ground is --surface, where those tokens measure
+   * 6.49-13.23:1 in light and 7.22-13.39:1 in dark.
+   */
   .peek-code :global(.hljs-doctag),
   .peek-code :global(.hljs-keyword),
   .peek-code :global(.hljs-meta .hljs-keyword),
   .peek-code :global(.hljs-template-tag),
   .peek-code :global(.hljs-template-variable),
   .peek-code :global(.hljs-type),
-  .peek-code :global(.hljs-variable.language_) { color: #ff7b72; }
+  .peek-code :global(.hljs-variable.language_) { color: var(--syntax-keyword); }
   .peek-code :global(.hljs-title),
   .peek-code :global(.hljs-title.class_),
-  .peek-code :global(.hljs-title.function_) { color: #d2a8ff; }
+  .peek-code :global(.hljs-title.function_) { color: var(--syntax-entity); }
   .peek-code :global(.hljs-attr),
   .peek-code :global(.hljs-attribute),
   .peek-code :global(.hljs-literal),
@@ -541,77 +559,22 @@
   .peek-code :global(.hljs-variable),
   .peek-code :global(.hljs-selector-attr),
   .peek-code :global(.hljs-selector-class),
-  .peek-code :global(.hljs-selector-id) { color: #79c0ff; }
+  .peek-code :global(.hljs-selector-id) { color: var(--syntax-constant); }
   .peek-code :global(.hljs-regexp),
   .peek-code :global(.hljs-string),
-  .peek-code :global(.hljs-meta .hljs-string) { color: #a5d6ff; }
+  .peek-code :global(.hljs-meta .hljs-string) { color: var(--syntax-string); }
   .peek-code :global(.hljs-built_in),
-  .peek-code :global(.hljs-symbol) { color: #ffa657; }
+  .peek-code :global(.hljs-symbol) { color: var(--syntax-variable); }
   .peek-code :global(.hljs-comment),
   .peek-code :global(.hljs-code),
-  .peek-code :global(.hljs-formula) { color: #8b949e; }
+  .peek-code :global(.hljs-formula) { color: var(--syntax-comment); }
   .peek-code :global(.hljs-name),
   .peek-code :global(.hljs-quote),
   .peek-code :global(.hljs-selector-tag),
-  .peek-code :global(.hljs-selector-pseudo) { color: #7ee787; }
+  .peek-code :global(.hljs-selector-pseudo) { color: var(--syntax-tag); }
+  .peek-code :global(.hljs-subst) { color: var(--syntax-ink); }
   .peek-code :global(.hljs-emphasis) { font-style: italic; }
   .peek-code :global(.hljs-strong) { font-weight: bold; }
-
-  /* Light palette (GitHub light) — explicit theme choice. */
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-doctag),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-keyword),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-meta .hljs-keyword),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-template-tag),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-template-variable),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-type),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-variable.language_) { color: #d73a49; }
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-title),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-title.class_),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-title.function_) { color: #6f42c1; }
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-attr),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-attribute),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-literal),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-meta),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-number),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-operator),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-variable),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-selector-attr),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-selector-class),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-selector-id) { color: #005cc5; }
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-regexp),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-string),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-meta .hljs-string) { color: #032f62; }
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-built_in),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-symbol) { color: #e36209; }
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-comment),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-code),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-formula) { color: #6a737d; }
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-name),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-quote),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-selector-tag),
-  :global(:root[data-theme='light']) .peek-code :global(.hljs-selector-pseudo) { color: #22863a; }
-
-  /* Auto light preference (no explicit choice stored). */
-  @media (prefers-color-scheme: light) {
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-doctag),
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-keyword),
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-type),
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-variable.language_) { color: #d73a49; }
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-title),
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-title.function_) { color: #6f42c1; }
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-attr),
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-literal),
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-number),
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-selector-id) { color: #005cc5; }
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-regexp),
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-string) { color: #032f62; }
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-built_in),
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-symbol) { color: #e36209; }
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-comment) { color: #6a737d; }
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-name),
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-selector-tag),
-    :global(:root:not([data-theme])) .peek-code :global(.hljs-selector-pseudo) { color: #22863a; }
-  }
 
   .loc {
     font-family: var(--font-mono);
