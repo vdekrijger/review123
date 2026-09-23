@@ -809,3 +809,78 @@ describe('P1-4 — the disabled opacity is its own token', () => {
     expect(round2(light), `light measured ${round2(light)}`).toBeGreaterThan(2)
   })
 })
+
+/**
+ * P1-4 / Batch 2D — the LAST two of the opacity semantics, which closes the set
+ * that one bare `opacity: 0.45` used to carry.
+ *
+ * --chrome-muted-opacity was handed to this batch by Batch 2A (a scale question,
+ * not a form one). --busy-opacity was not in the plan at all: it is the
+ * "deliberate outlier" 2A flagged, promoted from a literal to a token so that
+ * the next sweep of "all the disabled opacities" reads an intention instead of a
+ * number it is tempted to flatten. The grep found TWO sites of it, not the one
+ * the plan named.
+ */
+describe('P1-4 — chrome-muted and busy opacities (Batch 2D)', () => {
+  const root = Object.fromEntries(declarations(rootBlock(appCss)))
+
+  it('all four opacity semantics exist as separate declarations', () => {
+    // recede / disabled / chrome-muted / busy. Three of them are 0.45 or near
+    // it today; that coincidence is exactly why they must not be aliases.
+    for (const name of [
+      '--recede-opacity',
+      '--disabled-opacity',
+      '--chrome-muted-opacity',
+      '--busy-opacity',
+    ]) {
+      const value = root[name]
+      expect(value, `${name} is not declared`).toBeTruthy()
+      expect(value, `${name} must not be an alias`).not.toMatch(/^var\(/)
+      const alpha = parseFloat(value)
+      expect(Number.isFinite(alpha), `${name} must be a number`).toBe(true)
+      expect(alpha).toBeGreaterThan(0)
+      expect(alpha).toBeLessThan(1)
+    }
+  })
+
+  it('neither new token is theme-split (the F17 hazard stays at two declarations)', () => {
+    // A number cannot use light-dark(), so every theme-dependent number has to
+    // be written out in BOTH dark-override blocks — which is the duplication
+    // Phase 1 removed everywhere else. --recede-opacity pays that cost because
+    // it has a 3:1 floor; these two have none, so they do not.
+    for (const block of [darkOverrideDeclarations(), autoDarkOverrideDeclarations()]) {
+      const names = block.map(([n]) => n)
+      expect(names).not.toContain('--chrome-muted-opacity')
+      expect(names).not.toContain('--busy-opacity')
+    }
+  })
+
+  it('busy is well above disabled — a working control must stay readable', () => {
+    // .run-reviewers-btn and .tests-review-btn are `disabled={isRunning}` with
+    // aria-busy: at that moment the label IS the status message ("Running…"),
+    // so dimming it to --disabled-opacity would hide the only thing telling the
+    // user their review is under way. This ORDERING is the assertion; the two
+    // numbers may be retuned as long as it holds.
+    const busy = parseFloat(root['--busy-opacity'])
+    const disabled = parseFloat(root['--disabled-opacity'])
+    expect(busy).toBeGreaterThan(disabled)
+    // And it must still clear the normal-text floor on the ground it sits on,
+    // because unlike a genuinely inactive control it is carrying live copy.
+    for (const [name, palette] of [
+      ['light', LIGHT],
+      ['dark', DARK],
+    ] as const) {
+      const ratio = contrast(palette['--text'], palette['--surface-sunken'], busy)
+      expect(round2(ratio), `${name} busy label measured ${round2(ratio)}`).toBeGreaterThanOrEqual(
+        4.5,
+      )
+    }
+  })
+
+  it('chrome-muted is not an alias of disabled, though they share a number', () => {
+    // Equal today, separately tunable by construction. Quiet resting chrome and
+    // a dead control are different questions and must not move together.
+    expect(root['--chrome-muted-opacity']).not.toBe('var(--disabled-opacity)')
+    expect(root['--disabled-opacity']).not.toBe('var(--chrome-muted-opacity)')
+  })
+})
