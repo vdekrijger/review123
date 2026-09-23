@@ -682,18 +682,72 @@ describe('F12 — the label ranks below its value', () => {
     })
   }
 
+  /**
+   * A rule's font-size in rem, FOLLOWING the indirection through the type scale.
+   *
+   * Batch 2D put `var(--text-*)` between the rule and its number, so a test that
+   * only read the literal would silently stop measuring anything. Resolving it
+   * here keeps the assertion pointed at the real size AND makes the test fail if
+   * a rule ever references a step that does not exist.
+   */
+  /** One spacing declaration's length in rem, resolved through --space-*. */
+  const remLength = (body: string, property: string): number | undefined => {
+    const declared = body.match(new RegExp(`${property}:\\s*([^;]+);`))?.[1]?.trim()
+    if (!declared) return undefined
+    const tokenRef = declared.match(/^var\(\s*(--space-\d+)\s*\)$/)
+    if (!tokenRef) return parseFloat(declared.match(/^([\d.]+)rem$/)?.[1] ?? 'NaN')
+    const step = Object.fromEntries(declarations(rootBlock(appCss)))[tokenRef[1]]
+    expect(step, `${property} references ${tokenRef[1]}, which is not declared`).toBeTruthy()
+    return parseFloat(step)
+  }
+
+  const remSize = (selector: string): number | undefined => {
+    const declared = ruleBody(selector).match(/font-size:\s*([^;]+);/)?.[1]?.trim()
+    if (!declared) return undefined
+    const tokenRef = declared.match(/^var\(\s*(--text-[a-z0-9]+)\s*\)$/)
+    if (!tokenRef) return parseFloat(declared.match(/^([\d.]+)rem$/)?.[1] ?? 'NaN')
+    const step = Object.fromEntries(declarations(rootBlock(appCss)))[tokenRef[1]]
+    expect(step, `${selector} references ${tokenRef[1]}, which is not declared`).toBeTruthy()
+    return parseFloat(step)
+  }
+
   it('the .field label is SMALLER than the control value it labels (p.44)', () => {
-    const label = ruleBody('\\.field-label').match(/font-size:\s*([\d.]+)rem/)
-    const field = ruleBody('\\.field').match(/font-size:\s*([\d.]+)rem/)
-    const control = ruleBody(
+    const label = remSize('\\.field-label')
+    const field = remSize('\\.field')
+    const control = remSize(
       'input:not\\(\\[type="radio"\\]\\):not\\(\\[type="checkbox"\\]\\),\\s*\\ntextarea,\\s*\\nselect',
-    ).match(/font-size:\s*([\d.]+)rem/)
-    expect(label?.[1], '.field-label needs an explicit size').toBeTruthy()
-    expect(control?.[1], 'the control primitive needs an explicit size').toBeTruthy()
-    expect(parseFloat(label![1])).toBeLessThan(parseFloat(control![1]))
+    )
+    expect(label, '.field-label needs an explicit size').toBeTruthy()
+    expect(control, 'the control primitive needs an explicit size').toBeTruthy()
+    expect(label!).toBeLessThan(control!)
     // Both spellings of the label — the span and the bare text node in a .field
     // — must agree, or the same form renders two different labels.
-    expect(field?.[1]).toBe(label?.[1])
+    expect(field).toBe(label)
+  })
+
+  it('every sized primitive in app.css takes its size from the type scale', () => {
+    // Batch 2A's recorded lesson, applied to the scale: Phase 1 defined a
+    // contrast-gated token that nothing rendered, and nothing caught it. A scale
+    // that only exists in :root is the same failure. These are the primitives
+    // the whole app inherits from, so they are where it must be true first.
+    const sized = [
+      'h1',
+      'h2',
+      '\\.prose,\\s*\\n\\.prose-md',
+      '\\.btn',
+      'input:not\\(\\[type="radio"\\]\\):not\\(\\[type="checkbox"\\]\\),\\s*\\ntextarea,\\s*\\nselect',
+      '\\.field',
+      '\\.field-label',
+      '\\.chip',
+      'details > summary',
+    ]
+    for (const selector of sized) {
+      expect(ruleBody(selector), selector).toMatch(/font-size:\s*var\(--text-[a-z0-9]+\)/)
+    }
+    // The ONE deliberate exception, and it is the exception on purpose: the root
+    // is 15px, the plan forbids changing it inside a batch, and it cannot
+    // reference a step of a scale that is defined relative to it.
+    expect(ruleBody(':root')).toMatch(/font-size:\s*15px/)
   })
 
   it('the .field label takes --text-secondary, never --text or --text-muted', () => {
@@ -713,12 +767,14 @@ describe('F12 — the label ranks below its value', () => {
   it('the gap BETWEEN fields is at least 3x the gap inside one (p.83-84)', () => {
     // The audit measured 3.7px inside against 7.5px between — a 2:1 ratio it
     // called unreadable as grouping. Asserted as a RATIO so a later change of
-    // scale step passes as long as the relationship survives.
-    const inside = ruleBody('\\.field').match(/gap:\s*([\d.]+)rem/)
-    const between = ruleBody('\\.field \\+ \\.field').match(/margin-top:\s*([\d.]+)rem/)
-    expect(inside?.[1], '.field needs a gap').toBeTruthy()
-    expect(between?.[1], '.field + .field needs a margin').toBeTruthy()
-    expect(parseFloat(between![1]) / parseFloat(inside![1])).toBeGreaterThanOrEqual(3)
+    // scale step passes as long as the relationship survives — which is exactly
+    // what happened: Batch 2D put var(--space-*) between the rule and its
+    // number, so the lengths are resolved through the scale before comparing.
+    const inside = remLength(ruleBody('\\.field'), 'gap')
+    const between = remLength(ruleBody('\\.field \\+ \\.field'), 'margin-top')
+    expect(inside, '.field needs a gap').toBeTruthy()
+    expect(between, '.field + .field needs a margin').toBeTruthy()
+    expect(between! / inside!).toBeGreaterThanOrEqual(3)
   })
 
   it('--text-secondary is a real declaration, not an alias of another tier', () => {

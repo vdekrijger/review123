@@ -385,7 +385,7 @@
 :root[data-diffwidth='full'] .review:has(.inspect-layout),
 :root[data-diffwidth='full'] .review:has(.story) {
   max-width: none;
-  padding-left: 10px;
+  padding-left: var(--space-3);
 }
 
 /* Right gutter slims only when the rail isn't reserving that space.
@@ -396,7 +396,7 @@
    reserve where width is plentiful. */
 :root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='true'],
 :root[data-diffwidth='full'] .review:has(.story)[data-rail-collapsed='true'] {
-  padding-right: 10px;
+  padding-right: var(--space-3);
 }
 
 /*
@@ -417,11 +417,11 @@
 @media (min-width: 1444px) {
   :root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='false'],
   :root[data-diffwidth='full'] .review:has(.story)[data-rail-collapsed='false'] {
-    padding-right: calc(340px + 1rem);
+    padding-right: calc(340px + var(--space-4));
   }
   :root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='true'],
   :root[data-diffwidth='full'] .review:has(.story)[data-rail-collapsed='true'] {
-    padding-right: calc(1.75rem + 0.5rem);
+    padding-right: calc(1.75rem + var(--space-2));
   }
 }
 
@@ -511,14 +511,14 @@ a {
 }
 
 h1 {
-  font-size: 1.5rem;
+  font-size: var(--text-2xl);
   font-weight: 600;
   letter-spacing: -0.01em;
   font-family: var(--font-ui);
 }
 
 h2 {
-  font-size: 1.25rem;
+  font-size: var(--text-xl);
   font-weight: 600;
   letter-spacing: -0.01em;
 }
@@ -537,7 +537,7 @@ h3 {
 .prose,
 .prose-md {
   font-family: var(--font-prose);
-  font-size: 1.05rem;
+  font-size: var(--text-lg);
   line-height: 1.65;
   max-width: 72ch;
 }
@@ -560,7 +560,7 @@ h3 {
   background: var(--surface-raised);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 0.875rem;
+  font-size: var(--text-sm);
   font-weight: 500;
   cursor: pointer;
   transition: background 150ms ease, border-color 150ms ease;
@@ -622,7 +622,7 @@ select {
   border-radius: 6px;
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
   /* Explicit, and load-bearing for .field below: a control is the DATA, so it
      must not inherit the label weight of the .field wrapper around it (p.44). */
   font-weight: 400;
@@ -798,16 +798,16 @@ input[type='radio']:disabled {
 .field {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-1);
   min-width: 0;
-  font-size: 0.8rem;
+  font-size: var(--text-xs);
   font-weight: 500;
   line-height: 1.4;
   color: var(--text-secondary);
 }
 
 .field-label {
-  font-size: 0.8rem;
+  font-size: var(--text-xs);
   font-weight: 500;
   line-height: 1.4;
   color: var(--text-secondary);
@@ -817,7 +817,7 @@ input[type='radio']:disabled {
    stacked siblings — a form that lays its fields out in a ROW (BridgeSection's
    pairing row) sets this back to 0, because there the separation is horizontal. */
 .field + .field {
-  margin-top: 1rem;
+  margin-top: var(--space-4);
 }
 
 /* ═══════════════════════════════════════════
@@ -855,7 +855,7 @@ input[type='radio']:disabled {
   background: var(--surface);
   border: 1px solid light-dark(transparent, var(--hairline));
   border-radius: 8px;
-  padding: 0.75rem 1rem;
+  padding: var(--space-3) var(--space-4);
   box-shadow: var(--elevation-1);
 }
 
@@ -877,7 +877,7 @@ input[type='radio']:disabled {
   padding: 0.15rem 0.5rem;
   border-radius: 999px;
   font-family: var(--font-ui);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-weight: 500;
   background: var(--surface-sunken);
   border: 1px solid transparent;
@@ -894,15 +894,15 @@ details > summary {
   cursor: pointer;
   user-select: none;
   font-family: var(--font-ui);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
-  padding: 0.5rem 0.75rem;
+  padding: var(--space-2) var(--space-3);
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-2);
 }
 
 details > summary::-webkit-details-marker { display: none; }
@@ -939,7 +939,7 @@ dialog {
   border: 1px solid light-dark(transparent, var(--hairline));
   border-radius: 12px;
   color: var(--text);
-  padding: 1.5rem;
+  padding: var(--space-5);
   box-shadow: var(--elevation-5);
   max-width: 480px;
   width: 90vw;

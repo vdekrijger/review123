@@ -11,7 +11,7 @@ import type { ScaleCounts } from './scaleScan'
 
 export const SCALE_BASELINE: Record<string, ScaleCounts> = {
   'src/App.svelte': { emFont: 2, offScaleFont: 3, offScaleSpace: 8, offScaleWeight: 1 },
-  'src/app.css': { emFont: 0, offScaleFont: 10, offScaleSpace: 22, offScaleWeight: 4 },
+  'src/app.css': { emFont: 0, offScaleFont: 1, offScaleSpace: 10, offScaleWeight: 4 },
   'src/components/AgentFixPanel.svelte': { emFont: 0, offScaleFont: 22, offScaleSpace: 49, offScaleWeight: 2 },
   'src/components/AiPanel.svelte': { emFont: 0, offScaleFont: 9, offScaleSpace: 14, offScaleWeight: 0 },
   'src/components/AiProgress.svelte': { emFont: 0, offScaleFont: 2, offScaleSpace: 6, offScaleWeight: 0 },
