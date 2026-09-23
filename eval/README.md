@@ -116,8 +116,14 @@ inference:
 
 | run | file |
 | --- | --- |
-| 2026-09-23, 9 cases (current) | `eval/expanded-baseline-run.json`, `eval/expanded-repeat-run.json` |
+| 2026-09-23, 9 cases, Measurement 3 (current — the unanimity carve-out for LOW) | `eval/unanimity-baseline-run.json`, `eval/unanimity-repeat-run.json` |
+| 2026-09-23, 9 cases, Measurement 2 | `eval/expanded-baseline-run.json`, `eval/expanded-repeat-run.json` |
 | 2026-09-22, 6 cases (superseded) | `eval/baseline-run.json`, `eval/repeat-run.json` |
+
+Re-scoring is also how a *policy* change is measured honestly: run
+`pnpm eval:rescore` on a stored generation with the old rule and again with the
+new one, and the model output is identical on both sides. Measurement 3 is built
+on exactly that, because two fresh live runs cannot hold the model fixed.
 
 Each measurement has two runs so the run-to-run jitter — which decides whether
 your delta means anything — is checkable rather than asserted. On the current
@@ -514,7 +520,7 @@ row.
    | `05-security` | a real injection beside a safe parameterized/escaped pattern | HIGH recall |
    | `06-perf` | a real N+1 beside a noise micro-optimization | HIGH recall |
    | `07-quiet-medium` | a wrong-unit default and an off-by-one bound, both MEDIUM | **triage / mootness eating a bug** |
-   | `08-quiet-low` | a wrong bound in an error message and a rethrow that drops its cause, both LOW | **triage burying a lone LOW** |
+   | `08-quiet-low` | a wrong bound in an error message and a rethrow that drops its cause, both LOW | **triage burying a lone LOW** — this one fired: it produced Measurement 2's recall loss and Measurement 3's fix |
    | `09-two-reviewers` | two personas landing on one missing `await`, on different lines | **convergence (#206)** |
 
    The first six were the 2026-09-22 seed set and all four of their real findings
