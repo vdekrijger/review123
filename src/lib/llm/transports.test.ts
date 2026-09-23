@@ -106,8 +106,12 @@ describe('PROVIDERS — structure', () => {
       // never a fabricated dollar figure for a subscription we cannot price.
       expect(m.pricing).toBeUndefined()
       expect(estimateCostUsd(m, 1_000_000, 1_000_000)).toBeNull()
-      // No tools → the agentic path is gated off before it can be attempted.
-      expect(m.supportsTools).toBe(false)
+      // Tools YES — but by delegation, not by review123 driving rounds. The
+      // bridge hands the CLI its own read-only toolset and the CLI runs the
+      // loop. The flag answers "can deep review run on this model?", and for
+      // these two it now can. Whether the PAIRED bridge is new enough to be
+      // asked is a separate, live check (deepReview.ts).
+      expect(m.supportsTools).toBe(true)
     }
   })
 

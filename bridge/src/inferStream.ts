@@ -44,6 +44,7 @@ import {
   CLI_STREAMS,
   KILL_GRACE_MS,
   NEUTRAL_SYSTEM_PROMPT,
+  readClaudeAgentic,
   readClaudeResult,
   runInference,
   sanitizeDiagnostic,
@@ -493,8 +494,9 @@ export async function runStreamInference(
       // only when the request asked for tools. The two routes share their argv
       // (#236), so they must share what they say about it — a stream that ran
       // with tools and did not report them would make the two routes disagree
-      // about the same invocation.
-      ...(req.agentic === true && parsed.agentic ? { agentic: parsed.agentic } : {}),
+      // about the same invocation. It is read from the SAME final result line
+      // the answer came from, which carries `num_turns` in both output formats.
+      ...(req.agentic === true ? { agentic: readClaudeAgentic(resultLine) } : {}),
     })
   } catch {
     // A temp-file or filesystem failure. Generic on purpose: the real message

@@ -119,29 +119,35 @@ describe('modelSupportsTools', () => {
 
   it('all non-legacy models across the API providers support tools', () => {
     // The LOCAL BRIDGE is excluded on purpose, and asserted separately below:
-    // its "models" are CLIs that are already agents.
+    // its "models" are CLIs, and they reach deep review by a different route.
     for (const p of PROVIDERS.filter((pr) => pr.id !== 'bridge')) {
       const def = p.models.find((m) => m.id === p.defaultModel)!
       expect(modelSupportsTools(def)).toBe(true)
     }
   })
 
-  it('EVERY local-bridge model reports no tool support, which is what keeps the tool loop off it', () => {
-    // `claude -p` runs its own agent loop with its own tools. Driving it from
-    // llmToolLoop would be two agents with two tool vocabularies talking
-    // through a text pipe. This flag is the mechanism that makes the existing
-    // deep-review gates route those tasks to the single-pass path instead —
-    // no call site had to change.
+  it('EVERY local-bridge model reports tool support, because the CLI runs the loop itself', () => {
+    // The flag answers one question — "can a deep review run on this model?"
+    // For an API model that is true because llmToolLoop drives the rounds; for
+    // these it is true because the CLI is handed its own read-only tools and
+    // drives its own. review123 still does NOT steer the CLI round by round
+    // (that would be two agents with two tool vocabularies talking through a
+    // text pipe) — it delegates, which is why no call site had to change.
     for (const m of getProvider('bridge')!.models) {
-      expect(modelSupportsTools(m)).toBe(false)
+      expect(modelSupportsTools(m)).toBe(true)
     }
   })
 
-  it('refuses outright if a caller reaches the tool loop with the bridge selected', async () => {
+  it('delegates to the CLI instead of driving rounds when the bridge is selected', async () => {
+    // Reaching the loop with the bridge selected is now a legitimate path, so
+    // it must NOT be the old flat refusal. With no bridge paired it fails on
+    // the pairing token ('no-key' — "configure your provider"), which proves
+    // the call reached the delegated bridge transport rather than the
+    // round-driving one that used to throw 'server' on sight.
     setAiProvider('bridge')
     await expect(
       llmToolLoop({ system: 's', user: 'u', tools: [], executeTool: async () => ({ ok: true, content: '' }) }),
-    ).rejects.toMatchObject({ kind: 'server' })
+    ).rejects.toMatchObject({ kind: 'no-key' })
   })
 })
 

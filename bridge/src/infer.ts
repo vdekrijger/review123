@@ -647,15 +647,28 @@ interface ClaudeResultDoc {
 /**
  * Build the agentic report from claude's result document.
  *
+ * SEPARATE FROM readClaudeResult on purpose: that function reads the ANSWER, and
+ * every caller of it — agentic or not, streaming or not — wants exactly the
+ * answer. Folding the report into its return value would make a tool-less run
+ * carry a tool report, which is the one thing this field must never do. Two
+ * functions, one concern each, as the rest of this module is arranged.
+ *
  * Every field is derived from something the CLI actually stated; anything it did
  * not state is left ABSENT rather than defaulted, because a zero here would read
  * as "it used no tools" — a claim, not a gap.
+ *
+ * Returns the report with `tools` alone when stdout is unreadable: the tools WERE
+ * granted (that is a fact about the argv we built, not about the answer), we
+ * simply cannot say what was done with them.
  */
-export function readClaudeAgentic(doc: {
-  num_turns?: unknown
-  permission_denials?: unknown
-}): InferAgentic {
+export function readClaudeAgentic(stdout: string): InferAgentic {
   const report: InferAgentic = { tools: [...AGENTIC_CLAUDE_TOOLS] }
+  let doc: ClaudeResultDoc
+  try {
+    doc = JSON.parse(stdout.trim()) as ClaudeResultDoc
+  } catch {
+    return report
+  }
   const turns = doc.num_turns
   if (typeof turns === 'number' && Number.isFinite(turns) && turns >= 1) {
     // Turns AFTER the first. The first turn is the answer itself; every turn
@@ -705,7 +718,7 @@ export function countCodexCommands(stdout: string): number | null {
  */
 export function readClaudeResult(
   stdout: string,
-): { text: string; usage?: InferUsage; agentic?: InferAgentic } | { error: string } | null {
+): { text: string; usage?: InferUsage } | { error: string } | null {
   let doc: ClaudeResultDoc
   try {
     doc = JSON.parse(stdout.trim()) as ClaudeResultDoc
@@ -723,14 +736,7 @@ export function readClaudeResult(
     typeof input === 'number' && typeof output === 'number'
       ? { inputTokens: input, outputTokens: output }
       : undefined
-  // The raw turn/denial facts travel with the answer; whether they become an
-  // `agentic` report is extractOutcome's call, since only it knows whether the
-  // REQUEST asked for tools. A tool-less run must never report one.
-  const agentic = readClaudeAgentic(doc)
-  const base: { text: string; usage?: InferUsage; agentic?: InferAgentic } = { text: doc.result }
-  if (usage) base.usage = usage
-  base.agentic = agentic
-  return base
+  return usage ? { text: doc.result, usage } : { text: doc.result }
 }
 
 // ---------------------------------------------------------------------------
@@ -1003,7 +1009,7 @@ async function extractOutcome(
     // Reported ONLY when this run actually asked for tools. The turn count is
     // present on every claude result document, agentic or not, and echoing it
     // back on a tool-less run would advertise a grounding that never happened.
-    if (agentic && parsed.agentic) base.agentic = parsed.agentic
+    if (agentic) base.agentic = readClaudeAgentic(result.stdout)
     return base
   }
 

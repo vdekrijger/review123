@@ -41,7 +41,7 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     ok: true,
     protocol: PROTOCOL_VERSION,
     root: 'review123',
-    capabilities: { inference: ['claude'], infer: true, inferStream: true, files: true, search: true, fix: false, checkout: false },
+    capabilities: { inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false },
     git: { head: HEAD_SHA, branch: 'main', dirty: false },
     version: '0.1.0',
     ...overrides,
@@ -206,6 +206,7 @@ describe('connectBridge — user-initiated pairing', () => {
       inference: ['claude'],
       infer: true,
       inferStream: true,
+      inferAgentic: true,
       files: true,
       search: true,
       fix: false,
@@ -592,6 +593,7 @@ describe('parseHealth', () => {
       inference: ['claude'],
       infer: false,
       inferStream: false,
+      inferAgentic: false,
       files: false,
       search: false,
       fix: false,
@@ -608,6 +610,25 @@ describe('parseHealth', () => {
     })
     expect(parseHealth(older)?.capabilities.inferStream).toBe(false)
     expect(parseHealth(older)?.capabilities.infer).toBe(true)
+  })
+
+  // The same additive rule, and the one where reading it wrong is worst: a
+  // bridge without the agentic route does not REFUSE an agentic request, it
+  // silently answers tool-less. Reading the absent flag as false is what stops
+  // that answer being presented as a deep, locally-grounded review.
+  it('reads a MISSING inferAgentic flag as false, so a pre-agentic bridge still pairs', () => {
+    const older = healthBody({
+      capabilities: { inference: ['claude'], infer: true, inferStream: true, files: true, search: true },
+    })
+    expect(parseHealth(older)?.capabilities.inferAgentic).toBe(false)
+    expect(parseHealth(older)?.capabilities.inferStream).toBe(true)
+  })
+
+  it('reads a NON-BOOLEAN inferAgentic flag as malformed rather than guessing', () => {
+    const lying = healthBody({
+      capabilities: { inference: ['claude'], infer: true, inferStream: true, inferAgentic: 'yes', files: true, search: true },
+    })
+    expect(parseHealth(lying)).toBeNull()
   })
 
   it('reads a NON-BOOLEAN inferStream flag as malformed rather than guessing', () => {

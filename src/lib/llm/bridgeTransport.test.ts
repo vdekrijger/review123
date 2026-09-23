@@ -21,6 +21,7 @@ import {
   llmJsonWithRepairFor,
   llmTestConnection,
   LlmError,
+  BRIDGE_AGENTIC_INSTRUCTION,
   BRIDGE_JSON_INSTRUCTION,
   BRIDGE_NOT_PAIRED_MESSAGE,
   BRIDGE_UNREACHABLE_MESSAGE,
@@ -1114,23 +1115,130 @@ describe('bridge transport — an older bridge with no /v1/infer/stream', () => 
 })
 
 // ===========================================================================
-// The tool loop stays off the bridge
+// The tool loop DELEGATES to the bridge — the CLI runs the agent loop
 // ===========================================================================
 
-describe('bridge transport — the agentic loop', () => {
-  it('refuses the tool loop with an explanation, rather than half-driving an agent', async () => {
-    useBridge()
-    vi.stubGlobal('fetch', vi.fn())
+/** An /v1/infer body that reports a real agentic run. */
+function agenticBody(
+  agentic: Record<string, unknown> | undefined,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return inferBody({ ...(agentic ? { agentic } : {}), ...overrides })
+}
 
-    const err = await llmToolLoop({
-      system: 'S',
-      user: 'U',
-      tools: [],
-      executeTool: async () => ({ ok: true, content: '' }),
-    }).catch((e: unknown) => e)
+function runLoop(opts: Partial<Parameters<typeof llmToolLoop>[0]> = {}) {
+  return llmToolLoop({
+    system: 'S',
+    user: 'U',
+    tools: [],
+    executeTool: async () => ({ ok: true, content: '' }),
+    ...opts,
+  })
+}
+
+describe('bridge transport — the delegated agentic loop', () => {
+  it('asks for tools, and sends ONE request rather than driving rounds', async () => {
+    useBridge()
+    const fetchMock = respondWith(agenticBody({ tools: ['Read', 'Glob', 'Grep'], toolCallsAtLeast: 3 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await runLoop()
+
+    // One call. The loop lives in the CLI, so there is no second round.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as Record<string, unknown>
+    expect(body['agentic']).toBe(true)
+    expect(result.content).toBe('the answer')
+  })
+
+  it('tells the CLI it may read the repo, without touching the task prompt', async () => {
+    useBridge()
+    const fetchMock = respondWith(agenticBody({ tools: ['Read'], toolCallsAtLeast: 1 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await runLoop({ system: 'TASK SYSTEM PROMPT' })
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as Record<string, unknown>
+    // The task prompt survives verbatim; the capability note is APPENDED. This
+    // is the BRIDGE_JSON_INSTRUCTION pattern — transport-level, so no
+    // PROMPT_VERSIONS entry is involved.
+    expect(body['system']).toContain('TASK SYSTEM PROMPT')
+    expect(body['system']).toContain(BRIDGE_AGENTIC_INSTRUCTION)
+  })
+
+  it('reports the CLI’s tool count as toolCallsUsed, so the completeness nudge stays quiet', async () => {
+    useBridge()
+    vi.stubGlobal('fetch', respondWith(agenticBody({ tools: ['Read'], toolCallsAtLeast: 4 })))
+
+    expect((await runLoop()).toolCallsUsed).toBe(4)
+  })
+
+  it('reports 0 when the CLI had tools and used none — a real answer, not a gap', async () => {
+    useBridge()
+    vi.stubGlobal('fetch', respondWith(agenticBody({ tools: ['Read'], toolCallsAtLeast: 0 })))
+
+    expect((await runLoop()).toolCallsUsed).toBe(0)
+  })
+
+  it('reports 0 when the CLI reported nothing countable, rather than inventing one', async () => {
+    useBridge('codex')
+    // codex names no tools and may report no count; the run still happened.
+    vi.stubGlobal('fetch', respondWith(agenticBody({ tools: [] })))
+
+    expect((await runLoop()).toolCallsUsed).toBe(0)
+  })
+
+  it('FAILS rather than relabel a tool-less answer as deep when the bridge ignored the flag', async () => {
+    useBridge()
+    // An older bridge: 200 OK, a perfectly good answer, and NO agentic report.
+    // Returning this as a deep review is the one outcome that must not happen,
+    // because nothing downstream could tell it apart from a grounded one.
+    vi.stubGlobal('fetch', respondWith(agenticBody(undefined)))
+
+    const err = await runLoop().catch((e: unknown) => e)
 
     expect((err as LlmError).kind).toBe('server')
-    expect((err as LlmError).message).toMatch(/already an agent/i)
+    expect((err as LlmError).message).toMatch(/without its tools/i)
+  })
+
+  it('passes the CLI’s token usage through so the cost UI keeps working', async () => {
+    useBridge()
+    vi.stubGlobal(
+      'fetch',
+      respondWith(
+        agenticBody({ tools: ['Read'], toolCallsAtLeast: 2 }, { usage: { inputTokens: 100, outputTokens: 20 } }),
+      ),
+    )
+
+    expect((await runLoop()).usage).toEqual({
+      prompt_tokens: 100,
+      completion_tokens: 20,
+      total_tokens: 120,
+    })
+  })
+
+  it('surfaces an activity line, because the CLI reports no per-call feed to mirror', async () => {
+    useBridge()
+    vi.stubGlobal('fetch', respondWith(agenticBody({ tools: ['Read'], toolCallsAtLeast: 2 })))
+
+    const events: string[] = []
+    await runLoop({ onToolEvent: (ev) => events.push(ev.detail) })
+
+    expect(events.length).toBeGreaterThan(0)
+    expect(events[0]).toMatch(/investigating your working tree/i)
+  })
+
+  it('never executes review123’s own tools — the CLI has its own', async () => {
+    useBridge()
+    vi.stubGlobal('fetch', respondWith(agenticBody({ tools: ['Read'], toolCallsAtLeast: 2 })))
+    const executeTool = vi.fn(async () => ({ ok: true, content: 'x' }))
+
+    await runLoop({
+      tools: [{ name: 'read_file', description: 'd', parameters: { type: 'object', properties: {} } }],
+      executeTool,
+    })
+
+    expect(executeTool).not.toHaveBeenCalled()
   })
 })
 
