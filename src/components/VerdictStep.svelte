@@ -1256,7 +1256,7 @@
     background: var(--surface-raised);
     border: 1px solid var(--hairline);
     border-radius: 8px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+    box-shadow: var(--elevation-4);
     display: flex;
     flex-direction: column;
     gap: 0.1rem;

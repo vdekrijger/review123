@@ -391,7 +391,7 @@
     background: var(--surface-raised);
     border: 1px solid var(--hairline);
     border-radius: 8px;
-    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+    box-shadow: var(--elevation-4);
     padding: 0.5rem 0.65rem 0.65rem;
     font-size: 0.8rem;
     color: var(--text);

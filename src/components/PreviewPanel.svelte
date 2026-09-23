@@ -157,7 +157,7 @@
   @media (max-width: 1099px) {
     .preview-panel {
       width: min(92vw, 480px);
-      box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+      box-shadow: var(--elevation-drawer);
     }
   }
 

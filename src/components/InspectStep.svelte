@@ -2389,7 +2389,7 @@
     border-radius: 6px;
     padding: 0.5rem 0.25rem;
     scrollbar-width: thin;
-    box-shadow: -2px 4px 20px rgba(0, 0, 0, 0.22);
+    box-shadow: var(--elevation-drawer);
   }
 
   /* ---- MARGIN mode: centered diff + viewport wide enough for the 340px tree ---- */
@@ -2956,7 +2956,7 @@
     background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
     border-radius: 6px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
+    box-shadow: var(--elevation-3);
     scrollbar-width: thin;
   }
 
