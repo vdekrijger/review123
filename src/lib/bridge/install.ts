@@ -27,8 +27,32 @@ export const BRIDGE_LOCAL_PATH = '~/review123-bridge.mjs'
 /** Step 1: fetch the bundle once. */
 export const BRIDGE_DOWNLOAD_COMMAND = `curl -fsSL ${BRIDGE_DOWNLOAD_URL} -o ${BRIDGE_LOCAL_PATH}`
 
-/** Step 2, and the command every surface names when the bridge is not running. */
-export const BRIDGE_START_COMMAND = `node ${BRIDGE_LOCAL_PATH} --root .`
+/**
+ * Step 2, and the command every surface names when the bridge is not running.
+ *
+ * WHY THE FLAGS ARE IN THE DOCUMENTED COMMAND, AND MUST STAY:
+ *
+ * The bridge's code defaults are OFF and that is not changing — this string is
+ * DOCUMENTATION, not a default. `--allow-write` and `--allow-checkout` are the
+ * only way to turn on the two features most people install the bridge for, and
+ * they are typed at a terminal on purpose: nothing review123 sends can enable
+ * them, so the grant survives even if review123.dev is compromised and starts
+ * asking for things the user never wanted. The flags defend the user against
+ * THIS APP; they were never a warning about the user's own machine. Leaving
+ * them out of the documented line doesn't harden anything — the process is
+ * equally exposed either way — it just means the features silently don't work
+ * and the user is told to "restart the bridge with…" later.
+ *
+ *   --allow-write     → POST /v1/fix: hand a finding to your local coding
+ *                       agent, which fixes it in a SCRATCH git worktree.
+ *   --allow-checkout  → POST /v1/checkout + /v1/restore: check a PR out in
+ *                       THIS working tree so your dev server serves it.
+ *
+ * They are independent in both directions; neither implies the other. Drop
+ * either from this string only with a reason better than "it looks safer".
+ */
+export const BRIDGE_START_COMMAND =
+  `node ${BRIDGE_LOCAL_PATH} --root . --allow-write --allow-checkout`
 
 export const BRIDGE_REPO_URL = 'https://github.com/vdekrijger/review123'
 export const BRIDGE_README_URL = 'https://github.com/vdekrijger/review123/blob/main/bridge/README.md'

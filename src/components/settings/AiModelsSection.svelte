@@ -11,7 +11,8 @@
   import { PROVIDERS, getProvider, getModelDef, type ApiProviderId, type LlmProviderId } from '../../lib/llm/providers'
   import { bridgeState, bridgeCanInfer } from '../../lib/bridge/bridge.svelte'
   import { llmTestConnection, LlmError } from '../../lib/llm/llm'
-  import { activeProviderHasKey, resolvePanel } from '../../lib/llm/config'
+  import { activeProviderHasKey, providerIsUsable, resolvePanel } from '../../lib/llm/config'
+  import { verifierVotesCanDemote } from '../../lib/ai/crossVerify'
   import { providerSupportsBalance, fetchProviderBalance, formatBalance, type ProviderBalance } from '../../lib/llm/balance'
   import { track } from '../../lib/analytics/analytics'
   import SecretInput from './SecretInput.svelte'
@@ -86,10 +87,6 @@
   // only when ≥2 providers have keys; disabled with a hint otherwise. Reactive
   // to settingsState so adding a second key re-enables it live.
   let crossModelVerify = $state<boolean>(current.crossModelVerify)
-  const keyedProviderCount = $derived.by(() => {
-    const s = settingsState.current
-    return [s.deepseekKey, s.openaiKey, s.anthropicKey, s.geminiKey, s.openrouterKey].filter(Boolean).length
-  })
   function onCrossModelVerifyChange(checked: boolean) {
     crossModelVerify = checked
     setCrossModelVerify(checked)
@@ -104,10 +101,35 @@
   // becomes authoritative.
   // -------------------------------------------------------------------------
 
-  /** Whether a provider has a key saved (drives row disabling + hints). */
+  /**
+   * Whether a provider is USABLE — has a credential — which drives row
+   * disabling, the hints, and the cross-verify gate.
+   *
+   * Delegates to `providerIsUsable` rather than indexing settings itself. This
+   * used to be an open-coded five-way key chain that ended `: s.openrouterKey`,
+   * so the LOCAL BRIDGE — which has no settings key field, its credential being
+   * the pairing token — fell through onto OpenRouter's empty key and read as
+   * unkeyed. A paired bridge then counted as ZERO usable models: every panel row
+   * said "no key", and `crossVerifyAvailable` stayed false, so cross-model
+   * verification (the one feature PR #250 measured as actually cutting noise,
+   * 36–45% → 9%) was silently unavailable to bridge users.
+   *
+   * The two reads below are both REACTIVITY anchors, not data sources:
+   * `settingsState.current` for the API keys and `bridgeState.paired` for the
+   * bridge token, which lives in its own localStorage record and would
+   * otherwise never re-run this.
+   */
   function providerKeyed(p: AiProvider): boolean {
-    const s = settingsState.current
-    return !!(p === 'deepseek' ? s.deepseekKey : p === 'openai' ? s.openaiKey : p === 'anthropic' ? s.anthropicKey : p === 'gemini' ? s.geminiKey : s.openrouterKey)
+    void settingsState.current
+    void bridgeState.paired
+    return providerIsUsable(p)
+  }
+
+  /** Per-provider hint for an unusable row — the bridge is PAIRED, not keyed. */
+  function noCredentialHint(p: AiProvider): string {
+    return p === 'bridge'
+      ? 'Bridge not paired — set one up in Local bridge below'
+      : `No ${getProvider(p)?.displayName} key — add it above`
   }
 
   /**
@@ -134,6 +156,25 @@
   const crossVerifyAvailable = $derived(usablePanelCount >= 2)
   /** Count of generator rows (drives the ≥1-generator constraint on the role toggle). */
   const generatorCount = $derived(panelParticipants.filter((p) => p.role === 'generator').length)
+
+  /**
+   * Can this panel's verifiers actually OVERTURN anything?
+   *
+   * The aggregator surfaces a finding when `score >= polled / 2`, counting each
+   * raiser as an implicit confirm on BOTH sides of that comparison — so a lone
+   * verifier's vote is arithmetically incapable of pulling the score under the
+   * bar (1 >= 2/2 always holds). The worst case for any panel is a finding ONE
+   * model raised, leaving every other usable model to verify it, which is why
+   * this asks `verifierVotesCanDemote(1, usable - 1)` — the same predicate the
+   * aggregator itself is documented against, rather than a second copy of the
+   * arithmetic that could drift from it.
+   *
+   * With a unanimous refutation now demoting outright (see crossVerify.ts), a
+   * two-model panel is not useless — it just cannot RESOLVE a disagreement,
+   * only act on a flat one. The hint below says exactly that instead of letting
+   * the user believe a vote is deciding something.
+   */
+  const panelCanOverturn = $derived(verifierVotesCanDemote(1, Math.max(usablePanelCount - 1, 0)))
 
   /** Persist a participant list back to aiPanel. */
   function commitPanel(participants: PanelParticipant[]) {
@@ -676,11 +717,19 @@
             >✕</button>
           {/if}
           {#if !keyed}
-            <span class="ensemble-nokey">No {getProvider(row.provider)?.displayName} key — add it above</span>
+            <span class="ensemble-nokey">{noCredentialHint(row.provider)}</span>
           {/if}
         </li>
       {/each}
     </ul>
+    {#if crossVerifyAvailable && !panelCanOverturn}
+      <p class="ensemble-thin-poll" data-testid="ensemble-thin-poll">
+        <strong>Two models can agree, but they cannot outvote each other.</strong> When one model
+        raises a finding and one checks it, a tie goes to the finding — so the check can only
+        remove a finding it flatly refutes, and it can never settle a disagreement. Add a third
+        model to give the panel a real vote.
+      </p>
+    {/if}
     {#if panelParticipants.length >= 4}
       <p class="ensemble-scale-note" data-testid="ensemble-scale-note">
         Each model verifies every finding — more models means more tokens and higher
@@ -1162,6 +1211,14 @@
     font-style: italic;
     color: var(--text-muted);
     opacity: 0.85;
+  }
+  /* Not styled as an error: a two-model panel is a legitimate, useful setup —
+     this corrects what it can be expected to DO, it does not condemn it. */
+  .ensemble-thin-poll {
+    margin: 0.6rem 0 0;
+    font-size: 0.76em;
+    line-height: 1.45;
+    color: var(--text-muted);
   }
   .ensemble-add {
     margin-top: 0.6rem;

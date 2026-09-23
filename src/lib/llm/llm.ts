@@ -1240,6 +1240,11 @@ async function bridgeComplete(
     timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS,
   }
   if (maxTokens !== undefined) payload.maxOutputTokens = maxTokens
+  // `model` here is the CLI to spawn; WHICH MODEL that CLI runs is a separate
+  // setting, because the bridge provider's "models" are process names. Left
+  // unset the flag is omitted entirely and the CLI keeps its own default.
+  const bridgeModel = getSettings().bridgeModel
+  if (bridgeModel !== '') payload.model = bridgeModel
 
   let res: Response
   try {
@@ -1381,6 +1386,11 @@ async function bridgeStream(
     // browser would have given up anyway.
     timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS,
   }
+  // The streaming route must pick the same model as the one-shot route, or the
+  // same review would be answered by two different models depending only on
+  // whether the CLI happened to support partial output.
+  const streamBridgeModel = getSettings().bridgeModel
+  if (streamBridgeModel !== '') payload.model = streamBridgeModel
 
   let res: Response
   try {

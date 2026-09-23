@@ -30,7 +30,7 @@ import {
 } from './llm'
 import { llmToolLoop } from './llmToolLoop'
 import { setTransientRetryPolicyForTests } from './transientRetry'
-import { setAiProvider, setAiModel, setDeepseekKey, getSettings } from '../settings/settings'
+import { setAiProvider, setAiModel, setBridgeModel, setDeepseekKey, getSettings } from '../settings/settings'
 import { BRIDGE_STORAGE_KEY } from '../bridge/storage'
 import { BRIDGE_START_COMMAND } from '../bridge/install'
 import { MAX_INFLIGHT_LLM_CALLS } from './concurrencyGate'
@@ -121,6 +121,46 @@ describe('bridge transport — the request', () => {
     await llmComplete({ system: 'be terse', user: 'review this' })
 
     expect(sentBody(fetchMock)).toMatchObject({ cli: 'codex', prompt: 'review this', system: 'be terse' })
+  })
+
+  // -------------------------------------------------------------------------
+  // Model selection. `aiModel` for the bridge names the CLI (`claude`/`codex`)
+  // — a process, not a model — so which MODEL that process runs is a separate
+  // setting. Before it existed, nothing ever sent `--model` and the user got
+  // their CLI's configured default with no way to choose.
+  // -------------------------------------------------------------------------
+  it('sends the configured bridge model so the CLI gets a --model flag', async () => {
+    useBridge()
+    setBridgeModel('opus')
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(inferBody()))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmComplete({ system: 'S', user: 'U' })
+
+    expect(sentBody(fetchMock)['model']).toBe('opus')
+  })
+
+  it('sends NO model field when none is configured — the CLI keeps its default', async () => {
+    useBridge()
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(inferBody()))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmComplete({ system: 'S', user: 'U' })
+
+    // Absent, not empty: an empty string would make the bridge build
+    // `--model ''` and the CLI would reject every call.
+    expect(sentBody(fetchMock)).not.toHaveProperty('model')
+  })
+
+  it('keeps the CLI and the model independent', async () => {
+    useBridge('codex')
+    setBridgeModel('gpt-5')
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(inferBody({ cli: 'codex' })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmComplete({ system: 'S', user: 'U' })
+
+    expect(sentBody(fetchMock)).toMatchObject({ cli: 'codex', model: 'gpt-5' })
   })
 
   it('sends a timeout the bridge can enforce, so both ends give up together', async () => {
@@ -526,6 +566,30 @@ describe('bridge transport — streaming', () => {
     expect((fetchMock.mock.calls[0]![1] as RequestInit).credentials).toBe('omit')
     // Still a CLI id and a prompt on the body — never a command, argv or cwd.
     expect(Object.keys(sentBody(fetchMock)).sort()).toEqual(['cli', 'prompt', 'system', 'timeoutMs'])
+  })
+
+  it('sends the configured model on the STREAM route too', async () => {
+    // Both routes must pick the same model, or the same review would be
+    // answered by a different one depending only on whether the CLI happened
+    // to support partial output.
+    useBridge()
+    setBridgeModel('sonnet')
+    const fetchMock = streamFetch(happyStream())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmStream({ system: 'S', user: 'U' }, () => {})
+
+    expect(sentBody(fetchMock)['model']).toBe('sonnet')
+  })
+
+  it('sends no model on the STREAM route when none is configured', async () => {
+    useBridge()
+    const fetchMock = streamFetch(happyStream())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmStream({ system: 'S', user: 'U' }, () => {})
+
+    expect(sentBody(fetchMock)).not.toHaveProperty('model')
   })
 
   it('DELIVERS DELTAS INCREMENTALLY — the consumer sees them before the answer ends', async () => {

@@ -47,13 +47,34 @@ export function providerCredential(providerId: LlmProviderId): string | null {
 }
 
 /**
+ * Is this provider USABLE — i.e. does it have a credential we could call it
+ * with? THE one answer to that question; every gate asks it here.
+ *
+ * It exists because open-coding the question keeps going wrong in the same
+ * way. Three times now a call site has written its own five-way
+ * `p === 'deepseek' ? s.deepseekKey : … : s.openrouterKey` chain, and each
+ * time `'bridge'` — which has no settings key field at all — fell off the end
+ * of the chain onto `openrouterKey` and read as UNKEYED. #238 fixed one such
+ * site, #244 another, and #252's follow-up a third, where the consequence was
+ * severe: a paired bridge counted as zero usable models, so cross-model
+ * verification silently switched itself off for bridge users.
+ *
+ * So: never ask "which settings field holds this provider's key?" at a call
+ * site. Ask this function. It delegates to `providerCredential`, which knows
+ * the bridge's credential is its PAIRING TOKEN rather than an API key.
+ */
+export function providerIsUsable(providerId: LlmProviderId): boolean {
+  return providerCredential(providerId) !== null
+}
+
+/**
  * Whether the ACTIVE provider (settings.aiProvider) has a credential saved.
  * Used by no-key gates so they follow the provider selection instead of
  * being hardwired to deepseekKey.
  */
 export function activeProviderHasKey(): boolean {
   const { provider } = activeLlmConfig()
-  return providerCredential(provider.id) !== null
+  return providerIsUsable(provider.id)
 }
 
 /** Static fallback — kept for compatibility. Do not use in new code. */

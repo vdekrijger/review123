@@ -356,11 +356,44 @@ export interface ErrorResponse {
  * reuses the CLI's stored credentials to call a vendor API directly — that
  * would route a subscription's auth around the subscription.
  */
+/**
+ * Characters a `InferRequest.model` id may contain.
+ *
+ * The model id is the ONE piece of caller-supplied text that reaches argv (the
+ * prompt and system text go to stdin and a temp file precisely so they never
+ * do). An argv ARRAY already makes word-splitting impossible, but it does not
+ * stop a value from LOOKING like a flag: `--model --dangerously-skip-permissions`
+ * would hand the CLI an extra switch rather than a model name. So the id is
+ * restricted to the shape real model ids actually have — letters, digits and
+ * `. _ : - /` — and, separately, may not START with `-`. See MODEL_ID_MAX_LEN.
+ */
+export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/
+
+/** Length ceiling for a model id. Generous next to any real id. */
+export const MODEL_ID_MAX_LEN = 100
+
+/** Whether `value` is a model id the bridge will put on argv. */
+export function isValidModelId(value: string): boolean {
+  return value.length > 0 && value.length <= MODEL_ID_MAX_LEN && MODEL_ID_PATTERN.test(value)
+}
+
 export interface InferRequest {
   /** Which detected CLI to use. Must appear in `capabilities.inference`. */
   cli: 'claude' | 'codex'
   /** The user-turn prompt text. Delivered on STDIN, never in argv. */
   prompt: string
+  /**
+   * Which MODEL the chosen CLI should run — `claude --model <id>` /
+   * `codex exec --model <id>`. Both accept a vendor alias (`opus`, `sonnet`,
+   * `gpt-5`) or a full id (`claude-fable-5`); the bridge passes the string
+   * through and lets the CLI validate it, because the CLI's accepted set moves
+   * with its releases and a list baked in here would be wrong within a month.
+   *
+   * ABSENT means absent: no `--model` flag is added at all and the CLI uses
+   * whatever the user configured it with — the behaviour every existing client
+   * already gets. Must satisfy `isValidModelId`.
+   */
+  model?: string
   /**
    * Optional system/instructions preamble. `claude` receives it through
    * `--system-prompt-file` (a 0600 temp file, so it stays out of `ps` too);

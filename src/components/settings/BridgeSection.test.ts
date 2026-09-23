@@ -12,6 +12,7 @@ import BridgeSection from './BridgeSection.svelte'
 import { BRIDGE_STORAGE_KEY, _resetBridgeForTest } from '../../lib/bridge/bridge.svelte'
 import { PROTOCOL_VERSION } from '../../lib/bridge/protocol'
 import { _setCaptureForTest } from '../../lib/analytics/analytics'
+import { getSettings } from '../../lib/settings/settings'
 
 const TOKEN = 'pairing-token-0000000000000000000000000000'
 
@@ -95,6 +96,32 @@ describe('BridgeSection — never paired', () => {
     expect(install).toHaveTextContent('node ~/review123-bridge.mjs --root .')
   })
 
+  // The documented command carries both grants. The code defaults stay OFF —
+  // this is documentation, not a default — but omitting them from the line
+  // people paste only means the two headline features silently do not work.
+  it('documents the command with BOTH grants, not a crippled one', () => {
+    render(BridgeSection)
+    expect(screen.getByTestId('bridge-install')).toHaveTextContent(
+      'node ~/review123-bridge.mjs --root . --allow-write --allow-checkout',
+    )
+  })
+
+  it('says what each flag unlocks, and why they live on the command line', () => {
+    render(BridgeSection)
+    const note = screen.getByTestId('bridge-flags-note')
+    // Which flag unlocks what — they are independent grants.
+    expect(note).toHaveTextContent(/--allow-write/)
+    expect(note).toHaveTextContent(/scratch git worktree/i)
+    expect(note).toHaveTextContent(/--allow-checkout/)
+    expect(note).toHaveTextContent(/check\s+a pull request out/i)
+    expect(note).toHaveTextContent(/independent/i)
+    // And the reason they exist: they defend the user against THIS WEBSITE,
+    // not against themselves. Without this, someone "hardens" the documented
+    // command back out and only turns the features off.
+    expect(note).toHaveTextContent(/off/i)
+    expect(note).toHaveTextContent(/compromised/i)
+  })
+
   it('still offers the clone route, and is honest that it is heavy', () => {
     render(BridgeSection)
     const install = screen.getByTestId('bridge-install')
@@ -134,6 +161,55 @@ describe('BridgeSection — connecting', () => {
     })
     expect(screen.getByTestId('bridge-root')).toHaveTextContent('review123')
     expect(screen.getByTestId('bridge-clis')).toHaveTextContent('claude, codex')
+  })
+
+  // -------------------------------------------------------------------------
+  // Model selection. The "Local bridge model" dropdown under AI models picks
+  // the CLI (`claude`/`codex`) — a process name. This picks the MODEL that
+  // process runs, which nothing could express before: no `--model` was ever
+  // sent, so users silently got their CLI's configured default.
+  // -------------------------------------------------------------------------
+  async function connect(): Promise<void> {
+    fetchMock.mockResolvedValue(jsonResponse(healthBody()))
+    render(BridgeSection)
+    await userEvent.type(screen.getByLabelText(/bridge pairing token/i), TOKEN)
+    await userEvent.click(screen.getByRole('button', { name: /^connect$/i }))
+    await waitFor(() => expect(screen.getByTestId('bridge-status')).toBeInTheDocument())
+  }
+
+  it('offers a model field once connected, blank by default', async () => {
+    await connect()
+    const field = await screen.findByLabelText(/bridge cli model/i)
+    expect((field as HTMLInputElement).value).toBe('')
+    expect(getSettings().bridgeModel).toBe('')
+  })
+
+  it('stores a typed model id', async () => {
+    await connect()
+    await userEvent.type(await screen.findByLabelText(/bridge cli model/i), 'opus')
+    expect(getSettings().bridgeModel).toBe('opus')
+  })
+
+  it('clearing it goes back to the CLI default rather than sending an empty model', async () => {
+    await connect()
+    const field = await screen.findByLabelText(/bridge cli model/i)
+    await userEvent.type(field, 'opus')
+    await userEvent.clear(field)
+    expect(getSettings().bridgeModel).toBe('')
+  })
+
+  it('flags an id that could never be sent, and stores nothing', async () => {
+    await connect()
+    await userEvent.type(await screen.findByLabelText(/bridge cli model/i), '-opus')
+    expect(screen.getByText(/isn't a model id/i)).toBeInTheDocument()
+    expect(getSettings().bridgeModel).toBe('')
+  })
+
+  it('explains the flag rather than listing models it cannot know', async () => {
+    await connect()
+    const note = await screen.findByTestId('bridge-model-note')
+    expect(note).toHaveTextContent(/--model/)
+    expect(note).toHaveTextContent(/Blank sends no flag/i)
   })
 
   it('swaps the form for a Disconnect button once connected', async () => {
