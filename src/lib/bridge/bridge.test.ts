@@ -30,6 +30,7 @@ import {
   bridgeUrl,
   parseGitState,
   parseHealth,
+  parseInferResponse,
   parseInferStreamEvent,
 } from './protocol'
 import { _setCaptureForTest } from '../analytics/analytics'
@@ -41,7 +42,7 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     ok: true,
     protocol: PROTOCOL_VERSION,
     root: 'review123',
-    capabilities: { inference: ['claude'], infer: true, inferStream: true, files: true, search: true, fix: false, checkout: false },
+    capabilities: { inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false },
     git: { head: HEAD_SHA, branch: 'main', dirty: false },
     version: '0.1.0',
     ...overrides,
@@ -206,6 +207,7 @@ describe('connectBridge — user-initiated pairing', () => {
       inference: ['claude'],
       infer: true,
       inferStream: true,
+      inferAgentic: true,
       files: true,
       search: true,
       fix: false,
@@ -592,6 +594,7 @@ describe('parseHealth', () => {
       inference: ['claude'],
       infer: false,
       inferStream: false,
+      inferAgentic: false,
       files: false,
       search: false,
       fix: false,
@@ -608,6 +611,25 @@ describe('parseHealth', () => {
     })
     expect(parseHealth(older)?.capabilities.inferStream).toBe(false)
     expect(parseHealth(older)?.capabilities.infer).toBe(true)
+  })
+
+  // The same additive rule, and the one where reading it wrong is worst: a
+  // bridge without the agentic route does not REFUSE an agentic request, it
+  // silently answers tool-less. Reading the absent flag as false is what stops
+  // that answer being presented as a deep, locally-grounded review.
+  it('reads a MISSING inferAgentic flag as false, so a pre-agentic bridge still pairs', () => {
+    const older = healthBody({
+      capabilities: { inference: ['claude'], infer: true, inferStream: true, files: true, search: true },
+    })
+    expect(parseHealth(older)?.capabilities.inferAgentic).toBe(false)
+    expect(parseHealth(older)?.capabilities.inferStream).toBe(true)
+  })
+
+  it('reads a NON-BOOLEAN inferAgentic flag as malformed rather than guessing', () => {
+    const lying = healthBody({
+      capabilities: { inference: ['claude'], infer: true, inferStream: true, inferAgentic: 'yes', files: true, search: true },
+    })
+    expect(parseHealth(lying)).toBeNull()
   })
 
   it('reads a NON-BOOLEAN inferStream flag as malformed rather than guessing', () => {
@@ -853,5 +875,43 @@ describe('parseInferStreamEvent', () => {
     ['a done with a non-numeric duration', '{"type":"done","text":"x","truncated":false,"durationMs":"1"}'],
   ])('SKIPS %s rather than failing the stream', (_label, raw) => {
     expect(parseInferStreamEvent(raw)).toBeNull()
+  })
+})
+
+describe('parseInferResponse — the agentic report', () => {
+  function body(agentic: unknown): Record<string, unknown> {
+    return { ok: true, cli: 'claude', text: 'a', truncated: false, durationMs: 1, agentic }
+  }
+
+  it('reads a well-formed report', () => {
+    const parsed = parseInferResponse(body({ tools: ['Read', 'Glob'], toolCallsAtLeast: 3, denied: 1 }))
+    expect(parsed?.agentic).toEqual({ tools: ['Read', 'Glob'], toolCallsAtLeast: 3, denied: 1 })
+  })
+
+  it('accepts codex’s EMPTY tool list — not nameable is not the same as none', () => {
+    expect(parseInferResponse(body({ tools: [] }))?.agentic).toEqual({ tools: [] })
+  })
+
+  /**
+   * The presence of this report is what lets the app tell a user their review
+   * read their own working tree. So anything that is not a well-formed report
+   * is dropped ENTIRELY rather than half-read: "we could not tell" has to
+   * resolve to "not grounded", never to a partial claim.
+   */
+  it('drops a malformed report rather than half-reading it', () => {
+    for (const bad of [null, 'yes', 42, {}, { tools: 'Read' }, { tools: [1, 2] }]) {
+      expect(parseInferResponse(body(bad))?.agentic).toBeUndefined()
+    }
+  })
+
+  it('leaves a malformed COUNT absent rather than coercing it to zero', () => {
+    // Absent means "unreported"; 0 is a claim that the CLI used no tools.
+    const parsed = parseInferResponse(body({ tools: ['Read'], toolCallsAtLeast: -1, denied: 'lots' }))
+    expect(parsed?.agentic).toEqual({ tools: ['Read'] })
+  })
+
+  it('is ABSENT for an ordinary tool-less answer, which is how an old bridge reads', () => {
+    const plain = { ok: true, cli: 'claude', text: 'a', truncated: false, durationMs: 1 }
+    expect(parseInferResponse(plain)?.agentic).toBeUndefined()
   })
 })

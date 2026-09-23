@@ -20,6 +20,8 @@ import {
   fetchBudgetFor,
 } from './deepReview'
 import type { DeepReviewSource } from './deepReview'
+ import { _resetBridgeForTest, _setBridgeConnectedForTest } from '../bridge/bridge.svelte'
+ import { BRIDGE_STORAGE_KEY } from '../bridge/storage'
 
 beforeEach(() => {
   localStorage.clear()
@@ -534,5 +536,92 @@ describe('createDeepReviewCache — shared cross-task fetch cache', () => {
     await tA.executeTool('read_file', { path: 'a.ts' })
     await tB.executeTool('read_file', { path: 'a.ts' })
     expect(getFileAtHead).toHaveBeenCalledTimes(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The BRIDGE harness gate — deep review runs inside the user's own CLI
+// ---------------------------------------------------------------------------
+
+describe('resolveTaskMode — deep review over the local bridge', () => {
+  /** Settings that select the bridge and ask for a deep verdict. */
+  function useBridgeDeep(): void {
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({ aiProvider: 'bridge', aiModel: 'claude', aiTaskModes: { verdict: 'deep' } }),
+    )
+  }
+
+  /** Pair a bridge whose capabilities are whatever this test needs. */
+  function pairBridge(inferAgentic: boolean): void {
+    _resetBridgeForTest()
+    localStorage.setItem(BRIDGE_STORAGE_KEY, JSON.stringify({ token: 'tok', port: 7321 }))
+    _setBridgeConnectedForTest({
+      inference: ['claude', 'codex'],
+      infer: true,
+      inferStream: true,
+      inferAgentic,
+      files: true,
+      search: true,
+      fix: false,
+      checkout: false,
+    })
+  }
+
+  it('runs DEEP over a bridge that understands the agentic request', () => {
+    useBridgeDeep()
+    pairBridge(true)
+    expect(resolveTaskMode('verdict', makeSource())).toEqual({ run: true, deep: true })
+  })
+
+  /**
+   * The failure this gate exists to prevent.
+   *
+   * An older bridge does not REFUSE an agentic request — it ignores the field
+   * and returns an ordinary single-pass answer, 200 OK. Without this check the
+   * app would present that as a deep review grounded in the user's working
+   * tree, and neither the user nor any downstream code could tell. So the gate
+   * falls back to standard review and SAYS WHY.
+   */
+  it('falls back to standard WITH a note when the bridge is too old, never silently', () => {
+    useBridgeDeep()
+    pairBridge(false)
+    const r = resolveTaskMode('verdict', makeSource())
+    expect(r.run).toBe(true)
+    expect(r.deep).toBe(false)
+    expect(r.note).toMatch(/too old/i)
+    expect(r.note).toMatch(/standard review/i)
+  })
+
+  it('falls back with a note when no bridge is paired at all', () => {
+    useBridgeDeep()
+    _resetBridgeForTest()
+    const r = resolveTaskMode('verdict', makeSource())
+    expect(r.deep).toBe(false)
+    expect(r.note).toMatch(/no local bridge/i)
+  })
+
+  it('does NOT apply the bridge check to API providers', () => {
+    // The capability is a fact about the bridge. An API provider has no bridge
+    // and must not be gated on one, paired or not.
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({
+        aiProvider: 'deepseek',
+        aiModel: 'deepseek-v4-flash',
+        aiTaskModes: { verdict: 'deep' },
+      }),
+    )
+    _resetBridgeForTest()
+    expect(resolveTaskMode('verdict', makeSource())).toEqual({ run: true, deep: true })
+  })
+
+  it('still honours OFF — an unavailable harness never resurrects a disabled task', () => {
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({ aiProvider: 'bridge', aiModel: 'claude', aiTaskModes: { verdict: 'off' } }),
+    )
+    pairBridge(true)
+    expect(resolveTaskMode('verdict', makeSource())).toEqual({ run: false, deep: false })
   })
 })

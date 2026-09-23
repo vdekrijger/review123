@@ -111,6 +111,20 @@ export const REQUEST_TIMEOUT_MS = 30_000
  */
 export const DEFAULT_INFER_TIMEOUT_MS = 120_000
 
+/**
+ * The default budget for an AGENTIC call (`InferRequest.agentic`), when the
+ * request names none.
+ *
+ * Five minutes rather than two, because the work is genuinely different: a
+ * tool-less call is one model turn, while an agentic one reads files, searches,
+ * and turns again on what it found. The same ceiling still applies — this moves
+ * the DEFAULT, never the maximum.
+ *
+ * It is also the ONLY budget that grows for agentic mode, and deliberately so:
+ * see `InferAgentic` for why there is no tool-call budget to raise.
+ */
+export const DEFAULT_AGENTIC_INFER_TIMEOUT_MS = 300_000
+
 /** Ceiling on `InferRequest.timeoutMs`. Anything larger is clamped to this. */
 export const MAX_INFER_TIMEOUT_MS = 600_000
 
@@ -160,6 +174,25 @@ export interface BridgeCapabilities {
    * falls back to `/v1/infer` — no CLI is spawned on the way.
    */
   inferStream: boolean
+  /**
+   * `InferRequest.agentic` — whether this bridge understands the flag that runs
+   * the CLI with its own READ-ONLY tools. A route-readiness boolean like
+   * `infer`, flipped in the commit that implemented it.
+   *
+   * IT IS LOAD-BEARING, not informational. `agentic` is an additive request
+   * field, so a bridge predating it does not reject the flag — it IGNORES it
+   * and runs the ordinary tool-less completion, answering 200 with a perfectly
+   * good single-pass answer. A client that asked for an agentic review and does
+   * not check this would then present that answer as "grounded in your working
+   * tree", which it never was. So the client checks the flag BEFORE offering
+   * deep review over the bridge, exactly as it checks `files` and `search`
+   * before claiming local grounding.
+   *
+   * It is NOT a permission flag. Unlike `fix` and `checkout` it reports a
+   * release, not a grant, because the capability it describes is read-only and
+   * needs no grant: no `--allow-*` flag turns it on or off.
+   */
+  inferAgentic: boolean
   files: boolean
   search: boolean
   /**
@@ -418,10 +451,126 @@ export interface InferRequest {
   maxOutputTokens?: number
   /**
    * Per-call budget in ms. Clamped to [1, MAX_INFER_TIMEOUT_MS]; absent →
-   * DEFAULT_INFER_TIMEOUT_MS. On expiry the child is killed and the call
-   * answers `504 timeout`.
+   * DEFAULT_INFER_TIMEOUT_MS, or DEFAULT_AGENTIC_INFER_TIMEOUT_MS when
+   * `agentic` is set. On expiry the child is killed and the call answers
+   * `504 timeout`.
    */
   timeoutMs?: number
+  /**
+   * Run the CLI WITH its own read-only tools, so it can investigate the served
+   * working tree instead of answering from the prompt alone.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * WHY THIS FLAG EXISTS AT ALL
+   *
+   * The ordinary call runs `claude` with `--tools ""` — WE strip its tools, on
+   * purpose, because an ordinary completion has no business touching the disk.
+   * "The CLI is already an agent, so agentic review is impossible over the
+   * bridge" was never true: the CLI is not acting as an agent in that
+   * invocation because we disabled it. This flag stops disabling it.
+   *
+   * The result is BETTER grounded than the API path, not worse. review123's own
+   * deep-review tools fetch files through the VCS provider's API; the CLI reads
+   * the user's actual working tree — the code in front of them, uncommitted
+   * changes included.
+   *
+   * READ-ONLY IS THE WHOLE CONTRACT, and it is enforced DIFFERENTLY per CLI
+   * because the two CLIs offer different levers — so it is stated per CLI
+   * rather than as one comfortable sentence:
+   *
+   *   claude — the toolset is narrowed to Read, Glob and Grep by name. There is
+   *     no write tool, no edit tool, no shell tool and no network tool in the
+   *     process AT ALL (verified by asking it to enumerate them), so writing is
+   *     not "denied", it is absent.
+   *   codex — its toolset cannot be narrowed; `--sandbox read-only` instead
+   *     confines what its shell may DO. So codex DOES run shell commands (`sed`,
+   *     `grep`, `ls`) — it simply cannot write with them, and cannot reach
+   *     outside the served root. That is a real difference from claude and it is
+   *     recorded here rather than smoothed over. Note this is ALREADY true of
+   *     the ordinary tool-less call, which has always run codex this way; the
+   *     flag does not widen codex's powers at all.
+   *
+   * What holds for BOTH, and is what the route actually promises: no writes to
+   * the repo, and no reads outside the served root (verified against both CLIs
+   * with an absolute path to a file outside it — both refused).
+   *
+   * This is NOT a back door to `--allow-write` / `--allow-checkout`: those
+   * grants are made by the person at the terminal, a web origin still cannot
+   * request them, and a bridge started with NEITHER serves this route exactly as
+   * fully as one started with both. See infer.ts for the argv that enforces all
+   * of the above, and `InferAgentic` for what comes back.
+   * ────────────────────────────────────────────────────────────────────────
+   *
+   * Absent or false → the byte-identical tool-less invocation every existing
+   * client already gets.
+   */
+  agentic?: boolean
+}
+
+/**
+ * What an `agentic: true` run actually did — reported, never promised.
+ *
+ * ABSENT from a response means the run was NOT agentic. Present means the CLI
+ * really was given its tools, and these are the facts it reported back.
+ *
+ * WHY THERE IS NO TOOL-CALL BUDGET HERE, AND WHY THAT IS HONEST
+ *
+ * review123's own deep-review loop bounds itself with DEEP_REVIEW_MAX_TOOL_CALLS
+ * because IT drives the loop: it decides whether to send another round. Here the
+ * CLI owns its loop. Neither `claude` nor `codex exec` exposes a max-turns or
+ * max-tool-calls flag, so the bridge has no lever to enforce such a budget with
+ * — and a field claiming one would be a number we made up.
+ *
+ * `claude --max-budget-usd` IS enforced, and was REJECTED on evidence: it is a
+ * dollar cap, and the point of the bridge is that the user is spending a
+ * SUBSCRIPTION with no per-token price to cap. Worse, exhausting it fails the
+ * whole run (`subtype: "error_max_budget_usd"` with no `result`), so the answer
+ * already paid for is thrown away. A budget that converts a finished review into
+ * an error is not a safety feature.
+ *
+ * So the run is bounded by the three things the bridge really does enforce, all
+ * of them pre-existing machinery:
+ *   - WALL CLOCK — `timeoutMs`, killed on the SIGTERM→SIGKILL ladder;
+ *   - OUTPUT BYTES — MAX_INFER_OUTPUT_BYTES, which kills the child;
+ *   - FILESYSTEM REACH — the CLI's own confinement to the served root.
+ * and everything else is REPORTED here rather than pretended about.
+ */
+export interface InferAgentic {
+  /**
+   * The tool names granted, as passed to the CLI.
+   *
+   * `claude` takes an explicit `--tools` list, so this is exactly what it was
+   * given. `codex exec` has no way to enumerate or narrow its toolset — its
+   * sandbox mode restricts what its shell may DO, not which tools exist — so
+   * this is EMPTY for codex. Empty means "this CLI does not let us name them",
+   * never "it had none".
+   */
+  tools: string[]
+  /**
+   * A LOWER BOUND on the tool calls the CLI made. Never exact, never invented —
+   * each CLI reports something different, and this is the honest floor derived
+   * from it:
+   *   - claude: `num_turns - 1` from its result document. A single turn can
+   *     carry SEVERAL tool calls, so this UNDER-counts, which is the safe
+   *     direction: it can never overstate how grounded an answer was.
+   *   - codex:  the number of `command_execution` items in its `--json` event
+   *     stream. That is an exact command count, and a command may read more
+   *     than one file, so it under-counts too.
+   * ABSENT when the CLI reported nothing countable. Zero means the CLI had its
+   * tools and chose not to use them — a real and useful answer, distinct from
+   * absent.
+   */
+  toolCallsAtLeast?: number
+  /**
+   * Tool calls the CLI's OWN permission layer refused — for `claude`, the
+   * length of its `permission_denials` array.
+   *
+   * It is reported because it is the read-only contract being enforced in
+   * public: a run that tried to step outside the served root and was stopped
+   * says so here rather than silently. Absent when the CLI reports no such
+   * list.
+   */
+  denied?: number
 }
 
 /**
@@ -445,6 +594,14 @@ export interface InferResponse {
   durationMs: number
   /** Present only when the CLI reported token counts. See InferUsage. */
   usage?: InferUsage
+  /**
+   * Present ONLY when the run was agentic, and then it is the report of what
+   * the CLI's tools actually did. Its absence is how a client knows the answer
+   * came from a tool-less completion — which is exactly what a bridge too old
+   * to understand `agentic` will return, so a client that claims local
+   * grounding must check for this rather than assume its request was honoured.
+   */
+  agentic?: InferAgentic
 }
 
 // ---------------------------------------------------------------------------
@@ -513,6 +670,12 @@ export interface InferStreamDone {
   durationMs: number
   /** Present ONLY when the CLI reported token counts. Never zero-filled. */
   usage?: InferUsage
+  /**
+   * Present ONLY when the run was agentic — the same report, on the same terms,
+   * that `/v1/infer` returns. The two routes share one invocation (#236), so
+   * they say the same thing about it.
+   */
+  agentic?: InferAgentic
 }
 
 /**

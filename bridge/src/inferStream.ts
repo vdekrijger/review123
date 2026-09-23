@@ -44,6 +44,7 @@ import {
   CLI_STREAMS,
   KILL_GRACE_MS,
   NEUTRAL_SYSTEM_PROMPT,
+  readClaudeAgentic,
   readClaudeResult,
   runInference,
   sanitizeDiagnostic,
@@ -426,7 +427,7 @@ export async function runStreamInference(
       args: invocation.args,
       stdin: invocation.stdin,
       cwd: opts.realRoot,
-      timeoutMs: clampTimeout(req.timeoutMs),
+      timeoutMs: clampTimeout(req.timeoutMs, req.agentic === true),
       onLine,
       ...(opts.signal ? { signal: opts.signal } : {}),
     })
@@ -443,7 +444,7 @@ export async function runStreamInference(
     if (result.timedOut) {
       fail(
         'timeout',
-        `The ${req.cli} CLI did not finish within the ${clampTimeout(req.timeoutMs)} ms budget and was stopped.`,
+        `The ${req.cli} CLI did not finish within the ${clampTimeout(req.timeoutMs, req.agentic === true)} ms budget and was stopped.`,
       )
       return
     }
@@ -489,6 +490,13 @@ export async function runStreamInference(
       // Usage ONLY when the CLI reported it. Never zero-filled — an absent
       // `usage` means unknown, and unknown must not render as free.
       ...(parsed.usage ? { usage: parsed.usage } : {}),
+      // The agentic report, on exactly the same terms as the one-shot route:
+      // only when the request asked for tools. The two routes share their argv
+      // (#236), so they must share what they say about it — a stream that ran
+      // with tools and did not report them would make the two routes disagree
+      // about the same invocation. It is read from the SAME final result line
+      // the answer came from, which carries `num_turns` in both output formats.
+      ...(req.agentic === true ? { agentic: readClaudeAgentic(resultLine) } : {}),
     })
   } catch {
     // A temp-file or filesystem failure. Generic on purpose: the real message

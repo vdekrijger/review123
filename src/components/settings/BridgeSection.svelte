@@ -70,6 +70,17 @@
   /** Both grounding routes. An older bridge has neither. */
   const filesReady = $derived(bridgeAvailable('files') && bridgeAvailable('search'))
   /**
+   * `capabilities.inferAgentic` — whether this bridge can run the CLI with its
+   * own read-only tools, which is what deep review over the bridge needs.
+   *
+   * Worth SAYING rather than silently degrading, because the failure is
+   * invisible: an older bridge does not refuse an agentic request, it answers
+   * with an ordinary single-pass review. Without this note a user would see
+   * deep review quietly behaving like standard review and have no way to learn
+   * why. It is read-only and needs no `--allow-*` grant.
+   */
+  const agenticReady = $derived(bridgeAvailable('inferAgentic'))
+  /**
    * `capabilities.fix` — the bridge's `--allow-write` flag, and the ONLY
    * authorisation for the fix loop. It is not a release-readiness boolean like
    * the other capabilities: it is a process flag the person at the terminal
@@ -176,6 +187,15 @@
           Answers from <code>codex</code> arrive all at once rather than typing out — it has
           no partial-output mode. <code>claude</code> streams.
         {/if}
+      {/if}
+    </p>
+    <p class="field-note" data-testid="bridge-agentic-note">
+      {#if agenticReady}
+        Deep review runs your CLI with read-only access to this checkout, so it can open the
+        real file before making a claim. It reads and searches; it never writes.
+      {:else}
+        Deep review will run as standard review: this bridge is too old to run your CLI with
+        its tools. Update it and restart to get deep review over the bridge.
       {/if}
     </p>
     <p class="field-note" data-testid="bridge-write-note">

@@ -136,7 +136,7 @@ Vercel deploy), which is a bad trade for a shorter command.
 It prints a banner with the pairing token:
 
 ```
-review123 bridge 0.2.1  ·  protocol v1
+review123 bridge 0.3.0  ·  protocol v1
 
   repo     /Users/you/code/your-repo
   listen   http://127.0.0.1:7321   (loopback only)
@@ -590,6 +590,7 @@ must fall back on `message`, never crash.
     "inference": ["claude"],    // CLIs DETECTED on PATH — see below
     "infer": true,              // route READINESS — one flag per route
     "inferStream": true,        // ditto, for POST /v1/infer/stream
+    "inferAgentic": true,       // ditto, for InferRequest.agentic (read-only tools)
     "files": true,
     "search": true,             // true even without ripgrep: a JS walk answers
     "fix": false,               // the --allow-write FLAG, not a readiness bit
@@ -608,10 +609,19 @@ must fall back on `message`, never crash.
 
 - `inference` is a **detection** signal: which of the known CLIs exist on
   `PATH`. It says nothing about whether the route works.
-- `infer`, `inferStream`, `files` and `search` are **route-readiness**
-  booleans, one per route and named after it. Each flips *in the same commit
-  that implements its route*, so a client that trusts the flag can never call a
-  route that is not there. All four are `true` — v1 is complete.
+- `infer`, `inferStream`, `inferAgentic`, `files` and `search` are
+  **route-readiness** booleans, one per route (or request capability) and named
+  after it. Each flips *in the same commit that implements it*, so a client that
+  trusts the flag can never call a route that is not there. All five are `true`
+  — v1 is complete.
+
+  `inferAgentic` is the one where reading the flag wrong is *silent*. It is not
+  a permission flag — nothing grants it, because what it enables is reading —
+  but an older bridge does not refuse an `agentic` request, it ignores the field
+  and returns an ordinary single-pass answer. A client that skipped this check
+  would label that answer a deep, locally-grounded review. Check it *before*
+  offering deep review, exactly as `files`/`search` are checked before claiming
+  local grounding.
 - `fix` and `checkout` are **authorisation** signals: each reports whether
   *this process* was started with its own flag (`--allow-write`,
   `--allow-checkout`). Neither is "true from the release that shipped the
@@ -710,6 +720,87 @@ Why each flag is there:
 
 **`--bare` is deliberately NOT used**: it forces `ANTHROPIC_API_KEY` and never
 reads the subscription, which would defeat the entire point of the bridge.
+
+#### Verified agentic invocations (deep review)
+
+`InferRequest.agentic` runs the CLI **with** its own read-only tools, so a
+reviewer can open the real file before making a claim. Verified against the
+same two CLI versions, by running them:
+
+```sh
+claude -p --output-format json --tools "Read,Glob,Grep" --restricted \
+       --strict-mcp-config --permission-prompts none --safe-mode \
+       --system-prompt-file <tmp>                      # prompt on stdin
+
+codex exec --json --sandbox read-only --skip-git-repo-check --color never \
+       --ephemeral --output-last-message <tmp> -       # prompt on stdin
+```
+
+**Why the old rationale was wrong.** The settings copy used to say deep review
+was impossible over the bridge because "the CLI is already an agent". The CLI
+is not acting as an agent in the ordinary invocation — `--tools ""` above is
+*us* taking its tools away. Giving three read-only ones back is the feature,
+and the result is **better** grounded than the API path: the CLI reads your
+actual working tree, uncommitted changes included, instead of fetching files
+through a rate-limited VCS API.
+
+| Flag | Why |
+| --- | --- |
+| `--tools "Read,Glob,Grep"` | A reviewer needs to open a file, find a file, and find a symbol. Everything else either writes (`Write`/`Edit`), executes (`Bash`) or leaves the machine (`WebFetch`) — none of which a review needs. **Verified:** asking the CLI to enumerate its tools under this exact argv answers `Glob, Grep, Read` and nothing else. |
+| `--restricted` | A **hard** confinement of the file tools to the working directory, not a permission decision, so it holds even if the permission layer's default answer ever changes. Also ignores user/project/local settings files. |
+| `--strict-mcp-config` | Your own MCP servers must not become review tools. `--safe-mode` already drops them; this says so at the flag that owns the question. |
+| `--json` (codex) | **Purely to count tool use.** Codex needs no new power: `--sandbox read-only` has always given it a shell it could read the tree with, so the ordinary tool-less call was already agentic. `--json` makes its `command_execution` events countable; the answer still comes from `--output-last-message`. |
+
+**Verified read-only, both CLIs** — asked to create a file, run a shell
+command, and read an absolute path outside the repo, over a real bridge started
+with *neither* `--allow-write` nor `--allow-checkout`:
+
+| Attempt | claude | codex |
+| --- | --- | --- |
+| Create a file | refused — no file-creation tool exists in the process | refused — sandbox is read-only |
+| Run a shell command | refused — no shell tool exists in the process | runs, but cannot write |
+| Read outside the repo root | refused, and recorded in `permission_denials` | refused — "outside the workspace root" |
+
+The working tree was byte-identical afterwards. Note the honest difference:
+claude's toolset is *narrowed by name*, so writing is absent rather than denied;
+codex's cannot be narrowed, so it **does** run shell commands — it simply
+cannot write with them or reach outside the root.
+
+#### What bounds an agentic run
+
+There is **no tool-call budget**, and that is deliberate rather than an
+oversight. review123's own deep-review loop bounds itself with
+`DEEP_REVIEW_MAX_TOOL_CALLS` because *it* drives the loop; here the CLI owns
+its loop, and neither CLI exposes a max-turns or max-tool-calls flag. A field
+claiming such a budget would be a number we made up.
+
+`claude --max-budget-usd` *is* enforced and was **rejected on evidence**: it
+caps dollars on a subscription that has no per-token price, and exhausting it
+fails the whole run (`subtype: "error_max_budget_usd"`, no `result`) — throwing
+away an answer already paid for. A budget that converts a finished review into
+an error is not a safety feature.
+
+What actually bounds it, all pre-existing machinery:
+
+| Bound | Mechanism |
+| --- | --- |
+| Wall clock | `timeoutMs`, killed on the SIGTERM→SIGKILL ladder. Agentic runs default to `DEFAULT_AGENTIC_INFER_TIMEOUT_MS` (5 min) instead of 2, under the **same** `MAX_INFER_TIMEOUT_MS` ceiling. |
+| Output bytes | `MAX_INFER_OUTPUT_BYTES`, which kills the child. |
+| Filesystem reach | The CLI's own confinement to the served root (table above). |
+
+Everything else is **reported** rather than claimed, in `InferResponse.agentic`:
+the tools granted, a deliberately *under-counted* lower bound on tool calls, and
+how many calls the CLI's own permission layer refused.
+
+#### `inferAgentic` is load-bearing
+
+`agentic` is an additive request field, so a bridge predating it does **not**
+reject it — it ignores the field, runs the ordinary tool-less completion, and
+answers `200` with a perfectly good single-pass review. Presenting that as a
+review grounded in your working tree would be a lie nobody downstream could
+detect. So clients check `capabilities.inferAgentic` *before* offering deep
+review, and `InferResponse.agentic` is absent from any run that was not
+actually agentic.
 
 #### Choosing the model
 

@@ -117,11 +117,31 @@ export function computeBudgetTokens(contextWindowTokens: number): number {
  * - NO `pricing`. Inference on the user's own subscription has no per-token
  *   list price we could honestly quote, and estimateCostUsd returns null
  *   without it — so the UI shows tokens and no fabricated dollar figure.
- * - `supportsTools: false`. `claude -p` is ITSELF an agent with its own tools;
- *   wrapping it in review123's tool loop would be an agent driving an agent
- *   through a text pipe, with two conflicting tool vocabularies. The flag makes
- *   the existing deep-review gates (run.svelte.ts, deepReview.ts) route those
- *   tasks to the single-pass path automatically, with no call-site change.
+ * - `supportsTools: true`, with a DIFFERENT MECHANISM behind it than every other
+ *   provider — which is why this comment is long.
+ *
+ *   The flag answers one question for its callers: "can a deep (agentic) review
+ *   run on this model?" For an API model the answer is yes because review123
+ *   drives its own tool loop. For the bridge the answer is ALSO yes, but the
+ *   loop runs inside the CLI: it is given real read-only tools (Read, Glob,
+ *   Grep) and investigates the user's actual working tree. llmToolLoop's bridge
+ *   arm delegates to that instead of driving rounds itself, so every existing
+ *   call site keeps working with no change — which is precisely what the flag
+ *   is for.
+ *
+ *   IT STILL DOES NOT MEAN review123's tool loop drives the CLI. That remains a
+ *   bad idea for the original reason — an agent steering an agent through a text
+ *   pipe, with two tool vocabularies that do not agree — and llmToolLoop does
+ *   not do it. What changed is that "the CLI is already an agent" turned out to
+ *   be the wrong reason to refuse: in the ordinary invocation the CLI is NOT
+ *   acting as an agent, because the bridge passes `--tools ""` and takes its
+ *   tools away. Giving three read-only ones back is the whole feature.
+ *
+ *   AVAILABILITY IS STILL CHECKED SEPARATELY, and must be. This flag is a fact
+ *   about the model lineup, but a paired bridge may be too OLD to understand the
+ *   agentic request — and an old bridge does not fail, it silently answers
+ *   tool-less. deepReview.ts's harness gate reads the live
+ *   `capabilities.inferAgentic` for exactly that case.
  * - `contextWindowTokens` is deliberately CONSERVATIVE. The real window belongs
  *   to whichever model the user's CLI is configured for, which the bridge never
  *   reports, so the packer is given a budget every current option can hold.
@@ -131,13 +151,13 @@ export const BRIDGE_MODELS: LlmModelDef[] = [
     id: 'claude',
     label: 'Claude Code CLI',
     contextWindowTokens: 200_000,
-    supportsTools: false,
+    supportsTools: true,
   },
   {
     id: 'codex',
     label: 'Codex CLI',
     contextWindowTokens: 200_000,
-    supportsTools: false,
+    supportsTools: true,
   },
 ]
 

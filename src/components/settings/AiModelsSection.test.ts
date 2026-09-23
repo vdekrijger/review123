@@ -1224,10 +1224,15 @@ describe('AiModelsSection — the local bridge source', () => {
     expect(card.queryByRole('button', { name: /save & test/i })).toBeNull()
   })
 
-  it('states that deep review is not available over it', () => {
+  it('states that deep review runs read-only against the local checkout', () => {
+    // The copy used to say deep review was unavailable "because the CLI is
+    // already an agent". It runs now — the CLI is given read-only tools — and
+    // the card must say both what it gains (the real file) and what it is
+    // still not allowed to do, since that is the user's actual question.
     render(AiModelsSection)
     const card = providerCard('Local bridge')
-    expect(card.textContent).toMatch(/deep \(agentic\) review is not\s+available over the bridge/i)
+    expect(card.textContent).toMatch(/deep \(agentic\) review runs your\s+CLI with read-only access/i)
+    expect(card.textContent).toMatch(/cannot write, run commands or change a branch/i)
   })
 
   it('selecting it persists aiProvider — no key needed to choose it', async () => {

@@ -48,6 +48,21 @@ export interface BridgeCapabilities {
    * false, and the transport falls back to `/v1/infer`.
    */
   inferStream: boolean
+  /**
+   * `InferRequest.agentic` — whether this bridge understands the flag that runs
+   * the CLI with its own READ-ONLY tools (file reading and search, never write,
+   * never shell, never network). A route-readiness boolean like `infer`.
+   *
+   * THE BROWSER MUST CHECK IT BEFORE PROMISING DEEP REVIEW. `agentic` is an
+   * additive request field, so a bridge predating it does not fail — it ignores
+   * the flag, runs the ordinary tool-less completion and answers 200. The text
+   * that comes back is a fine single-pass answer, and presenting it as a review
+   * grounded in the user's working tree would be a lie the user cannot detect.
+   * So this gates the offer, exactly as `files`/`search` gate local grounding.
+   *
+   * Absent reads as false — an older bridge, not a malformed one.
+   */
+  inferAgentic: boolean
   files: boolean
   search: boolean
   /**
@@ -110,6 +125,43 @@ export interface InferRequest {
   files?: string[]
   maxOutputTokens?: number
   timeoutMs?: number
+  /**
+   * Run the CLI WITH its own read-only tools, so it investigates the served
+   * working tree instead of answering from the prompt alone. See
+   * bridge/src/protocol.ts for the full contract; the short version is that the
+   * ordinary call passes `--tools ""` — WE strip the CLI's tools — and this
+   * flag stops doing that, granting file reading and search and nothing else.
+   *
+   * Only send it when `capabilities.inferAgentic` is true: an older bridge
+   * ignores it and answers tool-less, which must never be reported as grounded.
+   */
+  agentic?: boolean
+}
+
+/**
+ * What an `agentic: true` run actually did. MIRROR of bridge/src/protocol.ts,
+ * where the reasoning lives.
+ *
+ * ABSENT from a response means the run was NOT agentic — the honest signal that
+ * a bridge ignored the request field, or that the caller never asked.
+ */
+export interface InferAgentic {
+  /**
+   * Tool names granted. Exactly what `claude` was passed; EMPTY for `codex`,
+   * whose toolset cannot be enumerated or narrowed (its sandbox restricts what
+   * its shell may do, not which tools exist). Empty means "not nameable", never
+   * "none".
+   */
+  tools: string[]
+  /**
+   * A LOWER BOUND on the CLI's tool calls — under-counted on purpose so it can
+   * never overstate grounding. Absent when the CLI reported nothing countable;
+   * 0 means it had tools and chose not to use them, which is a different and
+   * useful fact.
+   */
+  toolCallsAtLeast?: number
+  /** Tool calls the CLI's own permission layer refused. Absent when unreported. */
+  denied?: number
 }
 
 /**
@@ -129,6 +181,13 @@ export interface InferResponse {
   truncated: boolean
   durationMs: number
   usage?: InferUsage
+  /**
+   * Present ONLY when the run really was agentic. Its ABSENCE is the signal
+   * that the answer came from a tool-less completion — which is what an older
+   * bridge returns for an `agentic: true` request — so a caller that means to
+   * claim local grounding must look for this, not assume it.
+   */
+  agentic?: InferAgentic
 }
 
 /**
@@ -252,6 +311,33 @@ export function parseInferResponse(value: unknown): InferResponse | null {
     const u = usage as Record<string, unknown>
     if (typeof u['inputTokens'] === 'number' && typeof u['outputTokens'] === 'number') {
       parsed.usage = { inputTokens: u['inputTokens'], outputTokens: u['outputTokens'] }
+    }
+  }
+
+  // The agentic report is narrowed STRICTLY, because its presence is what lets
+  // the app tell a user their review read their own working tree. Anything that
+  // is not a well-formed report is dropped entirely rather than half-read: a
+  // partial report would be indistinguishable from a tool-less run that somehow
+  // grew a field, and "we could not tell" must resolve to "not grounded".
+  const agentic = raw['agentic']
+  if (typeof agentic === 'object' && agentic !== null) {
+    const a = agentic as Record<string, unknown>
+    const tools = a['tools']
+    if (Array.isArray(tools) && tools.every((t) => typeof t === 'string')) {
+      const report: InferAgentic = { tools: (tools as string[]).map((t) => sanitizeLabel(t, 40)) }
+      // Counts are optional and must be non-negative integers. A malformed one
+      // is DROPPED (leaving it absent = "unreported"), never coerced to 0 —
+      // zero is a claim that the CLI used no tools, which is not what a
+      // malformed number tells us.
+      const calls = a['toolCallsAtLeast']
+      if (typeof calls === 'number' && Number.isInteger(calls) && calls >= 0) {
+        report.toolCallsAtLeast = calls
+      }
+      const denied = a['denied']
+      if (typeof denied === 'number' && Number.isInteger(denied) && denied >= 0) {
+        report.denied = denied
+      }
+      parsed.agentic = report
     }
   }
   return parsed
@@ -594,7 +680,14 @@ export function parseSearchResponse(value: unknown): BridgeSearchResponse | null
  * call this route?" — even though the bridge answers it from a flag rather
  * than from a release number.
  */
-export type BridgeCapability = 'infer' | 'inferStream' | 'files' | 'search' | 'fix' | 'checkout'
+export type BridgeCapability =
+  | 'infer'
+  | 'inferStream'
+  | 'inferAgentic'
+  | 'files'
+  | 'search'
+  | 'fix'
+  | 'checkout'
 
 /** The loopback URL for a bridge route. Always 127.0.0.1 — never `localhost`. */
 export function bridgeUrl(port: number, path: string): string {
@@ -632,6 +725,12 @@ export function parseHealth(value: unknown): BridgeHealth | null {
   // reads as false — which routes the transport to the one-shot path.
   const streamReady = capsRaw['inferStream']
   if (streamReady !== undefined && typeof streamReady !== 'boolean') return null
+  // `inferAgentic` is additive exactly as `infer` and `inferStream` were, and
+  // an absent flag is an OLDER bridge rather than a malformed one. It reads as
+  // false, which routes deep review over the bridge back to single-pass WITH a
+  // note — never to a silent tool-less answer dressed up as a grounded one.
+  const agenticReady = capsRaw['inferAgentic']
+  if (agenticReady !== undefined && typeof agenticReady !== 'boolean') return null
   if (typeof capsRaw['files'] !== 'boolean') return null
   if (typeof capsRaw['search'] !== 'boolean') return null
   // `fix` arrived with the fix-loop release and is additive the same way
@@ -655,6 +754,7 @@ export function parseHealth(value: unknown): BridgeHealth | null {
       inference: (inference as string[]).map((cli) => sanitizeLabel(cli, 40)),
       infer: inferReady === true,
       inferStream: streamReady === true,
+      inferAgentic: agenticReady === true,
       files: capsRaw['files'],
       search: capsRaw['search'],
       fix: fixReady === true,
@@ -711,6 +811,24 @@ export const MAX_FIX_FINDINGS = 10
  * the bridge's own honest `budget-exhausted` answer always wins the race.
  */
 export const FIX_REQUEST_TIMEOUT_MS = 31 * 60 * 1000
+
+/**
+ * Wall-clock budget for ONE agentic `/v1/infer` call, from the browser's side.
+ *
+ * It has to be stated explicitly, and that is the whole point of this constant.
+ * The bridge transport sends `timeoutMs ?? 60_000` on EVERY call, so a caller
+ * that names none does not get the bridge's agentic default — it gets 60
+ * seconds, both as the browser's abort and as the budget the bridge is told to
+ * honour. Sixty seconds is a fine ceiling for a single completion and far too
+ * short for an agent that opens several files and turns again on what it found:
+ * the review would be killed mid-investigation, having already spent the user's
+ * subscription on the part it did.
+ *
+ * Five minutes matches the bridge's own DEFAULT_AGENTIC_INFER_TIMEOUT_MS, so
+ * the two ends agree on one number instead of racing. It is still under the
+ * bridge's MAX_INFER_TIMEOUT_MS ceiling, which remains the real limit.
+ */
+export const INFER_AGENTIC_REQUEST_TIMEOUT_MS = 5 * 60 * 1000
 
 /** One proposed finding sent to the agent. `suggestedFix` is REQUIRED. */
 export interface BridgeFixFinding {

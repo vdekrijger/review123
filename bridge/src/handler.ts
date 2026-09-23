@@ -617,6 +617,11 @@ export async function handleRequest(
       truncated: outcome.truncated,
       durationMs: outcome.durationMs,
       ...(outcome.usage ? { usage: outcome.usage } : {}),
+      // Present only when the worker really ran the CLI with its tools. A
+      // client reads its ABSENCE as "this was a plain completion" — which is
+      // also what an older bridge returns for an `agentic` request it does not
+      // understand — so it must never be synthesized here.
+      ...(outcome.agentic ? { agentic: outcome.agentic } : {}),
     }
     return json(200, payload, cors)
   }

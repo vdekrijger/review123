@@ -14,9 +14,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { realpath } from 'node:fs/promises'
 import {
+  AGENTIC_CLAUDE_TOOLS,
   buildFileContext,
   buildInvocation,
   clampTimeout,
+  countCodexCommands,
+  readClaudeAgentic,
   NEUTRAL_SYSTEM_PROMPT,
   parseInferRequest,
   readClaudeResult,
@@ -28,6 +31,7 @@ import {
   type RunProcess,
 } from './infer.js'
 import {
+  DEFAULT_AGENTIC_INFER_TIMEOUT_MS,
   DEFAULT_INFER_TIMEOUT_MS,
   MAX_INFER_TIMEOUT_MS,
   type InferRequest,
@@ -688,5 +692,257 @@ describe('buildFileContext — confinement', () => {
     })
     expect(calls[0]!.stdin).toContain('export const a = 1')
     expect(calls[0]!.args.join(' ')).not.toContain('export const a')
+  })
+})
+
+// ===========================================================================
+// Agentic mode — the CLI runs with its OWN read-only tools
+//
+// Every expectation here was checked against the real CLIs before it was
+// written (claude 2.1.278, codex-cli 0.155.1); the notes say which run proved
+// what, because these are claims about someone else's software.
+// ===========================================================================
+
+describe('buildInvocation — agentic (read-only tools)', () => {
+  it('grants claude exactly Read, Glob and Grep — nothing that writes, runs or fetches', () => {
+    const inv = buildInvocation('claude', request({ agentic: true }), TMP)
+    const tools = inv.args[inv.args.indexOf('--tools') + 1]
+    expect(tools).toBe('Read,Glob,Grep')
+    // VERIFIED by running the CLI under this exact argv and asking it to
+    // enumerate its tools: it answers "Glob, Grep, Read" and nothing else.
+    expect([...AGENTIC_CLAUDE_TOOLS]).toEqual(['Read', 'Glob', 'Grep'])
+  })
+
+  /**
+   * THE REASON THIS TEST EXISTS, and it is not pedantry.
+   *
+   * An unrecognised name in `--tools` is SILENTLY DROPPED by the CLI — verified:
+   * `--tools "Read,NotATool"` yields exactly `Read`, exit code 0, no warning.
+   * So a typo in AGENTIC_CLAUDE_TOOLS would not fail the build, would not fail
+   * the run, and would not fail any test that only checked "some tools were
+   * passed". It would quietly hand the reviewer fewer tools and produce a worse
+   * review still labelled deep. Pinning the exact list is the only thing that
+   * would notice.
+   */
+  it('pins the tool list exactly, because an unknown name is silently dropped', () => {
+    for (const banned of ['Write', 'Edit', 'NotebookEdit', 'Bash', 'WebFetch', 'WebSearch', 'Task']) {
+      expect(AGENTIC_CLAUDE_TOOLS as readonly string[]).not.toContain(banned)
+    }
+  })
+
+  it('adds the confinement flags, so a read cannot leave the served root', () => {
+    const inv = buildInvocation('claude', request({ agentic: true }), TMP)
+    // --restricted is a HARD confinement of the file tools to the working
+    // directory (verified: an absolute path outside it is refused). It also
+    // ignores the user's settings files.
+    expect(inv.args).toContain('--restricted')
+    // The user's own MCP servers must not become review tools.
+    expect(inv.args).toContain('--strict-mcp-config')
+    // Both pre-existing safety flags survive: --permission-prompts none
+    // independently denies an out-of-root read, so confinement holds on two
+    // layers rather than one.
+    expect(inv.args).toContain('--safe-mode')
+    expect(inv.args.join(' ')).toContain('--permission-prompts none')
+  })
+
+  it('leaves the TOOL-LESS claude invocation byte-identical', () => {
+    // The ordinary path is the one every existing client uses. Agentic mode is
+    // additive or it is a regression.
+    const plain = buildInvocation('claude', request(), TMP)
+    expect(plain.args).toEqual([
+      '-p',
+      '--output-format',
+      'json',
+      '--tools',
+      '',
+      '--permission-prompts',
+      'none',
+      '--safe-mode',
+      '--system-prompt-file',
+      join(TMP, 'system.txt'),
+    ])
+    expect(plain.args).not.toContain('--restricted')
+  })
+
+  it('treats `agentic: false` exactly as absent — one tool-less path, not two', () => {
+    expect(buildInvocation('claude', request({ agentic: false }), TMP).args).toEqual(
+      buildInvocation('claude', request(), TMP).args,
+    )
+  })
+
+  it('keeps every safety flag when agentic mode is STREAMED', () => {
+    // Streaming may change how the answer is delivered, never what the child is
+    // allowed to do (#236 — the two routes share one invocation).
+    const inv = buildInvocation('claude', request({ agentic: true }), TMP, undefined, { stream: true })
+    expect(inv.args).toContain('--restricted')
+    expect(inv.args).toContain('--strict-mcp-config')
+    expect(inv.args[inv.args.indexOf('--tools') + 1]).toBe('Read,Glob,Grep')
+    expect(inv.args).toContain('stream-json')
+  })
+
+  /**
+   * codex needs NO new power, and this test says so.
+   *
+   * `--sandbox read-only` has always given codex a shell it can read the tree
+   * with — verified by running the EXISTING tool-less invocation, which ran
+   * `sed -n '1,120p' canary.ts` and reported the contents. So the only thing
+   * agentic mode adds for codex is the ability to COUNT that activity.
+   */
+  it('adds only --json to codex, whose read-only sandbox was already agentic', () => {
+    const plain = buildInvocation('codex', request({ cli: 'codex' }), TMP)
+    const agentic = buildInvocation('codex', request({ cli: 'codex', agentic: true }), TMP)
+    expect(agentic.args).toContain('--json')
+    expect(plain.args).not.toContain('--json')
+    // Identical apart from that one flag: no sandbox change, no new grant.
+    expect(agentic.args.filter((a) => a !== '--json')).toEqual(plain.args)
+    // The sandbox stays read-only in BOTH.
+    expect(agentic.args.join(' ')).toContain('--sandbox read-only')
+  })
+})
+
+describe('clampTimeout — the agentic default', () => {
+  it('gives an agentic run five minutes when it names no budget', () => {
+    // An agentic run reads files and turns again on what it found; a tool-less
+    // one is a single turn. The DEFAULT moves for that reason.
+    expect(clampTimeout(undefined, true)).toBe(DEFAULT_AGENTIC_INFER_TIMEOUT_MS)
+    expect(clampTimeout(undefined, false)).toBe(DEFAULT_INFER_TIMEOUT_MS)
+  })
+
+  it('does NOT raise the ceiling for agentic mode', () => {
+    // The only budget that moves is the default. A caller still cannot buy more
+    // wall clock by asking for tools.
+    expect(clampTimeout(MAX_INFER_TIMEOUT_MS * 10, true)).toBe(MAX_INFER_TIMEOUT_MS)
+  })
+
+  it('honours a caller that asks for LESS than the agentic default', () => {
+    expect(clampTimeout(1_000, true)).toBe(1_000)
+  })
+})
+
+describe('parseInferRequest — agentic', () => {
+  it('accepts a boolean and normalises false to absent', () => {
+    const yes = parseInferRequest({ cli: 'claude', prompt: 'p', agentic: true })
+    expect(yes).toMatchObject({ agentic: true })
+    const no = parseInferRequest({ cli: 'claude', prompt: 'p', agentic: false })
+    expect('agentic' in (no as object)).toBe(false)
+  })
+
+  it('refuses a non-boolean rather than reading it as truthy', () => {
+    // This is the field that decides whether a subprocess may read the user's
+    // disk. "false" as a STRING is truthy in JS, and must not turn tools on.
+    for (const bad of ['true', 'false', 1, 0, {}, []]) {
+      expect(parseInferRequest({ cli: 'claude', prompt: 'p', agentic: bad })).toEqual({
+        error: 'agentic must be a boolean.',
+      })
+    }
+  })
+})
+
+describe('readClaudeAgentic — what the run reported', () => {
+  it('derives a LOWER-BOUND tool count from num_turns', () => {
+    // num_turns counts assistant turns: 1 = answered with no tool call, and
+    // every turn beyond the first followed at least one. A single turn can
+    // carry several calls, so this UNDER-counts — the safe direction.
+    expect(readClaudeAgentic(JSON.stringify({ num_turns: 1 })).toolCallsAtLeast).toBe(0)
+    expect(readClaudeAgentic(JSON.stringify({ num_turns: 2 })).toolCallsAtLeast).toBe(1)
+    expect(readClaudeAgentic(JSON.stringify({ num_turns: 7 })).toolCallsAtLeast).toBe(6)
+  })
+
+  it('reports refused tool calls, so a blocked escape is visible not silent', () => {
+    // Shape verified: an out-of-root Read lands here as
+    // {"tool_name":"Read","tool_use_id":"…","tool_input":{"file_path":"…"}}.
+    const doc = JSON.stringify({ num_turns: 2, permission_denials: [{ tool_name: 'Read' }] })
+    expect(readClaudeAgentic(doc).denied).toBe(1)
+  })
+
+  it('leaves counts ABSENT rather than zero when the CLI reported none', () => {
+    // Absent means "unreported"; 0 would be a claim that it used no tools.
+    const report = readClaudeAgentic(JSON.stringify({ result: 'x' }))
+    expect(report.toolCallsAtLeast).toBeUndefined()
+    expect(report.denied).toBeUndefined()
+  })
+
+  it('still reports the GRANT when stdout is unreadable', () => {
+    // The tools were granted — that is a fact about the argv we built, not
+    // about the answer. We simply cannot say what was done with them.
+    expect(readClaudeAgentic('not json at all').tools).toEqual(['Read', 'Glob', 'Grep'])
+  })
+})
+
+describe('countCodexCommands — codex tool use', () => {
+  const line = (o: unknown): string => JSON.stringify(o)
+
+  it('counts completed command executions', () => {
+    // Event shape verified by running `codex exec --json`.
+    const stdout = [
+      line({ type: 'thread.started' }),
+      line({ type: 'item.started', item: { type: 'command_execution' } }),
+      line({ type: 'item.completed', item: { type: 'command_execution' } }),
+      line({ type: 'item.completed', item: { type: 'command_execution' } }),
+      line({ type: 'item.completed', item: { type: 'agent_message' } }),
+      line({ type: 'turn.completed' }),
+    ].join('\n')
+    // Only COMPLETED command executions — `item.started` would double-count,
+    // and agent_message is the answer, not a tool call.
+    expect(countCodexCommands(stdout)).toBe(2)
+  })
+
+  it('returns 0 for a run that used no commands but did emit events', () => {
+    expect(countCodexCommands(line({ type: 'turn.completed' }))).toBe(0)
+  })
+
+  it('returns null when nothing countable arrived, keeping unreported distinct from zero', () => {
+    expect(countCodexCommands('OpenAI Codex v0.155.1\nsome human transcript\n')).toBeNull()
+    expect(countCodexCommands('')).toBeNull()
+  })
+
+  it('skips unparseable lines rather than failing the whole count', () => {
+    // stdout also carries codex's banner; a stricter reader would turn a
+    // cosmetic change upstream into a failed review.
+    const stdout = ['garbage {', line({ type: 'item.completed', item: { type: 'command_execution' } })].join('\n')
+    expect(countCodexCommands(stdout)).toBe(1)
+  })
+})
+
+describe('runInference — the agentic report reaches the caller', () => {
+  const claudeDoc = (over: Record<string, unknown> = {}): string =>
+    JSON.stringify({ result: 'the answer', is_error: false, subtype: 'success', num_turns: 3, ...over })
+
+  function fakeRun(stdout: string): RunProcess {
+    return async () =>
+      ({
+        code: 0,
+        signal: null,
+        stdout,
+        stderr: '',
+        truncated: false,
+        timedOut: false,
+        spawnFailed: false,
+      }) as ProcessResult
+  }
+
+  it('reports the run when tools were asked for', async () => {
+    const out = await runInference(request({ agentic: true }), {
+      realRoot: TMP,
+      availableClis: ['claude'],
+      run: fakeRun(claudeDoc({ permission_denials: [] })),
+    })
+    expect(out).toMatchObject({
+      ok: true,
+      agentic: { tools: ['Read', 'Glob', 'Grep'], toolCallsAtLeast: 2, denied: 0 },
+    })
+  })
+
+  it('reports NOTHING when tools were not asked for, even though num_turns is there', async () => {
+    // claude's result document always carries num_turns. Echoing it back on a
+    // tool-less run would advertise a grounding that never happened, and the
+    // client reads the field's ABSENCE as exactly that signal.
+    const out = await runInference(request(), {
+      realRoot: TMP,
+      availableClis: ['claude'],
+      run: fakeRun(claudeDoc()),
+    })
+    expect(out).toMatchObject({ ok: true })
+    expect((out as { agentic?: unknown }).agentic).toBeUndefined()
   })
 })

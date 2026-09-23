@@ -47,6 +47,7 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
       inference: ['claude'],
       infer: true,
       inferStream: true,
+      inferAgentic: true,
       files: true,
       search: true,
       fix: false,
@@ -138,6 +139,7 @@ describe('GET /v1/health', () => {
         inference: ['claude'],
         infer: true,
         inferStream: true,
+        inferAgentic: true,
         files: true,
         search: true,
         fix: false,
@@ -168,11 +170,12 @@ describe('GET /v1/health', () => {
 
   it('re-probes capabilities per request so a newly installed CLI shows up', async () => {
     let installed: string[] = []
-    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, inferStream: true, files: true, search: true, fix: false, checkout: false }) })
+    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false }) })
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
       inference: [],
       infer: true,
       inferStream: true,
+      inferAgentic: true,
       files: true,
       search: true,
       fix: false,
@@ -183,6 +186,7 @@ describe('GET /v1/health', () => {
       inference: ['codex'],
       infer: true,
       inferStream: true,
+      inferAgentic: true,
       files: true,
       search: true,
       fix: false,
@@ -455,6 +459,44 @@ describe('POST /v1/infer', () => {
     expect(parse((await handleRequest(inferReq({ cli: 'claude', prompt: 'hi' }), ctx())).body)).not.toHaveProperty('usage')
   })
 
+  it('forwards the agentic flag to the worker instead of deciding for it', async () => {
+    let seen: unknown
+    const spy = ctx({
+      infer: async (request) => {
+        seen = request.agentic
+        return { ok: true as const, text: 'a', truncated: false, durationMs: 1 }
+      },
+    })
+    await handleRequest(inferReq({ cli: 'claude', prompt: 'hi', agentic: true }), spy)
+    expect(seen).toBe(true)
+    await handleRequest(inferReq({ cli: 'claude', prompt: 'hi' }), spy)
+    expect(seen).toBeUndefined()
+  })
+
+  it('includes the agentic report ONLY when the worker produced one', async () => {
+    // Its ABSENCE is the signal a client reads as "this was a plain
+    // completion" — the same thing an older bridge sends for an agentic
+    // request it does not understand. So it must never be synthesized here.
+    const withReport = ctx({
+      infer: async () => ({
+        ok: true as const, text: 'a', truncated: false, durationMs: 1,
+        agentic: { tools: ['Read', 'Glob', 'Grep'], toolCallsAtLeast: 2, denied: 0 },
+      }),
+    })
+    expect(
+      parse((await handleRequest(inferReq({ cli: 'claude', prompt: 'hi', agentic: true }), withReport)).body),
+    ).toHaveProperty('agentic', { tools: ['Read', 'Glob', 'Grep'], toolCallsAtLeast: 2, denied: 0 })
+    expect(
+      parse((await handleRequest(inferReq({ cli: 'claude', prompt: 'hi' }), ctx())).body),
+    ).not.toHaveProperty('agentic')
+  })
+
+  it('400s a non-boolean agentic rather than reading it as truthy', async () => {
+    const res = await handleRequest(inferReq({ cli: 'claude', prompt: 'hi', agentic: 'yes' }), ctx())
+    expect(res.status).toBe(400)
+    expect(parse(res.body)['error']).toBe('bad-request')
+  })
+
   it('405s a GET', async () => {
     const res = await handleRequest(req({ method: 'GET', path: '/v1/infer' }), ctx())
     expect(res.status).toBe(405)
@@ -478,7 +520,7 @@ describe('POST /v1/infer', () => {
   it('503s a KNOWN cli that is not installed — checked before the worker runs', async () => {
     let spawnedAnyway = false
     const context = ctx({
-      capabilities: async () => ({ inference: [], infer: true, inferStream: true, files: false, search: false, fix: false, checkout: false }),
+      capabilities: async () => ({ inference: [], infer: true, inferStream: true, inferAgentic: true, files: false, search: false, fix: false, checkout: false }),
       infer: async () => {
         spawnedAnyway = true
         return { ok: true as const, text: '', truncated: false, durationMs: 0 }
@@ -823,7 +865,7 @@ describe('POST /v1/fix — the other gates still apply', () => {
   it('refuses a CLI that is not installed, with 503 rather than a confusing 501', async () => {
     const res = await handleRequest(
       fixReq({ ...FIX_BODY, cli: 'codex' }),
-      ctx({ ...write, capabilities: async () => ({ inference: ['claude'], infer: true, inferStream: true, files: true, search: true, fix: true, checkout: false }) }),
+      ctx({ ...write, capabilities: async () => ({ inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: true, checkout: false }) }),
     )
     expect(res.status).toBe(503)
     expect(parse(res.body)['error']).toBe('cli-unavailable')
@@ -1311,6 +1353,7 @@ describe('POST /v1/infer/stream — what is decided BEFORE the status line', () 
           inference: ['codex'],
           infer: true,
           inferStream: true,
+          inferAgentic: true,
           files: true,
           search: true,
           fix: false,

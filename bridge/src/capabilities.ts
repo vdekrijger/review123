@@ -99,6 +99,15 @@ export async function detectInferenceClis(deps: CapabilityDeps): Promise<string[
  * both, and gets a precise `cli-unavailable` error instead of a confusing 501
  * when it asks for a CLI that is not installed.
  *
+ * `inferAgentic` is a READINESS flag of the same kind: it says this build
+ * understands `InferRequest.agentic`, the flag that runs the CLI with its own
+ * read-only tools. It is NOT a grant and has no `--allow-*` switch, because
+ * what it enables is reading — the same reading `/v1/files` and `/v1/search`
+ * already do, done by the CLI instead of by us. It is flipped here rather than
+ * inferred by a client, because an older bridge silently IGNORES the request
+ * field and returns a good tool-less answer that a client would otherwise
+ * mistake for a grounded one.
+ *
  * `fix` IS DIFFERENT FROM ALL FOUR. It is not "true from the release that
  * implements the route" — it is `allowWrite`, i.e. whether the person at the
  * terminal started this process with `--allow-write`. The flag is the entire
@@ -124,6 +133,7 @@ export async function detectCapabilities(
     inference: await detectInferenceClis(deps),
     infer: true,
     inferStream: true,
+    inferAgentic: true,
     files: true,
     search: true,
     fix: allowWrite,

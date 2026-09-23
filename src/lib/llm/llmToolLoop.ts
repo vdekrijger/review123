@@ -28,6 +28,13 @@
  *     results  appended as user content parts { functionResponse:{ name, response } }
  *     forced final: toolConfig.functionCallingConfig.mode = 'NONE'
  *
+ * - bridge: NO ROUNDS ARE DRIVEN HERE AT ALL. The user's own CLI is given
+ *     read-only tools and runs its own agent loop against the served working
+ *     tree, returning a finished answer in ONE call. See
+ *     runDelegatedBridgeLoop, which explains why delegating is right where
+ *     driving would be wrong, and why that still leaves every call site
+ *     unchanged.
+ *
  * All rounds are NON-streaming (tool calls don't stream); each round gets a
  * fresh 60 s timeout unless the caller supplies a signal. Usage is summed
  * across rounds so the llm*WithUsage / PostHog token-event pattern keeps
@@ -38,11 +45,12 @@
  * LlmError so callers surface the existing error rendering — never a hang.
  */
 
-import { activeLlmConfig } from './config'
+import { activeLlmConfig, activeBridgeModel } from './config'
 import { gateFor } from './concurrencyGate'
 import type { LlmProviderDef, LlmModelDef } from './providers'
 import {
   LlmError,
+  bridgeAgenticComplete,
   getKeyForProvider,
   buildOpenAICompatHeaders,
   buildAnthropicHeaders,
@@ -52,8 +60,9 @@ import {
   anySignal,
   retryWithCancellation,
 } from './llm'
-import type { LlmUsage } from './llm'
+import type { LlmCompleteOpts, LlmUsage } from './llm'
 import { sizeAwareTimeoutMs, timeoutDetail } from './requestWindow'
+import { INFER_AGENTIC_REQUEST_TIMEOUT_MS } from '../bridge/protocol'
 import { estimateTokens } from '../context/pack'
 
 /**
@@ -568,24 +577,123 @@ function createTransport(opts: LlmToolLoopOpts): ToolTransport {
     case 'gemini':
       return createGeminiTransport(provider, model, opts)
     case 'bridge':
-      // THE TOOL LOOP DOES NOT RUN OVER THE BRIDGE, on purpose.
-      //
-      // `claude -p` is itself an agent with its own tools and its own loop.
-      // Driving it from this loop would be an agent steering an agent through
-      // a text pipe, with two tool vocabularies that do not agree and no way
-      // to attribute a tool call to either. The bridge models therefore carry
-      // `supportsTools: false`, so every deep-review gate (run.svelte.ts,
-      // deepReview.ts) routes to the single-pass path BEFORE reaching here —
-      // this arm is the backstop that keeps that contract loud rather than
-      // silent if a new call site forgets to check.
-      throw new LlmError(
-        'server',
-        'Deep (agentic) review does not run through the local bridge — the CLI is already an agent. Pick an API provider for deep review, or use standard review over the bridge.',
-      )
+      // Unreachable: llmToolLoop routes the bridge to runDelegatedBridgeLoop
+      // before ever building a transport. The arm stays so that adding a
+      // transport without deciding which loop drives it is a compile error
+      // rather than a silent fall-through.
+      throw new LlmError('server', 'The bridge does not use a round-driving tool transport.')
   }
 }
 
+/**
+ * The BRIDGE's deep-review path: the CLI runs the agent loop, we do not.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHY THIS IS ONE CALL AND NOT A LOOP
+ *
+ * Everything above this line drives rounds: send tools, receive tool_use,
+ * execute, append, send again. That shape is right for an API model, which
+ * cannot touch anything itself. It is the WRONG shape for a CLI that is already
+ * a full agent — it would be an agent steering an agent through a text pipe,
+ * with two tool vocabularies that do not agree and no way to attribute a tool
+ * call to either. That objection was always correct and nothing here overturns
+ * it.
+ *
+ * What was wrong was the CONCLUSION drawn from it: that deep review therefore
+ * could not run over the bridge at all. The bridge's ordinary call passes
+ * `--tools ""` — review123 strips the CLI's tools deliberately — so "the CLI is
+ * already an agent" described a capability we had switched off. Switching it
+ * back on, narrowed to read-only, gives an agent loop that is BETTER grounded
+ * than the API path: it reads the user's real working tree, uncommitted changes
+ * included, instead of fetching files through a rate-limited VCS API.
+ *
+ * So the division of labour is: the CLI owns the loop, and this function owns
+ * the contract that the loop's callers already depend on.
+ *
+ * WHAT THE TOOLKIT IS FOR HERE: nothing, and that is deliberate. `opts.tools`
+ * and `opts.executeTool` describe review123's OWN tools, and the CLI neither
+ * receives nor can call them — it has its own equivalents pointed at the same
+ * code. They are ignored rather than adapted, because an adapter would be the
+ * agent-driving-an-agent design this function exists to avoid.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+async function runDelegatedBridgeLoop(
+  provider: LlmProviderDef,
+  model: LlmModelDef,
+  opts: LlmToolLoopOpts,
+): Promise<LlmToolLoopResult> {
+  // One honest activity line. There is no per-call feed to mirror: the CLI does
+  // not report its tool calls as it makes them, and inventing "Reading foo.ts…"
+  // to keep the indicator busy would be describing work we cannot see.
+  opts.onToolEvent?.({
+    name: 'bridge_agentic',
+    detail: `${model.label} is investigating your working tree…`,
+  })
+
+  const completeOpts: LlmCompleteOpts = {
+    system: opts.system,
+    user: opts.user,
+    // NAMED EXPLICITLY, because the default would be wrong in a way that looks
+    // like a flaky bridge. The transport sends `timeoutMs ?? 60_000`, so
+    // omitting it would both abort the fetch at 60 s and TELL the bridge to
+    // kill the CLI then — an agent mid-investigation, with the user's
+    // subscription already spent on the part it had done.
+    timeoutMs: INFER_AGENTIC_REQUEST_TIMEOUT_MS,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  }
+  const result = await bridgeAgenticComplete(
+    provider,
+    model,
+    completeOpts,
+    activeBridgeModel(model.id),
+  )
+
+  // The bridge answered, but WITHOUT an agentic report — so the CLI ran
+  // tool-less. That is what a bridge predating the agentic release does: it
+  // ignores the request field and returns a perfectly good single-pass answer.
+  //
+  // Returning that text as a deep review is the one outcome this whole feature
+  // must not produce, because nobody downstream could tell. deepReview.ts's
+  // harness gate normally catches this and falls back to standard review WITH a
+  // note; this is the backstop for a call site that reached the loop anyway, and
+  // it fails loudly rather than quietly relabelling a shallow answer.
+  if (result.agentic === null) {
+    throw new LlmError(
+      'server',
+      'The local bridge ran the CLI without its tools, so this was not a deep review. Update the bridge and restart it.',
+    )
+  }
+
+  if (result.content === '') {
+    throw new LlmError('invalid-output', 'Tool loop ended without a final answer')
+  }
+
+  // `toolCallsAtLeast` is a LOWER BOUND the CLI reported (see InferAgentic), and
+  // it is passed through as-is rather than rounded up to look busy. Absent means
+  // the CLI reported nothing countable, which becomes 0 — the same value a real
+  // zero produces. Both mean "we cannot show that it looked anything up", and a
+  // caller reading this as an exact count would be over-reading it either way.
+  const toolCallsUsed = result.agentic.toolCallsAtLeast ?? 0
+  if (toolCallsUsed > 0) {
+    opts.onToolEvent?.({
+      name: 'bridge_agentic',
+      detail: `${model.label} read your working tree (${toolCallsUsed} ${toolCallsUsed === 1 ? 'lookup' : 'lookups'} or more)`,
+    })
+  }
+
+  const out: LlmToolLoopResult = { content: result.content, toolCallsUsed }
+  if (result.usage) out.usage = result.usage
+  return out
+}
+
 export async function llmToolLoop(opts: LlmToolLoopOpts): Promise<LlmToolLoopResult> {
+  // The bridge's loop lives in the CLI, so it branches BEFORE the round driver
+  // rather than pretending to be a transport inside it.
+  const resolved = opts.override ?? activeLlmConfig()
+  if (resolved.provider.transport === 'bridge') {
+    return runDelegatedBridgeLoop(resolved.provider, resolved.model, opts)
+  }
+
   const transport = createTransport(opts)
   const maxCalls = opts.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS
   const roundCap = maxRounds(maxCalls)

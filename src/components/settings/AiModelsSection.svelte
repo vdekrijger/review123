@@ -600,8 +600,10 @@
         <p class="privacy-line">
           {#if isBridge(p.id)}
             Nothing leaves your machine: the prompt goes to 127.0.0.1, and the bridge runs your
-            CLI, which talks to its own vendor as it always does. Deep (agentic) review is not
-            available over the bridge — the CLI is already an agent.
+            CLI, which talks to its own vendor as it always does. Deep (agentic) review runs your
+            CLI with read-only access to your checkout — it reads the code in front of you, so it
+            can check a claim against the real file instead of guessing. It can read and search;
+            it cannot write, run commands or change a branch.
           {:else if p.id === 'openai'}
             The OpenAI key transits our serverless proxy (OpenAI's API blocks browser requests) —
             it is forwarded per-request and never stored or logged on the server.

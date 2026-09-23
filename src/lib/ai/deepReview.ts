@@ -45,6 +45,7 @@
 import type { LlmToolDef, LlmToolResult } from '../llm/llmToolLoop'
 import { activeLlmConfig } from '../llm/config'
 import { modelSupportsTools } from '../llm/providers'
+import { currentBridgeAgentic, describeBridgeAgentic } from '../bridge/grounding'
 import { getSettings, type AiTaskId, type AiTaskMode } from '../settings/settings'
 
 // ---------------------------------------------------------------------------
@@ -256,11 +257,27 @@ export interface DeepReviewAvailability {
  */
 function deepHarnessAvailable(source: DeepReviewSource | undefined): DeepReviewAvailability {
   if (!source) return { enabled: false }
-  const { model } = activeLlmConfig()
+  const { provider, model } = activeLlmConfig()
   if (!modelSupportsTools(model)) {
     return {
       enabled: false,
       note: `Deep review unavailable: ${model.label} does not support tool calling — ran standard review.`,
+    }
+  }
+  // THE BRIDGE NEEDS A SECOND CHECK, and it is not symmetry for its own sake.
+  //
+  // For an API provider, `supportsTools` settles it: review123 drives the loop
+  // and the only question is whether the model can be sent tools. Over the
+  // bridge the loop runs inside the user's CLI, which the bridge must be new
+  // enough to ask for — and a bridge that is NOT new enough does not refuse.
+  // It ignores the request field and answers with an ordinary single-pass
+  // review, which we would then label deep. So availability is settled from the
+  // live capability BEFORE anything is offered.
+  if (provider.transport === 'bridge') {
+    const status = currentBridgeAgentic()
+    if (!status.ready) {
+      const note = describeBridgeAgentic(status)
+      return { enabled: false, ...(note ? { note } : {}) }
     }
   }
   return { enabled: true }
