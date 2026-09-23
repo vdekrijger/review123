@@ -50,6 +50,18 @@
  *
  * SIZE DISCIPLINE. Fourteen shots, ~2.5MB total. If a change pushes that up,
  * that is a signal to look at the shot, not to raise the budget.
+ *
+ * WHAT DETERMINISM DOES NOT COVER, because it will mislead you otherwise. Two
+ * runs of the SAME build give fourteen byte-identical files. Across commits,
+ * SIX of them change even when nothing visual moved: BuildIndicator.svelte
+ * renders BUILD_SHA and BUILD_TIME (Vite bakes them in at build time), and that
+ * footer falls inside the captured area on landing-* (y=969 of a 1000px page),
+ * settings-models-* (y=5983 of 6014) and step1-understand-* (y=1089 of 1120 —
+ * the footer is why that shot is 1120 and not 1000). It never enters the step-2
+ * shots, which clip at 1000px while the footer sits at y=2836, and on
+ * step3-verdict-* the sticky draft bar covers it. So a byte diff on those six
+ * proves nothing on its own; the reported DIMENSIONS, and the other eight
+ * files, are the signal worth reading.
  */
 
 import { chromium } from '@playwright/test'

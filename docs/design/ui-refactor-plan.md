@@ -2081,10 +2081,26 @@ committed dimensions** — including all six that were called stale, and includi
 `settings-models-*` at 780x**3257** against a committed 780x**3260**: a 3px
 drift from real app movement since slice 2 (#264, #265), not a recipe error.
 The script also reproduces the set's own quirk — `focus-dim-*` comes out
-byte-identical to `step2-inspect-unified-*`, exactly as committed. Two full runs
-against two independent builds produced **fourteen byte-identical files**, so the
-capture is deterministic and a diff in this directory means the app moved. Total:
+byte-identical to `step2-inspect-unified-*`, exactly as committed. Total:
 **2.5 MB for 14**, the size discipline held.
+
+**One caveat, found by over-claiming and then checking.** The capture is
+deterministic *against a given build* — two runs of the same build produce
+fourteen byte-identical files — but **six of the fourteen change on every commit
+even when nothing visual moves**. `BuildIndicator.svelte` renders `BUILD_SHA` and
+`BUILD_TIME`, which Vite bakes in at build time (`build 017a2ef · 2026-09-23`),
+and that footer sits inside the captured area on exactly three surfaces:
+`landing-*` (footer at y=969 of a 1000px page), `settings-models-*` (y=5983 of
+6014) and `step1-understand-*` (y=1089 of 1120 — the footer *is* why that shot is
+1120 rather than 1000). The step-2 shots are viewport clips at 1000px and the
+footer sits at y=2836, so it never enters them; on `step3-verdict-*` the sticky
+draft bar covers it.
+
+So **a byte diff on those six is not evidence that the design moved** — the
+dimensions, and the other eight files, are the signal. It also means re-running
+the capture always dirties them. The fix, if this ever becomes annoying, is to
+neutralise the sha in capture mode rather than to crop the footer out; it is
+left alone here because it is a real part of the page.
 
 ---
 
