@@ -35,6 +35,7 @@ import { setTransientRetryPolicyForTests } from './transientRetry'
 import { setAiProvider, setAiModel, setBridgeModel, setDeepseekKey, setAiPanel, getSettings, type PanelParticipant } from '../settings/settings'
 import { resolvePanel, verifierProviderConfigs } from './config'
 import { BRIDGE_STORAGE_KEY } from '../bridge/storage'
+import { INFER_AGENTIC_REQUEST_TIMEOUT_MS } from '../bridge/protocol'
 import { BRIDGE_START_COMMAND } from '../bridge/install'
 import { MAX_INFLIGHT_LLM_CALLS } from './concurrencyGate'
 
@@ -1164,6 +1165,29 @@ describe('bridge transport — the delegated agentic loop', () => {
     // PROMPT_VERSIONS entry is involved.
     expect(body['system']).toContain('TASK SYSTEM PROMPT')
     expect(body['system']).toContain(BRIDGE_AGENTIC_INSTRUCTION)
+  })
+
+  /**
+   * A 60-second agentic review is a broken one, and it would LOOK like a flaky
+   * bridge rather than a bug here.
+   *
+   * The transport sends `timeoutMs ?? 60_000` on every call, so omitting it
+   * does not fall through to the bridge's agentic default — it pins 60 s at
+   * BOTH ends: the browser aborts, and the bridge is told to kill the CLI. An
+   * agent that opens several files and turns again on what it found does not
+   * finish in 60 s, so it would be killed mid-investigation with the user's
+   * subscription already spent on the part it did.
+   */
+  it('sends a budget fit for an agent, not the 60s single-completion default', async () => {
+    useBridge()
+    const fetchMock = respondWith(agenticBody({ tools: ['Read'], toolCallsAtLeast: 1 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await runLoop()
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as Record<string, unknown>
+    expect(body['timeoutMs']).toBe(INFER_AGENTIC_REQUEST_TIMEOUT_MS)
+    expect(body['timeoutMs']).toBeGreaterThan(60_000)
   })
 
   it('reports the CLI’s tool count as toolCallsUsed, so the completeness nudge stays quiet', async () => {

@@ -62,6 +62,7 @@ import {
 } from './llm'
 import type { LlmCompleteOpts, LlmUsage } from './llm'
 import { sizeAwareTimeoutMs, timeoutDetail } from './requestWindow'
+import { INFER_AGENTIC_REQUEST_TIMEOUT_MS } from '../bridge/protocol'
 import { estimateTokens } from '../context/pack'
 
 /**
@@ -632,6 +633,12 @@ async function runDelegatedBridgeLoop(
   const completeOpts: LlmCompleteOpts = {
     system: opts.system,
     user: opts.user,
+    // NAMED EXPLICITLY, because the default would be wrong in a way that looks
+    // like a flaky bridge. The transport sends `timeoutMs ?? 60_000`, so
+    // omitting it would both abort the fetch at 60 s and TELL the bridge to
+    // kill the CLI then — an agent mid-investigation, with the user's
+    // subscription already spent on the part it had done.
+    timeoutMs: INFER_AGENTIC_REQUEST_TIMEOUT_MS,
     ...(opts.signal ? { signal: opts.signal } : {}),
   }
   const result = await bridgeAgenticComplete(

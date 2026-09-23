@@ -812,6 +812,24 @@ export const MAX_FIX_FINDINGS = 10
  */
 export const FIX_REQUEST_TIMEOUT_MS = 31 * 60 * 1000
 
+/**
+ * Wall-clock budget for ONE agentic `/v1/infer` call, from the browser's side.
+ *
+ * It has to be stated explicitly, and that is the whole point of this constant.
+ * The bridge transport sends `timeoutMs ?? 60_000` on EVERY call, so a caller
+ * that names none does not get the bridge's agentic default — it gets 60
+ * seconds, both as the browser's abort and as the budget the bridge is told to
+ * honour. Sixty seconds is a fine ceiling for a single completion and far too
+ * short for an agent that opens several files and turns again on what it found:
+ * the review would be killed mid-investigation, having already spent the user's
+ * subscription on the part it did.
+ *
+ * Five minutes matches the bridge's own DEFAULT_AGENTIC_INFER_TIMEOUT_MS, so
+ * the two ends agree on one number instead of racing. It is still under the
+ * bridge's MAX_INFER_TIMEOUT_MS ceiling, which remains the real limit.
+ */
+export const INFER_AGENTIC_REQUEST_TIMEOUT_MS = 5 * 60 * 1000
+
 /** One proposed finding sent to the agent. `suggestedFix` is REQUIRED. */
 export interface BridgeFixFinding {
   id: string
