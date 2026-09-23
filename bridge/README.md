@@ -236,10 +236,13 @@ What actually happens, measured against Chromium 148 and Chrome 154:
   process — not one byte.
 - The page's `fetch` rejects in about a millisecond with a bare
   `TypeError: Failed to fetch`, which is the *same* error a refused connection
-  gives. The console says: `Access to fetch at 'http://127.0.0.1:7321/v1/health'
-  from origin 'https://www.review123.dev' has been blocked by CORS policy:
-  Permission was denied for this request to access the ``loopback`` address
-  space.` — that string is what to search for when this happens again.
+  gives. **Search for this console line** when it happens again:
+
+  ```
+  Access to fetch at 'http://127.0.0.1:7321/v1/health' from origin
+  'https://www.review123.dev' has been blocked by CORS policy: Permission was
+  denied for this request to access the `loopback` address space.
+  ```
 - `navigator.permissions.query({ name: 'local-network-access' })` answers
   `prompt`, `granted` or `denied`. review123 asks it on a failed pairing so it
   can tell you the browser blocked the request instead of telling you to start
