@@ -2,6 +2,9 @@
   import { DiffView, DiffModeEnum, SplitSide } from '@git-diff-view/svelte'
   import { highlighter } from '@git-diff-view/lowlight'
   import '@git-diff-view/svelte/styles/diff-view.css'
+  // MUST come after the vendored sheet: it re-points every ground, border,
+  // widget and syntax token at the app's palette (audit F5, plan Phase 3).
+  import './diff-view-theme.css'
   import { buildDiffFile, classifyFile } from '../lib/diff/diffFile'
   import type { PrFile } from '../lib/github/types'
   import type { DiffMode, FocusMode } from '../lib/settings/settings'
@@ -1673,48 +1676,54 @@
   article.test-dim { opacity: 0.6; }
   article.test-dim header { opacity: 0.8; }
 
-  /* Focus mode — dim "code noise" (import / comment) content cells.
-     Opacity-only so the text stays fully selectable and the cell remains
-     comment-anchorable (the add-comment affordance and line number are
-     untouched). Hover restores full opacity for legibility on demand. Works in
-     unified (.diff-line-content) and split (old/new-content) layouts.
+  /* ---- Recede: INK SUBSTITUTION, not alpha (plan Phase 3 / P1-4(b)) ----
+     Focus mode ("code noise": imports, comments) and per-hunk attention
+     (mechanical hunks) are ONE visual language and share this exact mechanism.
 
-     The alpha is NOT theme-agnostic, which is what --recede-opacity fixes: the
-     old bare 0.45 was tuned against the dark ground and measured 26% harsher on
-     white, dropping receded code below the legibility floor in light mode only
-     (audit F4). The token is 0.55 light / 0.45 dark, asserted on all three real
-     diff grounds in src/lib/theme/contrast.test.ts. The class is toggled per
-     content cell. */
+     Both used to set `opacity: var(--recede-opacity)`. Phase 1 shipped that
+     knowingly as an interim fix and recorded why it is a dead end: alpha
+     collapses every hue toward the ground at once, so the coloured syntax fell
+     far further than the base ink. Measured in the built app before this change
+     — light 2.16 (keyword on a removed row), 2.31 (keyword on context), 2.39
+     (title); dark 2.27, 2.39, 2.73 — every one of them under the 3:1 floor, in
+     BOTH themes. No alpha that still reads as receded fixes that (0.70 only
+     reaches 2.74 for the light comment token) because the problem is not how
+     much alpha, it is alpha.
+
+     The answer is one muted ink for the whole row. Declaring
+     `--syntax-recede-ink` here makes every rule in diff-view-theme.css resolve
+     to it — fifteen syntax roles plus the base ink — because each of those
+     rules reads `var(--syntax-recede-ink, var(--syntax-<role>))`. One
+     declaration, no specificity fight with the vendored theme, and ONE
+     measurable colour instead of six unmeasurable ones. Worst case now 4.51
+     light / 4.33 dark on the row grounds (src/lib/theme/contrast.test.ts).
+
+     Two consequences, both deliberate:
+       · the row keeps its full add/remove TINT — alpha used to fade the cell's
+         own background too. The content recedes; the structure does not.
+       · hover restores by making the custom property guaranteed-invalid
+         (`initial`), which sends every rule back to its own fallback. The text
+         stays selectable and the cell stays comment-anchorable and a drop
+         target for a dragged finding throughout; nothing is ever hidden.
+
+     When a row is BOTH noise and mechanical the ink does not compound — the two
+     rules set the same value. */
   .focus-dim-host :global(.diff-line-content.dimmed-noise),
   .focus-dim-host :global(.diff-line-old-content.dimmed-noise),
-  .focus-dim-host :global(.diff-line-new-content.dimmed-noise) {
-    opacity: var(--recede-opacity);
-    transition: opacity 0.12s ease;
-  }
-  .focus-dim-host :global(.diff-line-content.dimmed-noise):hover,
-  .focus-dim-host :global(.diff-line-old-content.dimmed-noise):hover,
-  .focus-dim-host :global(.diff-line-new-content.dimmed-noise):hover {
-    opacity: 1;
-  }
-
-  /* Per-hunk attention — MECHANICAL hunks recede. Deliberately the SAME idiom
-     and the same --recede-opacity focus mode uses for code noise (one visual
-     language, not two — which is exactly why it is one token): opacity only,
-     so the code stays selectable,
-     comment-anchorable and a drop target for a dragged finding; hover restores
-     it for a glance; the hunk's marker restores it for good. Nothing is ever
-     hidden. When a row is BOTH noise and mechanical the opacity does not
-     compound — the two rules set the same value. */
+  .focus-dim-host :global(.diff-line-new-content.dimmed-noise),
   .focus-dim-host :global(.diff-line-content.hunk-receded),
   .focus-dim-host :global(.diff-line-old-content.hunk-receded),
   .focus-dim-host :global(.diff-line-new-content.hunk-receded) {
-    opacity: var(--recede-opacity);
-    transition: opacity 0.12s ease;
+    --syntax-recede-ink: var(--syntax-receded);
+    transition: color 0.12s ease;
   }
+  .focus-dim-host :global(.diff-line-content.dimmed-noise):hover,
+  .focus-dim-host :global(.diff-line-old-content.dimmed-noise):hover,
+  .focus-dim-host :global(.diff-line-new-content.dimmed-noise):hover,
   .focus-dim-host :global(.diff-line-content.hunk-receded):hover,
   .focus-dim-host :global(.diff-line-old-content.hunk-receded):hover,
   .focus-dim-host :global(.diff-line-new-content.hunk-receded):hover {
-    opacity: 1;
+    --syntax-recede-ink: initial;
   }
 
   /* The receded hunk's one-line marker, rendered inline in the diff through

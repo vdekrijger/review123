@@ -24,11 +24,11 @@
    *   light → :root[data-theme='light'] { color-scheme: light }
    *   dark  → :root[data-theme='dark']  { color-scheme: dark }
    *
-   * Only two theme-dependent tokens CANNOT live here, because `light-dark()`
-   * takes <color> and they are not colours: `--select-chevron` (a url()) and
-   * `--recede-opacity` (a number). Those two are declared light-first below and
-   * overridden in BOTH dark paths; src/lib/theme/contrast.test.ts pins the two
-   * dark declarations equal so they cannot drift.
+   * One theme-dependent token CANNOT live here, because `light-dark()` takes
+   * <color> and it is not a colour: `--select-chevron` (a url()). It is
+   * declared light-first below and overridden in BOTH dark paths;
+   * src/lib/theme/contrast.test.ts pins the two dark declarations equal so they
+   * cannot drift. (It was two until Phase 3 retired `--recede-opacity`.)
    *
    * ── AUTHORING ORDER: LIGHT FIRST ──
    * The light value comes first in every pair because light is now the AUTHORED
@@ -91,54 +91,55 @@
   --accent-contrast: var(--on-accent);
 
   /*
-   * ── Recede opacity — how far de-emphasised CONTENT drops back ──
+   * ── Recede INK — how de-emphasised CONTENT drops back (Phase 3) ──
    *
-   * NEW, and theme-dependent: 0.45 was tuned against the diff's dark ground and
-   * is 26% harsher on white (audit F4). Light needs 0.55 to restore parity with
-   * dark's 4.53:1 on the context ground; 0.50 is not enough (3.98:1). A number,
-   * not a colour, so it cannot use light-dark() — see the dark blocks below.
+   * `--recede-opacity` USED TO LIVE HERE. Phase 1 shipped it (0.55 light / 0.45
+   * dark) as an explicitly INTERIM fix and recorded the proof that alpha is the
+   * wrong tool: it collapses every hue toward the ground at once, so the light
+   * comment token only reaches 2.74:1 even at 0.70 — an alpha that no longer
+   * reads as receded at all. There is no value that both looks receded and
+   * holds 3:1 over coloured syntax.
    *
-   * Consumed by focus mode (.dimmed-noise) and per-hunk attention
-   * (.hunk-receded) in FileDiff.svelte — one visual language, one token.
+   * Phase 3 replaces it with INK SUBSTITUTION: a receded row paints its whole
+   * syntax set in ONE muted ink instead of dimming six hues. That is one
+   * measurable colour rather than six unmeasurable ones, which is the only way
+   * to put a floor under focus mode (.dimmed-noise) and per-hunk attention
+   * (.hunk-receded). Both consume --syntax-receded below, through the
+   * --syntax-recede-ink indirection in src/components/diff-view-theme.css.
    *
-   * This is DELIBERATELY not the same token as the 13 bare `opacity: 0.45`
-   * literals elsewhere in the app. Those serve three distinct semantics —
-   * receded content, a disabled control, de-emphasised chrome — and are one
-   * number by coincidence. Folding them together would make them impossible to
-   * tune independently. Batch 2A gives the disabled one its own token
-   * (--disabled-opacity, below); --chrome-muted-opacity is still outstanding.
+   * The consequence worth knowing: a receded row now keeps its FULL add/remove
+   * tint (alpha used to fade the row's own background too). The content
+   * recedes; the structure does not. That is the intended reading.
    *
-   * HONEST LIMIT: 0.55 restores the BASE ink, not the syntax colours. Alpha
-   * collapses every hue toward the ground at once, and no alpha that still
-   * reads as receded holds 3:1 for coloured syntax (even 0.70 only reaches
-   * 2.74:1 for the light comment token). This is an interim fix; the real
-   * answer is substituting one muted ink for the syntax set on receded rows,
-   * which is Phase 3 (plan P1-4(b)).
+   * --disabled-opacity (below) is untouched: a disabled control is inactive
+   * chrome that WCAG exempts outright, and alpha is the right tool there
+   * because there is no coloured content under it to collapse.
    */
-  --recede-opacity: 0.55;
 
   /*
    * ── Disabled opacity — how far an UNAVAILABLE CONTROL drops back ──
    *
    * The second of the three semantics stacked on the old bare `opacity: 0.45`
-   * (plan P1-4a). It is NOT --recede-opacity: receded content is content the
-   * reader can bring back by hovering and therefore has a 3:1 floor to hold;
-   * a disabled control is inactive chrome, which WCAG 2.1 exempts outright
-   * (SC 1.4.3 and SC 1.4.11 both except "inactive user interface components").
-   * One number, two meanings — so two tokens, as the plan asks.
+   * (plan P1-4a). It is NOT the recede treatment: receded CONTENT is content the
+   * reader can bring back by hovering and therefore has a floor to hold — which
+   * is why Phase 3 gave it an ink (--syntax-receded) rather than an alpha. A
+   * disabled control is inactive chrome, which WCAG 2.1 exempts outright (SC
+   * 1.4.3 and SC 1.4.11 both except "inactive user interface components"), and
+   * there is no coloured content under it for alpha to collapse. One number,
+   * two meanings — so two treatments, as the plan asks.
    *
    * DELIBERATELY NOT THEME-SPLIT, and here is the measurement, because the
    * asymmetry is real and someone will want to revisit it:
    *
    *   --text @0.45 on --surface-sunken   light 2.68:1     dark 3.65:1
    *
-   * Light lands 27% harsher, the same shape of bug --recede-opacity exists to
-   * fix. The difference is that --recede-opacity had a FLOOR (3:1 on the diff
-   * grounds) which forced 0.55 in light; a disabled control has no floor, so a
-   * second value here would be a taste call dressed as a measurement. It also
-   * costs something: a number cannot use light-dark(), so splitting it would
-   * grow the dark-override block below — the app's last copy of the F17 hazard
-   * — from two declarations to three. Single value, measured, recorded.
+   * Light lands 27% harsher, the same shape of bug the recede treatment exists
+   * to fix. The difference is that receded content has a FLOOR; a disabled
+   * control has none, so a second value here would be a taste call dressed as a
+   * measurement. It also costs something: a number cannot use light-dark(), so
+   * splitting it would grow the dark-override block below — the app's last copy
+   * of the F17 hazard — back from one declaration to two. Single value,
+   * measured, recorded.
    */
   --disabled-opacity: 0.45;
 
@@ -176,6 +177,78 @@
   --legend-unchanged-bg:    light-dark(#f0f0f2, #22262d);
   --legend-unchanged-border:light-dark(#bbbbbb, #3a3f48);
   --legend-unchanged-color: light-dark(#666666, #9a9890);
+
+  /*
+   * ── THE DIFF VIEWER'S PALETTE (Phase 3; audit F5) ────────────────────────
+   *
+   * The densest surface in the product used to draw almost none of its colour
+   * from this file: it shipped GitHub's palette whole. Three unrelated dark
+   * greys met within pixels (--bg #14161a, --surface #1b1e24 and the viewer's
+   * own #0d1117); body ink was pure #ffffff/#000000 rather than --text; there
+   * were two greens and two reds for one meaning; and #0969da appeared on 78
+   * add-comment widgets as a second, unrelated accent.
+   *
+   * Everything structural now points at tokens that already exist — the row
+   * grounds ARE the legend chips (one green, one red), the context ground IS
+   * --surface, the border IS --hairline, the widget IS --accent. Only two
+   * genuinely new grounds and the syntax set are authored here.
+   * src/components/diff-view-theme.css binds them to the vendored viewer.
+   *
+   * ── The word-level emphasis tints ──
+   * The viewer marks the CHANGED WORDS inside a changed line with a stronger
+   * tint. That is a role the legend chips do not have, so it needs its own
+   * value: the legend BORDER mixed into the legend BG until the step off the
+   * row reaches 1.20:1 — the same step GitHub's own word highlight makes in
+   * light, and the step our removed row makes off white (1.19:1).
+   */
+  --diff-added-emphasis:   light-dark(#bceec8, #1d482d);
+  --diff-removed-emphasis: light-dark(#f9ccce, #552023);
+
+  /*
+   * ── The syntax set (rubric A4: every token >= 4.5:1 on EVERY ground) ──
+   *
+   * GitHub's prettylights hues, kept because a reader already knows them, but
+   * contrast-REPAIRED against the six grounds a token can actually land on:
+   * context, sunken (expand/empty), added, removed, and the two emphasis tints
+   * above. Five light values and one dark value moved; the rest are GitHub's
+   * unchanged. Every shift is the SMALLEST walk toward black (light) or white
+   * (dark) that clears the floor, so the hue is untouched.
+   *
+   *   light  keyword  #d73a49 -> #ac2f3b   (was 3.83 on the removed row)
+   *          variable #e36209 -> #9c4306   (was 2.92 — the audit's worst)
+   *          comment  #6a737d -> #575f67   (was 4.03)
+   *          tag      #22863a -> #1b6c2f   (was 3.88)
+   *          constant #005cc5 -> #005ac1   (was 4.47, one step)
+   *          bullet   #735c0f -> #725b0f   (was 4.49, one step)
+   *   dark   keyword  #ff7b72 -> #ff8880   (was 4.34 on the emphasis tint)
+   *          comment  #8b949e -> #a5acb3   (was 3.83)
+   *
+   * Worst measured ratio across the whole matrix: 4.50 light, 4.50 dark.
+   * src/lib/theme/contrast.test.ts asserts every cell of it.
+   */
+  --syntax-ink:      var(--text);
+  --syntax-keyword:  light-dark(#ac2f3b, #ff8880);
+  --syntax-entity:   light-dark(#6f42c1, #d2a8ff);
+  --syntax-constant: light-dark(#005ac1, #79c0ff);
+  --syntax-string:   light-dark(#032f62, #a5d6ff);
+  --syntax-variable: light-dark(#9c4306, #ffa657);
+  --syntax-comment:  light-dark(#575f67, #a5acb3);
+  --syntax-tag:      light-dark(#1b6c2f, #7ee787);
+  --syntax-bullet:   light-dark(#725b0f, #f2cc60);
+
+  /*
+   * The ONE ink a receded row paints its whole syntax set in — the answer
+   * --recede-opacity was an interim stand-in for (see the recede note above).
+   * It is --text-muted, not a new colour: "de-emphasised but still readable" is
+   * a tier the palette already has, and reusing it keeps receded code in the
+   * same visual language as every other muted thing in the app.
+   *
+   * Measured: 4.51-5.39 light / 4.33-5.78 dark on the four row grounds, and
+   * 3.74 / 3.60 at worst on the emphasis tints — against 2.16-3.34 for the
+   * same rows under alpha. The step down from --syntax-ink is 15.80 -> 5.39
+   * light and 13.39 -> 5.78 dark, i.e. it still recedes hard.
+   */
+  --syntax-receded:  var(--text-muted);
 
   /*
    * ── THE ELEVATION SCALE (Batch 2B; audit F10) ────────────────────────────
@@ -314,27 +387,28 @@
 :root[data-theme='light'] { color-scheme: light; }
 
 /*
- * ── The dark values `light-dark()` cannot carry ──
+ * ── The dark value `light-dark()` cannot carry ──
  *
- * `light-dark()` takes <color>. These tokens are not colours — a url() and a
- * number — so they are declared light-first in :root and overridden here for the
- * two ways a user reaches dark: an explicit choice, and `auto` + an OS that
- * prefers dark. These two blocks MUST stay identical; that is the one remaining
- * copy of the F17 hazard, so src/lib/theme/contrast.test.ts asserts them equal
+ * `light-dark()` takes <color>. This token is not a colour — it is a url() — so
+ * it is declared light-first in :root and overridden here for the two ways a
+ * user reaches dark: an explicit choice, and `auto` + an OS that prefers dark.
+ * These two blocks MUST stay identical; that is the one remaining copy of the
+ * F17 hazard, so src/lib/theme/contrast.test.ts asserts them equal
  * declaration-for-declaration, and e2e/theme-token-parity.spec.ts proves the two
  * paths resolve identically in a real browser for EVERY token.
  *
- * Keep this block as small as possible. A new theme-dependent token belongs in
- * the light-dark() palette above unless it genuinely is not a colour.
+ * It used to be two declarations. Phase 3 retired `--recede-opacity` (a number)
+ * when ink substitution replaced alpha-recede in the diff viewer, which shrank
+ * the hazard by half — the smaller these blocks are, the less there is to
+ * diverge. A new theme-dependent token belongs in the light-dark() palette
+ * above unless it genuinely is not a colour.
  */
 :root[data-theme='dark'] {
-  --recede-opacity: 0.45;
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239a9890' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --recede-opacity: 0.45;
     --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239a9890' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   }
 }
