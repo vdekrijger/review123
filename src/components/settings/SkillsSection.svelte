@@ -244,16 +244,14 @@
 
           {#if editingId === skill.id}
             <div class="skill-edit-form" role="region" aria-label="Edit {skill.name}">
-              <label>
-                Name
+              <label class="field"><span class="field-label">Name</span>
                 <input
                   type="text"
                   bind:value={editName}
                   placeholder="Skill name"
                 />
               </label>
-              <label>
-                Persona
+              <label class="field"><span class="field-label">Persona</span>
                 <textarea
                   bind:value={editContent}
                   placeholder="Reviewer persona guidelines…"
@@ -348,16 +346,14 @@
       {#if minedSkillDraft}
         <p class="mined-skill-notice">Review your generated skill below, then save or edit it.</p>
       {/if}
-      <label>
-        Skill name
+      <label class="field"><span class="field-label">Skill name</span>
         <input
           type="text"
           bind:value={newSkillName}
           placeholder="Skill name"
         />
       </label>
-      <label>
-        Persona (paste markdown checklist or guidelines)
+      <label class="field"><span class="field-label">Persona (paste markdown checklist or guidelines)</span>
         <textarea
           bind:value={newSkillContent}
           placeholder="Paste your reviewer checklist or persona guidelines here…"
@@ -535,16 +531,15 @@
   .add-skill-form {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 1rem;
     margin-top: 0.5rem;
   }
 
-  .add-skill-form label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.9em;
-  }
+  /* The column + 0.25rem label→control step this used to declare is the global
+     .field primitive now (app.css, audit F12); the labels carry `class="field"`
+     and their text a `.field-label` span, so the demoted label ink comes with
+     it. The container gap above went 0.5rem → 1rem so the space BETWEEN fields
+     is four times the space inside one, not two (p.83-84). */
 
   .add-skill-form textarea {
     font-family: var(--font-mono);
@@ -597,7 +592,7 @@
   .skill-edit-form {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 1rem;
     margin: 0.4rem 0 0.4rem 1.5rem;
     padding: 0.6rem 0.75rem;
     border: 1px solid var(--border-subtle);
@@ -605,12 +600,8 @@
     background: var(--surface-raised);
   }
 
-  .skill-edit-form label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.9em;
-  }
+  /* Same as .add-skill-form above: the global .field primitive owns the column
+     and the label treatment. */
 
   .skill-edit-form textarea {
     font-family: var(--font-mono);
@@ -753,9 +744,14 @@
     margin-bottom: 0.5rem;
   }
 
+  /* A side-by-side field, so it is not a .field (that primitive is the STACKED
+     shape), but it takes the same label treatment: one step below the control's
+     own text, --text-secondary rather than --text-muted, which is where this
+     section's hints live. */
   .mine-provider-label {
-    font-size: 0.88em;
-    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-secondary);
     flex-shrink: 0;
   }
 

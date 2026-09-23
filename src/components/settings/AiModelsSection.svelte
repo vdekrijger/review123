@@ -513,7 +513,7 @@
         </div>
 
         {#if useCombobox(p.models.length)}
-          <div class="model-label" id="model-field-{p.id}">{p.displayName} model
+          <div class="field model-label" id="model-field-{p.id}"><span class="field-label">{p.displayName} model</span>
             <ModelCombobox
               id="model-combobox-{p.id}"
               label="{p.displayName} model"
@@ -523,7 +523,7 @@
             />
           </div>
         {:else}
-          <label class="model-label">{p.displayName} model
+          <label class="field model-label"><span class="field-label">{p.displayName} model</span>
             <select
               value={modelSel[p.id] || p.defaultModel}
               onchange={(e) => onModelChange(p.id, (e.currentTarget as HTMLSelectElement).value)}
@@ -552,7 +552,7 @@
             {/if}
           </p>
         {:else}
-          <label class="key-label">{p.displayName} API key
+          <label class="field key-label"><span class="field-label">{p.displayName} API key</span>
             <SecretInput bind:value={keys[p.id]} placeholder={p.keyHint} />
           </label>
         {/if}
@@ -945,21 +945,18 @@
     font-weight: 600;
   }
 
+  /* Both are .field now (audit F12): the primitive in app.css supplies the
+     column, the 0.25rem label→control step and the demoted label ink, so all
+     that is left here is the gap to whatever follows the field in the card.
+     Before, the label was 13.5px --text — the same size as the select's own
+     text and at full strength — over a 3.7px gap, against 7.5px to the next
+     row: a 2:1 ratio the audit measured as unreadable as grouping. */
   .model-label {
-    display: block;
-    margin-bottom: 0.5rem;
-    font-size: 0.9em;
-  }
-
-  .model-label select {
-    display: block;
-    margin-top: 0.25rem;
+    margin-bottom: 1rem;
   }
 
   .key-label {
-    display: block;
-    margin-bottom: 0.35rem;
-    font-size: 0.9em;
+    margin-bottom: 0.75rem;
   }
 
   .test-row {

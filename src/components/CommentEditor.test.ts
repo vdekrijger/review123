@@ -369,8 +369,31 @@ describe('CommentEditor — theme readability tokens', () => {
     expect(body).toMatch(/color:\s*var\(--text\)/)
   })
 
-  it('editor chrome borders use the hairline token, not hardcoded hex', () => {
+  /**
+   * Batch 2A / audit F11 moved this from --hairline to --border-control, and
+   * that is a STRONGER assertion, not a weaker one: the editor's <textarea> is
+   * `border: none`, so this wrapper IS the control's visual boundary, and WCAG
+   * 2.1 SC 1.4.11 wants 3:1 for it. --hairline measures 1.33:1 in light and is
+   * deliberately below that floor (it is the decorative line); --border-control
+   * measures 3.74:1 on --surface. The original intent — a token, never a
+   * hardcoded hex — is kept and narrowed to the RIGHT token.
+   */
+  it('editor chrome border uses the control-boundary token, not hairline or hex', () => {
     const body = ruleBody('.comment-editor')
-    expect(body).toMatch(/border:\s*1px solid var\(--hairline\)/)
+    expect(body).toMatch(/border:\s*1px solid var\(--border-control\)/)
+    expect(body).not.toMatch(/border:\s*1px solid #/)
+    // The textarea has no border of its own, which is why the wrapper needs one
+    // that clears the non-text floor.
+    expect(ruleBody('textarea')).toMatch(/border:\s*none/)
+  })
+
+  /** The separators INSIDE the editor are decorative, so they keep --hairline:
+   *  two tokens, two roles (app.css, Batch 2A). */
+  it('the tab-bar and toolbar separators stay on the decorative hairline', () => {
+    for (const selector of ['.tab-bar', '.toolbar']) {
+      expect(ruleBody(selector), selector).toMatch(
+        /border-bottom:\s*1px solid var\(--hairline\)/,
+      )
+    }
   })
 })

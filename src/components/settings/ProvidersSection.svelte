@@ -196,7 +196,7 @@
 
   <details bind:open={advancedOpen}>
     <summary>Advanced: use a personal access token instead</summary>
-    <label>GitHub token (PAT)
+    <label class="field"><span class="field-label">GitHub token (PAT)</span>
       <SecretInput bind:value={pat} placeholder="github_pat_… (fine-grained, repo-scoped recommended)" />
     </label>
     <div class="hint pat-scope-hint">
@@ -205,22 +205,22 @@
       <p><strong>Classic token:</strong> the <code>public_repo</code> scope (or <code>repo</code> for private
         repositories). In a SAML/SSO organization, click <em>Configure SSO → Authorize</em> on the token afterwards.</p>
     </div>
-    <label>GitLab host
+    <label class="field"><span class="field-label">GitLab host</span>
       <input type="text" bind:value={gitlabHostInput} autocomplete="off" placeholder="gitlab.com" aria-label="GitLab host" />
     </label>
     <div class="hint pat-scope-hint">
       <p>Self-hosted instances supported. Enter a hostname (e.g. <code>gitlab.mycompany.com</code>). Leave as <code>gitlab.com</code> for the default.</p>
     </div>
-    <label>GitLab token (PAT)
+    <label class="field"><span class="field-label">GitLab token (PAT)</span>
       <SecretInput bind:value={gitlabTokenInput} placeholder="glpat_… (scope: api)" ariaLabel="GitLab personal access token" />
     </label>
     <div class="hint pat-scope-hint">
       <p>Alternative: personal access token. Required scope: <code>api</code>. Create one at <em>GitLab → User Settings → Access Tokens</em>.</p>
     </div>
-    <label>Bitbucket email
+    <label class="field"><span class="field-label">Bitbucket email</span>
       <input type="password" bind:value={bitbucketEmail} autocomplete="off" placeholder="your@email.com" aria-label="Bitbucket email address" />
     </label>
-    <label>Bitbucket API token
+    <label class="field"><span class="field-label">Bitbucket API token</span>
       <SecretInput bind:value={bitbucketToken} placeholder="App password / API token" ariaLabel="Bitbucket API token" />
     </label>
     <div class="hint pat-scope-hint">
@@ -329,9 +329,20 @@
     color: var(--text-muted);
   }
 
-  details label {
-    display: block;
-    margin: 0.5rem 0.75rem;
+  /* Stacked-field rhythm (audit F12, p.84). The .field primitive owns what is
+     INSIDE a field (label→control, 0.25rem); this owns what is between them.
+     Before: every label carried a flat 0.5rem block margin and the control
+     opened its own line, so label→control measured 0px while field→field was
+     whatever the interleaved hint happened to add. Now the hint is attached to
+     the field it explains (0.25rem above it, the same step as label→control)
+     and the 1rem below it is the gap to the NEXT field — so the three pieces of
+     one field group tighter than the groups do. */
+  details .field {
+    margin: 0 0.75rem;
+  }
+
+  details .field:first-of-type {
+    margin-top: 0.75rem;
   }
 
   .hint {
@@ -341,7 +352,7 @@
   }
 
   .pat-scope-hint {
-    margin: 0.25rem 0.75rem 0.75rem;
+    margin: 0.25rem 0.75rem 1rem;
     line-height: 1.4;
   }
 
