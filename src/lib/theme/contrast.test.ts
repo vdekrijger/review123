@@ -580,3 +580,232 @@ describe('P1-5 — forward surfaces are lighter than their ground, wells darker'
     }
   })
 })
+
+/**
+ * F11 / Batch 2A — the control boundary is CONSUMED, not merely defined.
+ *
+ * Phase 1 added --border-control and gated its ratio, but nothing pointed at
+ * it: every input, select, textarea, checkbox and button still drew its edge
+ * with --hairline at 1.19-1.43:1. A field's own fill stands 1.06:1 off the page
+ * it sits on, so that line was the whole control. SC 1.4.11 asks 3:1.
+ *
+ * The ratios themselves are already asserted above; these pin the two things
+ * that can rot afterwards — that the two tokens stay two ROLES, and that the
+ * primitives actually reference the right one.
+ */
+describe('F11 — the two border roles stay two tokens', () => {
+  const root = Object.fromEntries(declarations(rootBlock(appCss)))
+
+  for (const [themeName, tokens] of Object.entries(THEMES)) {
+    for (const ground of GROUNDS) {
+      it(`${themeName}: --border-control beats --hairline on ${ground} by 2x`, () => {
+        // A clear margin, not a tie: if a re-tone ever brings them within 2x of
+        // each other, one of them has stopped doing its job and the split is a
+        // fiction. Measured today: 2.65x/2.65x/2.66x light, 2.65x/2.66x/2.66x dark.
+        const control = contrast(tokens['--border-control'], tokens[ground])
+        const hairline = contrast(tokens['--hairline'], tokens[ground])
+        expect(
+          control / hairline,
+          `control ${round2(control)} vs hairline ${round2(hairline)}`,
+        ).toBeGreaterThan(2)
+      })
+    }
+  }
+
+  it('--border-subtle is an alias of --hairline, not a third border value', () => {
+    expect(root['--border-subtle']).toBe('var(--hairline)')
+  })
+
+  /**
+   * The control primitives themselves. Static, because the ratio is only worth
+   * anything if something renders it — and this is the assertion that failed to
+   * exist between Phase 1 defining the token and Batch 2A wiring it up.
+   */
+  const ruleBody = (selector: string) =>
+    stripComments(appCss).match(new RegExp(`(^|\\n)${selector}\\s*\\{([^}]*)\\}`))?.[2] ?? ''
+
+  it('every control primitive draws its boundary with --border-control', () => {
+    const controlRules = [
+      '\\.btn',
+      'input:not\\(\\[type="radio"\\]\\):not\\(\\[type="checkbox"\\]\\),\\s*\\ntextarea,\\s*\\nselect',
+      "input\\[type='checkbox'\\],\\s*\\ninput\\[type='radio'\\]",
+    ]
+    for (const selector of controlRules) {
+      expect(ruleBody(selector), selector).toMatch(
+        /border:\s*1px solid var\(--border-control\)/,
+      )
+    }
+  })
+
+  it('the decorative primitives keep --hairline — the split is visible in app.css', () => {
+    // .card and dialog carry Batch 2B's theme-dependent rim; a chip has none.
+    // None of the three is a control, so none of them takes the control token.
+    for (const selector of ['\\.card', 'dialog']) {
+      expect(ruleBody(selector), selector).toMatch(/var\(--hairline\)/)
+      expect(ruleBody(selector), selector).not.toMatch(/--border-control/)
+    }
+  })
+})
+
+/**
+ * F12 / Batch 2A — the three text tiers, and the .field primitive that uses them.
+ *
+ * The forms wrapped the control in its label, so the label inherited the page
+ * size and the page ink while the control re-declared itself smaller: a label
+ * LARGER than, and exactly as dark as, the value it labelled. p.44 says a label
+ * you only need for scanning is support. --text-secondary is the middle tier
+ * Phase 1 added for precisely this and left unconsumed until now.
+ */
+describe('F12 — the label ranks below its value', () => {
+  const root = Object.fromEntries(declarations(rootBlock(appCss)))
+  const ruleBody = (selector: string) =>
+    stripComments(appCss).match(new RegExp(`(^|\\n)${selector}\\s*\\{([^}]*)\\}`))?.[2] ?? ''
+
+  for (const [themeName, tokens] of Object.entries(THEMES)) {
+    it(`${themeName}: the three tiers are strictly ordered, --text > secondary > muted`, () => {
+      // The ordering is what makes a demotion MEAN anything. If secondary ever
+      // ties --text the label stops being support; if it ties --text-muted the
+      // label and the hint below it collapse onto one tier, which is what
+      // BridgeSection's hand-rolled --text-muted labels were doing.
+      const on = (ink: string) => contrast(tokens[ink], tokens['--surface'])
+      expect(on('--text')).toBeGreaterThan(on('--text-secondary'))
+      expect(on('--text-secondary')).toBeGreaterThan(on('--text-muted'))
+    })
+
+    it(`${themeName}: a demoted label is still a comfortable read on every ground`, () => {
+      // Demotion is a hierarchy move, not a legibility trade. Already covered by
+      // the tier sweep above at 4.5; this says so in F12's own terms.
+      for (const ground of GROUNDS) {
+        const r = contrast(tokens['--text-secondary'], tokens[ground])
+        expect(round2(r), `${ground} measured ${round2(r)}`).toBeGreaterThanOrEqual(4.5)
+      }
+    })
+  }
+
+  it('the .field label is SMALLER than the control value it labels (p.44)', () => {
+    const label = ruleBody('\\.field-label').match(/font-size:\s*([\d.]+)rem/)
+    const field = ruleBody('\\.field').match(/font-size:\s*([\d.]+)rem/)
+    const control = ruleBody(
+      'input:not\\(\\[type="radio"\\]\\):not\\(\\[type="checkbox"\\]\\),\\s*\\ntextarea,\\s*\\nselect',
+    ).match(/font-size:\s*([\d.]+)rem/)
+    expect(label?.[1], '.field-label needs an explicit size').toBeTruthy()
+    expect(control?.[1], 'the control primitive needs an explicit size').toBeTruthy()
+    expect(parseFloat(label![1])).toBeLessThan(parseFloat(control![1]))
+    // Both spellings of the label — the span and the bare text node in a .field
+    // — must agree, or the same form renders two different labels.
+    expect(field?.[1]).toBe(label?.[1])
+  })
+
+  it('the .field label takes --text-secondary, never --text or --text-muted', () => {
+    for (const selector of ['\\.field', '\\.field-label']) {
+      expect(ruleBody(selector), selector).toMatch(/color:\s*var\(--text-secondary\)/)
+    }
+  })
+
+  it('a control does not inherit the label weight around it', () => {
+    // .field sets font-weight: 500 on the wrapper, so the primitive has to say
+    // 400 explicitly or every input in a field renders semi-bold.
+    expect(
+      ruleBody('input:not\\(\\[type="radio"\\]\\):not\\(\\[type="checkbox"\\]\\),\\s*\\ntextarea,\\s*\\nselect'),
+    ).toMatch(/font-weight:\s*400/)
+  })
+
+  it('the gap BETWEEN fields is at least 3x the gap inside one (p.83-84)', () => {
+    // The audit measured 3.7px inside against 7.5px between — a 2:1 ratio it
+    // called unreadable as grouping. Asserted as a RATIO so a later change of
+    // scale step passes as long as the relationship survives.
+    const inside = ruleBody('\\.field').match(/gap:\s*([\d.]+)rem/)
+    const between = ruleBody('\\.field \\+ \\.field').match(/margin-top:\s*([\d.]+)rem/)
+    expect(inside?.[1], '.field needs a gap').toBeTruthy()
+    expect(between?.[1], '.field + .field needs a margin').toBeTruthy()
+    expect(parseFloat(between![1]) / parseFloat(inside![1])).toBeGreaterThanOrEqual(3)
+  })
+
+  it('--text-secondary is a real declaration, not an alias of another tier', () => {
+    expect(root['--text-secondary']).toMatch(/^light-dark\(/)
+    for (const [themeName, tokens] of Object.entries(THEMES)) {
+      expect(tokens['--text-secondary'], themeName).not.toBe(tokens['--text'])
+      expect(tokens['--text-secondary'], themeName).not.toBe(tokens['--text-muted'])
+    }
+  })
+})
+
+/**
+ * F14 / Batch 2A — the link primitive.
+ *
+ * app.css had no `a` rule at all, so the DEFAULT for an anchor was the UA's
+ * #0000EE (light) / #9e9eff (dark) — the one colour on the page in neither
+ * palette, and a saturated blue standing next to a teal accent. The audit named
+ * two such links, Phase 1 found a third, and grepping the pattern for this batch
+ * found seven more. They kept appearing because the default was wrong, not
+ * because three authors were careless.
+ */
+describe('F14 — an anchor can no longer fall back to browser blue', () => {
+  const ruleBody = (selector: string) =>
+    stripComments(appCss).match(new RegExp(`(^|\\n)${selector}\\s*\\{([^}]*)\\}`))?.[2] ?? ''
+
+  it('app.css declares a global anchor colour and an underline affordance', () => {
+    const rule = ruleBody('a')
+    expect(rule, 'app.css has no global `a` rule — F14 can recur').toBeTruthy()
+    expect(rule).toMatch(/color:\s*inherit/)
+    expect(rule).toMatch(/text-decoration:\s*underline/)
+  })
+
+  it('it inherits rather than picking a hue, so it cannot fight the accent', () => {
+    // `color: inherit` is the idiom six components had already converged on by
+    // hand: a link inside a --text-muted note stays muted, and the underline
+    // (p.193) is what marks it. A literal hue here would be a second accent.
+    expect(ruleBody('a')).not.toMatch(/color:\s*#/)
+    expect(ruleBody('a')).not.toMatch(/color:\s*var\(--accent\)/)
+  })
+})
+
+/**
+ * P1-4 / Batch 2A — --disabled-opacity, the second of the three semantics that
+ * were stacked on one bare `opacity: 0.45`.
+ */
+describe('P1-4 — the disabled opacity is its own token', () => {
+  const root = Object.fromEntries(declarations(rootBlock(appCss)))
+
+  it('is a number in (0,1), declared once, theme-independent', () => {
+    const alpha = parseFloat(root['--disabled-opacity'])
+    expect(Number.isFinite(alpha)).toBe(true)
+    expect(alpha).toBeGreaterThan(0)
+    expect(alpha).toBeLessThan(1)
+    // Unlike --recede-opacity it is NOT in either dark-override block: a
+    // disabled control has no contrast floor to hold (SC 1.4.3 and SC 1.4.11
+    // both except inactive components), so a second value would be taste
+    // dressed as measurement — and it would grow the app's last copy of the
+    // F17 hazard from two declarations to three.
+    for (const block of [darkOverrideDeclarations(), autoDarkOverrideDeclarations()]) {
+      expect(block.map(([n]) => n)).not.toContain('--disabled-opacity')
+    }
+  })
+
+  it('is NOT --recede-opacity — one number, two meanings, two tokens', () => {
+    // They are equal in dark today and differ in light. Asserting they are
+    // separate DECLARATIONS is the point: folding them would make a receded
+    // diff row and a dead button impossible to tune apart.
+    expect(root['--disabled-opacity']).toBeTruthy()
+    expect(root['--recede-opacity']).toBeTruthy()
+    expect(root['--disabled-opacity']).not.toBe('var(--recede-opacity)')
+    expect(parseFloat(LIGHT['--recede-opacity'])).not.toBe(
+      parseFloat(root['--disabled-opacity']),
+    )
+  })
+
+  it('records the theme asymmetry it deliberately does NOT correct', () => {
+    // The measurement behind the "single value" decision, kept as a test so the
+    // number is here when someone wants to revisit it rather than in a comment
+    // that can drift. Light lands ~27% harsher, the same shape of bug
+    // --recede-opacity exists to fix — the difference is that this one has no
+    // floor to force a second value.
+    const alpha = parseFloat(root['--disabled-opacity'])
+    const light = contrast(LIGHT['--text'], LIGHT['--surface-sunken'], alpha)
+    const dark = contrast(DARK['--text'], DARK['--surface-sunken'], alpha)
+    expect(round2(light)).toBeLessThan(round2(dark))
+    // A disabled control is exempt from the floors, but it must still be
+    // PERCEIVABLE — "unavailable", not "absent".
+    expect(round2(light), `light measured ${round2(light)}`).toBeGreaterThan(2)
+  })
+})
