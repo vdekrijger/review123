@@ -11,10 +11,12 @@
  * single `light-dark()` declarations driven by `color-scheme`, which makes that
  * divergence unrepresentable for every colour token.
  *
- * Two tokens still cannot use light-dark(), because it takes <color> and they
- * are not colours: `--select-chevron` (a url()) and `--recede-opacity` (a
- * number). Those ARE still declared twice for dark, so this spec is what keeps
- * them honest.
+ * ONE token still cannot use light-dark(), because it takes <color> and this is
+ * not a colour: `--select-chevron` (a url()). It IS still declared twice for
+ * dark, so this spec is what keeps the two copies honest. It was two until
+ * Phase 3 retired `--recede-opacity` (a number) — the diff viewer recedes by
+ * substituting one muted ink now, not by dimming, so the alpha it needed is
+ * gone and with it half of what was left of this hazard.
  *
  * This spec does not take the palette's word for anything. It ENUMERATES every
  * custom property the app declares (so a token added tomorrow is covered
