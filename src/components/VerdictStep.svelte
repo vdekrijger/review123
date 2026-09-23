@@ -1194,7 +1194,7 @@
   }
 
   .copy-prompt-btn:disabled {
-    opacity: 0.55;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 
@@ -1236,7 +1236,7 @@
   }
 
   .copy-command-btn:disabled {
-    opacity: 0.55;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 
@@ -1317,7 +1317,7 @@
   }
 
   .submit-btn:disabled {
-    opacity: 0.55;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 
@@ -1386,7 +1386,7 @@
   }
 
   .coach-btn:disabled {
-    opacity: 0.6;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 
@@ -1438,7 +1438,7 @@
   }
 
   .coach-retry-btn:disabled {
-    opacity: 0.6;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 

@@ -880,30 +880,30 @@
      letter-spacing is pinned back to normal because the global h2/h3 rules
      tighten it: the outline is the change here, not a single rendered pixel. */
   .section-label {
-    font-size: 0.9em;
+    font-size: var(--text-sm);
     font-weight: 600;
     letter-spacing: normal;
-    margin: 0 0 0.4rem;
+    margin: 0 0 var(--space-2);
     color: var(--text);
   }
 
   .apply-note {
-    font-size: 0.8em;
+    font-size: var(--text-xs);
     color: var(--text-muted);
-    margin: 0 0 0.75rem;
+    margin: 0 0 var(--space-3);
   }
 
   .provider-cards {
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
+    gap: var(--space-2);
   }
 
   /* One context block per provider: radio + model + key + Save & test. */
   .provider-card {
     border: 1px solid var(--hairline);
     border-radius: 8px;
-    padding: 0.65rem 0.85rem 0.6rem;
+    padding: var(--space-3) var(--space-3) var(--space-2);
     opacity: 0.72;
   }
 
@@ -918,15 +918,15 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: 0.6rem;
-    margin-bottom: 0.5rem;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
   }
 
   .provider-radio {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    font-size: 0.95em;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
     cursor: pointer;
     color: var(--text);
   }
@@ -936,7 +936,7 @@
   }
 
   .use-hint {
-    font-size: 0.78em;
+    font-size: var(--text-xs);
     color: var(--text-muted);
   }
 
@@ -952,22 +952,22 @@
      text and at full strength — over a 3.7px gap, against 7.5px to the next
      row: a 2:1 ratio the audit measured as unreadable as grouping. */
   .model-label {
-    margin-bottom: 1rem;
+    margin-bottom: var(--space-4);
   }
 
   .key-label {
-    margin-bottom: 0.75rem;
+    margin-bottom: var(--space-3);
   }
 
   .test-row {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
+    gap: var(--space-2);
     flex-wrap: wrap;
   }
 
   .test-btn {
-    font-size: 0.85em;
+    font-size: var(--text-sm);
   }
 
   /* A dirty key field's button becomes prominent (accent) — saved-vs-not at a glance */
@@ -978,13 +978,13 @@
   }
 
   .dirty-hint {
-    font-size: 0.85em;
+    font-size: var(--text-xs);
     font-style: italic;
     color: var(--text-muted);
   }
 
   .saved-note {
-    font-size: 0.85em;
+    font-size: var(--text-xs);
     color: var(--ok, #1a7f37);
     opacity: 0;
     transition: opacity 0.35s ease;
@@ -995,12 +995,12 @@
   }
 
   .test-ok {
-    font-size: 0.85em;
+    font-size: var(--text-xs);
     color: var(--ok, #1a7f37);
   }
 
   .test-error {
-    font-size: 0.85em;
+    font-size: var(--text-xs);
     color: #cf222e;
   }
 
@@ -1008,9 +1008,9 @@
   .balance-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    margin-top: 0.4rem;
-    font-size: 0.82em;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+    font-size: var(--text-xs);
     color: var(--text-muted);
   }
 
@@ -1023,7 +1023,7 @@
     background: none;
     border: none;
     color: var(--accent);
-    font-size: 0.95em;
+    font-size: var(--text-xs);
     cursor: pointer;
     padding: 0;
   }
@@ -1034,8 +1034,8 @@
   }
 
   .bridge-line {
-    margin: 0.4rem 0 0;
-    font-size: 0.85em;
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-xs);
     line-height: 1.5;
     color: var(--text-muted);
   }
@@ -1055,51 +1055,51 @@
   }
 
   .privacy-line {
-    font-size: 0.78em;
+    font-size: var(--text-xs);
     color: var(--text-muted);
-    margin: 0.5rem 0 0;
+    margin: var(--space-2) 0 0;
   }
 
   /* Plan J: "What runs (and how deep)" per-task mode matrix. */
   /* Asymmetric padding on purpose: it is what gives the <h3> inside 13.5px
      above against its 4.5px below (3:1, rubric D2, p.85) — it was 2:1. */
   .task-modes {
-    margin: 0.85rem 0 0;
-    padding: 0.9rem 0.85rem 0.6rem;
+    margin: var(--space-3) 0 0;
+    padding: var(--space-4) var(--space-3) var(--space-2);
     border: 1px solid var(--hairline);
     border-radius: 8px;
   }
 
   .task-modes-label {
-    font-size: 0.9em;
+    font-size: var(--text-sm);
     font-weight: 600;
     letter-spacing: normal;
-    margin: 0 0 0.3rem;
+    margin: 0 0 var(--space-1);
     color: var(--text);
   }
 
   .task-modes-hint {
-    font-size: 0.78em;
+    font-size: var(--text-xs);
     color: var(--text-muted);
-    margin: 0 0 0.6rem;
+    margin: 0 0 var(--space-2);
   }
 
   .quick-set {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: var(--space-2);
     flex-wrap: wrap;
-    margin-bottom: 0.7rem;
+    margin-bottom: var(--space-3);
   }
 
   .quick-set-label {
-    font-size: 0.82em;
+    font-size: var(--text-xs);
     color: var(--text-muted);
   }
 
   .quick-set-btn {
-    font-size: 0.8em;
-    padding: 0.2rem 0.55rem;
+    font-size: var(--text-xs);
+    padding: var(--space-1) var(--space-2);
     border: 1px solid var(--border-control);
     border-radius: 6px;
     background: var(--surface);
@@ -1118,19 +1118,19 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: var(--space-2);
   }
 
   .task-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
+    gap: var(--space-3);
     flex-wrap: wrap;
   }
 
   .task-name {
-    font-size: 0.88em;
+    font-size: var(--text-sm);
     color: var(--text);
   }
 
@@ -1145,9 +1145,9 @@
   .mode-option {
     display: inline-flex;
     align-items: center;
-    gap: 0.2rem;
-    padding: 0.22rem 0.55rem;
-    font-size: 0.8em;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-sm);
     cursor: pointer;
     color: var(--text-muted);
     border-left: 1px solid var(--border-control);
@@ -1173,13 +1173,13 @@
   }
 
   .cost-hint {
-    font-size: 0.85em;
+    font-size: var(--text-xs);
     opacity: 0.7;
   }
 
   .deep-review-row {
-    margin: 0.85rem 0 0;
-    padding: 0.6rem 0.85rem;
+    margin: var(--space-3) 0 0;
+    padding: var(--space-2) var(--space-3);
     border: 1px solid var(--hairline);
     border-radius: 8px;
   }
@@ -1187,8 +1187,8 @@
   .deep-review-toggle {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    font-size: 0.9em;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
     cursor: pointer;
   }
 
@@ -1202,25 +1202,25 @@
   }
 
   .deep-review-hint {
-    font-size: 0.78em;
+    font-size: var(--text-xs);
     color: var(--text-muted);
-    margin: 0.3rem 0 0;
+    margin: var(--space-1) 0 0;
   }
 
   .hint {
-    font-size: 0.8em;
+    font-size: var(--text-xs);
     color: var(--text-muted);
-    margin: 0.75rem 0 0;
+    margin: var(--space-3) 0 0;
   }
 
   .privacy-note p {
-    margin: 0 0 0.35rem;
+    margin: 0 0 var(--space-1);
   }
 
   /* Plan N — ensemble editor */
   .ensemble-editor {
-    margin-top: 0.85rem;
-    padding: 0.85rem;
+    margin-top: var(--space-3);
+    padding: var(--space-3);
     border: 1px solid var(--hairline);
     border-radius: 8px;
     background: var(--surface);
@@ -1233,13 +1233,13 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
   /* A real <h3> (F13/D1) styled down to the label it already looked like:
      the UA heading margins would otherwise break the baseline-aligned row. */
   .ensemble-title {
     font-weight: 600;
-    font-size: 0.88em;
+    font-size: var(--text-sm);
     letter-spacing: normal;
     margin: 0;
     color: var(--text);
@@ -1248,22 +1248,22 @@
     background: none;
     border: none;
     color: var(--accent);
-    font-size: 0.78em;
+    font-size: var(--text-xs);
     cursor: pointer;
     padding: 0;
   }
   .ensemble-rows {
     list-style: none;
-    margin: 0.6rem 0 0;
+    margin: var(--space-2) 0 0;
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.45rem;
+    gap: var(--space-2);
   }
   .ensemble-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     flex-wrap: wrap;
   }
   .ensemble-row.row-disabled {
@@ -1273,9 +1273,9 @@
   .panel-presets {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: var(--space-2);
     flex-wrap: wrap;
-    margin: 0.6rem 0 0.2rem;
+    margin: var(--space-2) 0 var(--space-1);
   }
   .role-segmented {
     display: inline-flex;
@@ -1286,8 +1286,8 @@
   .role-option {
     display: inline-flex;
     align-items: center;
-    padding: 0.2rem 0.5rem;
-    font-size: 0.78em;
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-xs);
     cursor: pointer;
     color: var(--text-muted);
     border-left: 1px solid var(--border-control);
@@ -1313,12 +1313,12 @@
   }
   .ensemble-provider,
   .ensemble-model {
-    padding: 0.25rem 0.4rem;
+    padding: var(--space-1) var(--space-2);
     border: 1px solid var(--border-control);
     border-radius: 6px;
     background: var(--surface-raised);
     color: var(--text);
-    font-size: 0.82em;
+    font-size: var(--text-sm);
   }
   /* The combobox brings its own input border/background — don't double it. */
   .ensemble-model-combobox {
@@ -1332,12 +1332,12 @@
      neither CLI publishes a stable list of ids. It matches the chrome of the
      CLI picker beside it because (CLI, model) is really one choice. */
   .ensemble-bridge-model {
-    padding: 0.25rem 0.4rem;
+    padding: var(--space-1) var(--space-2);
     border: 1px solid var(--border-control);
     border-radius: 6px;
     background: var(--surface-raised);
     color: var(--text);
-    font-size: 0.82em;
+    font-size: var(--text-sm);
     min-width: 8rem;
     flex: 1 1 8rem;
   }
@@ -1362,13 +1362,13 @@
     line-height: 1;
   }
   .ensemble-nokey {
-    font-size: 0.74em;
+    font-size: var(--text-xs);
     color: var(--text-muted);
     flex-basis: 100%;
   }
   .ensemble-scale-note {
-    margin: 0.6rem 0 0;
-    font-size: 0.76em;
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-xs);
     font-style: italic;
     color: var(--text-muted);
     opacity: 0.85;
@@ -1376,19 +1376,19 @@
   /* Not styled as an error: a two-model panel is a legitimate, useful setup —
      this corrects what it can be expected to DO, it does not condemn it. */
   .ensemble-thin-poll {
-    margin: 0.6rem 0 0;
-    font-size: 0.76em;
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-xs);
     line-height: 1.45;
     color: var(--text-muted);
   }
   .ensemble-add {
-    margin-top: 0.6rem;
+    margin-top: var(--space-2);
     background: none;
     border: 1px dashed var(--border-control);
     border-radius: 6px;
     color: var(--accent);
-    font-size: 0.82em;
-    padding: 0.3rem 0.6rem;
+    font-size: var(--text-xs);
+    padding: var(--space-1) var(--space-2);
     cursor: pointer;
   }
 </style>

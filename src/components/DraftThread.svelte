@@ -687,7 +687,7 @@
   }
 
   .btn-ask:disabled {
-    opacity: 0.4;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 

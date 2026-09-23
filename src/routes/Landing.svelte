@@ -879,7 +879,7 @@
 
   .refresh-btn:disabled {
     cursor: default;
-    opacity: 0.6;
+    opacity: var(--disabled-opacity);
   }
 
   .sr-only {
@@ -1021,7 +1021,7 @@
 
   .prepare-btn:disabled {
     cursor: default;
-    opacity: 0.5;
+    opacity: var(--disabled-opacity);
   }
 
   .prepare-btn:focus-visible {

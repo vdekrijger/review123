@@ -5,6 +5,94 @@
   --font-prose: 'Newsreader', Georgia, serif;
 
   /*
+   * ── THE TYPE SCALE (audit F6, rubric p.88-93; plan Batch 2D) ─────────────
+   *
+   * Six steps, and they are the rubric's own reference scale (p.91-92:
+   * 12/14/16/18/20/24/30/36/48/60/72px) truncated at the top, because nothing
+   * in this app is larger than its `h1`. Before this there were **50 distinct
+   * declared font-size values** across 604 declarations, roughly 400 of them
+   * packed into the 10.5-13.5px band — twelve near-identical sizes doing one
+   * job. Every existing value lands within 7% of a step here, which is the
+   * finding as much as the fix: the differences were never carrying meaning.
+   *
+   * ── rem, NEVER em ── The single highest-yield rule for this codebase
+   * (p.92-93). `em` compounds: three nested levels of it produced the audit's
+   * 12.1125px, a size no one chose and that is on no scale by construction.
+   * `rem` resolves against the root and therefore cannot compound. Do not
+   * define a step, or consume one, in `em`.
+   *
+   * ── THE 15px-vs-16px ROOT, stated plainly ──
+   * The scale is authored in `rem` against the rubric's **16px** base, so the
+   * "nominal" column below is literally the rubric's number. This app's root is
+   * `font-size: 15px` (further down this file), so every step RENDERS at
+   * 15/16 = 93.75% of nominal — uniformly, because they are all the same
+   * multiplication. Changing the root to 16px is a one-line change that makes
+   * every nominal number true at once, and it is deliberately NOT part of this
+   * batch: it is a whole-app visual decision of its own (see the plan's "What
+   * this plan deliberately does not do"). Nothing below depends on which root
+   * wins — the properties that matter (no compounding, a fixed step count, a
+   * strictly increasing ladder) are ratios, and ratios survive the change.
+   *
+   *   token         rem         nominal @16px   renders @15px root
+   *   --text-xs     0.75rem     12px            11.25px
+   *   --text-sm     0.875rem    14px            13.125px
+   *   --text-base   1rem        16px            15px      (= the root, = body)
+   *   --text-lg     1.125rem    18px            16.875px
+   *   --text-xl     1.25rem     20px            18.75px
+   *   --text-2xl    1.5rem      24px            22.5px
+   */
+  --text-xs:   0.75rem;
+  --text-sm:   0.875rem;
+  --text-base: 1rem;
+  --text-lg:   1.125rem;
+  --text-xl:   1.25rem;
+  --text-2xl:  1.5rem;
+
+  /*
+   * ── THE SPACING SCALE (audit F7, rubric p.60-64; plan Batch 2D) ──────────
+   *
+   * Eight steps, and they are the rubric's reference scale (p.63:
+   * 4/8/12/16/24/32/48/64/96/128px) truncated at the top. Adjacent steps differ
+   * by 100 / 50 / 33 / 50 / 33 / 50 / 33% — every one of them clears the ~25%
+   * minimum (p.61-62), which is the whole point: below 25% the choice between
+   * two neighbours stops being a decision and becomes a nudge.
+   *
+   * F7 measured 40 distinct rem values across 1,221 declarations, with adjacent
+   * ones 7-12% apart. The encouraging half of that measurement, and the reason
+   * this scale is not an imposition: the five most-used values in the app
+   * (0.25 / 0.5 / 0.75 / 1 / 1.5rem — 545 declarations between them) are
+   * ALREADY exactly --space-1 … --space-5. The scale is the codebase's own
+   * dominant mode; the 40 values are the noise around it.
+   *
+   * Same rem-against-16px basis as the type scale above; same 93.75% rendering
+   * at the current root; same reason that is fine.
+   *
+   *   token       rem        nominal @16px   renders @15px root
+   *   --space-1   0.25rem     4px             3.75px
+   *   --space-2   0.5rem      8px             7.5px
+   *   --space-3   0.75rem    12px            11.25px
+   *   --space-4   1rem       16px            15px
+   *   --space-5   1.5rem     24px            22.5px
+   *   --space-6   2rem       32px            30px
+   *   --space-7   3rem       48px            45px
+   *   --space-8   4rem       64px            60px
+   *
+   * There is deliberately NO step below --space-1. The app carries 154
+   * declarations in the 1.5-3px band (0.1 / 0.15 / 0.2rem) and those are the
+   * "never nudge sizes 1px at a time" defect (p.60), not a missing token. Each
+   * one is a per-site decision between --space-1 and 0, which is what the later
+   * slices are for — a ninth token would only make the defect expressible.
+   */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  /*
    * ── THE PALETTE — ONE declaration per token ──────────────────────────────
    *
    * Every colour token carries BOTH themes in a single `light-dark(light, dark)`
@@ -105,8 +193,9 @@
    * literals elsewhere in the app. Those serve three distinct semantics —
    * receded content, a disabled control, de-emphasised chrome — and are one
    * number by coincidence. Folding them together would make them impossible to
-   * tune independently. Batch 2A gives the disabled one its own token
-   * (--disabled-opacity, below); --chrome-muted-opacity is still outstanding.
+   * tune independently. Batch 2A gave the disabled one its own token
+   * (--disabled-opacity, below) and Batch 2D closes the set with
+   * --chrome-muted-opacity. All three exist now; none is an alias of another.
    *
    * HONEST LIMIT: 0.55 restores the BASE ink, not the syntax colours. Alpha
    * collapses every hue toward the ground at once, and no alpha that still
@@ -141,6 +230,49 @@
    * — from two declarations to three. Single value, measured, recorded.
    */
   --disabled-opacity: 0.45;
+
+  /*
+   * ── Chrome-muted opacity — how far DE-EMPHASISED CHROME drops back ───────
+   *
+   * The third and last of the three semantics stacked on the old bare
+   * `opacity: 0.45` (plan P1-4a), inherited by Batch 2D from Batch 2A because
+   * it is a scale question rather than a form one. Three sites, all of them
+   * chrome that is present but deliberately quiet:
+   *
+   *   BridgeSection .status-dot        an "off" status dot
+   *   GroundingIndicator .dot          an "off" status dot
+   *   CommentThread .thread-menu-btn   a menu affordance revealed on hover
+   *
+   * It is NOT --disabled-opacity: these controls are fully available (the menu
+   * button is clickable at rest; the dots are live status). It is NOT
+   * --recede-opacity either: receded content is content a reader brings back,
+   * and it carries a 3:1 floor for that reason. Quiet chrome has no floor here
+   * because in all three sites the information is ALSO carried at full strength
+   * by the text label beside it (rubric B2, redundant encoding) — the dot and
+   * the "⋯" are the decoration on a message, not the message.
+   *
+   * Same number as --disabled-opacity today, and that is a coincidence the
+   * separate token exists to preserve: tuning how quiet resting chrome is must
+   * not silently re-tune how dead a disabled control looks.
+   */
+  --chrome-muted-opacity: 0.45;
+
+  /*
+   * ── Busy opacity — a control disabled WHILE IT WORKS ─────────────────────
+   *
+   * The deliberate outlier Batch 2A flagged, and the grep found TWO of it, not
+   * one: `.run-reviewers-btn` and `.tests-review-btn` in InspectStep are both
+   * `disabled={isRunning} aria-busy` and both swap their label for a spinner
+   * and "Running…". The label IS the status message at that moment, so it must
+   * stay readable — dropping it to --disabled-opacity would dim the only thing
+   * telling the user their review is under way.
+   *
+   * It exists as a token precisely so that a future sweep of "all the disabled
+   * opacities" reads an intention instead of a number it is tempted to flatten.
+   * Strictly greater than --disabled-opacity, and asserted so in
+   * src/lib/theme/contrast.test.ts.
+   */
+  --busy-opacity: 0.85;
 
   /* ── Select chevron (stroke matches --text-muted; NOT a colour, so it cannot
      use light-dark() — see the dark override blocks below) ── */
@@ -248,12 +380,17 @@
    Both selectors get identical full-width treatment so the diff honours diffWidth
    in either mode. */
 /* :root[data-diffwidth] attribute is set/cleared by applyAppearance() on every change. */
-/* Gutters also collapse to a slim 10px so full mode is meaningfully wider than
-   centered at EVERY viewport size, not only above the 70rem cap. */
+/* Gutters also collapse to --space-2 (7.5px) so full mode is meaningfully wider
+   than centered at EVERY viewport size, not only above the 70rem cap. The page
+   gutter is --space-4 (15px), so full mode buys 15px of diff width at any size;
+   e2e/fullwidth-rail.spec.ts asserts that difference. Batch 2D first mapped this
+   to --space-3 by nearest-step and that gate caught it: 11.25px is WIDER than the
+   10px it replaced, which is backwards for the mode whose whole point is going
+   edge-to-edge. A scale step has to preserve the intention, not just the number. */
 :root[data-diffwidth='full'] .review:has(.inspect-layout),
 :root[data-diffwidth='full'] .review:has(.story) {
   max-width: none;
-  padding-left: 10px;
+  padding-left: var(--space-2);
 }
 
 /* Right gutter slims only when the rail isn't reserving that space.
@@ -264,7 +401,7 @@
    reserve where width is plentiful. */
 :root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='true'],
 :root[data-diffwidth='full'] .review:has(.story)[data-rail-collapsed='true'] {
-  padding-right: 10px;
+  padding-right: var(--space-2);
 }
 
 /*
@@ -285,11 +422,11 @@
 @media (min-width: 1444px) {
   :root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='false'],
   :root[data-diffwidth='full'] .review:has(.story)[data-rail-collapsed='false'] {
-    padding-right: calc(340px + 1rem);
+    padding-right: calc(340px + var(--space-4));
   }
   :root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='true'],
   :root[data-diffwidth='full'] .review:has(.story)[data-rail-collapsed='true'] {
-    padding-right: calc(1.75rem + 0.5rem);
+    padding-right: calc(1.75rem + var(--space-2));
   }
 }
 
@@ -379,14 +516,14 @@ a {
 }
 
 h1 {
-  font-size: 1.5rem;
+  font-size: var(--text-2xl);
   font-weight: 600;
   letter-spacing: -0.01em;
   font-family: var(--font-ui);
 }
 
 h2 {
-  font-size: 1.25rem;
+  font-size: var(--text-xl);
   font-weight: 600;
   letter-spacing: -0.01em;
 }
@@ -405,7 +542,7 @@ h3 {
 .prose,
 .prose-md {
   font-family: var(--font-prose);
-  font-size: 1.05rem;
+  font-size: var(--text-lg);
   line-height: 1.65;
   max-width: 72ch;
 }
@@ -428,7 +565,7 @@ h3 {
   background: var(--surface-raised);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 0.875rem;
+  font-size: var(--text-sm);
   font-weight: 500;
   cursor: pointer;
   transition: background 150ms ease, border-color 150ms ease;
@@ -490,7 +627,7 @@ select {
   border-radius: 6px;
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
   /* Explicit, and load-bearing for .field below: a control is the DATA, so it
      must not inherit the label weight of the .field wrapper around it (p.44). */
   font-weight: 400;
@@ -666,16 +803,16 @@ input[type='radio']:disabled {
 .field {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-1);
   min-width: 0;
-  font-size: 0.8rem;
+  font-size: var(--text-xs);
   font-weight: 500;
   line-height: 1.4;
   color: var(--text-secondary);
 }
 
 .field-label {
-  font-size: 0.8rem;
+  font-size: var(--text-xs);
   font-weight: 500;
   line-height: 1.4;
   color: var(--text-secondary);
@@ -685,7 +822,7 @@ input[type='radio']:disabled {
    stacked siblings — a form that lays its fields out in a ROW (BridgeSection's
    pairing row) sets this back to 0, because there the separation is horizontal. */
 .field + .field {
-  margin-top: 1rem;
+  margin-top: var(--space-4);
 }
 
 /* ═══════════════════════════════════════════
@@ -723,7 +860,7 @@ input[type='radio']:disabled {
   background: var(--surface);
   border: 1px solid light-dark(transparent, var(--hairline));
   border-radius: 8px;
-  padding: 0.75rem 1rem;
+  padding: var(--space-3) var(--space-4);
   box-shadow: var(--elevation-1);
 }
 
@@ -745,7 +882,7 @@ input[type='radio']:disabled {
   padding: 0.15rem 0.5rem;
   border-radius: 999px;
   font-family: var(--font-ui);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-weight: 500;
   background: var(--surface-sunken);
   border: 1px solid transparent;
@@ -762,15 +899,15 @@ details > summary {
   cursor: pointer;
   user-select: none;
   font-family: var(--font-ui);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
-  padding: 0.5rem 0.75rem;
+  padding: var(--space-2) var(--space-3);
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-2);
 }
 
 details > summary::-webkit-details-marker { display: none; }
@@ -807,7 +944,7 @@ dialog {
   border: 1px solid light-dark(transparent, var(--hairline));
   border-radius: 12px;
   color: var(--text);
-  padding: 1.5rem;
+  padding: var(--space-5);
   box-shadow: var(--elevation-5);
   max-width: 480px;
   width: 90vw;

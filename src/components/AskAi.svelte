@@ -264,7 +264,7 @@
   }
 
   .ask-ai-textarea:disabled {
-    opacity: 0.5;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 
@@ -285,7 +285,7 @@
   }
 
   .ask-ai-submit:disabled {
-    opacity: 0.4;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 </style>

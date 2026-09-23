@@ -353,7 +353,7 @@
     border-radius: 50%;
     flex-shrink: 0;
     background: var(--text-muted);
-    opacity: 0.45;
+    opacity: var(--chrome-muted-opacity);
   }
 
   .status-dot.on {
