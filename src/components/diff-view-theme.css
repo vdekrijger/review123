@@ -36,6 +36,12 @@
 
 /* ── The structural palette: every ground, border and widget → app tokens ── */
 :root .diff-tailwindcss-wrapper[data-theme] .diff-style-root {
+  /* The vendored theme blocks end with a bare `color: black` / `color: white`
+     on this element. It is the inherited base of the ENTIRE viewer subtree, and
+     it is where the audit's "pure #ffffff on 278 elements / #000000 on 200"
+     came from — anything the viewer does not paint explicitly landed on it. */
+  color: var(--syntax-ink);
+
   /* Grounds. The context ground IS the card's face; the expand/empty rows and
      the line-number gutter are wells (p.167-168: darker recedes). */
   --diff-plain-content--: var(--surface);
