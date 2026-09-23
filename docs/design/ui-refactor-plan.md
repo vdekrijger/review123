@@ -46,7 +46,9 @@ readability."* The palette serving that requirement is the one nobody checked.
 there, and derive dark from it.** Keep all three modes (`auto` / `dark` / `light`)
 and keep `auto` as the default.
 
-### P1-1 — de-duplicate the light palette first {#p1-1}
+<a id="p1-1"></a>
+
+### P1-1 — de-duplicate the light palette first
 
 **Do this before touching a single value.** `src/app.css:123-156` and
 `src/app.css:159-194` currently contain **30 byte-identical declarations** — the
@@ -80,7 +82,9 @@ converts a silent hazard into a red CI light. It also pairs naturally with
 
 *Zero visual change. Ship it on its own.*
 
-### P1-2 — the proposed light palette (authored, measured on white) {#p1-2}
+<a id="p1-2"></a>
+
+### P1-2 — the proposed light palette (authored, measured on white)
 
 Every ratio below is measured, not estimated. Floors: 4.5:1 normal text, 3:1
 large text and non-text boundaries (p.142, SC 1.4.11).
@@ -145,7 +149,9 @@ large in review: it also clears every floor, with less margin (4.52 on `--bg`).
 Added (4.71), removed (4.59) and unchanged (5.04) pass and stay. They pass
 *narrowly*, which is worth noting: if the tints are ever re-toned, re-measure.
 
-### P1-3 — the derived dark palette {#p1-3}
+<a id="p1-3"></a>
+
+### P1-3 — the derived dark palette
 
 Derived from light by lifting the greys and the accent back up the same hue.
 **A dark-mode user sees no change, with exactly one deliberate exception, flagged
@@ -182,7 +188,9 @@ Every existing dark value is preserved. Validated: all 24 checks pass.
 > everywhere: an accent that carries white on a light ground does not carry it on
 > a dark one. Call it out in the Phase 1 PR body so it is not mistaken for drift.
 
-### P1-4 — `opacity: 0.45`, the recede token {#p1-4}
+<a id="p1-4"></a>
+
+### P1-4 — `opacity: 0.45`, the recede token
 
 Two problems are stacked here ([F4](./ui-audit.md#f4)); they need separate
 answers.
@@ -250,7 +258,9 @@ put a floor under it. Recorded as rubric B5.
    on context (4.34) and added (4.24) — but do not go below `0.50`, which fails
    (3.98/3.89/3.87).
 
-### P1-5 — token naming, resolved during the inversion {#p1-5}
+<a id="p1-5"></a>
+
+### P1-5 — token naming, resolved during the inversion
 
 Two names to settle while the file is open, both cheap now and expensive later:
 
@@ -268,7 +278,9 @@ Two names to settle while the file is open, both cheap now and expensive later:
 
 *Both are mechanical. The alias makes them zero-risk.*
 
-### P1-6 — make the measurements a gate, not a one-off {#p1-6}
+<a id="p1-6"></a>
+
+### P1-6 — make the measurements a gate, not a one-off
 
 Add `src/lib/theme/contrast.test.ts` (vitest, no DOM needed — pure arithmetic on
 the token values):

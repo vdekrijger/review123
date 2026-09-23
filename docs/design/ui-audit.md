@@ -29,7 +29,7 @@ Three independent sources, in decreasing order of authority:
    `opacity`-dimmed content (an `opacity` on text is arithmetically the same as
    blending the ink toward its ground, so the effective colour is computable).
    Every ratio quoted below is measured, not estimated. Full tables in
-   [Appendix A](#appendix-a--measured-contrast-tables).
+   [Appendix A](#appendix-a).
 3. **Screenshots**, in [`./shots/`](./shots/) — 14 PNGs, both themes: landing,
    the three review steps, the diff viewer unified and side-by-side, the settings
    page, and the focus-mode / hunk-attention dimming. Downsampled deliberately:
@@ -81,7 +81,9 @@ white. That is the case for the Phase 1 inversion in
 
 ## Colour and contrast
 
-### F1 — `--on-accent` is undefined, and its fallback fails in both themes {#f1}
+<a id="f1"></a>
+
+### F1 — `--on-accent` is undefined, and its fallback fails in both themes
 
 `--on-accent` is **never declared** anywhere in the codebase. Six call sites
 reference it with a white fallback, painted on an `--accent` fill:
@@ -112,7 +114,9 @@ row, i.e. live, frequently-used controls.
 Defining `--on-accent` is therefore not merely a prerequisite for a light-first
 palette — it is an outstanding contrast bug in the palette that exists today.
 
-### F2 — four different inks on the same accent fill {#f2}
+<a id="f2"></a>
+
+### F2 — four different inks on the same accent fill
 
 There is no single answer in this codebase to "what colour is text on the accent":
 
@@ -131,7 +135,9 @@ hand-pick one-off values; choose from a system) and p.142.
 Two token names exist for one role (`--accent-contrast`, `--on-accent`), one of
 them undefined, and two components bypass both with a literal.
 
-### F3 — `--accent` is not a legal text colour in light mode {#f3}
+<a id="f3"></a>
+
+### F3 — `--accent` is not a legal text colour in light mode
 
 | ground | measured | 4.5 floor |
 |---|---|---|
@@ -166,7 +172,9 @@ Dark mode passes everywhere (6.16-7.34:1). Where this lands in light:
   the hierarchy runs backwards. (Dark: 6.09 active vs 6.27 inactive — level, and
   both pass.) Visible in [`shots/settings-models-light.png`](./shots/settings-models-light.png).
 
-### F4 — `opacity: 0.45` was tuned on a dark ground and is 26% harsher on white {#f4}
+<a id="f4"></a>
+
+### F4 — `opacity: 0.45` was tuned on a dark ground and is 26% harsher on white
 
 The same `0.45` recedes content for **two** different features, by design — one
 visual language, as the source comments say:
@@ -218,7 +226,9 @@ separate answers (both in [the plan](./ui-refactor-plan.md#p1-4)):
    toward the ground at once. No alpha that still reads as "receded" can hold 3:1
    for coloured syntax.
 
-### F5 — the diff viewer ships GitHub's palette, not the app's {#f5}
+<a id="f5"></a>
+
+### F5 — the diff viewer ships GitHub's palette, not the app's
 
 The densest surface in the product draws almost none of its colour from the app's
 tokens. Harvested from the live DOM:
@@ -256,7 +266,9 @@ dependency (`patches/@git-diff-view__svelte.patch`), it carries the dimming from
 [F4](#f4), and re-pointing its palette touches every colour decision the other
 phases make.
 
-### F16 — the "changed" legend chip fails in light only {#f16}
+<a id="f16"></a>
+
+### F16 — the "changed" legend chip fails in light only
 
 `src/app.css:150-152` — `--legend-changed-color: #9a6700` on
 `--legend-changed-bg: #fff5cc` measures **4.45:1**, just under the 4.5 floor
@@ -270,7 +282,9 @@ the edge, which is the signature of values derived rather than verified.
 
 ## Hierarchy and emphasis
 
-### F9 — everything at equal emphasis on both content steps {#f9}
+<a id="f9"></a>
+
+### F9 — everything at equal emphasis on both content steps
 
 **Inspect (step 2).** Measured vertical positions at 1440×1000 —
 seven control rows, ~250px of chrome, before the first line of content:
@@ -307,7 +321,9 @@ styles `details > summary` as muted, uppercase, tracked support so the content
 leads (p.47), and the landing page ranks its actions textbook-correctly
 ([F-positives](#what-passes)).
 
-### F18 — four font weights {#f18}
+<a id="f18"></a>
+
+### F18 — four font weights
 
 400, 500, 600 and 700 all appear on every surface measured (settings: 400×232,
 500×9, 600×44, 700×20). p.34 asks for two — a body weight and an emphasis
@@ -318,7 +334,9 @@ sizes in use, while costing a decision at every call site.
 
 ## Type and spacing scales
 
-### F6 — no type scale: 21 distinct sizes on a single page {#f6}
+<a id="f6"></a>
+
+### F6 — no type scale: 21 distinct sizes on a single page
 
 `src/app.css:51` sets `:root { font-size: 15px }`. Components then size text in
 **`em`**, which compounds through every nesting level — exactly what p.92-93
@@ -348,7 +366,9 @@ product; this page has 21, none of which a designer chose. `/demo` step 1 shows
 Violates p.88 (fix the scale up front), p.89-90 (a UI where every size between 10
 and 24px appears somewhere is inconsistent and slow to work in) and p.92-93.
 
-### F7 — no spacing scale: 40 distinct values, steps of 7-12% {#f7}
+<a id="f7"></a>
+
+### F7 — no spacing scale: 40 distinct values, steps of 7-12%
 
 **1,221** `padding` / `margin` / `gap` declarations across `src/`, using **40
 distinct `rem` values**. p.61-62 requires adjacent values to differ by roughly
@@ -375,7 +395,9 @@ are off any grid. The computed harvest confirms it: 25 distinct padding values o
 the settings page, including `0.57px`, `0.605625px` and `3.63375px` — em-derived
 paddings inside em-sized text.
 
-### F8 — the Inspect toolbar's spacing inverts the grouping rule {#f8}
+<a id="f8"></a>
+
+### F8 — the Inspect toolbar's spacing inverts the grouping rule
 
 `src/components/InspectStep.svelte:1640-1641` renders `Unified` and
 `Side-by-side` as one mutually-exclusive view-mode control; `Hide whitespace`,
@@ -401,7 +423,9 @@ weight despite two of them being a mode selector and three being toggles (p.52-5
 
 ## Depth and elevation
 
-### F10 — no elevation scale; separation is borders-only; the hairline is invisible {#f10}
+<a id="f10"></a>
+
+### F10 — no elevation scale; separation is borders-only; the hairline is invisible
 
 **There is no scale.** 16 non-focus-ring `box-shadow` declarations exist, with
 **8 distinct hand-picked values** — effectively one bespoke shadow per component:
@@ -452,7 +476,9 @@ for raised things like `.btn` — the name and the optical direction disagree.
 
 ## Form design
 
-### F11 — form controls have no perceivable boundary {#f11}
+<a id="f11"></a>
+
+### F11 — form controls have no perceivable boundary
 
 `src/app.css:306-317` gives every `input`, `textarea` and `select` a
 `1px solid var(--hairline)` border. Measured against the ground they sit on:
@@ -470,9 +496,11 @@ and here one token serves both roles.
 This is the reason the settings screenshots read as floating text: the fields are
 there, but their edges are at the limit of perception. No warm grey light enough
 to work as a decorative hairline reaches 3:1 — the roles genuinely need two
-tokens (measured ramp in [Appendix A](#appendix-a--measured-contrast-tables)).
+tokens (measured ramp in [Appendix A](#appendix-a)).
 
-### F12 — labels outrank the fields they label {#f12}
+<a id="f12"></a>
+
+### F12 — labels outrank the fields they label
 
 The settings form pattern wraps the control in its label
 (`src/components/settings/ProvidersSection.svelte:199-225`, and the same shape in
@@ -511,7 +539,9 @@ The direction is right, but a 3.7px vs 7.5px pair does not communicate grouping
 at a glance (p.83), and a 0px label→input gap leaves the label visually fused to
 its field.
 
-### F13 — six sections, one heading {#f13}
+<a id="f13"></a>
+
+### F13 — six sections, one heading
 
 The entire `/settings` page exposes exactly one heading element to the document
 outline: `<h1>Settings</h1>`. The six section titles — *Appearance*,
@@ -532,7 +562,9 @@ nav on the left is the only structure a reader gets.
 Sub-section titles inside `AI models` ("What runs (and how deep)", "Model panel")
 are likewise non-headings.
 
-### F14 — a browser-default blue link in production {#f14}
+<a id="f14"></a>
+
+### F14 — a browser-default blue link in production
 
 `src/components/settings/AiModelsSection.svelte:481`:
 
@@ -556,7 +588,9 @@ except the diff viewer's `#0969da`, [F5](#f5).
 
 ## Empty and loading states
 
-### F15 — empty states are bare one-liners {#f15}
+<a id="f15"></a>
+
+### F15 — empty states are bare one-liners
 
 Every empty state found is a single sentence with no icon, no illustration and no
 call to action, with the surrounding toolbars left in place:
@@ -626,7 +660,9 @@ deliberate, and not consistent.
 
 ---
 
-## What passes {#what-passes}
+<a id="what-passes"></a>
+
+## What passes
 
 Recorded honestly, because a refactor should not break these:
 
@@ -659,7 +695,7 @@ Per this pass's scope, nothing below was changed.
    dark mode, not merely a light-mode prerequisite. **Highest-priority repair.**
 2. **A browser-default blue link ships in production** ([F14](#f14)) —
    `AiModelsSection.svelte:481`, `StandingRulesSection.svelte:385`.
-3. **The light palette is duplicated verbatim** ([F17](#f17)) — `src/app.css:123-156`
+3. **The light palette is duplicated verbatim** <a id="f17"></a> — `src/app.css:123-156`
    and `src/app.css:159-194` contain **30 byte-identical declarations**. Verified
    identical by diff. Any token added to one block and not the other will silently
    diverge between an explicit `data-theme="light"` and the `auto` +
@@ -678,6 +714,8 @@ Per this pass's scope, nothing below was changed.
    tuned independently today ([F4](#f4)).
 
 ---
+
+<a id="appendix-a"></a>
 
 ## Appendix A — measured contrast tables
 
