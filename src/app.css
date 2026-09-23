@@ -340,7 +340,7 @@ h3 {
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #0a1410;
+  color: var(--on-accent);
   font-weight: 600;
 }
 

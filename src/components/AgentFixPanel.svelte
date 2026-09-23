@@ -599,7 +599,7 @@
     border-radius: 6px;
     border: 1px solid var(--accent);
     background: var(--accent);
-    color: var(--accent-contrast, #fff);
+    color: var(--on-accent);
     cursor: pointer;
   }
 

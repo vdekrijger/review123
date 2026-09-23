@@ -458,6 +458,15 @@
     color: inherit;
   }
 
+  /* Same F14 bug as the two links the audit named in AiModelsSection and
+     StandingRulesSection: `.install a` above covers only the install block, so
+     the link inside a .field-note was still rendering in the UA default
+     #0000EE. Found by grepping for the pattern rather than the two cited lines. */
+  .field-note a {
+    color: inherit;
+    text-decoration: underline;
+  }
+
   /* The one thing in this section people have to copy. pre-wrap rather than a
      horizontal scroller so the whole URL is visible in a narrow settings
      panel — soft wrapping inserts no newlines, so a selection still pastes as

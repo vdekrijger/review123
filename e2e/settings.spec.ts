@@ -599,12 +599,17 @@ test('themed form controls: radios are custom-styled (appearance:none) with verd
   expect(
     await lightRadio.evaluate((el) => getComputedStyle(el).appearance),
   ).toBe('none')
-  // Light verdigris accent (#2e8b78)
-  await expect(lightRadio).toHaveCSS('border-top-color', 'rgb(46, 139, 120)')
+  // Light verdigris accent (#1f7a66). Phase 1 darkened this one step on the
+  // same hue, from #2e8b78: the old value was not a legal text colour on any
+  // light ground (4.13/3.90/3.66 against a 4.5 floor) and could not carry white
+  // as a fill. The assertion tracks the new correct value — see
+  // src/lib/theme/contrast.test.ts for the measurements.
+  await expect(lightRadio).toHaveCSS('border-top-color', 'rgb(31, 122, 102)')
 
   // The now-UNCHECKED Dark radio reverts to the hairline border and a
-  // scaled-out (hidden) indicator — in light theme hairline is #e3dfd6.
-  await expect(darkRadio).toHaveCSS('border-top-color', 'rgb(227, 223, 214)')
+  // scaled-out (hidden) indicator — in light theme hairline is #ded9cf
+  // (Phase 1 re-toned it from #e3dfd6 alongside the rest of the light palette).
+  await expect(darkRadio).toHaveCSS('border-top-color', 'rgb(222, 217, 207)')
   await expect
     .poll(() =>
       darkRadio.evaluate((el) => getComputedStyle(el, '::before').transform),

@@ -1677,12 +1677,18 @@
      Opacity-only so the text stays fully selectable and the cell remains
      comment-anchorable (the add-comment affordance and line number are
      untouched). Hover restores full opacity for legibility on demand. Works in
-     unified (.diff-line-content) and split (old/new-content) layouts and in both
-     themes (opacity is theme-agnostic). The class is toggled per content cell. */
+     unified (.diff-line-content) and split (old/new-content) layouts.
+
+     The alpha is NOT theme-agnostic, which is what --recede-opacity fixes: the
+     old bare 0.45 was tuned against the dark ground and measured 26% harsher on
+     white, dropping receded code below the legibility floor in light mode only
+     (audit F4). The token is 0.55 light / 0.45 dark, asserted on all three real
+     diff grounds in src/lib/theme/contrast.test.ts. The class is toggled per
+     content cell. */
   .focus-dim-host :global(.diff-line-content.dimmed-noise),
   .focus-dim-host :global(.diff-line-old-content.dimmed-noise),
   .focus-dim-host :global(.diff-line-new-content.dimmed-noise) {
-    opacity: 0.45;
+    opacity: var(--recede-opacity);
     transition: opacity 0.12s ease;
   }
   .focus-dim-host :global(.diff-line-content.dimmed-noise):hover,
@@ -1692,8 +1698,9 @@
   }
 
   /* Per-hunk attention — MECHANICAL hunks recede. Deliberately the SAME idiom
-     and the same 0.45 opacity focus mode uses for code noise (one visual
-     language, not two): opacity only, so the code stays selectable,
+     and the same --recede-opacity focus mode uses for code noise (one visual
+     language, not two — which is exactly why it is one token): opacity only,
+     so the code stays selectable,
      comment-anchorable and a drop target for a dragged finding; hover restores
      it for a glance; the hunk's marker restores it for good. Nothing is ever
      hidden. When a row is BOTH noise and mechanical the opacity does not
@@ -1701,7 +1708,7 @@
   .focus-dim-host :global(.diff-line-content.hunk-receded),
   .focus-dim-host :global(.diff-line-old-content.hunk-receded),
   .focus-dim-host :global(.diff-line-new-content.hunk-receded) {
-    opacity: 0.45;
+    opacity: var(--recede-opacity);
     transition: opacity 0.12s ease;
   }
   .focus-dim-host :global(.diff-line-content.hunk-receded):hover,
