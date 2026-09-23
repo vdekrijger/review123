@@ -942,6 +942,11 @@ async function measureFormPrimitives(
   await page.goto('/settings')
   await expect(page.getByRole('heading', { name: /^settings$/i })).toBeVisible({ timeout: 5_000 })
   await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)
+  // The control primitives transition border-color over 150ms, so a flip read
+  // immediately back returns the OUTGOING theme's colour. Both ends of that
+  // interpolation happen to clear 3:1 today, which is exactly the kind of
+  // accident that makes a gate pass for the wrong reason — so wait it out.
+  await page.waitForTimeout(400)
 
   return page.evaluate(() => {
     const lin = (c: number) => {

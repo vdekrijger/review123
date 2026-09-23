@@ -338,7 +338,11 @@
      and the 1rem below it is the gap to the NEXT field — so the three pieces of
      one field group tighter than the groups do. */
   details .field {
-    margin: 0 0.75rem;
+    /* Inline only. A `margin: 0 0.75rem` shorthand here would out-specify the
+       primitive's `.field + .field { margin-top: 1rem }` and silently flatten
+       two ADJACENT fields (Bitbucket email / API token) back to 0 — which is
+       the very defect this item exists to fix. */
+    margin-inline: 0.75rem;
   }
 
   details .field:first-of-type {
