@@ -141,10 +141,17 @@ describe('elevation primitive — one scale, no bespoke shadows', () => {
     // non-negotiable, and dialog had none at all before Batch 2B.
     expect(rule('dialog')).toMatch(/box-shadow:\s*var\(--elevation-5\)/)
     expect(rule('\\.card')).toMatch(/box-shadow:\s*var\(--elevation-1\)/)
-    // Both dropped their border: depth plus a background shift separates them
-    // now, rather than a fourth mechanism (p.206-209).
-    expect(rule('dialog')).not.toMatch(/border:\s*1px/)
-    expect(rule('\\.card')).not.toMatch(/border:\s*1px/)
+    // Both drop the rim in LIGHT, where the shadow measures 1.58:1 against the
+    // page and beats the 1.33:1 border outright, and keep it in DARK, where a
+    // black shadow cannot exceed 1.08:1 at any alpha. The measurements behind
+    // that split are asserted in src/lib/theme/contrast.test.ts; this only
+    // pins that both primitives express it the same way and neither has
+    // quietly gone back to an unconditional border.
+    for (const selector of ['dialog', '\\.card']) {
+      expect(rule(selector), selector).toMatch(
+        /border:\s*1px solid light-dark\(\s*transparent\s*,\s*var\(--hairline\)\s*\)/,
+      )
+    }
   })
 
   it('a chip takes no elevation — it is a label, not an object (p.158)', () => {

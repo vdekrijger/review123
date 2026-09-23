@@ -681,9 +681,10 @@
      one-line summary, so it LEADS the ten detail panels below it rather than
      matching them (audit F9). Depth is what ranks it — elevation step 2 against
      the panels' 1-or-nothing. Otherwise this is the .card primitive in app.css
-     inlined; it drops its border for the same reason .card does (p.206-209). */
+     inlined, and it follows the same measured theme-dependent border rule. */
   .glance-card {
     background: var(--surface);
+    border: 1px solid light-dark(transparent, var(--hairline));
     border-radius: 8px;
     padding: 0.75rem 1rem;
     box-shadow: var(--elevation-2);
@@ -1187,9 +1188,12 @@
    *            --bg in BOTH themes (the flat-design depth cue, p.167-168),
    *            and takes elevation step 1.
    *
-   * The border is gone in both states: the background shift plus the shadow
-   * separate an open panel from the page (p.207-208), and the .understand-step
-   * column gap separates the closed ones from each other (p.209).
+   * A CLOSED panel has no border in either theme — there is no box to outline.
+   * An OPEN one keeps a rim in DARK only, on the measured rule app.css sets out
+   * on .card: in light the elevation-1 shadow reads 1.58:1 against the page and
+   * beats the 1.33:1 border it replaces, but in dark a black shadow tops out at
+   * 1.08:1 whatever its alpha, so there the rim is still the only mechanism
+   * that works and the shadow supports it (p.206-209, measured, not assumed).
    *
    * Above them, .glance-card takes elevation step 2, so the page now reads in
    * three depths — the primary card, then an opened panel, then the flat list —
@@ -1197,12 +1201,14 @@
    */
 
   .detail-panel {
+    border: 1px solid transparent;
     border-radius: 6px;
     overflow: hidden;
   }
 
   .detail-panel[open] {
     background: var(--surface);
+    border-color: light-dark(transparent, var(--hairline));
     box-shadow: var(--elevation-1);
   }
 

@@ -567,12 +567,27 @@ input[type='radio']:disabled {
    ═══════════════════════════════════════════ */
 
 /*
- * A card is separated from the page by DEPTH, not by a line: it sits on
- * --surface, which is lighter than --bg in light and in dark (the flat-design
- * depth cue, p.167-168), and carries elevation step 1. That is two of the three
- * alternatives p.206-209 offers instead of reaching for yet another border —
- * and the border it drops measured 1.33:1 against this very background, below
- * the threshold of comfortable perception anyway (audit F10).
+ * ── WHY THE BORDER IS THEME-DEPENDENT, and this is the rule that sets it ──
+ *
+ * p.206-209 says separate with space, a background shift or a shadow BEFORE
+ * reaching for another border. Measured on this app's real grounds, that advice
+ * holds in light and fails in dark:
+ *
+ *   mechanism                    light        dark
+ *   --hairline as a 1px rim      1.33:1       1.31:1
+ *   --surface against --bg       1.06:1       1.08:1
+ *   the elevation-1 shadow       1.58:1       1.08:1
+ *
+ * In light the shadow beats the border outright — stronger AND softer — so the
+ * border is redundant and goes. In dark it does not, and no alpha rescues it:
+ * black on #14161a tops out at 1.07:1 even at 0.40, which is exactly why the
+ * nine values Batch 2B replaced kept climbing toward 0.40 without ever
+ * separating anything. A dark ground has no room below it to cast into.
+ *
+ * So the rim stays in DARK only, and the shadow supports it there instead of
+ * replacing it. One declaration carries both, the same way the palette does.
+ * (Nested light-dark() is deliberate and verified in-browser: it keeps the dark
+ * side pointing at --hairline rather than duplicating its value here.)
  *
  * NOTE: this primitive has no call sites today; .glance-card in
  * UnderstandStep.svelte is a hand-inlined copy of the old rule. Batch 2B
@@ -580,6 +595,7 @@ input[type='radio']:disabled {
  */
 .card {
   background: var(--surface);
+  border: 1px solid light-dark(transparent, var(--hairline));
   border-radius: 8px;
   padding: 0.75rem 1rem;
   box-shadow: var(--elevation-1);
@@ -657,11 +673,12 @@ details[open] > summary::before {
  * A modal had NO shadow at all before Batch 2B — it sat flat against a page it
  * is meant to float above, held apart only by a 1.33:1 hairline and the
  * backdrop. p.159-160 names the modal as the one case where large elevation is
- * non-negotiable, so it takes the top step of the scale and drops the border.
+ * non-negotiable, so it takes the top step of the scale. The border follows the
+ * same theme-dependent rule as .card, and for the same measured reason.
  */
 dialog {
   background: var(--surface);
-  border: none;
+  border: 1px solid light-dark(transparent, var(--hairline));
   border-radius: 12px;
   color: var(--text);
   padding: 1.5rem;

@@ -492,6 +492,41 @@ describe('F10 — the elevation scale', () => {
     }
     expect(contrast(DARK['--shadow-tight'], DARK['--bg'])).toBeGreaterThan(floor * 0.9)
   })
+
+  /**
+   * THE reason .card, dialog, .glance-card and .detail-panel[open] drop their
+   * border in light and KEEP it in dark.
+   *
+   * p.206-209 says separate with space, a background shift or a shadow before
+   * reaching for another border. Measured against this app's real grounds, that
+   * holds in light and fails in dark — and the failure is physical, not a
+   * tuning problem: a black shadow has nowhere to cast on a near-black ground,
+   * so it tops out around 1.07:1 even at the heaviest alpha the app ever used.
+   * That is very likely WHY the nine replaced values kept climbing toward 0.40
+   * without ever separating anything.
+   *
+   * Shipping "drop the border" in both themes would therefore have traded a
+   * 1.31:1 rim for a 1.08:1 shadow in dark — a regression dressed as a
+   * principle. These two assertions are what make that trade-off visible to
+   * whoever edits the scale next.
+   */
+  it('light: the shadow BEATS the border it replaces, so the border goes', () => {
+    const border = contrast(LIGHT['--hairline'], LIGHT['--bg'])
+    const shadowCore = contrast(LIGHT['--shadow-tight'], LIGHT['--bg'])
+    expect(round2(border), `hairline measured ${round2(border)}`).toBeLessThan(1.4)
+    expect(shadowCore, `shadow ${round2(shadowCore)} vs border ${round2(border)}`)
+      .toBeGreaterThan(border * 0.95)
+  })
+
+  it('dark: NO alpha lets a shadow beat the border, so the border stays', () => {
+    const border = contrast(DARK['--hairline'], DARK['--surface'])
+    // Not just our alphas — the whole usable range, including the heaviest
+    // value the app ever shipped. Every one of them loses to the rim.
+    for (const alpha of [0.2, 0.3, 0.4, 0.5, 0.6]) {
+      const r = contrast(`rgba(0,0,0,${alpha})`, DARK['--bg'])
+      expect(r, `black @${alpha} measured ${round2(r)}`).toBeLessThan(border)
+    }
+  })
 })
 
 /**
