@@ -227,7 +227,8 @@ test('short diff + long tree (inline regime): nav is clamped to the diff column 
 test('short diff + long tree (margin regime, >=1750px centered): nav is clamped too', async ({ page }) => {
   await page.setViewportSize({ width: 1900, height: 1400 })
   const { files, viewedPaths } = shortDiffLongTreeFixture()
-  await gotoInspectStep(page, { files, viewedPaths })
+  // Margin regime is centered-only, and centered is no longer the default.
+  await gotoInspectStep(page, { files, viewedPaths, diffWidth: 'centered' })
 
   const firstArticle = page.locator('article.file-diff').first()
   const boxBefore = await firstArticle.boundingBox()

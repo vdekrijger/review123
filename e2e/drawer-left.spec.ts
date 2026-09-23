@@ -159,7 +159,10 @@ test('crafted loader: diff-bars SVG and caption visible while PR is loading', as
 
 test('margin mode (wide + centered): drawer opens into the margin, diff boundingBox unchanged', async ({ page }) => {
   await page.setViewportSize({ width: 1900, height: 900 })
-  await gotoInspectStep(page)
+  // `centered` is asked for explicitly: it stopped being the default when the
+  // p3-item4 measurement moved diffWidth to `full`, and margin mode is a
+  // centered-only regime.
+  await gotoInspectStep(page, { diffWidth: 'centered' })
 
   const firstArticle = page.locator('article.file-diff').first()
   const boxBefore = await firstArticle.boundingBox()
@@ -191,8 +194,10 @@ test('margin mode (wide + centered): drawer opens into the margin, diff bounding
 // ---------------------------------------------------------------------------
 
 test('inline mode (narrow + centered): drawer pushes the diff over; tree fully visible, no overlay', async ({ page }) => {
-  // Default Playwright viewport (1280×720) — too narrow for the 340px margin
-  await gotoInspectStep(page)
+  // Default Playwright viewport (1280×720) — too narrow for the 340px margin.
+  // Pinned to centered: narrow forces inline mode either way, so without this
+  // the test would quietly pass while exercising `full` and not what it names.
+  await gotoInspectStep(page, { diffWidth: 'centered' })
 
   const firstArticle = page.locator('article.file-diff').first()
   const boxBefore = await firstArticle.boundingBox()

@@ -86,7 +86,9 @@ describe('Fix A — full-width mode: .review reserves margin-right for expanded 
   })
 
   it('centered mode: inspect-layout does NOT have class diff-full', () => {
-    // centered is default
+    // `full` is the default since the p3-item4 measurement, so centered is now
+    // the case that has to be asked for explicitly.
+    setDiffWidth('centered')
     const { container } = render(InspectStep, {
       props: {
         files: makeFiles(['src/a.ts']),
@@ -247,6 +249,7 @@ describe('Fix B structural — full-width data hook on inspect-layout', () => {
   })
 
   it('centered: inspect-layout has data-diffwidth="centered" attribute', () => {
+    setDiffWidth('centered')
     const { container } = render(InspectStep, {
       props: {
         files: makeFiles(['src/a.ts']),
