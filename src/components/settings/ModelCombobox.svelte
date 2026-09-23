@@ -568,7 +568,7 @@
 
   .combobox-result-lab {
     display: block;
-    padding: var(--space-1) var(--space-2) var(--space-1);
+    padding: var(--space-1) var(--space-2);
     font-size: var(--text-xs);
     font-weight: 700;
     text-transform: uppercase;
@@ -619,7 +619,7 @@
 
   .combobox-empty {
     margin: 0;
-    padding: var(--space-2) var(--space-2);
+    padding: var(--space-2);
     font-size: var(--text-xs);
     color: var(--text-muted);
   }

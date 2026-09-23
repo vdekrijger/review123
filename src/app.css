@@ -380,12 +380,17 @@
    Both selectors get identical full-width treatment so the diff honours diffWidth
    in either mode. */
 /* :root[data-diffwidth] attribute is set/cleared by applyAppearance() on every change. */
-/* Gutters also collapse to a slim 10px so full mode is meaningfully wider than
-   centered at EVERY viewport size, not only above the 70rem cap. */
+/* Gutters also collapse to --space-2 (7.5px) so full mode is meaningfully wider
+   than centered at EVERY viewport size, not only above the 70rem cap. The page
+   gutter is --space-4 (15px), so full mode buys 15px of diff width at any size;
+   e2e/fullwidth-rail.spec.ts asserts that difference. Batch 2D first mapped this
+   to --space-3 by nearest-step and that gate caught it: 11.25px is WIDER than the
+   10px it replaced, which is backwards for the mode whose whole point is going
+   edge-to-edge. A scale step has to preserve the intention, not just the number. */
 :root[data-diffwidth='full'] .review:has(.inspect-layout),
 :root[data-diffwidth='full'] .review:has(.story) {
   max-width: none;
-  padding-left: var(--space-3);
+  padding-left: var(--space-2);
 }
 
 /* Right gutter slims only when the rail isn't reserving that space.
@@ -396,7 +401,7 @@
    reserve where width is plentiful. */
 :root[data-diffwidth='full'] .review:has(.inspect-layout)[data-rail-collapsed='true'],
 :root[data-diffwidth='full'] .review:has(.story)[data-rail-collapsed='true'] {
-  padding-right: var(--space-3);
+  padding-right: var(--space-2);
 }
 
 /*

@@ -1141,6 +1141,192 @@ neither belongs to a component:
   pass rather than a sweep. The full inventory is in
   [Batch 2A's record](#b2a-shipped).
 
+<a id="b2d-shipped"></a>
+
+### Batch 2D — as shipped (slice 1 of N)
+
+Shipped as one PR in four commits: the scales + the ratchet (no rendered
+pixels), the inherited opacity work, `app.css`, then the first component slice.
+**This is the opening slice, not the whole batch** — by design. The plan asks
+for the scales, the ratchet, and a first meaningful migration; the ledger below
+says exactly how much corpus is left and is the instrument every later slice is
+measured with.
+
+**The scales, and the 15px root.** Both are the rubric's own reference scales
+(p.63, p.91-92), authored in `rem` against a **16px** base, so the "nominal"
+column is literally the rubric's number:
+
+| | tokens | nominal px | rendered at the 15px root |
+|---|---|---|---|
+| type | `--text-xs … --text-2xl` (6) | 12 / 14 / 16 / 18 / 20 / 24 | 11.25 / 13.125 / 15 / 16.875 / 18.75 / 22.5 |
+| spacing | `--space-1 … --space-8` (8) | 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64 | 3.75 / 7.5 / 11.25 / 15 / 22.5 / 30 / 45 / 60 |
+
+`:root { font-size: 15px }` is **unchanged**, as the plan requires. Because the
+scale is root-relative, every step simply renders at 15/16 = **93.75% of
+nominal, uniformly** — one multiplication, applied to all fourteen steps
+equally. Flipping the root to 16px later is still one line and makes every
+nominal number true at once. A test pins both halves of that: the root is 15px,
+and **no step may be declared in `px` or `em`**, because a step in either unit
+would be immune to the flip and would fragment the scale the day it is taken.
+
+`rem`, never `em`, is the load-bearing rule (p.92-93) and it is asserted:
+`em` compounding is the disease, and shipping the cure in the same unit would
+reproduce it one level down.
+
+Two encouraging measurements that made this cheaper than F6/F7 suggested:
+
+- The app's **five most-used spacing values** (`0.25 / 0.5 / 0.75 / 1 / 1.5rem`,
+  545 declarations between them) are **already exactly `--space-1 … --space-5`**.
+  The scale is the codebase's own dominant mode; the 40 values are noise around it.
+- At the declaration level F6 is worse than recorded — **50 distinct declared
+  `font-size` values across 604 declarations**, ~400 of them in the 10.5-13.5px
+  band — but **every one of them lands within 7% of a step**. The differences
+  were never carrying meaning, which is the finding as much as the fix.
+
+**There is deliberately no spacing step below `--space-1`.** 154 declarations sit
+in the 1.5-3px band (`0.1 / 0.15 / 0.2rem`); those are the "never nudge sizes 1px
+at a time" defect (p.60), not a missing token, and each is a per-site choice
+between `--space-1` and `0`. A ninth token would only make the defect
+expressible.
+
+**The ratchet** (`src/lib/theme/scaleRatchet.test.ts`,
+`src/lib/theme/scaleScan.ts`, `src/lib/theme/scaleBaseline.ts`,
+`scripts/generate-scale-baseline.mjs`) is the sister project's pattern: the
+baseline records a per-file ceiling, growth fails, **and an unrecorded shrink
+fails too**, so a banked win cannot silently come back later disguised as "still
+under the ceiling". Generator and test count with the same module, and a test
+asserts that too. Mutation-checked in both directions and on every scale
+assertion.
+
+| ledger | at 9ada655 | after this PR |
+|---|---|---|
+| `emFont` — `font-size` in `em` | **137** | **96** |
+| `offScaleFont` — `font-size` not on the scale | **596** | **546** |
+| `offScaleSpace` — spacing components not on the scale | **1391** | **1299** |
+| `offScaleWeight` — `font-weight` neither 400 nor 600 (F18) | **83** | **83** |
+| files off the scale | 61 of 64 | 59 of 64 |
+
+**Measured in the built app** at 1440×1000, `/settings`, both builds
+(`getComputedStyle`, the audit's own method — and it reproduces the audit's 21
+exactly on the base build, which is what makes the after-number trustworthy):
+
+| | before | after |
+|---|---|---|
+| distinct computed font sizes on the page | **21** | **15** |
+| …inside `#ai-models` | **13** | **4** |
+| smallest size rendered anywhere | **8.64px** | 10.56px |
+| page height | 6651px | **6588px** |
+| `#ai-models` height | 2625px | **2574px** |
+| `.btn` height | 28px | 28px |
+
+> **Nearest-step is not always the right step, and an e2e gate caught it.**
+> `app.css`'s full-width diff gutter was `10px`; nearest-step put it on
+> `--space-3` (11.25px) — **wider than what it replaced**, which is backwards for
+> the one mode whose entire purpose is going edge-to-edge.
+> `e2e/fullwidth-rail.spec.ts` asserts full mode buys ≥8px of diff width over
+> centered; it measured **949.5 against a required 950** and failed, twice,
+> including the retry. `--space-2` (7.5px) is the step that preserves the
+> intention, and it buys 15px. Recorded because a mechanical mapping applied to
+> 1,391 values will be wrong somewhere, and this is what "wrong" looks like:
+> arithmetically nearest, semantically inverted. Nothing but a behavioural gate
+> was ever going to see it.
+
+**Two real bugs the scale exposed**, both invisible in the CSS and both visible
+in `shots/settings-models-light.png`:
+
+1. **The ensemble row's two halves disagreed.** Its provider `<select>` rendered
+   at 12.3px and the model combobox beside it at 10.125px — 21% apart, for two
+   controls that are one choice. The combobox's chevron was at **8.64px**, the
+   product of four nested `em` levels (`0.8 × 0.9 × 0.82 × …`).
+2. **The same class rendered at different sizes in different places**, because
+   each was sized relative to whatever it happened to sit in.
+
+**The inherited items, all three closed or measured:**
+
+- **`--chrome-muted-opacity`** — added, and its three named sites converted
+  (`BridgeSection .status-dot`, `GroundingIndicator .dot`,
+  `CommentThread .comment-menu-btn`). Not a disabled state and not receded
+  content: in all three the information is carried at full strength by the text
+  label beside it (rubric B2), so quiet chrome has no floor here.
+- **The 21 disabled-state opacities** — done per site, as 2A asked. 18 converge
+  on `--disabled-opacity` from four different values. **The outlier is two
+  sites, not one**: `.run-reviewers-btn` *and* `.tests-review-btn` are both
+  `disabled={isRunning}` with `aria-busy`, so both took a new
+  **`--busy-opacity` (0.85)** — promoted from a literal to a token precisely so
+  the next sweep reads an intention instead of a number it is tempted to
+  flatten. The 21st was never a disabled state:
+  `.picker-quick:not(:disabled):hover` is the *enabled* state, and a blind sweep
+  is exactly what would have eaten it. Two sites are measured and deliberately
+  left: `SectionStatus .is-disabled` (0.6) is a section that did not *run* —
+  status a reader needs, not an unavailable control — and the hover rule above.
+  Guarded: no component may write a bare opacity number on a disabled selector,
+  `:not(:disabled)` excluded by name.
+- **[F18](./ui-audit.md#f18)** — **measured and frozen, not fixed**, and that is
+  a deliberate refusal. The surplus is **500 (×56) and 700 (×24)**; collapsing to
+  the rubric's two weights would overturn [Batch 2A's stated choice](#b2a-f11) of
+  500 for the 12px `.field-label` ("at 12px in a secondary ink a 400-weight label
+  gets thin"). That is a design fork, not a mechanical one. The ratchet's
+  `offScaleWeight` column now stops a fifth weight arriving and the two surplus
+  ones spreading, which is what a ratchet is for when the decision behind a
+  number has not been taken yet.
+
+**Deferred out of Batch 2D's first slice, deliberately:**
+
+- **The control primitives' padding** (`.btn`, `input`/`textarea`/`select`,
+  `.chip` — 10 of `app.css`'s remaining components). These set **control
+  height**, and the scale forces a genuine fork: up to `--space-2/3` makes every
+  control ~6px taller and undoes Batch 2C's 260px → 231px chrome win on the
+  Inspect toolbar; down to `--space-1` shortens the settings page but takes
+  buttons to 25px. Same shape as the 15px root — a whole-app visual decision, so
+  it gets its own slice.
+- **`:root { font-size: 15px }`**, per the plan. It is the single
+  `offScaleFont` entry left in `app.css`, and that entry is *meant* to sit there
+  until the decision is taken.
+- **The five hand-copied settings cards.** `section { margin-bottom: 1.5rem;
+  padding: 1rem 1.25rem; border: 1px solid var(--hairline); border-radius: 10px }`
+  is written out **byte-identically in five sections** (`AiModels`,
+  `Appearance`, `Bridge`, `Providers`, `StandingRules`) — a settings card
+  re-invented five times, beside the `.card` primitive that already exists in
+  `app.css`. Migrating one copy would have made that section visibly differ from
+  its four siblings on the same page, which is Batch 2A's recorded lesson in a
+  new costume. It needs a slice that takes all five, or converges them onto
+  `.card`. **This is the highest-value follow-up in the batch.**
+- **`line-height`.** F6 records 21 distinct line-heights alongside the sizes
+  (19 after this PR). A line-height scale is a ratio, not a length, and adding
+  it here would have made the first ratchet reading un-actionable.
+- **The two `margin: -1px` hairline-overlap nudges** in `AiModelsSection` — not
+  points on a spacing scale.
+- **`FileDiff.svelte` and `SymbolPopover.svelte`** stay in the baseline
+  untouched: Phase 3 owns them.
+- **The UA monospace default.** `13.3333px` appears 78 times on `/settings` and
+  is not declared anywhere — it is Chrome's `medium` for `font-family: monospace`
+  on an element with no explicit size. It is a genuine F6 contributor that no
+  amount of grepping the CSS would find, and it wants one `code, pre { font-size:
+  var(--text-…) }` rule in `app.css`.
+
+**Verification that shipped with it:**
+
+- `src/lib/theme/scaleRatchet.test.ts` — 8 tests: the two ratchet directions,
+  a glob-emptiness guard, the opening ledger as a ceiling, both scales' shape
+  (six strictly increasing type steps, eight spacing steps each ≥25% above its
+  predecessor, every step a plain `rem` length), the root-relative property, and
+  that the generator imports the same counting module.
+- `src/lib/theme/contrast.test.ts` — **103 → 108 assertions.** Four cover the two
+  new opacity tokens (numbers in (0,1), neither an alias, neither theme-split,
+  and `busy > disabled` with the busy label clearing 4.5:1 in both themes); one
+  is the assertion whose absence let Phase 1 ship a token nothing rendered —
+  **every sized primitive in `app.css` must reference the scale**, with `:root`'s
+  15px named as the one exception. Two existing assertions were **repaired, not
+  deleted**: the F12 label-vs-control size test and the field-rhythm ratio test
+  both read literal `rem` out of `app.css`, so `var(--text-*)` made them silently
+  match nothing. They now resolve the indirection and fail if a rule references a
+  step that does not exist.
+- `src/components/design-system-primitives.test.ts` — three disabled-opacity
+  guards (above).
+- Screenshots: **all 14 re-captured**. The capture method was validated by
+  reproducing the committed pre-change `step1-understand-light.png` height
+  (1105px) exactly before capturing the new set.
+
 ---
 
 ## Phase 3 — the diff viewer, last
