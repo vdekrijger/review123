@@ -225,7 +225,7 @@ function healthBody(overrides: Record<string, unknown> = {}) {
     ok: true,
     protocol: 1,
     root: 'review123',
-    capabilities: { inference: ['claude', 'codex'], infer: true, inferStream: true, files: true, search: true },
+    capabilities: { inference: ['claude', 'codex'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true },
     git: { head: BRIDGE_HEAD, branch: 'main', dirty: false },
     version: '0.1.0',
     ...overrides,
@@ -298,6 +298,73 @@ test('a bridge with no grounding routes is told to update, not silently trusted'
   await expect(page.getByTestId('bridge-grounding-note')).toContainText(/too old to serve repo files/i, {
     timeout: 5_000,
   })
+})
+
+test('a bridge that can run the CLI with its tools says deep review is read-only', async ({ page }) => {
+  await blockExternal(page)
+  await stubBridge(page, healthBody())
+  await seedPairing(page)
+
+  await openSettings(page)
+
+  const note = page.getByTestId('bridge-agentic-note')
+  await expect(note).toContainText(/read-only/i, { timeout: 5_000 })
+  await expect(note).toContainText(/never writes/i)
+})
+
+/**
+ * The failure is INVISIBLE without this note, which is why it is an e2e test.
+ *
+ * A bridge predating the agentic route does not refuse the request — it ignores
+ * the field and answers with an ordinary single-pass review. So a user would
+ * see deep review quietly behaving like standard review, with nothing anywhere
+ * telling them why. The settings section has to say it.
+ */
+test('an older bridge is TOLD deep review will fall back, not left to wonder', async ({ page }) => {
+  await blockExternal(page)
+  await stubBridge(
+    page,
+    healthBody({
+      capabilities: { inference: ['claude'], infer: true, inferStream: true, files: true, search: true },
+    }),
+  )
+  await seedPairing(page)
+
+  await openSettings(page)
+
+  const note = page.getByTestId('bridge-agentic-note')
+  await expect(note).toContainText(/too old/i, { timeout: 5_000 })
+  await expect(note).toContainText(/standard review/i)
+  // It must say what to DO about it.
+  await expect(note).toContainText(/update it and restart/i)
+})
+
+test('deep review over the bridge needs NEITHER write grant', async ({ page }) => {
+  await blockExternal(page)
+  // fix:false and checkout:false — the default, and the only state a user who
+  // typed no --allow-* flag can be in. Deep review is a READ feature and must
+  // be offered anyway.
+  await stubBridge(
+    page,
+    healthBody({
+      capabilities: {
+        inference: ['claude'],
+        infer: true,
+        inferStream: true,
+        inferAgentic: true,
+        files: true,
+        search: true,
+        fix: false,
+        checkout: false,
+      },
+    }),
+  )
+  await seedPairing(page)
+
+  await openSettings(page)
+
+  await expect(page.getByTestId('bridge-agentic-note')).toContainText(/read-only/i, { timeout: 5_000 })
+  await expect(page.getByTestId('bridge-agentic-note')).not.toContainText(/too old/i)
 })
 
 test('a bridge serving a non-repo says so, instead of implying it can ground a review', async ({ page }) => {
