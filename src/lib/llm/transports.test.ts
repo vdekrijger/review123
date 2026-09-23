@@ -93,7 +93,7 @@ describe('PROVIDERS — structure', () => {
     expect(ids).toEqual(['deepseek', 'openai', 'anthropic', 'gemini', 'openrouter', 'bridge'])
   })
 
-  it('the local bridge is a keyless, priceless, tool-less source — every one of those on purpose', () => {
+  it('the local bridge is a keyless, priceless, TOOL-CAPABLE source — every one of those on purpose', () => {
     const bridge = getProvider('bridge')!
     expect(bridge.transport).toBe('bridge')
     // No keyHint: there is no API key to paste, only a pairing token.
