@@ -168,3 +168,80 @@ describe('elevation primitive — one scale, no bespoke shadows', () => {
     expect(chip).toMatch(/background:\s*var\(--surface-sunken\)/)
   })
 })
+
+/**
+ * Disabled-state opacity — one meaning, one token (plan P1-4a, finished in 2D).
+ *
+ * The audit found 35 disabled-state opacity rules carrying SEVEN different
+ * values (0.35 … 0.85) for one meaning. Batch 2A converted the 14 inside its own
+ * fence; Batch 2D converted the rest, per site rather than by sweep, because two
+ * of them are a deliberate outlier: `.run-reviewers-btn` and `.tests-review-btn`
+ * are `disabled={isRunning}` with aria-busy, so their label is the status
+ * message and must stay readable. Those two took --busy-opacity.
+ *
+ * This guard is what stops the eighth value. It is deliberately stricter than
+ * "no literals anywhere": it looks ONLY at rules whose selector is a disabled
+ * state, so a hover or a transition keeps its own number.
+ */
+describe('disabled-state opacity — one token, and the outlier is explicit', () => {
+  /** Rule blocks whose selector marks an unavailable control. */
+  function disabledRules(css: string): { selector: string; body: string }[] {
+    const out: { selector: string; body: string }[] = []
+    for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selector = m[1].trim().replace(/\s+/g, ' ')
+      // `:not(:disabled)` is the INVERSE and must not be swept — it is the
+      // enabled state, and 2A's record names that trap by name.
+      if (/:not\(\s*:disabled\s*\)/.test(selector)) continue
+      if (!/:disabled|\[disabled\]|\.locked\b|\.disabled\b/.test(selector)) continue
+      out.push({ selector, body: m[2] })
+    }
+    return out
+  }
+
+  it('no component writes a bare opacity number on a disabled state', () => {
+    const offenders: string[] = []
+    for (const [file, source] of Object.entries(svelteSources)) {
+      const styleMatch = source.match(/<style[^>]*>([\s\S]*?)<\/style>/)
+      if (!styleMatch) continue
+      for (const { selector, body } of disabledRules(styleMatch[1])) {
+        const opacity = body.match(/opacity\s*:\s*([^;}]+)/)
+        if (!opacity) continue
+        if (!opacity[1].includes('var(--')) {
+          offenders.push(`${file} → ${selector} { opacity: ${opacity[1].trim()} }`)
+        }
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('the busy outlier is named, not blended away', () => {
+    // If a later sweep flattens these onto --disabled-opacity, the user loses
+    // sight of a running review. The token exists so that sweep reads an
+    // intention; this asserts both sites still carry it.
+    const inspect = svelteSources['./InspectStep.svelte']
+    expect(inspect, 'InspectStep.svelte is not in the glob').toBeTruthy()
+    for (const selector of ['.run-reviewers-btn:disabled', '.tests-review-btn:disabled']) {
+      expect(inspect, selector).toMatch(
+        new RegExp(`${selector.replace('.', '\\.')}\\s*\\{[^}]*opacity:\\s*var\\(--busy-opacity\\)`),
+      )
+    }
+    // …and nothing else in the app claims to be busy-disabled.
+    const claimants = Object.entries(svelteSources).filter(([, s]) =>
+      s.includes('var(--busy-opacity)'),
+    )
+    expect(claimants.map(([f]) => f)).toEqual(['./InspectStep.svelte'])
+  })
+
+  it('app.css still owns the three control primitives that carry it', () => {
+    // The primitives are where a component gets the behaviour for free; if one
+    // of them stopped referencing the token, the per-component guard above
+    // would still pass while most of the app quietly lost the treatment.
+    for (const selector of ['\\.btn:disabled', 'select:disabled']) {
+      const rule = appCss.match(new RegExp(`(^|\\n)${selector}\\s*\\{([^}]*)\\}`))?.[2] ?? ''
+      expect(rule, selector).toMatch(/opacity:\s*var\(--disabled-opacity\)/)
+    }
+    expect(appCss).toMatch(
+      /input\[type='checkbox'\]:disabled[\s\S]{0,80}\{[^}]*opacity:\s*var\(--disabled-opacity\)/,
+    )
+  })
+})

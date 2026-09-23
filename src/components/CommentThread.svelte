@@ -278,7 +278,7 @@
     font-size: 1rem;
     line-height: 1;
     /* Unobtrusive: muted by default, revealed on hover/focus of the item */
-    opacity: 0.45;
+    opacity: var(--chrome-muted-opacity);
     transition: opacity 0.12s ease, background 0.12s ease;
   }
 

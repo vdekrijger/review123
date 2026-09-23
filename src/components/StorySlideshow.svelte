@@ -751,7 +751,7 @@
     cursor: pointer;
   }
   .story-nav:hover:not(:disabled) { background: var(--surface-raised); }
-  .story-nav:disabled { opacity: 0.4; cursor: default; }
+  .story-nav:disabled { opacity: var(--disabled-opacity); cursor: default; }
 
   .story-counter {
     font-size: 0.8rem;
