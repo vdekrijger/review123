@@ -4,9 +4,18 @@
  * Usage (via the `eval` pnpm script):
  *   pnpm eval                     # --mock (default): scripted stub, no network/key
  *   pnpm eval -- --live           # real inference (needs a key OR the local bridge)
- *   pnpm eval -- --live --deep    # exercise the agentic deep-review guidance too
+ *   pnpm eval -- --live --deep    # deep review (#82): the GENERATOR gets tools
+ *   pnpm eval -- --live --grounded           # grounded verification (#229): the
+ *                                            # VERIFIER panel gets tools
  *   pnpm eval -- --case 01-real-bug          # one golden case
  *   pnpm eval -- --live --matrix             # the ON/OFF comparison (see below)
+ *
+ * `--deep` and `--grounded` require a bridge that reports
+ * `capabilities.inferAgentic` (bridge >= 0.3.0), and a bridge rooted at a
+ * materialized fixture tree — see `eval/materialize-golden.mts`. They are
+ * SEPARATE flags on purpose: grounded verification and deep review are
+ * different features with different costs, and a single `--deep` that turned on
+ * both could never tell you which one moved a number.
  *
  * The harness logic lives in src/lib/eval/* (so it is unit-tested under
  * `pnpm test`). This file is the THIN driver: it loads golden cases from
@@ -37,6 +46,17 @@ import { createServer, type ViteDevServer } from 'vite'
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import http from 'node:http'
+import https from 'node:https'
+import {
+  agenticVerdict,
+  gateAgentic,
+  inferTimeoutMs,
+  observeAgentic,
+  type AgenticCall,
+  type AgenticGate,
+  type AgenticReport,
+} from '../src/lib/eval/bridgeAgentic.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
@@ -49,7 +69,10 @@ const RESULTS_DIR = join(HERE, 'results')
 
 interface Args {
   live: boolean
+  /** Deep review (#82): the GENERATOR gets repo tools + the deep guidance. */
   deep: boolean
+  /** Grounded verification (#229): the VERIFIER panel gets repo tools. */
+  grounded: boolean
   caseFilter: string | null
   crossVerify: boolean
   /** Plan O: 'generate' enables multi-generator fusion (recall lift). */
@@ -68,6 +91,7 @@ function parseArgs(argv: string[]): Args {
   const args: Args = {
     live: false,
     deep: false,
+    grounded: false,
     caseFilter: null,
     crossVerify: false,
     fusion: 'verify',
@@ -81,7 +105,12 @@ function parseArgs(argv: string[]): Args {
     if (a === '--live') args.live = true
     else if (a === '--mock') args.live = false
     else if (a === '--deep') args.deep = true
-    else if (a === '--cross-verify') args.crossVerify = true
+    else if (a === '--grounded') {
+      // Grounded verification only exists downstream of a verifier panel, so
+      // asking for it turns the panel on rather than silently doing nothing.
+      args.grounded = true
+      args.crossVerify = true
+    } else if (a === '--cross-verify') args.crossVerify = true
     else if (a === '--tests') args.tests = true
     else if (a === '--matrix') {
       // The matrix needs every stage's data, so it turns the producing passes on.
@@ -192,13 +221,34 @@ function loadCase(name: string): LoadedCase {
 // The bridge is checked FIRST when BRIDGE_URL is set, because a user who
 // started a bridge meant to use it.
 //
-// BRIDGE LIMITATION, stated up front: `/v1/infer` runs the CLI with
-// `--tools ""` — every built-in tool disabled, by design, so the route cannot
-// touch the repo. Deep review (`--deep`) and grounded verification (#229) both
-// tell the model to VERIFY claims with tools and to DROP whatever it cannot
-// verify. Over the bridge those tools do not exist, so neither feature can be
-// honestly measured through it; use an API-key transport with the app's real
-// agentic harness for that.
+// TOOLS OVER THE BRIDGE (this used to say the opposite — see below).
+//
+// `/v1/infer` USED to run the CLI with `--tools ""` unconditionally, and this
+// comment used to record that as a permanent limitation: deep review (#82) and
+// grounded verification (#229) both tell the model to verify claims with repo
+// tools and to DROP what it cannot verify, so over a tool-less transport they
+// could only ever measure a crippled prompt. That was true, and the harness
+// said so rather than reporting a zero.
+//
+// Bridge 0.3.0 (#266) made it false. `InferRequest.agentic` runs the CLI WITH
+// its own read-only tools — `claude` narrowed to Read/Glob/Grep by name, `codex`
+// under its read-only sandbox — and reports back what they did in
+// `InferResponse.agentic`. So `--deep` and `--grounded` are now measurable here.
+//
+// TWO things guard the claim, because the failure mode is silent (#267):
+//
+//   - `agentic` is an ADDITIVE request field. A bridge older than 0.3.0 does
+//     NOT reject it; it ignores it and answers 200 with a perfectly good
+//     tool-less review. So the harness reads `capabilities.inferAgentic` from
+//     /v1/health first and REFUSES the run rather than mislabelling that answer.
+//   - The response's `agentic` report is present only when the run really was
+//     agentic. Every call is recorded and counted; a run with even one
+//     unhonoured request does not get to call itself grounded.
+//
+// See src/lib/eval/bridgeAgentic.ts for both, and src/lib/eval/goldenTree.ts for
+// why the bridge must be rooted at a materialized fixture tree rather than at
+// review123 itself — the fixtures are synthetic, and tools that find nothing
+// would refute real defects for reasons unrelated to grounding.
 // ---------------------------------------------------------------------------
 
 type CompleteArgs = { system: string; user: string; taskKey: string }
@@ -209,6 +259,17 @@ interface Transport {
   label: string
   /** The model/CLI identifier, recorded in the results JSON. */
   model: string
+  /**
+   * Whether this run may claim tool-grounded inference, decided from the live
+   * `capabilities.inferAgentic` BEFORE any inference is paid for.
+   */
+  gate: AgenticGate
+  /**
+   * Every `/v1/infer` call this run made, with what it asked for and what came
+   * back. Folded into the honesty read-out at the end; a request that was not
+   * honoured is what disqualifies the "grounded" label.
+   */
+  calls: AgenticCall[]
   complete: CompleteFn
   /**
    * Independent verifier transports for the cross-verification pass.
@@ -333,55 +394,173 @@ function readTokenFile(path: string | undefined): string | null {
   }
 }
 
-function makeBridgeComplete(cfg: BridgeConfig, cli: string): CompleteFn {
-  return async ({ system, user }) => {
-    const res = await fetch(`${cfg.url}/v1/infer`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.token}` },
-      body: JSON.stringify({ cli, system, prompt: user, timeoutMs: cfg.timeoutMs }),
+/**
+ * One bridge request, over `node:http` rather than `fetch`.
+ *
+ * NOT a style preference. An agentic call can legitimately take five minutes,
+ * and Node's `fetch` (undici) applies a 300 s `headersTimeout` by default — the
+ * bridge sends no headers until the CLI has finished, so a run right at the
+ * agentic budget races a transport default nobody configured. #266 already hit
+ * the same class of bug: a transport default silently pinned every call to 60 s
+ * at both ends. `http.request` has no response-side timeout of its own, so the
+ * only clock on this call is the one we set here, deliberately, from the
+ * per-call budget plus slack for the bridge to answer `504` itself.
+ */
+function bridgePost(
+  cfg: BridgeConfig,
+  path: string,
+  body: unknown | null,
+  budgetMs: number,
+): Promise<{ status: number; text: string }> {
+  const url = new URL(cfg.url + path)
+  const mod = url.protocol === 'https:' ? https : http
+  const payload = body === null ? null : Buffer.from(JSON.stringify(body))
+  return new Promise((resolve, reject) => {
+    const req = mod.request(
+      url,
+      {
+        method: payload ? 'POST' : 'GET',
+        headers: {
+          authorization: `Bearer ${cfg.token}`,
+          ...(payload ? { 'content-type': 'application/json', 'content-length': payload.length } : {}),
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c: Buffer) => chunks.push(c))
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8') }))
+        res.on('error', reject)
+      },
+    )
+    // Slack over the bridge's own budget: we want the bridge's honest `504
+    // timeout` answer, not a socket the harness cut first and cannot explain.
+    req.setTimeout(budgetMs + 30_000, () => {
+      req.destroy(new Error(`bridge call exceeded ${budgetMs + 30_000}ms with no response`))
     })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`bridge/${cli} HTTP ${res.status}: ${text.slice(0, 300)}`)
+    req.on('error', reject)
+    if (payload) req.write(payload)
+    req.end()
+  })
+}
+
+/**
+ * @param agentic Ask the bridge to run the CLI WITH its read-only tools. Only
+ *   ever true when `gateAgentic` cleared it against the live capability — a
+ *   pre-0.3.0 bridge would answer 200 to this and mean something else entirely.
+ * @param record Where to log what this call asked for and what came back, so
+ *   the run can be audited against the responses rather than the requests.
+ */
+function makeBridgeComplete(
+  cfg: BridgeConfig,
+  cli: string,
+  opts: { agentic: boolean; role: 'generator' | 'verifier'; record: AgenticCall[] },
+): CompleteFn {
+  const budget = inferTimeoutMs(cfg.timeoutMs, opts.agentic)
+  return async ({ system, user }) => {
+    const res = await bridgePost(
+      cfg,
+      '/v1/infer',
+      {
+        cli,
+        system,
+        prompt: user,
+        timeoutMs: budget,
+        // Absent (not `false`) when off, so the body is byte-identical to what
+        // every pre-agentic run sent — the tool-less arm stays a true control.
+        ...(opts.agentic ? { agentic: true } : {}),
+      },
+      budget,
+    )
+    if (res.status !== 200) {
+      throw new Error(`bridge/${cli} HTTP ${res.status}: ${res.text.slice(0, 300)}`)
     }
-    const data = (await res.json()) as { text?: string }
+    const data = JSON.parse(res.text) as { text?: string; agentic?: AgenticReport }
+    // Recorded for EVERY call, honoured or not: an agentic request that came
+    // back without a report is the silent downgrade, and it only shows up here.
+    opts.record.push({
+      role: opts.role,
+      cli,
+      requested: opts.agentic,
+      ...(data.agentic ? { report: data.agentic } : {}),
+    })
     return data.text ?? ''
   }
 }
 
-async function bridgeHealth(cfg: BridgeConfig): Promise<{ inference: string[] }> {
-  const res = await fetch(`${cfg.url}/v1/health`, {
-    headers: { authorization: `Bearer ${cfg.token}` },
-  })
-  if (!res.ok) throw new Error(`bridge health HTTP ${res.status} — is the bridge running at ${cfg.url}?`)
-  const data = (await res.json()) as { capabilities?: { inference?: string[] } }
-  return { inference: data.capabilities?.inference ?? [] }
+interface BridgeHealth {
+  inference: string[]
+  /** `capabilities.inferAgentic === true`. */
+  inferAgentic: boolean
+  /**
+   * The health document carried an `inferAgentic` key at all. A bridge older
+   * than 0.3.0 omits it, and "omitted" is a different diagnosis from "off" —
+   * the first is "upgrade the bridge", the second is not.
+   */
+  inferAgenticKnown: boolean
 }
 
-async function resolveTransport(): Promise<Transport> {
+async function bridgeHealth(cfg: BridgeConfig): Promise<BridgeHealth> {
+  const res = await bridgePost(cfg, '/v1/health', null, 30_000)
+  if (res.status !== 200) {
+    throw new Error(`bridge health HTTP ${res.status} — is the bridge running at ${cfg.url}?`)
+  }
+  const data = JSON.parse(res.text) as { capabilities?: { inference?: string[]; inferAgentic?: unknown } }
+  const raw = data.capabilities?.inferAgentic
+  return {
+    inference: data.capabilities?.inference ?? [],
+    inferAgentic: raw === true,
+    inferAgenticKnown: typeof raw === 'boolean',
+  }
+}
+
+async function resolveTransport(wants: { deep: boolean; grounded: boolean }): Promise<Transport> {
   const bridge = resolveBridge()
   if (bridge) {
-    const { inference } = await bridgeHealth(bridge)
-    if (!inference.includes(bridge.cli)) {
+    const health = await bridgeHealth(bridge)
+    if (!health.inference.includes(bridge.cli)) {
       throw new Error(
-        `The bridge does not offer the "${bridge.cli}" CLI (it has: ${inference.join(', ') || 'none'}). Set BRIDGE_CLI.`,
+        `The bridge does not offer the "${bridge.cli}" CLI (it has: ${health.inference.join(', ') || 'none'}). Set BRIDGE_CLI.`,
       )
     }
-    const verifierClis = bridge.verifierClis.filter((c) => inference.includes(c))
+    // THE GATE. Decided from the live capability before a single token is
+    // spent, because the failure it prevents is invisible afterwards: a
+    // pre-0.3.0 bridge answers an agentic request 200 with a tool-less review.
+    const gate = gateAgentic({
+      wants,
+      isBridge: true,
+      capable: health.inferAgentic,
+      capabilityKnown: health.inferAgenticKnown,
+    })
+    if (gate.refuse) throw new Error(`Refusing to run: ${gate.reason}`)
+
+    const calls: AgenticCall[] = []
+    const verifierClis = bridge.verifierClis.filter((c) => health.inference.includes(c))
+    const tag = gate.generator || gate.verifier ? `, agentic: ${[gate.generator ? 'gen' : null, gate.verifier ? 'verify' : null].filter(Boolean).join('+')}` : ''
     return {
-      label: `bridge (${bridge.cli}${verifierClis.length ? `, verifiers: ${verifierClis.join('+')}` : ''})`,
+      label: `bridge (${bridge.cli}${verifierClis.length ? `, verifiers: ${verifierClis.join('+')}` : ''}${tag})`,
       model: `bridge:${bridge.cli}`,
-      complete: makeBridgeComplete(bridge, bridge.cli),
-      verifiers: verifierClis.map((c) => ({ label: `bridge:${c}`, complete: makeBridgeComplete(bridge, c) })),
+      gate,
+      calls,
+      complete: makeBridgeComplete(bridge, bridge.cli, { agentic: gate.generator, role: 'generator', record: calls }),
+      verifiers: verifierClis.map((c) => ({
+        label: `bridge:${c}`,
+        complete: makeBridgeComplete(bridge, c, { agentic: gate.verifier, role: 'verifier', record: calls }),
+      })),
     }
   }
 
   const key = resolveKeyProvider()
   if (key) {
+    // An API key reaches a model but not the working tree, so a run that asked
+    // for tools is refused here rather than quietly measured without them.
+    const gate = gateAgentic({ wants, isBridge: false, capable: false, capabilityKnown: false })
+    if (gate.refuse) throw new Error(`Refusing to run: ${gate.reason}`)
     const complete = makeKeyComplete(key)
     return {
       label: `${key.label} ${key.model}`,
       model: key.model,
+      gate,
+      calls: [],
       complete,
       // One API provider = one verifier model. Verification cannot demote with
       // a single verifier (see Transport.verifiers), so this is reported, not
@@ -564,11 +743,28 @@ async function main(): Promise<void> {
     let transport: Transport
     let modeLabel: string
     if (args.live) {
-      transport = await resolveTransport()
-      modeLabel = `--live (${transport.label})${args.deep ? ' --deep' : ''}`
+      transport = await resolveTransport({ deep: args.deep, grounded: args.grounded })
+      modeLabel = `--live (${transport.label})${args.deep ? ' --deep' : ''}${args.grounded ? ' --grounded' : ''}`
     } else {
       modeLabel = '--mock (scripted stub — validates harness mechanics, NOT model quality)'
-      transport = { label: 'mock', model: 'mock', complete: async () => '{}', verifiers: [] }
+      if (args.deep || args.grounded) {
+        // --mock's stub has no tools and no repo. Letting the flags through
+        // would put "--deep" in a mode label over scripted JSON.
+        throw new Error('--deep / --grounded need a real agentic transport; they are meaningless under --mock.')
+      }
+      transport = {
+        label: 'mock',
+        model: 'mock',
+        gate: gateAgentic({
+          wants: { deep: false, grounded: false },
+          isBridge: false,
+          capable: false,
+          capabilityKnown: false,
+        }),
+        calls: [],
+        complete: async () => '{}',
+        verifiers: [],
+      }
     }
     if (args.fusion === 'generate') modeLabel += ' --fusion generate'
     else if (args.crossVerify) modeLabel += ' --cross-verify'
@@ -591,11 +787,13 @@ async function main(): Promise<void> {
           severity: f.severity ?? 'medium',
           body: f.description,
         }))
-        // Grounded verification (#229) is deliberately OFF: it instructs the
-        // verifier to look things up with repo tools, and no transport here
-        // exposes tools. Asking for grounding we cannot provide would produce
-        // a number about a feature that never ran.
-        const prompts = buildVerifyPrompt(verifiable)
+        // Grounded verification (#229). ON exactly when the verifier transport
+        // really has tools — `transport.gate.verifier` was decided from the
+        // live `capabilities.inferAgentic`, not from the flag alone. Asking for
+        // grounding the transport cannot provide would produce a number about a
+        // feature that never ran, which is why this follows the gate rather
+        // than `args.grounded`.
+        const prompts = transport.gate.verifier ? buildVerifyPrompt(verifiable, { grounded: true }) : buildVerifyPrompt(verifiable)
 
         const perVerifier = await Promise.all(
           transport.verifiers.map(async (v) => {
@@ -723,11 +921,16 @@ async function main(): Promise<void> {
           `    score >= polled/2 bar), so --cross-verify is a no-op for this run.`,
       )
     }
-    if (args.live && args.deep) {
-      console.log(
-        `\n  ! --deep asks the model to verify claims with repo tools. Confirm this transport\n` +
-          `    actually exposes tools; the local bridge does NOT (/v1/infer runs --tools "").`,
-      )
+    if (args.live) {
+      console.log(`\n  Grounding: ${transport.gate.reason}`)
+      if (transport.gate.generator || transport.gate.verifier) {
+        console.log(
+          `    The tools are scoped to the bridge's --root. If that root is not a tree containing\n` +
+            `    the fixtures' files, every lookup returns "not found" and grounded verification\n` +
+            `    will refute real defects for a reason unrelated to grounding. Materialize one with:\n` +
+            `      node eval/materialize-golden.mts`,
+        )
+      }
     }
     // Convergence merges ACROSS reviewer personas, so a set of single-persona
     // fixtures makes its comparison rows silently identical to their siblings.
@@ -918,6 +1121,25 @@ async function main(): Promise<void> {
       for (const variant of variants) console.log(`  ${pad(variant.key, 28)} ${variant.label}`)
     }
 
+    // --- Did the run actually get the tools it asked for? --------------------
+    // Printed from the RESPONSES, after the numbers, so a reader who has just
+    // seen a recall figure immediately learns whether it describes grounding.
+    const agenticObs = observeAgentic(transport.calls)
+    const agenticSaid = agenticVerdict(agenticObs)
+    if (args.live && (transport.gate.generator || transport.gate.verifier)) {
+      console.log(`\nAgentic report (from InferResponse.agentic, not from the request):`)
+      console.log(`  ${agenticSaid.line}`)
+      console.log(
+        `  generator: ${agenticObs.byRole.generator.honoured}/${agenticObs.byRole.generator.requested} honoured, ` +
+          `>=${agenticObs.byRole.generator.toolCallsAtLeast} tool calls · ` +
+          `verifier: ${agenticObs.byRole.verifier.honoured}/${agenticObs.byRole.verifier.requested} honoured, ` +
+          `>=${agenticObs.byRole.verifier.toolCallsAtLeast} tool calls`,
+      )
+      if (!agenticSaid.earned) {
+        console.log(`\n  ! This run must NOT be reported as grounded. See the line above for why.`)
+      }
+    }
+
     if (!args.live) {
       console.log('\nNote: --mock only proves the scoring/matching plumbing. Run --live to measure the model.')
     }
@@ -936,8 +1158,18 @@ async function main(): Promise<void> {
           model: transport.model,
           verifiers: transport.verifiers.map((v) => v.label),
           deep: args.deep,
+          grounded: args.grounded,
           testsPass: args.tests,
           crossVerify: args.crossVerify,
+          // What was ASKED for and what the bridge actually DID, kept apart on
+          // purpose so a later reader can re-derive the grounded label instead
+          // of taking this file's word for it.
+          agentic: {
+            gate: transport.gate,
+            observed: agenticObs,
+            verdict: agenticSaid,
+            calls: transport.calls,
+          },
           aggregate: agg,
           variantAggregates,
           gate,
