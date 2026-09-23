@@ -573,7 +573,8 @@
   }
 
   .optional-note {
-    font-weight: normal;
+    /* F18: `normal` IS 400 — one spelling, so the set stays countable. */
+    font-weight: 400;
     color: var(--text-muted);
     font-size: 0.85em;
   }

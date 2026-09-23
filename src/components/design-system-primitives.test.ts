@@ -245,3 +245,135 @@ describe('disabled-state opacity — one token, and the outlier is explicit', ()
     )
   })
 })
+
+/**
+ * F18 / this batch — the weight set.
+ *
+ * The audit found four weights (400, 500, 600, 700) on every surface it
+ * measured, and p.34 asks for two. Batch 2D deliberately FROZE this rather than
+ * sweeping it, because a blind collapse to 400/600 would have overturned Batch
+ * 2A's stated choice of 500 for the 12px secondary .field-label — the one place
+ * where weight goes UP because size and colour have both gone down.
+ *
+ * The decision this batch took, and what these tests encode:
+ *
+ *   400  body, and anything whose emphasis is already carried by another axis.
+ *   600  emphasis.
+ *   500  ONLY where BOTH --text-xs and --text-secondary are already in play.
+ *
+ * That last line is the point. 2A's reasoning was never "500 is nice on
+ * labels"; it was "two axes went down, so stroke has to pay some back". Written
+ * as a rule it stops BOTH failure modes at once: a future sweep cannot delete
+ * 2A's 500, and nobody can spread 500 to a site that has not earned it.
+ *
+ * SCOPE: app.css and src/components/settings/**, the fence this batch owned.
+ * Twenty-odd 500/700 declarations remain in step components and panels; the
+ * scaleBaseline ratchet holds those at their current count until a later slice
+ * takes them, and the rule above is the one it should apply.
+ */
+describe('F18 — two weights, plus one named exception', () => {
+  const stripCss = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, '')
+  const styleOf = (source: string) => source.match(/<style[^>]*>([\s\S]*?)<\/style>/)?.[1] ?? ''
+
+  /** Every `selector { body }` pair, at-rule wrappers skipped. */
+  const rulesOf = (css: string) =>
+    [...stripCss(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
+      selector: m[1].trim().replace(/\s+/g, ' '),
+      body: m[2],
+    }))
+
+  /** Every rule that declares a weight, with the value it declares. */
+  const weightRules = (css: string) =>
+    rulesOf(css).flatMap((rule) => {
+      const value = rule.body.match(/font-weight:\s*([^;]+)/)?.[1]?.trim()
+      return value ? [{ ...rule, value }] : []
+    })
+
+  const settingsSources = Object.entries(svelteSources).filter(([file]) =>
+    file.includes('/settings/'),
+  )
+
+  /** app.css plus every settings section, as (label, css) pairs. */
+  const fence = (): Array<[string, string]> => [
+    ['src/app.css', appCss],
+    ...settingsSources.map(([file, source]) => [file, styleOf(source)] as [string, string]),
+  ]
+
+  it('the glob really reaches the settings sections', () => {
+    // Without this, every assertion below passes vacuously the day the glob
+    // pattern changes — the failure mode the elevation allowlist was built to
+    // avoid, in a new place.
+    expect(settingsSources.length).toBeGreaterThanOrEqual(6)
+  })
+
+  it('app.css declares only 400, 500 and 600 — 700 is abolished', () => {
+    const values = weightRules(appCss).map((r) => r.value)
+    expect(values.length, 'app.css declares no weights at all?').toBeGreaterThan(0)
+    expect([...new Set(values)].sort()).toEqual(['400', '500', '600'])
+  })
+
+  it('no rule in the fence spells a weight `normal` or `bold`', () => {
+    // `normal` IS 400 and `bold` IS 700, so a second spelling is a weight the
+    // ratchet cannot count and a reader cannot compare. One spelling per value.
+    const offenders: string[] = []
+    for (const [file, css] of fence()) {
+      for (const rule of weightRules(css)) {
+        if (/^(normal|bold|bolder|lighter)$/.test(rule.value)) {
+          offenders.push(`${file} → ${rule.selector}: ${rule.value}`)
+        }
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('every 500 in the fence sits on text demoted in BOTH size and colour', () => {
+    // THE rule. A 500 is legitimate only where --text-xs and --text-secondary
+    // are both already doing their part — which is exactly Batch 2A's argument,
+    // made checkable so the next batch inherits it instead of re-litigating it.
+    const unearned: string[] = []
+    for (const [file, css] of fence()) {
+      for (const rule of weightRules(css)) {
+        if (rule.value !== '500') continue
+        const demotedSize = /font-size:\s*var\(--text-xs\)/.test(rule.body)
+        const demotedInk = /color:\s*var\(--text-secondary\)/.test(rule.body)
+        if (!demotedSize || !demotedInk) {
+          unearned.push(
+            `${file} → ${rule.selector} (size ${demotedSize ? 'ok' : 'NOT --text-xs'}, ` +
+              `ink ${demotedInk ? 'ok' : 'NOT --text-secondary'})`,
+          )
+        }
+      }
+    }
+    expect(unearned).toEqual([])
+  })
+
+  it('the exception is still actually taken, so the rule is not vacuous', () => {
+    // The mirror of the test above: if .field / .field-label ever lost their
+    // 500, "every 500 is earned" would pass with no 500s left and 2A's finding
+    // would evaporate silently. Same shape as the elevation allowlist's
+    // "an exemption cannot outlive its exception" guard.
+    for (const selector of ['\\.field', '\\.field-label']) {
+      const rule = appCss.match(new RegExp(`(^|\\n)${selector}\\s*\\{([^}]*)\\}`))?.[2] ?? ''
+      expect(rule, selector).toMatch(/font-weight:\s*500/)
+    }
+  })
+
+  it('a control is identified by its box, not by its stroke', () => {
+    // .btn and .chip both carried 500 at FULL --text ink: weight competing with
+    // a border, a fill, padding and a radius that had already done the work
+    // (p.44). Pinned at 400 so the demotion cannot quietly creep back.
+    for (const selector of ['\\.btn', '\\.chip']) {
+      const rule = appCss.match(new RegExp(`(^|\\n)${selector}\\s*\\{([^}]*)\\}`))?.[2] ?? ''
+      expect(rule, selector).toMatch(/font-weight:\s*400/)
+    }
+  })
+
+  it('no settings section declares 700', () => {
+    const offenders = settingsSources.flatMap(([file, source]) =>
+      weightRules(styleOf(source))
+        .filter((r) => r.value === '700')
+        .map((r) => `${file} → ${r.selector}`),
+    )
+    expect(offenders).toEqual([])
+  })
+})

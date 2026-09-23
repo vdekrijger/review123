@@ -285,9 +285,12 @@
     color: var(--text);
   }
 
+  /* F18. 400: the check is a GREEN glyph — a hue no other text on the page
+     carries, which is emphasis enough on its own (p.48-49 warns the other way
+     round: don't let a mark outrank the label beside it). */
   .chip-check {
     color: var(--ok, #1a7f37);
-    font-weight: 700;
+    font-weight: 400;
   }
 
   .chip-signout {

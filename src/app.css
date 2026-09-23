@@ -49,6 +49,41 @@
   --text-2xl:  1.5rem;
 
   /*
+   * ── THE WEIGHT SET (audit F18, rubric p.34; plan Batch 2D deferred it) ───
+   *
+   * There are no --weight-* tokens here, and that absence is the decision.
+   * A weight is not a scale: it is a choice between TWO values, and giving the
+   * choice a token name would only make a third one easy to add. It would also
+   * launder the ratchet, which skips `var()` values by design — spelling 500 as
+   * a token would zero the offScaleWeight column without changing one rendered
+   * pixel. So the set is stated here as a rule and enforced by the F18 block in
+   * src/components/design-system-primitives.test.ts.
+   *
+   *   400  body, and everything whose emphasis is already carried by another
+   *        axis — size, colour, position, a border, a fill, a shape.
+   *   600  emphasis: headings, the active nav item, a group label.
+   *
+   * Those are the two (p.34). There is exactly ONE standing exception:
+   *
+   *   500  ONLY for text that has been demoted on BOTH size AND colour —
+   *        `font-size: var(--text-xs)` together with `color: var(--text-secondary)`.
+   *
+   * That exception is Batch 2A's, and it is kept because its reasoning survives
+   * re-examination: at 11.25px in a secondary ink, size and colour have BOTH
+   * already gone down, and stroke is the only axis left holding the glyph
+   * together. Weight is not adding emphasis there — it is paying back some of
+   * what two other axes just took away. Everywhere else, 500 was weight
+   * competing with an axis that had already done the job (p.44), which is what
+   * this batch removed: `.btn` and `.chip` are identified by their box, not by
+   * their stroke, and both are at FULL --text ink, so 2A's thinness argument
+   * does not reach them.
+   *
+   * 700 is abolished. Every site that carried it had a stronger signal beside
+   * it — a hue, or uppercase-plus-tracking — and 700-against-600 is a fourth
+   * weight buying a difference no one can see at these sizes.
+   */
+
+  /*
    * ── THE SPACING SCALE (audit F7, rubric p.60-64; plan Batch 2D) ──────────
    *
    * Eight steps, and they are the rubric's reference scale (p.63:
@@ -649,7 +684,11 @@ h3 {
   color: var(--text);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
-  font-weight: 500;
+  /* F18. 400, not 500: a .btn is identified by its BOX — the --border-control
+     rim item 1 of Batch 2A raised to 3.5:1, the --surface-raised fill, the
+     padding and the radius. Its label sits at full --text ink, so nothing has
+     been taken away for stroke to pay back (p.44). */
+  font-weight: 400;
   cursor: pointer;
   transition: background 150ms ease, border-color 150ms ease;
   white-space: nowrap;
@@ -889,6 +928,9 @@ input[type='radio']:disabled {
   gap: var(--space-1);
   min-width: 0;
   font-size: var(--text-xs);
+  /* F18's ONE standing exception, and this is the rule that defines it:
+     --text-xs AND --text-secondary together. Both axes are already down, so
+     500 pays back stroke rather than adding emphasis. See :root's weight note. */
   font-weight: 500;
   line-height: 1.4;
   color: var(--text-secondary);
@@ -896,6 +938,7 @@ input[type='radio']:disabled {
 
 .field-label {
   font-size: var(--text-xs);
+  /* Same exception, the explicit-<span> spelling of it. */
   font-weight: 500;
   line-height: 1.4;
   color: var(--text-secondary);
@@ -966,7 +1009,10 @@ input[type='radio']:disabled {
   border-radius: 999px;
   font-family: var(--font-ui);
   font-size: var(--text-xs);
-  font-weight: 500;
+  /* F18. 400: the pill IS the emphasis — a 999px radius, a fill, and (in the
+     .legend-* modifiers) a status tint. The chip is at --text-xs but at full
+     --text ink, so it fails the one test the 500 exception has to pass. */
+  font-weight: 400;
   background: var(--surface-sunken);
   border: 1px solid transparent;
   white-space: nowrap;

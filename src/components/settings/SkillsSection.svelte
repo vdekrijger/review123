@@ -749,7 +749,12 @@
      own text, --text-secondary rather than --text-muted, which is where this
      section's hints live. */
   .mine-provider-label {
-    font-size: 0.8rem;
+    /* F18. The ONE standing 500 exception outside app.css, and it now actually
+       MEETS the rule it always claimed to: --text-xs together with
+       --text-secondary. It was 0.8rem (12px) — a step off the scale and a step
+       ABOVE --text-xs, so the comment above was true in spirit and false in
+       fact. Both axes are down; weight is what keeps the stroke legible. */
+    font-size: var(--text-xs);
     font-weight: 500;
     color: var(--text-secondary);
     flex-shrink: 0;

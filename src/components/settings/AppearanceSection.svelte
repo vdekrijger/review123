@@ -253,7 +253,8 @@
   }
 
   .immediate-note {
-    font-weight: normal;
+    /* F18: `normal` IS 400 — one spelling, so the set stays countable. */
+    font-weight: 400;
     color: var(--text-muted);
     font-size: 0.85em;
   }
@@ -373,7 +374,9 @@
     border-radius: 6px;
     cursor: pointer;
     font-size: 0.8em;
-    font-weight: 500;
+    /* F18. 400, with .btn — a bordered, padded, radiused control at --text-muted.
+       Its box identifies it; 500 was stroke competing with that (p.44). */
+    font-weight: 400;
     color: var(--text-muted);
     padding: 0.3rem 0.7rem;
   }

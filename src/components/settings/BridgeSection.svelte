@@ -313,7 +313,8 @@
   }
 
   .optional-note {
-    font-weight: normal;
+    /* F18: `normal` IS 400 — one spelling, so the set stays countable. */
+    font-weight: 400;
     color: var(--text-muted);
     font-size: 0.85em;
   }
@@ -421,7 +422,10 @@
     border-radius: 6px;
     cursor: pointer;
     font-size: 0.85em;
-    font-weight: 500;
+    /* F18. 400, with .btn — these are the same object as the global button
+       primitive and must not read heavier than it on the same page (2A's
+       lesson: the sibling that differs is the bug). */
+    font-weight: 400;
     padding: 0.35rem 0.85rem;
     background: var(--surface-raised);
     color: var(--text);
