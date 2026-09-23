@@ -196,7 +196,7 @@
     margin: 0.5rem 0;
     border: 1px solid var(--border-subtle);
     border-radius: 4px;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
   }
 
   .verdict-lower-confidence > summary {
@@ -211,7 +211,7 @@
     display: inline-block;
     padding: 0.1rem 0.4rem;
     border-radius: 4px;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     border: 1px solid var(--hairline);
     font-family: var(--font-mono);
     font-size: 0.75rem;
@@ -248,7 +248,7 @@
 
   .evidence-text :global(code) {
     font-size: 0.85em;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     padding: 0.1em 0.3em;
     border-radius: 3px;
   }

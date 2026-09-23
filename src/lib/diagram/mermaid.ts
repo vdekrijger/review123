@@ -37,7 +37,13 @@ const CLASS_DEFS: Record<'dark' | 'light', Record<NodeStatus, string>> = {
   light: {
     added:     'classDef added fill:#dcffe4,stroke:#2ea44f,color:#1a7f37',
     removed:   'classDef removed fill:#ffe5e5,stroke:#d73a49,color:#cb2431,stroke-dasharray: 5 5',
-    changed:   'classDef changed fill:#fff5cc,stroke:#d4a72c,color:#9a6700',
+    // #8f5f00, NOT #9a6700: this triple is a hand-copy of the light "changed"
+    // chip tokens, and Phase 1 moved --legend-changed-color to #8f5f00 because
+    // #9a6700 measured 4.45:1 on #fff5cc — just under the 4.5 floor (audit F16).
+    // Mermaid classDef cannot reference a CSS custom property, so the only way
+    // to keep the diagram and the chip in step is to re-state the value here.
+    // If --legend-changed-* ever moves again, move this with it.
+    changed:   'classDef changed fill:#fff5cc,stroke:#d4a72c,color:#8f5f00',
     unchanged: 'classDef unchanged fill:#f0f0f2,stroke:#bbb,color:#666',
     // Context (deep-diagram neighborhood): de-emphasized — muted light fill,
     // thin dashed border, low-contrast text so changed nodes stay the focus.

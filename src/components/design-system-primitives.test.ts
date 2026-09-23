@@ -83,3 +83,81 @@ describe('select primitive — themed dropdown', () => {
     expect(offenders).toEqual([])
   })
 })
+
+/**
+ * Elevation primitive — the scale is the only source of depth (audit F10).
+ *
+ * Before Batch 2B, elevation was a per-component improvisation: 16 non-focus
+ * box-shadow declarations with 9 hand-picked values, every alpha chosen against
+ * the dark ground. app.css now owns a five-step scale plus a drawer variant
+ * (see :root, and src/lib/theme/contrast.test.ts for the measurements). The
+ * point of a scale is that nobody hand-picks the tenth value, so this guard
+ * fails the moment a component writes a raw shadow of its own.
+ */
+describe('elevation primitive — one scale, no bespoke shadows', () => {
+  /**
+   * The two call sites still carrying a literal, each because it sits outside
+   * Batch 2B's fence and belongs to a batch that has not landed. Both are
+   * recorded in the "Batch 2B — as shipped" section of the refactor plan.
+   * DELETE an entry here as its batch converts it — never add one.
+   */
+  const DEFERRED_TO_A_LATER_BATCH = [
+    // './ContextRail.svelte' — converted by Batch 2C onto --elevation-drawer.
+    './settings/ModelCombobox.svelte', // Batch 2A owns this file
+  ]
+
+  it('no component hand-picks a raw black shadow', () => {
+    const offenders: string[] = []
+    for (const [file, source] of Object.entries(svelteSources)) {
+      if (DEFERRED_TO_A_LATER_BATCH.includes(file)) continue
+      const styleMatch = source.match(/<style[^>]*>([\s\S]*?)<\/style>/)
+      if (!styleMatch) continue
+      for (const m of styleMatch[1].matchAll(/box-shadow\s*:\s*([^;]+);/g)) {
+        // An rgba() of pure black is the F10 signature: a shadow ink picked by
+        // hand instead of taken from --shadow-tight/--shadow-soft/--shadow-faint.
+        if (/rgba\(\s*0\s*,\s*0\s*,\s*0\s*,/.test(m[1])) {
+          offenders.push(`${file} → box-shadow: ${m[1].trim()}`)
+        }
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('the deferred list names only files that really do still carry one', () => {
+    // Stops the allowlist from outliving the exception it documents.
+    for (const file of DEFERRED_TO_A_LATER_BATCH) {
+      const source = svelteSources[file]
+      expect(source, `${file} is listed as deferred but does not exist`).toBeTruthy()
+      expect(source, `${file} no longer needs its exemption — remove it`).toMatch(
+        /box-shadow\s*:[^;]*rgba\(\s*0\s*,\s*0\s*,\s*0\s*,/,
+      )
+    }
+  })
+
+  it('app.css gives the card and the modal a real elevation', () => {
+    const rule = (selector: string) =>
+      appCss.match(new RegExp(`(^|\\n)${selector}\\s*\\{([^}]*)\\}`))?.[2] ?? ''
+    // A modal with no shadow is the one case p.159-160 treats as
+    // non-negotiable, and dialog had none at all before Batch 2B.
+    expect(rule('dialog')).toMatch(/box-shadow:\s*var\(--elevation-5\)/)
+    expect(rule('\\.card')).toMatch(/box-shadow:\s*var\(--elevation-1\)/)
+    // Both drop the rim in LIGHT, where the shadow measures 1.58:1 against the
+    // page and beats the 1.33:1 border outright, and keep it in DARK, where a
+    // black shadow cannot exceed 1.08:1 at any alpha. The measurements behind
+    // that split are asserted in src/lib/theme/contrast.test.ts; this only
+    // pins that both primitives express it the same way and neither has
+    // quietly gone back to an unconditional border.
+    for (const selector of ['dialog', '\\.card']) {
+      expect(rule(selector), selector).toMatch(
+        /border:\s*1px solid light-dark\(\s*transparent\s*,\s*var\(--hairline\)\s*\)/,
+      )
+    }
+  })
+
+  it('a chip takes no elevation — it is a label, not an object (p.158)', () => {
+    const chip = appCss.match(/(^|\n)\.chip\s*\{([^}]*)\}/)?.[2] ?? ''
+    expect(chip).toMatch(/box-shadow:\s*none/)
+    // …and carries the flat depth cue instead: an un-set chip recedes.
+    expect(chip).toMatch(/background:\s*var\(--surface-sunken\)/)
+  })
+})

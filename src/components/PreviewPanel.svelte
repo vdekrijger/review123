@@ -157,7 +157,7 @@
   @media (max-width: 1099px) {
     .preview-panel {
       width: min(92vw, 480px);
-      box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+      box-shadow: var(--elevation-drawer);
     }
   }
 
@@ -215,7 +215,7 @@
     color: var(--text-muted);
     padding: 0.4rem 0.75rem;
     border-bottom: 1px solid var(--hairline);
-    background: var(--surface-raised, #141a28);
+    background: var(--surface-sunken, #141a28);
   }
 
   .preview-fallback a {

@@ -4,18 +4,25 @@ Companion to [`ui-audit.md`](./ui-audit.md) (the findings, `F1`-`F18`) and
 [`refactoring-ui-principles.md`](./refactoring-ui-principles.md) (the rubric and
 its page refs).
 
-**Status: Phase 1 shipped. Phase 2 in progress — Batch 2C shipped. Phase 3 is
-still a proposal.**
+**Status: Phase 1 shipped. Phase 2 in progress — Batches 2B and 2C shipped.
+Batches 2A, 2D and Phase 3 are still proposals.**
 
 Phase 1 landed as one PR — see [Phase 1 — as shipped](#p1-shipped) for what
 changed against what this document proposed, and for the measurements taken from
-the built app rather than from the token values. Batch 2C followed — see
-[Batch 2C — as shipped](#b2c-shipped). The screenshots in [`./shots/`](./shots/)
-are the **after** state of the most recent batch to touch each surface; the
-pre-Phase-1 state is in git history at commit `38b9e9a`, and the pre-Batch-2C
-state of the settings page and the Inspect step at commit `038e6d4`.
+the built app rather than from the token values. Batch 2B likewise records what
+it actually decided in [Batch 2B — as shipped](#b2b-shipped); later batches
+should inherit its [border rule](#b2b-border) rather than re-litigate it. Batch
+2C follows in [Batch 2C — as shipped](#b2c-shipped), which also corrects one of
+the audit's own measurements ([F8](./ui-audit.md#f8)).
 
-Every token value in Phases 2 and 3 remains *proposed and measured*, not applied.
+The screenshots in [`./shots/`](./shots/) are the **after** state of the most
+recent batch to touch each surface. The pre-Phase-1 before state is in git
+history at commit `38b9e9a`; at commit `038e6d4`, the pre-Batch-2B state of
+`step1-understand-*.png` and the pre-Batch-2C state of the settings page and the
+Inspect step.
+
+Every token value in the unshipped batches remains *proposed and measured*, not
+applied.
 
 ---
 
@@ -450,6 +457,189 @@ language, which is what makes it reviewable.
 4. Apply the flat-depth rule now that `--surface-sunken` is named correctly
    ([P1-5](#p1-5)): forward elements lighter than their ground, receded ones darker.
 
+<a id="b2b-shipped"></a>
+
+### Batch 2B — as shipped
+
+All four items shipped. **One thing differs from what this document proposed,
+and it is a correction, not a shortcut:** item 3 says to drop the panels'
+borders, and that turned out to be right in light and wrong in dark. The
+measurement is below.
+
+#### The elevation scale as shipped
+
+Five steps plus one drawer variant, in `src/app.css :root`. Each step is two
+shadows (p.163-165): a large soft one for the direct light, plus a tighter
+darker one for the ambient occlusion, which **fades from `--shadow-tight` to
+`--shadow-faint` from step 3 up** (p.165-166). The soft part's geometry is the
+rubric's reference ramp verbatim (p.161).
+
+```css
+--shadow-tight: light-dark(rgba(31,35,40,.14), rgba(0,0,0,.32));
+--shadow-soft:  light-dark(rgba(31,35,40,.10), rgba(0,0,0,.22));
+--shadow-faint: light-dark(rgba(31,35,40,.06), rgba(0,0,0,.14));
+
+--elevation-1: 0 1px 1px var(--shadow-tight), 0 1px 3px   var(--shadow-soft);
+--elevation-2: 0 1px 2px var(--shadow-tight), 0 4px 6px   var(--shadow-soft);
+--elevation-3: 0 1px 3px var(--shadow-faint), 0 5px 15px  var(--shadow-soft);
+--elevation-4: 0 2px 4px var(--shadow-faint), 0 10px 24px var(--shadow-soft);
+--elevation-5: 0 2px 6px var(--shadow-faint), 0 15px 35px var(--shadow-soft);
+--elevation-drawer: -2px 0 6px var(--shadow-faint), -10px 0 24px var(--shadow-soft);
+```
+
+| step | purpose (p.158-161) | consumers |
+|---|---|---|
+| 1 | rests on the page | `.card`, `.detail-panel[open]` |
+| 2 | the primary card on a page | `.glance-card` |
+| 3 | menus, tooltips, small popovers | CommentEditor emoji picker, CommentThread menu, VerifyVotesTooltip, InspectStep findings popover |
+| 4 | dropdowns and large popovers | SymbolPopover, VerdictStep review-command dropdown |
+| 5 | modals | `dialog` — which had **no shadow at all** |
+| drawer | edge-anchored overlays, casting sideways | InspectStep file-tree drawer, PreviewPanel overlay drawer |
+
+**Why the alphas are theme-dependent.** A shadow's weight is the luminance drop
+it makes in *its own* ground, and all nine replaced values were picked against
+`#14161a`. Re-measured on each page ground:
+
+| declaration | on `--bg` light | on `--bg` dark |
+|---|---|---|
+| `rgba(0,0,0,.18)` | 1.52 | 1.03 |
+| `rgba(0,0,0,.25)` | 1.83 | 1.05 |
+| `rgba(0,0,0,.40)` | **2.83** | **1.07** |
+
+The same declaration lands **2.8× heavier in light**, which is what made the
+light page read as sooty. Light now uses a low-alpha warm near-black (the
+`--text` ink, so the mark stays in the palette's family on `#faf8f4`); dark
+keeps pure black inside the 0.18–0.40 envelope it already had, so no dark
+surface gains or loses a shadow it did not have.
+
+<a id="b2b-border"></a>
+
+#### The correction: dark keeps its rim
+
+Item 3 assumed a shadow can stand in for a border. Measured in the built app:
+
+| mechanism | light | dark |
+|---|---|---|
+| `--hairline` as a 1px rim | 1.33 | 1.31 |
+| `--surface` against `--bg` (the background shift) | 1.06 | 1.08 |
+| the `--elevation-1` shadow | **1.58** | **1.08** |
+
+In light the shadow beats the border outright — stronger *and* softer — so the
+border is redundant and goes. In dark it does not, and **no alpha rescues it**:
+black on `#14161a` tops out at 1.07:1 even at 0.40, because a near-black ground
+has nothing left to cast into. That is very likely *why* the nine replaced
+values kept climbing toward 0.40 without ever separating anything.
+
+Dropping the border in both themes would have traded a 1.31:1 rim for a 1.08:1
+shadow in dark — a regression dressed as a principle. So the rim is
+theme-dependent, in one declaration:
+
+```css
+border: 1px solid light-dark(transparent, var(--hairline));
+```
+
+on `.card`, `dialog`, `.glance-card` and `.detail-panel[open]`. The nested
+`light-dark()` was verified in a real browser before use; it keeps the dark side
+pointing at `--hairline` rather than duplicating `#2e333b`.
+
+**Later batches should inherit this rule, not re-litigate it:** in light, prefer
+depth over a line; in dark, keep the line and let depth support it.
+
+#### The ten `<details>` panels
+
+Ranked by **open vs closed** — the one axis that always means something and that
+survives the reader reordering the list in settings (`panels/sectionRegistry.ts`
+makes the order a user preference, so any rank keyed to a specific section's
+identity would be wrong for some readers).
+
+- **closed** — chrome. No box: a summary row on the page ground, with a
+  `--surface-sunken` hover so it still reads as a control. Ten of them read as a
+  list of ten things to choose from rather than ten panels competing.
+- **open** — content. Comes forward onto `--surface` with `--elevation-1`.
+- above them, `.glance-card` takes `--elevation-2`, so the page reads in **three
+  depths instead of one** — which is the [F9](./ui-audit.md#f9) complaint for
+  step 1, answered.
+
+A closed panel keeps a *transparent* 1px rim so opening one does not shift the
+layout; the re-captured shot is the same 1440×1105 as the before-state, which
+makes the comparison purely visual.
+
+#### Verification that shipped with it
+
+- **`src/lib/theme/contrast.test.ts` — 64 → 80 assertions.** The scale is
+  exactly five steps plus the drawer; every step is two-part and takes its
+  colour only from a `--shadow-*` ink; the tight part fades from step 3; the
+  soft geometry equals p.161's ramp verbatim; the drawer casts sideways; the
+  inks are ordered in both themes; the light ramp sits in a
+  visible-but-not-sooty band; the dark ramp stays in its old envelope; light's
+  shadow beats its border while in dark every alpha 0.2–0.6 loses to the rim;
+  and the flat-depth rule holds. Mutation-checked: pasting `rgba(0,0,0,.40)`
+  into the light ramp fails the band assertion, and reducing a step to one part
+  fails three.
+- **`src/components/design-system-primitives.test.ts` — 4 new static guards.**
+  No component may hand-pick a raw black `box-shadow`; the two still doing so
+  are allowlisted *by name with the batch that owns them*, and a second test
+  fails if an allowlisted file no longer needs its exemption, so the list cannot
+  outlive the exception.
+
+#### Measured, reported, left alone
+
+- **In dark, `--surface-sunken` (`#22262d`) is lighter than `--surface`
+  (`#1b1e24`)** — the opposite sign to light, where it is darker. That is the
+  universal dark-UI convention (there is no "less light" below a dark ground),
+  not a defect, and the batch's brief forbids changing a settled palette value.
+  It is now pinned by a test that says so rather than left as folklore. Anything
+  wanting the literal p.167-168 direction in *both* themes needs a separate
+  `--surface-well` value for dark — a token decision, not a component one.
+
+#### Deferred out of Batch 2B
+
+- **Two bespoke shadows remain**, each outside this batch's fence:
+  `ContextRail.svelte:313` (Batch 2C owns the file) and
+  `settings/ModelCombobox.svelte:440` (Batch 2A). Both map to
+  `--elevation-drawer` and `--elevation-4` respectively; converting them is a
+  one-line change each. They are allowlisted by name in the static guard, which
+  fails once the literal is gone, so the exemption cannot be forgotten.
+  > **Since resolved, half of it.** Batch 2C landed after this and took
+  > `ContextRail.svelte` — see [its record](#b2c-shipped). One entry is left in
+  > `DEFERRED_TO_A_LATER_BATCH`: `settings/ModelCombobox.svelte`, Batch 2A's.
+  > The guard worked exactly as designed: removing the literal made the
+  > "names only files that really do still carry one" test fail until the
+  > allowlist entry went with it.
+- **`--surface-raised` still has ~30 call sites** outside this batch's files
+  (settings/\*, FileDiff, InspectStep, VerdictStep, Landing, Review, …). Batch 2B
+  swept the 32 in its own fence to `--surface-sunken`; the alias resolves to the
+  same value, so that was zero visual change. **Whether a given well should
+  instead come *forward* onto `--surface` is a per-site question**, and this
+  batch deliberately did not answer it blind for sites it could not see in
+  context — `SkillFindingCard`'s `severity-low` is the clearest example: it is a
+  neutral member of a status-tint family, so moving it to `--surface` would
+  break that family's logic, not fix it.
+- **`Landing.svelte`'s `.discard-confirm`** still hardcodes `#0a1410` and still
+  needs an `--on-danger` (inherited from Phase 1; Landing is not a Batch 2B
+  file).
+
+#### Closed here, from Phase 1's deferred list
+
+- **`src/lib/diagram/mermaid.ts`** — the light `changed` `classDef` re-states
+  `--legend-changed-color` as `#8f5f00` (was `#9a6700`, 4.45:1, under the
+  floor), with a comment tying the two together. Mermaid `classDef` cannot read
+  a custom property, so re-stating is the only option.
+- **`SymbolTestPairing.svelte`** — the component-scope [F17](./ui-audit.md#f17)
+  copy, and Phase 1's note that "both paths are present and correct" was
+  **wrong**. The `@media (prefers-color-scheme: light)` copy was missing
+  **thirteen selectors** the explicit `[data-theme='light']` copy had
+  (`.hljs-meta .hljs-keyword`, `.hljs-template-tag`, `.hljs-template-variable`,
+  `.hljs-title.class_`, `.hljs-attribute`, `.hljs-meta`, `.hljs-operator`,
+  `.hljs-variable`, `.hljs-selector-attr`, `.hljs-selector-class`,
+  `.hljs-meta .hljs-string`, `.hljs-code`, `.hljs-formula`, `.hljs-quote`), so a
+  reader on `auto` with an OS set to light saw those tokens still painted in the
+  **dark** palette — salmon `#ff7b72` keywords on a white snippet. Three blocks
+  collapsed to one `light-dark()` declaration per colour, which makes the
+  divergence unrepresentable rather than merely fixed. This is the concrete
+  evidence that the remaining copy in `SymbolPopover.svelte` (Phase 3) is worth
+  treating as a live bug, not tidying.
+
 ### Batch 2C — nav, settings and page structure
 
 **Files:** `src/routes/SettingsPage.svelte`, `src/components/Stepper.svelte`,
@@ -635,11 +825,18 @@ demoted toggles 7.59:1 off and 13.07:1 on in light, 8.45 / 12.03:1 in dark.
 
 - **Widening the settings column** — see [item 4](#b2c-item4). The follow-up, if
   any, is a two-column control grid owned by Batches 2A/2B, not a wider page.
-- **`Stepper.svelte` and `ContextRail.svelte`** were listed in this batch's files
-  and were **not changed**. The stepper is Tier 1 and is already the most
-  prominent chrome row on the Inspect step; the context rail is collapsed to a
-  27px off-canvas tab and is not one of the seven rows. Neither needed a change
-  for items 1-5, and neither got one for its own sake.
+- **`Stepper.svelte`** was listed in this batch's files and was **not changed**.
+  It is Tier 1 and already the most prominent chrome row on the Inspect step; it
+  needed no change for items 1-5 and did not get one for its own sake.
+- **`ContextRail.svelte`** needed nothing for items 1-5 either — collapsed to a
+  27px off-canvas tab, it is not one of the seven rows. It did get **one** line:
+  Batch 2B deferred its hand-picked `-4px 0 16px rgba(0,0,0,.4)` here because
+  the `--elevation-*` tokens did not exist yet. They do now, so this batch took
+  it. That literal was the [F10](./ui-audit.md#f10) signature *and* a measured
+  theme bug — `rgba(0,0,0,.4)` is 2.83:1 on the light ground against 1.07:1 on
+  the dark, so the single declaration landed 2.6× heavier in the theme the owner
+  reads in. It is an edge-anchored overlay casting sideways, which is precisely
+  what `--elevation-drawer` is for.
 - **The inactive `.mode-btn`** reads 5.08:1 at `--text-muted`, matching the three
   pill switches it now stands beside exactly. That is consistency, not a
   measurement: if the pill language is ever re-toned, all four move together.

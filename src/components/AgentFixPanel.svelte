@@ -455,7 +455,7 @@
   .agent-fix {
     border: 1px solid var(--border-subtle);
     border-radius: 8px;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     padding: 0.75rem 0.9rem;
     margin: 0.75rem 0;
     font-size: 0.85rem;
@@ -564,7 +564,7 @@
   }
 
   .afx-sev-low {
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     color: var(--text-muted);
     border: 1px solid var(--border-subtle);
   }
@@ -702,7 +702,7 @@
     padding: 0.05rem 0.4rem;
     border-radius: 999px;
     border: 1px solid var(--border-subtle);
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     color: var(--text-muted);
     white-space: nowrap;
   }
@@ -739,7 +739,7 @@
     overflow: auto;
     font-size: 0.72rem;
     line-height: 1.35;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     border: 1px solid var(--border-subtle);
     border-radius: 4px;
     white-space: pre;
@@ -765,7 +765,7 @@
     padding: 0.2rem 0.6rem;
     border-radius: 5px;
     border: 1px solid var(--border-subtle);
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     cursor: pointer;
   }
 
@@ -799,7 +799,7 @@
   .afx-cherry code {
     font-size: 0.75rem;
     padding: 0.2rem 0.4rem;
-    background: var(--surface-raised);
+    background: var(--surface-sunken);
     border: 1px solid var(--border-subtle);
     border-radius: 4px;
     overflow-x: auto;

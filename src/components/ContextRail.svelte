@@ -310,7 +310,12 @@
     .context-rail:not(.collapsed) {
       width: 300px;
       z-index: 300; /* above topbar (z-index: 200) */
-      box-shadow: -4px 0 16px rgba(0, 0, 0, 0.4);
+      /* Edge-anchored overlay: it casts SIDEWAYS, which is the one thing
+         --elevation-drawer exists for (Batch 2B). Was a hand-picked
+         `-4px 0 16px rgba(0,0,0,0.4)` — the F10 signature, and 0.4 black is
+         2.83:1 on the light ground against 1.07:1 on the dark one, so the one
+         literal landed 2.6x heavier in the theme the owner actually reads in. */
+      box-shadow: var(--elevation-drawer);
     }
   }
 

@@ -381,3 +381,202 @@ describe('F4 — --recede-opacity keeps receded code legible on every diff groun
     expect(contrast(lightComment, DIFF_GROUNDS.light.context, 0.7)).toBeLessThan(3.0)
   })
 })
+
+/**
+ * F10 / Batch 2B — the elevation scale.
+ *
+ * The audit's finding was not "the shadows are wrong", it was "there is no
+ * scale": 16 non-focus box-shadow declarations carrying 9 hand-picked values,
+ * every alpha chosen against the dark ground. These assertions pin the two
+ * things that can silently rot — the shape of the scale, and the fact that its
+ * light ramp is genuinely light-appropriate rather than dark values re-used.
+ */
+describe('F10 — the elevation scale', () => {
+  const root = Object.fromEntries(declarations(rootBlock(appCss)))
+  const STEPS = ['--elevation-1', '--elevation-2', '--elevation-3', '--elevation-4', '--elevation-5'] as const
+  const INKS = ['--shadow-tight', '--shadow-soft', '--shadow-faint'] as const
+
+  it('is a fixed scale of five steps plus one drawer variant (p.160-161)', () => {
+    for (const step of [...STEPS, '--elevation-drawer']) {
+      expect(root[step], `${step} is missing`).toBeTruthy()
+    }
+    // Nobody has quietly added a sixth step instead of reusing one.
+    const declared = Object.keys(root).filter((n) => n.startsWith('--elevation-'))
+    expect(declared.sort()).toEqual([...STEPS, '--elevation-drawer'].sort())
+  })
+
+  it('every step is a TWO-part shadow built only from the scale inks (p.163-165)', () => {
+    for (const step of [...STEPS, '--elevation-drawer']) {
+      const parts = splitArgs(root[step])
+      expect(parts, `${step} must be two shadows, not one`).toHaveLength(2)
+      for (const part of parts) {
+        const ref = part.match(/var\((--shadow-[\w-]+)\)/)
+        expect(ref, `${step}: "${part}" must take its colour from a scale ink`).toBeTruthy()
+        expect(INKS as readonly string[]).toContain(ref![1])
+      }
+    }
+  })
+
+  it('the tight ambient part fades out as the element rises (p.165-166)', () => {
+    // Steps 1-2 sit close to the page and keep the firm ambient part; 3-5 are
+    // far enough off it that the contact shadow has to fade.
+    const tightPartOf = (step: string) => splitArgs(root[step])[0]
+    expect(tightPartOf('--elevation-1')).toContain('var(--shadow-tight)')
+    expect(tightPartOf('--elevation-2')).toContain('var(--shadow-tight)')
+    for (const step of ['--elevation-3', '--elevation-4', '--elevation-5']) {
+      expect(tightPartOf(step), step).toContain('var(--shadow-faint)')
+    }
+  })
+
+  it("the soft part follows the rubric's reference ramp verbatim (p.161)", () => {
+    const softGeometry = (step: string) =>
+      splitArgs(root[step])[1].replace(/\s*var\(--shadow-[\w-]+\)\s*/, '').trim()
+    expect(STEPS.map(softGeometry)).toEqual([
+      '0 1px 3px',
+      '0 4px 6px',
+      '0 5px 15px',
+      '0 10px 24px',
+      '0 15px 35px',
+    ])
+  })
+
+  it('a drawer casts SIDEWAYS, not down — it is anchored to a screen edge', () => {
+    for (const part of splitArgs(LIGHT['--elevation-drawer'] ?? root['--elevation-drawer'])) {
+      const [x, y] = part.trim().split(/\s+/)
+      expect(parseFloat(x), `x offset of "${part}"`).toBeLessThan(0)
+      expect(parseFloat(y), `y offset of "${part}"`).toBe(0)
+    }
+  })
+
+  it('the ramp is ordered: tight is firmer than soft, soft firmer than faint', () => {
+    for (const [themeName, tokens] of Object.entries(THEMES)) {
+      const weight = (ink: string) => contrast(tokens[ink], tokens['--bg'])
+      expect(weight('--shadow-tight'), `${themeName} tight vs soft`).toBeGreaterThan(weight('--shadow-soft'))
+      expect(weight('--shadow-soft'), `${themeName} soft vs faint`).toBeGreaterThan(weight('--shadow-faint'))
+    }
+  })
+
+  /**
+   * THE reason the alphas are theme-dependent. A shadow's weight is the
+   * luminance drop it makes in ITS OWN ground, and the nine values Batch 2B
+   * replaced were all picked against #14161a. Re-measured on each page ground,
+   * the same declaration is nearly three times heavier in light — which is what
+   * made the light page read as sooty. This is the mutation guard: paste a dark
+   * alpha into the light ramp and this turns red.
+   */
+  it('proves the old dark-chosen alphas were wrong for light', () => {
+    const asDarkChose = 'rgba(0,0,0,.40)' // the heaviest of the nine it replaced
+    const inLight = contrast(asDarkChose, LIGHT['--bg'])
+    const inDark = contrast(asDarkChose, DARK['--bg'])
+    expect(round2(inLight)).toBeGreaterThan(2.5) // sooty
+    expect(round2(inDark)).toBeLessThan(1.1) // barely there
+    expect(inLight / inDark).toBeGreaterThan(2.5)
+  })
+
+  it('the light ramp lands in the visible-but-not-sooty band on its own ground', () => {
+    // Floor: a shadow nobody can see is not separation (p.207). Ceiling: well
+    // below the 2.83:1 mark the old 0.40 black left on this same ground.
+    const tight = contrast(LIGHT['--shadow-tight'], LIGHT['--bg'])
+    expect(round2(tight), `measured ${round2(tight)}`).toBeGreaterThan(1.15)
+    expect(round2(tight), `measured ${round2(tight)}`).toBeLessThan(1.6)
+  })
+
+  it('the dark ramp stays inside the 0.18-0.40 envelope it already had', () => {
+    // No dark surface gains or loses a shadow it did not have: the whole dark
+    // ramp sits between the lightest and heaviest values Batch 2B replaced.
+    const floor = contrast('rgba(0,0,0,.18)', DARK['--bg'])
+    const ceiling = contrast('rgba(0,0,0,.40)', DARK['--bg'])
+    for (const ink of INKS) {
+      const r = contrast(DARK[ink], DARK['--bg'])
+      expect(r, `${ink} measured ${round2(r)}`).toBeLessThanOrEqual(ceiling)
+    }
+    expect(contrast(DARK['--shadow-tight'], DARK['--bg'])).toBeGreaterThan(floor * 0.9)
+  })
+
+  /**
+   * THE reason .card, dialog, .glance-card and .detail-panel[open] drop their
+   * border in light and KEEP it in dark.
+   *
+   * p.206-209 says separate with space, a background shift or a shadow before
+   * reaching for another border. Measured against this app's real grounds, that
+   * holds in light and fails in dark — and the failure is physical, not a
+   * tuning problem: a black shadow has nowhere to cast on a near-black ground,
+   * so it tops out around 1.07:1 even at the heaviest alpha the app ever used.
+   * That is very likely WHY the nine replaced values kept climbing toward 0.40
+   * without ever separating anything.
+   *
+   * Shipping "drop the border" in both themes would therefore have traded a
+   * 1.31:1 rim for a 1.08:1 shadow in dark — a regression dressed as a
+   * principle. These two assertions are what make that trade-off visible to
+   * whoever edits the scale next.
+   */
+  it('light: the shadow BEATS the border it replaces, so the border goes', () => {
+    const border = contrast(LIGHT['--hairline'], LIGHT['--bg'])
+    const shadowCore = contrast(LIGHT['--shadow-tight'], LIGHT['--bg'])
+    expect(round2(border), `hairline measured ${round2(border)}`).toBeLessThan(1.4)
+    expect(shadowCore, `shadow ${round2(shadowCore)} vs border ${round2(border)}`)
+      .toBeGreaterThan(border * 0.95)
+  })
+
+  it('dark: NO alpha lets a shadow beat the border, so the border stays', () => {
+    const border = contrast(DARK['--hairline'], DARK['--surface'])
+    // Not just our alphas — the whole usable range, including the heaviest
+    // value the app ever shipped. Every one of them loses to the rim.
+    for (const alpha of [0.2, 0.3, 0.4, 0.5, 0.6]) {
+      const r = contrast(`rgba(0,0,0,${alpha})`, DARK['--bg'])
+      expect(r, `black @${alpha} measured ${round2(r)}`).toBeLessThan(border)
+    }
+  })
+})
+
+/**
+ * P1-5 / Batch 2B — the flat-design depth cue (p.167-168, rubric quick-scan 11).
+ *
+ * "Make an element lighter than its background to bring it forward, darker to
+ * push it back." The audit's complaint was that --surface-raised was DARKER
+ * than both grounds while being used for raised things — the name and the
+ * optics disagreed. Phase 1 renamed it --surface-sunken; these assertions are
+ * what stop a later batch from re-introducing the contradiction.
+ */
+describe('P1-5 — forward surfaces are lighter than their ground, wells darker', () => {
+  const lum = (token: string) => relativeLuminance(composite(token, [255, 255, 255]))
+
+  it('light: --surface comes FORWARD off --bg', () => {
+    expect(lum(LIGHT['--surface'])).toBeGreaterThan(lum(LIGHT['--bg']))
+  })
+
+  it('light: --surface-sunken RECEDES behind --bg, as its name says', () => {
+    expect(lum(LIGHT['--surface-sunken'])).toBeLessThan(lum(LIGHT['--bg']))
+  })
+
+  it('dark: --surface still comes FORWARD off --bg', () => {
+    expect(lum(DARK['--surface'])).toBeGreaterThan(lum(DARK['--bg']))
+  })
+
+  /**
+   * MEASURED AND LEFT ALONE, deliberately.
+   *
+   * In dark, --surface-sunken (#22262d) is LIGHTER than --surface (#1b1e24) and
+   * lighter than --bg — the opposite of the direction it takes in light. That is
+   * not an oversight: on a dark ground, "add light to raise, remove light to
+   * recede" has nowhere to go downward, so every dark UI (this one included)
+   * signals depth by ADDING light in both directions and lets proximity and
+   * shadow carry the sign. The token's job is "the second surface", and both
+   * themes deliver that; only the arithmetic sign differs.
+   *
+   * Batch 2B's brief forbids changing a settled palette value, so this is
+   * recorded as a measurement rather than repaired. Anything that wants the
+   * literal p.167-168 direction in BOTH themes needs a separate --surface-well
+   * value for dark, which is a token decision, not a component one.
+   */
+  it('dark: the well is lighter than the card — recorded, not repaired', () => {
+    expect(lum(DARK['--surface-sunken'])).toBeGreaterThan(lum(DARK['--surface']))
+    expect(lum(DARK['--surface-sunken'])).toBeGreaterThan(lum(DARK['--bg']))
+  })
+
+  it('--surface-raised is still only a deprecated alias, never a third value', () => {
+    for (const [themeName, tokens] of Object.entries(THEMES)) {
+      expect(tokens['--surface-raised'], themeName).toBe(tokens['--surface-sunken'])
+    }
+  })
+})
