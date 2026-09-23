@@ -1383,8 +1383,10 @@ the patch only where it does not.
 ### Phase 3 — as shipped
 
 Items 1, 2, 3 and 5 shipped. **Item 4 (side-by-side density) is deliberately not
-in this PR** — see the bottom of this section. One PR, five commits along the
-item seams.
+in this PR** — see the bottom of this section. One PR, seven commits along the
+item seams, plus a merge of [Batch 2D's first slice](#b2d-shipped), which landed
+on `main` while this was in flight and needed three hand-resolved conflicts
+(recorded in that merge commit).
 
 **The risk note was over-cautious, and that is the headline.** The patch was not
 touched at all. `@git-diff-view` resolves every one of its grounds through a
@@ -1611,9 +1613,23 @@ looked like a product bug.
   and this PR is already a palette change across four files. Splitting it keeps
   both reviewable. It is also the one Phase 3 item with no contrast component,
   so nothing else was waiting on it.
-- **Batch 2D's ratchet baseline is unchanged by this PR.** The diff viewer's
-  `em` font-sizes and off-scale spacing are exactly as 2D measured them: no
-  length or font-size declaration was added or removed. 2D's counts still hold.
+- **Batch 2D's ratchet baseline is unchanged by this PR**, and it is worth
+  recording what the ratchet actually sees here, because the brief for Phase 3
+  assumed otherwise. `FileDiff.svelte` is `emFont: 0` — the diff viewer's `em`
+  font-sizes are all in the **vendored** stylesheet and components
+  (`text-[1.2em]` and friends), which are outside `src/` and therefore outside
+  the ratchet's scope by design. What is on the ratchet is
+  `FileDiff.svelte`'s `offScaleFont: 18` / `offScaleSpace: 53`,
+  `SymbolPopover.svelte`'s `19 / 35` and `SymbolTestPairing.svelte`'s `11 / 23`,
+  and Phase 3 moved none of them: it added and removed only `color`
+  declarations, one `transition` property name, and one custom-property
+  declaration. The new `src/components/diff-view-theme.css` is not scanned
+  either — the scope is `src/**/*.svelte` plus `src/app.css` — and it contains
+  no length or font-size to scan.
+
+  Migrating those three files onto the scale is a later 2D slice, and it should
+  stay that way: the shared `--space-*` decision for a code table is a density
+  judgement that wants its own before/after, not a rider on a palette change.
 - **The audit's F5 entry is left as written.** It is the record of the
   pre-refactor state; the two places it undercounts (three light syntax failures
   rather than five, and the body ink as a per-element colour rather than an
