@@ -4,9 +4,15 @@ Companion to [`ui-audit.md`](./ui-audit.md) (the findings, `F1`-`F18`) and
 [`refactoring-ui-principles.md`](./refactoring-ui-principles.md) (the rubric and
 its page refs).
 
-**Status: proposal.** Every token value in this document is *proposed and
-measured*, not applied. Nothing in the PR that introduces this plan changes a
-rendered pixel.
+**Status: Phase 1 shipped; Phases 2 and 3 are still proposals.**
+
+Phase 1 landed as one PR — see [Phase 1 — as shipped](#p1-shipped) for what
+changed against what this document proposed, and for the measurements taken from
+the built app rather than from the token values. The screenshots in
+[`./shots/`](./shots/) are now the **after** state; the before state is in git
+history at commit `38b9e9a`.
+
+Every token value in Phases 2 and 3 remains *proposed and measured*, not applied.
 
 ---
 
@@ -313,6 +319,93 @@ is the deliverable that stops this audit from being needed twice.
 1a-1c are pure refactors and can ship while the owner is working. **1d and 1e are
 the first PRs in this whole plan that change what the owner sees** — they should
 land at a moment of their choosing, with the before/after shots in the PR body.
+
+<a id="p1-shipped"></a>
+
+### Phase 1 — as shipped
+
+Shipped as **one** PR rather than the five above, split into commits along the
+1a-1e seams so each step is still reviewable on its own: the structural collapse
+(no pixel changes), then the token values with their tests, then the
+token-consumption fixes. The staged `.fails()` step (1b) was dropped — it exists
+only to keep an intermediate tree green, and there was no intermediate tree.
+
+**Three things differ from what this document proposed. Each is an
+improvement on the proposal, not a substitution of a measured value — every
+token value shipped exactly as specified in [P1-2](#p1-2) and [P1-3](#p1-3).**
+
+1. **[P1-1](#p1-1) used `light-dark()`, not the recommended option (a).** The
+   plan offered (a) keep the duplication and test it, or (b) generate the CSS at
+   build time, and recommended (a). There is a third option it did not consider:
+   `light-dark(light, dark)` puts both themes in a **single declaration** per
+   token, resolved against the `color-scheme` already set on `:root`. That
+   removes the duplication outright instead of testing for it, needs no build
+   step, and is supported by every browser this app targets. 30 duplicated
+   declarations became 0.
+
+   Two tokens cannot use it, because it takes `<color>` and they are not
+   colours: `--select-chevron` (a `url()`) and `--recede-opacity` (a number).
+   Those two are still written out for both dark paths — the last 2
+   declarations of the original 30 — and are pinned by both tests below.
+
+2. **The `#0a1410` convergence was larger than [F2](./ui-audit.md#f2) recorded.**
+   The audit named two hardcoded literals; grep found **six**, every one on a
+   `background: var(--accent)` fill. This mattered more than tidiness: `#0a1410`
+   on the new light accent measures **3.60:1**, so leaving them literal would
+   have turned the accent repair into a regression on six live buttons.
+
+3. **[F14](./ui-audit.md#f14) was a three-link bug, not two.** The audit records
+   `BridgeSection`'s links as correctly styled; in fact its `.install a` rule
+   covers only the install block, so the link inside its `.field-note` was
+   rendering in the same UA-default `#0000EE`. All three are fixed.
+
+**Measured in the built app** (`getComputedStyle`, not token arithmetic):
+
+| element | dark before → after | light before → after |
+|---|---|---|
+| AI-models mode control (selected) | **2.47 → 7.60** | 4.13 → **5.21** |
+| model-combobox selected row | **2.47 → 7.60** | 4.13 → **5.21** |
+| landing demo CTA (accent as text) | 7.34 → 7.34 | **3.90 → 4.91** |
+| landing submit / `.btn-primary` fill | 7.60 → 7.60 | 4.53 → **5.21** |
+| the three `#0000EE` links | — → 6.27 | — → 5.08 |
+
+**Verification that shipped with it:**
+
+- `src/lib/theme/contrast.test.ts` — 64 assertions, parsing the real token
+  values out of `src/app.css` and compositing `rgba()`/`opacity` over their true
+  grounds. Mutation-checked: restoring the pre-Phase-1 values reproduces the
+  audit's hand-measured failures to the hundredth (3.90 / 4.13 / 3.66 accent,
+  4.13 on-accent, 4.45 changed chip). This is [P1-6](#p1-6), delivered.
+- `e2e/theme-token-parity.spec.ts` — enumerates every custom property the app
+  declares (so a token added later is covered without editing the spec) and
+  proves in a real browser that explicit light ≡ `auto` + OS light, explicit
+  dark ≡ `auto` + OS dark, and that an explicit choice is independent of the OS
+  preference. This is the behavioural half of [P1-1](#p1-1).
+
+**Deferred out of Phase 1, deliberately:**
+
+- The ~40 `--surface-raised` call sites. The token is now an alias of the
+  correctly-named `--surface-sunken`; Phase 2 sweeps the call sites as it
+  restyles those components anyway ([P1-5](#p1-5) kept its alias promise).
+- `Landing.svelte`'s `.discard-confirm` keeps a hardcoded `#0a1410` — it sits on
+  `--legend-removed-color`, not the accent, so `--on-accent` would be the wrong
+  token. It needs an `--on-danger`, which is a Phase 2 decision.
+- `src/lib/diagram/mermaid.ts:40` hardcodes the light "changed" chip triple
+  (`fill:#fff5cc,stroke:#d4a72c,color:#9a6700`) into a mermaid `classDef`.
+  Phase 1's [F16](./ui-audit.md#f16) repair moved the token to `#8f5f00`, so the
+  diagram's amber is now one step lighter than the chip it was copying — both
+  still read as the same colour, but it is a real (small) divergence this PR
+  created. Mermaid `classDef` cannot reference a CSS custom property, so closing
+  it means re-stating the value there; Batch 2B owns it.
+- The component-level copies of the [F17](./ui-audit.md#f17) hazard.
+  `SymbolPopover.svelte` and `SymbolTestPairing.svelte` each write their light
+  treatment out **twice** — once under `:root[data-theme='light']` and again
+  under `@media (prefers-color-scheme: light)` / `:root:not([data-theme])` —
+  the same duplication Phase 1 just removed from `app.css`, at component scope.
+  Both paths are present and correct today, so nothing is broken; they are
+  simply the next places a token can silently diverge. `SymbolPopover`'s copies
+  are hardcoded GitHub syntax colours, so Phase 3 owns that one when it
+  tokenises the syntax set; `SymbolTestPairing` belongs to Batch 2B.
 
 ---
 
