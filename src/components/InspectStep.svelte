@@ -3114,6 +3114,13 @@
     line-height: 1.45;
     white-space: normal;
     overflow-wrap: anywhere;
+    /* Same prose measure as the finding cards (rubric p.99-101, A2). The
+       popover box is capped at 40rem, which at this size is ~81ch — so a long
+       finding body CAN run past the comfortable measure here even though the
+       demo fixture's happens to land at 43ch. The cap goes on the body span
+       and not on the popover, because the sibling .findings-popover-loc is a
+       `path:line` reference — code-adjacent, and A2 exempts it. */
+    max-width: var(--measure-prose);
   }
   .findings-popover-body :global(code) {
     font-family: var(--font-mono);
