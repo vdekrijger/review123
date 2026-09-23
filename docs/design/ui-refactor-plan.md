@@ -1204,7 +1204,14 @@ assertion.
 | `offScaleFont` — `font-size` not on the scale | **596** | **546** |
 | `offScaleSpace` — spacing components not on the scale | **1391** | **1299** |
 | `offScaleWeight` — `font-weight` neither 400 nor 600 (F18) | **83** | **83** |
-| files off the scale | 61 of 64 | 59 of 64 |
+| files off the scale | 61 of 64 | 61 of 64 |
+| …files with **zero** `em` font-sizes | 40 of 64 | 42 of 64 |
+
+The file count does not move yet, and that is the ratchet telling the truth
+rather than flattering the PR: `app.css` still carries `:root`'s 15px and the
+three control primitives' padding, `AiModelsSection` still carries the
+five-times-copied card and two `-1px` nudges, and `ModelCombobox` still carries
+one surplus font-weight. A file leaves the ledger only when it is *finished*.
 
 **Measured in the built app** at 1440×1000, `/settings`, both builds
 (`getComputedStyle`, the audit's own method — and it reproduces the audit's 21
