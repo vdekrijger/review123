@@ -1044,6 +1044,15 @@
     font-weight: 600;
   }
 
+  /* Without this the in-body link renders in the UA default #0000EE — the one
+     colour on the page that is in neither palette, and a saturated blue next to
+     a teal accent (audit F14). Inherit the note's own --text-muted and keep the
+     underline as the affordance, matching BridgeSection's `.install a` idiom. */
+  .bridge-line a {
+    color: inherit;
+    text-decoration: underline;
+  }
+
   .privacy-line {
     font-size: 0.78em;
     color: var(--text-muted);
@@ -1146,7 +1155,7 @@
 
   .mode-option.selected {
     background: var(--accent);
-    color: var(--on-accent, #fff);
+    color: var(--on-accent);
     font-weight: 600;
   }
 
@@ -1279,7 +1288,7 @@
   }
   .role-option.selected {
     background: var(--accent);
-    color: var(--on-accent, #fff);
+    color: var(--on-accent);
     font-weight: 600;
   }
   .role-option.locked {

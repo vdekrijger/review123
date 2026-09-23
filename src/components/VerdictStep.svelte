@@ -1305,7 +1305,7 @@
     border: 1px solid var(--accent);
     border-radius: 6px;
     background: var(--accent);
-    color: #0a1410;
+    color: var(--on-accent);
     font-size: 0.95rem;
     font-weight: 600;
     cursor: pointer;
@@ -1342,7 +1342,7 @@
     padding: 0.4rem 1rem;
     border-radius: 6px;
     background: var(--accent);
-    color: #0a1410;
+    color: var(--on-accent);
     text-decoration: none;
     font-size: 0.9rem;
     font-weight: 600;

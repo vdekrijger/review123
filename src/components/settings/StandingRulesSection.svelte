@@ -597,6 +597,14 @@
     font-size: 0.95em;
   }
 
+  /* Without this the in-body link renders in the UA default #0000EE — the one
+     colour on the page that is in neither palette (audit F14). Inherit the
+     note's own --text-muted and keep the underline as the affordance. */
+  .field-note a {
+    color: inherit;
+    text-decoration: underline;
+  }
+
   .error {
     margin: 0 0 0.5rem;
     font-size: 0.85em;

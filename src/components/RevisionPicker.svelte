@@ -176,7 +176,7 @@
     background: var(--accent);
     border: 1px solid var(--accent);
     border-radius: 4px;
-    color: #0a1410;
+    color: var(--on-accent);
     cursor: pointer;
     font-size: 0.82rem;
     font-weight: 600;

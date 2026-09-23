@@ -508,7 +508,7 @@
 
   .combobox-lab.active {
     background: var(--accent);
-    color: var(--on-accent, #fff);
+    color: var(--on-accent);
   }
 
   .combobox-lab-name {
@@ -525,7 +525,7 @@
   }
 
   .combobox-lab.active .combobox-lab-count {
-    color: var(--on-accent, #fff);
+    color: var(--on-accent);
     opacity: 0.8;
   }
 
@@ -583,7 +583,7 @@
 
   .combobox-option.active {
     background: var(--accent);
-    color: var(--on-accent, #fff);
+    color: var(--on-accent);
   }
 
   .combobox-option.selected:not(.active) {
@@ -606,7 +606,7 @@
   }
 
   .combobox-option.active .combobox-option-hint {
-    color: var(--on-accent, #fff);
+    color: var(--on-accent);
     opacity: 0.85;
   }
 

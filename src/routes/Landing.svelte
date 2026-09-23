@@ -694,7 +694,7 @@
     border: 1px solid var(--accent);
     border-radius: 6px;
     background: var(--accent);
-    color: #0a1410;
+    color: var(--on-accent);
     font-family: var(--font-ui);
     font-size: 0.9rem;
     font-weight: 600;
@@ -759,7 +759,7 @@
   .demo-cta-btn:hover,
   .demo-cta-btn:focus-visible {
     background: var(--accent);
-    color: #0a1410;
+    color: var(--on-accent);
   }
   .demo-cta-sub {
     font-size: 0.8rem;
