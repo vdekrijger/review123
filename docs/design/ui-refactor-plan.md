@@ -4,13 +4,16 @@ Companion to [`ui-audit.md`](./ui-audit.md) (the findings, `F1`-`F18`) and
 [`refactoring-ui-principles.md`](./refactoring-ui-principles.md) (the rubric and
 its page refs).
 
-**Status: Phase 1 shipped; Phases 2 and 3 are still proposals.**
+**Status: Phase 1 shipped. Phase 2 in progress — Batch 2C shipped. Phase 3 is
+still a proposal.**
 
 Phase 1 landed as one PR — see [Phase 1 — as shipped](#p1-shipped) for what
 changed against what this document proposed, and for the measurements taken from
-the built app rather than from the token values. The screenshots in
-[`./shots/`](./shots/) are now the **after** state; the before state is in git
-history at commit `38b9e9a`.
+the built app rather than from the token values. Batch 2C followed — see
+[Batch 2C — as shipped](#b2c-shipped). The screenshots in [`./shots/`](./shots/)
+are the **after** state of the most recent batch to touch each surface; the
+pre-Phase-1 state is in git history at commit `38b9e9a`, and the pre-Batch-2C
+state of the settings page and the Inspect step at commit `038e6d4`.
 
 Every token value in Phases 2 and 3 remains *proposed and measured*, not applied.
 
@@ -465,6 +468,186 @@ language, which is what makes it reviewable.
    highest-value single fix in Phase 2. Group `Unified`/`Side-by-side` as one
    segmented control with no internal gap, put a scale-step gap between groups, and
    rank the seven control rows so the reader's eye reaches the code.
+
+<a id="b2c-shipped"></a>
+
+### Batch 2C — as shipped
+
+Shipped as one PR, three commits along the item seams: the outline (zero
+rendered pixels), the nav and heading spacing, then the Inspect toolbar. Every
+number below was taken with `getComputedStyle` in the **built** app at
+1440×1000 in both themes — the audit's numbers came from the browser, so these
+do too. Screenshots re-captured: `settings-models-*`, `step2-inspect-unified-*`,
+`step2-inspect-split-*` and `focus-dim-*` (the last two pairs are the same
+capture; `focus-dim` is byte-identical to `step2-inspect-unified` and always
+was). The other six shots are untouched because Batch 2C did not reach them.
+
+**Item 1 — semantic headings ([F13](./ui-audit.md#f13), rubric D1). Done, and
+provably pixel-neutral.**
+
+Six `<p class="section-label">` became `<h2>`; four sub-titles became `<h3>`
+(`Built-in reviewers`, `Generate from my reviews`, `What runs (and how deep)`,
+`Model panel`). `StandingRulesSection`'s existing per-group `<h3>` therefore
+stops being a level with no `<h2>` above it. The outline is now
+`h1 → 6×h2 → h3`, where it was a single `h1` for ~6,000px of page.
+
+`letter-spacing: normal` is pinned on those rules: `app.css`'s global `h2`/`h3`
+tighten it to `-0.01em`, and the brief for this item was "no visual change".
+Before/after in the built app: font-size 13.5px, weight 600, every above/below
+gap, every section's scroll top and the page height (6069px) are identical.
+
+**Item 2 — nav emphasis ([F3](./ui-audit.md#f3), p.30-31, p.142). Done.**
+
+Phase 1 made the active item legal (3.47 → 4.31:1) but not *emphatic*: it was
+still the least-contrasted item in a list of six. The accent now carries the
+indicator instead of the label — the left bar (2px → 3px, 65% → 70%) and the
+tint stay accent, the label takes `--text` at 600 weight.
+
+| | active before | active after | inactive | active ÷ inactive |
+|---|---|---|---|---|
+| light | 4.31:1 | **13.07:1** | 5.08:1 | 0.85× → **2.57×** |
+| dark | 6.08:1 | **12.03:1** | 6.27:1 | 0.97× → **1.92×** |
+
+**Item 3 — heading spacing (rubric D2, p.85). Done where it was actually
+broken.**
+
+Measured visual gaps, above / below:
+
+| heading | before | after |
+|---|---|---|
+| `Providers & access` | 15 / 13.5 (1.1:1) | 15 / 6 (**2.5:1**) |
+| `Built-in reviewers` | 11.3 / 6 (1.9:1) | 18.8 / 6 (**3.1:1**) |
+| `What runs (and how deep)` | 22.8 / 4.5 (5.1:1) | 27.3 / 4.5 (**6.1:1**) |
+| standing-rules group title | 13.5 / 6 (2.25:1) | 17.3 / 6 (**2.9:1**) |
+
+`Providers & access` was the real violation and it was invisible in the CSS: as
+a `<p>`, `.auth-status` carried the UA `1em` top margin, which **collapsed**
+with the heading's own `0.4rem` bottom margin and all but erased the difference
+between above and below. `margin-top: 0` is the whole fix.
+
+The six top-level `<h2>`s already passed — 15px of card padding above (plus
+22.5px of inter-card gap outside the border) against 6px below, 2.5:1 — and are
+deliberately left alone. Not churning them also keeps every section's scroll top
+where `e2e/settings.spec.ts`'s scrollspy assertions expect it.
+
+<a id="b2c-item4"></a>
+
+**Item 4 — the 663px column. Decided AGAINST widening. Here is the evidence.**
+
+The measurements that settle it:
+
+- the content column is **663px = 74ch** at the body size — the top of the
+  45-75ch comfortable measure, not below it;
+- the **widest paragraphs in it already render at ~86ch** (623px at 12-12.75px:
+  the bridge explainer, the model-panel explainer, the key-storage note). The
+  column is not too narrow for its prose; it is marginally too wide already;
+- using the 550px of unused horizontal room would put those paragraphs near
+  **140ch**, a straightforward p.68-70 violation;
+- and the height is not a width problem. `#ai-models` alone is **2,578px, 42%
+  of the 6,069px page**. Widening the column might shave ~15% off that. Ranking
+  and collapsing those sections is the real fix, and it belongs to Batches 2A
+  and 2B, which own the form primitives and the panels.
+
+p.71 warns against cramming content into a small area to look compact. 663px of
+stacked form fields at 74ch is not cramped, and p.68-70's prescription for a
+narrow component lost in a wide area is to **split it into columns, not stretch
+it** — which this is not, being a centred document with a sticky section nav,
+the conventional and correct shape for a settings page.
+
+**If this is revisited**, the move is a two-column *control grid* (the six
+provider cards, the per-task mode matrix, the model panel rows) inside a prose
+measure that stays narrow — not a wider page. That is a Batch 2A/2B decision
+about those components, not a page-shell decision, so it is recorded here and
+left to them.
+
+**Item 5 — the Inspect toolbar ([F8](./ui-audit.md#f8),
+[F9](./ui-audit.md#f9)). Done, and F8's measurement is corrected.**
+
+> **Correction to [F8](./ui-audit.md#f8).** The audit recorded 4px inside the
+> view-mode pair against 3px between unrelated controls. Measured sub-pixel,
+> **every gap in that row was the same 3.55px** — a collapsed whitespace text
+> node between `inline-flex` children of a `display: block` container, not a
+> declared gap anywhere. The 4-vs-3 was integer rounding of one value. The
+> defect is therefore worse than "inverted": the grouping was **absent**, the
+> ratio of around-to-inside was exactly 1.0, and the row could only read as five
+> peer buttons.
+
+`Unified | Side-by-side` is now a segmented pill — the treatment `.flow-switch`,
+`.sort-switch` and `.phase-switch` already used, so the row finally speaks one
+language: **a pill is a mutually exclusive choice, a bordered button is an
+independent switch.**
+
+| measured gap | before | after |
+|---|---|---|
+| inside the view-mode pair | 3.55px | **0px** |
+| inside the three toggles | 3.55px | **4.5px** |
+| pair → toggles (between groups) | 3.55px | **15px** |
+| `Story\|Files` → pair (between groups) | *(different row)* | **15px** |
+
+Space around a group is now **3.3× the space inside it** (p.83, p.86).
+
+**Ranking the seven rows** (p.30-31: de-emphasise the secondary, do not enlarge
+the important). Three tiers:
+
+| tier | rows | treatment |
+|---|---|---|
+| **1 — decisions that change what you see** | the stepper; the phase bar (`Implementation`/`Tests`, which scopes the file set and carries the approval) | untouched. The phase bar is the only filled, bordered row and should be. |
+| **2 — reading preferences** | `Story\|Files`, diff layout, the three view toggles, the sort switch | `Story\|Files` and the diff controls answer one question, so they are **one row now, not two**. The toggles lose the filled `--surface-raised` ground and the 700-weight accent underline: they are preferences you set once. |
+| **3 — status, never a control** | the reviewer chips, the findings-triage line | left as muted text |
+
+**Seven rows → six; chrome before the first line of code 260px → 231px.**
+
+Two things fell out of making `.mode-toggle` a real flex row:
+
+1. `run-reviewers-btn { margin-left: auto }` was **dead CSS** under
+   `display: block`. "Run my reviewers" now sits at the right edge it was
+   written for.
+2. Four `color: var(--surface, #fff)` declarations on `background: var(--accent)`
+   fills (the flow, mode, phase and sort pills) converge onto `--on-accent`.
+   Phase 1 grepped for the `#0a1410` literal and missed this spelling of the
+   same bug. Light is unchanged (both resolve to white, 5.21:1); dark goes
+   **6.81 → 7.60:1**.
+
+Every accent-fill ink in the row now measures 5.21:1 light / 7.60:1 dark; the
+demoted toggles 7.59:1 off and 13.07:1 on in light, 8.45 / 12.03:1 in dark.
+
+**Verification that shipped with it:**
+
+- `src/routes/SettingsPage.test.ts` — three outline assertions: the six `<h2>`s
+  in nav order, exactly one `<h2>` per section element with no `p.section-label`
+  surviving, and every `<h3>` inside a section that has an `<h2>`. A section
+  added later as a `<p>` fails them.
+- `e2e/settings.spec.ts` — two gates (light + dark) that composite the **real**
+  rendered colours, translucent tint over its true ground, and assert the
+  *ordering* rather than a hardcoded ratio: the active item clears AA,
+  out-contrasts its siblings by >1.5×, and carries both the heavier weight and
+  the indicator bar. A palette change that re-inverts them fails here.
+- `e2e/focus-mode.spec.ts` — a gate that measures the **rendered geometry** of
+  the toolbar and asserts around > inside with no hardcoded pixel value, so a
+  restyle that re-flattens the row fails whatever the scale step turns out to be.
+- `src/components/InspectStep.test.ts` — four structural tests replace the two
+  that asserted "`Unified` has class `btn`". They assert the grouping instead:
+  the pair is its own `role="group"` with exactly those two buttons, the three
+  toggles are a disjoint group, the pills carry the pill class, and the flow
+  switch shares the view bar.
+
+**Deferred out of Batch 2C, deliberately:**
+
+- **Widening the settings column** — see [item 4](#b2c-item4). The follow-up, if
+  any, is a two-column control grid owned by Batches 2A/2B, not a wider page.
+- **`Stepper.svelte` and `ContextRail.svelte`** were listed in this batch's files
+  and were **not changed**. The stepper is Tier 1 and is already the most
+  prominent chrome row on the Inspect step; the context rail is collapsed to a
+  27px off-canvas tab and is not one of the seven rows. Neither needed a change
+  for items 1-5, and neither got one for its own sake.
+- **The inactive `.mode-btn`** reads 5.08:1 at `--text-muted`, matching the three
+  pill switches it now stands beside exactly. That is consistency, not a
+  measurement: if the pill language is ever re-toned, all four move together.
+- **The remaining `--surface-raised` call sites.** The view toggles dropped
+  theirs; Phase 1's [P1-5](#p1-5) deferral otherwise stands.
+- **[F18](./ui-audit.md#f18) (four font weights)** is untouched. This batch adds
+  no new weight — 500, 600 and 700 were all already in use — but it does not
+  reduce the count either. That is Batch 2D's scale work.
 
 ### Batch 2D — the scales themselves
 
