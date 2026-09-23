@@ -1276,7 +1276,11 @@ async function bridgeComplete(
    * asked for it.
    */
   agentic = false,
-): Promise<LlmCompleteResult> {
+  // The extra field is on THIS function's return, not on LlmCompleteResult:
+  // that shape is what all six providers return, and a bridge-only field there
+  // would be permanently undefined for the other five. Callers that assign the
+  // result to an LlmCompleteResult simply ignore it.
+): Promise<LlmCompleteResult & { bridgeAgentic?: InferAgentic | null }> {
   const stored = readStoredBridge()
   // 'no-key' is the honest kind: the pairing token IS this provider's
   // credential, and the UI's no-key copy is "configure your provider".
@@ -1351,22 +1355,17 @@ async function bridgeComplete(
     }
   }
 
-  lastBridgeAgentic = parsed.agentic ?? null
-  return { content: parsed.text, usage, truncated: parsed.truncated }
+  // The report RIDES ON THE RESULT, and must never become a module-level
+  // "last call" latch.
+  //
+  // Up to MAX_INFLIGHT_LLM_CALLS bridge calls are in flight at once (a review
+  // runs its tasks concurrently, and deep multi-gen runs several generators).
+  // A latch would be written by whichever call parsed last and read by whichever
+  // resumed next — there is an await between the write and the read, so those
+  // are not the same call. That race decides whether we report a review as
+  // grounded, so it gets a per-call value, not a shared slot.
+  return { content: parsed.text, usage, truncated: parsed.truncated, bridgeAgentic: parsed.agentic ?? null }
 }
-
-/**
- * The agentic report from the LAST `/v1/infer` call, or null when that call was
- * not agentic (or the bridge ignored the request).
- *
- * A module-level latch rather than a field on LlmCompleteResult, for the same
- * reason bridgeLastStreamMode() below is one: `LlmCompleteResult` is the shape
- * EVERY provider returns, and a bridge-only field on it would be permanently
- * undefined for the other five. The one caller that needs this reads it
- * immediately after its own awaited call — see bridgeAgenticComplete, which is
- * the only supported way to read it.
- */
-let lastBridgeAgentic: InferAgentic | null = null
 
 /** What an agentic bridge completion produced, report included. */
 export interface BridgeAgenticResult {
@@ -1394,9 +1393,8 @@ export async function bridgeAgenticComplete(
   opts: LlmCompleteOpts,
   bridgeModel: string | undefined,
 ): Promise<BridgeAgenticResult> {
-  lastBridgeAgentic = null
   const result = await bridgeComplete(provider, model, opts, true, bridgeModel, true)
-  return { content: result.content, usage: result.usage, agentic: lastBridgeAgentic }
+  return { content: result.content, usage: result.usage, agentic: result.bridgeAgentic ?? null }
 }
 
 /**

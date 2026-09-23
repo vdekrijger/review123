@@ -1228,6 +1228,41 @@ describe('bridge transport — the delegated agentic loop', () => {
     expect(events[0]).toMatch(/investigating your working tree/i)
   })
 
+  /**
+   * CONCURRENT runs must not read each other's report.
+   *
+   * A review runs its tasks concurrently (up to MAX_INFLIGHT_LLM_CALLS) and
+   * deep multi-gen runs several generators, so several bridge calls really are
+   * in flight at once. An earlier draft of this carried the report in a
+   * module-level "last call" latch: written when a response finished parsing,
+   * read after the caller's await resumed — which is not the same call. The
+   * value that race decides is whether a review is reported as GROUNDED, so it
+   * gets pinned here rather than left to timing.
+   */
+  it('keeps each concurrent run’s report to itself', async () => {
+    useBridge()
+    // Both responses become available in the SAME turn, so the two calls'
+    // continuations interleave in the microtask queue — which is exactly when a
+    // shared latch breaks: one call's write lands between the other's write and
+    // its read. A timer-based mock would NOT reproduce this, because microtasks
+    // drain completely between timer callbacks and each call would finish
+    // undisturbed.
+    const bodies = [
+      agenticBody({ tools: ['Read'], toolCallsAtLeast: 5 }),
+      agenticBody({ tools: ['Read'], toolCallsAtLeast: 1 }),
+    ]
+    let call = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () => jsonResponse(bodies[call++]!)),
+    )
+
+    const [first, second] = await Promise.all([runLoop(), runLoop()])
+
+    expect(first.toolCallsUsed).toBe(5)
+    expect(second.toolCallsUsed).toBe(1)
+  })
+
   it('never executes review123’s own tools — the CLI has its own', async () => {
     useBridge()
     vi.stubGlobal('fetch', respondWith(agenticBody({ tools: ['Read'], toolCallsAtLeast: 2 })))
