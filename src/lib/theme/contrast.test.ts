@@ -21,6 +21,12 @@
  */
 import { describe, it, expect } from 'vitest'
 import appCss from '../../app.css?raw'
+// Phase 3 asserts two things about the diff viewer that are not token
+// arithmetic: that the binding layer really binds (a dropped line silently
+// restores GitHub's literal), and that the recede path carries no alpha. Both
+// are properties of the SOURCE, so the source is the input.
+import diffThemeCss from '../../components/diff-view-theme.css?raw'
+import fileDiffSource from '../../components/FileDiff.svelte?raw'
 
 // ---------------------------------------------------------------------------
 // Colour maths (WCAG 2.1)
@@ -185,20 +191,70 @@ const THEMES = { light: LIGHT, dark: DARK } as const
 const GROUNDS = ['--bg', '--surface', '--surface-sunken'] as const
 
 /**
- * The diff viewer's OWN grounds and ink, harvested from the vendored dependency
- * (node_modules/@git-diff-view/svelte/dist/css/diff-view.css) rather than from
- * our palette — because that is what `--recede-opacity` actually dims today.
+ * The diff viewer's grounds — now TOKEN NAMES, not literals.
  *
- * The viewer ships GitHub's palette, not the app's (audit F5): it paints plain
- * #ffffff / #000000 body ink, not --text. Phase 3 re-points these at the app's
- * tokens; until then, measuring against --text would flatter the result. When
- * Phase 3 lands, update these constants (or delete them in favour of the real
- * tokens) — this comment is the breadcrumb.
+ * This used to be a hand-copied table of the vendored dependency's own hex
+ * values (#0d1117, #dafbe1, #ffebe9 …) with a breadcrumb saying "when Phase 3
+ * lands, replace these with the real tokens". Phase 3 landed:
+ * src/components/diff-view-theme.css binds every one of the viewer's custom
+ * properties to a token below, so these names ARE what the browser paints and
+ * the table cannot go stale behind the app again.
+ *
+ * Verified in the built app with getComputedStyle — the vendored custom
+ * properties resolve to exactly these tokens in both themes and both diff
+ * modes, and a sweep of every computed colour inside the viewer finds zero
+ * values that are not a resolved app token.
+ *
+ *   plain / context row   --surface
+ *   expand + empty rows,
+ *     and the gutter      --surface-sunken
+ *   added row             --legend-added-bg
+ *   removed row           --legend-removed-bg
+ *   added   emphasis      --diff-added-emphasis    (changed words, add gutter)
+ *   removed emphasis      --diff-removed-emphasis  (changed words, del gutter)
  */
-const DIFF_GROUNDS = {
-  light: { ink: '#000000', context: '#ffffff', added: '#dafbe1', removed: '#ffebe9' },
-  dark: { ink: '#ffffff', context: '#0d1117', added: '#18271f', removed: '#23191c' },
-} as const
+const DIFF_GROUNDS = [
+  '--surface',
+  '--surface-sunken',
+  '--legend-added-bg',
+  '--legend-removed-bg',
+  '--diff-added-emphasis',
+  '--diff-removed-emphasis',
+] as const
+
+/** Every `prop: value;` declaration in a stylesheet, comments stripped. */
+function cssDeclarations(css: string): string[] {
+  return stripComments(css).match(/[\w-]+\s*:\s*[^;{}]+;/g) ?? []
+}
+
+/** Every individual selector in a stylesheet, comments stripped. */
+function cssSelectors(css: string): string[] {
+  return stripComments(css)
+    .split('}')
+    .flatMap((block) => (block.includes('{') ? block.split('{')[0].split(',') : []))
+    .map((sel) => sel.trim())
+    .filter(Boolean)
+}
+
+/**
+ * The receded-cell rules in FileDiff.svelte — the ones Phase 3 converted from
+ * `opacity: var(--recede-opacity)` to an ink swap. Matched from the source so
+ * the "no alpha" property is checked where it can actually regress.
+ */
+const RECEDE_RULE = /\.focus-dim-host[^{}]*(?:dimmed-noise|hunk-receded)[^{}]*\{[^{}]*\}/g
+
+/** Every ink the viewer can paint ON those grounds. */
+const SYNTAX_INKS = [
+  '--syntax-ink',
+  '--syntax-keyword',
+  '--syntax-entity',
+  '--syntax-constant',
+  '--syntax-string',
+  '--syntax-variable',
+  '--syntax-comment',
+  '--syntax-tag',
+  '--syntax-bullet',
+] as const
 
 // ---------------------------------------------------------------------------
 
@@ -341,45 +397,223 @@ describe('F16 — status chip inks clear AA on their own tint', () => {
 })
 
 /**
- * P1-4 — the recede token.
+ * F5 + P1-4(b) / Phase 3 — the diff viewer's own palette.
  *
- * Floor is 3:1, not 4.5:1: receded rows are de-emphasised content the reader can
- * restore by hovering, and the rubric's non-text/large floor is the honest bar
- * for them. The pre-Phase-1 light value (0.45) did not even clear that.
+ * These blocks replace the `--recede-opacity` assertions Phase 1 shipped. That
+ * token is gone: it was an explicitly INTERIM fix whose own test documented why
+ * alpha could never work over coloured syntax. Phase 3 substitutes one muted
+ * INK instead, so what needs a floor under it is a set of colours rather than a
+ * number — and a colour can be asserted on every ground it lands on, which an
+ * alpha over six unknown hues never could be.
+ *
+ * Two floors, and the difference is deliberate:
+ *   4.5:1  every syntax ink at full strength (rubric A4 — normal text)
+ *   3.0:1  the RECEDED ink, which is de-emphasised content the reader restores
+ *          by hovering, so the rubric's non-text/large bar is the honest one.
+ *          It in fact clears 4.5 on all four ROW grounds and only dips to
+ *          3.60-3.74 on the two word-level emphasis tints; both are asserted
+ *          separately below so a regression cannot hide behind the lower bar.
  */
-describe('F4 — --recede-opacity keeps receded code legible on every diff ground', () => {
-  for (const themeName of ['light', 'dark'] as const) {
-    const alpha = parseFloat(THEMES[themeName]['--recede-opacity'])
-    const { ink, ...grounds } = DIFF_GROUNDS[themeName]
-
-    it(`${themeName}: --recede-opacity is a number in (0,1)`, () => {
-      expect(Number.isFinite(alpha)).toBe(true)
-      expect(alpha).toBeGreaterThan(0)
-      expect(alpha).toBeLessThan(1)
-    })
-
-    for (const [groundName, ground] of Object.entries(grounds)) {
-      it(`${themeName}: receded ink on the ${groundName} line >= 3.0`, () => {
-        const r = contrast(ink, ground, alpha)
-        expect(round2(r), `measured ${round2(r)}`).toBeGreaterThanOrEqual(3.0)
-      })
+describe('F5 — every syntax ink clears AA on every diff ground', () => {
+  for (const [themeName, tokens] of Object.entries(THEMES)) {
+    for (const ink of SYNTAX_INKS) {
+      for (const ground of DIFF_GROUNDS) {
+        it(`${themeName}: ${ink} on ${ground} >= 4.5`, () => {
+          const r = contrast(tokens[ink], tokens[ground])
+          expect(round2(r), `measured ${round2(r)}`).toBeGreaterThanOrEqual(4.5)
+        })
+      }
     }
   }
 
-  it('the two themes recede to within 0.3 of each other on the context line', () => {
-    // The point of tokenising: light must not be visibly harsher than dark.
+  it('the syntax set is complete — every role is a real, distinct colour', () => {
+    for (const [themeName, tokens] of Object.entries(THEMES)) {
+      const values = SYNTAX_INKS.map((n) => {
+        expect(tokens[n], `${themeName} ${n} is undeclared`).toMatch(/^#[0-9a-f]{6}$/i)
+        return tokens[n]
+      })
+      // Nine roles, nine colours: a role silently collapsed onto another would
+      // lose a distinction the reader uses, and no ratio would show it.
+      expect(new Set(values).size, `${themeName} has duplicate syntax roles`).toBe(
+        SYNTAX_INKS.length,
+      )
+    }
+  })
+})
+
+describe('P1-4(b) / Phase 3 — recede by ink substitution, not alpha', () => {
+  /** The four grounds a receded ROW sits on. */
+  const ROW_GROUNDS = [
+    '--surface',
+    '--surface-sunken',
+    '--legend-added-bg',
+    '--legend-removed-bg',
+  ] as const
+  const EMPHASIS = ['--diff-added-emphasis', '--diff-removed-emphasis'] as const
+
+  for (const [themeName, tokens] of Object.entries(THEMES)) {
+    // The rubric bar for de-emphasised content, on EVERY ground it can land on.
+    for (const ground of [...ROW_GROUNDS, ...EMPHASIS]) {
+      it(`${themeName}: --syntax-receded on ${ground} >= 3.0`, () => {
+        const r = contrast(tokens['--syntax-receded'], tokens[ground])
+        expect(round2(r), `measured ${round2(r)}`).toBeGreaterThanOrEqual(3.0)
+      })
+    }
+
+    // And the stronger floor it actually holds on the four grounds a receded
+    // ROW sits on, which is where a reader meets it. Asserted separately so
+    // that a regression from 4.3 to 3.1 cannot hide behind the rubric bar.
+    // 4.3 is not a rounded-down 4.5: dark's added row is the binding case at
+    // 4.33, because --syntax-receded is --text-muted (the palette's existing
+    // de-emphasis tier) rather than a ninth colour authored for 0.17 of a point.
+    for (const ground of ROW_GROUNDS) {
+      it(`${themeName}: --syntax-receded on ${ground} >= 4.3 (the real floor)`, () => {
+        const r = contrast(tokens['--syntax-receded'], tokens[ground])
+        expect(round2(r), `measured ${round2(r)}`).toBeGreaterThanOrEqual(4.3)
+      })
+    }
+
+    it(`${themeName}: receding still RECEDES — at least a 2x drop from --syntax-ink`, () => {
+      // A floor alone would be satisfied by not receding at all. The point of
+      // the ink is that it drops hard while staying legible: 15.80 -> 5.39 in
+      // light and 13.39 -> 5.78 in dark, on the context ground.
+      const full = contrast(tokens['--syntax-ink'], tokens['--surface'])
+      const receded = contrast(tokens['--syntax-receded'], tokens['--surface'])
+      expect(round2(receded), `receded ${round2(receded)}`).toBeLessThanOrEqual(full / 2)
+    })
+  }
+
+  it('the two themes recede to within 0.5 of each other on the context ground', () => {
+    // Inherited from the --recede-opacity gate: light must not be visibly
+    // harsher than dark, which is the bug that forced 0.55 in the first place.
     const at = (t: 'light' | 'dark') =>
-      contrast(DIFF_GROUNDS[t].ink, DIFF_GROUNDS[t].context, parseFloat(THEMES[t]['--recede-opacity']))
-    expect(Math.abs(at('light') - at('dark'))).toBeLessThanOrEqual(0.3)
+      contrast(THEMES[t]['--syntax-receded'], THEMES[t]['--surface'])
+    expect(Math.abs(at('light') - at('dark'))).toBeLessThanOrEqual(0.5)
   })
 
-  it('documents the limit: alpha cannot rescue COLOURED syntax (Phase 3)', () => {
-    // Recorded as a test so the limitation is not quietly forgotten. Even at an
-    // alpha that no longer reads as receded, the light comment token misses 3:1
-    // — which is why Phase 3 substitutes a single muted ink instead.
-    const lightComment = '#6a737d'
-    expect(contrast(lightComment, DIFF_GROUNDS.light.context, 0.7)).toBeLessThan(3.0)
+  it('alpha is GONE from the recede path — the whole point of Phase 3', () => {
+    // The mutation this catches: someone re-adds `opacity: <n>` to a receded
+    // cell "to make it read more receded", and silently re-breaks the syntax
+    // floor in a way no colour assertion in this file would notice.
+    const rules = fileDiffSource.match(RECEDE_RULE) ?? []
+    expect(rules.length, 'no receded-cell rule found in FileDiff.svelte').toBeGreaterThan(0)
+    for (const rule of rules) {
+      expect(rule, `alpha is back in: ${rule}`).not.toMatch(/[^-]opacity\s*:/)
+    }
+    expect(rules.join('\n')).toContain('--syntax-recede-ink')
   })
+
+  it('--recede-opacity is retired, not merely unused', () => {
+    // Leaving a dead token declared is how a replaced mechanism comes back.
+    // The prose in both files still NAMES it — that history is the point — so
+    // this looks at declarations, not at the text.
+    expect(cssDeclarations(appCss).filter((d) => d.startsWith('--recede-opacity'))).toEqual([])
+    expect(stripComments(fileDiffSource)).not.toContain('var(--recede-opacity)')
+  })
+
+  it('documents the limit that killed alpha (the reason this block exists)', () => {
+    // Kept from the --recede-opacity gate as arithmetic on the values that were
+    // actually shipping, so the finding survives the token that carried it.
+    // Even at 0.70 — an alpha that no longer reads as receded at all — the
+    // light comment token on the old white context ground misses 3:1.
+    expect(contrast('#6a737d', '#ffffff', 0.7)).toBeLessThan(3.0)
+    // And what the app really painted: the light keyword on a removed row at
+    // the shipped 0.55, measured in the browser at 2.16.
+    expect(contrast('#d73a49', '#ffebe9', 0.55)).toBeLessThan(2.5)
+    // Dark was no better — the same row measured 2.27 there at 0.45. Alpha was
+    // never a light-only problem; it was the wrong tool in both themes.
+    expect(contrast('#ff7b72', '#18271f', 0.45)).toBeLessThan(2.5)
+  })
+})
+
+describe('F5 — the vendored viewer is bound to the app palette', () => {
+  // The audit's table, as a gate. diff-view-theme.css is the ONLY thing between
+  // the app's tokens and the vendored stylesheet; drop a binding and the viewer
+  // silently falls back to GitHub's literal with nothing else to notice.
+  const BINDINGS: Array<[string, string]> = [
+    ['--diff-plain-content--', '--surface'],
+    ['--diff-expand-content--', '--surface-sunken'],
+    ['--diff-empty-content--', '--surface-sunken'],
+    ['--diff-add-content--', '--legend-added-bg'],
+    ['--diff-del-content--', '--legend-removed-bg'],
+    ['--diff-add-content-highlight--', '--diff-added-emphasis'],
+    ['--diff-del-content-highlight--', '--diff-removed-emphasis'],
+    ['--diff-add-lineNumber--', '--diff-added-emphasis'],
+    ['--diff-del-lineNumber--', '--diff-removed-emphasis'],
+    ['--diff-plain-lineNumber--', '--surface-sunken'],
+    ['--diff-expand-lineNumber--', '--surface-sunken'],
+    ['--diff-plain-lineNumber-color--', '--text-secondary'],
+    ['--diff-expand-lineNumber-color--', '--text-secondary'],
+    ['--diff-hunk-content--', '--surface-sunken'],
+    ['--diff-hunk-lineNumber--', '--surface-sunken'],
+    ['--diff-hunk-content-color--', '--text-muted'],
+    ['--diff-hunk-lineNumber-hover--', '--accent'],
+    ['--diff-border--', '--hairline'],
+    // The 78 #0969d2 add-comment widgets — the audit's "second accent".
+    ['--diff-add-widget--', '--accent'],
+    ['--diff-add-widget-color--', '--on-accent'],
+  ]
+
+  for (const [vendored, token] of BINDINGS) {
+    it(`${vendored} -> var(${token})`, () => {
+      const decl = `${vendored}: var(${token});`
+      expect(diffThemeCss, `missing binding: ${decl}`).toContain(decl)
+    })
+  }
+
+  it('no colour literal survives in the binding layer', () => {
+    // Every colour in diff-view-theme.css must come from a token. Hex literals
+    // in the PROSE are fine and expected (they record what was replaced); a hex
+    // literal in a DECLARATION is the palette fork coming back.
+    for (const d of cssDeclarations(diffThemeCss)) {
+      expect(d, `hardcoded colour: ${d}`).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+    }
+  })
+
+  it('every selector out-specifies the vendored theme without relying on order', () => {
+    // The vendored rules are theme-scoped (`.diff-tailwindcss-wrapper[data-theme=…]`
+    // before the target). Prefixing `:root` — a pseudo-class, so one class-level
+    // unit — beats each of them by exactly one, uniformly. That is what makes
+    // this file independent of where the bundler puts the two sheets.
+    const selectors = cssSelectors(diffThemeCss)
+    expect(selectors.length).toBeGreaterThan(30)
+    for (const sel of selectors) {
+      expect(sel, `not :root-prefixed: ${sel}`).toMatch(/^:root\s/)
+      expect(sel, `not theme-qualified: ${sel}`).toContain('[data-theme]')
+    }
+  })
+
+  it('the gutter ink is --text-secondary for a measured reason, not a taste one', () => {
+    // One ink serves all four gutter grounds (the library has no per-side
+    // line-number colour) and two of them are the emphasis tints. --text-muted
+    // is the obvious choice and it FAILS there; this pins why it is not used.
+    for (const [themeName, tokens] of Object.entries(THEMES)) {
+      for (const ground of ['--diff-added-emphasis', '--diff-removed-emphasis'] as const) {
+        const secondary = contrast(tokens['--text-secondary'], tokens[ground])
+        const muted = contrast(tokens['--text-muted'], tokens[ground])
+        expect(round2(secondary), `${themeName} secondary on ${ground}`).toBeGreaterThanOrEqual(4.5)
+        expect(round2(muted), `${themeName} muted on ${ground}`).toBeLessThan(4.5)
+      }
+    }
+  })
+})
+
+describe('Phase 3 — the emphasis tints are one clear step off their row', () => {
+  // The word-level (changed-words) highlight and the add/del gutter share these.
+  // Too small and the emphasis does not read; too large and it becomes a ground
+  // the syntax set cannot clear — which is exactly the trade-off that set them.
+  const PAIRS = [
+    ['--diff-added-emphasis', '--legend-added-bg'],
+    ['--diff-removed-emphasis', '--legend-removed-bg'],
+  ] as const
+  for (const [themeName, tokens] of Object.entries(THEMES)) {
+    for (const [emphasis, row] of PAIRS) {
+      it(`${themeName}: ${emphasis} separates from ${row} by >= 1.15`, () => {
+        const r = contrast(tokens[emphasis], tokens[row])
+        expect(round2(r), `measured ${round2(r)}`).toBeGreaterThanOrEqual(1.15)
+      })
+    }
+  }
 })
 
 /**
@@ -772,33 +1006,33 @@ describe('P1-4 — the disabled opacity is its own token', () => {
     expect(Number.isFinite(alpha)).toBe(true)
     expect(alpha).toBeGreaterThan(0)
     expect(alpha).toBeLessThan(1)
-    // Unlike --recede-opacity it is NOT in either dark-override block: a
-    // disabled control has no contrast floor to hold (SC 1.4.3 and SC 1.4.11
-    // both except inactive components), so a second value would be taste
-    // dressed as measurement — and it would grow the app's last copy of the
-    // F17 hazard from two declarations to three.
+    // It is NOT in either dark-override block: a disabled control has no
+    // contrast floor to hold (SC 1.4.3 and SC 1.4.11 both except inactive
+    // components), so a second value would be taste dressed as measurement —
+    // and it would grow the app's last copy of the F17 hazard back to two
+    // declarations after Phase 3 shrank it to one.
     for (const block of [darkOverrideDeclarations(), autoDarkOverrideDeclarations()]) {
       expect(block.map(([n]) => n)).not.toContain('--disabled-opacity')
     }
   })
 
-  it('is NOT --recede-opacity — one number, two meanings, two tokens', () => {
-    // They are equal in dark today and differ in light. Asserting they are
-    // separate DECLARATIONS is the point: folding them would make a receded
-    // diff row and a dead button impossible to tune apart.
+  it('is NOT the recede treatment — one number, two meanings, two mechanisms', () => {
+    // These were once two alphas that happened to be equal in dark. Phase 3
+    // made receded CONTENT an ink (--syntax-receded) and left disabled CHROME
+    // an alpha, which is the same separation stated more strongly: they can no
+    // longer be folded together even by accident, because they are not the same
+    // kind of value any more.
     expect(root['--disabled-opacity']).toBeTruthy()
-    expect(root['--recede-opacity']).toBeTruthy()
-    expect(root['--disabled-opacity']).not.toBe('var(--recede-opacity)')
-    expect(parseFloat(LIGHT['--recede-opacity'])).not.toBe(
-      parseFloat(root['--disabled-opacity']),
-    )
+    expect(root['--syntax-receded']).toBeTruthy()
+    expect(LIGHT['--syntax-receded']).toMatch(/^#[0-9a-f]{6}$/i)
+    expect(root['--disabled-opacity']).not.toMatch(/^#/)
   })
 
   it('records the theme asymmetry it deliberately does NOT correct', () => {
     // The measurement behind the "single value" decision, kept as a test so the
     // number is here when someone wants to revisit it rather than in a comment
-    // that can drift. Light lands ~27% harsher, the same shape of bug
-    // --recede-opacity exists to fix — the difference is that this one has no
+    // that can drift. Light lands ~27% harsher, the same shape of bug that the
+    // recede treatment exists to fix — the difference is that this one has no
     // floor to force a second value.
     const alpha = parseFloat(root['--disabled-opacity'])
     const light = contrast(LIGHT['--text'], LIGHT['--surface-sunken'], alpha)
