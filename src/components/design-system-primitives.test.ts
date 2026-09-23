@@ -96,15 +96,15 @@ describe('select primitive — themed dropdown', () => {
  */
 describe('elevation primitive — one scale, no bespoke shadows', () => {
   /**
-   * The two call sites still carrying a literal, each because it sits outside
-   * Batch 2B's fence and belongs to a batch that has not landed. Both are
-   * recorded in the "Batch 2B — as shipped" section of the refactor plan.
-   * DELETE an entry here as its batch converts it — never add one.
+   * EMPTY, and it should stay that way.
+   *
+   * Batch 2B shipped this guard with two exemptions, each a call site outside
+   * its own fence: ContextRail (taken by Batch 2C, onto --elevation-drawer) and
+   * settings/ModelCombobox (taken by Batch 2A, onto --elevation-4). Every
+   * box-shadow in the app now comes from the scale, so the guard below is
+   * unconditional. DELETE an entry here as its batch converts it — never add one.
    */
-  const DEFERRED_TO_A_LATER_BATCH = [
-    // './ContextRail.svelte' — converted by Batch 2C onto --elevation-drawer.
-    './settings/ModelCombobox.svelte', // Batch 2A owns this file
-  ]
+  const DEFERRED_TO_A_LATER_BATCH: string[] = []
 
   it('no component hand-picks a raw black shadow', () => {
     const offenders: string[] = []
@@ -121,6 +121,13 @@ describe('elevation primitive — one scale, no bespoke shadows', () => {
       }
     }
     expect(offenders).toEqual([])
+  })
+
+  it('the deferred list is empty — every shadow now comes from the scale', () => {
+    // Batch 2A converted the last entry (settings/ModelCombobox). Re-opening the
+    // allowlist should be a deliberate act with a failing test to justify it,
+    // not something a component can slip past by being added to a list.
+    expect(DEFERRED_TO_A_LATER_BATCH).toEqual([])
   })
 
   it('the deferred list names only files that really do still carry one', () => {

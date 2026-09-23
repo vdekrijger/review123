@@ -57,8 +57,11 @@
   /* NEW — the visible boundary of a control (input/select/textarea/checkbox).
      WCAG 2.1 SC 1.4.11 wants 3:1 for that boundary and --hairline measures 1.33
      (audit F11). Measured here: 3.53/3.74/3.32 light, 3.79/3.49/3.17 dark on
-     bg/surface/sunken. Phase 2 Batch 2A points the control primitives at it —
-     defining it here is what lets that batch be a one-line change per rule. */
+     bg/surface/sunken. Batch 2A consumes it: every INTERACTIVE boundary (the
+     .btn / input / textarea / select / checkbox / radio primitives below, plus
+     the component-level controls that bypass them) points here, while every
+     DECORATIVE line — panel rims, row separators, popover chrome — stays on
+     --hairline. That split is the whole point of there being two tokens. */
   --border-control: light-dark(#8d8370, #6b7380);
 
   /* Three text tiers (p.34). */
@@ -102,7 +105,8 @@
    * literals elsewhere in the app. Those serve three distinct semantics —
    * receded content, a disabled control, de-emphasised chrome — and are one
    * number by coincidence. Folding them together would make them impossible to
-   * tune independently. Phase 2 gives the other two their own tokens.
+   * tune independently. Batch 2A gives the disabled one its own token
+   * (--disabled-opacity, below); --chrome-muted-opacity is still outstanding.
    *
    * HONEST LIMIT: 0.55 restores the BASE ink, not the syntax colours. Alpha
    * collapses every hue toward the ground at once, and no alpha that still
@@ -112,6 +116,31 @@
    * which is Phase 3 (plan P1-4(b)).
    */
   --recede-opacity: 0.55;
+
+  /*
+   * ── Disabled opacity — how far an UNAVAILABLE CONTROL drops back ──
+   *
+   * The second of the three semantics stacked on the old bare `opacity: 0.45`
+   * (plan P1-4a). It is NOT --recede-opacity: receded content is content the
+   * reader can bring back by hovering and therefore has a 3:1 floor to hold;
+   * a disabled control is inactive chrome, which WCAG 2.1 exempts outright
+   * (SC 1.4.3 and SC 1.4.11 both except "inactive user interface components").
+   * One number, two meanings — so two tokens, as the plan asks.
+   *
+   * DELIBERATELY NOT THEME-SPLIT, and here is the measurement, because the
+   * asymmetry is real and someone will want to revisit it:
+   *
+   *   --text @0.45 on --surface-sunken   light 2.68:1     dark 3.65:1
+   *
+   * Light lands 27% harsher, the same shape of bug --recede-opacity exists to
+   * fix. The difference is that --recede-opacity had a FLOOR (3:1 on the diff
+   * grounds) which forced 0.55 in light; a disabled control has no floor, so a
+   * second value here would be a taste call dressed as a measurement. It also
+   * costs something: a number cannot use light-dark(), so splitting it would
+   * grow the dark-override block below — the app's last copy of the F17 hazard
+   * — from two declarations to three. Single value, measured, recorded.
+   */
+  --disabled-opacity: 0.45;
 
   /* ── Select chevron (stroke matches --text-muted; NOT a colour, so it cannot
      use light-dark() — see the dark override blocks below) ── */
@@ -325,6 +354,30 @@ code, pre, kbd, samp {
   font-family: var(--font-mono);
 }
 
+/*
+ * ── THE LINK PRIMITIVE (audit F14) ──
+ *
+ * There was no global `a` rule at all, so every anchor a component forgot to
+ * style rendered in the UA default — #0000EE in light, #9e9eff in dark: the one
+ * colour on the page in neither palette, and a saturated blue standing next to
+ * a teal accent. The audit named two such links, Phase 1 found a third, and the
+ * reason they keep appearing is that the DEFAULT was wrong, not that three
+ * authors were careless. Fixing the default makes the bug unrepresentable.
+ *
+ * The treatment is the idiom the app had already converged on by hand in
+ * BridgeSection, AiModelsSection, StandingRulesSection, ContextRail, AiPanel and
+ * InspectStep: inherit the surrounding ink (so a link inside a --text-muted note
+ * stays muted) and let the UNDERLINE carry the affordance (p.193 — an in-body
+ * link needs real styling, and an underline is the one cue that survives every
+ * ground). Element specificity (0,0,1), so every existing component rule and
+ * every .btn/.nav-link anchor still wins; this can only reach the anchors that
+ * had nothing at all.
+ */
+a {
+  color: inherit;
+  text-decoration: underline;
+}
+
 h1 {
   font-size: 1.5rem;
   font-weight: 600;
@@ -366,7 +419,11 @@ h3 {
   align-items: center;
   gap: 0.4rem;
   padding: 0.3rem 0.75rem;
-  border: 1px solid var(--hairline);
+  /* F11 / SC 1.4.11. A .btn's fill is --surface-sunken, which stands 1.06:1 off
+     the page and 1.13:1 off a card — invisible. Its border is therefore the ONLY
+     thing that identifies it as a control, and --hairline rendered that at
+     1.33:1. --border-control measures 3.53/3.74/3.32 light, 3.79/3.49/3.17 dark. */
+  border: 1px solid var(--border-control);
   border-radius: 6px;
   background: var(--surface-raised);
   color: var(--text);
@@ -390,7 +447,7 @@ h3 {
 }
 
 .btn:disabled {
-  opacity: 0.45;
+  opacity: var(--disabled-opacity);
   cursor: not-allowed;
 }
 
@@ -424,11 +481,19 @@ input:not([type="radio"]):not([type="checkbox"]),
 textarea,
 select {
   background: var(--surface);
-  border: 1px solid var(--hairline);
+  /* THE F11 fix — the one that makes fields visible again. A field's only
+     boundary is this line: --surface on --bg is a 1.06:1 shift, so with
+     --hairline at 1.33:1 the settings page read as floating text. SC 1.4.11
+     wants 3:1 for a control's boundary; --border-control clears it on every
+     ground in both themes (3.32-3.79:1), a 2.7x improvement. */
+  border: 1px solid var(--border-control);
   border-radius: 6px;
   color: var(--text);
   font-family: var(--font-ui);
   font-size: 0.9rem;
+  /* Explicit, and load-bearing for .field below: a control is the DATA, so it
+     must not inherit the label weight of the .field wrapper around it (p.44). */
+  font-weight: 400;
   padding: 0.4rem 0.6rem;
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
@@ -459,7 +524,7 @@ select {
 }
 
 select:disabled {
-  opacity: 0.45;
+  opacity: var(--disabled-opacity);
   cursor: not-allowed;
 }
 
@@ -484,7 +549,10 @@ input[type='radio'] {
   margin: 0;
   flex-shrink: 0;
   vertical-align: -0.15em; /* baseline alignment in non-flex label contexts */
-  border: 1px solid var(--hairline);
+  /* F11 again, and the worst case of it: an UNCHECKED box is nothing but its
+     border — there is no label text inside it to fall back on. At --hairline it
+     measured 1.19-1.43:1 depending on the ground. */
+  border: 1px solid var(--border-control);
   background: var(--surface);
   color: var(--accent);
   cursor: pointer;
@@ -544,7 +612,7 @@ input[type='radio']:focus-visible {
 
 input[type='checkbox']:disabled,
 input[type='radio']:disabled {
-  opacity: 0.45;
+  opacity: var(--disabled-opacity);
   cursor: not-allowed;
 }
 
@@ -560,6 +628,64 @@ input[type='radio']:disabled {
   input[type='radio']::before {
     content: none;
   }
+}
+
+/* ═══════════════════════════════════════════
+   STACKED FIELD PRIMITIVE  (audit F12)
+   ═══════════════════════════════════════════ */
+
+/*
+ * Two defects, one primitive.
+ *
+ * (a) THE LABEL OUTRANKED ITS VALUE. The settings forms wrap the control in its
+ *     label, so the label text inherited the page ink and the page size while
+ *     the control re-declared itself smaller: a 15px / weight-400 / --text label
+ *     over a 13.5px value. p.44 is explicit that a label you only need for
+ *     scanning is SUPPORT — smaller, softer — and that the data should dominate;
+ *     the inversion is right only on spec-sheet pages, which a credentials form
+ *     is not. So: 12px (one step BELOW the 13.5px value), --text-secondary
+ *     (8.05:1 light / 7.79:1 dark on --surface, still a comfortable read — this
+ *     is the middle tier Phase 1 added for exactly this job, not --text-muted,
+ *     which is where the HINTS live and would flatten label and hint together).
+ *     Weight 500 is the one axis that goes UP: at 12px a 400-weight secondary
+ *     ink gets thin, and stroke weight is not emphasis when both size and
+ *     contrast have dropped. It is also a weight the app already uses (F18).
+ *
+ * (b) THE RHYTHM WAS FLAT. Measured: label→input 3.7px against input→next field
+ *     7.5px, and 0px→119px where the control was a block element that opened its
+ *     own line. p.84 wants the gap INSIDE a field clearly smaller than the gap
+ *     BETWEEN fields, and 2:1 is not "clearly" (p.83). One scale step inside
+ *     (0.25rem = 3.75px), four between (1rem = 15px): a 4:1 ratio, the same
+ *     register as the 3.3:1 Batch 2C used to group the Inspect toolbar.
+ *
+ * The label may be a <span class="field-label"> (preferred — explicit, and the
+ * shape BridgeSection already used) or a bare text node in the .field, which is
+ * how the wrapping-<label> forms are written. Both get the same treatment, so
+ * adopting the primitive never forces a markup rewrite.
+ */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.field-label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+/* Between fields: four steps, against the one step inside them. Only applies to
+   stacked siblings — a form that lays its fields out in a ROW (BridgeSection's
+   pairing row) sets this back to 0, because there the separation is horizontal. */
+.field + .field {
+  margin-top: 1rem;
 }
 
 /* ═══════════════════════════════════════════

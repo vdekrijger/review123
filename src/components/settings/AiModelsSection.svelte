@@ -1103,7 +1103,7 @@
   .quick-set-btn {
     font-size: 0.8em;
     padding: 0.2rem 0.55rem;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     border-radius: 6px;
     background: var(--surface);
     color: var(--text);
@@ -1140,7 +1140,7 @@
   /* Themed segmented control — radios under the hood, consistent with siblings. */
   .mode-segmented {
     display: inline-flex;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     border-radius: 6px;
     overflow: hidden;
   }
@@ -1153,7 +1153,7 @@
     font-size: 0.8em;
     cursor: pointer;
     color: var(--text-muted);
-    border-left: 1px solid var(--hairline);
+    border-left: 1px solid var(--border-control);
   }
 
   .mode-option:first-child {
@@ -1197,7 +1197,7 @@
 
   .deep-review-toggle.disabled {
     cursor: not-allowed;
-    opacity: 0.55;
+    opacity: var(--disabled-opacity);
   }
 
   .deep-review-label {
@@ -1229,7 +1229,7 @@
     background: var(--surface);
   }
   .ensemble-editor.disabled {
-    opacity: 0.55;
+    opacity: var(--disabled-opacity);
     pointer-events: none;
   }
   .ensemble-head {
@@ -1282,7 +1282,7 @@
   }
   .role-segmented {
     display: inline-flex;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     border-radius: 6px;
     overflow: hidden;
   }
@@ -1293,7 +1293,7 @@
     font-size: 0.78em;
     cursor: pointer;
     color: var(--text-muted);
-    border-left: 1px solid var(--hairline);
+    border-left: 1px solid var(--border-control);
   }
   .role-option:first-child {
     border-left: none;
@@ -1305,7 +1305,7 @@
   }
   .role-option.locked {
     cursor: not-allowed;
-    opacity: 0.45;
+    opacity: var(--disabled-opacity);
   }
   .role-option input {
     position: absolute;
@@ -1317,7 +1317,7 @@
   .ensemble-provider,
   .ensemble-model {
     padding: 0.25rem 0.4rem;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     border-radius: 6px;
     background: var(--surface-raised);
     color: var(--text);
@@ -1336,7 +1336,7 @@
      CLI picker beside it because (CLI, model) is really one choice. */
   .ensemble-bridge-model {
     padding: 0.25rem 0.4rem;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     border-radius: 6px;
     background: var(--surface-raised);
     color: var(--text);
@@ -1356,7 +1356,7 @@
   }
   .ensemble-remove {
     background: none;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     border-radius: 6px;
     color: var(--text-muted);
     cursor: pointer;
@@ -1387,7 +1387,7 @@
   .ensemble-add {
     margin-top: 0.6rem;
     background: none;
-    border: 1px dashed var(--hairline);
+    border: 1px dashed var(--border-control);
     border-radius: 6px;
     color: var(--accent);
     font-size: 0.82em;

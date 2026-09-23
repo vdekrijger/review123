@@ -417,7 +417,7 @@
 
   .primary-btn,
   .secondary-btn {
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     border-radius: 6px;
     cursor: pointer;
     font-size: 0.85em;
@@ -433,7 +433,7 @@
   }
 
   .primary-btn:disabled {
-    opacity: 0.55;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 

@@ -288,7 +288,7 @@
    * text in dark theme (same class of bug as the theme-audit PR #11).
    */
   .comment-editor {
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     border-radius: 6px;
     overflow: visible;
     display: flex;

@@ -502,7 +502,7 @@
   .skill-delete-btn {
     font-size: 0.8em;
     padding: 0.15rem 0.5rem;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--border-control);
     border-radius: 4px;
     background: transparent;
     color: inherit;
@@ -520,7 +520,7 @@
   .add-skill-btn {
     font-size: 0.9em;
     padding: 0.3rem 0.75rem;
-    border: 1px dashed var(--border-subtle);
+    border: 1px dashed var(--border-control);
     border-radius: 4px;
     background: transparent;
     color: inherit;
@@ -528,7 +528,7 @@
   }
 
   .add-skill-btn:disabled {
-    opacity: 0.45;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 
@@ -549,7 +549,7 @@
   .add-skill-form textarea {
     font-family: var(--font-mono);
     font-size: 0.8em;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--border-control);
     border-radius: 4px;
     padding: 0.4rem;
     resize: vertical;
@@ -581,7 +581,7 @@
   .skill-edit-btn {
     font-size: 0.8em;
     padding: 0.15rem 0.5rem;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--border-control);
     border-radius: 4px;
     background: transparent;
     color: inherit;
@@ -615,7 +615,7 @@
   .skill-edit-form textarea {
     font-family: var(--font-mono);
     font-size: 0.8em;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--border-control);
     border-radius: 4px;
     padding: 0.4rem;
     resize: vertical;
@@ -643,7 +643,7 @@
     font-size: 0.82em;
     padding: 0.25rem 0.65rem;
     border-radius: 4px;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--border-control);
     background: transparent;
     color: inherit;
     cursor: pointer;
@@ -705,7 +705,7 @@
   .mine-repo-input {
     font-size: 0.88em;
     padding: 0.25rem 0.5rem;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--border-control);
     border-radius: 4px;
     background: var(--surface);
     color: var(--text);
@@ -721,7 +721,7 @@
   .mine-btn {
     font-size: 0.88em;
     padding: 0.3rem 0.75rem;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--border-control);
     border-radius: 4px;
     background: transparent;
     color: inherit;
@@ -732,7 +732,7 @@
   }
 
   .mine-btn:disabled {
-    opacity: 0.45;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 
@@ -836,7 +836,7 @@
   .builtin-add-btn {
     font-size: 0.8em;
     padding: 0.15rem 0.55rem;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--border-control);
     border-radius: 4px;
     background: transparent;
     color: inherit;
@@ -852,7 +852,7 @@
   }
 
   .builtin-add-btn:disabled {
-    opacity: 0.45;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 
