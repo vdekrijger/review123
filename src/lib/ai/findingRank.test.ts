@@ -5,7 +5,8 @@
  *   - high severity → always primary (even demoted; never spilled by budget)
  *   - majority-verified (confirmedBy/polled ≥ 0.5, surfaced) medium → primary
  *   - convergent (≥2 distinct reviewers) medium → primary
- *   - low → primary only with convergence AND non-negative verification
+ *   - low → primary with convergence AND non-negative verification, OR when the
+ *     panel unanimously backed it on both axes (non-degenerate poll)
  *   - weak/failed verification (below majority / demoted) without convergence → secondary
  *   - verification never ran (polled=0 / absent) → severity is the signal (medium+ inline)
  *   - coveredByDraft → always secondary, regardless of strength
@@ -18,6 +19,9 @@ import {
   rankFindings,
   findingTier,
   isMajorityVerified,
+  isUnanimouslyVerified,
+  isUnanimouslyBacked,
+  raiserCount,
   isConvergent,
   isJudgedMoot,
   MOOT_SECONDARY_LABEL,
@@ -152,6 +156,8 @@ describe('findingTier — low severity', () => {
   })
 
   it('majority-verified low WITHOUT convergence → secondary (low needs something else)', () => {
+    // No worth data on this fixture, so the unanimity carve-out below cannot
+    // fire: it demands BOTH axes positive, and silence is not evidence.
     expect(findingTier(finding({ severity: 'low', verification: verification(3, 3, true) }))).toBe('secondary')
   })
 
@@ -165,6 +171,165 @@ describe('findingTier — low severity', () => {
 
   it('convergent low the verifiers DEMOTED → secondary', () => {
     expect(findingTier(finding({ severity: 'low', verification: verification(1, 4, false), ...converged }))).toBe('secondary')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The unanimity carve-out for LOW — isUnanimouslyVerified / isUnanimouslyBacked
+//
+// Regression guard for the recall loss eval/BASELINE.md Measurement 2 (run 2)
+// measured: a real defect confirmed 3/3, surfaced, worth-flagged, collapsed
+// anyway because one reviewer had typed "low".
+// ---------------------------------------------------------------------------
+
+/**
+ * A poll with `raisers` raiser rows and `verifiers` verifier rows, all confirm.
+ * Built through `perModel` so `raiserCount` reads the real shape the
+ * aggregators emit, not the fixture shorthand.
+ */
+function unanimousPoll(
+  raisers: number,
+  verifiers: number,
+  over: Partial<FindingVerification> = {},
+): FindingVerification {
+  const perModel = [
+    ...Array.from({ length: raisers }, (_, i) => ({
+      provider: `gen${i}`,
+      verdict: 'confirm' as const,
+      reason: '',
+      raised: true,
+    })),
+    ...Array.from({ length: verifiers }, (_, i) => ({
+      provider: `verifier${i}`,
+      verdict: 'confirm' as const,
+      reason: '',
+      worth: true,
+    })),
+  ]
+  return {
+    confirmedBy: raisers + verifiers,
+    polledModels: raisers + verifiers,
+    surfaced: true,
+    worthFlagging: true,
+    perModel,
+    ...over,
+  }
+}
+
+describe('raiserCount — how many models RAISED vs verified', () => {
+  it('counts the rows the aggregators stamp with raised:true', () => {
+    expect(raiserCount(unanimousPoll(1, 2))).toBe(1)
+    expect(raiserCount(unanimousPoll(3, 4))).toBe(3)
+  })
+
+  it('floors at 1 when perModel carries no raiser row (old caches, fixtures)', () => {
+    expect(raiserCount(verification(3, 3, true))).toBe(1)
+  })
+})
+
+describe('isUnanimouslyVerified — unanimity on a poll that could have bitten', () => {
+  it('false with no verifiers at all: 1/1 is one model agreeing with itself', () => {
+    expect(isUnanimouslyVerified(unanimousPoll(1, 0))).toBe(false)
+  })
+
+  it('false with ONE verifier (#253): 2/2 always holds, so the poll is decorative', () => {
+    expect(isUnanimouslyVerified(unanimousPoll(1, 1))).toBe(false)
+  })
+
+  it('true with TWO verifiers — 3/3 on a poll that could have demoted it', () => {
+    expect(isUnanimouslyVerified(unanimousPoll(1, 2))).toBe(true)
+  })
+
+  it('true with THREE verifiers — 4/4', () => {
+    expect(isUnanimouslyVerified(unanimousPoll(1, 3))).toBe(true)
+  })
+
+  it('false when one polled model did NOT confirm (3/4 is a majority, not unanimity)', () => {
+    expect(isUnanimouslyVerified(unanimousPoll(1, 3, { confirmedBy: 3 }))).toBe(false)
+  })
+
+  it('false when the engine demoted it, whatever the tally says', () => {
+    expect(isUnanimouslyVerified(unanimousPoll(1, 2, { surfaced: false }))).toBe(false)
+  })
+
+  it('false when verification never ran', () => {
+    expect(isUnanimouslyVerified(undefined)).toBe(false)
+    expect(isUnanimouslyVerified({ confirmedBy: 0, polledModels: 0, surfaced: true, perModel: [] })).toBe(false)
+  })
+
+  it('scales with raisers: 2 raisers need >2 verifiers before unanimity means anything', () => {
+    expect(isUnanimouslyVerified(unanimousPoll(2, 2))).toBe(false)
+    expect(isUnanimouslyVerified(unanimousPoll(2, 3))).toBe(true)
+  })
+})
+
+describe('isUnanimouslyBacked — both axes positive, explicitly', () => {
+  it('true when unanimous-real AND explicitly worth flagging', () => {
+    expect(isUnanimouslyBacked(unanimousPoll(1, 2))).toBe(true)
+  })
+
+  it('false without worth data — silence is not positive evidence', () => {
+    expect(isUnanimouslyBacked(unanimousPoll(1, 2, { worthFlagging: undefined }))).toBe(false)
+  })
+
+  it('false when the panel judged it moot', () => {
+    expect(isUnanimouslyBacked(unanimousPoll(1, 2, { worthFlagging: false }))).toBe(false)
+  })
+})
+
+describe('findingTier — a unanimously backed LOW stays inline', () => {
+  it('THE REGRESSION: a lone LOW confirmed 3/3, surfaced, worth-flagged → primary', () => {
+    // eval/BASELINE.md Measurement 2, run 2, 08-quiet-low line 13: a `catch`
+    // that discards its error. Every model said real + worth flagging; the old
+    // rule buried it because one reviewer typed "low".
+    const f = finding({ severity: 'low', line: 13, verification: unanimousPoll(1, 2) })
+    expect(findingTier(f)).toBe('primary')
+  })
+
+  it('one verifier is NOT enough — a 2/2 poll could not have demoted it', () => {
+    expect(findingTier(finding({ severity: 'low', verification: unanimousPoll(1, 1) }))).toBe('secondary')
+  })
+
+  it('three verifiers work the same as two', () => {
+    expect(findingTier(finding({ severity: 'low', verification: unanimousPoll(1, 3) }))).toBe('primary')
+  })
+
+  it('a MAJORITY-but-not-unanimous LOW still collapses (2 of 3 is not the bar)', () => {
+    expect(findingTier(finding({ severity: 'low', verification: unanimousPoll(1, 2, { confirmedBy: 2 }) }))).toBe('secondary')
+  })
+
+  it('a unanimously-real LOW the panel judged MOOT still collapses — the gate outranks it', () => {
+    expect(findingTier(finding({ severity: 'low', verification: unanimousPoll(1, 2, { worthFlagging: false }) }))).toBe('secondary')
+  })
+
+  it('a unanimous LOW with no worth data keeps the old tier (old caches unchanged)', () => {
+    expect(findingTier(finding({ severity: 'low', verification: unanimousPoll(1, 2, { worthFlagging: undefined }) }))).toBe('secondary')
+    // The fixture shorthand (no perModel rows) is the same case.
+    expect(findingTier(finding({ severity: 'low', verification: verification(3, 3, true) }))).toBe('secondary')
+  })
+
+  it('the carve-out does not reach MEDIUM or HIGH rules (they already had their own)', () => {
+    expect(findingTier(finding({ severity: 'medium', verification: unanimousPoll(1, 2) }))).toBe('primary')
+    expect(findingTier(finding({ severity: 'high', verification: unanimousPoll(1, 2) }))).toBe('primary')
+  })
+
+  it('coveredByDraft still wins over a unanimously backed LOW', () => {
+    const f = finding({
+      severity: 'low',
+      verification: unanimousPoll(1, 2),
+      coveredByDraft: { path: 'src/a.ts', line: 9 },
+    })
+    expect(findingTier(f)).toBe('secondary')
+  })
+
+  it('a promoted LOW is still an ordinary primary: it spills under the budget like any non-high', () => {
+    const highs = Array.from({ length: INLINE_PRIMARY_BUDGET }, (_, i) =>
+      finding({ severity: 'high', path: 'src/a.ts', line: i + 1 }),
+    )
+    const promotedLow = finding({ severity: 'low', path: 'src/z.ts', line: 1, verification: unanimousPoll(1, 2) })
+    const { primary, secondary } = rankFindings([...highs, promotedLow])
+    expect(primary).toHaveLength(INLINE_PRIMARY_BUDGET)
+    expect(secondary).toContain(promotedLow)
   })
 })
 

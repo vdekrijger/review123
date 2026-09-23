@@ -21,6 +21,7 @@
 
 import type { FindingVerification, AbsorbedFinding } from './schemas'
 import { findingWeight } from '../risk/risk'
+import { verifierVotesCanDemote } from './crossVerify'
 
 // ---------------------------------------------------------------------------
 // Tier rules — named constants with rationale
@@ -135,6 +136,73 @@ export function isConvergent(f: RankableFinding): boolean {
 }
 
 /**
+ * How many models RAISED this finding, as opposed to verifying it. Both
+ * aggregators (`aggregateFinding`, `aggregateMultiRaiser`) stamp `raised: true`
+ * on every raiser row of `perModel`.
+ *
+ * Floor of 1: a verification with no raiser row is either a pre-#250 cached
+ * result (Plan M aggregation was always single-raiser) or a test fixture that
+ * did not bother to build `perModel`. Assuming ONE raiser is the conservative
+ * reading — it is the smallest legal raiser count, and it is what makes the
+ * derived verifier count `polled − raisers` an UPPER bound. Over-counting
+ * raisers would understate verifiers and wrongly call a live poll degenerate;
+ * the floor cannot do that.
+ */
+export function raiserCount(v: FindingVerification): number {
+  const rows = Array.isArray(v.perModel) ? v.perModel : []
+  let raised = 0
+  for (const m of rows) if (m.raised === true) raised += 1
+  return Math.max(1, raised)
+}
+
+/**
+ * UNANIMOUSLY VERIFIED on the reality axis: verification ran, the engine
+ * surfaced the finding, EVERY polled model cast a confirm
+ * (`confirmedBy === polledModels`), AND the poll was capable of demoting it in
+ * the first place.
+ *
+ * That last clause is the whole point of reusing `verifierVotesCanDemote`
+ * (crossVerify.ts, #253): the surface threshold is `score >= polled / 2`, so
+ * with `verifiers <= raisers` a finding surfaces however the verifiers vote and
+ * a "unanimous" tally is DECORATIVE — nobody could have disagreed to any
+ * effect. Promoting on a decorative poll would be promoting on nothing.
+ *
+ * Behaviour with one generator, by verifier count:
+ *
+ *   verifiers | polled | unanimous tally | canDemote(1, V) | unanimously verified
+ *   ----------|--------|-----------------|-----------------|---------------------
+ *   0         | 1      | 1/1             | false           | NO  (no poll at all)
+ *   1         | 2      | 2/2             | false           | NO  (degenerate poll)
+ *   2         | 3      | 3/3             | true            | YES
+ *   3         | 4      | 4/4             | true            | YES
+ *
+ * So the rule is inert on the one-verifier setups #253 showed cannot vote, and
+ * live from two verifiers up. Multi-raiser polls scale the same way: three
+ * raisers need four verifiers before their unanimity means anything.
+ */
+export function isUnanimouslyVerified(v: FindingVerification | undefined): boolean {
+  if (!v || !isMajorityVerified(v)) return false
+  if (v.confirmedBy < v.polledModels) return false
+  const raisers = raiserCount(v)
+  return verifierVotesCanDemote(raisers, v.polledModels - raisers)
+}
+
+/**
+ * The strongest signal this system produces: a finding a non-degenerate panel
+ * confirmed UNANIMOUSLY on the reality axis AND explicitly judged worth
+ * flagging on the worth axis. Both axes must be positive:
+ *
+ *   - reality: `isUnanimouslyVerified` (see above),
+ *   - worth:   `worthFlagging === true`, EXPLICITLY. Absent worth data (old
+ *     caches, verifiers predating the axis) is silence, and this predicate
+ *     promotes only on positive evidence — the mirror of `isJudgedMoot`, which
+ *     demotes only on positive evidence. Silence changes nothing either way.
+ */
+export function isUnanimouslyBacked(v: FindingVerification | undefined): boolean {
+  return isUnanimouslyVerified(v) && v?.worthFlagging === true
+}
+
+/**
  * Judged MOOT by verification (the mootness gate): verification ran and the
  * panel's aggregate worth judgment came back false — real or not, a majority
  * of the polled models judged this not worth a busy reviewer's time. Absent
@@ -176,10 +244,26 @@ export const MOOT_SECONDARY_LABEL = 'judged minor by verification'
  *                           medium+ has always rendered inline).
  *                           Weak/failed verification without convergence →
  *                           SECONDARY (the verifiers looked and didn't back it).
- *   low severity          → PRIMARY only with convergence AND a non-negative
+ *   low severity          → PRIMARY with convergence AND a non-negative
  *                           verification signal (majority-verified, or never
- *                           ran). A lone low finding — or a low the verifiers
- *                           demoted — is exactly the noise this pass collapses.
+ *                           ran) — OR, without convergence, when the panel
+ *                           UNANIMOUSLY backed it on both axes
+ *                           (`isUnanimouslyBacked`). Otherwise SECONDARY: a
+ *                           lone low finding — or a low the verifiers demoted —
+ *                           is exactly the noise this pass collapses.
+ *
+ * The unanimity carve-out for LOW (follow-up to the #254 measurement) exists
+ * because the eval measured this rule eating a real defect. `eval/BASELINE.md`
+ * Measurement 2, run 2: `08-quiet-low` line 13 — a `catch` that silently
+ * discards its error — was confirmed 3/3 `surfaced=true` `worthFlagging=true`,
+ * i.e. every model that looked at it said it was real AND worth a reviewer's
+ * time, and it was collapsed anyway because one reviewer had typed "low".
+ * Severity is ONE reviewer's opinion; unanimous cross-model agreement is the
+ * strongest evidence the ensemble produces, and the same measurement found
+ * verification to be the only stage reliably reducing noise. Letting the weak
+ * signal overrule the strong one was backwards. This carve-out is the narrowest
+ * that fixes it: unanimous (not majority), both axes positive (not one), and
+ * only where the poll could actually have gone the other way.
  *
  * Moot-demotion matrix (worth axis × severity × reality axis):
  *
@@ -217,7 +301,7 @@ export function findingTier(f: RankableFinding): 'primary' | 'secondary' {
   }
 
   // low
-  if (!convergent) return 'secondary'
+  if (!convergent) return isUnanimouslyBacked(f.verification) ? 'primary' : 'secondary'
   if (!ran) return 'primary'
   return majority ? 'primary' : 'secondary'
 }
