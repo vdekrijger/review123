@@ -132,3 +132,107 @@ test('inspect: focus mode dims import lines and toggling off restores them', asy
   await expect(focusToggle).toHaveAttribute('aria-pressed', 'false')
   await expect(importCell.first()).not.toHaveClass(/dimmed-noise/)
 })
+
+// ---------------------------------------------------------------------------
+// Inspect toolbar grouping (Batch 2C, ui-audit F8, rubric p.83 / p.86).
+//
+// `Unified`/`Side-by-side` are one mutually-exclusive choice; `Hide whitespace`,
+// `Focus:` and `Hunk focus:` are three independent switches. They used to be
+// five identical `.btn` siblings inside a plain `display: block` container, so
+// every gap in the row was the same 3.55px collapsed whitespace node: the space
+// INSIDE the pair equalled the space between it and the unrelated toggles, and
+// a reader could not tell the first two were one control.
+//
+// "The space around a group must always exceed the space inside it." This
+// measures the REAL rendered geometry and asserts exactly that, with no
+// hardcoded pixel value — a future restyle that re-flattens the row fails here
+// whatever the scale step happens to be.
+// ---------------------------------------------------------------------------
+
+test('inspect toolbar: the space around each control group exceeds the space inside it', async ({
+  page,
+}) => {
+  await page.route('**/*posthog.com/**', (route) => route.abort())
+  await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+
+  await page.route('**/api.github.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}`) {
+      return route.fulfill({
+        json: {
+          title: 'Toolbar grouping test PR',
+          state: 'open', merged: false, body: null,
+          base: { sha: BASE_SHA, repo: { private: false } },
+          head: { sha: HEAD_SHA },
+          changed_files: 1,
+        },
+      })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/files`) {
+      return route.fulfill({
+        json: [{ filename: 'src/sample.ts', status: 'modified', patch: SAMPLE_PATCH, additions: 2, deletions: 0 }],
+      })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/commits/${HEAD_SHA}/check-runs`) {
+      return route.fulfill({ json: { total_count: 0, check_runs: [] } })
+    }
+    if (path === `/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/comments`) {
+      return route.fulfill({ json: [] })
+    }
+    return route.fulfill({ status: 404, json: { message: 'Not Found' } })
+  })
+  await page.route('**/api.deepseek.com/**', (route) => route.abort())
+
+  await page.addInitScript((settings) => {
+    localStorage.setItem('review123:settings', JSON.stringify(settings))
+  }, { deepseekKey: '', diffMode: 'unified', railCollapsed: true, focusMode: 'off' })
+
+  await page.goto(APP_REVIEW_PATH)
+  await expect(page.getByRole('heading', { name: /Toolbar grouping test PR/i })).toBeVisible({
+    timeout: 10_000,
+  })
+  await page.getByRole('button', { name: 'Next step' }).click()
+  await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+  const geometry = await page.evaluate(() => {
+    const gap = (a: Element, b: Element) =>
+      b.getBoundingClientRect().left - a.getBoundingClientRect().right
+
+    const seg = document.querySelector('.mode-switch')
+    const toggles = document.querySelector('.view-toggles')
+    if (!seg || !toggles) throw new Error('toolbar groups missing')
+
+    const segBtns = [...seg.querySelectorAll('button')]
+    const togBtns = [...toggles.querySelectorAll('button')]
+
+    const insideSegmented = segBtns.slice(1).map((b, i) => gap(segBtns[i], b))
+    const insideToggles = togBtns.slice(1).map((b, i) => gap(togBtns[i], b))
+
+    return {
+      insideSegmented,
+      insideToggles,
+      betweenGroups: gap(seg, toggles),
+      // Same row, not stacked: the grouping claim is about horizontal space.
+      sameRow:
+        Math.abs(seg.getBoundingClientRect().top - toggles.getBoundingClientRect().top) < 4,
+      segmentedCount: segBtns.length,
+      toggleCount: togBtns.length,
+    }
+  })
+
+  expect(geometry.segmentedCount).toBe(2)
+  expect(geometry.toggleCount).toBe(3)
+  expect(geometry.sameRow).toBe(true)
+
+  const maxInside = Math.max(...geometry.insideSegmented, ...geometry.insideToggles)
+
+  // The pair is ONE control: no gap at all between its two halves.
+  for (const g of geometry.insideSegmented) expect(g).toBeLessThanOrEqual(0.5)
+
+  // The three toggles sit closer to each other than to the pair (p.86) …
+  for (const g of geometry.insideToggles) expect(g).toBeLessThan(geometry.betweenGroups)
+
+  // … and the rule holds over the whole row: around > inside, with real margin
+  // rather than the 1.0x tie the old 3.55px-everywhere row produced.
+  expect(geometry.betweenGroups).toBeGreaterThan(maxInside * 2)
+})

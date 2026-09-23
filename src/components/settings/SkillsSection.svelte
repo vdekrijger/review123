@@ -203,7 +203,7 @@
 </script>
 
 <section id="skills" aria-label="Reviewer skills" class="skills-section">
-  <p class="section-label">Reviewer skills</p>
+  <h2 class="section-label">Reviewer skills</h2>
 
   <label class="auto-run-label">
     <input
@@ -315,7 +315,7 @@
 
   <!-- Built-in reviewers library -->
   <div class="builtin-section">
-    <p class="section-label builtin-label">Built-in reviewers</p>
+    <h3 class="section-label builtin-label">Built-in reviewers</h3>
     <ul class="builtin-list">
       {#each BUILTIN_SKILLS as builtin (builtin.id)}
         <li class="builtin-entry" data-builtin-id={builtin.id}>
@@ -376,7 +376,7 @@
 
   <!-- Mine-my-reviews section -->
   <div class="mine-section">
-    <p class="section-label mine-label">Generate from my reviews</p>
+    <h3 class="section-label mine-label">Generate from my reviews</h3>
     <p class="hint mine-hint">Analyzes your recent review comments across your repositories to build a personalized reviewer persona.</p>
 
     {#if !hasAiKey}
@@ -460,9 +460,13 @@
     padding: 1rem 1.25rem;
   }
 
+  /* A real <h2> (F13/rubric D1) styled down to the label it already was.
+     letter-spacing is pinned back to normal because the global h2/h3 rules
+     tighten it: the outline is the change here, not a single rendered pixel. */
   .section-label {
     font-size: 0.9em;
     font-weight: 600;
+    letter-spacing: normal;
     margin: 0 0 0.4rem;
     color: var(--text);
   }
@@ -773,7 +777,11 @@
   }
 
   /* ---- Built-in reviewers library ---- */
+  /* margin-top separates this sub-section from the installed-skills list above
+     it: its <h3> had 11.25px above and 6px below (1.9:1), too close to call
+     which side it belonged to. 30px / 6px now (rubric D2, p.85). */
   .builtin-section {
+    margin-top: 1.25rem;
     margin-bottom: 0.75rem;
   }
 

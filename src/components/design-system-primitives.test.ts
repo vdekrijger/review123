@@ -102,7 +102,7 @@ describe('elevation primitive — one scale, no bespoke shadows', () => {
    * DELETE an entry here as its batch converts it — never add one.
    */
   const DEFERRED_TO_A_LATER_BATCH = [
-    './ContextRail.svelte', // Batch 2C owns this file
+    // './ContextRail.svelte' — converted by Batch 2C onto --elevation-drawer.
     './settings/ModelCombobox.svelte', // Batch 2A owns this file
   ]
 

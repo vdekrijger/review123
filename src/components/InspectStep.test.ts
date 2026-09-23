@@ -136,23 +136,67 @@ describe('InspectStep — viewedStore wiring', () => {
 // InspectStep — toolbar btn class (task 5, item 1)
 // ---------------------------------------------------------------------------
 
-describe('InspectStep — toolbar btn classes', () => {
-  it('Unified button has class btn', () => {
+// Batch 2C / ui-audit F8. `Unified` and `Side-by-side` are ONE mutually
+// exclusive choice; `Hide whitespace`, `Focus:` and `Hunk focus:` are three
+// independent switches. They used to be five identical `.btn` siblings in a
+// plain block, separated by nothing but a collapsed whitespace node — the same
+// 3.55px inside the pair as between the unrelated controls, so the markup said
+// "five peer buttons". These assert the GROUPING, which is what regressed:
+// the pair is its own control, the three toggles are a different one, and no
+// button belongs to both.
+describe('InspectStep — toolbar grouping', () => {
+  it('Unified and Side-by-side are the ONLY buttons in the diff-layout group', () => {
     const files = makeFiles(['a.ts'])
     const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null } })
-    const buttons = container.querySelectorAll('.mode-toggle button')
-    const unifiedBtn = [...buttons].find(b => b.textContent?.trim() === 'Unified')
-    expect(unifiedBtn).toBeTruthy()
-    expect(unifiedBtn!.classList.contains('btn')).toBe(true)
+    const segmented = container.querySelector('.mode-switch')
+    expect(segmented).toBeTruthy()
+    expect(segmented!.getAttribute('role')).toBe('group')
+    expect([...segmented!.querySelectorAll('button')].map((b) => b.textContent?.trim())).toEqual([
+      'Unified',
+      'Side-by-side',
+    ])
   })
 
-  it('Side-by-side button has class btn', () => {
+  it('the three independent toggles are a SEPARATE group, sharing no button with the pair', () => {
+    const files = makeFiles(['a.ts'])
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null } })
+    const toggles = container.querySelector('.view-toggles')
+    expect(toggles).toBeTruthy()
+    const labels = [...toggles!.querySelectorAll('button')].map((b) => b.textContent?.trim() ?? '')
+    expect(labels).toHaveLength(3)
+    expect(labels[0]).toBe('Hide whitespace')
+    expect(labels[1]).toMatch(/^Focus:/)
+    expect(labels[2]).toMatch(/^Hunk focus:/)
+    // Disjoint: the layout pair is not inside the toggle group and vice versa.
+    expect(toggles!.querySelector('.mode-switch')).toBeNull()
+    expect(container.querySelector('.mode-switch')!.contains(toggles!)).toBe(false)
+  })
+
+  it('the mode buttons carry the segmented pill class, not the loose .btn', () => {
     const files = makeFiles(['a.ts'])
     const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'split', onmode: () => {}, draftStore: null } })
-    const buttons = container.querySelectorAll('.mode-toggle button')
-    const splitBtn = [...buttons].find(b => b.textContent?.trim() === 'Side-by-side')
-    expect(splitBtn).toBeTruthy()
-    expect(splitBtn!.classList.contains('btn')).toBe(true)
+    for (const label of ['Unified', 'Side-by-side']) {
+      const btn = [...container.querySelectorAll('.mode-switch button')].find(
+        (b) => b.textContent?.trim() === label,
+      )
+      expect(btn, `${label} button is missing`).toBeTruthy()
+      expect(btn!.classList.contains('mode-btn')).toBe(true)
+      expect(btn!.classList.contains('btn')).toBe(false)
+    }
+    // …and the active one is marked with the pill's own active class.
+    const active = container.querySelector('.mode-btn.mode-active')
+    expect(active?.textContent?.trim()).toBe('Side-by-side')
+  })
+
+  it('the Story|Files switch shares the view bar row with the diff controls', () => {
+    const files = makeFiles(['a.ts'])
+    const { container } = render(InspectStep, { props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null } })
+    const bar = container.querySelector('.view-bar')
+    expect(bar).toBeTruthy()
+    // The diff controls live in the bar; the story fallback notes do not
+    // (they explain the row, so they sit under it rather than splitting it).
+    expect(bar!.querySelector('.mode-toggle')).toBeTruthy()
+    expect(bar!.querySelector('.story-fallback-note')).toBeNull()
   })
 
   it('active mode button has aria-pressed=true', () => {

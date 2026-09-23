@@ -151,7 +151,7 @@
 </script>
 
 <section id="providers" aria-label="Providers and access">
-  <p class="section-label">Providers &amp; access</p>
+  <h2 class="section-label">Providers &amp; access</h2>
 
   {#if githubOauthConnected}
     <div class="connected-chip">
@@ -248,16 +248,26 @@
     padding: 1rem 1.25rem;
   }
 
+  /* A real <h2> (F13/rubric D1) styled down to the label it already was.
+     letter-spacing is pinned back to normal because the global h2/h3 rules
+     tighten it: the outline is the change here, not a single rendered pixel. */
   .section-label {
     font-size: 0.9em;
     font-weight: 600;
+    letter-spacing: normal;
     margin: 0 0 0.4rem;
     color: var(--text);
   }
 
+  /* margin-top: 0 is load-bearing (rubric D2, p.85). As a <p> this carried the
+     UA 1em top margin, which collapsed with the heading's 0.4rem bottom margin
+     to 13.5px — against 15px above the heading. The section title was floating
+     between its section and its content instead of attaching to the content it
+     introduces. Now 15px above / 6px below. */
   .auth-status {
     font-size: 0.9em;
     color: var(--text-muted);
+    margin-top: 0;
     margin-bottom: 0.75rem;
   }
 
