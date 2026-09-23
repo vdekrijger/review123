@@ -377,3 +377,84 @@ describe('F18 — two weights, plus one named exception', () => {
     expect(offenders).toEqual([])
   })
 })
+
+/**
+ * Batch 2D's highest-value follow-up — the settings card.
+ *
+ * `section { margin-bottom: 1.5rem; border: 1px solid var(--hairline);
+ * border-radius: 10px; padding: 1rem 1.25rem }` was written out byte-identically
+ * in the settings sections, beside a .card primitive in app.css that had NO call
+ * sites at all. The plan counted five copies; there were six. The sixth
+ * (SkillsSection) is the only one written under a class selector rather than the
+ * `section` element, so the grep that found the other five walked past it —
+ * "the citation is a starting point, the grep is the set", one more time.
+ *
+ * Why all six had to move together: migrating one would have made that section
+ * visibly differ from its siblings on the SAME PAGE, which is Batch 2A's
+ * recorded lesson in a new costume.
+ *
+ * These tests pin the convergence rather than the pixels: the card is declared
+ * in exactly one place, and the sections consume it.
+ */
+describe('the settings card is the .card primitive, not six copies of it', () => {
+  const stripCss = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, '')
+  const styleOf = (source: string) => source.match(/<style[^>]*>([\s\S]*?)<\/style>/)?.[1] ?? ''
+
+  const sections = Object.entries(svelteSources).filter(
+    ([file]) => file.includes('/settings/') && /Section\.svelte$/.test(file),
+  )
+
+  it('there are six settings sections and the glob finds them all', () => {
+    expect(sections.map(([f]) => f.split('/').pop()).sort()).toEqual([
+      'AiModelsSection.svelte',
+      'AppearanceSection.svelte',
+      'BridgeSection.svelte',
+      'ProvidersSection.svelte',
+      'SkillsSection.svelte',
+      'StandingRulesSection.svelte',
+    ])
+  })
+
+  it('every one of them wears class="card"', () => {
+    for (const [file, source] of sections) {
+      expect(source, file).toMatch(/<section[^>]*\bclass="(?:[^"]*\s)?card(?:\s[^"]*)?"/)
+    }
+  })
+
+  it('none of them re-declares the card chrome', () => {
+    // The section-level rule may carry margin-bottom and NOTHING else: the gap
+    // to the next card is the page's rhythm, the card's skin is app.css's.
+    const offenders: string[] = []
+    for (const [file, source] of sections) {
+      const css = stripCss(styleOf(source))
+      for (const m of css.matchAll(/(^|\n)\s*(section|\.skills-section)\s*\{([^}]*)\}/g)) {
+        const props = [...m[3].matchAll(/([a-z-]+)\s*:/g)].map((p) => p[1])
+        if (props.join() !== 'margin-bottom') {
+          offenders.push(`${file} → ${m[2]} declares ${props.join(', ') || '(nothing)'}`)
+        }
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('app.css owns the card, and it follows Batch 2B’s measured border rule', () => {
+    const card = appCss.match(/(^|\n)\.card\s*\{([^}]*)\}/)?.[2] ?? ''
+    expect(card, 'app.css has no .card rule').toBeTruthy()
+    // A card is a SURFACE — the hand-copies had no background, so they were
+    // rectangles drawn on the page ground rather than things resting on it.
+    expect(card).toMatch(/background:\s*var\(--surface\)/)
+    // Light drops the line and takes depth; dark keeps the rim because black on
+    // #14161a tops out at 1.07:1. One declaration carries both.
+    expect(card).toMatch(/border:\s*1px solid light-dark\(\s*transparent\s*,\s*var\(--hairline\)\s*\)/)
+    expect(card).toMatch(/box-shadow:\s*var\(--elevation-1\)/)
+    // And it sits on the spacing scale, which is what the six copies did not.
+    expect(card).toMatch(/padding:\s*var\(--space-3\)\s+var\(--space-4\)/)
+  })
+
+  it('the card carries no margin, so the page keeps owning its own rhythm', () => {
+    // The reason each section still declares one line of its own. If .card ever
+    // grew a margin, six sections would silently double their gap.
+    const card = appCss.match(/(^|\n)\.card\s*\{([^}]*)\}/)?.[2] ?? ''
+    expect(card).not.toMatch(/margin/)
+  })
+})

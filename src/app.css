@@ -978,9 +978,31 @@ input[type='radio']:disabled {
  * (Nested light-dark() is deliberate and verified in-browser: it keeps the dark
  * side pointing at --hairline rather than duplicating its value here.)
  *
- * NOTE: this primitive has no call sites today; .glance-card in
- * UnderstandStep.svelte is a hand-inlined copy of the old rule. Batch 2B
- * restyles that copy to match, so adopting .card later is a no-op.
+ * CALL SITES. Batch 2B shipped this with none, which is why the settings page
+ * went on re-inventing it. It now dresses the SIX settings sections
+ * (AiModels, Appearance, Bridge, Providers, Skills, StandingRules), each of
+ * which had written these five properties out by hand, byte-identically. They
+ * wear `class="card"` and keep only their margin-bottom, because the gap to the
+ * next card is the page's rhythm and not the card's chrome.
+ *
+ * Adopting it was NOT a no-op, and the differences are the point — every one is
+ * this primitive applying a rule the hand-copies predated:
+ *   - they carried `1px solid var(--hairline)` in BOTH themes, which is exactly
+ *     what Batch 2B measured and corrected: in light a 1.33:1 rim loses to a
+ *     1.58:1 shadow, so light drops the line and takes depth instead. Dark keeps
+ *     its rim, because black on #14161a tops out at 1.07:1 and no alpha rescues
+ *     it. The settings page was the last surface still on the old rule.
+ *   - they had no background at all, so a "card" was a rectangle drawn on the
+ *     page ground. --surface is what makes it a surface.
+ *   - 10px radius → 8px, and 1rem/1.25rem padding → --space-3/--space-4, which
+ *     is the same padding .glance-card already renders.
+ *
+ * On Batch 2B's claim that .glance-card was styled to make this a no-op: it
+ * holds for the four chrome properties (background, border, radius) and exactly
+ * for padding — 0.75rem/1rem IS --space-3/--space-4 — but NOT for elevation.
+ * .glance-card takes --elevation-2 deliberately, to outrank the detail panels
+ * below it, and adds its own flex layout. So it is a no-op on the card's skin
+ * and a deliberate divergence on its depth; it is left alone here.
  */
 .card {
   background: var(--surface);

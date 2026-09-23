@@ -202,7 +202,7 @@
   }
 </script>
 
-<section id="skills" aria-label="Reviewer skills" class="skills-section">
+<section id="skills" aria-label="Reviewer skills" class="card skills-section">
   <h2 class="section-label">Reviewer skills</h2>
 
   <label class="auto-run-label">
@@ -449,11 +449,17 @@
 
 <style>
   /* Bounded section card — skills persist on toggle/add, no Save button. */
+  /* The settings card IS the .card primitive in app.css — this section wears it
+     via class="card" instead of re-declaring it (it was written out
+     byte-identically in all SIX sections of this page). What stays here is the
+     one thing .card deliberately does not own: the gap to the next card, which
+     is the PAGE's rhythm, not the card's chrome.
+
+     This was the SIXTH copy, and the reason the plan's count said five: it is
+     the only one written under a class selector rather than `section`, so the
+     grep that found the others walked straight past it. */
   .skills-section {
-    margin-bottom: 1.5rem;
-    border: 1px solid var(--hairline);
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
+    margin-bottom: var(--space-5);
   }
 
   /* A real <h2> (F13/rubric D1) styled down to the label it already was.

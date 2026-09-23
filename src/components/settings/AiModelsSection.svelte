@@ -491,7 +491,7 @@
   })
 </script>
 
-<section id="ai-models" aria-label="AI models">
+<section id="ai-models" aria-label="AI models" class="card">
   <h2 class="section-label">AI models</h2>
   <p class="apply-note">Provider and model selection applies immediately. API keys are saved per provider with <em>Save &amp; test</em>.</p>
 
@@ -869,11 +869,13 @@
 <style>
   /* Bounded section card — saving here is per-key (Save & test); provider and
      model apply immediately, so there is no section-level Save button. */
+  /* The settings card IS the .card primitive in app.css — this section wears it
+     via class="card" instead of re-declaring it (it was written out
+     byte-identically in all SIX sections of this page). What stays here is the
+     one thing .card deliberately does not own: the gap to the next card, which
+     is the PAGE's rhythm, not the card's chrome. */
   section {
-    margin-bottom: 1.5rem;
-    border: 1px solid var(--hairline);
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
+    margin-bottom: var(--space-5);
   }
 
   /* A real <h2> (F13/rubric D1) styled down to the label it already was.
