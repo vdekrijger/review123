@@ -9,7 +9,7 @@ import {
   findInvalidKeyChar, invalidKeyCharMessage, setUnderstandSections,
   setAiTaskMode, setAiTaskModes, setAllTasksDeep, setAllTasksStandard, setOffAllExtras,
   defaultTaskModes, allDeepTaskModes, taskSupportsDeep, setAiPanel, setPanelOneGenerator, setPanelAllGenerate,
-  type PanelParticipant,
+  type PanelParticipant, type ParticipantRole,
 } from './settings'
 
 describe('settings', () => {
@@ -880,6 +880,93 @@ describe('aiPanel setting (Plan P — unified model panel)', () => {
     const participants: PanelParticipant[] = [gen('bridge', 'claude'), ver('openai', 'gpt-5.4')]
     setAiPanel({ participants })
     expect(getSettings().aiPanel).toEqual({ participants })
+  })
+
+  // -------------------------------------------------------------------------
+  // PER-ROW BRIDGE MODELS. For the bridge, `model` names the CLI to spawn, so
+  // a row needs a second field to say WHICH MODEL that CLI runs — otherwise
+  // every bridge row in a panel resolves to the same model and the point of a
+  // panel is lost. Absent means "inherit the global bridgeModel", which is what
+  // makes a panel stored before this field existed keep working unchanged.
+  // -------------------------------------------------------------------------
+  const bridgeRow = (cli: string, bridgeModel: string, role: ParticipantRole = 'generator'): PanelParticipant =>
+    ({ provider: 'bridge', model: cli, role, bridgeModel })
+
+  it('round-trips a per-row model on a bridge participant', () => {
+    const participants: PanelParticipant[] = [
+      bridgeRow('claude', 'fable'),
+      bridgeRow('claude', 'opus', 'verifier'),
+    ]
+    setAiPanel({ participants })
+    expect(getSettings().aiPanel).toEqual({ participants })
+    // Through storage, not just through the in-memory object.
+    const stored = JSON.parse(localStorage.getItem('review123:settings')!)
+    expect(stored.aiPanel.participants.map((p: { bridgeModel?: string }) => p.bridgeModel)).toEqual(['fable', 'opus'])
+  })
+
+  it('A PANEL STORED BEFORE PER-ROW MODELS still loads, with no model of its own', () => {
+    // Byte-for-byte the shape #253 and earlier wrote: provider, model, role.
+    localStorage.setItem('review123:settings', JSON.stringify({
+      bridgeModel: 'opus',
+      aiPanel: { participants: [{ provider: 'bridge', model: 'claude', role: 'generator' }] },
+    }))
+    const panel = getSettings().aiPanel!
+    expect(panel.participants).toEqual([{ provider: 'bridge', model: 'claude', role: 'generator' }])
+    // No invented field — the row stays silent and INHERITS at resolution time
+    // (config.ts), so the global it used to get is the global it still gets.
+    expect(panel.participants[0].bridgeModel).toBeUndefined()
+  })
+
+  it('trims a per-row model and ignores a blank one (blank = inherit)', () => {
+    setAiPanel({ participants: [bridgeRow('claude', '  fable  '), bridgeRow('claude', '   ', 'verifier')] })
+    const rows = getSettings().aiPanel!.participants
+    expect(rows[0].bridgeModel).toBe('fable')
+    expect(rows[1].bridgeModel).toBeUndefined()
+  })
+
+  it('never keeps a per-row model on a NON-bridge participant', () => {
+    // `model` already IS the model id there; a second one could only confuse.
+    setAiPanel({ participants: [
+      { provider: 'anthropic', model: 'claude-opus-4-8', role: 'generator', bridgeModel: 'fable' },
+    ] })
+    expect(getSettings().aiPanel!.participants[0].bridgeModel).toBeUndefined()
+  })
+
+  it('REFUSES a flag-shaped per-row model from hand-edited storage, keeping the row', () => {
+    // This string would reach the bridge's argv as `--model <id>`, so
+    // `--dangerously-skip-permissions` here would smuggle a switch past the UI.
+    // localStorage is user-writable, so it is re-validated on READ — and the
+    // bad value is dropped rather than the row, which then inherits the global.
+    localStorage.setItem('review123:settings', JSON.stringify({
+      aiPanel: { participants: [
+        { provider: 'bridge', model: 'claude', role: 'generator', bridgeModel: '--dangerously-skip-permissions' },
+        { provider: 'bridge', model: 'claude', role: 'verifier', bridgeModel: 'opus; rm -rf /' },
+        { provider: 'bridge', model: 'claude', role: 'verifier', bridgeModel: '-opus' },
+        { provider: 'bridge', model: 'claude', role: 'verifier', bridgeModel: 42 },
+      ] },
+    }))
+    const rows = getSettings().aiPanel!.participants
+    expect(rows.length).toBe(4)
+    expect(rows.every((r) => r.bridgeModel === undefined)).toBe(true)
+  })
+
+  it('refuses a per-row model on the WRITE path too, not only on read', () => {
+    setAiPanel({ participants: [bridgeRow('claude', '--dangerously-skip-permissions')] })
+    // Nothing malformed is persisted in the first place, so the editor can
+    // never show a stored value that resolution would silently ignore.
+    const stored = JSON.parse(localStorage.getItem('review123:settings')!)
+    expect(stored.aiPanel.participants[0].bridgeModel).toBeUndefined()
+  })
+
+  it('the role presets preserve each row\'s own model', () => {
+    // A preset only re-roles rows; it must not flatten what they run.
+    setPanelAllGenerate([bridgeRow('claude', 'fable'), bridgeRow('claude', 'opus', 'verifier')])
+    const rows = getSettings().aiPanel!.participants
+    expect(rows.every((r) => r.role === 'generator')).toBe(true)
+    expect(rows.map((r) => r.bridgeModel)).toEqual(['fable', 'opus'])
+
+    setPanelOneGenerator(rows)
+    expect(getSettings().aiPanel!.participants.map((r) => r.bridgeModel)).toEqual(['fable', 'opus'])
   })
 
   it('still drops a bridge participant naming a CLI that does not exist', () => {

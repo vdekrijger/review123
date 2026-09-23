@@ -46,12 +46,13 @@ import {
   parseBridgeError,
   parseInferResponse,
   parseInferStreamEvent,
+  isValidModelId,
   INFER_STREAM_PATH,
   type BridgeCli,
   type InferRequest,
   type InferUsage,
 } from '../bridge/protocol'
-import { activeLlmConfig, PROVIDER_KEY_FIELDS } from './config'
+import { activeLlmConfig, activeBridgeModel, PROVIDER_KEY_FIELDS } from './config'
 import { getProvider, getModelDef } from './providers'
 import { parseJsonLoose } from './jsonExtract'
 import type { LlmProviderDef, LlmModelDef, LlmProviderId } from './providers'
@@ -155,6 +156,19 @@ export interface ProviderConfig {
   providerId: LlmProviderId
   model: LlmModelDef
   key: string
+  /**
+   * LOCAL BRIDGE ONLY — the EFFECTIVE model this participant's CLI should run
+   * (`--model <id>`), already resolved by config.ts's resolvePanel from the
+   * panel row's own choice falling back to the global `bridgeModel`.
+   * `undefined` → no flag, so the CLI keeps its own default.
+   *
+   * It is carried on the CONFIG rather than read from settings at the transport
+   * because a panel can hold several bridge participants that differ ONLY here
+   * — one generator on `fable`, a verifier on `opus`, the same CLI, the same
+   * subscription. A transport that asked settings would give all of them the
+   * same answer, which is the bug this replaces.
+   */
+  bridgeModel?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -1221,6 +1235,13 @@ async function bridgeComplete(
   model: LlmModelDef,
   opts: LlmCompleteOpts,
   includeUsage: boolean,
+  /**
+   * The model this CLI should run, ALREADY RESOLVED by the caller (row choice →
+   * global default → undefined). Required rather than optional so every call
+   * site has to decide which participant it is speaking for; `undefined` means
+   * "send no --model flag", never "look it up yourself".
+   */
+  bridgeModel: string | undefined,
 ): Promise<LlmCompleteResult> {
   const stored = readStoredBridge()
   // 'no-key' is the honest kind: the pairing token IS this provider's
@@ -1240,11 +1261,13 @@ async function bridgeComplete(
     timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS,
   }
   if (maxTokens !== undefined) payload.maxOutputTokens = maxTokens
-  // `model` here is the CLI to spawn; WHICH MODEL that CLI runs is a separate
-  // setting, because the bridge provider's "models" are process names. Left
-  // unset the flag is omitted entirely and the CLI keeps its own default.
-  const bridgeModel = getSettings().bridgeModel
-  if (bridgeModel !== '') payload.model = bridgeModel
+  // `model` here is the CLI to spawn; WHICH MODEL that CLI runs is a separate,
+  // PER-PARTICIPANT choice, because the bridge provider's "models" are process
+  // names. Left unset the flag is omitted entirely and the CLI keeps its own
+  // default. Re-validated at the last possible moment: this is the only
+  // caller-supplied string that reaches the bridge's argv, and the bridge
+  // rejects a bad one too (#253) — neither end trusts the other to have checked.
+  if (bridgeModel !== undefined && isValidModelId(bridgeModel)) payload.model = bridgeModel
 
   let res: Response
   try {
@@ -1329,12 +1352,14 @@ async function bridgeStreamViaOneShot(
   opts: LlmStreamOpts,
   onDelta: (text: string) => void,
   includeUsage: boolean,
+  /** Passed straight through, so the fallback runs the SAME model the stream would have. */
+  bridgeModel: string | undefined,
 ): Promise<LlmStreamResult> {
   const completeOpts: LlmCompleteOpts = { system: opts.system, user: opts.user }
   if (opts.signal !== undefined) completeOpts.signal = opts.signal
   if (opts.timeoutMs !== undefined) completeOpts.timeoutMs = opts.timeoutMs
 
-  const result = await bridgeComplete(provider, model, completeOpts, includeUsage)
+  const result = await bridgeComplete(provider, model, completeOpts, includeUsage, bridgeModel)
   if (result.content) onDelta(result.content)
   return result.usage ? { content: result.content, usage: result.usage } : { content: result.content }
 }
@@ -1371,6 +1396,8 @@ async function bridgeStream(
   opts: LlmStreamOpts,
   onDelta: (text: string) => void,
   includeUsage: boolean,
+  /** See bridgeComplete — already resolved by the caller, never looked up here. */
+  bridgeModel: string | undefined,
 ): Promise<LlmStreamResult> {
   const stored = readStoredBridge()
   if (stored === null) throw new LlmError('no-key', BRIDGE_NOT_PAIRED_MESSAGE)
@@ -1388,9 +1415,9 @@ async function bridgeStream(
   }
   // The streaming route must pick the same model as the one-shot route, or the
   // same review would be answered by two different models depending only on
-  // whether the CLI happened to support partial output.
-  const streamBridgeModel = getSettings().bridgeModel
-  if (streamBridgeModel !== '') payload.model = streamBridgeModel
+  // whether the CLI happened to support partial output — so it takes the same
+  // already-resolved value, and re-validates it the same way.
+  if (bridgeModel !== undefined && isValidModelId(bridgeModel)) payload.model = bridgeModel
 
   let res: Response
   try {
@@ -1413,7 +1440,7 @@ async function bridgeStream(
   if (res.status === 404) {
     await res.body?.cancel().catch(() => {})
     lastBridgeStreamMode = 'no-route'
-    return bridgeStreamViaOneShot(provider, model, opts, onDelta, includeUsage)
+    return bridgeStreamViaOneShot(provider, model, opts, onDelta, includeUsage, bridgeModel)
   }
 
   if (!res.ok) await mapBridgeHttpError(res, timeoutSignal)
@@ -1534,7 +1561,10 @@ async function dispatchComplete(opts: LlmCompleteOpts, includeUsage: boolean): P
           case 'gemini':
             return geminiComplete(provider, model, opts)
           case 'bridge':
-            return bridgeComplete(provider, model, opts, includeUsage)
+            // The active path IS the panel's primary generator in verify mode,
+            // so it asks config.ts which model that generator row chose rather
+            // than reading the global setting directly.
+            return bridgeComplete(provider, model, opts, includeUsage, activeBridgeModel(model.id))
         }
       }),
     { providerId: provider.id, signal: opts.signal },
@@ -1573,7 +1603,9 @@ async function dispatchCompleteFor(
           case 'bridge':
             // A bridge participant ignores cfg.key: its credential is the
             // pairing token in localStorage, not a per-participant API key.
-            return bridgeComplete(provider, cfg.model, opts, includeUsage)
+            // Its MODEL, though, is per-participant — that is how one
+            // subscription runs `fable` here and `opus` on the next row.
+            return bridgeComplete(provider, cfg.model, opts, includeUsage, cfg.bridgeModel)
         }
       }),
     { providerId: provider.id, signal: opts.signal },
@@ -1607,7 +1639,7 @@ async function dispatchStream(
           case 'gemini':
             return geminiStream(provider, model, opts, onDelta)
           case 'bridge':
-            return bridgeStream(provider, model, opts, onDelta, includeUsage)
+            return bridgeStream(provider, model, opts, onDelta, includeUsage, activeBridgeModel(model.id))
         }
       }),
     { providerId: provider.id, signal: opts.signal },
@@ -1920,7 +1952,10 @@ export async function llmTestConnection(
       // honest connection test here: /v1/health proves the bridge answers but
       // says nothing about whether the CLI is signed in, and guessing from a
       // credentials file on disk is exactly what this feature refuses to do.
-      await bridgeComplete(provider, model, opts, false)
+      // The ping runs the model a review WOULD run through this CLI, not a
+      // blanket default: a green "Save & test" that exercised a different model
+      // than the panel's generator would be testing the wrong thing.
+      await bridgeComplete(provider, model, opts, false, activeBridgeModel(model.id))
       return
     case 'openai-compat':
       await openaiCompatComplete(provider, model, opts, false)

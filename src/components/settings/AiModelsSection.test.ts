@@ -43,6 +43,10 @@ const fetchProviderBalanceMock = vi.mocked(fetchProviderBalance)
 beforeEach(() => {
   localStorage.clear()
   _resetSettingsStateForTest()
+  // The bridge's paired/unpaired state lives in module state, so clearing
+  // localStorage alone does not undo it: without this, a test that pairs a
+  // bridge leaves every LATER test in the file believing one is connected.
+  _resetBridgeForTest()
   vi.clearAllMocks()
   llmTestConnectionMock.mockResolvedValue(undefined)
   fetchProviderBalanceMock.mockResolvedValue(null)
@@ -910,6 +914,108 @@ describe('AiModelsSection — unified model panel (Plan P)', () => {
     render(AiModelsSection)
     const toggle = screen.getByRole('checkbox', { name: /Cross-check findings/i }) as HTMLInputElement
     expect(toggle.disabled).toBe(true)
+  })
+
+  // -------------------------------------------------------------------------
+  // PER-ROW BRIDGE MODELS. The row's provider select picks Local bridge and
+  // its model select picks the CLI — a process name, not a model. Without a
+  // third control every bridge row ran whatever the ONE global bridgeModel
+  // said, so "Fable generates, Opus verifies on one subscription" could not be
+  // expressed at all. Free text, not a dropdown: neither CLI publishes a stable
+  // list of model ids, so a baked-in one would be stale within weeks (#253).
+  // -------------------------------------------------------------------------
+  function bridgePanel(rows: PanelParticipant[]) {
+    localStorage.setItem('review123:bridge', BRIDGE_PAIRING)
+    _resetBridgeForTest()
+    setupAnthropic()
+    setAiPanel({ participants: rows })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+  }
+  const bridgeRow = (
+    cli: string,
+    role: 'generator' | 'verifier',
+    bridgeModel?: string,
+  ): PanelParticipant => ({
+    provider: 'bridge' as PanelParticipant['provider'],
+    model: cli,
+    role,
+    ...(bridgeModel ? { bridgeModel } : {}),
+  })
+
+  it('gives a bridge row its OWN model box, and shows what each row runs', () => {
+    bridgePanel([bridgeRow('claude', 'generator', 'fable'), bridgeRow('claude', 'verifier', 'opus')])
+    expect((screen.getByTestId('panel-bridge-model-0') as HTMLInputElement).value).toBe('fable')
+    expect((screen.getByTestId('panel-bridge-model-1') as HTMLInputElement).value).toBe('opus')
+  })
+
+  it('gives a NON-bridge row no model box — its model select already is the model', () => {
+    bridgePanel([gen('anthropic', 'claude-opus-4-8'), bridgeRow('claude', 'verifier')])
+    expect(screen.queryByTestId('panel-bridge-model-0')).toBeNull()
+    expect(screen.getByTestId('panel-bridge-model-1')).toBeInTheDocument()
+  })
+
+  it('typing a model persists it to THAT ROW only', async () => {
+    bridgePanel([bridgeRow('claude', 'generator'), bridgeRow('claude', 'verifier')])
+    await userEvent.type(screen.getByTestId('panel-bridge-model-0'), 'fable')
+    await userEvent.type(screen.getByTestId('panel-bridge-model-1'), 'opus')
+    const rows = getSettings().aiPanel!.participants
+    expect(rows.map((r) => r.bridgeModel)).toEqual(['fable', 'opus'])
+    // Same CLI on both — one subscription, two models.
+    expect(rows.map((r) => r.model)).toEqual(['claude', 'claude'])
+  })
+
+  it('ACCEPTS any model id — the suggestions are a datalist, not an allowlist', async () => {
+    // Neither CLI publishes a stable enumeration, so a closed dropdown would go
+    // stale. An unknown id is the CLI's to reject, with the CLI's own error.
+    bridgePanel([bridgeRow('claude', 'generator')])
+    await userEvent.type(screen.getByTestId('panel-bridge-model-0'), 'claude-some-unreleased-model-9')
+    expect(getSettings().aiPanel!.participants[0].bridgeModel).toBe('claude-some-unreleased-model-9')
+  })
+
+  it('says what a blank row will inherit rather than leaving it a mystery', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({
+      aiProvider: 'anthropic', anthropicKey: 'sk-ant-test', bridgeModel: 'opus',
+    }))
+    localStorage.setItem('review123:bridge', BRIDGE_PAIRING)
+    _resetBridgeForTest()
+    setAiPanel({ participants: [bridgeRow('claude', 'generator')] })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    expect((screen.getByTestId('panel-bridge-model-0') as HTMLInputElement).placeholder).toMatch(/inherits opus/i)
+  })
+
+  it('refuses a flag-shaped id: says so, and persists nothing', async () => {
+    // The only caller-supplied string that reaches the bridge's argv.
+    bridgePanel([bridgeRow('claude', 'generator')])
+    await userEvent.type(screen.getByTestId('panel-bridge-model-0'), '--dangerously-skip-permissions')
+    expect(screen.getByTestId('panel-bridge-model-invalid-0')).toBeInTheDocument()
+    expect(getSettings().aiPanel!.participants[0].bridgeModel).toBeUndefined()
+    // The typed text stays visible so the user can fix it rather than watching
+    // the field silently erase itself under the cursor.
+    expect((screen.getByTestId('panel-bridge-model-0') as HTMLInputElement).value)
+      .toBe('--dangerously-skip-permissions')
+  })
+
+  it('drops a row\'s model when its CLI changes — a claude alias means nothing to codex', async () => {
+    bridgePanel([bridgeRow('claude', 'generator', 'fable')])
+    const modelSelects = screen.getAllByLabelText('Model') as HTMLSelectElement[]
+    await userEvent.selectOptions(modelSelects[0], 'codex')
+    const row = getSettings().aiPanel!.participants[0]
+    expect(row.model).toBe('codex')
+    expect(row.bridgeModel).toBeUndefined()
+  })
+
+  it('states the seat cost once several rows share one subscription', () => {
+    bridgePanel([bridgeRow('claude', 'generator', 'fable'), bridgeRow('claude', 'verifier', 'opus')])
+    const note = screen.getByTestId('panel-bridge-seat-note')
+    expect(note).toBeInTheDocument()
+    expect(note.textContent).toMatch(/at least 2\s+CLI calls against that one subscription/i)
+  })
+
+  it('says nothing about seats when only one row uses the bridge', () => {
+    bridgePanel([bridgeRow('claude', 'generator', 'fable'), ver('anthropic', 'claude-haiku-4-5')])
+    expect(screen.queryByTestId('panel-bridge-seat-note')).toBeNull()
   })
 
   // -------------------------------------------------------------------------
