@@ -394,7 +394,12 @@ const DEFAULTS: Settings = {
   showProgress: true,
   treeOpen: false,
   testFileDisplay: 'normal',
-  diffWidth: 'centered',
+  // Measured, not guessed (plan §p3-item4): at 1440x1000 `centered` gives split
+  // 51 columns per pane with 16.2 % of rows wrapping; `full` gives 72 columns
+  // with 4.1 %, closing 72 % of the split-vs-unified density gap. A wrapped row
+  // is the real cost — its second visual line carries no line number and no
+  // marker. A STORED 'centered' still wins: coerce() writes it over this.
+  diffWidth: 'full',
   // Non-destructive dimming of imports is our recommendation → on by default.
   focusMode: 'imports',
   showTokenCost: false,

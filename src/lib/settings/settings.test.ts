@@ -58,7 +58,7 @@ describe('settings', () => {
       showProgress: true,
       treeOpen: false,
       testFileDisplay: 'normal',
-      diffWidth: 'centered',
+      diffWidth: 'full',
       focusMode: 'imports',
       showTokenCost: false,
     })
@@ -147,7 +147,7 @@ describe('settings', () => {
       showProgress: true,
       treeOpen: false,
       testFileDisplay: 'normal',
-      diffWidth: 'centered',
+      diffWidth: 'full',
       focusMode: 'imports',
       showTokenCost: false,
     })

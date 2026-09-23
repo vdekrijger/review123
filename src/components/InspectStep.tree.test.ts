@@ -16,7 +16,7 @@ import { render, screen, fireEvent } from '@testing-library/svelte'
 import InspectStep from './InspectStep.svelte'
 import type { PrFile } from '../lib/github/types'
 import { createViewedStore } from '../lib/viewed/viewed.svelte'
-import { getSettings } from '../lib/settings/settings'
+import { getSettings, setDiffWidth } from '../lib/settings/settings'
 
 // Canvas stub for DiffView in jsdom
 Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
@@ -338,6 +338,7 @@ describe('InspectStep — adaptive drawer: no overlay artifacts on open', () => 
   })
 
   it('inspect-layout carries data-diffwidth so CSS can pick margin vs inline mode', async () => {
+    setDiffWidth('centered')
     const files = [makeFile('src/a.ts')]
     const { container } = render(InspectStep, {
       props: { files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null },

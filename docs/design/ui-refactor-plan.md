@@ -29,15 +29,14 @@ deliberately left open, and it confirms Batch 2B's suspicion about
 closes in [Phase 3, item 4 — measured, not changed](#p3-item4), which disproves
 one of the audit's own claims and ships a measurement instead of a change.
 
-The screenshots in [`./shots/`](./shots/) are the **after** state of the most
-recent batch to touch each surface. `settings-models-*` and `landing-*` are
-**Batch 2D's second slice**; the six diff shots (`step2-inspect-unified-*`,
-`step2-inspect-split-*` and `focus-dim-*`, the last pair still byte-identical to
-the unified pair) are **Phase 3's**; `step1-understand-*` is **Batch 2D's first
-slice**. The six diff/step shots are one slice stale — slice 2 changed `.btn`
-and `<strong>` on every surface but could not faithfully re-shoot a mocked PR
-fixture that lives only inside an e2e spec; see
-[its deferred list](#b2d-slice2). The pre-Phase-1 before state is in git
+The screenshots in [`./shots/`](./shots/) are the **after** state of the whole
+tree, and **nothing in the set is stale any more**: all fourteen are re-captured
+together by [`scripts/capture-shots.mjs`](../../scripts/capture-shots.mjs), which
+is the committed recipe — see [the capture script](#capture-script). `focus-dim-*`
+stays byte-identical to `step2-inspect-unified-*`, and that is now a recorded
+property of the set rather than an accident: the two recipes ARE the same recipe,
+because focus mode's import dimming is already on in the unified shot.
+The pre-Phase-1 before state is in git
 history at commit `38b9e9a`; at commit `038e6d4`, the pre-Batch-2B state of
 `step1-understand-*.png` and the pre-Batch-2C state of the settings page and the
 Inspect step; at commit `1e2de30`, the pre-Batch-2A state of all fourteen; at
@@ -1548,6 +1547,9 @@ should apply; the ratchet holds them at today's count meanwhile.
   fixture would make the set internally inconsistent and destroy the before/after
   comparison the directory exists for. **The real fix is a committed capture
   script**, which is its own small piece of work.
+  *(Closed — and the premise was wrong. The fixture was never e2e-only; it is
+  `src/lib/demo/fixture.ts`, served at `/demo`. See
+  [the capture script](#capture-script).)*
 - **`SettingsPage.svelte`'s two remaining 700s** (`.settings-title` and one
   anchor) — outside the fence, and the only 700s still rendering on `/settings`.
 - **`SkillsSection`'s `0.8rem` siblings.** Only `.mine-provider-label` moved to a
@@ -1969,7 +1971,136 @@ set.
 - **Whether `diffWidth: full` should be the default**, given it is worth 21
   columns per pane in split and ~12 % more source rows per screen. That is a
   whole-app default, adjacent to "does not change `:root { font-size: 15px }`"
-  below.
+  below. *(Decided: **yes**. See [the default, decided](#fullwidth-default).)*
+
+---
+
+<a id="fullwidth-default"></a>
+
+## `diffWidth: full` — the default, decided
+
+The fork [item 4](#p3-item4) left open, closed the way it asked to be: on the
+measurement, not on taste. `DEFAULTS.diffWidth` in
+[`src/lib/settings/settings.ts`](../../src/lib/settings/settings.ts) is now
+`'full'`. At 1440x1000 that is **72 columns per split pane against 51**, and
+**4.1 % of rows wrapping against 16.2 %** — 72 % of the split-vs-unified density
+gap, closed by a setting the app already shipped.
+
+**Only the unset default moved.** `getSettings()` is
+`{ ...DEFAULTS, ...coerce(stored) }`, so a stored value is applied last and
+wins; anyone who chose `centered` keeps it. Six guards in
+`src/components/InspectStep.diffwidth.test.ts` pin that, and all six go red
+under the one mutation that matters (swapping the spread order). The Appearance
+toggle is untouched.
+
+**Two honest notes, one of them a correction.**
+
+*The known cost of a default change here:* `save()` writes the whole resolved
+settings object, so a user who has ever changed any setting already has
+`diffWidth: 'centered'` materialised in `localStorage` — chosen or not. The new
+default therefore reaches genuinely new profiles, not the existing installed
+base, and nothing can tell a deliberate `centered` from a materialised one after
+the fact. That is the correct conservative failure: it never overrides a real
+preference.
+
+*The accepted consequence, measured — and it is narrower than it was assumed to
+be.* Full width was accepted on the understanding that it widens the **prose**
+surfaces too, "summary, findings, the outcomes panel". Measured in the built app
+at 1440x1000, `/demo`, that is **false for the summary and the outcomes panel
+and true only of the findings on step 2**, because the cap is lifted by
+`:root[data-diffwidth='full'] .review:has(.inspect-layout)` — scoped to step 2
+on purpose, with `app.css` saying so in a comment. Steps 1 and 3 are byte-for-byte
+the same width in both modes:
+
+| surface | centered | full |
+|---|---|---|
+| step 1 summary paragraph (13.5px) | 1025.5px / **126.6ch** | **unchanged** |
+| step 3 verdict / cost panel rows (15px) | 1022.5px / **113.6ch** | **unchanged** |
+| step 2 `.review` container | 1080px | **1440px** |
+| step 2 finding body paragraph (13.5px) | 978.5px / **120.8ch** | 1346px / **166.2ch** |
+| step 2 `.skill-finding-body` (12.75px) | 978.5px / **127.9ch** | 1346px / **175.9ch** |
+| step 2 secondary findings list (15px) | 1005px / **111.7ch** | 1372.5px / **152.5ch** |
+
+**So one thing does land badly, and it is recorded rather than fixed here.**
+[Batch 2C](#b2c-shipped) measured the settings column at **74ch** and called that
+already at the top of comfortable measure. The step-2 findings run at
+**166–176ch** in full mode — about **2.4x** that — and they were already over at
+**111–128ch** in centered, so the default did not create the problem, it
+enlarged one that was there. Capping the prose measure while letting the diff
+take the room is the real follow-up. It is deliberately NOT in this change:
+it is a component decision about the finding cards, it needs its own before/after,
+and bundling it would have made a one-line default change unreviewable.
+
+<a id="capture-script"></a>
+
+## The capture script — the recipe, committed
+
+[`scripts/capture-shots.mjs`](../../scripts/capture-shots.mjs) regenerates all
+fourteen shots. It exists because the recipe was never written down, so **three
+separate agents reverse-engineered it**, each re-validating the guess by
+rebuilding `origin/main` and reproducing a committed shot — and the third still
+could not re-shoot six of the fourteen.
+
+```
+node scripts/capture-shots.mjs                # build, serve, shoot all 14
+node scripts/capture-shots.mjs --check        # shoot to a temp dir, compare, write nothing
+node scripts/capture-shots.mjs --only landing
+node scripts/capture-shots.mjs --base-url http://localhost:4173
+```
+
+**The blocker was a false premise, and that is the finding.** Slice 2 deferred
+the six review-flow shots because their fixture "exists only inside an e2e spec",
+so re-shooting meant inventing one. It never did. The fixture is
+[`src/lib/demo/fixture.ts`](../../src/lib/demo/fixture.ts) — a committed, in-app
+example PR served at `/demo`, with every AI panel pre-generated into the `done`
+state: no spinners, no streaming, no network, no clock.
+[`e2e/diff-density.spec.ts`](../../e2e/diff-density.spec.ts) already measured
+against it. Nothing had to be factored out of `e2e/`; the six shots were
+reachable the whole time. **All six are re-captured, and the set is current.**
+
+**The recipe.** Viewport 1440x1000 at `deviceScaleFactor: 1`; the full settings
+object written to `localStorage` before first paint, so no shot inherits a
+default; analytics blocked; fonts loaded and two idle frames before the shutter.
+Shots are full-page **except** the step-2 diff surfaces, which are clipped to the
+viewport. That last rule is not a preference — it is forced by the committed
+files: `step1-understand-*.png` is 1440x**1120**, taller than the viewport, so it
+can only be full-page, while `step2-inspect-*.png` is exactly 1440x**1000**
+against a 2867px document, so it can only be a clip. `/settings` is shot
+full-page at 1440 and then downsampled with `sips --resampleWidth 780`, which is
+what keeps a ~6000px page to ~550KB (macOS-only; the script says so).
+
+`diffWidth` is pinned to `'centered'` in the script even though the app now
+defaults to `'full'`, so this directory's before/after axis stays the token and
+component layer — one variable at a time. The width comparison is the table
+[above](#fullwidth-default), not a silent change to every diff shot at once.
+
+**Validated before being believed**, the way the earlier slices validated theirs.
+Against a build of the current tree, **12 of the 14 reproduce at exactly the
+committed dimensions** — including all six that were called stale, and including
+`step1-understand-*` at its distinctive 1440x1120. The other two are
+`settings-models-*` at 780x**3257** against a committed 780x**3260**: a 3px
+drift from real app movement since slice 2 (#264, #265), not a recipe error.
+The script also reproduces the set's own quirk — `focus-dim-*` comes out
+byte-identical to `step2-inspect-unified-*`, exactly as committed. Total:
+**2.5 MB for 14**, the size discipline held.
+
+**One caveat, found by over-claiming and then checking.** The capture is
+deterministic *against a given build* — two runs of the same build produce
+fourteen byte-identical files — but **six of the fourteen change on every commit
+even when nothing visual moves**. `BuildIndicator.svelte` renders `BUILD_SHA` and
+`BUILD_TIME`, which Vite bakes in at build time (`build 017a2ef · 2026-09-23`),
+and that footer sits inside the captured area on exactly three surfaces:
+`landing-*` (footer at y=969 of a 1000px page), `settings-models-*` (y=5983 of
+6014) and `step1-understand-*` (y=1089 of 1120 — the footer *is* why that shot is
+1120 rather than 1000). The step-2 shots are viewport clips at 1000px and the
+footer sits at y=2836, so it never enters them; on `step3-verdict-*` the sticky
+draft bar covers it.
+
+So **a byte diff on those six is not evidence that the design moved** — the
+dimensions, and the other eight files, are the signal. It also means re-running
+the capture always dirties them. The fix, if this ever becomes annoying, is to
+neutralise the sha in capture mode rather than to crop the footer out; it is
+left alone here because it is a real part of the page.
 
 ---
 

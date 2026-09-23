@@ -94,6 +94,7 @@ describe('InspectStep — adaptive drawer: CSS hooks present', () => {
   })
 
   it('centered: inspect-layout has data-diffwidth="centered" and no diff-full class', () => {
+    setDiffWidth('centered')
     const { container } = renderStep()
     const layout = container.querySelector('.inspect-layout')
     expect(layout?.getAttribute('data-diffwidth')).toBe('centered')

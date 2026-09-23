@@ -154,6 +154,10 @@ test('diff width: Full width sets data-diffwidth=full immediately and widens .re
     localStorage.setItem('review123:settings', JSON.stringify({
       diffMode: 'unified',
       railCollapsed: true,
+      // This test measures the centered -> full TRANSITION, so it has to start
+      // from centered. `full` is the default now, and clicking an already-
+      // checked radio fires no change event.
+      diffWidth: 'centered',
     }))
   })
 

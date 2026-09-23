@@ -48,8 +48,8 @@ function makeFiles(names: string[]): PrFile[] {
 // ---------------------------------------------------------------------------
 
 describe('settings — diffWidth (Fix 3)', () => {
-  it('default diffWidth is "centered"', () => {
-    expect(getSettings().diffWidth).toBe('centered')
+  it('default diffWidth is "full"', () => {
+    expect(getSettings().diffWidth).toBe('full')
   })
 
   it('setDiffWidth("full") persists the setting', () => {
@@ -63,14 +63,66 @@ describe('settings — diffWidth (Fix 3)', () => {
     expect(getSettings().diffWidth).toBe('centered')
   })
 
-  it('coerces unknown diffWidth to centered (robustness)', () => {
+  it('coerces unknown diffWidth to the default (robustness)', () => {
     localStorage.setItem('review123:settings', JSON.stringify({ diffWidth: 'bananas' }))
-    expect(getSettings().diffWidth).toBe('centered')
+    expect(getSettings().diffWidth).toBe('full')
   })
 
   it('coerces stored "full" correctly', () => {
     localStorage.setItem('review123:settings', JSON.stringify({ diffWidth: 'full' }))
     expect(getSettings().diffWidth).toBe('full')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The default moved 'centered' -> 'full'. The whole risk of that change is
+// whether it reaches over someone who already chose. getSettings() is
+// `{ ...DEFAULTS, ...coerce(stored) }`, so a stored value is applied LAST and
+// wins — these pin that, because a regression here silently overrides a
+// deliberate user preference and nothing else in the suite would notice.
+// ---------------------------------------------------------------------------
+
+describe('diffWidth — a stored preference beats the new default', () => {
+  it('stored "centered" survives the default being "full"', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ diffWidth: 'centered' }))
+    expect(getSettings().diffWidth).toBe('centered')
+  })
+
+  it('stored "centered" survives alongside other stored settings', () => {
+    localStorage.setItem(
+      'review123:settings',
+      JSON.stringify({ diffWidth: 'centered', theme: 'dark', diffMode: 'split' }),
+    )
+    const s = getSettings()
+    expect(s.diffWidth).toBe('centered')
+    expect(s.theme).toBe('dark')
+  })
+
+  it('setDiffWidth("centered") round-trips — an explicit choice is re-read as chosen', () => {
+    setDiffWidth('centered')
+    expect(getSettings().diffWidth).toBe('centered')
+    expect(JSON.parse(localStorage.getItem('review123:settings') ?? '{}').diffWidth).toBe('centered')
+  })
+
+  it('ONLY the unset default moves: absent key -> full, present key -> as stored', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ theme: 'dark' }))
+    expect(getSettings().diffWidth).toBe('full')
+    localStorage.setItem('review123:settings', JSON.stringify({ theme: 'dark', diffWidth: 'centered' }))
+    expect(getSettings().diffWidth).toBe('centered')
+  })
+
+  it('a stored "centered" still reaches the rendered layout (no diff-full class)', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ diffWidth: 'centered' }))
+    const { container } = render(InspectStep, {
+      props: { files: makeFiles(['src/a.ts']), changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null },
+    })
+    expect(container.querySelector('.inspect-layout')?.classList.contains('diff-full')).toBe(false)
+  })
+
+  it('a stored "centered" still checks the Centered radio in Appearance', () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ diffWidth: 'centered' }))
+    render(AppearanceSection)
+    expect((screen.getByRole('radio', { name: /centered/i }) as HTMLInputElement).checked).toBe(true)
   })
 })
 
@@ -91,7 +143,14 @@ describe('AppearanceSection — Diff width radiogroup (Fix 3)', () => {
     expect(within(group).getByRole('radio', { name: /full width/i })).toBeInTheDocument()
   })
 
-  it('Centered radio is checked by default', () => {
+  it('Full width radio is checked by default', () => {
+    render(AppearanceSection)
+    const fullRadio = screen.getByRole('radio', { name: /full width/i })
+    expect((fullRadio as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('Centered radio is checked when diffWidth=centered in storage', () => {
+    setDiffWidth('centered')
     render(AppearanceSection)
     const centeredRadio = screen.getByRole('radio', { name: /centered/i })
     expect((centeredRadio as HTMLInputElement).checked).toBe(true)
@@ -105,6 +164,7 @@ describe('AppearanceSection — Diff width radiogroup (Fix 3)', () => {
   })
 
   it('clicking Full width radio saves diffWidth=full immediately', async () => {
+    setDiffWidth('centered')
     render(AppearanceSection)
     await fireEvent.click(screen.getByRole('radio', { name: /full width/i }))
     expect(getSettings().diffWidth).toBe('full')
@@ -123,7 +183,16 @@ describe('AppearanceSection — Diff width radiogroup (Fix 3)', () => {
 // ---------------------------------------------------------------------------
 
 describe('InspectStep — diff-full class (Fix 3)', () => {
-  it('inspect-layout has NO "diff-full" class when diffWidth=centered (default)', () => {
+  it('inspect-layout HAS "diff-full" class by default (nothing stored)', () => {
+    const { container } = render(InspectStep, {
+      props: { files: makeFiles(['src/a.ts']), changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null },
+    })
+    const layout = container.querySelector('.inspect-layout')
+    expect(layout?.classList.contains('diff-full')).toBe(true)
+  })
+
+  it('inspect-layout has NO "diff-full" class when diffWidth=centered', () => {
+    setDiffWidth('centered')
     const { container } = render(InspectStep, {
       props: { files: makeFiles(['src/a.ts']), changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null },
     })
@@ -156,6 +225,7 @@ describe('InspectStep — diff-full class (Fix 3)', () => {
 
 describe('AppearanceSection — onDiffWidthChange calls applyAppearance (attribute-driven fix)', () => {
   it('clicking Full width radio calls applyAppearance immediately', async () => {
+    setDiffWidth('centered')
     render(AppearanceSection)
     vi.mocked(appearanceModule.applyAppearance).mockClear()
     await fireEvent.click(screen.getByRole('radio', { name: /full width/i }))
@@ -173,6 +243,7 @@ describe('AppearanceSection — onDiffWidthChange calls applyAppearance (attribu
 
 describe('applyAppearance — sets data-diffwidth on documentElement (container-level fix)', () => {
   it('documentElement gets data-diffwidth=full immediately when Full width radio clicked', async () => {
+    setDiffWidth('centered')
     render(AppearanceSection)
     vi.mocked(appearanceModule.applyAppearance).mockClear()
     await fireEvent.click(screen.getByRole('radio', { name: /full width/i }))
