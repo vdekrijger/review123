@@ -101,6 +101,7 @@ describe('GET /v1/health over HTTP', () => {
       inference: [],
       infer: true,
       inferStream: true,
+      inferAgentic: true,
       files: true,
       search: true,
       fix: false,

@@ -50,12 +50,14 @@ import { join } from 'node:path'
 import { INFERENCE_CLIS, type InferenceCli } from './capabilities.js'
 import { PathEscapeError, resolveInRoot } from './confine.js'
 import {
+  DEFAULT_AGENTIC_INFER_TIMEOUT_MS,
   DEFAULT_INFER_TIMEOUT_MS,
   MAX_INFER_FILE_CONTEXT_BYTES,
   MAX_INFER_OUTPUT_BYTES,
   MAX_INFER_TIMEOUT_MS,
   isValidModelId,
   type BridgeErrorCode,
+  type InferAgentic,
   type InferRequest,
   type InferUsage,
 } from './protocol.js'
@@ -70,6 +72,8 @@ export interface InferSuccess {
   truncated: boolean
   durationMs: number
   usage?: InferUsage
+  /** Present ONLY when the request asked for tools AND the CLI really got them. */
+  agentic?: InferAgentic
 }
 
 export interface InferFailure {
@@ -84,6 +88,58 @@ export interface InferFailure {
 }
 
 export type InferOutcome = InferSuccess | InferFailure
+
+// ---------------------------------------------------------------------------
+// Agentic (read-only tools) — the grant, verified against the real CLIs
+// ---------------------------------------------------------------------------
+
+/**
+ * The ONLY tools `claude` is given when `InferRequest.agentic` is set.
+ *
+ * VERIFIED against claude 2.1.278 by running it (see bridge/README.md § Verified
+ * agentic invocations). Asking the CLI to enumerate its own tools under the
+ * exact argv below answers `Glob, Grep, Read` and nothing else — no Write, no
+ * Edit, no Bash, no WebFetch, no MCP tool.
+ *
+ * WHY THESE THREE, AND WHY NO MORE. A reviewer needs to open a file, find a
+ * file, and find a symbol. That is Read, Glob and Grep. Every other built-in
+ * either writes (Write/Edit/NotebookEdit), executes (Bash), or leaves the
+ * machine (WebFetch/WebSearch) — none of which a review needs, and all of which
+ * the bridge's security model promises this route does not do.
+ *
+ * THIS LIST IS PINNED BY A TEST, and it has to be: an unrecognised name in
+ * `--tools` is SILENTLY DROPPED, not an error (verified — `--tools
+ * "Read,NotATool"` yields exactly `Read`). So a typo here would not fail the
+ * build or the run; it would quietly hand the reviewer fewer tools and produce
+ * a worse review that still called itself deep. The test is the only thing that
+ * would notice.
+ */
+export const AGENTIC_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep'] as const
+
+/**
+ * The flags that make claude's agentic run read-only, BEYOND the tool list.
+ * Each is defence in depth for a different failure, and all were checked by
+ * running the CLI:
+ *
+ *   --restricted        Confines the file tools to the working directories and
+ *                       ignores user/project/local settings files. This is a
+ *                       HARD confinement rather than a permission decision, so
+ *                       it holds even if the permission layer's default answer
+ *                       ever changes. VERIFIED: an absolute path outside the
+ *                       root is refused with "outside the restricted working
+ *                       directory".
+ *   --strict-mcp-config Ignores every MCP server the user has configured. A
+ *                       review must not gain tools from the user's own machine
+ *                       setup — `--safe-mode` already drops them, and this says
+ *                       so a second time at the flag that owns the question.
+ *
+ * `--permission-prompts none` and `--safe-mode` are NOT here because the
+ * tool-less invocation already carries them; they are shared, not agentic-only.
+ * `--permission-prompts none` independently refuses an out-of-root read
+ * (VERIFIED: denied, and recorded in `permission_denials`), which is why the
+ * confinement holds on both layers rather than one.
+ */
+const AGENTIC_CLAUDE_FLAGS = ['--restricted', '--strict-mcp-config'] as const
 
 /**
  * Grace between SIGTERM and SIGKILL. A CLI that catches SIGTERM gets a moment
@@ -168,7 +224,15 @@ export const NEUTRAL_SYSTEM_PROMPT =
  *   - `--tools ""` disables EVERY built-in tool. This is the load-bearing
  *     safety flag: the bridge promises it does not write to the repo, and a
  *     tool-less `claude` physically cannot. It also makes the call a plain
- *     completion, which is all review123 wants here.
+ *     completion, which is all review123 wants for an ORDINARY call.
+ *
+ *     `InferRequest.agentic` is the ONE request that changes this, and it
+ *     changes it narrowly: `--tools ""` becomes `--tools Read,Glob,Grep` plus
+ *     `--restricted --strict-mcp-config`. See AGENTIC_CLAUDE_TOOLS. Note what
+ *     this says about the old rationale for refusing agentic review over the
+ *     bridge — "the CLI is already an agent" — which was never the reason it
+ *     did not work. WE took its tools away, right here, on this line. Giving
+ *     three read-only ones back is the whole feature.
  *   - `--permission-prompts none` denies anything that would prompt, instead of
  *     blocking forever on a terminal nobody is watching.
  *   - `--safe-mode` drops CLAUDE.md, hooks, plugins, MCP servers and custom
@@ -204,7 +268,13 @@ export const NEUTRAL_SYSTEM_PROMPT =
  *     is a human-readable transcript, but the final assistant message lands in
  *     this file, alone and clean.
  *   - `--sandbox read-only` is the safety flag: codex has no way to disable its
- *     tools, so instead it is confined to reading. It cannot modify the repo.
+ *     tools, so instead it is confined to reading. It cannot modify the repo,
+ *     and cannot read outside the served root (both VERIFIED by running it).
+ *
+ *     CONSEQUENCE WORTH STATING PLAINLY: codex has ALWAYS been agentic here. It
+ *     has a shell it can read the tree with, in every call this bridge has ever
+ *     made. `InferRequest.agentic` therefore adds no power to codex — it adds
+ *     `--json`, purely so the answer can say whether it investigated.
  *   - `--ephemeral` keeps review123's prompts out of the user's session history.
  */
 /**
@@ -239,6 +309,8 @@ export function buildInvocation(
 ): Invocation {
   const system = req.system?.trim() ? req.system : NEUTRAL_SYSTEM_PROMPT
 
+  const agentic = req.agentic === true
+
   if (cli === 'claude') {
     const systemFile = join(tmpDir, 'system.txt')
     // The ONLY difference between the one-shot and the streaming invocation.
@@ -247,14 +319,19 @@ export function buildInvocation(
     const outputFormat = opts?.stream === true
       ? ['--output-format', 'stream-json', '--include-partial-messages', '--verbose']
       : ['--output-format', 'json']
+    // The tool grant, and the ONLY place the two modes differ. Tool-less mode is
+    // byte-identical to what it has always been; agentic mode swaps the empty
+    // `--tools ""` for the pinned read-only list and adds the confinement flags.
+    const toolArgs = agentic
+      ? ['--tools', AGENTIC_CLAUDE_TOOLS.join(','), ...AGENTIC_CLAUDE_FLAGS]
+      : ['--tools', '']
     return {
       bin: 'claude',
       args: [
         '-p',
         ...outputFormat,
         ...modelArgs(req),
-        '--tools',
-        '',
+        ...toolArgs,
         '--permission-prompts',
         'none',
         '--safe-mode',
@@ -273,6 +350,21 @@ export function buildInvocation(
     args: [
       'exec',
       ...modelArgs(req),
+      // `--json` is added ONLY for an agentic run, and only to COUNT tool use.
+      //
+      // codex needs no argv change to become agentic: `--sandbox read-only`
+      // already gives it a shell it can read the tree with, and always has —
+      // VERIFIED by running the existing tool-less invocation, which happily ran
+      // `sed -n '1,120p' canary.ts` and reported the contents. So there is
+      // nothing to switch ON here; the only gap was that its answer arrived with
+      // no way to say whether it had investigated at all.
+      //
+      // `--json` closes that: stdout becomes NDJSON carrying
+      // `{"type":"item.completed","item":{"type":"command_execution",…}}` per
+      // command. The ANSWER still comes from --output-last-message exactly as
+      // before (VERIFIED: the file is written identically with --json), so this
+      // changes what we can OBSERVE and nothing about what codex does.
+      ...(agentic ? ['--json'] : []),
       '--sandbox',
       'read-only',
       '--skip-git-repo-check',
@@ -542,6 +634,66 @@ interface ClaudeResultDoc {
   is_error?: unknown
   subtype?: unknown
   usage?: { input_tokens?: unknown; output_tokens?: unknown }
+  /**
+   * Assistant turns. 1 = answered without calling a tool; each further turn
+   * followed at least one tool call. See InferAgentic.toolCallsAtLeast for why
+   * this is reported as a lower bound and not as a call count.
+   */
+  num_turns?: unknown
+  /** Tool calls claude's own permission layer refused. See InferAgentic.denied. */
+  permission_denials?: unknown
+}
+
+/**
+ * Build the agentic report from claude's result document.
+ *
+ * Every field is derived from something the CLI actually stated; anything it did
+ * not state is left ABSENT rather than defaulted, because a zero here would read
+ * as "it used no tools" — a claim, not a gap.
+ */
+export function readClaudeAgentic(doc: {
+  num_turns?: unknown
+  permission_denials?: unknown
+}): InferAgentic {
+  const report: InferAgentic = { tools: [...AGENTIC_CLAUDE_TOOLS] }
+  const turns = doc.num_turns
+  if (typeof turns === 'number' && Number.isFinite(turns) && turns >= 1) {
+    // Turns AFTER the first. The first turn is the answer itself; every turn
+    // beyond it exists because the previous one called a tool.
+    report.toolCallsAtLeast = Math.max(0, Math.trunc(turns) - 1)
+  }
+  if (Array.isArray(doc.permission_denials)) report.denied = doc.permission_denials.length
+  return report
+}
+
+/**
+ * Count codex's tool use from its `--json` event stream.
+ *
+ * One `{"type":"item.completed","item":{"type":"command_execution"}}` per shell
+ * command it ran. Unparseable lines are skipped rather than failing the count —
+ * stdout is also where codex writes its banner, and a stricter reader would turn
+ * a cosmetic change into a failed review.
+ *
+ * Returns null when the stream contained no countable events at all, which is
+ * how "unreported" stays distinct from "ran no commands".
+ */
+export function countCodexCommands(stdout: string): number | null {
+  let commands = 0
+  let sawEvent = false
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed === '' || !trimmed.startsWith('{')) continue
+    let doc: { type?: unknown; item?: { type?: unknown } }
+    try {
+      doc = JSON.parse(trimmed) as { type?: unknown; item?: { type?: unknown } }
+    } catch {
+      continue
+    }
+    if (typeof doc.type !== 'string') continue
+    sawEvent = true
+    if (doc.type === 'item.completed' && doc.item?.type === 'command_execution') commands++
+  }
+  return sawEvent ? commands : null
 }
 
 /**
@@ -553,7 +705,7 @@ interface ClaudeResultDoc {
  */
 export function readClaudeResult(
   stdout: string,
-): { text: string; usage?: InferUsage } | { error: string } | null {
+): { text: string; usage?: InferUsage; agentic?: InferAgentic } | { error: string } | null {
   let doc: ClaudeResultDoc
   try {
     doc = JSON.parse(stdout.trim()) as ClaudeResultDoc
@@ -571,7 +723,14 @@ export function readClaudeResult(
     typeof input === 'number' && typeof output === 'number'
       ? { inputTokens: input, outputTokens: output }
       : undefined
-  return usage ? { text: doc.result, usage } : { text: doc.result }
+  // The raw turn/denial facts travel with the answer; whether they become an
+  // `agentic` report is extractOutcome's call, since only it knows whether the
+  // REQUEST asked for tools. A tool-less run must never report one.
+  const agentic = readClaudeAgentic(doc)
+  const base: { text: string; usage?: InferUsage; agentic?: InferAgentic } = { text: doc.result }
+  if (usage) base.usage = usage
+  base.agentic = agentic
+  return base
 }
 
 // ---------------------------------------------------------------------------
@@ -650,10 +809,18 @@ export interface RunInferenceOptions {
   signal?: AbortSignal
 }
 
-/** Clamp a requested budget into the range the bridge will actually honour. */
-export function clampTimeout(requested: number | undefined): number {
+/**
+ * Clamp a requested budget into the range the bridge will actually honour.
+ *
+ * `agentic` moves only the DEFAULT — what an unspecified budget means — because
+ * an agentic run is several model turns plus file reads where a tool-less one is
+ * a single turn. The CEILING is untouched: a caller may still ask for less, and
+ * still cannot ask for more than MAX_INFER_TIMEOUT_MS.
+ */
+export function clampTimeout(requested: number | undefined, agentic = false): number {
+  const fallback = agentic ? DEFAULT_AGENTIC_INFER_TIMEOUT_MS : DEFAULT_INFER_TIMEOUT_MS
   if (typeof requested !== 'number' || !Number.isFinite(requested) || requested <= 0) {
-    return DEFAULT_INFER_TIMEOUT_MS
+    return fallback
   }
   return Math.min(Math.trunc(requested), MAX_INFER_TIMEOUT_MS)
 }
@@ -703,12 +870,23 @@ export function parseInferRequest(body: unknown): InferRequest | { error: string
     return { error: 'timeoutMs must be a number.' }
   }
 
+  // Strictly boolean. A truthy string like "false" must NOT turn on the tools:
+  // this is the field that decides whether a subprocess may read the user's
+  // disk, so it is the last field that should be lenient about its type.
+  const agentic = raw['agentic']
+  if (agentic !== undefined && typeof agentic !== 'boolean') {
+    return { error: 'agentic must be a boolean.' }
+  }
+
   const parsed: InferRequest = { cli: cli as InferenceCli, prompt }
   if (typeof model === 'string') parsed.model = model
   if (typeof system === 'string') parsed.system = system
   if (Array.isArray(files)) parsed.files = files as string[]
   if (typeof maxOutputTokens === 'number') parsed.maxOutputTokens = maxOutputTokens
   if (typeof timeoutMs === 'number') parsed.timeoutMs = timeoutMs
+  // Only ever set to literal true, so `agentic: false` is indistinguishable from
+  // absent everywhere downstream — one tool-less path, not two.
+  if (agentic === true) parsed.agentic = true
   return parsed
 }
 
@@ -754,7 +932,7 @@ export async function runInference(
       args: invocation.args,
       stdin: invocation.stdin,
       cwd: opts.realRoot,
-      timeoutMs: clampTimeout(req.timeoutMs),
+      timeoutMs: clampTimeout(req.timeoutMs, req.agentic === true),
       ...(opts.signal ? { signal: opts.signal } : {}),
     })
     const durationMs = now() - started
@@ -770,7 +948,7 @@ export async function runInference(
       return {
         ok: false,
         code: 'timeout',
-        message: `The ${req.cli} CLI did not finish within the ${clampTimeout(req.timeoutMs)} ms budget and was stopped.`,
+        message: `The ${req.cli} CLI did not finish within the ${clampTimeout(req.timeoutMs, req.agentic === true)} ms budget and was stopped.`,
       }
     }
     if (result.code !== 0) {
@@ -784,7 +962,7 @@ export async function runInference(
       }
     }
 
-    return extractOutcome(req.cli as InferenceCli, invocation, result, durationMs)
+    return extractOutcome(req.cli as InferenceCli, invocation, result, durationMs, req.agentic === true)
   } catch {
     // A temp-file or filesystem failure. The message is deliberately generic:
     // the real one would name an absolute path.
@@ -800,6 +978,7 @@ async function extractOutcome(
   invocation: Invocation,
   result: ProcessResult,
   durationMs: number,
+  agentic: boolean,
 ): Promise<InferOutcome> {
   if (cli === 'claude') {
     const parsed = readClaudeResult(result.stdout)
@@ -820,12 +999,17 @@ async function extractOutcome(
       }
     }
     const base: InferSuccess = { ok: true, text: parsed.text, truncated: result.truncated, durationMs }
-    return parsed.usage ? { ...base, usage: parsed.usage } : base
+    if (parsed.usage) base.usage = parsed.usage
+    // Reported ONLY when this run actually asked for tools. The turn count is
+    // present on every claude result document, agentic or not, and echoing it
+    // back on a tool-less run would advertise a grounding that never happened.
+    if (agentic && parsed.agentic) base.agentic = parsed.agentic
+    return base
   }
 
   // codex: the final assistant message goes to --output-last-message, so stdout
-  // (a human transcript) is never returned. An unreadable file means the run
-  // produced no final message.
+  // (a human transcript, or NDJSON under --json) is never returned. An
+  // unreadable file means the run produced no final message.
   let text: string
   try {
     text = await readFile(invocation.lastMessageFile!, 'utf8')
@@ -836,7 +1020,16 @@ async function extractOutcome(
       message: withDiagnostic('The codex CLI finished without producing a final message.', result.stderr),
     }
   }
-  return { ok: true, text: text.trim(), truncated: result.truncated, durationMs }
+  const codex: InferSuccess = { ok: true, text: text.trim(), truncated: result.truncated, durationMs }
+  if (agentic) {
+    // `tools` is EMPTY for codex and that is the honest answer, not an omission:
+    // its toolset cannot be enumerated or narrowed. See InferAgentic.tools.
+    const report: InferAgentic = { tools: [] }
+    const commands = countCodexCommands(result.stdout)
+    if (commands !== null) report.toolCallsAtLeast = commands
+    codex.agentic = report
+  }
+  return codex
 }
 
 /** HTTP status for each failure the route can produce. */

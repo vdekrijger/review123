@@ -49,6 +49,7 @@ import {
   isValidModelId,
   INFER_STREAM_PATH,
   type BridgeCli,
+  type InferAgentic,
   type InferRequest,
   type InferUsage,
 } from '../bridge/protocol'
@@ -1140,6 +1141,30 @@ async function geminiStream(
 export const BRIDGE_JSON_INSTRUCTION =
   'Respond with a single valid JSON value and nothing else: no prose before or after it, no explanation, and no markdown code fence.'
 
+/**
+ * The instruction appended to the system prompt when the caller asks for an
+ * AGENTIC bridge run.
+ *
+ * TRANSPORT-level, exactly like BRIDGE_JSON_INSTRUCTION above and for the same
+ * reason: it describes a CAPABILITY THIS TRANSPORT HAS — "you can open files
+ * yourself" — and says nothing about what to review or how to judge it. It is
+ * the bridge's equivalent of handing an API model a `tools` array, which is
+ * likewise not part of any task prompt. So it is NOT a task prompt and NOT a
+ * reason to touch any PROMPT_VERSIONS entry.
+ *
+ * It is needed because the two ends know different halves of the situation. The
+ * CLI is given real tools, but the TASK prompt was written for a single-pass
+ * reviewer that had none, so nothing in it invites the model to look anything
+ * up. Without this sentence a tool-equipped CLI frequently answers from the
+ * diff alone — technically agentic, substantively not.
+ */
+export const BRIDGE_AGENTIC_INSTRUCTION =
+  'You can read the files in this repository yourself with your Read, Glob and Grep tools, ' +
+  'and the working tree you are reading is the code under review. ' +
+  'Use them to check any claim that depends on code outside the excerpt you were given — ' +
+  'open the file, find the callers, confirm the symbol — before you assert it. ' +
+  'You have read-only access: you cannot modify anything, so there is no risk in looking.'
+
 /** Shown when the user picked the bridge but never paired one. */
 export const BRIDGE_NOT_PAIRED_MESSAGE =
   'No local bridge is paired. Open Settings → Local bridge and paste the pairing token the bridge printed.'
@@ -1242,6 +1267,15 @@ async function bridgeComplete(
    * "send no --model flag", never "look it up yourself".
    */
   bridgeModel: string | undefined,
+  /**
+   * Run the CLI WITH its read-only tools, so it investigates the working tree.
+   *
+   * The CALLER is responsible for having checked `capabilities.inferAgentic`
+   * first — see bridgeAgenticReady(). This function faithfully reports what came
+   * back (`agentic` present or absent) and never infers grounding from having
+   * asked for it.
+   */
+  agentic = false,
 ): Promise<LlmCompleteResult> {
   const stored = readStoredBridge()
   // 'no-key' is the honest kind: the pairing token IS this provider's
@@ -1251,10 +1285,16 @@ async function bridgeComplete(
   const { system, user, json, signal, maxTokens, timeoutMs } = opts
   const { timeoutSignal, effectiveSignal } = requestSignals(signal, timeoutMs)
 
+  // Both instructions are TRANSPORT-level and compose: an agentic run that also
+  // wants JSON is told it may look things up AND how to shape the answer.
+  let effectiveSystem = system
+  if (agentic) effectiveSystem = `${effectiveSystem}\n\n${BRIDGE_AGENTIC_INSTRUCTION}`
+  if (json) effectiveSystem = `${effectiveSystem}\n\n${BRIDGE_JSON_INSTRUCTION}`
+
   const payload: InferRequest = {
     cli: (model.id === 'codex' ? 'codex' : 'claude') as BridgeCli,
     prompt: user,
-    system: json ? `${system}\n\n${BRIDGE_JSON_INSTRUCTION}` : system,
+    system: effectiveSystem,
     // The bridge clamps this to its own ceiling; sending our window keeps the
     // two budgets aligned so the CLI is killed at roughly the moment the
     // browser would have given up anyway.
@@ -1268,6 +1308,9 @@ async function bridgeComplete(
   // caller-supplied string that reaches the bridge's argv, and the bridge
   // rejects a bad one too (#253) — neither end trusts the other to have checked.
   if (bridgeModel !== undefined && isValidModelId(bridgeModel)) payload.model = bridgeModel
+  // Only ever literal true. An older bridge ignores the field and answers with
+  // no `agentic` report, which is precisely how the caller finds out.
+  if (agentic) payload.agentic = true
 
   let res: Response
   try {
@@ -1308,7 +1351,52 @@ async function bridgeComplete(
     }
   }
 
+  lastBridgeAgentic = parsed.agentic ?? null
   return { content: parsed.text, usage, truncated: parsed.truncated }
+}
+
+/**
+ * The agentic report from the LAST `/v1/infer` call, or null when that call was
+ * not agentic (or the bridge ignored the request).
+ *
+ * A module-level latch rather than a field on LlmCompleteResult, for the same
+ * reason bridgeLastStreamMode() below is one: `LlmCompleteResult` is the shape
+ * EVERY provider returns, and a bridge-only field on it would be permanently
+ * undefined for the other five. The one caller that needs this reads it
+ * immediately after its own awaited call — see bridgeAgenticComplete, which is
+ * the only supported way to read it.
+ */
+let lastBridgeAgentic: InferAgentic | null = null
+
+/** What an agentic bridge completion produced, report included. */
+export interface BridgeAgenticResult {
+  content: string
+  usage?: LlmUsage
+  /**
+   * The CLI's own report of what its tools did. NULL when the bridge did not
+   * run agentically — an older bridge that ignored the flag, which is the case
+   * that must never be mistaken for a grounded review.
+   */
+  agentic: InferAgentic | null
+}
+
+/**
+ * One agentic bridge completion: the CLI runs its OWN read-only tool loop
+ * against the served working tree and returns a finished answer.
+ *
+ * This is the delegated deep-review path. It is a SINGLE round trip on purpose
+ * — the loop happens inside the CLI, not here — so there is no conversation to
+ * accumulate and no per-round budget to spend. See llmToolLoop's bridge arm.
+ */
+export async function bridgeAgenticComplete(
+  provider: LlmProviderDef,
+  model: LlmModelDef,
+  opts: LlmCompleteOpts,
+  bridgeModel: string | undefined,
+): Promise<BridgeAgenticResult> {
+  lastBridgeAgentic = null
+  const result = await bridgeComplete(provider, model, opts, true, bridgeModel, true)
+  return { content: result.content, usage: result.usage, agentic: lastBridgeAgentic }
 }
 
 /**

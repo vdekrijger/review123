@@ -40,6 +40,7 @@ const ALL_READY: BridgeCapabilities = {
   inference: ['claude'],
   infer: true,
   inferStream: true,
+  inferAgentic: true,
   files: true,
   search: true,
   fix: false,

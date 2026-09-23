@@ -192,6 +192,73 @@ export function groundingIsLocal(prHead: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Agentic readiness — the same shape of question, one route further on
+// ---------------------------------------------------------------------------
+
+/**
+ * Why deep (agentic) review over the bridge is or is not available RIGHT NOW.
+ *
+ * A named reason rather than a boolean, for exactly the reason the grounding
+ * decision above is: every value maps to a sentence the user can act on, and
+ * the UI must never reconstruct "why" from a false.
+ */
+export type BridgeAgenticReason =
+  /** A paired, connected bridge that understands `InferRequest.agentic`. */
+  | 'ready'
+  /** No bridge paired, or it is not running. */
+  | 'no-bridge'
+  /** Connected, but predating the agentic release — it would answer tool-less. */
+  | 'route-missing'
+
+export interface BridgeAgenticStatus {
+  ready: boolean
+  reason: BridgeAgenticReason
+}
+
+/**
+ * THE RULE, as a pure function over a snapshot — testable without a live bridge.
+ *
+ * `route-missing` is the case this function exists for. `agentic` is an ADDITIVE
+ * request field, so an older bridge does not reject it: it ignores it, runs the
+ * ordinary tool-less completion, and answers 200 with a perfectly good
+ * single-pass review. Offering deep review against such a bridge would therefore
+ * not fail loudly — it would quietly return a shallow answer labelled deep. So
+ * availability is decided from the CAPABILITY, before anything is offered, and
+ * never inferred from a successful call.
+ */
+export function decideBridgeAgentic(snapshot: BridgeSnapshot): BridgeAgenticStatus {
+  if (!snapshot.connected || snapshot.capabilities === null) {
+    return { ready: false, reason: 'no-bridge' }
+  }
+  if (!snapshot.capabilities.inferAgentic) return { ready: false, reason: 'route-missing' }
+  return { ready: true, reason: 'ready' }
+}
+
+/** The live decision, against whatever bridge is paired right now. */
+export function currentBridgeAgentic(): BridgeAgenticStatus {
+  return decideBridgeAgentic({
+    connected: bridgeState.status === 'connected',
+    capabilities: bridgeState.capabilities,
+    git: bridgeState.git,
+  })
+}
+
+/**
+ * One honest sentence for the UI, in the same voice as describeGrounding.
+ * `ready` has no sentence: there is nothing to explain when it works.
+ */
+export function describeBridgeAgentic(status: BridgeAgenticStatus): string | null {
+  switch (status.reason) {
+    case 'ready':
+      return null
+    case 'no-bridge':
+      return 'Deep review unavailable: no local bridge is paired — ran standard review.'
+    case 'route-missing':
+      return 'Deep review unavailable: your local bridge is too old to run the CLI with its tools — ran standard review. Update the bridge and restart it.'
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The calls
 // ---------------------------------------------------------------------------
 

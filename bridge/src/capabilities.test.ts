@@ -77,7 +77,7 @@ describe('detectInferenceClis', () => {
 describe('detectCapabilities', () => {
   it('reports every read-only v1 route as READY — all three are implemented', async () => {
     const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, false)
-    expect(caps).toEqual({ inference: ['claude'], infer: true, inferStream: true, files: true, search: true, fix: false, checkout: false })
+    expect(caps).toEqual({ inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false })
   })
 
   it('reports search READY with nothing on PATH — the route falls back to a JS walk', async () => {
@@ -87,7 +87,7 @@ describe('detectCapabilities', () => {
 
   it('reports infer READY even with no CLI detected — readiness and detection are different questions', async () => {
     const caps = await detectCapabilities(stubDeps(['/bin'], []), false, false)
-    expect(caps).toEqual({ inference: [], infer: true, inferStream: true, files: true, search: true, fix: false, checkout: false })
+    expect(caps).toEqual({ inference: [], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false })
   })
 
   // `fix` is NOT a release-readiness flag like its siblings: it is the
@@ -104,7 +104,7 @@ describe('detectCapabilities', () => {
 
   it('reports fix TRUE even with no CLI detected — the flag is about authorisation, not tooling', async () => {
     const caps = await detectCapabilities(stubDeps(['/bin'], []), true, false)
-    expect(caps).toEqual({ inference: [], infer: true, inferStream: true, files: true, search: true, fix: true, checkout: false })
+    expect(caps).toEqual({ inference: [], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: true, checkout: false })
   })
 
   // `checkout` is the --allow-checkout flag, and the WHOLE point of it being a
