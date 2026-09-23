@@ -1749,6 +1749,10 @@ test.describe('real browser → real bridge', () => {
   let bridge: RealBridge
 
   test.beforeAll(async () => {
+    // Compiling the bridge is the slow part, and a cold CI runner is slower
+    // than any laptop. The default hook timeout is the 30s test timeout, which
+    // would turn a slow `tsc` into a mystery failure rather than a slow pass.
+    test.setTimeout(180_000)
     buildBridgeOnce()
     bridge = await startRealBridge()
   })
