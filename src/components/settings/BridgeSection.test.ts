@@ -291,7 +291,9 @@ describe('BridgeSection — connecting', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:9001/v1/health')
   })
 
-  it('shows an actionable alert when nothing is listening', async () => {
+  it('names both possibilities when the browser will not say which it was', async () => {
+    // jsdom exposes no Permissions API, so the probe cannot rule the browser
+    // in or out and must not pretend otherwise.
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
     render(BridgeSection)
 
@@ -299,9 +301,33 @@ describe('BridgeSection — connecting', () => {
     await userEvent.click(screen.getByRole('button', { name: /^connect$/i }))
 
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent(/start the bridge in your repo/i)
+      expect(screen.getByRole('alert')).toHaveTextContent(/nothing is listening there/i)
     })
+    expect(screen.getByRole('alert')).toHaveTextContent(/blocked the request to your local network/i)
     expect(screen.getByTestId('bridge-status')).toHaveTextContent(/not connected/i)
+  })
+
+  /**
+   * THE BUG THIS PR EXISTS FOR, at the surface the user actually read: a
+   * running bridge, a browser that blocked the request, and an alert that used
+   * to say "Start the bridge in your repo".
+   */
+  it('tells the user to grant local network access, not to start a bridge that is already running', async () => {
+    vi.stubGlobal('navigator', {
+      ...globalThis.navigator,
+      permissions: { query: async () => ({ state: 'denied' }) as PermissionStatus },
+    })
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+    render(BridgeSection)
+
+    await userEvent.type(screen.getByLabelText(/bridge pairing token/i), TOKEN)
+    await userEvent.click(screen.getByRole('button', { name: /^connect$/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/local network access/i)
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent(/never left it/i)
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/start the bridge in your repo/i)
   })
 })
 

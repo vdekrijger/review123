@@ -13,6 +13,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { basename } from 'node:path'
 import { detectCapabilities, defaultCapabilityDeps, type CapabilityDeps } from './capabilities.js'
+import { PRIVATE_NETWORK_REQUEST_HEADER } from './cors.js'
 import {
   defaultAppState,
   defaultCheckout,
@@ -187,6 +188,17 @@ function clientDisconnectSignal(req: IncomingMessage, res: ServerResponse): Abor
   return controller.signal
 }
 
+/**
+ * One header as a plain string. Node types every header as
+ * `string | string[] | undefined`; a repeated header is not something any
+ * browser sends on a preflight, and the handler only ever compares the value
+ * to an exact string, so an array is simply not a value it recognises.
+ */
+function headerValue(req: IncomingMessage, name: string): string | undefined {
+  const raw = req.headers[name]
+  return typeof raw === 'string' ? raw : undefined
+}
+
 async function respond(
   req: IncomingMessage,
   res: ServerResponse,
@@ -202,6 +214,7 @@ async function respond(
       host: req.headers.host,
       origin: typeof req.headers.origin === 'string' ? req.headers.origin : undefined,
       authorization: req.headers.authorization,
+      requestPrivateNetwork: headerValue(req, PRIVATE_NETWORK_REQUEST_HEADER),
     },
     // 'too-large' is handed to the handler as an over-cap buffer stand-in so
     // the 413 answer stays in the one place that formats responses.

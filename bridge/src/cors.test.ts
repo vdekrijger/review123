@@ -7,12 +7,45 @@
  * happy path: suffix look-alikes, scheme swaps, `null`, and a rebound Host.
  */
 import { describe, it, expect } from 'vitest'
-import { REVIEW123_ORIGIN, corsHeaders, isAllowedHost, isAllowedOrigin } from './cors.js'
+import {
+  PRIVATE_NETWORK_ALLOW_HEADER,
+  REVIEW123_ORIGIN,
+  REVIEW123_ORIGINS,
+  REVIEW123_WWW_ORIGIN,
+  corsHeaders,
+  isAllowedHost,
+  isAllowedOrigin,
+  privateNetworkHeaders,
+} from './cors.js'
 
 describe('isAllowedOrigin', () => {
   it('allows the deployed app origin exactly', () => {
     expect(isAllowedOrigin(REVIEW123_ORIGIN)).toBe(true)
     expect(REVIEW123_ORIGIN).toBe('https://review123.dev')
+  })
+
+  /**
+   * THE REGRESSION. review123.dev answers 308 → www.review123.dev, so `www`
+   * is the origin every real browser actually sends. Allowing only the apex
+   * meant the bridge refused every genuine user with a headerless 403, which
+   * the page could not tell apart from "no bridge is running".
+   */
+  it('allows the www origin the apex redirects to', () => {
+    expect(isAllowedOrigin(REVIEW123_WWW_ORIGIN)).toBe(true)
+    expect(REVIEW123_WWW_ORIGIN).toBe('https://www.review123.dev')
+    expect(REVIEW123_ORIGINS).toEqual([REVIEW123_ORIGIN, REVIEW123_WWW_ORIGIN])
+  })
+
+  it('allowing www does NOT allow any other subdomain', () => {
+    for (const origin of [
+      'https://api.review123.dev',
+      'https://www.review123.dev.evil.test',
+      'https://wwww.review123.dev',
+      'https://www.review123.dev:8443',
+      'http://www.review123.dev',
+    ]) {
+      expect(isAllowedOrigin(origin), origin).toBe(false)
+    }
   })
 
   it('allows loopback dev origins on any port', () => {
@@ -73,6 +106,25 @@ describe('corsHeaders', () => {
 
   it('does NOT allow credentials — the bridge is bearer-token only', () => {
     expect(corsHeaders(REVIEW123_ORIGIN)['Access-Control-Allow-Credentials']).toBeUndefined()
+  })
+
+  it('never carries the private-network answer on its own', () => {
+    expect(corsHeaders(REVIEW123_ORIGIN)[PRIVATE_NETWORK_ALLOW_HEADER]).toBeUndefined()
+  })
+})
+
+describe('privateNetworkHeaders', () => {
+  it('answers a preflight that asked for private-network access', () => {
+    expect(privateNetworkHeaders('true')).toEqual({ [PRIVATE_NETWORK_ALLOW_HEADER]: 'true' })
+  })
+
+  it.each([
+    ['nothing asked', undefined],
+    ['an explicit false', 'false'],
+    ['a truthy-looking string that is not the spec value', 'TRUE'],
+    ['an empty value', ''],
+  ])('sends nothing for %s', (_label, requested) => {
+    expect(privateNetworkHeaders(requested as string | undefined)).toEqual({})
   })
 })
 

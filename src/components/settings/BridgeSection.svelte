@@ -223,6 +223,13 @@
       </p>
       <pre class="cmd"><code>{BRIDGE_DOWNLOAD_COMMAND}
 {BRIDGE_START_COMMAND}</code></pre>
+      <p class="field-note" data-testid="bridge-permission-note">
+        <strong>Your browser will ask once.</strong> Reaching a server on your own machine
+        from a website needs your permission — Chrome asks to
+        <em>“look for and connect to any device on your local network”</em>. Choose
+        <strong>Allow</strong>. Until you do, the bridge is unreachable from here no matter
+        how well it is running, and nothing you type reaches it.
+      </p>
       <p class="field-note">
         Prefer to build it yourself? Clone
         <a href={BRIDGE_REPO_URL} target="_blank" rel="noopener noreferrer">the repo</a> and run
