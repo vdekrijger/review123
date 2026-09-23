@@ -4,8 +4,8 @@ Companion to [`ui-audit.md`](./ui-audit.md) (the findings, `F1`-`F18`) and
 [`refactoring-ui-principles.md`](./refactoring-ui-principles.md) (the rubric and
 its page refs).
 
-**Status: Phase 1 shipped. Phase 2 in progress — Batches 2B and 2C shipped.
-Batches 2A, 2D and Phase 3 are still proposals.**
+**Status: Phase 1 shipped. Phase 2 in progress — Batches 2A, 2B and 2C shipped.
+Batch 2D and Phase 3 are still proposals.**
 
 Phase 1 landed as one PR — see [Phase 1 — as shipped](#p1-shipped) for what
 changed against what this document proposed, and for the measurements taken from
@@ -13,13 +13,17 @@ the built app rather than from the token values. Batch 2B likewise records what
 it actually decided in [Batch 2B — as shipped](#b2b-shipped); later batches
 should inherit its [border rule](#b2b-border) rather than re-litigate it. Batch
 2C follows in [Batch 2C — as shipped](#b2c-shipped), which also corrects one of
-the audit's own measurements ([F8](./ui-audit.md#f8)).
+the audit's own measurements ([F8](./ui-audit.md#f8)). Batch 2A closes Phase 2's
+form work in [Batch 2A — as shipped](#b2a-shipped), which corrects one of *this
+document's* items — [F14](./ui-audit.md#f14) had already been fixed, by Phase 1.
 
 The screenshots in [`./shots/`](./shots/) are the **after** state of the most
-recent batch to touch each surface. The pre-Phase-1 before state is in git
-history at commit `38b9e9a`; at commit `038e6d4`, the pre-Batch-2B state of
-`step1-understand-*.png` and the pre-Batch-2C state of the settings page and the
-Inspect step.
+recent batch to touch each surface. **All 14 are Batch 2A's**, because its
+control primitives are global and every screen carries at least one of them. The
+pre-Phase-1 before state is in git history at commit `38b9e9a`; at commit
+`038e6d4`, the pre-Batch-2B state of `step1-understand-*.png` and the
+pre-Batch-2C state of the settings page and the Inspect step; at commit
+`1e2de30`, the pre-Batch-2A state of all fourteen.
 
 Every token value in the unshipped batches remains *proposed and measured*, not
 applied.
@@ -437,9 +441,264 @@ language, which is what makes it reviewable.
    value they label, not larger ([F12](./ui-audit.md#f12), p.44).
 3. Fix stacked-field rhythm to the scale: label→input one step, input→next field
    at least two steps up ([F12](./ui-audit.md#f12), p.84).
-4. Style the two unstyled anchors ([F14](./ui-audit.md#f14)) —
-   `AiModelsSection.svelte:481`, `StandingRulesSection.svelte:385`.
+4. ~~Style the two unstyled anchors ([F14](./ui-audit.md#f14)) —
+   `AiModelsSection.svelte:481`, `StandingRulesSection.svelte:385`.~~
+   **Already done by Phase 1**, which also found a third
+   ([see its record](#p1-shipped)) — this item should have been struck then.
+   What Batch 2A found instead was the *cause*, and seven more anchors;
+   see [its record](#b2a-shipped).
 5. Replace the `0.45` disabled literals with `--disabled-opacity`.
+
+<a id="b2a-shipped"></a>
+
+### Batch 2A — as shipped
+
+Shipped as one PR, four commits along the item seams: the control boundaries and
+the two new tokens, then the label/rhythm primitive, then the gates, then the
+screenshots. **One of the five items above was already done**, and three of the
+other four found more sites than this document or the audit recorded. The
+pattern by now is unmistakable and worth stating plainly: *the citation is a
+starting point, the grep is the set.*
+
+**Item 4 was already closed, by Phase 1.** This document asks Batch 2A to style
+`AiModelsSection.svelte:481` and `StandingRulesSection.svelte:385`. Phase 1
+styled both — and found a third in `BridgeSection` — and
+[said so](#p1-shipped). The item should have been struck then; it is struck now.
+What was left was the *cause*: `app.css` had **no `a` rule at all**, so the
+default for an anchor in this app was the UA's `#0000EE` / `#9e9eff`, and each
+new anchor was a fresh instance of the same bug. Grepping every `<a>` in `src/`
+and checking whether any rule could reach it found **seven still unstyled**, none
+of them in this batch's files:
+
+| file | anchor | why the existing rule missed it |
+|---|---|---|
+| `App.svelte:148` | "Go home" (not-found route) | `.topbar a` covers the header only |
+| `AiPanel.svelte:80` | `.ai-panel-no-key` | the rule covers the sibling `.ai-panel-disabled` state |
+| `InspectStep.svelte:1700` | `.story-fallback-note` | likewise a sibling of the styled `.reviewers-disabled-note` |
+| `VerdictStep.svelte:564` | "Open Settings" | no rule |
+| `VerdictStep.svelte:806` | org-access link in `.error-msg` | no rule |
+| `Review.svelte:786` | "Settings" in `p.muted` | no rule |
+| `AuthCallback.svelte:94` | "Go home" | the file has no anchor rule at all |
+
+Five of the seven are a link inside a *sibling state* of a state someone did
+style. That is the signature of a missing default, not of seven oversights.
+`a { color: inherit; text-decoration: underline }` in `app.css` — the idiom six
+components had already written out by hand — fixes all seven and every future
+one, at element specificity (0,0,1) so it cannot reach a `.btn`, a `.nav-link`
+or any component rule. Measured in the built app on `/this-route-does-not-exist`:
+"Go home" was `#0000EE` (light) / `#9e9eff` (dark) and is now `--text`, underlined,
+in both. Note that UA blue *passed* contrast (8.86:1 light, 7.58:1 dark) — F14
+was never a legibility bug. It was a second hue competing with the accent, in
+neither palette, and not theme-aware.
+
+<a id="b2a-f11"></a>
+
+**Item 1 — control borders ([F11](./ui-audit.md#f11)). Done, and it is the
+largest visible change in the batch.**
+
+Measured with `getComputedStyle` in the **built** app at 1440×1000, both themes:
+
+| ground | `--hairline` (before) | `--border-control` (after) |
+|---|---|---|
+| light `--bg` | 1.33 | **3.53** |
+| light `--surface` | 1.41 | **3.74** |
+| light `--surface-sunken` | 1.25 | **3.32** |
+| dark `--bg` | 1.43 | **3.79** |
+| dark `--surface` | 1.31 | **3.49** |
+| dark `--surface-sunken` | 1.19 | **3.17** |
+
+Every control boundary in the app now clears **SC 1.4.11's 3:1**, where none of
+them did before; the improvement is a uniform **2.65×**. The numbers are the
+token's, so the interesting part is the scope. The plan says "one-line-per-rule",
+and in `app.css` it is exactly that — three rules, `.btn`, the
+`input`/`textarea`/`select` primitive, and the `checkbox`/`radio` primitive. But
+**21 component-level controls bypass those primitives** with a border of their
+own, and a repair that stopped at `app.css` would have left most of the settings
+page untouched. All 21 are converted: the segmented controls and their internal
+dividers, the combobox trigger and its search box, the ensemble row's selects and
+its add/remove buttons, the quick-set buttons, the skills forms' textareas and
+buttons, the bridge and standing-rules primary/secondary buttons, Appearance's
+move/reset buttons, the ask box's input and close button, and `CommentEditor`'s
+wrapper — whose `<textarea>` is `border: none`, so the wrapper **is** the
+control's edge.
+
+**The line this batch draws, and the one it does not.** A control's boundary is
+required information (SC 1.4.11) and gets `--border-control`. A *surface* or a
+*separator* is not, and keeps `--hairline`: section cards, `<details>` panels,
+fieldsets, provider cards, popover chrome, row separators, `.chip`, `.cmd` code
+blocks, the comment editor's own internal tab/toolbar rules. That is the split
+the two tokens exist to express, and it is now asserted in both directions —
+`.card` and `dialog` must *not* reference the control token.
+
+Worth being explicit about one judgement: **`.btn` is a control**, so it took the
+token too, and that is why the change is visible on every screen and not just in
+settings. A `.btn`'s fill is `--surface-sunken`, which stands **1.06:1** off the
+page and **1.13:1** off a card — invisible. Its border was the only thing making
+it a button, at 1.33:1. That is the same finding as F11, on a different element.
+
+**Item 2 — label demotion ([F12](./ui-audit.md#f12), p.44). Done.**
+
+Measured in the built app, the `DeepSeek API key` field on `/settings`:
+
+| | before | after |
+|---|---|---|
+| label size | 15px (ProvidersSection) / 13.5px (AiModelsSection) | **12px** |
+| label weight | 400 | **500** |
+| label ink | `--text` — 15.80:1 light | `--text-secondary` — **7.14:1** light / **7.09:1** dark |
+| value size | 13.5px | 13.5px (unchanged) |
+| value ink | `--text` — 14.00:1 light | unchanged |
+
+The label was *larger than, and exactly as dark as*, the value in one section and
+*the same size and just as dark* in the other. It is now one scale step below the
+value on size and roughly half its contrast, while staying well clear of the
+4.5:1 floor — a demotion, not a legibility trade.
+
+**`--text-secondary`, not `--text-muted`, and the difference is the point.**
+`BridgeSection` had already hand-rolled a demoted label — at `--text-muted`,
+which is where its own `.field-note` hints live. Label and hint were therefore on
+one tier, which flattens the thing a form most needs to distinguish: *what this
+field is* versus *what you should know about it*. The middle tier Phase 1 added
+and left unconsumed is exactly this role. Weight is the one axis that goes **up**
+(400 → 500): at 12px in a secondary ink a 400-weight label gets thin, and stroke
+weight is not emphasis once both size and contrast have dropped. No new weight is
+introduced — 500 was already in use ([F18](./ui-audit.md#f18)).
+
+**Item 3 — stacked-field rhythm ([F12](./ui-audit.md#f12), p.84). Done.**
+
+Rendered geometry, not declared CSS:
+
+| | before | after |
+|---|---|---|
+| label → its own control | 3.7px (AiModels) / **0px** (Providers, SecretInput) | **3.75px** everywhere |
+| field → next field | 7.5px | **15px** |
+| ratio | 2.0:1 | **4.0:1** |
+
+The 0px cases were a block-level control opening its own line inside a
+`display: block` label, which fused the label to its field. `.field` /
+`.field-label` are now a primitive in `app.css` rather than a shape each section
+re-invents; the four sections that had their own copy (`BridgeSection`,
+`AiModelsSection`, `SkillsSection`, `ProvidersSection`) adopt it. A label may be
+a `<span class="field-label">` or a bare text node in the `.field` — both get the
+same treatment, so adopting the primitive never forces a markup rewrite. 4:1 is
+the same register Batch 2C used for the Inspect toolbar (3.3:1).
+
+> **The fix reintroduced the defect once, two lines below itself.**
+> `ProvidersSection`'s `details .field { margin: 0 0.75rem }` shorthand
+> out-specified the primitive's `.field + .field { margin-top: 1rem }` and
+> flattened the two adjacent Bitbucket fields back to a 0 gap. The *screenshots*
+> caught it; neither the unit gates nor the e2e gates did, because both measure
+> the AI-models field. `margin-inline` is the repair. Recorded because "the
+> primitive is right, therefore every call site is right" is exactly the
+> assumption that was wrong.
+
+**Item 5 — `--disabled-opacity`. Done, and the sweep was bigger than the
+literal.**
+
+`0.45` was never the whole story. Parsing every rule whose selector carries
+`:disabled` / `[disabled]` / `.locked` / `.disabled` found **35 disabled-state
+opacity rules across the app, carrying seven different values** (0.35, 0.4, 0.45,
+0.5, 0.55, 0.6, 0.85) for one meaning. Inside this batch's fence there were
+**14**, with five different values; they now carry one token. Three of them
+actually move: `.move-btn:disabled` 0.35 → 0.45 (a disabled move arrow becomes
+slightly more legible), `BridgeSection`'s `.primary-btn:disabled` and
+`AiModelsSection`'s two `.disabled` panels 0.55 → 0.45, and
+`StandingRulesSection`'s buttons 0.5 → 0.45.
+
+**The value is a single theme-independent `0.45`, deliberately.** The asymmetry
+is real and is recorded in `app.css` and in a test: `--text` at 0.45 measures
+**2.68:1** on the light well against **3.65:1** on the dark one, so light lands
+27% harsher — the same shape of bug `--recede-opacity` exists to fix. The
+difference is that `--recede-opacity` had a **floor** (3:1 on the three diff
+grounds) which *forced* 0.55 in light; a disabled control has no floor at all —
+WCAG 2.1 excepts inactive components from both SC 1.4.3 and SC 1.4.11 — so a
+second value would be taste dressed as a measurement. It would also cost
+something concrete: a number cannot use `light-dark()`, so splitting it would
+grow the app's last copy of the [F17](./ui-audit.md#f17) hazard from two
+declarations to three. Measured, reported, single value.
+
+**Closed here, from Batch 2B's deferred list:**
+`settings/ModelCombobox.svelte:440`'s hand-picked
+`0 10px 30px rgba(0,0,0,.28)` → `--elevation-4`. It is a large dropdown, which is
+what step 4 is for, and its alpha was a dark-ground pick: black at .28 measures
+2.10:1 on the light page against 1.04:1 on the dark one, so the one declaration
+landed twice as heavy in the theme it was *not* chosen for. **The guard's
+allowlist is now empty**, and a new assertion says it must stay empty — the two
+tests worked exactly as Batch 2B designed them: removing the literal turned the
+"names only files that really do still carry one" test red until the allowlist
+entry went with it.
+
+**Verification that shipped with it:**
+
+- **`src/lib/theme/contrast.test.ts` — 80 → 103 assertions**, in four groups.
+  F11: `--border-control` must beat `--hairline` by >2× on every ground in both
+  themes (a clear margin, so the two roles cannot quietly re-converge);
+  `--border-subtle` is still only an alias; every control primitive in `app.css`
+  really does reference the control token and `.card`/`dialog` really do not —
+  *that* is the assertion whose absence let Phase 1 define a contrast-gated token
+  that nothing rendered. F12: the three inks are strictly ordered; the `.field`
+  label is smaller than the control primitive's own size; both spellings of the
+  label agree; the control declares `font-weight: 400` so it cannot inherit the
+  wrapper's 500; and the between-field gap is ≥3× the inside gap, asserted as a
+  **ratio** so a later change of scale step still passes. F14: `app.css` declares
+  a global `a` colour and underline, and does *not* pick a hue there. P1-4:
+  `--disabled-opacity` is a number in (0,1), absent from **both** dark-override
+  blocks, not an alias of `--recede-opacity`, and its light-vs-dark asymmetry is
+  pinned as a test rather than a comment that can drift.
+  Mutation-checked in all four families: pointing `.btn` back at `--hairline`,
+  enlarging `.field-label` past its value, halving the between-field gap and
+  deleting the global `a` rule each turn exactly the intended assertion red.
+- **`src/components/design-system-primitives.test.ts`** — the elevation
+  allowlist is empty and a test enforces that.
+- **`src/components/CommentEditor.test.ts`** — its border assertion follows the
+  source to `--border-control` and is *narrowed*: it now also proves the
+  `<textarea>` has no border of its own (which is *why* the wrapper must clear
+  the non-text floor) and that the editor's internal separators stay decorative.
+- **`e2e/settings.spec.ts`** — the unchecked-radio assertion follows the source
+  (an unchecked radio is F11's worst case: nothing inside it but its border),
+  plus **four new gates**, two per theme, measuring the built app: every control
+  boundary in `#ai-models` clears 3:1 *and* beats the hairline by 2×; and the
+  label ranks below its value on both size and contrast while the **rendered
+  geometry** keeps the gap between fields >3× the gap inside one. Relationships,
+  not hardcoded steps. They wait out the 150ms `border-color` transition first —
+  read immediately after a theme flip, both ends of that interpolation happen to
+  clear 3:1, which is the kind of accident that makes a gate pass for the wrong
+  reason.
+
+**Deferred out of Batch 2A, deliberately:**
+
+- **`--chrome-muted-opacity`, the third of P1-4a's three semantics.** Three bare
+  `opacity: 0.45` literals remain and they are *not* disabled states:
+  `BridgeSection.svelte:356` and `GroundingIndicator.svelte:80` (an "off" status
+  dot) and `CommentThread.svelte:281` (a menu button revealed on hover). Two of
+  the three are outside this batch's files, and tuning de-emphasised chrome is a
+  decision about chrome, not about forms. **Batch 2D owns it** — it is a scale
+  question.
+- **The other 21 disabled-state opacities**, in `VerdictStep` (5), `InspectStep`
+  (4), `RevisionPicker` (3), `AskAi` (2), `Landing` (2), `AgentFixPanel`,
+  `CiSummary`, `DraftThread`, `RunPrPanel`, `StorySlideshow` and
+  `SectionStatus`. Converging them is mechanical, but at least one is a
+  deliberate outlier — `run-reviewers-btn:disabled` sits at 0.85 because it is
+  disabled *while busy* and must stay readable — so they want a per-site look,
+  not a sweep. The token exists and is the obvious target.
+- **The remaining `--surface-raised` call sites.** Phase 1's
+  [P1-5](#p1-5) deferral stands; this batch swept none, because in its files the
+  alias always resolves to the right value and the per-site "should this come
+  forward instead?" question is genuinely per-site.
+- **`Landing.svelte`'s `.discard-confirm`** still hardcodes `#0a1410` and still
+  wants an `--on-danger`. Inherited from Phase 1 and from Batch 2B; Landing is
+  not a Batch 2A file either. Nobody has taken it yet.
+- **`src/routes/Demo.svelte:235`** paints `.demo-banner a { color: #6ab4f0 }` —
+  a hardcoded blue that does not flip with the theme, sitting on the banner's own
+  fixed tint. Measured and left alone: it is legible on its own ground and
+  `Demo.svelte` is nobody's fence yet, but it is the last saturated blue in the
+  app outside the diff viewer, and it is the natural companion to F14 whenever a
+  batch claims that file.
+- **The two-column control grid** Batch 2C floated for the settings page
+  ([item 4](#b2c-item4)) is **not** built. This batch made the column shorter
+  (≈100px) by tightening the field primitive, but it did not restructure the
+  layout — that is a different change with a different risk profile, and item 4's
+  own conclusion was that it is optional.
+
 
 ### Batch 2B — cards, panels and elevation
 
@@ -600,12 +859,13 @@ makes the comparison purely visual.
   `--elevation-drawer` and `--elevation-4` respectively; converting them is a
   one-line change each. They are allowlisted by name in the static guard, which
   fails once the literal is gone, so the exemption cannot be forgotten.
-  > **Since resolved, half of it.** Batch 2C landed after this and took
-  > `ContextRail.svelte` — see [its record](#b2c-shipped). One entry is left in
-  > `DEFERRED_TO_A_LATER_BATCH`: `settings/ModelCombobox.svelte`, Batch 2A's.
-  > The guard worked exactly as designed: removing the literal made the
-  > "names only files that really do still carry one" test fail until the
-  > allowlist entry went with it.
+  > **Since resolved, both halves.** Batch 2C landed after this and took
+  > `ContextRail.svelte`; Batch 2A took `settings/ModelCombobox.svelte` onto
+  > `--elevation-4` — see [its record](#b2a-shipped). `DEFERRED_TO_A_LATER_BATCH`
+  > is now **empty**, and a test says it must stay empty. The guard worked
+  > exactly as designed both times: removing the literal made the "names only
+  > files that really do still carry one" test fail until the allowlist entry
+  > went with it.
 - **`--surface-raised` still has ~30 call sites** outside this batch's files
   (settings/\*, FileDiff, InspectStep, VerdictStep, Landing, Review, …). Batch 2B
   swept the 32 in its own fence to `--surface-sunken`; the alias resolves to the
@@ -864,6 +1124,22 @@ declarations. Approach:
 
 Changing `:root { font-size: 15px }` to `16px` is a *separate*, deliberate
 decision with a whole-app visual effect — do not smuggle it into a batch.
+
+**Inherited into this batch by Batch 2A**, because both are scale questions and
+neither belongs to a component:
+
+- **`--chrome-muted-opacity`**, the last of the three semantics
+  [P1-4](#p1-4) split out of one bare `0.45`. Three literals are still
+  un-tokenised: `BridgeSection.svelte:356`, `GroundingIndicator.svelte:80` (both
+  an "off" status dot) and `CommentThread.svelte:281` (a hover-revealed menu
+  button). `--recede-opacity` and `--disabled-opacity` both exist now; this is
+  the one left.
+- **The 21 remaining disabled-state opacities** outside Batch 2A's fence, which
+  carry six different values for one meaning. `--disabled-opacity` is the target,
+  but at least one is a deliberate outlier (`run-reviewers-btn:disabled` at 0.85
+  is disabled *while busy* and must stay readable), so this wants a per-site
+  pass rather than a sweep. The full inventory is in
+  [Batch 2A's record](#b2a-shipped).
 
 ---
 
