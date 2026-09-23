@@ -1042,6 +1042,59 @@
     padding: 0;
   }
 
+  /*
+   * ---- THE PROSE MEASURE (rubric p.99-101, amendment A2) ----
+   *
+   * The finding card is the one surface that carries prose AND code in the
+   * same box, and it lives INSIDE the diff, which legitimately wants the whole
+   * window. So the cap goes on the prose ELEMENTS, not on the card and not on
+   * .skill-finding-body:
+   *
+   *   - the CARD is the anchor between two diff rows and hosts the chip
+   *     header, the Fix block and the action row. Capping it would drag the
+   *     code and the controls in with the prose, which is the p.68-70 mistake
+   *     in reverse — shrinking a container to suit part of its content.
+   *   - .skill-finding-body WRAPS the rendered markdown, and that markdown
+   *     contains <pre> fences. Capping the wrapper caps the code with it,
+   *     which A2 forbids outright: code sets its own measure and must never be
+   *     re-wrapped for prose comfort.
+   *
+   * So: every prose block caps; <pre>, tables, images and mermaid containers
+   * are deliberately absent from this selector and keep the full card width,
+   * with their own overflow-x for lines longer than the box.
+   *
+   * The same treatment reaches .fix-body for the same reason — the Fix block
+   * is prose ("do X because Y") wrapped around a snippet, so its paragraphs
+   * cap and its fences do not.
+   *
+   * Measured at 1440x1000 on /demo: the 13.5px finding paragraph went 166.7ch
+   * -> 72ch at diffWidth:full and 121.4ch -> 72ch at centered. It was already
+   * over at centered, which is why this is capped rather than left to the
+   * width setting. In split panes at centered the paragraph measures 58.1ch
+   * and the cap does not bind — max-width, so it only ever removes excess.
+   *
+   * NOT capped, deliberately: .simple-toggle ("Show original"). It is a
+   * 13-character button label, not a paragraph; a measure on it would be a cap
+   * that can never bind, and p.99-100 legislates running text.
+   *
+   * overflow-wrap: a narrower box makes a long backticked identifier or a
+   * file/path token likelier to exceed the line, and inline code in prose may
+   * break (unlike a <pre>, which scrolls).
+   */
+  .skill-finding-body :global(p),
+  .skill-finding-body :global(li),
+  .skill-finding-body :global(blockquote),
+  .skill-finding-body :global(h1),
+  .skill-finding-body :global(h2),
+  .skill-finding-body :global(h3),
+  .skill-finding-body :global(h4),
+  .fix-body :global(p),
+  .fix-body :global(li),
+  .fix-body :global(blockquote) {
+    max-width: var(--measure-prose);
+    overflow-wrap: break-word;
+  }
+
   .skill-finding-actions {
     display: flex;
     gap: 0.4rem;

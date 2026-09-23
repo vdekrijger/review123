@@ -49,6 +49,31 @@
   --text-2xl:  1.5rem;
 
   /*
+   * ── THE PROSE MEASURE (rubric p.99-101; amendment A2) ────────────────────
+   *
+   * Paragraphs run 45-75 characters per line "even when the container is
+   * wider" (p.100-101). Amendment A2 makes the scope explicit for this app:
+   * the rule binds every PROSE block — AI summaries, findings, hints, PR
+   * descriptions — and does NOT bind code, which sets its own measure and must
+   * never be re-wrapped for prose comfort.
+   *
+   * ONE token, not a number per call site, for the same reason B4 gives the
+   * recede token: a measure is a recurring dimension, so it is systematised
+   * (p.27-28). It is stated in `ch` on purpose. `ch` is the advance of "0" in
+   * the USING element's own font, so one token caps a 12.75px finding body, a
+   * 13.5px markdown paragraph and a 15px list at 72 characters each — the cap
+   * is in characters, which is what the rubric legislates, and a future font
+   * or type-scale change cannot silently widen it the way a px value would.
+   *
+   * 72ch, not a new number: it is what .prose/.prose-md already used, and
+   * Batch 2C measured the settings column at 74ch and called that the TOP of
+   * comfortable (plan #b2c-item4). Sitting just inside that is the value this
+   * app has already twice decided on, so adopting it keeps one measure
+   * decision in the codebase rather than opening a second.
+   */
+  --measure-prose: 72ch;
+
+  /*
    * ── THE WEIGHT SET (audit F18, rubric p.34; plan Batch 2D deferred it) ───
    *
    * There are no --weight-* tokens here, and that absence is the decision.
@@ -679,7 +704,9 @@ b {
   font-family: var(--font-prose);
   font-size: var(--text-lg);
   line-height: 1.65;
-  max-width: 72ch;
+  /* Was a literal 72ch. Same rendered width — now the same DECLARATION as
+     every other prose measure in the app, so the two cannot drift apart. */
+  max-width: var(--measure-prose);
 }
 
 /* ═══════════════════════════════════════════
