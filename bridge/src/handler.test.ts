@@ -12,7 +12,7 @@ import {
   type StreamSink,
 } from './handler.js'
 import { MAX_BODY_BYTES, PROTOCOL_VERSION, type HealthResponse } from './protocol.js'
-import { REVIEW123_ORIGIN } from './cors.js'
+import { REVIEW123_ORIGIN, REVIEW123_WWW_ORIGIN } from './cors.js'
 
 const TOKEN = 'test-token-0000000000000000000000000000000'
 const PORT = 7321
@@ -331,6 +331,78 @@ describe('preflight', () => {
     )
     expect(res.status).toBe(403)
     expect(res.headers['Access-Control-Allow-Origin']).toBeUndefined()
+  })
+
+  it('answers the private-network preflight for an ALLOWED origin', async () => {
+    const res = await handleRequest(
+      req({
+        method: 'OPTIONS',
+        headers: { authorization: undefined, requestPrivateNetwork: 'true' },
+      }),
+      ctx(),
+    )
+    expect(res.status).toBe(204)
+    expect(res.headers['Access-Control-Allow-Private-Network']).toBe('true')
+  })
+
+  it('answers it for the www origin the apex redirects to', async () => {
+    const res = await handleRequest(
+      req({
+        method: 'OPTIONS',
+        headers: {
+          origin: REVIEW123_WWW_ORIGIN,
+          authorization: undefined,
+          requestPrivateNetwork: 'true',
+        },
+      }),
+      ctx(),
+    )
+    expect(res.status).toBe(204)
+    expect(res.headers['Access-Control-Allow-Origin']).toBe(REVIEW123_WWW_ORIGIN)
+    expect(res.headers['Access-Control-Allow-Private-Network']).toBe('true')
+  })
+
+  /**
+   * The rule that keeps the new header from widening anything: it rides on the
+   * origin allowlist, so a stranger asking for private-network access still
+   * gets a bare 403 with no `Access-Control-*` header of ANY kind.
+   */
+  it('NEVER sends the private-network answer to a rejected origin', async () => {
+    const res = await handleRequest(
+      req({
+        method: 'OPTIONS',
+        headers: {
+          origin: 'https://evil.test',
+          authorization: undefined,
+          requestPrivateNetwork: 'true',
+        },
+      }),
+      ctx(),
+    )
+    expect(res.status).toBe(403)
+    const cors = Object.keys(res.headers).filter((h) => h.toLowerCase().startsWith('access-control-'))
+    expect(cors).toEqual([])
+  })
+
+  it('never sends it to an Origin-less preflight either', async () => {
+    const res = await handleRequest(
+      req({
+        method: 'OPTIONS',
+        headers: { origin: undefined, authorization: undefined, requestPrivateNetwork: 'true' },
+      }),
+      ctx(),
+    )
+    expect(res.status).toBe(204)
+    expect(res.headers['Access-Control-Allow-Private-Network']).toBeUndefined()
+  })
+
+  it('sends it only when the preflight asked', async () => {
+    const res = await handleRequest(
+      req({ method: 'OPTIONS', headers: { authorization: undefined } }),
+      ctx(),
+    )
+    expect(res.status).toBe(204)
+    expect(res.headers['Access-Control-Allow-Private-Network']).toBeUndefined()
   })
 })
 

@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { LOOPBACK_HOST, createBridgeServer, listenLoopback, type BridgeServer } from './server.js'
 import { MAX_BODY_BYTES, PROTOCOL_VERSION } from './protocol.js'
-import { REVIEW123_ORIGIN } from './cors.js'
+import { REVIEW123_ORIGIN, REVIEW123_WWW_ORIGIN } from './cors.js'
 import { runStreamProcess } from './inferStream.js'
 import { runProcess } from './infer.js'
 
@@ -140,6 +140,50 @@ describe('preflight over HTTP', () => {
     expect(res.status).toBe(204)
     expect(res.headers.get('access-control-allow-origin')).toBe(REVIEW123_ORIGIN)
     expect(await res.text()).toBe('')
+  })
+
+  /**
+   * The SOCKET half of the private-network answer. handler.test.ts proves the
+   * rule over plain data; this proves `server.ts` actually reads the header
+   * off the wire and writes the answer back onto it — the wiring a pure test
+   * cannot see.
+   */
+  it('answers a private-network preflight from an allowed origin', async () => {
+    const res = await call('/v1/health', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: REVIEW123_WWW_ORIGIN,
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Headers': 'authorization',
+        'Access-Control-Request-Private-Network': 'true',
+      },
+    })
+    expect(res.status).toBe(204)
+    expect(res.headers.get('access-control-allow-private-network')).toBe('true')
+    expect(res.headers.get('access-control-allow-origin')).toBe(REVIEW123_WWW_ORIGIN)
+  })
+
+  it('gives a rejected origin a bare 403 even when it asks for private-network access', async () => {
+    const res = await call('/v1/health', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://evil.test',
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Private-Network': 'true',
+      },
+    })
+    expect(res.status).toBe(403)
+    expect(res.headers.get('access-control-allow-private-network')).toBeNull()
+    expect(res.headers.get('access-control-allow-origin')).toBeNull()
+  })
+
+  it('sends no private-network answer when the preflight did not ask', async () => {
+    const res = await call('/v1/health', {
+      method: 'OPTIONS',
+      headers: { Origin: REVIEW123_ORIGIN, 'Access-Control-Request-Method': 'GET' },
+    })
+    expect(res.status).toBe(204)
+    expect(res.headers.get('access-control-allow-private-network')).toBeNull()
   })
 })
 

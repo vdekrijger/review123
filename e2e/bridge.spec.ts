@@ -9,13 +9,25 @@
  *      stops answering, the review must fail visibly rather than quietly
  *      spending the API key the user also has configured.
  *
- * The bridge is a process on 127.0.0.1 that no CI runner has, so it is stubbed
- * at the `window.fetch` seam via addInitScript. That is deliberate over
- * `page.route`: the real calls are cross-origin with an Authorization header
- * and a JSON content type, so they would drag CORS preflights into the test and
- * make the assertions depend on Playwright's preflight handling.
+ * MOST of the bridge here is STUBBED at the `window.fetch` seam via
+ * addInitScript, because a stub is the only way to pin how the UI reacts to
+ * two dozen server states. That is deliberate over `page.route`: the real
+ * calls are cross-origin with an Authorization header and a JSON content type,
+ * so interception would drag CORS into the assertions.
+ *
+ * But a fetch stub can never fail the way a browser fails, and that blind spot
+ * shipped a bridge no one could connect to. So the LAST describe block in this
+ * file — "real browser → real bridge" — stubs nothing: it compiles and spawns
+ * the actual bridge process and lets Chrome talk to it. Read the long comment
+ * above that block for exactly what it does and does not cover.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { mkdtempSync } from 'node:fs'
+import { createServer } from 'node:net'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const BRIDGE_KEY = 'review123:bridge'
 const TOKEN = 'e2e-pairing-token-000000000000000000000000'
@@ -1561,4 +1573,340 @@ test('run this PR: with no bridge paired the surface does not exist at all', asy
   // Zero-cost absence: nothing was asked of 127.0.0.1.
   const calls = await page.evaluate(() => (window as unknown as { __bridgeCalls: string[] }).__bridgeCalls)
   expect(calls).toEqual([])
+})
+
+// ---------------------------------------------------------------------------
+// THE SEAM NO TEST EVER CROSSED: a REAL browser talking to a REAL bridge.
+//
+// Everything above this line stubs `window.fetch`, and the bridge's own ~620
+// unit tests drive the server from Node. Both are blind to the two things that
+// actually broke the feature for its first real user:
+//
+//   1. Chrome 142+ ships LOCAL NETWORK ACCESS. A page on a public origin may
+//      not reach `http://127.0.0.1` until the user grants permission. The
+//      rejected fetch is a plain `TypeError: Failed to fetch` in about a
+//      millisecond and NOTHING reaches the bridge — which the app reported as
+//      "Nothing answered … Start the bridge", to someone whose bridge was
+//      running the whole time.
+//   2. `https://review123.dev` answers `308 → https://www.review123.dev`, so
+//      the origin real browsers send is `www`, which the bridge's allowlist
+//      did not carry. Its 403 has no CORS headers by design, so that ALSO
+//      surfaced as an unexplained `TypeError: Failed to fetch`.
+//
+// WHAT THESE TESTS COVER, AND WHAT THEY DO NOT — read this before trusting
+// them, because an honest partial test beats a green one that proves nothing:
+//
+//   • `startRealBridge` spawns the compiled bridge (tsc, once per run) and
+//     reads its port and token out of its own banner. No stubs of any kind.
+//   • The LOOPBACK tests load the app from the e2e origin (http://localhost:…)
+//     and make a genuine cross-origin call to the bridge on another port. That
+//     is a real CORS preflight against the real allowlist. It does NOT
+//     exercise Local Network Access: both ends are loopback, which Chrome does
+//     not gate.
+//   • The PUBLIC-ORIGIN tests put the page on `https://www.review123.dev` by
+//     fulfilling it through `page.route`, which is the only way to hold that
+//     origin with no internet. Chrome applies the Local Network Access gate to
+//     an intercepted page exactly as it does to a real one (verified against
+//     Chromium 148 and Chrome 154), so those tests DO cover it and DO cover
+//     the Origin allowlist. They do NOT cover the CORS preflight: with request
+//     interception on, Chrome handles CORS internally and emits no OPTIONS —
+//     which is precisely why the loopback tests above exist.
+//   • The Private Network Access preflight answer is asserted from Node,
+//     because `Access-Control-Request-Private-Network` is a forbidden header
+//     no page may set. That proves the bridge's ANSWER, not any browser's
+//     behaviour — and current Chrome never asks (see bridge/src/cors.ts).
+// ---------------------------------------------------------------------------
+
+/** The origin the deployed app really has, after the apex 308-redirects. */
+const APP_ORIGIN = 'https://www.review123.dev'
+/** The apex people type, which must keep working for anyone who reaches it. */
+const APEX_ORIGIN = 'https://review123.dev'
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+
+interface RealBridge {
+  port: number
+  token: string
+  stop: () => void
+}
+
+/** Compile the bridge once. The e2e CI job installs deps but builds nothing. */
+function buildBridgeOnce(): void {
+  const built = spawnSync(
+    process.execPath,
+    [join(REPO_ROOT, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', 'bridge/tsconfig.build.json'],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  )
+  if (built.status !== 0) {
+    throw new Error(`could not compile the bridge:\n${built.stdout}\n${built.stderr}`)
+  }
+}
+
+/**
+ * A port nothing is using. The bridge refuses `--port 0` on purpose (a bridge
+ * whose port you cannot predict is one you cannot paste into Settings), so the
+ * test picks one the same way the e2e harness picks its own.
+ */
+function freePort(): Promise<number> {
+  return new Promise((settle, fail) => {
+    const probe = createServer()
+    probe.once('error', fail)
+    probe.listen({ host: '127.0.0.1', port: 0 }, () => {
+      const address = probe.address()
+      if (address === null || typeof address === 'string') {
+        fail(new Error('could not reserve a port'))
+        return
+      }
+      const { port } = address
+      probe.close(() => settle(port))
+    })
+  })
+}
+
+/**
+ * Start a real bridge on a free port, serving this repo, and read the port and
+ * pairing token back out of the banner it prints — the same two strings a user
+ * copies off their own terminal.
+ */
+async function startRealBridge(): Promise<RealBridge> {
+  const child: ChildProcessWithoutNullStreams = spawn(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'bridge', 'dist', 'cli.js'),
+      '--port',
+      String(await freePort()),
+      '--root',
+      REPO_ROOT,
+      '--token-file',
+      join(mkdtempSync(join(tmpdir(), 'review123-e2e-bridge-')), 'token'),
+    ],
+    { cwd: REPO_ROOT },
+  )
+  let banner = ''
+  const ready = new Promise<{ port: number; token: string }>((settle, fail) => {
+    const timer = setTimeout(() => fail(new Error(`bridge did not start:\n${banner}`)), 30_000)
+    child.stdout.on('data', (chunk: Buffer) => {
+      banner += chunk.toString()
+      const port = /listen\s+http:\/\/127\.0\.0\.1:(\d+)/.exec(banner)
+      // The token is the only indented bare word on its own line in the banner.
+      const token = /\n {4}([A-Za-z0-9_-]{20,})\n/.exec(banner)
+      if (port !== null && token !== null) {
+        clearTimeout(timer)
+        settle({ port: Number(port[1]), token: token[1]! })
+      }
+    })
+    child.on('error', fail)
+    child.on('exit', (code) => fail(new Error(`bridge exited with ${code}:\n${banner}`)))
+  })
+  const { port, token } = await ready
+  return { port, token, stop: () => child.kill('SIGKILL') }
+}
+
+/**
+ * Ask the bridge for its health FROM THE PAGE, with no stub anywhere. Returns
+ * whatever the browser gave the page — including the error, which is the whole
+ * point of the blocked cases.
+ */
+function probeFromPage(page: Page, port: number, token: string) {
+  return page.evaluate(
+    async ({ port, token }) => {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/v1/health`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+          credentials: 'omit',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(5_000),
+        })
+        return { ok: true as const, status: response.status, body: await response.text() }
+      } catch (err) {
+        const error = err as { name?: string; message?: string }
+        return { ok: false as const, name: error?.name ?? '', message: String(error?.message ?? err) }
+      }
+    },
+    { port, token },
+  )
+}
+
+/** A blank page held at `origin`, so a test can own that origin with no internet. */
+async function blankPageAt(page: Page, origin: string, path: string) {
+  await page.route(`${origin}${path}`, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>t</title>' }),
+  )
+  await page.goto(`${origin}${path}`)
+}
+
+/** Serve the REAL built app at a public https origin, through interception. */
+async function serveAppAt(page: Page, origin: string, baseURL: string) {
+  await page.route(`${origin}/**`, async (route) => {
+    const requested = new URL(route.request().url())
+    const response = await route.fetch({ url: `${baseURL}${requested.pathname}${requested.search}` })
+    await route.fulfill({ response })
+  })
+}
+
+test.describe('real browser → real bridge', () => {
+  let bridge: RealBridge
+
+  test.beforeAll(async () => {
+    // Compiling the bridge is the slow part, and a cold CI runner is slower
+    // than any laptop. The default hook timeout is the 30s test timeout, which
+    // would turn a slow `tsc` into a mystery failure rather than a slow pass.
+    test.setTimeout(180_000)
+    buildBridgeOnce()
+    bridge = await startRealBridge()
+  })
+
+  test.afterAll(() => {
+    bridge?.stop()
+  })
+
+  test('a genuine cross-origin call from the app reaches the bridge, preflight and all', async ({
+    page,
+  }) => {
+    // NO page.route in this test, deliberately: registering one makes Chrome
+    // handle CORS internally and skip the OPTIONS preflight, which is the one
+    // thing this test exists to exercise.
+    await page.goto('/')
+    const result = await probeFromPage(page, bridge.port, bridge.token)
+
+    expect(result.ok, `the bridge refused a real browser call: ${JSON.stringify(result)}`).toBe(true)
+    if (!result.ok) return
+    expect(result.status).toBe(200)
+    expect(JSON.parse(result.body)).toMatchObject({ ok: true, protocol: 1 })
+  })
+
+  test('a wrong token comes back as a READABLE 401, not as an unexplained failure', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    const result = await probeFromPage(page, bridge.port, 'not-the-token')
+
+    // The 401 carries CORS headers on purpose, so the page can tell "the token
+    // is wrong" from "nothing is there" — two problems, two different fixes.
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.status).toBe(401)
+  })
+
+  test('the bridge answers a Private Network Access preflight — and only for an allowed origin', async ({
+    request,
+  }) => {
+    // Driven from Node: no page may set this request header.
+    const allowed = await request.fetch(`http://127.0.0.1:${bridge.port}/v1/health`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: APP_ORIGIN,
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Headers': 'authorization',
+        'Access-Control-Request-Private-Network': 'true',
+      },
+    })
+    expect(allowed.status()).toBe(204)
+    expect(allowed.headers()['access-control-allow-private-network']).toBe('true')
+    expect(allowed.headers()['access-control-allow-origin']).toBe(APP_ORIGIN)
+
+    const stranger = await request.fetch(`http://127.0.0.1:${bridge.port}/v1/health`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://evil.test',
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Private-Network': 'true',
+      },
+    })
+    expect(stranger.status()).toBe(403)
+    // A rejected origin gets NOTHING — not the private-network answer, not any
+    // other Access-Control-* header.
+    const leaked = Object.keys(stranger.headers()).filter((h) => h.startsWith('access-control-'))
+    expect(leaked).toEqual([])
+  })
+
+  test('Chrome BLOCKS a public-origin page from the bridge until local network access is granted', async ({
+    page,
+  }) => {
+    await blankPageAt(page, APP_ORIGIN, '/blocked')
+
+    const permission = await page.evaluate(async () => {
+      try {
+        return (await navigator.permissions.query({ name: 'local-network-access' } as never)).state
+      } catch {
+        return 'unqueryable'
+      }
+    })
+    // The state the app's classifier keys on. If this ever stops being
+    // 'prompt', the copy in bridge.svelte.ts needs revisiting.
+    expect(permission).toBe('prompt')
+
+    const result = await probeFromPage(page, bridge.port, bridge.token)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    // The failure the user saw: indistinguishable, from the page alone, from a
+    // bridge that was never started.
+    expect(result.name).toBe('TypeError')
+  })
+
+  test('with the permission granted, the WWW origin the apex redirects to is allowed', async ({
+    page,
+    context,
+  }) => {
+    await blankPageAt(page, APP_ORIGIN, '/allowed')
+    await context.grantPermissions(['local-network-access'], { origin: APP_ORIGIN })
+
+    const result = await probeFromPage(page, bridge.port, bridge.token)
+
+    // THE REGRESSION. Before this fix the allowlist carried only the apex, so
+    // this call died on a headerless 403 even with the permission granted.
+    expect(result.ok, `www origin was refused: ${JSON.stringify(result)}`).toBe(true)
+    if (!result.ok) return
+    expect(result.status).toBe(200)
+  })
+
+  test('the apex origin keeps working for anyone who reaches it', async ({ page, context }) => {
+    await blankPageAt(page, APEX_ORIGIN, '/allowed')
+    await context.grantPermissions(['local-network-access'], { origin: APEX_ORIGIN })
+
+    const result = await probeFromPage(page, bridge.port, bridge.token)
+    expect(result.ok).toBe(true)
+  })
+
+  test('a foreign origin is still refused, permission or not', async ({ page, context }) => {
+    await blankPageAt(page, 'https://evil.test', '/steal')
+    await context.grantPermissions(['local-network-access'], { origin: 'https://evil.test' })
+
+    const result = await probeFromPage(page, bridge.port, bridge.token)
+
+    // Even holding the token AND the browser's permission, the origin gate
+    // stops it — and it learns nothing from the bare 403.
+    expect(result.ok).toBe(false)
+  })
+
+  test('THE BUG, end to end: the real app on the real origin, and what it tells the user', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    await serveAppAt(page, APP_ORIGIN, baseURL!)
+    await page.goto(`${APP_ORIGIN}/settings`)
+    await expect(page.getByRole('heading', { name: /^settings$/i })).toBeVisible({ timeout: 15_000 })
+
+    await page.getByLabel(/bridge port/i).fill(String(bridge.port))
+    await page.getByLabel(/bridge pairing token/i).fill(bridge.token)
+    await page.getByRole('button', { name: /^connect$/i }).click()
+
+    // Permission not granted: the app must blame the BROWSER, not the bridge —
+    // which is running, serving this very repo, started in beforeAll.
+    const alert = page.getByRole('alert')
+    await expect(alert).toContainText(/local network access/i, { timeout: 15_000 })
+    await expect(alert).not.toContainText(/start the bridge in your repo/i)
+
+    // Grant it, press Connect again, and the same click now pairs.
+    await context.grantPermissions(['local-network-access'], { origin: APP_ORIGIN })
+    await page.getByRole('button', { name: /^connect$/i }).click()
+
+    await expect(page.getByTestId('bridge-status')).toContainText(/connected to/i, { timeout: 15_000 })
+    // The bridge sends the repo BASENAME only, and the checkout this runs in
+    // is a worktree as often as it is the repo itself.
+    await expect(page.getByTestId('bridge-root')).toHaveText(basename(REPO_ROOT))
+  })
 })

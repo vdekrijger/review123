@@ -9,7 +9,9 @@
  *   1. Host        — DNS-rebinding guard.        403, no CORS headers.
  *   2. Origin      — exact allowlist.            403, no CORS headers.
  *   3. Preflight   — OPTIONS short-circuit.      204, CORS headers, NO auth
- *                    (browsers never send Authorization on a preflight).
+ *                    (browsers never send Authorization on a preflight), plus
+ *                    the Private Network Access answer when one was asked for
+ *                    — and ONLY for an origin gate 2 already allowed.
  *   4. Auth        — bearer token.               401, CORS headers if the
  *                    origin was allowed, so the browser can READ the 401.
  *   5. Body cap.                                 413.
@@ -54,7 +56,7 @@ import {
   type CheckoutResult,
   type RestoreResult,
 } from './checkout.js'
-import { corsHeaders, isAllowedHost, isAllowedOrigin } from './cors.js'
+import { corsHeaders, isAllowedHost, isAllowedOrigin, privateNetworkHeaders } from './cors.js'
 import {
   parseFilesRequest,
   readFiles,
@@ -105,6 +107,13 @@ export interface BridgeRequest {
     host?: string | undefined
     origin?: string | undefined
     authorization?: string | undefined
+    /**
+     * `Access-Control-Request-Private-Network`, verbatim. Only a Private
+     * Network Access preflight carries it, and only an ALLOWED origin is ever
+     * answered with the matching `Allow` header — see cors.ts for why that is
+     * safe and for which browsers still send it.
+     */
+    requestPrivateNetwork?: string | undefined
   }
   body: Buffer | null
   /**
@@ -431,13 +440,25 @@ export function checkGates(req: BridgeRequest, ctx: HandlerContext): GateOutcome
   // A request with NO Origin is not browser-borne (curl, a health check). The
   // bearer token still gates it, and it gets no CORS headers because it needs
   // none.
-  const cors = origin !== undefined && originAllowed ? corsHeaders(origin) : {}
+  const corsAllowed = origin !== undefined && originAllowed
+  const cors = corsAllowed ? corsHeaders(origin) : {}
 
   // ---- 3. Preflight: answer before auth (no Authorization is sent on one) ----
   if (req.method === 'OPTIONS') {
+    // The Private Network Access answer rides on `corsAllowed` and nothing
+    // else, so it can only ever reach an origin the allowlist already passed.
+    // A rejected origin halted at gate 2 with a bare 403; an Origin-less
+    // preflight gets no Access-Control-* headers here either.
+    const privateNetwork = corsAllowed
+      ? privateNetworkHeaders(req.headers.requestPrivateNetwork)
+      : {}
     return {
       kind: 'halt',
-      response: { status: 204, headers: { ...cors, 'Cache-Control': 'no-store' }, body: '' },
+      response: {
+        status: 204,
+        headers: { ...cors, ...privateNetwork, 'Cache-Control': 'no-store' },
+        body: '',
+      },
     }
   }
 

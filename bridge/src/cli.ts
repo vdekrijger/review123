@@ -12,12 +12,12 @@ import { BridgeArgError, USAGE, parseArgs, type BridgeOptions } from './args.js'
 import { loadOrCreateToken } from './auth.js'
 import { defaultCapabilityDeps, detectInferenceClis } from './capabilities.js'
 import { resolveRepoRoot } from './confine.js'
-import { REVIEW123_ORIGIN } from './cors.js'
+import { REVIEW123_ORIGINS } from './cors.js'
 import { PROTOCOL_VERSION } from './protocol.js'
 import { createBridgeServer, listenLoopback, LOOPBACK_HOST } from './server.js'
 
 /** Kept in step with package.json; printed in /v1/health. */
-export const BRIDGE_VERSION = '0.1.0'
+export const BRIDGE_VERSION = '0.2.0'
 
 export async function main(argv: readonly string[], cwd: string): Promise<number> {
   let options: BridgeOptions
@@ -103,7 +103,7 @@ interface BannerInput {
  * exactly once, on its own line, ready to copy.
  */
 export function banner(input: BannerInput): string {
-  const origins = [REVIEW123_ORIGIN, 'http://localhost:*', 'http://127.0.0.1:*', ...input.extraOrigins]
+  const origins = [...REVIEW123_ORIGINS, 'http://localhost:*', 'http://127.0.0.1:*', ...input.extraOrigins]
   const lines = [
     '',
     `review123 bridge ${BRIDGE_VERSION}  ·  protocol v${PROTOCOL_VERSION}`,

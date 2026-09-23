@@ -19,6 +19,7 @@ import {
   disconnectBridge,
   initBridge,
   isValidPort,
+  localNetworkPermission,
   readStoredBridge,
 } from './bridge.svelte'
 import {
@@ -259,12 +260,16 @@ describe('connectBridge — user-initiated pairing', () => {
     expect(bridgeState.error).toMatch(/paste the pairing token/i)
   })
 
-  it('reports an unreachable bridge with an actionable message', async () => {
+  it('names BOTH possibilities when the browser will not say which it was', async () => {
+    // No Permissions API (Firefox, Safari, jsdom) and a refused no-cors probe:
+    // "nothing there" and "the browser blocked it" are both still live, so the
+    // copy must not pick one — the original bug was picking the wrong one.
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
     expect(await connectBridge(TOKEN, 7321)).toBe(false)
     expect(bridgeState.status).toBe('error')
     expect(bridgeState.error).toMatch(/127\.0\.0\.1:7321/)
-    expect(bridgeState.error).toMatch(/start the bridge/i)
+    expect(bridgeState.error).toMatch(/nothing is listening there/i)
+    expect(bridgeState.error).toMatch(/blocked the request to your local network/i)
   })
 
   it('reports a rejected token, and explains that tokens rotate on restart', async () => {
@@ -272,6 +277,10 @@ describe('connectBridge — user-initiated pairing', () => {
     expect(await connectBridge(TOKEN, 7321)).toBe(false)
     expect(bridgeState.error).toMatch(/rejected/i)
     expect(bridgeState.error).toMatch(/every time it starts/i)
+    // The one thing this failure PROVES: the bridge is up. A user who just
+    // restarted it must not be told to start it.
+    expect(bridgeState.error).toMatch(/running and reachable/i)
+    expect(bridgeState.error).not.toMatch(/start the bridge/i)
   })
 
   it('refuses a bridge speaking a different protocol version', async () => {
@@ -297,6 +306,141 @@ describe('connectBridge — user-initiated pairing', () => {
     fetchMock.mockResolvedValue(jsonResponse({ ok: false }, 401))
     await connectBridge(TOKEN, 7321)
     expect(captured).toEqual([])
+  })
+})
+
+/**
+ * THE REGRESSION SUITE FOR THE BUG THAT MADE THE BRIDGE UNUSABLE.
+ *
+ * A real user ran the bridge, pasted the token on https://www.review123.dev,
+ * and was told "Nothing answered on 127.0.0.1:7321. Start the bridge in your
+ * repo, then try again." — while it was running the whole time. Chrome 142+
+ * blocks a public-origin page from reaching loopback until the user grants
+ * Local Network Access, and the rejected fetch is a bare `TypeError: Failed to
+ * fetch`, identical to a refused connection.
+ *
+ * Every case below is one cause with one fix, and asserts that the message
+ * names THAT fix and not another one.
+ */
+describe('probe failure taxonomy — four causes, four sentences', () => {
+  /** Stub the Permissions API the way a Chromium that ships LNA answers. */
+  function stubPermission(state: PermissionState | 'throws') {
+    vi.stubGlobal('navigator', {
+      ...globalThis.navigator,
+      permissions: {
+        query: (descriptor: { name: string }) => {
+          if (state === 'throws' || descriptor.name.startsWith('local-network') === false) {
+            return Promise.reject(new TypeError(`unknown permission ${descriptor.name}`))
+          }
+          return Promise.resolve({ state } as PermissionStatus)
+        },
+      },
+    })
+  }
+
+  it('says the BROWSER blocked it — never "start the bridge" — when permission is denied', async () => {
+    stubPermission('denied')
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+
+    expect(await connectBridge(TOKEN, 7321)).toBe(false)
+
+    expect(bridgeState.error).toMatch(/never left it/i)
+    expect(bridgeState.error).toMatch(/Local network access/i)
+    // The whole point of the fix: the bridge is NOT what the user must change.
+    expect(bridgeState.error).not.toMatch(/start the bridge/i)
+    expect(bridgeState.error).not.toMatch(/nothing is listening/i)
+  })
+
+  it('distinguishes "never asked" from "already refused"', async () => {
+    stubPermission('prompt')
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+    await connectBridge(TOKEN, 7321)
+    expect(bridgeState.error).toMatch(/has not yet allowed/i)
+    expect(bridgeState.error).not.toMatch(/will not help/i)
+
+    _resetBridgeForTest()
+    stubPermission('denied')
+    await connectBridge(TOKEN, 7321)
+    expect(bridgeState.error).toMatch(/is blocking/i)
+    // A retry alone cannot fix a denial, and the copy has to say so.
+    expect(bridgeState.error).toMatch(/will not help/i)
+  })
+
+  it('says "nothing is listening" ONLY when the browser confirmed it let the request out', async () => {
+    stubPermission('granted')
+    // Both the real probe and the no-cors liveness probe fail: the connection
+    // was genuinely refused.
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+
+    expect(await connectBridge(TOKEN, 7321)).toBe(false)
+
+    expect(bridgeState.error).toMatch(/nothing is listening on 127\.0\.0\.1:7321/i)
+    expect(bridgeState.error).toMatch(/start the bridge/i)
+  })
+
+  it('reports an origin the server refused when something IS listening', async () => {
+    stubPermission('granted')
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) =>
+      // A no-cors request RESOLVES (opaquely) whenever the server answered at
+      // all — even with the bridge's headerless 403. That is the one signal
+      // separating "refused my origin" from "there is no server".
+      init?.mode === 'no-cors'
+        ? // An opaque response, as Chrome hands one back: type 'opaque',
+          // status 0, unreadable — and that is all the signal we need.
+          Promise.resolve({ type: 'opaque', status: 0 } as unknown as Response)
+        : Promise.reject(new TypeError('Failed to fetch')),
+    )
+
+    expect(await connectBridge(TOKEN, 7321)).toBe(false)
+
+    expect(bridgeState.error).toMatch(/something is listening on 127\.0\.0\.1:7321/i)
+    expect(bridgeState.error).toMatch(/older build/i)
+    expect(bridgeState.error).not.toMatch(/start the bridge/i)
+  })
+
+  it('names a timeout as a timeout, not as a missing bridge', async () => {
+    fetchMock.mockRejectedValue(
+      Object.assign(new DOMException('signal timed out', 'TimeoutError')),
+    )
+    expect(await connectBridge(TOKEN, 7321)).toBe(false)
+    expect(bridgeState.error).toMatch(/did not answer within/i)
+    expect(bridgeState.error).not.toMatch(/start the bridge/i)
+  })
+
+  it('spends NO diagnostic call on the silent mount probe', async () => {
+    stubPermission('granted')
+    localStorage.setItem(BRIDGE_STORAGE_KEY, JSON.stringify({ token: TOKEN, port: 7321 }))
+    _resetBridgeForTest()
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+
+    await initBridge()
+
+    // One refused connection and nothing else — the module's standing promise.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(bridgeState.status).toBe('disconnected')
+    expect(bridgeState.error).toBeNull()
+  })
+
+  it('reports "unknown" permission honestly rather than guessing', async () => {
+    stubPermission('throws')
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+    expect(await localNetworkPermission()).toBe('unknown')
+
+    await connectBridge(TOKEN, 7321)
+    expect(bridgeState.error).toMatch(/either nothing is listening there, or this browser blocked/i)
+  })
+
+  it('reads the permission through the shipped alias too', async () => {
+    vi.stubGlobal('navigator', {
+      ...globalThis.navigator,
+      permissions: {
+        query: ({ name }: { name: string }) =>
+          name === 'local-network'
+            ? Promise.resolve({ state: 'granted' } as PermissionStatus)
+            : Promise.reject(new TypeError('unknown permission')),
+      },
+    })
+    expect(await localNetworkPermission()).toBe('granted')
   })
 })
 

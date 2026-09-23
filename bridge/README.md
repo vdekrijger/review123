@@ -123,12 +123,12 @@ Vercel deploy), which is a bad trade for a shorter command.
 It prints a banner with the pairing token:
 
 ```
-review123 bridge 0.1.0  ·  protocol v1
+review123 bridge 0.2.0  ·  protocol v1
 
   repo     /Users/you/code/your-repo
   listen   http://127.0.0.1:7321   (loopback only)
   CLIs     claude, codex
-  origins  https://review123.dev  http://localhost:*  http://127.0.0.1:*
+  origins  https://review123.dev  https://www.review123.dev  http://localhost:*  http://127.0.0.1:*
 
   Paste this pairing token into review123 → Settings → Local bridge:
 
@@ -192,7 +192,11 @@ opts into a stable token (stored `0600`) for people who restart often.
 
 Allowed origins:
 
-- `https://review123.dev` — exact string;
+- `https://review123.dev` and `https://www.review123.dev` — two exact strings,
+  because the apex answers `308 → www` and `www` is therefore the origin every
+  real browser actually sends. Listing only the apex is what made the bridge
+  unreachable before 0.2.0: a genuine user's preflight got the bare `403`
+  below, which the page cannot tell apart from "no bridge is running";
 - `http://localhost[:port]` and `http://127.0.0.1[:port]` — scheme and host
   pinned exactly, port wildcarded because dev servers pick what is free;
 - anything passed with `--allow-origin`, compared as an exact string.
@@ -207,6 +211,49 @@ bridge is bearer-token-only and must never be reachable with ambient cookies.
 Preflight (`OPTIONS`) is answered `204` with the CORS headers and **without**
 requiring the token, because browsers do not send `Authorization` on a
 preflight. A preflight from a disallowed origin is still a bare `403`.
+
+A preflight carrying `Access-Control-Request-Private-Network: true` is answered
+`Access-Control-Allow-Private-Network: true` — **only** when the origin already
+passed the allowlist. That header widens nothing by itself: it is the server
+saying "yes, I meant to be reachable from a web page", which this bridge did
+mean or it would not exist. The origin allowlist, the pairing token, the Host
+anti-rebinding guard and loopback binding all still run on the request that
+follows, and that layering is exactly why answering it is safe. A rejected
+origin still gets a bare `403` with no `Access-Control-*` header of any kind.
+
+### 3a. Your browser is a gate too — Local Network Access
+
+**A website reaching a server on your own machine needs YOUR permission, and no
+setting on this side can grant it.** Chrome 142+ ships Local Network Access,
+which replaced the older Private Network Access preflight: a page on a public
+origin (`https://www.review123.dev`) may not open a connection to
+`http://127.0.0.1` until you allow it.
+
+What actually happens, measured against Chromium 148 and Chrome 154:
+
+- Chrome sends **no** preflight and **no**
+  `Access-Control-Request-Private-Network` header. Nothing reaches this
+  process — not one byte.
+- The page's `fetch` rejects in about a millisecond with a bare
+  `TypeError: Failed to fetch`, which is the *same* error a refused connection
+  gives. **Search for this console line** when it happens again:
+
+  ```
+  Access to fetch at 'http://127.0.0.1:7321/v1/health' from origin
+  'https://www.review123.dev' has been blocked by CORS policy: Permission was
+  denied for this request to access the `loopback` address space.
+  ```
+- `navigator.permissions.query({ name: 'local-network-access' })` answers
+  `prompt`, `granted` or `denied`. review123 asks it on a failed pairing so it
+  can tell you the browser blocked the request instead of telling you to start
+  a bridge that is already running.
+
+**The fix is one click:** when Chrome asks to *"look for and connect to any
+device on your local network"*, choose **Allow**. If you never saw the prompt
+(or said no), open the icon to the left of the address bar → **Site settings**
+→ **Local network access** → **Allow**, then press Connect again.
+
+Firefox and Safari do not gate local network requests this way today.
 
 ### 4. Repo confinement (`..`, absolute paths, symlinks)
 

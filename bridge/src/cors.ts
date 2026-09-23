@@ -16,8 +16,25 @@
  *     header still says `evil.test`. Requiring a loopback Host closes that.
  */
 
-/** The deployed app. The only non-loopback origin allowed by default. */
+/** The deployed app, at the apex name people type. */
 export const REVIEW123_ORIGIN = 'https://review123.dev'
+
+/**
+ * The deployed app, at `www` — the origin a real browser actually has.
+ *
+ * NOT a nicety. `https://review123.dev` answers `308 → https://www.review123.dev`,
+ * so a user who types the apex is on the `www` document, and `www` is what
+ * lands in the `Origin` header of every request the page makes. With only the
+ * apex allowlisted, the bridge answered a real user's preflight with a bare
+ * 403 and the browser reported "No 'Access-Control-Allow-Origin' header is
+ * present on the requested resource" — indistinguishable, from the page, from
+ * a bridge that was never started. Both spellings are listed, both EXACTLY:
+ * no wildcard, and `https://api.review123.dev` is still refused.
+ */
+export const REVIEW123_WWW_ORIGIN = 'https://www.review123.dev'
+
+/** Every built-in non-loopback origin, in banner order. Exact matches only. */
+export const REVIEW123_ORIGINS: readonly string[] = [REVIEW123_ORIGIN, REVIEW123_WWW_ORIGIN]
 
 /**
  * Dev origins: `http://localhost[:port]` and `http://127.0.0.1[:port]`.
@@ -42,7 +59,7 @@ const MAX_PORT = 65535
  */
 export function isAllowedOrigin(origin: string | undefined, extra: readonly string[] = []): boolean {
   if (!origin) return false
-  if (origin === REVIEW123_ORIGIN) return true
+  if (REVIEW123_ORIGINS.includes(origin)) return true
   const loopback = LOOPBACK_ORIGIN.exec(origin)
   if (loopback) {
     const port = loopback[1]
@@ -68,6 +85,47 @@ export function corsHeaders(origin: string): Record<string, string> {
     'Access-Control-Max-Age': '600',
     Vary: 'Origin',
   }
+}
+
+/**
+ * The request header a Private Network Access preflight carries, lowercased
+ * the way Node hands header names over.
+ */
+export const PRIVATE_NETWORK_REQUEST_HEADER = 'access-control-request-private-network'
+
+/** The response header that answers it. */
+export const PRIVATE_NETWORK_ALLOW_HEADER = 'Access-Control-Allow-Private-Network'
+
+/**
+ * The Private Network Access answer, for an ALREADY-ALLOWED origin only.
+ *
+ * ── WHY ANSWERING THIS IS SAFE, SO NOBODY "HARDENS" IT BACK OUT ──
+ * `Access-Control-Allow-Private-Network: true` widens NOTHING on its own. It
+ * is the server saying "yes, I meant to be reachable from a web page" — which
+ * this bridge did mean, or it would not exist. Every gate that actually
+ * protects the repo is untouched and still runs on the request that follows:
+ * the exact-match ORIGIN allowlist, the per-process PAIRING TOKEN, the HOST
+ * anti-rebinding guard, and binding to 127.0.0.1 in the first place. That
+ * layering is precisely why this header can be answered without loosening the
+ * security model by one inch.
+ *
+ * It is emitted ONLY alongside `corsHeaders`, i.e. only for an origin that
+ * already passed the allowlist. A rejected origin still gets a bare 403 with
+ * no `Access-Control-*` headers at all, which is the existing, tested contract.
+ *
+ * ── HONEST NOTE ON WHO STILL SENDS THE PREFLIGHT ──
+ * Chrome 142+ does NOT. Private Network Access was put on hold and replaced by
+ * Local Network Access, a USER PERMISSION: current Chrome sends no PNA
+ * preflight and no `Access-Control-Request-Private-Network` header, and gates
+ * the whole request on the permission instead (verified against Chrome 148 and
+ * 154 — a denied permission blocks the request before a single byte reaches
+ * this process). So this header does not, by itself, fix anything on a current
+ * Chrome. It is here for Chrome 138-141 with the PNA flag on, and for any
+ * other UA that implements the preflight — answering it costs one header and
+ * removes one way to be unreachable.
+ */
+export function privateNetworkHeaders(requested: string | undefined): Record<string, string> {
+  return requested === 'true' ? { [PRIVATE_NETWORK_ALLOW_HEADER]: 'true' } : {}
 }
 
 /**
