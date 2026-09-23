@@ -3,20 +3,34 @@
 The measured baseline for review123's reviewer output. Everything below comes
 from runs actually executed on the date given; nothing is extrapolated.
 
-**Two measurements live in this file.** The current one is
-[Measurement 2 (2026-09-23)](#measurement-2--2026-09-23--the-expanded-9-case-set),
-against the expanded 9-case golden set. The one it replaces,
-[Measurement 1 (2026-09-22)](#measurement-1--2026-09-22--the-6-case-seed-set-superseded),
-is kept verbatim underneath: it is the number eight quality PRs were never
-measured against, and deleting it would delete the evidence that the second
-measurement is an improvement on the *instrument*, not just on the numbers.
+**Three measurements live in this file**, newest first, each kept verbatim.
+
+- [Measurement 3 (2026-09-23)](#measurement-3--2026-09-23--the-unanimity-carve-out-for-low)
+  — the first measurement of a *fix*: does letting a unanimously-verified LOW
+  stay inline recover the defect Measurement 2 found being eaten?
+- [Measurement 2 (2026-09-23)](#measurement-2--2026-09-23--the-expanded-9-case-set)
+  — the expanded 9-case golden set, and the measurement that found the loss.
+- [Measurement 1 (2026-09-22)](#measurement-1--2026-09-22--the-6-case-seed-set-superseded)
+  — the 6-case seed set eight quality PRs were never measured against.
+
+Nothing is deleted when a measurement is superseded: the older numbers are the
+evidence that the newer instrument is an improvement on the *instrument*, not
+just on the numbers.
 
 ---
 
 ## The headline, in one line
 
-**Recall finally moved, and it moved downwards at the app's own operating
-point.** The reviewer model finds **9 of 9** known-real defects at raw
+**Measurement 3: the fix is provably correct on the case it was built for and
+provably inert everywhere else — and it did not move recall in either fresh
+run, because the verifier panel never repeated the unanimous verdict that
+triggers it.** Re-scored against Measurement 2's own generations it takes
+`app-default` from **8/9 to 9/9** in the run where the panel was unanimous, with
+noise-rate unchanged. In two fresh live runs it fired **zero** times and the
+numbers are byte-identical with and without it.
+
+**Measurement 2: recall finally moved, and it moved downwards at the app's own
+operating point.** The reviewer model finds **9 of 9** known-real defects at raw
 generation, in both runs. What a user actually sees inline — variant
 `app-default` — is **8 of 9**, in both runs. **The post-generation pipeline
 costs one real defect out of nine.**
@@ -24,6 +38,185 @@ costs one real defect out of nine.**
 Measurement 1 reported recall 4/4 in all 22 of its measurements and said, in
 its own honesty section, that the set "could not have detected over-filtering
 if it were happening". It was happening.
+
+---
+
+## Measurement 3 — 2026-09-23 · the unanimity carve-out for LOW
+
+### What was changed, and why this measurement exists
+
+Measurement 2 found `findingTier` burying a real defect that the verifier panel
+had unanimously confirmed. `findingRank.ts` now keeps a LOW inline when the
+panel **unanimously** backed it on **both** axes — every polled model confirmed
+(`confirmedBy === polledModels`), the engine surfaced it, `worthFlagging` is
+explicitly `true`, and the poll was one that *could* have demoted it
+(`verifierVotesCanDemote`, #253, so a 1-verifier poll where `2/2` always holds
+is excluded as decorative). Nothing else about triage changed.
+
+This section reports whether that helped. **No threshold was tuned in response
+to any number below.**
+
+### Run metadata
+
+| | |
+| --- | --- |
+| Date | 2026-09-23 |
+| Branch | `fix/finding-tier-verified-low` (off `b87727c`) |
+| Golden set | 9 cases — 9 known-real findings, 17 known-noise (unchanged from M2) |
+| Transport | local bridge (`POST /v1/infer`) — no API key, subscription-billed |
+| Generator | `claude` CLI, via the bridge |
+| Verifiers | `codex` CLI ×2 (`BRIDGE_VERIFY_CLIS=codex,codex`) |
+| Mode | `--live --matrix --concurrency 3` |
+| Live runs | **two** — `eval/unanimity-baseline-run.json`, `eval/unanimity-repeat-run.json` |
+| Offline re-scores | Measurement 2's committed generations, re-scored under the new rule **and** under the old one — the only way to vary the policy while holding the model output fixed |
+
+### A. The controlled measurement: same generations, only the rule changed
+
+Re-scoring costs nothing and is the *only* comparison where the model output is
+identical on both sides, so this is the measurement that actually isolates the
+policy change.
+
+| stored generation | `app-default` BEFORE | `app-default` AFTER | change |
+| --- | --- | --- | --- |
+| `expanded-baseline-run.json` (M2 run 1) | 8/9 · 36f · prec 62% · noise 6% (1/17) | 8/9 · 36f · prec 62% · noise 6% (1/17) | **nothing** |
+| `expanded-repeat-run.json` (M2 run 2) | 8/9 · 42f · prec 40% · noise 6% (1/17) | **9/9** · 44f · prec 41% · noise 6% (1/17) | **+11pp recall, +2 findings, noise unchanged** |
+
+M2 run 2 is the run whose panel voted `3/3 surfaced=true worthFlagging=true` on
+`08-quiet-low` line 13. The carve-out recovers exactly that defect. M2 run 1 is
+the run where verification had already demoted it (`1/3 surfaced=false`); triage
+never saw it, so a triage rule cannot help, and the re-score confirms it changes
+nothing there.
+
+**`verify+triage` moves the same way** — 8/9 → 9/9 on run 2, 35f → 37f, precision
+50% → 50%, noise 6% → 6% — so the gain is the triage rule, not an interaction
+with simplify or convergence.
+
+### B. The two fresh live runs: the fix was a complete no-op
+
+| variant | run 1 | run 2 |
+| --- | --- | --- |
+| `generate-only` | 9/9 · 52f · 29% · 18% (3/17) | 8/9 · 53f · 21% · 41% (7/17) |
+| `+tests-pass` | 9/9 · 70f · 23% · 18% | 9/9 · 71f · 18% · 41% |
+| `+verify` | 9/9 · 40f · 45% · 6% | 7/9 · 43f · 25% · 6% |
+| `+triage` | 8/9 · 46f · 31% · 18% | 7/9 · 47f · 20% · 41% |
+| `verify+triage` | 8/9 · 33f · 57% · 6% | 7/9 · 32f · 37% · 6% |
+| **`app-default`** | **8/9 · 40f · 38% · 6% (1/17)** | **8/9 · 39f · 50% · 6% (1/17)** |
+| `app-default/show-all` | 8/9 · 48f · 28% · 6% | 8/9 · 49f · 31% · 6% |
+
+Re-scoring both of these runs under the **pre-fix** rule reproduces every cell
+above **exactly** — same finding counts, same recall, same precision, same
+noise, in all thirteen variants of both runs. The carve-out fired zero times in
+either run. So on fresh generations the fix is measurably neither a gain nor a
+regression: it is inert.
+
+### C. Why it stayed inert: the panel never repeated its verdict
+
+The rule is deterministic given the verification tally. The tally is not. Here
+is the panel's verdict on the *same* defect — `08-quiet-low` line 13, the `catch`
+that discards its error — across all four runs this file now contains:
+
+| run | panel on line 13 | what removed it | carve-out |
+| --- | --- | --- | --- |
+| M2 run 1 | `1/3`, `surfaced=false` | cross-model verification | inert (correctly — triage never saw it) |
+| M2 run 2 | `3/3`, `surfaced=true`, `worth=true` | triage | **fires → 9/9** |
+| M3 run 1 | `2/3`, `surfaced=true`, `worth=true` | triage | inert — majority, not unanimous |
+| M3 run 2 | `1/3`, `surfaced=false` (both instances) | cross-model verification | inert (correctly) |
+
+So the defect is lost to a *different* mechanism in three of four runs, and only
+one of those mechanisms is the one this fix addresses. **The unanimous verdict
+that triggers the carve-out occurred in 1 of 4 runs.** That is the honest reason
+recall did not reach 9/9 on the fresh runs, and it is not a reason to loosen the
+rule — see §E.
+
+### D. Blast radius: how often the new rule fires at all
+
+Across all four runs — **283 raw findings, 16 of them LOW** — the carve-out
+promotes exactly **two**:
+
+| run | promoted | what it is |
+| --- | --- | --- |
+| M2 run 2 | `08-quiet-low` L13 | **the real defect.** The point of the change. |
+| M2 run 2 | `06-perf` (file-level) | a real observation — the added comment does not describe what the loop does — unanimously confirmed and worth-flagged, but matching no golden label, so it scores as precision dilution rather than noise |
+| M2 run 1, M3 run 1, M3 run 2 | *(none)* | |
+
+**Noise did not regress in any measurement.** `app-default` noise-rate is 6%
+(1 of 17) in every run, before and after, and `02-clean-pr` and `03-noise-trap`
+both end at **zero findings** in both fresh runs. The only cost measured is the
+single unlabelled `06-perf` card — one extra inline card in one run of four.
+
+### E. The threshold: what a looser rule would have bought, and why it was not taken
+
+The obvious way to make the number move is to accept a *majority* instead of
+unanimity. That was measured offline (same re-score method, **not shipped**):
+
+| generation | unanimity (shipped) | majority + worth (not shipped) |
+| --- | --- | --- |
+| M2 run 1 | 8/9 · 36f | 8/9 · 36f |
+| M2 run 2 | **9/9** · 44f | 9/9 · **45f** |
+| M3 run 1 | 8/9 · 40f | `verify+triage` **9/9**; `app-default` 8/9 · 44f · prec 32% |
+
+So majority *would* have recovered M3 run 1's defect at `verify+triage`. It is
+still the wrong trade, for reasons that do not depend on this run:
+
+1. **Majority is already the MEDIUM bar.** `isMajorityVerified` is what promotes
+   a medium; using it for LOW too erases the severity distinction inside triage
+   rather than carving out an exception to it.
+2. **It fires far more often.** In M3 run 1 alone, majority-with-worth would
+   promote three LOWs instead of zero, only one of which is a labelled defect.
+3. **It is the Goodhart move.** The rule was designed before these runs existed;
+   changing it *because* a run came back 2/3 would be tuning the policy to the
+   instrument, which is the failure the golden set exists to prevent.
+
+The stricter rule is the one whose justification survives the measurement. The
+decision to loosen it belongs to the repo owner, with the numbers above.
+
+### F. An instrument artifact worth recording
+
+In M3 run 1, `app-default/show-all` also scores 8/9 even though the line-13
+finding is *present* in its output. The simplify pass rewrote "discards the
+original RangeError" to "drops the original RangeError", and that one word puts
+the body under the matcher's Jaccard bar for the golden label. This is
+Measurement 2's "simplify's recall effect is entangled with the matcher" caveat
+firing again, and it means that in that run the harness cannot fully separate
+"triage hid it" from "the matcher lost it". The `+verify` row (9/9, no simplify)
+is the clean read for that run.
+
+### G. What this measurement still canNOT tell you
+
+1. **The recall gain rests on one re-scored run.** It is a correct,
+   mechanistically-understood gain, not a rate.
+2. **Two live runs is not enough to estimate how often the panel is unanimous.**
+   1 of 4 is the whole sample.
+3. Every Measurement 2 caveat still applies: 9 real findings is small, precision
+   jitter on this set is ~±20pp, grounded verification and deep review are still
+   unmeasurable over this transport, and the mootness gate has still never been
+   observed in its design regime.
+4. **The carve-out depends on the worth axis being populated.** With
+   `worthFlagging` stripped (`app-default/moot-off`) it cannot fire — visible in
+   the M2 run 2 re-score, where `moot-off` stays at 8/9 while `app-default`
+   reaches 9/9. That is self-consistent (no worth evidence, no promotion) and
+   carries no product risk, because the mootness gate is not user-toggleable —
+   `moot-off` exists only as an instrument variant.
+
+### The mock baseline (harness mechanics only)
+
+`pnpm eval` with no flags, on this branch: recall 100% (9/9), precision 82%,
+noise-rate 6% (1/17), 23 findings, PASS — identical to Measurement 2's mock
+baseline, confirming the change did not disturb the scoring plumbing.
+
+### Verdict
+
+- **The fix is correct and narrow.** It recovers the exact defect Measurement 2
+  documented being eaten, in the exact conditions that defect was eaten under,
+  and it is a provable no-op everywhere else: 2 promotions in 283 findings.
+- **It did not move recall on fresh generations**, because the verifier panel
+  returned a unanimous verdict on that defect in only 1 of 4 runs. Reported as
+  measured; no threshold was adjusted to improve it.
+- **No noise regression was measured.** Noise-rate is 6% (1/17) in every run
+  before and after; the clean-PR and noise-trap cases stay at zero findings.
+- **The residual recall loss is now mostly cross-model verification, not
+  triage** — it removed the defect in 2 of 4 runs. That is the next thing worth
+  measuring, and it is a different change from this one.
 
 ---
 
