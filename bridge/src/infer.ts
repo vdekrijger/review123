@@ -54,6 +54,7 @@ import {
   MAX_INFER_FILE_CONTEXT_BYTES,
   MAX_INFER_OUTPUT_BYTES,
   MAX_INFER_TIMEOUT_MS,
+  isValidModelId,
   type BridgeErrorCode,
   type InferRequest,
   type InferUsage,
@@ -206,6 +207,29 @@ export const NEUTRAL_SYSTEM_PROMPT =
  *     tools, so instead it is confined to reading. It cannot modify the repo.
  *   - `--ephemeral` keeps review123's prompts out of the user's session history.
  */
+/**
+ * `['--model', '<id>']`, or NOTHING when the request named no model.
+ *
+ * The empty case is the contract: a request without `model` must produce the
+ * byte-identical argv it produced before this flag existed, so every existing
+ * client keeps getting its CLI's own configured default.
+ *
+ * VERIFIED against the real CLIs (see bridge/README.md § Verified invocations):
+ *   - claude 2.1.278 — `--model <model>`: "Provide an alias for the latest
+ *     model (e.g. 'fable', 'opus', or 'sonnet') or a model's full name (e.g.
+ *     'claude-fable-5')".
+ *   - codex-cli — `codex exec -m, --model <MODEL>`: "Model the agent should
+ *     use". The long form is used here so both branches read the same.
+ *
+ * Neither CLI publishes a stable enumeration of accepted values, so the id is
+ * passed through and the CLI is left to reject a bad one — with its own error,
+ * which is more useful than a stale allowlist here. `parseInferRequest` has
+ * already established the id cannot masquerade as a flag.
+ */
+function modelArgs(req: InferRequest): string[] {
+  return req.model === undefined ? [] : ['--model', req.model]
+}
+
 export function buildInvocation(
   cli: InferenceCli,
   req: InferRequest,
@@ -228,6 +252,7 @@ export function buildInvocation(
       args: [
         '-p',
         ...outputFormat,
+        ...modelArgs(req),
         '--tools',
         '',
         '--permission-prompts',
@@ -247,6 +272,7 @@ export function buildInvocation(
     bin: 'codex',
     args: [
       'exec',
+      ...modelArgs(req),
       '--sandbox',
       'read-only',
       '--skip-git-repo-check',
@@ -650,6 +676,16 @@ export function parseInferRequest(body: unknown): InferRequest | { error: string
   const prompt = raw['prompt']
   if (typeof prompt !== 'string' || prompt === '') return { error: 'prompt must be a non-empty string.' }
 
+  // The model id is the only caller-supplied string that reaches argv, so it is
+  // validated HERE rather than trusted at the spawn — see MODEL_ID_PATTERN.
+  const model = raw['model']
+  if (model !== undefined) {
+    if (typeof model !== 'string') return { error: 'model must be a string.' }
+    if (!isValidModelId(model)) {
+      return { error: 'model must be a plain model id (letters, digits and . _ : / -), not starting with "-".' }
+    }
+  }
+
   const system = raw['system']
   if (system !== undefined && typeof system !== 'string') return { error: 'system must be a string.' }
 
@@ -668,6 +704,7 @@ export function parseInferRequest(body: unknown): InferRequest | { error: string
   }
 
   const parsed: InferRequest = { cli: cli as InferenceCli, prompt }
+  if (typeof model === 'string') parsed.model = model
   if (typeof system === 'string') parsed.system = system
   if (Array.isArray(files)) parsed.files = files as string[]
   if (typeof maxOutputTokens === 'number') parsed.maxOutputTokens = maxOutputTokens

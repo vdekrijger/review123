@@ -82,9 +82,30 @@ export const BRIDGE_CLIS = ['claude', 'codex'] as const
 export type BridgeCli = (typeof BRIDGE_CLIS)[number]
 
 /** `POST /v1/infer` request. See bridge/src/protocol.ts for the invariants. */
+/**
+ * Characters a `InferRequest.model` id may contain — kept byte-identical to
+ * bridge/src/protocol.ts (#236: the two copies change in the same commit).
+ * The bridge re-validates on arrival; this copy is so the UI can refuse a bad
+ * id where the user typed it instead of after a round trip.
+ */
+export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/
+
+/** Length ceiling for a model id. */
+export const MODEL_ID_MAX_LEN = 100
+
+/** Whether `value` is a model id the bridge will accept. */
+export function isValidModelId(value: string): boolean {
+  return value.length > 0 && value.length <= MODEL_ID_MAX_LEN && MODEL_ID_PATTERN.test(value)
+}
+
 export interface InferRequest {
   cli: BridgeCli
   prompt: string
+  /**
+   * Which MODEL the CLI should run (`--model <id>`). Absent → no flag, so the
+   * CLI keeps using whatever the user configured. See bridge/src/protocol.ts.
+   */
+  model?: string
   system?: string
   files?: string[]
   maxOutputTokens?: number

@@ -79,10 +79,12 @@ jobs:
 
           ```sh
           curl -fsSL https://github.com/REPO_SLUG/releases/latest/download/bridge.mjs -o ~/review123-bridge.mjs
-          node ~/review123-bridge.mjs --root .
+          node ~/review123-bridge.mjs --root . --allow-write --allow-checkout
           ```
 
           Run it inside the repo you want to serve. It binds `127.0.0.1` only and requires the pairing token it prints on every request.
+
+          The two flags are **off** in the code and must be typed to take effect: `--allow-write` enables the fix loop (a scratch git worktree, never your checkout) and `--allow-checkout` lets review123 check a PR out in your working tree. They are independent, and they live on the command line so the grant still holds if review123.dev is ever compromised — nothing the site sends can switch them on. Drop them for a strictly read-only bridge.
 
           **While it runs it grants https://review123.dev read access to that repo**, to anyone holding that token. It never writes to the repo and never reads outside it; the token dies with the process. The full security model is in [bridge/README.md](https://github.com/REPO_SLUG/blob/main/bridge/README.md).
           NOTES

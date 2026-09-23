@@ -3,6 +3,7 @@ import {
   aggregateFinding,
   crossVerify,
   isDecisiveVote,
+  verifierVotesCanDemote,
   validateVerifierResponse,
   buildVerifyPrompt,
   classifyClaim,
@@ -41,14 +42,43 @@ describe('aggregateFinding — threshold', () => {
     expect(v.perModel[0]).toEqual({ provider: 'deepseek', verdict: 'confirm', reason: '', raised: true })
   })
 
-  it('single verifier refutes a generator-only finding → tie at half → still surfaced', () => {
-    // score = 1 (generator), polled = 2, half = 1, 1 >= 1 → surface
+  it('single verifier refutes a generator-only finding → the honesty floor demotes it', () => {
+    // The score arithmetic alone would surface this: score = 1 (generator),
+    // polled = 2, half = 1, and 1 >= 1 is a tie that goes to surface. That made
+    // the lone verifier's vote unable to change ANY outcome, while the UI
+    // reported "confirmed by 1/2 models". One raiser + a unanimous refutation
+    // is now demoted instead.
     const v = aggregateFinding('deepseek', [
       { provider: 'openai', verdict: 'refute', reason: 'not real' },
     ])
-    expect(v.surfaced).toBe(true)
+    expect(v.surfaced).toBe(false)
     expect(v.confirmedBy).toBe(1)
     expect(v.polledModels).toBe(2)
+  })
+
+  it('single verifier CONFIRMS → still surfaced (the floor needs a refutation)', () => {
+    const v = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'confirm', reason: 'real' },
+    ])
+    expect(v.surfaced).toBe(true)
+    expect(v.confirmedBy).toBe(2)
+  })
+
+  it('single verifier is UNCERTAIN → surfaced; only a flat refutation demotes', () => {
+    const v = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'uncertain', reason: 'cannot tell' },
+    ])
+    expect(v.surfaced).toBe(true)
+  })
+
+  it('the floor never alters a poll whose votes could already bite (V > R)', () => {
+    // Two verifiers, one refuting: score 1 + 0 + 1 = 2, polled 3 → 2 >= 1.5.
+    // Unchanged, because the refutation is not unanimous.
+    const mixed = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'refute', reason: 'no' },
+      { provider: 'anthropic', verdict: 'confirm', reason: 'yes' },
+    ])
+    expect(mixed.surfaced).toBe(true)
   })
 
   it('two verifiers refute → score 1 / polled 3 < 1.5 → demoted', () => {
@@ -376,9 +406,16 @@ describe('aggregateMultiRaiser', () => {
 
   it('finding raised by TWO of three surfaces regardless of the third', () => {
     const v = aggregateMultiRaiser(['A', 'B'], [{ provider: 'C', verdict: 'refute', reason: 'no' }], 3)
-    // raisers(2) + refute(0) = 2 >= 1.5 → surface
+    // raisers(2) + refute(0) = 2 >= 1.5 → surface. The one-raiser honesty floor
+    // deliberately does NOT reach here: two models independently raised this,
+    // so "2 of 3 say it's real" is a genuine majority, not a self-confirmation.
     expect(v.surfaced).toBe(true)
     expect(v.perModel.filter((p) => p.verdict === 'confirm').length).toBe(2)
+  })
+
+  it('ONE raiser refuted by its only verifier is demoted (the honesty floor)', () => {
+    const v = aggregateMultiRaiser(['A'], [{ provider: 'B', verdict: 'refute', reason: 'no' }], 2)
+    expect(v.surfaced).toBe(false)
   })
 })
 
@@ -772,12 +809,16 @@ describe('aggregateFinding — worthFlagging quorum', () => {
     expect(v.worthFlagging).toBe(false)
   })
 
-  it('a single dissenting verifier never demotes on its own (tie goes to worth)', () => {
-    // worth score = 1 (raiser) + 0 = 1 >= 1 (polled 2 / 2) → worth.
+  it('the ONLY worth voter saying "not worth" demotes a single-raiser finding', () => {
+    // The worth axis has the same degenerate zone as the reality axis: worth
+    // score = 1 (raiser) + 0 = 1 >= 1 (polled 2 / 2), so a lone worth vote
+    // could never demote. It takes the same one-raiser honesty floor.
     const v = aggregateFinding('deepseek', [
       { provider: 'openai', verdict: 'confirm', reason: 'real', worth: false },
     ])
-    expect(v.worthFlagging).toBe(true)
+    expect(v.worthFlagging).toBe(false)
+    // The finding is still REAL — only the worth axis moved.
+    expect(v.surfaced).toBe(true)
   })
 
   it('a majority of worth=true keeps worthFlagging true', () => {
@@ -1215,5 +1256,45 @@ describe('fuseConfirm — grounded evidence flows through fusion', () => {
     // Only B's vote counts (A raised it) — its grounded note carries through.
     expect(v.groundedNote).toBe('searched repo: caller exists in src/b.ts')
     expect(v.toolCallsUsed).toBe(1)
+  })
+})
+
+describe('verifierVotesCanDemote — when a poll can actually change an outcome', () => {
+  // The threshold is `score >= polled / 2` with each raiser counted on BOTH
+  // sides. All-refute therefore gives `R >= (R+V)/2`, i.e. surfaced whenever
+  // R >= V — so only V > R can ever demote. These cases pin that derivation so
+  // the settings warning and the aggregator's floor cannot drift apart.
+  it('one generator + one verifier cannot demote — the case the UI called "confirmed by 1/2"', () => {
+    expect(verifierVotesCanDemote(1, 1)).toBe(false)
+  })
+
+  it('one generator + two verifiers can', () => {
+    expect(verifierVotesCanDemote(1, 2)).toBe(true)
+  })
+
+  it('no verifiers at all cannot', () => {
+    expect(verifierVotesCanDemote(1, 0)).toBe(false)
+  })
+
+  it('two raisers need three verifiers before the votes bite', () => {
+    expect(verifierVotesCanDemote(2, 2)).toBe(false)
+    expect(verifierVotesCanDemote(2, 3)).toBe(true)
+  })
+
+  it('agrees with the aggregator it describes: V > R is where all-refute demotes on its own', () => {
+    // V = R = 1 → the score alone would surface; only the honesty floor demotes.
+    const oneOnOne = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'refute', reason: 'no' },
+    ])
+    expect(verifierVotesCanDemote(1, 1)).toBe(false)
+    expect(oneOnOne.surfaced).toBe(false) // floor, not arithmetic
+
+    // V(2) > R(1) → the arithmetic demotes unaided; the floor is redundant here.
+    const outvoted = aggregateFinding('deepseek', [
+      { provider: 'openai', verdict: 'refute', reason: 'no' },
+      { provider: 'anthropic', verdict: 'refute', reason: 'no' },
+    ])
+    expect(verifierVotesCanDemote(1, 2)).toBe(true)
+    expect(outvoted.surfaced).toBe(false)
   })
 })

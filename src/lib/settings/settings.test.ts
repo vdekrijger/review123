@@ -4,6 +4,7 @@ import {
   setTheme, setUiFont, setShowProgress, setTreeOpen, setTestFileDisplay, setGitlabToken,
   saveBitbucketAuth, setGitlabHost,
   setOpenaiKey, setAnthropicKey, setGeminiKey, setOpenrouterKey, setAiProvider, setAiModel,
+  setBridgeModel,
   setAiDeepReview, setStoryMode, setAutoRunReviewers, setFocusMode, setShowTokenCost,
   findInvalidKeyChar, invalidKeyCharMessage, setUnderstandSections,
   setAiTaskMode, setAiTaskModes, setAllTasksDeep, setAllTasksStandard, setOffAllExtras,
@@ -20,6 +21,7 @@ describe('settings', () => {
       deepseekKey: null,
       aiProvider: 'deepseek',
       aiModel: '',
+      bridgeModel: '',
       openaiKey: null,
       anthropicKey: null,
       geminiKey: null,
@@ -108,6 +110,7 @@ describe('settings', () => {
       deepseekKey: null,
       aiProvider: 'deepseek',
       aiModel: '',
+      bridgeModel: '',
       openaiKey: null,
       anthropicKey: null,
       geminiKey: null,
@@ -702,6 +705,34 @@ describe('settings', () => {
 
     it('openrouterKey defaults to null', () => {
       expect(getSettings().openrouterKey).toBeNull()
+    })
+
+    // bridgeModel is NOT aiModel: for the bridge, aiModel names the CLI to
+    // spawn, so this is the only place to say which model that CLI should run.
+    it('bridgeModel defaults to empty — "let the CLI decide"', () => {
+      expect(getSettings().bridgeModel).toBe('')
+    })
+
+    it('setBridgeModel stores, trims and persists a well-formed id', () => {
+      setBridgeModel('  claude-fable-5  ')
+      expect(getSettings().bridgeModel).toBe('claude-fable-5')
+      expect(JSON.parse(localStorage.getItem('review123:settings')!).bridgeModel).toBe('claude-fable-5')
+    })
+
+    it('setBridgeModel degrades a malformed id to the default rather than storing it', () => {
+      // This string ends up on the bridge's argv. A typo must fall back to
+      // today's behaviour, never to a request the bridge rejects every time.
+      setBridgeModel('--dangerously-skip-permissions')
+      expect(getSettings().bridgeModel).toBe('')
+      setBridgeModel('opus; rm -rf /')
+      expect(getSettings().bridgeModel).toBe('')
+      setBridgeModel('   ')
+      expect(getSettings().bridgeModel).toBe('')
+    })
+
+    it('re-validates a hand-edited localStorage value instead of trusting it', () => {
+      localStorage.setItem('review123:settings', JSON.stringify({ bridgeModel: '-opus --tools' }))
+      expect(getSettings().bridgeModel).toBe('')
     })
 
     it('setOpenrouterKey stores, trims, clears, rejects empty, and persists', () => {

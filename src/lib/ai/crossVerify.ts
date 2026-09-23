@@ -549,6 +549,62 @@ function voteWeight(verdict: 'confirm' | 'refute' | 'uncertain'): number {
 }
 
 /**
+ * Can a poll of `verifierCount` verifiers against `raiserCount` raisers change
+ * the vote-threshold outcome AT ALL?
+ *
+ * This is arithmetic, not policy. The threshold is `score >= polled / 2`, where
+ * each raiser contributes 1 to `score` AND 1 to `polled`. The verifiers' best
+ * case for demotion is every one of them refuting, i.e. adding 0 to `score`:
+ *
+ *     score = R,  polled = R + V
+ *     surfaced  ⟺  R >= (R + V) / 2  ⟺  2R >= R + V  ⟺  R >= V
+ *
+ * So whenever V <= R the finding surfaces NO MATTER HOW THE VERIFIERS VOTE —
+ * the poll is decorative. The classic case is one generator and one verifier
+ * (R=1, V=1): `1 >= 2/2` always holds, yet the UI happily reports "confirmed by
+ * 1/2 models" as though a vote had been held and won.
+ *
+ * Exported because two places must agree on this and neither should re-derive
+ * it: the aggregator (which applies the floor below) and the settings Model
+ * panel (which warns the user before they rely on a poll that cannot bite).
+ */
+export function verifierVotesCanDemote(raiserCount: number, verifierCount: number): boolean {
+  return verifierCount > raiserCount
+}
+
+/**
+ * THE HONESTY FLOOR: a finding that ONE model raised and that EVERY verifier
+ * refuted is demoted, whatever the score arithmetic says.
+ *
+ * Deliberately narrow, on two axes.
+ *
+ * It cannot touch any panel whose votes could already bite. Where V > R,
+ * all-refute means `R >= (R+V)/2` is already false and the finding was demoted
+ * anyway — so this floor provably alters no outcome there. That matters more
+ * than it sounds: PR #250 measured the existing thresholds cutting the noise
+ * rate from 36–45% to 9%, and a change that cannot alter a V > R result cannot
+ * invalidate that measurement.
+ *
+ * And it applies only to a SINGLE raiser. With two or more models
+ * independently raising the same finding there IS corroborating evidence, and
+ * "two of three models say this is real" is an honest majority that one
+ * dissenter should not bury — the documented tie-goes-to-surface rule is doing
+ * real work there. The dishonest case is precisely the one the brief names:
+ * one generator, whose own implicit confirm is the only thing on the "real"
+ * side, outvoting the only model that actually checked. `1 >= 2/2` always
+ * holds, so the check was decorative — and the UI reported "confirmed by 1/2".
+ *
+ * Because the fix works by flipping `surfaced`, every downstream consumer
+ * inherits it without a change of its own: `isMajorityVerified` already
+ * requires `surfaced`, so the "✓ verified" chip stops appearing, and
+ * VerifyVotesTooltip's heading falls to its "lower confidence" branch — which
+ * with one verifier was previously unreachable.
+ */
+function unanimouslyRefuted(raiserCount: number, votes: VerifierVote[]): boolean {
+  return raiserCount === 1 && votes.length > 0 && votes.every((v) => v.verdict === 'refute')
+}
+
+/**
  * Aggregate the WORTH axis (mootness gate) for one finding. Mirrors the
  * reality-axis quorum: each raiser counts as an implicit "worth" (raising IS
  * the claim it deserves attention), an explicit verifier worth vote counts
@@ -570,6 +626,11 @@ function aggregateWorth(
   polledModels: number,
 ): boolean | undefined {
   if (!votes.some((v) => v.worth !== undefined)) return undefined
+  // The worth axis mirrors the reality axis exactly, degenerate zone included,
+  // so it takes the same honesty floor on the same terms: a SINGLE raiser's
+  // implicit worth vote does not get to overrule every verifier that looked.
+  // Two or more raisers keep the tie rule, exactly as above.
+  if (raiserCount === 1 && votes.length > 0 && votes.every((v) => v.worth === false)) return false
   let score = raiserCount
   for (const v of votes) score += v.worth === true ? 1 : v.worth === false ? 0 : 0.5
   return score >= polledModels / 2
@@ -632,7 +693,10 @@ export function aggregateFinding(
     if (v.verdict === 'confirm') confirmedBy += 1
   }
   const polledModels = 1 + verifierVotes.length
-  const surfaced = applyAbsenceFloor(score >= polledModels / 2, absence)
+  const surfaced = applyAbsenceFloor(
+    score >= polledModels / 2 && !unanimouslyRefuted(1, verifierVotes),
+    absence,
+  )
   const worthFlagging = aggregateWorth(1, verifierVotes, polledModels)
   const groundedNote = composeGroundedNote(verifierVotes)
   return {
@@ -691,7 +755,10 @@ export function aggregateMultiRaiser(
     if (v.verdict === 'confirm') confirmedBy += 1
   }
   const polledModels = Math.max(totalParticipants, raisers.length + verifierVotes.length)
-  const surfaced = applyAbsenceFloor(score >= polledModels / 2, absence)
+  const surfaced = applyAbsenceFloor(
+    score >= polledModels / 2 && !unanimouslyRefuted(raisers.length, verifierVotes),
+    absence,
+  )
   const worthFlagging = aggregateWorth(raisers.length, verifierVotes, polledModels)
   const groundedNote = composeGroundedNote(verifierVotes)
   return {

@@ -20,7 +20,8 @@
     bridgeAvailable,
     BRIDGE_STORAGE_KEY,
   } from '../../lib/bridge/bridge.svelte'
-  import { DEFAULT_BRIDGE_PORT } from '../../lib/bridge/protocol'
+  import { DEFAULT_BRIDGE_PORT, isValidModelId } from '../../lib/bridge/protocol'
+  import { getSettings, setBridgeModel } from '../../lib/settings/settings'
   // Shared with the mid-review "bridge is not responding" error (llm.ts), so
   // the two surfaces can never name different commands.
   import {
@@ -33,6 +34,16 @@
   let token = $state('')
   let portInput = $state(String(bridgeState.port))
   let busy = $state(false)
+  /**
+   * Which MODEL the paired CLI should run. Separate from the "Local bridge
+   * model" dropdown under AI models, which picks the CLI (`claude` / `codex`) —
+   * a process name, not a model. Until this existed there was nowhere to say
+   * which model that process should use, so every bridge review silently ran
+   * the CLI's own configured default.
+   */
+  let modelInput = $state(getSettings().bridgeModel)
+  /** A non-empty entry that could never be sent. Blank is valid — it means "default". */
+  const modelInvalid = $derived(modelInput.trim() !== '' && !isValidModelId(modelInput.trim()))
 
   // Re-probe when this section mounts. main.ts already probes at app start
   // (inference routes through the bridge, so the connection has to be known
@@ -189,6 +200,31 @@
         {checkoutLine}
       {/if}
     </p>
+    <label class="field model-field">
+      <span class="field-label">Model (optional)</span>
+      <input
+        type="text"
+        bind:value={modelInput}
+        oninput={() => setBridgeModel(modelInput)}
+        aria-label="Bridge CLI model"
+        placeholder="leave blank to use the CLI's own default"
+        autocomplete="off"
+        spellcheck="false"
+      />
+    </label>
+    <p class="field-note" data-testid="bridge-model-note">
+      Passed to the CLI as <code>--model</code>. Both take a short alias or a full id —
+      <code>claude</code> accepts <code>opus</code>, <code>sonnet</code> or a full name like
+      <code>claude-fable-5</code>; <code>codex</code> takes any model id its
+      <code>exec --model</code> understands. Blank sends no flag at all, so the CLI keeps
+      whatever model you configured it with. We don't list the options here because each
+      CLI's accepted set changes with its own releases — an unknown id is rejected by the
+      CLI, with its own error.
+      {#if modelInvalid}
+        <strong class="model-invalid">That isn't a model id — use letters, digits and
+        <code>. _ : / -</code>. Nothing will be sent until it is fixed.</strong>
+      {/if}
+    </p>
     <button type="button" class="secondary-btn" onclick={handleDisconnect}>Disconnect</button>
   {:else}
     <form class="pair-form" onsubmit={handleConnect}>
@@ -223,6 +259,17 @@
       </p>
       <pre class="cmd"><code>{BRIDGE_DOWNLOAD_COMMAND}
 {BRIDGE_START_COMMAND}</code></pre>
+      <p class="field-note" data-testid="bridge-flags-note">
+        <strong>The two flags are the point of typing this yourself.</strong>
+        <code>--allow-write</code> lets review123 hand a finding to your local coding agent,
+        which fixes it in a scratch git worktree; <code>--allow-checkout</code> lets it check
+        a pull request out in this working tree so your dev server serves it. They are
+        independent — neither turns on the other — and the bridge starts with both
+        <strong>off</strong> unless you type them. That is deliberate: a grant that only
+        exists on your command line still holds if this website is ever compromised, because
+        nothing we send can switch it on. They protect you from <em>us</em>, not from
+        yourself — so leaving them out doesn't harden anything, it just turns the features off.
+      </p>
       <p class="field-note" data-testid="bridge-permission-note">
         <strong>Your browser will ask once.</strong> Reaching a server on your own machine
         from a website needs your permission — Chrome asks to
@@ -345,6 +392,18 @@
 
   .port-field {
     flex: 0 0 6rem;
+  }
+
+  /* Stands alone in the connected view rather than sharing the pairing row. */
+  .model-field {
+    margin-top: 0.75rem;
+    max-width: 22rem;
+  }
+
+  .model-invalid {
+    display: block;
+    margin-top: 0.25rem;
+    color: var(--danger, #b3261e);
   }
 
   .field-label {

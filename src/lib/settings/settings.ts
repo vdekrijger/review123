@@ -1,4 +1,5 @@
 import { getProvider } from '../llm/providers'
+import { isValidModelId } from '../bridge/protocol'
 
 const KEY = 'review123:settings'
 
@@ -210,6 +211,18 @@ export interface Settings {
   aiProvider: AiProvider
   /** Active model id within the selected provider. Empty string = use provider default. */
   aiModel: string
+  /**
+   * Which MODEL the local bridge's CLI should run — passed through as
+   * `--model <id>`.
+   *
+   * It is NOT `aiModel`, and the difference is the whole reason it exists: for
+   * the bridge, `aiModel` names the CLI to spawn (`claude` / `codex`), so there
+   * was previously nowhere to say WHICH MODEL that CLI should use, and every
+   * bridge call silently got the CLI's own configured default.
+   *
+   * Empty string means exactly that default — no `--model` flag is sent at all.
+   */
+  bridgeModel: string
   /** OpenAI API key (routed via serverless proxy). */
   openaiKey: string | null
   /** Anthropic API key (direct browser access with anthropic-dangerous-direct-browser-access header). */
@@ -340,6 +353,7 @@ const DEFAULTS: Settings = {
   deepseekKey: null,
   aiProvider: 'deepseek',
   aiModel: '',
+  bridgeModel: '',
   openaiKey: null,
   anthropicKey: null,
   geminiKey: null,
@@ -624,6 +638,14 @@ function coerce(raw: unknown): Partial<Settings> {
   const aiModel = obj['aiModel']
   if (typeof aiModel === 'string') result.aiModel = aiModel
 
+  // Re-validated rather than trusted: this string ends up on the bridge's argv,
+  // and localStorage is user-writable. An id that fails the shape check falls
+  // back to the default (''), i.e. "let the CLI decide" — never to a raw pass.
+  const bridgeModel = obj['bridgeModel']
+  if (typeof bridgeModel === 'string' && (bridgeModel === '' || isValidModelId(bridgeModel))) {
+    result.bridgeModel = bridgeModel
+  }
+
   const openaiKey = obj['openaiKey']
   if (typeof openaiKey === 'string' || openaiKey === null) result.openaiKey = openaiKey as string | null
 
@@ -862,6 +884,15 @@ export const setGeminiKey = (v: string | null) => saveTokens({ geminiKey: v })
 export const setOpenrouterKey = (v: string | null) => saveTokens({ openrouterKey: v })
 export const setAiProvider = (v: AiProvider) => save({ aiProvider: v })
 export const setAiModel = (v: string) => save({ aiModel: v })
+/**
+ * Set the bridge CLI's model. A blank or malformed id stores '' — "use the
+ * CLI's own default" — so a typo degrades to today's behaviour, not to a
+ * request the bridge will reject on every call.
+ */
+export const setBridgeModel = (v: string) => {
+  const trimmed = v.trim()
+  save({ bridgeModel: isValidModelId(trimmed) ? trimmed : '' })
+}
 export const setAiDeepReview = (v: boolean) => save({ aiDeepReview: v })
 
 /**

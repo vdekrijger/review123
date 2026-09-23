@@ -113,8 +113,11 @@ describe('cross-model verification in runSkillReviews', () => {
     // generator(1)+confirm(1)=2, polled 2, half 1 → surfaced
     expect(bug.verification!.surfaced).toBe(true)
     expect(bug.verification!.confirmedBy).toBe(2)
-    // generator(1)+refute(0)=1, polled 2, half 1 → 1>=1 tie surfaces with ONE verifier
-    expect(nit.verification!.surfaced).toBe(true)
+    // generator(1)+refute(0)=1, polled 2, half 1 → the tie WOULD surface, which
+    // is exactly the case where the lone verifier could never change anything.
+    // The one-raiser honesty floor demotes it instead, so the run never reports
+    // a finding as cross-verified that its only checker called unreal.
+    expect(nit.verification!.surfaced).toBe(false)
     expect(nit.verification!.confirmedBy).toBe(1)
   })
 

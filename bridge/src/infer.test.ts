@@ -92,6 +92,51 @@ describe('buildInvocation — the argv shape', () => {
     expect(inv.stdin).toContain('SECRET PROMPT TEXT')
   })
 
+  // -------------------------------------------------------------------------
+  // Model selection. Verified against claude 2.1.278 (`--model <model>`: an
+  // alias like 'opus'/'sonnet' or a full name like 'claude-fable-5') and
+  // codex-cli (`codex exec -m, --model <MODEL>`).
+  // -------------------------------------------------------------------------
+  it('adds --model to claude when the request names one', () => {
+    const inv = buildInvocation('claude', request({ model: 'opus' }), TMP)
+    expect(inv.args).toContain('--model')
+    expect(inv.args[inv.args.indexOf('--model') + 1]).toBe('opus')
+  })
+
+  it('adds --model to codex exec when the request names one', () => {
+    const inv = buildInvocation('codex', request({ cli: 'codex', model: 'gpt-5' }), TMP)
+    expect(inv.args).toContain('--model')
+    expect(inv.args[inv.args.indexOf('--model') + 1]).toBe('gpt-5')
+  })
+
+  it.each(['claude', 'codex'] as const)(
+    'omitting model leaves %s argv byte-identical to the pre-flag invocation',
+    (cli) => {
+      // The whole back-compat contract: no model named → no flag, so the CLI
+      // keeps answering with whatever model the user configured it with.
+      const withModel = buildInvocation(cli, request({ cli, model: 'x' }), TMP)
+      const without = buildInvocation(cli, request({ cli }), TMP)
+      expect(without.args).not.toContain('--model')
+      expect(without.args).toEqual(withModel.args.filter((a) => a !== '--model' && a !== 'x'))
+    },
+  )
+
+  it('keeps every safety flag when a model is selected', () => {
+    const inv = buildInvocation('claude', request({ model: 'opus' }), TMP)
+    expect(inv.args).toEqual(expect.arrayContaining(['--tools', '', '--permission-prompts', 'none', '--safe-mode']))
+    const codex = buildInvocation('codex', request({ cli: 'codex', model: 'gpt-5' }), TMP)
+    expect(codex.args).toEqual(expect.arrayContaining(['--sandbox', 'read-only', '--ephemeral']))
+  })
+
+  it('carries the model into the STREAMING invocation too', () => {
+    // Both routes share buildInvocation, so a review cannot silently change
+    // model just because the CLI happened to support partial output.
+    const inv = buildInvocation('claude', request({ model: 'sonnet' }), TMP, undefined, { stream: true })
+    expect(inv.args).toContain('--model')
+    expect(inv.args[inv.args.indexOf('--model') + 1]).toBe('sonnet')
+    expect(inv.args).toContain('stream-json')
+  })
+
   it('keeps the SYSTEM prompt out of argv too — it goes to a temp file', () => {
     const inv = buildInvocation('claude', request({ system: 'SECRET SYSTEM TEXT' }), TMP)
     expect(inv.args.join(' ')).not.toContain('SECRET SYSTEM TEXT')
@@ -158,14 +203,40 @@ describe('parseInferRequest', () => {
     ['a non-array files', { cli: 'claude', prompt: 'hi', files: 'a.ts' }],
     ['a files array with a non-string', { cli: 'claude', prompt: 'hi', files: ['a.ts', 3] }],
     ['a non-number timeoutMs', { cli: 'claude', prompt: 'hi', timeoutMs: 'soon' }],
+    ['a non-string model', { cli: 'claude', prompt: 'hi', model: 7 }],
+    ['an empty model', { cli: 'claude', prompt: 'hi', model: '' }],
+    // The model id is the ONE caller-supplied string that reaches argv. An
+    // argv array stops word-splitting, but not a value that looks like a flag.
+    ['a model that is really a flag', { cli: 'claude', prompt: 'hi', model: '--dangerously-skip-permissions' }],
+    ['a model with a leading dash', { cli: 'claude', prompt: 'hi', model: '-opus' }],
+    ['a model with a space', { cli: 'claude', prompt: 'hi', model: 'opus --tools' }],
+    ['a model with a shell metacharacter', { cli: 'claude', prompt: 'hi', model: 'opus; rm -rf /' }],
+    ['an absurdly long model', { cli: 'claude', prompt: 'hi', model: 'a'.repeat(101) }],
   ])('rejects %s', (_label, body) => {
     expect(parseInferRequest(body)).toHaveProperty('error')
   })
 
+  it.each([
+    ['a bare alias', 'opus'],
+    ['a full vendor name', 'claude-fable-5'],
+    ['a namespaced id', 'openai/gpt-5'],
+    ['a dotted id', 'gpt-5.4'],
+  ])('accepts %s as a model', (_label, model) => {
+    expect(parseInferRequest({ cli: 'claude', prompt: 'hi', model })).toEqual({
+      cli: 'claude',
+      prompt: 'hi',
+      model,
+    })
+  })
+
+  it('leaves model ABSENT when it was not sent, rather than defaulting one', () => {
+    expect(parseInferRequest({ cli: 'claude', prompt: 'hi' })).not.toHaveProperty('model')
+  })
+
   it('carries the optional fields through when they are well typed', () => {
     expect(
-      parseInferRequest({ cli: 'codex', prompt: 'hi', system: 's', files: ['a.ts'], timeoutMs: 5, maxOutputTokens: 9 }),
-    ).toEqual({ cli: 'codex', prompt: 'hi', system: 's', files: ['a.ts'], timeoutMs: 5, maxOutputTokens: 9 })
+      parseInferRequest({ cli: 'codex', prompt: 'hi', model: 'gpt-5', system: 's', files: ['a.ts'], timeoutMs: 5, maxOutputTokens: 9 }),
+    ).toEqual({ cli: 'codex', prompt: 'hi', model: 'gpt-5', system: 's', files: ['a.ts'], timeoutMs: 5, maxOutputTokens: 9 })
   })
 })
 

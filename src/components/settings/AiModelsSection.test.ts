@@ -20,6 +20,7 @@ import userEvent from '@testing-library/user-event'
 import AiModelsSection from './AiModelsSection.svelte'
 import { getSettings, saveTokens, setAiProvider, setAiModel, setAiPanel, type PanelParticipant } from '../../lib/settings/settings'
 import { _resetSettingsStateForTest } from '../../lib/settings/settingsState.svelte'
+import { _resetBridgeForTest } from '../../lib/bridge/bridge.svelte'
 import { PROVIDERS, getProvider } from '../../lib/llm/providers'
 import { llmTestConnection, LlmError } from '../../lib/llm/llm'
 import { fetchProviderBalance } from '../../lib/llm/balance'
@@ -853,6 +854,99 @@ describe('AiModelsSection — unified model panel (Plan P)', () => {
     _resetSettingsStateForTest()
     render(AiModelsSection)
     expect(screen.getByText(/No OpenAI key — add it above/i)).toBeInTheDocument()
+  })
+
+  // -------------------------------------------------------------------------
+  // The local bridge is credentialed by its PAIRING TOKEN, not an API key.
+  // `providerKeyed` used to be an open-coded five-way chain ending
+  // `: s.openrouterKey`, so 'bridge' fell off the end onto OpenRouter's empty
+  // key: every bridge row read "no key", usablePanelCount was 0, and the
+  // cross-check toggle stayed greyed out — with bridge rows configured.
+  // -------------------------------------------------------------------------
+  const BRIDGE_PAIRING = JSON.stringify({ token: 'pair-tok-000000000000000000', port: 7321 })
+
+  it('a PAIRED bridge row is usable — no "no key" hint, controls enabled', () => {
+    localStorage.setItem('review123:bridge', BRIDGE_PAIRING)
+    _resetBridgeForTest()
+    setupAnthropic()
+    setAiPanel({ participants: [gen('bridge', 'claude'), ver('anthropic', 'claude-haiku-4-5')] })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    expect(screen.queryByText(/No .* key — add it above/i)).toBeNull()
+    expect(screen.queryByText(/Bridge not paired/i)).toBeNull()
+    const genRadios = screen.getAllByRole('radio', { name: /generator/i }) as HTMLInputElement[]
+    expect(genRadios[0].disabled).toBe(false)
+  })
+
+  it('an UNPAIRED bridge row says so — and says PAIR, not "add a key"', () => {
+    _resetBridgeForTest()
+    setupAnthropic()
+    setAiPanel({ participants: [gen('anthropic', 'claude-opus-4-8'), ver('bridge', 'claude')] })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    // The bridge has no key field anywhere, so "add it above" would send the
+    // user looking for a control that does not exist.
+    expect(screen.getByText(/Bridge not paired — set one up in Local bridge below/i)).toBeInTheDocument()
+    expect(screen.queryByText(/No Local bridge key/i)).toBeNull()
+  })
+
+  it('a paired bridge + a second model ENABLES the cross-check toggle', () => {
+    localStorage.setItem('review123:bridge', BRIDGE_PAIRING)
+    _resetBridgeForTest()
+    setupAnthropic()
+    setAiPanel({ participants: [gen('bridge', 'claude'), ver('anthropic', 'claude-haiku-4-5')] })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    const toggle = screen.getByRole('checkbox', { name: /Cross-check findings/i }) as HTMLInputElement
+    expect(toggle.disabled).toBe(false)
+    expect(screen.queryByText(/Add a second model/i)).toBeNull()
+  })
+
+  it('an unpaired bridge leaves the cross-check toggle disabled (one usable model)', () => {
+    _resetBridgeForTest()
+    setupAnthropic()
+    setAiPanel({ participants: [gen('anthropic', 'claude-opus-4-8'), ver('bridge', 'claude')] })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    const toggle = screen.getByRole('checkbox', { name: /Cross-check findings/i }) as HTMLInputElement
+    expect(toggle.disabled).toBe(true)
+  })
+
+  // -------------------------------------------------------------------------
+  // Single-verifier honesty: with one raiser and one verifier the vote cannot
+  // change any outcome (1 >= 2/2 always holds), so the panel must say so
+  // rather than let the user believe a vote is deciding something.
+  // -------------------------------------------------------------------------
+  it('warns that a two-model panel cannot outvote itself', () => {
+    setupAnthropic()
+    setAiPanel({ participants: [gen('anthropic', 'claude-opus-4-8'), ver('anthropic', 'claude-haiku-4-5')] })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    const note = screen.getByTestId('ensemble-thin-poll')
+    expect(note).toHaveTextContent(/cannot outvote each other/i)
+    expect(note).toHaveTextContent(/Add a third model/i)
+  })
+
+  it('drops the warning once a third usable model can break the tie', () => {
+    setupAnthropic()
+    setAiPanel({ participants: [
+      gen('anthropic', 'claude-opus-4-8'),
+      ver('anthropic', 'claude-haiku-4-5'),
+      ver('anthropic', 'claude-sonnet-4-6'),
+    ] })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    expect(screen.queryByTestId('ensemble-thin-poll')).toBeNull()
+  })
+
+  it('does not warn when cross-verification is not available at all', () => {
+    setupAnthropic()
+    setAiPanel({ participants: [gen('anthropic', 'claude-opus-4-8')] })
+    _resetSettingsStateForTest()
+    render(AiModelsSection)
+    // One model is not a thin poll, it is no poll — the existing "add a second
+    // model" hint already covers it and two messages would contradict.
+    expect(screen.queryByTestId('ensemble-thin-poll')).toBeNull()
   })
 
   it('removing a participant updates the panel', async () => {

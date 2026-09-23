@@ -6,6 +6,7 @@ import {
   resolvePanel,
   panelMode,
   providerCredential,
+  providerIsUsable,
   activeProviderHasKey,
   MAX_VERIFIER_PROVIDERS,
   ENSEMBLE_RUNAWAY_BACKSTOP,
@@ -336,6 +337,74 @@ describe('providerCredential — the bridge pairing counts as a credential', () 
     // return it and a naive gate would call it configured.
     localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: '' }))
     expect(providerCredential('deepseek')).toBeNull()
+  })
+})
+
+describe('providerIsUsable — the one gate every call site asks', () => {
+  // It exists because open-coding the question kept producing a five-way key
+  // chain that ended `: s.openrouterKey`, off the end of which 'bridge' fell
+  // and read as unkeyed. These cases pin the answer for EVERY provider id so a
+  // future chain cannot quietly reintroduce the same hole.
+  it('a PAIRED bridge is usable, with no API key anywhere', () => {
+    pairBridge()
+    expect(providerIsUsable('bridge')).toBe(true)
+  })
+
+  it('an unpaired bridge is NOT usable', () => {
+    expect(providerIsUsable('bridge')).toBe(false)
+  })
+
+  it('a disconnected bridge — pairing cleared — is not usable', () => {
+    pairBridge()
+    expect(providerIsUsable('bridge')).toBe(true)
+    localStorage.removeItem(BRIDGE_STORAGE_KEY)
+    expect(providerIsUsable('bridge')).toBe(false)
+  })
+
+  it('a paired bridge is usable even with EVERY api key empty (the #252 regression)', () => {
+    pairBridge()
+    expect(providerIsUsable('deepseek')).toBe(false)
+    expect(providerIsUsable('openai')).toBe(false)
+    expect(providerIsUsable('anthropic')).toBe(false)
+    expect(providerIsUsable('gemini')).toBe(false)
+    expect(providerIsUsable('openrouter')).toBe(false)
+    // …and the bridge is STILL usable. The old chain answered false here,
+    // because it resolved 'bridge' to the (empty) openrouter key.
+    expect(providerIsUsable('bridge')).toBe(true)
+  })
+
+  it('agrees with providerCredential for api providers', () => {
+    setDeepseekKey('sk-k')
+    expect(providerIsUsable('deepseek')).toBe(true)
+    expect(providerIsUsable('openai')).toBe(false)
+  })
+})
+
+describe('a paired bridge makes cross-verification available', () => {
+  // The user-visible consequence of the key-gate bug: a bridge plus a second
+  // model resolved to ONE usable participant, so crossModelVerifyEffective was
+  // false and cross-model verification — the one feature PR #250 measured as
+  // cutting the noise rate (36–45% → 9%) — silently did not run.
+  it('bridge generator + one api verifier resolves to two participants', () => {
+    pairBridge()
+    setDeepseekKey('sk-k')
+    setCrossModelVerify(true)
+    setAiPanel({ participants: [gen('bridge', 'claude'), ver('deepseek', 'deepseek-v4-flash')] })
+
+    const panel = resolvePanel()
+    expect(panel.generators).toHaveLength(1)
+    expect(panel.generators[0].providerId).toBe('bridge')
+    expect(panel.verifiers).toHaveLength(1)
+    expect(crossModelVerifyEffective()).toBe(true)
+  })
+
+  it('an UNPAIRED bridge drops out, leaving too few participants', () => {
+    setDeepseekKey('sk-k')
+    setCrossModelVerify(true)
+    setAiPanel({ participants: [gen('deepseek', 'deepseek-v4-flash'), ver('bridge', 'claude')] })
+
+    expect(resolvePanel().verifiers).toHaveLength(0)
+    expect(crossModelVerifyEffective()).toBe(false)
   })
 })
 

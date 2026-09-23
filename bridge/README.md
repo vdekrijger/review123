@@ -81,8 +81,21 @@ you want to serve:
 
 ```sh
 curl -fsSL https://github.com/vdekrijger/review123/releases/latest/download/bridge.mjs -o ~/review123-bridge.mjs
-node ~/review123-bridge.mjs --root .
+node ~/review123-bridge.mjs --root . --allow-write --allow-checkout
 ```
+
+**Why the two flags are in the recommended line.** They are off in the code and
+staying off — this is the *documented* command, not a default. `--allow-write`
+turns on the fix loop ([§7](#7-writing-is-opt-in-at-the-command-line)) and
+`--allow-checkout` turns on checking a PR out in your working tree
+([§8](#8-checking-a-pull-request-out-is-a-second-separate-grant)); they are
+independent and neither implies the other. The reason they live on the command
+line is that **nothing review123 sends can switch them on** — so the grant
+still holds if review123.dev is ever compromised and starts asking for things
+you never agreed to. They protect you from *the website*, not from yourself.
+Omitting them hardens nothing about the running process; it only means the two
+features quietly do not work. Start it with `--root .` alone if you genuinely
+want a read-only bridge.
 
 `/releases/latest/download/` always resolves to the newest release, so that URL
 does not need a version in it. The file's header comment records the version,
@@ -123,7 +136,7 @@ Vercel deploy), which is a bad trade for a shorter command.
 It prints a banner with the pairing token:
 
 ```
-review123 bridge 0.2.0  ·  protocol v1
+review123 bridge 0.2.1  ·  protocol v1
 
   repo     /Users/you/code/your-repo
   listen   http://127.0.0.1:7321   (loopback only)
@@ -649,6 +662,7 @@ Run a prompt through one of the user's local CLIs, on their subscription.
 interface InferRequest {
   cli: 'claude' | 'codex'   // an ID from a hard-coded set — NEVER a command
   prompt: string            // delivered on STDIN, never in argv
+  model?: string            // --model <id>; omitted → the CLI's own default
   system?: string
   files?: string[]          // repo-relative, confined to the root; inlined
   maxOutputTokens?: number  // accepted, but see "ignored" below
@@ -692,9 +706,28 @@ Why each flag is there:
 | `--sandbox read-only` (codex) | Codex has no way to disable its tools, so it is confined to reading instead. |
 | `--output-last-message` (codex) | `codex exec` prints a human transcript on stdout; the final assistant message lands in this file, alone and clean. That is why the bridge does not parse its event log. |
 | `--ephemeral` (codex) | Keeps review123's prompts out of your session history. |
+| `--model <id>` | **Only when the request names one.** Without it the argv is byte-identical to what it was before the flag existed, so the CLI answers with whatever model you configured it with. |
 
 **`--bare` is deliberately NOT used**: it forces `ANTHROPIC_API_KEY` and never
 reads the subscription, which would defeat the entire point of the bridge.
+
+#### Choosing the model
+
+Both CLIs take `--model`, verified against the same versions:
+
+| CLI | Flag | What it accepts |
+| --- | --- | --- |
+| `claude` 2.1.278 | `--model <model>` | An alias for the latest model (`fable`, `opus`, `sonnet`) **or** a full name (`claude-fable-5`), per its own `--help`. |
+| `codex-cli` | `codex exec -m, --model <MODEL>` | "Model the agent should use." The bridge passes the long form. |
+
+The bridge does **not** validate the id against a list of known models: neither
+CLI publishes a stable enumeration, so a baked-in allowlist would be wrong
+within a month and would reject models that work. It checks the *shape* only —
+letters, digits and `. _ : / -`, not starting with `-` — because this is the one
+caller-supplied string that reaches argv, and a value like
+`--dangerously-skip-permissions` must not be able to arrive as a flag. An id
+that is well-formed but unknown is rejected by the CLI itself, with the CLI's
+own error, which is the more useful message.
 
 #### Honest limitations
 
@@ -702,8 +735,10 @@ reads the subscription, which would defeat the entire point of the bridge.
   headless mode. The field stays in the contract because a future release may,
   and callers should keep sending their intent — but today the bridge cannot
   enforce it and does not pretend to.
-- **No model selection.** The request never names a model; whichever model your
-  CLI is configured for is the one that answers.
+- **Model selection is a passthrough, not a catalog.** `model` becomes
+  `--model <id>` on both CLIs (see above). The bridge cannot tell you which ids
+  your CLI accepts, and omitting the field keeps the previous behaviour exactly:
+  whichever model your CLI is configured for is the one that answers.
 - **`usage` is absent for `codex`.** `claude -p --output-format json` reports
   token counts, `codex exec` does not report them machine-readably. An absent
   `usage` means *unknown* — never zero. review123 shows tokens-unknown rather
@@ -856,8 +891,10 @@ the worktree is left in) than cancelling a read-only completion.
   carrying **the real partial text** — which is strictly better than the
   one-shot route can manage, since there the truncated JSON is unparseable and
   the answer is lost entirely.
-- `maxOutputTokens` and model selection are ignored here exactly as they are on
-  `/v1/infer`.
+- `maxOutputTokens` is ignored here exactly as it is on `/v1/infer`. `model`,
+  by contrast, is honoured identically: both routes build their argv through the
+  same `buildInvocation`, so a review cannot change model just because the CLI
+  happened to support partial output.
 
 ### `POST /v1/files` — implemented
 

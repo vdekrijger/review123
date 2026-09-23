@@ -160,10 +160,16 @@ test('single-key 2-model ensemble: step-3 shows per-model cost + impact readout'
   await expect(breakdown).toBeVisible({ timeout: 15_000 })
   await expect(breakdown.getByText('Model performance')).toBeVisible()
 
-  // Generator row: impact = surfaced findings count. With a SINGLE verifier,
-  // a tie surfaces, so both evidence rows surface → "2 surfaced findings".
+  // Generator row: impact = surfaced findings count. The verifier confirms
+  // ev:0 and refutes ev:1. ev:1 is raised by ONE model and refuted by every
+  // model that checked it, so the honesty floor demotes it — leaving
+  // "1 surfaced finding". Before that floor the tie surfaced BOTH, which meant
+  // the lone verifier's vote could not change any outcome while the UI still
+  // reported the finding as confirmed. This assertion is the end-to-end proof
+  // that a single verifier now actually decides something.
   await expect(breakdown.locator('.model-id', { hasText: 'claude-opus-4-8' })).toBeVisible()
-  await expect(breakdown.getByText(/2 surfaced findings/i)).toBeVisible()
+  await expect(breakdown.getByText(/1 surfaced finding/i)).toBeVisible()
+  await expect(breakdown.getByText(/2 surfaced findings/i)).toHaveCount(0)
 
   // The active model is ALSO the configured generator here, so it stays a
   // GENERATOR row (its descriptive/narration tasks fold into it) — it is NEVER
@@ -172,8 +178,9 @@ test('single-key 2-model ensemble: step-3 shows per-model cost + impact readout'
   await expect(opusRole).toHaveText(/generator/i)
   await expect(breakdown.getByText('active · narration')).toHaveCount(0)
 
-  // Verifier row: 1 confirm + 1 refute, neither decisive (one dissent can't bury
-  // a finding) → rubber-stamped tally. The impact readout leads with that.
+  // Verifier row: 1 confirm + 1 refute. The tally is unchanged — what changed
+  // is that the refutation now lands instead of being outvoted by the finding's
+  // own author.
   await expect(breakdown.locator('.model-id', { hasText: 'claude-haiku-4-5' })).toBeVisible()
   await expect(breakdown.getByText(/1c\/1r/i)).toBeVisible()
 
