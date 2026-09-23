@@ -396,7 +396,7 @@
     width: 100%;
     box-sizing: border-box;
     padding: 0.3rem 0.5rem;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     border-radius: 6px;
     background: var(--surface-raised);
     color: var(--text);
@@ -437,7 +437,14 @@
     background: var(--surface-raised);
     border: 1px solid var(--hairline);
     border-radius: 8px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+    /* Batch 2B's last deferred literal (0 10px 30px rgba(0,0,0,.28)). It is a
+       large dropdown, which is what step 4 of the scale is for, and its alpha
+       was picked against the dark ground: black at .28 measures 2.1:1 on the
+       light page against 1.04:1 on the dark one, so the single declaration
+       landed twice as heavy in light. The static guard in
+       design-system-primitives.test.ts allowlisted this file by name; that
+       entry goes with this line, which empties the list. */
+    box-shadow: var(--elevation-4);
     overflow: hidden;
   }
 
@@ -450,7 +457,7 @@
     width: 100%;
     box-sizing: border-box;
     padding: 0.35rem 0.5rem;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     border-radius: 6px;
     background: var(--surface);
     color: var(--text);

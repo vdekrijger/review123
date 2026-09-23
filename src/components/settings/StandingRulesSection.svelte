@@ -629,7 +629,7 @@
     gap: 0.35rem;
     padding: 0.35rem 0.75rem;
     border-radius: 6px;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     background: var(--surface, transparent);
     color: var(--text);
     font-size: 0.85em;
@@ -643,7 +643,7 @@
 
   .primary-btn:disabled,
   .secondary-btn:disabled {
-    opacity: 0.5;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 

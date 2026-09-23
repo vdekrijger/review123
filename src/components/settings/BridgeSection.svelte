@@ -386,12 +386,17 @@
     gap: 0.6rem;
   }
 
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
+  /* .field and .field-label are the global primitive now (app.css, audit F12) —
+     this section's hand-rolled copy was the shape it was generalised FROM. Only
+     the flex sizing is local, because only this form lays its fields out in a
+     row. That row is also why the primitive's `.field + .field { margin-top }`
+     is reset here: between these two fields the separation is horizontal. */
+  .pair-form .field {
     flex: 1 1 16rem;
-    min-width: 0;
+  }
+
+  .pair-form .field + .field {
+    margin-top: 0;
   }
 
   .port-field {
@@ -410,14 +415,9 @@
     color: var(--danger, #b3261e);
   }
 
-  .field-label {
-    font-size: 0.8em;
-    color: var(--text-muted);
-  }
-
   .primary-btn,
   .secondary-btn {
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     border-radius: 6px;
     cursor: pointer;
     font-size: 0.85em;
@@ -433,7 +433,7 @@
   }
 
   .primary-btn:disabled {
-    opacity: 0.55;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 

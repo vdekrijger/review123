@@ -342,7 +342,7 @@
   }
 
   .move-btn {
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     background: var(--surface-raised);
     border-radius: 5px;
     cursor: pointer;
@@ -357,7 +357,7 @@
   }
 
   .move-btn:disabled {
-    opacity: 0.35;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 
@@ -368,7 +368,7 @@
 
   .reset-btn {
     align-self: flex-start;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--border-control);
     background: none;
     border-radius: 6px;
     cursor: pointer;

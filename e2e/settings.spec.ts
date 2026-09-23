@@ -606,10 +606,17 @@ test('themed form controls: radios are custom-styled (appearance:none) with verd
   // src/lib/theme/contrast.test.ts for the measurements.
   await expect(lightRadio).toHaveCSS('border-top-color', 'rgb(31, 122, 102)')
 
-  // The now-UNCHECKED Dark radio reverts to the hairline border and a
-  // scaled-out (hidden) indicator — in light theme hairline is #ded9cf
-  // (Phase 1 re-toned it from #e3dfd6 alongside the rest of the light palette).
-  await expect(darkRadio).toHaveCSS('border-top-color', 'rgb(222, 217, 207)')
+  // The now-UNCHECKED Dark radio reverts to its resting border and a scaled-out
+  // (hidden) indicator.
+  //
+  // Batch 2A CHANGED which token that is: --hairline (#ded9cf, 1.41:1 on
+  // --surface) → --border-control (#8d8370, 3.74:1). An unchecked radio is the
+  // worst case of audit F11 — there is nothing inside it but its border, so
+  // that border is the whole control, and WCAG 2.1 SC 1.4.11 asks for 3:1.
+  // --hairline is deliberately BELOW that floor; it is the decorative line.
+  // The ratio itself is gated just below, so this pins the token and the next
+  // assertion pins the property that made us pick it.
+  await expect(darkRadio).toHaveCSS('border-top-color', 'rgb(141, 131, 112)')
   await expect
     .poll(() =>
       darkRadio.evaluate((el) => getComputedStyle(el, '::before').transform),
@@ -898,5 +905,172 @@ for (const theme of ['light', 'dark'] as const) {
     //    carry the selection once the ink is no longer the accent.
     expect(Number(active.fontWeight)).toBeGreaterThan(Number(inactive.fontWeight))
     expect(parseFloat(active.indicatorWidth)).toBeGreaterThan(0)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Batch 2A — the form primitives, measured in a real browser (audit F11, F12).
+//
+// F11: every input / select / textarea / checkbox / button boundary was
+// --hairline, which measures 1.25-1.43:1 depending on ground and theme. A
+// field's own fill stands only 1.06:1 off the page it sits on, so that line was
+// the ONLY thing marking the field — which is why the settings screenshots read
+// as floating text. WCAG 2.1 SC 1.4.11 asks 3:1 for a control's visual boundary,
+// and --border-control is the token Phase 1 defined for it.
+//
+// F12: the label was larger than, and exactly as dark as, the value it labelled,
+// and the gap INSIDE a field was only 2x smaller than the gap BETWEEN fields —
+// which p.83 says is not enough to read as grouping at all.
+//
+// These gates assert the RELATIONSHIPS (the boundary beats the decorative line;
+// the label ranks below its value; inside a group beats around it) plus the one
+// absolute floor that is a spec requirement. Deliberately no hardcoded scale
+// step or hex: a later re-tone passes as long as the hierarchy survives it.
+// ---------------------------------------------------------------------------
+
+/**
+ * One pass over the AI-models section in the built app, returning everything
+ * both gates below need. The colour maths lives inside the browser call because
+ * only computed values are trustworthy here — the audit's numbers came from the
+ * browser, so these do too.
+ */
+async function measureFormPrimitives(
+  page: import('@playwright/test').Page,
+  theme: 'light' | 'dark',
+) {
+  await blockExternal(page)
+  await page.goto('/settings')
+  await expect(page.getByRole('heading', { name: /^settings$/i })).toBeVisible({ timeout: 5_000 })
+  await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)
+  // The control primitives transition border-color over 150ms, so a flip read
+  // immediately back returns the OUTGOING theme's colour. Both ends of that
+  // interpolation happen to clear 3:1 today, which is exactly the kind of
+  // accident that makes a gate pass for the wrong reason — so wait it out.
+  await page.waitForTimeout(400)
+
+  return page.evaluate(() => {
+    const lin = (c: number) => {
+      const s = c / 255
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4)
+    }
+    const parse = (css: string) => {
+      const m = css.match(/rgba?\(([^)]+)\)/)
+      if (!m) throw new Error(`cannot parse color: ${css}`)
+      const p = m[1].split(/[, /]+/).filter(Boolean).map(parseFloat)
+      return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }
+    }
+    const over = (fg: ReturnType<typeof parse>, bg: ReturnType<typeof parse>) => ({
+      r: fg.r * fg.a + bg.r * (1 - fg.a),
+      g: fg.g * fg.a + bg.g * (1 - fg.a),
+      b: fg.b * fg.a + bg.b * (1 - fg.a),
+      a: 1,
+    })
+    const lum = (c: { r: number; g: number; b: number }) =>
+      0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    const contrast = (fgCss: string, bgCss: string) => {
+      const bg = parse(bgCss)
+      const fg = over(parse(fgCss), bg)
+      const [hi, lo] = [lum(fg), lum(bg)].sort((a, b) => b - a)
+      return (hi + 0.05) / (lo + 0.05)
+    }
+
+    /** The first genuinely opaque background behind an element. */
+    const groundOf = (el: Element): string => {
+      for (let n: Element | null = el; n; n = n.parentElement) {
+        const bg = getComputedStyle(n).backgroundColor
+        if (parse(bg).a === 1) return bg
+      }
+      return getComputedStyle(document.body).backgroundColor
+    }
+
+    /** A custom property resolved to the rgb() the browser actually paints. */
+    const resolveToken = (token: string) => {
+      const probe = document.createElement('div')
+      probe.style.color = getComputedStyle(document.documentElement)
+        .getPropertyValue(token)
+        .trim()
+      document.body.appendChild(probe)
+      const rgb = getComputedStyle(probe).color
+      probe.remove()
+      return rgb
+    }
+
+    const controls = [
+      ...document.querySelectorAll<HTMLElement>(
+        '#ai-models input[type="password"], #ai-models select, #ai-models .combobox-trigger, #ai-models .btn',
+      ),
+    ]
+    if (!controls.length) throw new Error('no controls found in #ai-models')
+
+    const boundaries = controls.map((el) => {
+      const ground = groundOf(el.parentElement ?? el)
+      const cs = getComputedStyle(el)
+      return {
+        what: `${el.tagName.toLowerCase()}.${el.className || '(none)'}`,
+        boundary: contrast(cs.borderTopColor, ground),
+        hairline: contrast(resolveToken('--hairline'), ground),
+        width: parseFloat(cs.borderTopWidth),
+      }
+    })
+
+    const field = document.querySelector<HTMLElement>('#ai-models label.field.key-label')
+    if (!field) throw new Error('no .field.key-label found in #ai-models')
+    const label = field.querySelector<HTMLElement>('.field-label')
+    const input = field.querySelector<HTMLElement>('input')
+    const previousField = document.querySelector<HTMLElement>('#ai-models .field.model-label')
+    if (!label || !input || !previousField) throw new Error('field is missing its parts')
+
+    const ground = groundOf(field)
+    const ls = getComputedStyle(label)
+    const is = getComputedStyle(input)
+
+    return {
+      boundaries,
+      labelSize: parseFloat(ls.fontSize),
+      valueSize: parseFloat(is.fontSize),
+      labelContrast: contrast(ls.color, ground),
+      valueContrast: contrast(is.color, ground),
+      // Rendered geometry, not declared CSS: the gap inside this field against
+      // the gap between it and the field above it.
+      insideGap: input.getBoundingClientRect().top - label.getBoundingClientRect().bottom,
+      betweenGap: field.getBoundingClientRect().top - previousField.getBoundingClientRect().bottom,
+    }
+  })
+}
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`settings form: every control boundary clears the 3:1 non-text floor (${theme})`, async ({
+    page,
+  }) => {
+    const { boundaries } = await measureFormPrimitives(page, theme)
+
+    expect(boundaries.length).toBeGreaterThan(0)
+    for (const m of boundaries) {
+      expect(m.width, `${m.what} has no border to measure`).toBeGreaterThan(0)
+      // SC 1.4.11 — the requirement, and the reason --border-control exists.
+      expect(m.boundary, `${m.what} measured ${m.boundary.toFixed(2)}:1`).toBeGreaterThanOrEqual(3)
+      // …and it must beat the DECORATIVE line it replaced by a clear margin, so
+      // the two tokens can never quietly converge back into one.
+      expect(
+        m.boundary,
+        `${m.what}: boundary ${m.boundary.toFixed(2)}:1 vs hairline ${m.hairline.toFixed(2)}:1`,
+      ).toBeGreaterThan(m.hairline * 2)
+    }
+  })
+
+  test(`settings form: the label ranks BELOW the value it labels (${theme})`, async ({ page }) => {
+    const m = await measureFormPrimitives(page, theme)
+
+    // p.44 — a label you only need for scanning is SUPPORT: smaller than the
+    // value, and softer. Before Batch 2A it was larger and exactly as dark.
+    expect(m.labelSize).toBeLessThan(m.valueSize)
+    expect(m.labelContrast).toBeLessThan(m.valueContrast)
+    // …but still a comfortable read: it is the MIDDLE tier, not a hint.
+    expect(m.labelContrast).toBeGreaterThanOrEqual(4.5)
+
+    // p.83-84 — the space around a group must clearly exceed the space inside
+    // it. The audit measured 3.7 against 7.5 and called 2:1 not enough.
+    expect(m.insideGap).toBeGreaterThan(0)
+    expect(m.betweenGap).toBeGreaterThan(m.insideGap * 3)
   })
 }

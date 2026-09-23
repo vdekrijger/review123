@@ -146,7 +146,7 @@
     line-height: 1.4;
     padding: 0.35rem 0.5rem;
     border-radius: 4px;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--border-control);
     background: var(--surface-raised);
     color: inherit;
   }
@@ -178,7 +178,7 @@
   }
 
   .ask-box-send:disabled {
-    opacity: 0.45;
+    opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 
@@ -186,7 +186,7 @@
     font-size: 0.78rem;
     padding: 0.18rem 0.55rem;
     border-radius: 4px;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--border-control);
     background: transparent;
     color: inherit;
     cursor: pointer;
