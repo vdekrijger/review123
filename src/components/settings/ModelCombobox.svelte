@@ -384,7 +384,7 @@
   .model-combobox {
     position: relative;
     display: block;
-    margin-top: 0.25rem;
+    margin-top: var(--space-1);
   }
 
   /* Closed trigger — matches the sibling providers' <select> look. */
@@ -392,15 +392,15 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.5rem;
+    gap: var(--space-2);
     width: 100%;
     box-sizing: border-box;
-    padding: 0.3rem 0.5rem;
+    padding: var(--space-1) var(--space-2);
     border: 1px solid var(--border-control);
     border-radius: 6px;
     background: var(--surface-raised);
     color: var(--text);
-    font-size: 0.9em;
+    font-size: var(--text-sm);
     text-align: left;
     cursor: pointer;
   }
@@ -419,7 +419,7 @@
   .combobox-arrow {
     flex: none;
     color: var(--text-muted);
-    font-size: 0.8em;
+    font-size: var(--text-xs);
     pointer-events: none;
   }
 
@@ -449,19 +449,19 @@
   }
 
   .combobox-search-row {
-    padding: 0.5rem;
+    padding: var(--space-2);
     border-bottom: 1px solid var(--hairline);
   }
 
   .combobox-search {
     width: 100%;
     box-sizing: border-box;
-    padding: 0.35rem 0.5rem;
+    padding: var(--space-1) var(--space-2);
     border: 1px solid var(--border-control);
     border-radius: 6px;
     background: var(--surface);
     color: var(--text);
-    font-size: 0.88em;
+    font-size: var(--text-sm);
   }
 
   .combobox-search:focus-visible {
@@ -483,7 +483,7 @@
        the panel clips it). */
     min-height: 0;
     border-right: 1px solid var(--hairline);
-    padding: 0.25rem;
+    padding: var(--space-1);
     background: var(--surface);
   }
 
@@ -496,15 +496,15 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.4rem;
+    gap: var(--space-2);
     width: 100%;
     box-sizing: border-box;
-    padding: 0.3rem 0.45rem;
+    padding: var(--space-1) var(--space-2);
     border: none;
     border-radius: 5px;
     background: none;
     color: var(--text);
-    font-size: 0.84em;
+    font-size: var(--text-xs);
     text-align: left;
     cursor: pointer;
   }
@@ -526,7 +526,7 @@
 
   .combobox-lab-count {
     flex: none;
-    font-size: 0.85em;
+    font-size: var(--text-xs);
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
   }
@@ -542,7 +542,7 @@
        model list (e.g. 49 Qwen models) scrolls inside the panel instead of
        overflowing and being clipped. */
     min-height: 0;
-    padding: 0.25rem;
+    padding: var(--space-1);
   }
 
   .combobox-models:focus-visible {
@@ -554,7 +554,7 @@
   .combobox-results {
     max-height: 22rem;
     overflow-y: auto;
-    padding: 0.25rem;
+    padding: var(--space-1);
   }
 
   .combobox-results:focus-visible {
@@ -563,13 +563,13 @@
   }
 
   .combobox-result-group + .combobox-result-group {
-    margin-top: 0.2rem;
+    margin-top: var(--space-1);
   }
 
   .combobox-result-lab {
     display: block;
-    padding: 0.3rem 0.5rem 0.15rem;
-    font-size: 0.7em;
+    padding: var(--space-1) var(--space-2) var(--space-1);
+    font-size: var(--text-xs);
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -581,11 +581,11 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.32rem 0.5rem;
+    gap: var(--space-3);
+    padding: var(--space-1) var(--space-2);
     border-radius: 5px;
     cursor: pointer;
-    font-size: 0.85em;
+    font-size: var(--text-sm);
   }
 
   .combobox-option.active {
@@ -606,7 +606,7 @@
 
   .combobox-option-hint {
     flex: none;
-    font-size: 0.82em;
+    font-size: var(--text-xs);
     color: var(--text-muted);
     white-space: nowrap;
     text-align: right;
@@ -619,8 +619,8 @@
 
   .combobox-empty {
     margin: 0;
-    padding: 0.6rem 0.5rem;
-    font-size: 0.85em;
+    padding: var(--space-2) var(--space-2);
+    font-size: var(--text-xs);
     color: var(--text-muted);
   }
 </style>
