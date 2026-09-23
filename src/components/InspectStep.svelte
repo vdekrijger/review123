@@ -1593,6 +1593,11 @@
   </div>
 {/snippet}
 
+<!-- VIEW BAR (ui-audit F8/F9). Story|Files and the diff-view controls answer
+     ONE question — "how do I want to read this?" — so they share one row
+     instead of two, and the row's spacing states the grouping out loud:
+     0px inside each segmented control, 15px between groups (p.83, p.86). -->
+<div class="view-bar">
 {#if storyAvailable}
   <div class="flow-switch" role="group" aria-label="Inspect flow">
     <button
@@ -1612,56 +1617,55 @@
   </div>
 {/if}
 
-{#if storyAvailable && storyMode && storyTaskOff}
-  <p class="story-fallback-note" role="note">
-    Story walkthrough turned off — <a href="/settings" onclick={goToSettings}>enable in AI settings</a>. Showing all files.
-  </p>
-{:else if storyStructuralFallback}
-  <p class="story-fallback-note story-structural-note" role="note">
-    Structural walkthrough — AI ordering unavailable{storyFallbackReason ? ` (${storyFallbackReason})` : ''}.
-    {#if onRetryStory}
-      <button type="button" class="story-retry-btn" onclick={() => onRetryStory?.()}>Retry</button>
-    {/if}
-  </p>
-{:else if storyErrored}
-  <p class="story-fallback-note" role="note">
-    Couldn't build the walkthrough{storyError ? ` — ${storyError}` : ''} Showing all files.
-    {#if onRetryStory}
-      <button type="button" class="story-retry-btn" onclick={() => onRetryStory?.()}>Retry</button>
-    {/if}
-  </p>
-{:else if storyEmpty}
-  <p class="story-fallback-note" role="note">
-    Couldn't build a walkthrough for this PR — showing all files.
-  </p>
-{/if}
-
 <div class="mode-toggle" role="group" aria-label="Diff mode">
-  <button class="btn" class:btn-active={mode === 'unified'} aria-pressed={mode === 'unified'} onclick={() => onmode('unified')}>Unified</button>
-  <button class="btn" class:btn-active={mode === 'split'} aria-pressed={mode === 'split'} onclick={() => onmode('split')}>Side-by-side</button>
-  <button
-    class="btn ws-toggle"
-    class:btn-active={hideWhitespace && whitespaceToggleEnabled}
-    aria-pressed={hideWhitespace && whitespaceToggleEnabled}
-    disabled={!whitespaceToggleEnabled}
-    title={whitespaceDisabledReason ?? 'Hide changes that only add or remove whitespace (like git diff -w)'}
-    onclick={toggleHideWhitespace}
-  >Hide whitespace</button>
-  <button
-    class="btn focus-toggle"
-    class:btn-active={focusMode !== 'off'}
-    aria-pressed={focusMode !== 'off'}
-    title="Dim low-signal lines (imports, comments) so real changes stand out. Click to cycle: off → imports → imports + comments."
-    onclick={cycleFocusMode}
-  >{FOCUS_LABEL[focusMode]}</button>
-  <button
-    class="btn hunk-attention-toggle"
-    class:btn-active={hunkAttentionOn}
-    aria-pressed={hunkAttentionOn}
-    data-testid="hunk-attention-toggle"
-    title="Within a file: list the decision points and recede the mechanical hunks (formatting, imports, comments, renames, fixture data). Nothing is ever hidden — a receded hunk restores with one click."
-    onclick={() => track('hunk_focus_toggled', { enabled: toggleHunkAttention() })}
-  >{hunkAttentionOn ? 'Hunk focus: on' : 'Hunk focus: off'}</button>
+  <!-- ONE mutually-exclusive choice, so it is ONE control: a segmented pill
+       with no internal gap, the same treatment .flow-switch / .sort-switch /
+       .phase-switch already use. Before this, `Unified` and `Side-by-side`
+       were two of five identical `.btn`s separated by a 3.55px collapsed
+       whitespace node — the same 3.55px that separated them from the three
+       UNRELATED toggles, so nothing in the row said they were one choice. -->
+  <div class="mode-switch" role="group" aria-label="Diff layout">
+    <button
+      class="mode-btn"
+      class:mode-active={mode === 'unified'}
+      aria-pressed={mode === 'unified'}
+      onclick={() => onmode('unified')}
+    >Unified</button>
+    <button
+      class="mode-btn"
+      class:mode-active={mode === 'split'}
+      aria-pressed={mode === 'split'}
+      onclick={() => onmode('split')}
+    >Side-by-side</button>
+  </div>
+  <!-- Three INDEPENDENT switches. Their own group, tighter inside (4.5px)
+       than the gap that separates groups (15px), and quieter than the pills:
+       these are preferences you set once, not the decision on this screen. -->
+  <div class="view-toggles" role="group" aria-label="Diff view options">
+    <button
+      class="btn view-toggle ws-toggle"
+      class:btn-active={hideWhitespace && whitespaceToggleEnabled}
+      aria-pressed={hideWhitespace && whitespaceToggleEnabled}
+      disabled={!whitespaceToggleEnabled}
+      title={whitespaceDisabledReason ?? 'Hide changes that only add or remove whitespace (like git diff -w)'}
+      onclick={toggleHideWhitespace}
+    >Hide whitespace</button>
+    <button
+      class="btn view-toggle focus-toggle"
+      class:btn-active={focusMode !== 'off'}
+      aria-pressed={focusMode !== 'off'}
+      title="Dim low-signal lines (imports, comments) so real changes stand out. Click to cycle: off → imports → imports + comments."
+      onclick={cycleFocusMode}
+    >{FOCUS_LABEL[focusMode]}</button>
+    <button
+      class="btn view-toggle hunk-attention-toggle"
+      class:btn-active={hunkAttentionOn}
+      aria-pressed={hunkAttentionOn}
+      data-testid="hunk-attention-toggle"
+      title="Within a file: list the decision points and recede the mechanical hunks (formatting, imports, comments, renames, fixture data). Nothing is ever hidden — a receded hunk restores with one click."
+      onclick={() => track('hunk_focus_toggled', { enabled: toggleHunkAttention() })}
+    >{hunkAttentionOn ? 'Hunk focus: on' : 'Hunk focus: off'}</button>
+  </div>
   {#if hideWhitespace && whitespaceToggleEnabled && whitespaceOnlyCount > 0}
     <span class="ws-only-note" role="status">
       {whitespaceOnlyCount} whitespace-only file{whitespaceOnlyCount === 1 ? '' : 's'} hidden
@@ -1687,6 +1691,33 @@
     </p>
   {/if}
 </div>
+</div>
+
+<!-- The story fallback notes explain the ROW above them, so they sit under it
+     rather than splitting the two halves of one control row apart. -->
+{#if storyAvailable && storyMode && storyTaskOff}
+  <p class="story-fallback-note" role="note">
+    Story walkthrough turned off — <a href="/settings" onclick={goToSettings}>enable in AI settings</a>. Showing all files.
+  </p>
+{:else if storyStructuralFallback}
+  <p class="story-fallback-note story-structural-note" role="note">
+    Structural walkthrough — AI ordering unavailable{storyFallbackReason ? ` (${storyFallbackReason})` : ''}.
+    {#if onRetryStory}
+      <button type="button" class="story-retry-btn" onclick={() => onRetryStory?.()}>Retry</button>
+    {/if}
+  </p>
+{:else if storyErrored}
+  <p class="story-fallback-note" role="note">
+    Couldn't build the walkthrough{storyError ? ` — ${storyError}` : ''} Showing all files.
+    {#if onRetryStory}
+      <button type="button" class="story-retry-btn" onclick={() => onRetryStory?.()}>Retry</button>
+    {/if}
+  </p>
+{:else if storyEmpty}
+  <p class="story-fallback-note" role="note">
+    Couldn't build a walkthrough for this PR — showing all files.
+  </p>
+{/if}
 
 <!-- The reviewer run status bar covers BOTH passes (#237): the automatic
      implementation pass and the on-demand tests pass get identical treatment —
@@ -2454,6 +2485,24 @@
     flex: 1;
   }
 
+  /* ---- The view bar: one row for "how do I want to read this?" ----------
+     Batch 2C / ui-audit F8 + F9. Story|Files used to be its own row above the
+     diff controls; they are the same question, so they are one row now. That
+     is one of the seven control rows on this step gone outright.
+
+     The SPACING is the point. Every gap here is either 0 (inside a segmented
+     control), 0.3rem (inside the toggle group) or 1rem (between groups), so
+     the space around a group always exceeds the space inside it — p.83, p.86.
+     Before, every gap in the row was the same 3.55px collapsed whitespace
+     node, because .mode-toggle was a plain block with inline-flex children. */
+  .view-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem 1rem;
+    margin-bottom: 0.5rem;
+  }
+
   /* ---- Story | Files flow switch (Plan H) ---- */
   .flow-switch {
     display: inline-flex;
@@ -2461,7 +2510,6 @@
     border: 1px solid var(--border-subtle);
     border-radius: 999px;
     padding: 0.15rem;
-    margin-bottom: 0.5rem;
   }
   .flow-btn {
     border: none;
@@ -2475,7 +2523,7 @@
   }
   .flow-btn.flow-active {
     background: var(--accent);
-    color: var(--surface, #fff);
+    color: var(--on-accent);
   }
   .story-fallback-note {
     font-size: 0.82rem;
@@ -2508,14 +2556,75 @@
     padding: 0.5rem 0;
   }
 
-  /* Mode toggle: active state via accent underline, consistent with stepper */
-  .mode-toggle .btn-active {
-    border-bottom: 2px solid var(--accent);
-    font-weight: 700;
-    color: var(--accent);
+  /* The diff-view controls: a real flex row, so `margin-left: auto` on the
+     run button finally does something (it was dead CSS under display:block)
+     and the groups below can actually be spaced apart. */
+  .mode-toggle {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    flex: 1 1 auto;
+    gap: 0.4rem 1rem;
   }
-  .mode-toggle .btn {
-    border-radius: 4px 4px 0 0; /* flat bottom, pairs with underline indicator */
+
+  /* Unified | Side-by-side — the same pill segmented control as the flow,
+     sort and phase switches. One visual language: a pill means a mutually
+     exclusive choice, a bordered .btn means an independent switch. */
+  .mode-switch {
+    display: inline-flex;
+    gap: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    padding: 0.15rem;
+  }
+  .mode-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.2rem 0.8rem;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .mode-btn.mode-active {
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+  .mode-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  /* The three independent toggles. 0.3rem inside the group against the 1rem
+     that separates it from the pills (p.86), and DEMOTED (p.30-31): these are
+     preferences, not the decision on this screen, so they lose the filled
+     --surface-raised ground and the 700-weight accent underline they used to
+     wear. The screen is fixed by quieting the secondary, not by enlarging
+     anything. */
+  .view-toggles {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .view-toggles .btn {
+    background: transparent;
+    border-color: var(--border-subtle);
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+  }
+  .view-toggles .btn-active {
+    background: var(--accent-subtle);
+    border-color: var(--accent);
+    color: var(--text);
+    font-weight: 600;
+  }
+  .view-toggles .btn:hover:not(:disabled) {
+    border-color: var(--accent);
   }
   .ws-toggle:disabled {
     opacity: 0.5;
@@ -2525,7 +2634,6 @@
     font-size: 0.78rem;
     color: var(--text-muted);
     align-self: center;
-    margin-left: 0.4rem;
   }
   .run-reviewers-btn { margin-left: auto; }
 
@@ -3110,7 +3218,7 @@
   }
   .phase-btn.phase-active {
     background: var(--accent);
-    color: var(--surface, #fff);
+    color: var(--on-accent);
   }
   .phase-btn:focus-visible {
     outline: 2px solid var(--accent);
@@ -3285,7 +3393,7 @@
   }
   .sort-btn.sort-active {
     background: var(--accent);
-    color: var(--surface, #fff);
+    color: var(--on-accent);
   }
   .sort-btn:focus-visible {
     outline: 2px solid var(--accent);
