@@ -110,10 +110,19 @@ actually move it at the top of every run.
 A stage that cuts noise-rate on the first pair while holding recall on the second
 earned its place. One that cuts both is trading blindness for tidiness.
 
-**The measured baseline lives in [`BASELINE.md`](./BASELINE.md)**, and the two
-runs behind it are committed at `eval/baseline-run.json` and
-`eval/repeat-run.json` (the second one so the run-to-run jitter — which decides
-whether your delta means anything — is checkable rather than asserted).
+**The measured baseline lives in [`BASELINE.md`](./BASELINE.md)**, and the runs
+behind it are committed so every number is re-checkable without paying for
+inference:
+
+| run | file |
+| --- | --- |
+| 2026-09-23, 9 cases (current) | `eval/expanded-baseline-run.json`, `eval/expanded-repeat-run.json` |
+| 2026-09-22, 6 cases (superseded) | `eval/baseline-run.json`, `eval/repeat-run.json` |
+
+Each measurement has two runs so the run-to-run jitter — which decides whether
+your delta means anything — is checkable rather than asserted. On the current
+set that jitter is **±22pp on precision but zero on recall**, so recall is the
+signal to trust and precision deltas under ~20pp are not evidence.
 
 ### Re-scoring a stored run for free (`pnpm eval:rescore`)
 
@@ -544,8 +553,9 @@ row.
   throwaway Vite SSR server so the app's bundler-style imports resolve under Node.
 - `eval/rescore.mts` — re-scores a stored run under the variants, offline
   (`pnpm eval:rescore`).
-- `eval/BASELINE.md` + `eval/baseline-run.json` + `eval/repeat-run.json` — the
-  measured baseline and the two runs behind it.
+- `eval/BASELINE.md` — the measured baselines (current + the superseded one,
+  kept for comparison), with `eval/expanded-{baseline,repeat}-run.json` and
+  `eval/{baseline,repeat}-run.json` as the runs behind them.
 
 The scorer/harness/mock live under `src/lib/` so they run under the normal
 `pnpm test`. Their tests are `src/lib/eval/*.test.ts`.
