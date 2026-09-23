@@ -27,7 +27,11 @@ onto `.card`. Phase 3 closes the diff viewer in
 deliberately left open, and it confirms Batch 2B's suspicion about
 `SymbolPopover.svelte` — measured, that was a live bug. Its deferred item 4
 closes in [Phase 3, item 4 — measured, not changed](#p3-item4), which disproves
-one of the audit's own claims and ships a measurement instead of a change.
+one of the audit's own claims and ships a measurement instead of a change. The
+follow-up that measurement named — the finding cards running at 2.4x the
+comfortable measure — is taken in [the finding-card prose
+measure](#finding-measure), which constrains the prose and deliberately leaves
+the card, the diff column and the code alone.
 
 The screenshots in [`./shots/`](./shots/) are the **after** state of the whole
 tree, and **nothing in the set is stale any more**: all fourteen are re-captured
@@ -2031,6 +2035,12 @@ take the room is the real follow-up. It is deliberately NOT in this change:
 it is a component decision about the finding cards, it needs its own before/after,
 and bundling it would have made a one-line default change unreviewable.
 
+*(That follow-up is now taken — see [the finding-card prose
+measure](#finding-measure). The prose caps at 72ch on every surface and at both
+width settings; the card, the diff column and the code are untouched. It also
+found a surface this table missed: **Story mode at 171.7ch**, the widest of the
+lot, because its card is not inside the diff table.)*
+
 <a id="capture-script"></a>
 
 ## The capture script — the recipe, committed
@@ -2101,6 +2111,100 @@ dimensions, and the other eight files, are the signal. It also means re-running
 the capture always dirties them. The fix, if this ever becomes annoying, is to
 neutralise the sha in capture mode rather than to crop the footer out; it is
 left alone here because it is a real part of the page.
+
+---
+
+<a id="finding-measure"></a>
+
+## The finding-card prose measure — capped, and on the content
+
+The follow-up [`#fullwidth-default`](#fullwidth-default) named and deliberately
+did not take: "capping the prose measure while letting the diff take the room".
+Taken here, on the measurement.
+
+**The problem, re-measured before touching anything.** The harness reproduces
+that section's table exactly — 120.8 / 166.2ch for the 13.5px paragraph,
+127.9 / 175.9ch for `.skill-finding-body`, 111.7 / 152.5ch for the secondary
+list — which is what makes the after-numbers comparable. It also found a surface
+that table missed: **Story mode, at 171.7ch**, the widest of all, because its
+card is not inside the diff table and so is not even bounded by a `<td>`.
+
+**The tension, stated before it was resolved.** A finding card carries prose AND
+code in one box, and it lives inside the diff surface, which legitimately wants
+the whole window — that is *why* the cap was lifted for step 2. So the obvious
+move is the wrong one. What got capped is the **prose elements**:
+
+| capped (`--measure-prose`, 72ch) | deliberately NOT capped |
+|---|---|
+| `p`, `li`, `blockquote`, `h1`-`h4` in `.skill-finding-body` | the card — it anchors between two diff rows and hosts the chip header, the Fix block and the action row |
+| the same in `.fix-body` — the Fix block is prose around a snippet | `.skill-finding-body` — it wraps the markdown *including* its `<pre>` fences |
+| `.findings-popover-body` | `<pre>`, tables, images, mermaid — [A2](./refactoring-ui-principles.md): code sets its own measure |
+| | `.findings-popover-loc` — a `path:line` reference is code-adjacent |
+| | `.simple-toggle` — a 13-character button label is not a paragraph |
+
+This is [Batch 2C item 4](#b2c-item4)'s reasoning applied to a component instead
+of a page. 2C declined to *widen* a column because the prose in it was already
+too wide; the rubric's answer for narrow content in a wide area is to constrain
+the content, not to stretch or shrink the container (p.68-70). Capping the card
+would have been shrinking the container to suit part of its contents — and it
+would have passed a naive "is the prose ≤ 75ch" gate while quietly handing back
+the room the width setting bought.
+
+**Measured after**, built app, 1440x1000, `/demo`, both themes, both diff modes,
+both width settings:
+
+| surface | centered, before → after | full, before → after |
+|---|---|---|
+| inline in the diff (13.5px `p`) | 121.4ch → **72ch** | 166.7ch → **72ch** |
+| per-file secondary group | 120.8ch → **72ch** | 166.2ch → **72ch** |
+| Story, file-level card | 126.4ch → **72ch** | 171.7ch → **72ch** |
+| Story, inline in the diff | 124.8ch → **72ch** | 170.2ch → **72ch** |
+| Story, secondary group | 124.3ch → **72ch** | 169.6ch → **72ch** |
+| reviewer-chip popover | 42.7ch (already inside) | 42.7ch — cap is latent, see below |
+| the card itself | 131.4ch — **unchanged** | 179.4ch — **unchanged** |
+| a `<pre>` in a finding | 120.8ch — **unchanged** | 166.2ch — **unchanged** |
+
+The **Fix block** is measured separately and honestly: the demo fixture carries
+no `suggestedFix`, so there is nothing to photograph in place. Against a block
+injected into a real rendered card, its 12.3px prose caps at **72ch** (531.4px)
+while the fence beside it holds **110.2ch** and keeps `overflow-x: auto`. That
+is the same split as the body, which is the point of measuring it at all.
+
+The last two rows are the point: the prose came in, the container and the code
+did not move. In split panes at `centered` the paragraph measures **58.1ch** and
+the cap does not bind at all — it is a `max-width`, so it only ever removes
+excess.
+
+**Three notes worth keeping.**
+
+*The popover cap is latent, and that is still worth declaring.* The demo
+fixture's body lands at 42.7ch, so nothing visibly changes there today. But the
+popover box maxes at `40rem`, which at 0.82rem is ~81ch, so a longer finding
+*could* run past the measure. Capping it now is cheaper than rediscovering it.
+
+*One token, not a number per call site* — the same reasoning
+[B4](./refactoring-ui-principles.md) gives the recede token. `--measure-prose`
+is stated in `ch`, so one declaration caps a 12.3px Fix paragraph, a 13.5px
+markdown paragraph and a 15px list at 72 characters **each**. 72ch is not a new
+number: `.prose`/`.prose-md` already used that literal, and it is re-pointed at
+the token here so the two cannot drift. It sits just inside the 74ch 2C called
+the top of comfortable.
+
+*The gate is mutation-tested, not assumed.* `e2e/finding-measure.spec.ts` holds
+the measure in characters — including a test that moves the root font-size under
+the rendered page and requires the same ch at a different pixel width, so a
+future type-scale change cannot silently widen it. Deleting the one `max-width`
+declaration turns all eight assertions red at 120.8 / 166.2ch. Because the demo
+fixture's findings contain no code fences and no Fix block, the code-exemption
+test **injects** one into a real rendered card and lets the real stylesheet
+decide — asserting the selector list would test the declaration rather than the
+rendered result, which is the failure mode the batches below keep paying for.
+
+**Deferred, deliberately.** The shots in [`./shots/`](./shots/) are pinned to
+`diffWidth: 'centered'` and are not re-captured here: the visible change at
+centered is real but small (a finding paragraph wrapping at 72ch instead of
+121ch), and re-shooting would dirty the six build-SHA-bearing files described in
+[the capture-script note](#capture-script) for one component's wrap points.
 
 ---
 
