@@ -426,6 +426,12 @@ Practical rules for this set:
    (#242) are still unmeasured** — the bridge's `/v1/infer` runs the CLI with
    `--tools ""`, so the tools those features depend on do not exist on this
    transport. Unchanged from Measurement 1.
+   > **SUPERSEDED BY CAPABILITY (2026-09-23, #266 / #267).** The premise stopped
+   > being true after this measurement was taken: bridge 0.3.0 added
+   > `InferRequest.agentic`, which runs the CLI *with* read-only tools. The
+   > limitation above is a correct record of what the transport did on the date
+   > given — it is no longer a statement about the transport today. Measured in
+   > [Measurement 4](#measurement-4--2026-09-23--grounded-verification-deep-review-and-local-grounding).
 5. **Dismissal calibration (#230) is still unmeasured** — the fixtures are
    synthetic and have no dismissal ledger.
 6. **The mootness gate has still never been observed in its design regime**, for
@@ -649,6 +655,11 @@ State these next to any number quoted from this file.
    crippled prompt, not the feature. Needs an API-key transport driving the
    app's real agentic harness.
 4. **Local grounding (#242)** has the same problem, for the same reason.
+   > **SUPERSEDED BY CAPABILITY (2026-09-23, #266 / #267)** — items 3 and 4 both.
+   > Bridge 0.3.0's `InferRequest.agentic` runs the CLI with read-only tools, so
+   > the "those tools do not exist on this transport" premise no longer holds.
+   > The text stays as the correct record of 2026-09-22. Measured in
+   > [Measurement 4](#measurement-4--2026-09-23--grounded-verification-deep-review-and-local-grounding).
 5. **Dismissal calibration (#230) was not measured.** `skillReviewPrompt` takes
    a `calibration` argument built from the user's real dismissal ledger. These
    fixtures are synthetic and have no ledger; inventing one would have produced

@@ -31,7 +31,8 @@ findings against what a good reviewer *should* and *should not* flag.
 >   the plumbing works. It says **nothing** about real model quality.
 > - **`--live` (you run this locally, needs an API key):** actually calls the
 >   configured provider and measures **real model quality** against the golden
->   set. Add `--deep` to also exercise the agentic deep-review guidance.
+>   set. Add `--deep` / `--grounded` to exercise the tool-using paths — both
+>   need the local bridge (>= 0.3.0) served from a materialized fixture tree.
 >
 > The golden set is **small and seed-sized** and is meant to **grow** (see below).
 > Treat the metrics as a directional signal, not a benchmark leaderboard.
@@ -54,8 +55,16 @@ pnpm bridge -- --port 7739 --token-file .bridge-token      # in another terminal
 BRIDGE_URL=http://127.0.0.1:7739 BRIDGE_TOKEN_FILE=.bridge-token \
   pnpm eval -- --live --matrix --concurrency 3
 
-# Live + agentic deep-review guidance
-DEEPSEEK_API_KEY=sk-... pnpm eval -- --live --deep
+# Tool-using paths — deep review (#82) and grounded verification (#229).
+# These need the BRIDGE (>= 0.3.0), served from a tree that actually contains
+# the fixtures' files. An API key cannot reach a working tree, and the harness
+# refuses the run rather than measuring a tool-less pass under a "deep" label.
+node eval/materialize-golden.mts                           # → eval/.golden-tree
+node bridge/dist/cli.js --root eval/.golden-tree --port 7739 --token-file .bridge-token
+BRIDGE_URL=http://127.0.0.1:7739 BRIDGE_TOKEN_FILE=.bridge-token \
+  BRIDGE_VERIFY_CLIS=codex,codex \
+  pnpm eval -- --live --matrix --grounded          # verifiers get tools
+  # …--deep                                        # generator gets tools
 
 # Cross-model verification (Plan M): measure precision/recall/noise-rate WITH
 # the adversarial verify pass applied (demoted findings dropped before scoring)
@@ -249,16 +258,57 @@ BRIDGE_URL=http://127.0.0.1:7739 BRIDGE_TOKEN_FILE=.bridge-token \
 | `BRIDGE_VERIFY_CLIS` | Comma-separated verifier CLIs. Defaults to the *other* vendor's CLI plus the generator's. **Repeat a CLI to reach the two-verifier minimum** (e.g. `codex,codex`). |
 | `BRIDGE_TIMEOUT_MS` | Per-call budget. Default 240000. |
 
-Two things the bridge **cannot** measure, and will not pretend to:
+#### Tools over the bridge (`--deep`, `--grounded`)
 
-- **Deep review (`--deep`) and grounded verification (#229).** `/v1/infer` runs
-  the CLI with `--tools ""` — every built-in tool disabled, by design, so the
-  route cannot touch the repo. Both features instruct the model to verify claims
-  with repo tools and to *drop whatever it cannot verify*. Over the bridge those
-  tools do not exist, so a run would measure a crippled prompt, not the feature.
-  Use an API-key transport with the app's real agentic harness for those.
+This section used to say the bridge **could not** measure deep review or
+grounded verification, because `/v1/infer` ran the CLI with `--tools ""`. That
+was true until bridge **0.3.0** (#266), which added `InferRequest.agentic`: the
+CLI runs with its own read-only tools — `claude` narrowed to `Read`/`Glob`/
+`Grep` by name, `codex` under its read-only sandbox — and reports back what they
+did. Both features are measurable here now, with two conditions.
+
+**1. Serve the bridge from a materialized fixture tree, not from review123.**
+The golden fixtures are synthetic: `08-quiet-low` reviews `src/lib/range.ts`,
+which does not exist in this repo. Point an agentic bridge at review123 itself
+and every lookup returns "not found" — and since grounded verification tells the
+verifier to *drop what it cannot confirm*, the panel would refute real defects
+for a reason that has nothing to do with grounding.
+
+```bash
+node eval/materialize-golden.mts                     # → eval/.golden-tree
+node bridge/dist/cli.js --root eval/.golden-tree \
+  --port 7739 --token-file .bridge-token
+BRIDGE_URL=http://127.0.0.1:7739 BRIDGE_TOKEN_FILE=.bridge-token \
+  BRIDGE_VERIFY_CLIS=codex,codex \
+  pnpm eval -- --live --matrix --grounded --concurrency 3
+```
+
+**2. The harness gates on the live capability, and checks the answer.** `agentic`
+is an *additive* request field: a bridge older than 0.3.0 does not reject it, it
+**ignores** it and answers `200` with a perfectly good tool-less review. So the
+harness reads `capabilities.inferAgentic` from `/v1/health` and **refuses the
+run** rather than mislabelling that answer — and separately counts how many
+responses actually carried an `InferResponse.agentic` report. One unhonoured
+request and the run does not get to call itself grounded. See
+`src/lib/eval/bridgeAgentic.ts`.
+
+| Flag | Feature | Who gets tools |
+| --- | --- | --- |
+| `--deep` | Deep review (#82) | the **generator** |
+| `--grounded` | Grounded verification (#229) | the **verifier panel** |
+
+They are separate flags deliberately: one flag for both could never tell you
+which feature moved a number.
+
+What the bridge still **cannot** measure, and will not pretend to:
+
 - **A genuinely cross-vendor verifier panel**, if you point both verifier slots
   at the same CLI. Two calls to one model are two samples, not two opinions.
+- **Grounding against a real repo.** The materialized tree is the head state of
+  several unrelated synthetic PRs in one directory — no callers, no history, no
+  dependencies. A verifier can confirm a claim about the changed files and very
+  little else. Grounding measured here is a *lower* bound on grounding against a
+  real working tree.
 
 Known wrinkle: the `claude` CLI reliably times out on the multi-finding verify
 payload through `/v1/infer`, while `codex` answers it in ~50s. `codex,codex` is
