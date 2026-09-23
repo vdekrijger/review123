@@ -8,8 +8,9 @@
  * #242 the app grew a stack of passes that sit BETWEEN generation and what a
  * human actually sees —
  *
- *   generation  →  cross-model verification  →  triage (rank into tiers)
- *               →  simplify (rewrite bodies)  →  the inline surface
+ *   generation  →  cross-model verification  →  cross-reviewer convergence
+ *               →  triage (rank into tiers)   →  simplify (rewrite bodies)
+ *               →  the inline surface
  *
  * Scoring the raw generation therefore measures a surface nobody looks at, and
  * a single aggregate number cannot tell the difference between "the filters
@@ -57,6 +58,31 @@ export interface EvalFinding extends ProducedFinding {
   mergedFrom?: AbsorbedFinding[]
   /** Convergence: the user's own draft already made this point (#206). */
   coveredByDraft?: { path: string; line: number }
+  /**
+   * Convergence: this finding was ABSORBED into another one (whose id is given)
+   * by the convergence pass. The harness attaches the merge rather than applying
+   * it — the absorbed sibling stays in the list so the `convergence` stage can
+   * be switched OFF honestly — so a variant with convergence ON drops these,
+   * and a variant with it OFF keeps them and strips `mergedFrom`.
+   */
+  absorbedBy?: string
+  /**
+   * Convergence: this finding's own positional id (`f0…fN`) in the enumeration
+   * the pass ran over. Present on every finding convergence considered. It is
+   * what lets the stage check that an absorbed finding's PRIMARY is still on
+   * the surface before dropping it.
+   */
+  convergenceId?: string
+  /**
+   * Convergence: the MERGED card's severity — `applyConvergence` raises the
+   * primary to the max across its cluster. Carried separately so switching the
+   * stage off restores the reviewer's own severity, and so dropping an absorbed
+   * HIGH can never look like a lost finding when the merge would have promoted
+   * the primary to HIGH.
+   */
+  mergedSeverity?: 'high' | 'medium' | 'low'
+  /** Convergence: the merged card's verification (strongest across the cluster). */
+  mergedVerification?: FindingVerification
 }
 
 /** The task-key prefix the separate tests pass (#237) writes. */
@@ -85,6 +111,19 @@ export interface PipelineStages {
    * back, and conflating those two would make this table lie.
    */
   crossVerify: boolean
+  /**
+   * Cross-REVIEWER convergence (#206). ON: findings the convergence pass
+   * absorbed into a sibling are dropped, and the surviving primary keeps its
+   * `mergedFrom` — which is what makes `isConvergent` true and lets triage keep
+   * a MEDIUM/LOW inline on independent agreement alone. OFF: nothing is
+   * absorbed (both reviewers' cards stand) and `mergedFrom` is stripped, which
+   * is the honest model of "the convergence pass never ran".
+   *
+   * Only ever non-inert on a MULTI-PERSONA fixture: with one reviewer there is
+   * nothing to converge, which is precisely why the 2026-09-22 baseline could
+   * not measure this stage at all.
+   */
+  convergence: boolean
   /**
    * findingRank triage (#226). ON: only the inline `primary` tier is scored —
    * the tier a human actually sees without clicking "show all". OFF: every
@@ -123,16 +162,32 @@ export interface PipelineVariant {
 
 const OFF: PipelineStages = {
   crossVerify: false,
+  convergence: false,
   triage: false,
   mootnessGate: false,
   simplify: false,
   testsPass: false,
 }
 
+/** The app's operating point: every post-generation stage on. */
+const ALL_ON: PipelineStages = {
+  crossVerify: true,
+  convergence: true,
+  triage: true,
+  mootnessGate: true,
+  simplify: true,
+  testsPass: true,
+}
+
 export const PIPELINE_VARIANTS: readonly PipelineVariant[] = [
   { key: 'generate-only', label: 'raw generation (pre-#226 surface)', stages: { ...OFF } },
   { key: '+tests-pass', label: 'tests pass added (#237)', stages: { ...OFF, testsPass: true } },
   { key: '+verify', label: 'cross-model verification (#229)', stages: { ...OFF, crossVerify: true } },
+  {
+    key: '+convergence',
+    label: 'cross-reviewer convergence (#206)',
+    stages: { ...OFF, convergence: true },
+  },
   { key: '+triage', label: 'triage alone, unverified (#226)', stages: { ...OFF, triage: true, mootnessGate: true } },
   {
     key: 'verify+triage/moot-off',
@@ -144,15 +199,11 @@ export const PIPELINE_VARIANTS: readonly PipelineVariant[] = [
     label: 'verify + triage + mootness gate (#228)',
     stages: { ...OFF, crossVerify: true, triage: true, mootnessGate: true },
   },
-  {
-    key: 'app-default',
-    label: 'everything on — the inline surface today',
-    stages: { crossVerify: true, triage: true, mootnessGate: true, simplify: true, testsPass: true },
-  },
+  { key: 'app-default', label: 'everything on — the inline surface today', stages: { ...ALL_ON } },
   {
     key: 'app-default/show-all',
     label: 'everything on, "show all findings"',
-    stages: { crossVerify: true, triage: false, mootnessGate: true, simplify: true, testsPass: true },
+    stages: { ...ALL_ON, triage: false },
   },
   // Single-stage knock-outs from the app's operating point. A stage's effect at
   // the END of the pipeline is not its effect in isolation — triage barely moves
@@ -161,17 +212,22 @@ export const PIPELINE_VARIANTS: readonly PipelineVariant[] = [
   {
     key: 'app-default/simplify-off',
     label: 'everything on except simplify (#220)',
-    stages: { crossVerify: true, triage: true, mootnessGate: true, simplify: false, testsPass: true },
+    stages: { ...ALL_ON, simplify: false },
   },
   {
     key: 'app-default/moot-off',
     label: 'everything on except the mootness gate (#228)',
-    stages: { crossVerify: true, triage: true, mootnessGate: false, simplify: true, testsPass: true },
+    stages: { ...ALL_ON, mootnessGate: false },
+  },
+  {
+    key: 'app-default/convergence-off',
+    label: 'everything on except cross-reviewer convergence (#206)',
+    stages: { ...ALL_ON, convergence: false },
   },
   {
     key: 'app-default/tests-off',
     label: 'everything on except the tests pass (#237)',
-    stages: { crossVerify: true, triage: true, mootnessGate: true, simplify: true, testsPass: false },
+    stages: { ...ALL_ON, testsPass: false },
   },
 ]
 
@@ -205,8 +261,9 @@ function toRankable(f: EvalFinding): RankableFinding & { __source: EvalFinding }
  * return the flat list a human would actually be shown — which is what the
  * scorer then grades.
  *
- * Order matches the app: verification decides what survives, triage decides
- * what is inline, simplify decides what the text reads like.
+ * Order matches the app: verification decides what survives, convergence
+ * collapses the reviewers that agree, triage decides what is inline, simplify
+ * decides what the text reads like.
  */
 export function surfaceFindings(
   findings: readonly EvalFinding[],
@@ -224,7 +281,44 @@ export function surfaceFindings(
     working = working.map(({ verification: _v, ...rest }) => rest as EvalFinding)
   }
 
-  // 3. The mootness gate (#228) is a sub-switch of triage.
+  // 3. Cross-reviewer convergence (#206). The app runs it AFTER each reviewer's
+  //    findings have been cross-verified and BEFORE anything is ranked, so the
+  //    merge is an INPUT to triage, not a competitor with it.
+  if (stages.convergence) {
+    // An absorbed finding is only dropped while the primary that represents it
+    // is still HERE. If an earlier stage removed the primary — the tests pass
+    // switched off, or verification demoting it — the absorbed sibling is
+    // restored instead, because the merge is supposed to destroy nothing. Without
+    // this, a variant could lose a real finding that the app would still show,
+    // and the table would report a recall drop the app never had.
+    const present = new Set(
+      working.flatMap((f) => (f.convergenceId !== undefined ? [f.convergenceId] : [])),
+    )
+    working = working
+      .filter((f) => f.absorbedBy === undefined || !present.has(f.absorbedBy))
+      .map((f) => {
+        // The merge's own outputs: max severity across the cluster, and its
+        // strongest verification — the latter only when verification actually
+        // ran, so convergence can never resurrect a pass that is switched off.
+        const severity = f.mergedSeverity ?? f.severity
+        const verification = stages.crossVerify ? (f.mergedVerification ?? f.verification) : f.verification
+        if (severity === f.severity && verification === f.verification) return f
+        return { ...f, severity, ...(verification ? { verification } : {}) }
+      })
+  } else {
+    working = working.map(
+      ({
+        mergedFrom: _m,
+        absorbedBy: _a,
+        convergenceId: _c,
+        mergedSeverity: _s,
+        mergedVerification: _v,
+        ...rest
+      }) => rest as EvalFinding,
+    )
+  }
+
+  // 4. The mootness gate (#228) is a sub-switch of triage.
   if (!stages.mootnessGate) {
     working = working.map((f) => {
       const v = withoutWorth(f.verification)
@@ -232,7 +326,7 @@ export function surfaceFindings(
     })
   }
 
-  // 4. Triage (#226) — keep only what renders inline.
+  // 5. Triage (#226) — keep only what renders inline.
   let surfaced: EvalFinding[]
   if (stages.triage) {
     surfaced = rankFindings(working.map(toRankable)).primary.map((r) => r.__source)
@@ -240,7 +334,7 @@ export function surfaceFindings(
     surfaced = working
   }
 
-  // 5. Simplify (#220) — score the text the card actually shows.
+  // 6. Simplify (#220) — score the text the card actually shows.
   return surfaced.map((f) => ({
     file: f.file,
     line: f.line,

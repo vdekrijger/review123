@@ -1,19 +1,294 @@
 # AI-review quality baseline
 
-The first measured baseline for review123's reviewer output. Everything below
-comes from runs actually executed on the date given; nothing is extrapolated.
+The measured baseline for review123's reviewer output. Everything below comes
+from runs actually executed on the date given; nothing is extrapolated.
 
-**Why this file exists.** Between 2026-06-15 and 2026-09-22 eight PRs shipped
-claiming to improve finding quality — convergence (#206), simplify (#220),
-findingRank triage (#226), solutions + the mootness gate (#228), grounded
-verification (#229), dismissal calibration (#230), phase-scoped reviewers + a
-separate tests pass (#237) and local grounding (#242). The eval harness existed
-the whole time and was never run against any of them. This is the number the
-ninth change has to beat.
+**Two measurements live in this file.** The current one is
+[Measurement 2 (2026-09-23)](#measurement-2--2026-09-23--the-expanded-9-case-set),
+against the expanded 9-case golden set. The one it replaces,
+[Measurement 1 (2026-09-22)](#measurement-1--2026-09-22--the-6-case-seed-set-superseded),
+is kept verbatim underneath: it is the number eight quality PRs were never
+measured against, and deleting it would delete the evidence that the second
+measurement is an improvement on the *instrument*, not just on the numbers.
 
 ---
 
-## Run metadata
+## The headline, in one line
+
+**Recall finally moved, and it moved downwards at the app's own operating
+point.** The reviewer model finds **9 of 9** known-real defects at raw
+generation, in both runs. What a user actually sees inline — variant
+`app-default` — is **8 of 9**, in both runs. **The post-generation pipeline
+costs one real defect out of nine.**
+
+Measurement 1 reported recall 4/4 in all 22 of its measurements and said, in
+its own honesty section, that the set "could not have detected over-filtering
+if it were happening". It was happening.
+
+---
+
+## Measurement 2 — 2026-09-23 · the expanded 9-case set
+
+### Run metadata
+
+| | |
+| --- | --- |
+| Date | 2026-09-23 |
+| Commit | `9974879` (branch `feat/golden-set-expansion`) |
+| Golden set | **9 cases — 9 known-real findings, 17 known-noise** (was 6 / 4 / 11) |
+| Transport | local bridge (`POST /v1/infer`) — no API key, subscription-billed |
+| Generator | `claude` CLI, via the bridge |
+| Verifiers | `codex` CLI ×2 (`BRIDGE_VERIFY_CLIS=codex,codex`) |
+| Mode | `--live --matrix --concurrency 3` |
+| Wall time | ~11.5 min (run 1), ~12.5 min (run 2) |
+| Runs | **two** identical runs on the same commit — `expanded-baseline` and `expanded-repeat` |
+
+Same transport and same verifier configuration as Measurement 1, deliberately,
+so the two are comparable. Reproduce with:
+
+```bash
+node bridge/dist/cli.js --port 7739 --token-file .bridge-token
+BRIDGE_URL=http://127.0.0.1:7739 BRIDGE_TOKEN_FILE=.bridge-token \
+  BRIDGE_VERIFY_CLIS=codex,codex \
+  pnpm eval -- --live --matrix --concurrency 3 --label expanded-baseline
+pnpm eval:rescore eval/expanded-baseline-run.json -- --per-case   # free, no model calls
+```
+
+### What changed about the instrument
+
+Three cases were added, chosen so they **can fail**:
+
+| case | the defects | why it can detect what the seed set could not |
+| --- | --- | --- |
+| `07-quiet-medium` | a TTL default that silently changed units (5 minutes → 5 ms), and a `slice(0, count - 1)` bound | MEDIUM is the tier where `findingTier` weighs verification |
+| `08-quiet-low` | an error message interpolating `${min}` twice, and a `catch` that discards its caught error | a non-convergent LOW is **always** secondary — the sharpest probe in the set |
+| `09-two-reviewers` | one dropped `await`, raised by two personas on different lines in different words | the first multi-persona fixture, so convergence (#206) has something to merge |
+
+All four of Measurement 1's real findings are HIGH, and `findingTier` never
+demotes a non-moot HIGH. That is why its recall could not move.
+
+The harness also gained a real `convergence` stage: it now runs the app's own
+convergence pass and **attaches** the merge rather than applying it, so the
+stage is a genuine on/off switch. Stored runs stay re-scorable —
+`pnpm eval:rescore eval/baseline-run.json` reproduces every one of
+Measurement 1's published numbers exactly.
+
+### The headline: the app's inline surface today
+
+Variant `app-default` — every post-generation stage on, which is what a user
+sees without clicking "show all findings". Both runs shown; where they
+disagree, the disagreement is the finding.
+
+| case | findings (1 / 2) | recall (1 / 2) | precision (1 / 2) | noise-rate (1 / 2) |
+| --- | --- | --- | --- | --- |
+| `01-real-bug` | 4 / 5 | 100% / 100% | 100% / 50% | 0% / 0% |
+| `02-clean-pr` | 0 / 0 | — (0/0) | 100% / 100% | 0% / 0% |
+| `03-noise-trap` | 0 / 0 | — (0/0) | 100% / 100% | 0% / 0% |
+| `04-refactor` | 4 / 6 | 100% / 100% | 33% / 50% | 0% / 0% |
+| `05-security` | 4 / 4 | 100% / 100% | 33% / 50% | **50%** / 0% |
+| `06-perf` | 4 / 6 | 100% / 100% | 100% / 33% | 0% / **100%** |
+| `07-quiet-medium` | 8 / 8 | 100% / 100% (2/2 both) | 67% / 50% | 0% / 0% |
+| `08-quiet-low` | 4 / 5 | **50% / 50%** (1/2 both) | 100% / 33% | 0% / 0% |
+| `09-two-reviewers` | 8 / 8 | 100% / 100% | 100% / 25% | 0% / 0% |
+| **aggregate** | **36 / 42** | **89% / 89%** (8/9 both) | **62% / 40%** | **6% / 6%** (1/17) |
+
+`02-clean-pr` and `03-noise-trap` still end at **zero findings** in both runs —
+the reviewer says nothing on a clean PR and does not take the noise bait. That
+half of the result is unchanged and good.
+
+### Stage-by-stage: what each filter costs and buys
+
+One generation per case, scored under each combination. Both runs.
+
+| variant | findings (1 / 2) | **recall (1 / 2)** | precision (1 / 2) | noise-rate (1 / 2) |
+| --- | --- | --- | --- | --- |
+| `generate-only` | 52 / 54 | **100% / 100%** (9/9 both) | 26% / 26% | 29% / 29% (5/17) |
+| `+tests-pass` | 70 / 72 | **100% / 100%** | 21% / 21% | 29% / 29% |
+| `+verify` | 40 / 45 | **89% / 100%** | 36% / 38% | 12% / 6% |
+| `+convergence` | 51 / 52 | **100% / 100%** | 26% / 27% | 29% / 29% |
+| `+triage` | 48 / 50 | **100% / 89%** | 27% / 27% | 29% / 29% |
+| `verify+triage/moot-off` | 30 / 35 | **89% / 89%** | 53% / 50% | 12% / 6% |
+| `verify+triage` | 29 / 35 | **89% / 89%** | 57% / 50% | 12% / 6% |
+| `app-default` | 36 / 42 | **89% / 89%** | 62% / 40% | 6% / 6% |
+| `app-default/show-all` | 46 / 54 | **89% / 100%** | 36% / 31% | 6% / 6% |
+| `app-default/simplify-off` | 36 / 42 | **89% / 100%** | 53% / 47% | 12% / 6% |
+| `app-default/moot-off` | 37 / 42 | **89% / 89%** | 57% / 40% | 6% / 6% |
+| `app-default/convergence-off` | 36 / 42 | **89% / 89%** | 53% / 42% | 6% / 6% |
+| `app-default/tests-off` | 29 / 34 | **89% / 89%** | 73% / 50% | 6% / 6% |
+
+### The finding that gets eaten, exactly
+
+Both runs lose the **same** defect: `08-quiet-low` line 13 — the `catch` in
+`parsePort` that discards its caught `err` and rethrows a bare message,
+throwing away which bound was violated. The model **found it in both runs**,
+from both the implementation and the tests pass. It is removed by a different
+filter each time:
+
+- **Run 1 — cross-model verification removed it.** The reviewer rated it
+  MEDIUM; the codex panel voted `confirmedBy 1/3`, `surfaced=false`,
+  `worthFlagging=false`. It disappears at `+verify` and never comes back —
+  note `app-default/show-all` stays at 89%, because "show all findings" only
+  undoes triage, not verification.
+- **Run 2 — triage removed it.** Here the panel was *unanimous*:
+  `confirmedBy 3/3`, `surfaced=true`, `worthFlagging=true`. The reviewer rated
+  it LOW, and `findingTier`'s rule for LOW is `if (!convergent) return
+  'secondary'` — a lone LOW is collapsed **no matter how strongly it was
+  verified**. `app-default/show-all` recovers it to 100%, which confirms triage
+  as the cause.
+
+Run 2's mechanism is the more important of the two, because it is not model
+noise: it is a deterministic policy in `findingRank.ts`. **A real defect that
+three of three verifiers confirm as real and worth flagging is still hidden
+from the inline surface if one reviewer rated it LOW.** Whether that is the
+right trade is a product decision — this file only reports that the trade is
+being made, and how often. Nothing was tuned in response to it.
+
+### Read-outs
+
+**Cross-model verification is still the biggest noise win, and it now has a
+measured recall cost.** Noise-rate 29% → 12% / 6% in the two runs, findings
+52 → 40 and 54 → 45. That reproduces Measurement 1's headline result. What is
+new is the other side of the ledger: in run 1 it also removed a real defect.
+One of two runs, so treat the cost as *demonstrated to be possible*, not as a
+rate.
+
+**Triage's recall cost is structural, not stochastic.** `+triage` alone: recall
+100% in run 1 and 89% in run 2. The rule that produced the run-2 drop is
+readable in the source and will fire on any non-convergent LOW. Triage is still
+the second-biggest precision win once verification has run (`+verify` 36% →
+`verify+triage` 57% in run 1; 38% → 50% in run 2), so this is a trade, not a
+defect — but it is now a *measured* trade.
+
+**Simplify (#220) broke one match in run 2, and did nothing in run 1.**
+`app-default/simplify-off` is 100% against `app-default` at 89% in run 2.
+*Read this one carefully:* the simplified text still describes the defect
+perfectly well to a human — what it lost was enough token overlap with the
+golden label to clear the matcher's 0.12 Jaccard bar. So this is partly an
+instrument-resolution artifact. It is still worth knowing, because it is
+exactly the failure mode the rewrite risks: the rewrite dropped the technical
+anchors the label was written around. Measurement 1 concluded simplify had "no
+detectable effect on matching"; with more findings in flight, it has one.
+
+**The mootness gate (#228) is still very nearly inert.** `app-default` vs
+`app-default/moot-off`: 36 vs 37 findings in run 1, identical in run 2; recall
+unchanged in both. It removed exactly one finding across two runs. Measurement
+1's caveat still applies and still explains it — with two instances of the same
+verifier model a finding's confirm count is effectively 1/3 or 3/3, and the 2/3
+middle where the gate is designed to bite never occurs.
+
+**Convergence (#206) is measurable for the first time, and shows no metric
+effect.** On `09-two-reviewers` the pass formed **3 clusters, absorbing 9 of 13
+reviewer findings**, every cluster spanning both personas — so the mechanism
+demonstrably works. But `app-default` and `app-default/convergence-off` have
+identical finding counts (36/36, 42/42) and identical recall in both runs;
+precision differs by +9pp and −2pp, which is well inside this set's jitter.
+Honest read: **convergence deduplicates cards without changing what is found or
+hidden, measured on one fixture.** One multi-persona case is not enough to
+generalise.
+
+**The separate tests pass (#237) costs precision, reproducibly.** At the
+operating point it adds 7-8 findings for −11pp and −10pp of precision
+(`app-default` 62%/40% vs `app-default/tests-off` 73%/50%) with recall
+unchanged. That is a stronger version of Measurement 1's "no measurable
+benefit", now in the same direction twice. The caveat also survives: the golden
+set still has almost no test files, so this measures a tests reviewer with
+nothing to review.
+
+### Run-to-run variance — and an inversion worth noting
+
+| quantity | run 1 | run 2 | read |
+| --- | --- | --- | --- |
+| recall, `generate-only` | 9/9 | 9/9 | **stable** |
+| recall, `app-default` | 8/9 | 8/9 | **stable — and it is not 9/9** |
+| which stage ate it | verification | triage | **the loss is stable; the mechanism is not** |
+| noise-rate, `app-default` | 6% | 6% | stable (1 of 17) |
+| raw findings | 52 | 54 | ±4% volume |
+| precision, `app-default` | 62% | 40% | **±22pp of jitter** |
+
+**The instrument has inverted since Measurement 1.** There, recall was
+perfectly stable *because it was insensitive*, and precision jittered ±8pp.
+Here recall is stable *and load-bearing* — the same defect is lost in both runs
+— while precision jitter has grown to **±22pp**, because precision is dominated
+by unmatched findings and the raw volume is larger.
+
+Practical rules for this set:
+
+- **Recall is now the trustworthy signal.** One real finding = 11pp. A recall
+  move that reproduces across two runs is evidence.
+- **Precision deltas under ~20pp are not evidence** on this set. That is worse
+  than Measurement 1's ~8pp rule and it invalidates finer precision readings.
+- **Noise-rate moves in 5.9pp steps** (17 labels), better resolution than the
+  seed set's 9pp.
+
+### What this baseline still canNOT tell you
+
+1. **Nine real findings is still small.** One missed finding is 11% of recall.
+2. **The recall loss rests on one case.** `08-quiet-low` is the only case that
+   loses anything, in both runs. The result "the pipeline costs a real defect"
+   is well-evidenced for *this class* of defect (a genuine, low-severity, easily
+   dismissed one) and is not yet a rate.
+3. **Convergence is measured on exactly one fixture.** Its "no metric effect"
+   read-out is weak for that reason.
+4. **Grounded verification (#229), deep review (`--deep`) and local grounding
+   (#242) are still unmeasured** — the bridge's `/v1/infer` runs the CLI with
+   `--tools ""`, so the tools those features depend on do not exist on this
+   transport. Unchanged from Measurement 1.
+5. **Dismissal calibration (#230) is still unmeasured** — the fixtures are
+   synthetic and have no dismissal ledger.
+6. **The mootness gate has still never been observed in its design regime**, for
+   the verifier-panel reason above.
+7. **Simplify's recall effect is entangled with the matcher.** Separating "the
+   rewrite lost the point" from "the rewrite lost the tokens" needs a human
+   read, not a Jaccard score.
+
+### The mock baseline (harness mechanics only)
+
+`pnpm eval` with no flags, same commit: recall 100% (9/9), precision 82%,
+noise-rate 6% (1/17), 23 findings, PASS. This proves the scoring and matching
+plumbing works. It says nothing about model quality — the "model" is a scripted
+stub.
+
+### Verdict
+
+Measured on this set, on this date, with this transport:
+
+- **The pipeline costs one real defect in nine, at its own operating point,
+  reproducibly.** That is the result the expanded set was built to be able to
+  produce, and it is the first time the harness has produced it.
+- **Cross-model verification: still the largest noise win** (29% → 6-12%), now
+  with a demonstrated recall cost in one run of two.
+- **Triage: a real precision win downstream of verification, with a structural
+  recall cost** — every non-convergent LOW is collapsed regardless of
+  verification strength.
+- **Simplify: one broken match in two runs**, at least partly a matcher artifact.
+- **The mootness gate: still effectively inert** under this verifier config.
+- **Convergence: now measurable, merges as designed, no metric effect on one
+  fixture.**
+- **The tests pass: a reproducible precision cost with no measured benefit**, on
+  a set with almost no test files.
+
+No threshold, prompt or ranking rule was changed in response to any of this.
+The next decision — whether `findingTier` should bury a unanimously-verified
+LOW — belongs to the repo owner, not to the instrument.
+
+---
+
+## Measurement 1 — 2026-09-22 · the 6-case seed set (superseded)
+
+*Kept verbatim. This is the baseline the eight quality PRs of 2026-06..09 were
+never measured against, and the one whose flat 4/4 recall motivated the expanded
+set. Its numbers are still reproducible from the committed run:*
+`pnpm eval:rescore eval/baseline-run.json`.
+
+**Why this file was written.** Between 2026-06-15 and 2026-09-22 eight PRs
+shipped claiming to improve finding quality — convergence (#206), simplify
+(#220), findingRank triage (#226), solutions + the mootness gate (#228),
+grounded verification (#229), dismissal calibration (#230), phase-scoped
+reviewers + a separate tests pass (#237) and local grounding (#242). The eval
+harness existed the whole time and was never run against any of them. This is
+the number the ninth change had to beat.
+
+### Run metadata
 
 | | |
 | --- | --- |
@@ -39,7 +314,7 @@ node eval/rescore.mts --per-case     # re-score the stored run, no model calls
 
 ---
 
-## The headline: the app's inline surface today
+### The headline: the app's inline surface today
 
 Variant `app-default` — every post-generation stage on, which is what a user
 sees without clicking "show all findings". Run 1; see *Run-to-run variance* for
@@ -70,7 +345,7 @@ surfaces matches no label at all — 4 unmatched findings against 4 real ones.
 
 ---
 
-## Stage-by-stage: did the filtering help, or just hide things?
+### Stage-by-stage: did the filtering help, or just hide things?
 
 One generation per case, scored under each combination. Rows below the first are
 cumulative unless the key says `/x-off`, which knocks a single stage out of
@@ -95,7 +370,7 @@ Both runs are shown. Where they disagree, the disagreement *is* the finding.
 Noise-rate moves in steps of 9pp (one of 11 noise labels); precision jitters by
 about 4-8pp between runs. **Treat anything under ~8pp of precision as noise.**
 
-### Read-outs
+#### Read-outs
 
 **Cross-model verification is the single biggest win, and it is real.**
 Noise-rate **36% → 9%** in run 1 and **45% → 9%** in run 2 — it lands on exactly
@@ -158,7 +433,7 @@ produce — see the honesty section for why it is weaker evidence than it looks.
 
 ---
 
-## What this baseline canNOT tell you
+### What this baseline canNOT tell you
 
 State these next to any number quoted from this file.
 
@@ -193,7 +468,7 @@ State these next to any number quoted from this file.
 
 ---
 
-## Run-to-run variance
+### Run-to-run variance
 
 Two identical runs, same commit, same transport, same flags. What moved:
 
@@ -222,7 +497,7 @@ pnpm eval:rescore eval/baseline-run.json -- --per-case
 
 ---
 
-## The mock baseline (harness mechanics only)
+### The mock baseline (harness mechanics only)
 
 `pnpm eval` with no flags, same commit: recall 100% (4/4), precision 67%,
 noise-rate 9% (1/11), 13 findings. This proves the scoring and matching plumbing
@@ -230,7 +505,7 @@ works. It says nothing about model quality — the "model" is a scripted stub.
 
 ---
 
-## Verdict on three months of quality work
+### Verdict on three months of quality work
 
 Measured on this set, on this date, with this transport:
 

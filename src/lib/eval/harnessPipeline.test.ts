@@ -10,7 +10,14 @@
  * gate (#228) unmeasurable while the harness still printed confident numbers.
  */
 import { describe, it, expect, vi } from 'vitest'
-import { runCase, type CompleteFn, type GoldenCase, type SimplifyFn, type VerifyFn } from './harness'
+import {
+  runCase,
+  type CompleteFn,
+  type ConvergeFn,
+  type GoldenCase,
+  type SimplifyFn,
+  type VerifyFn,
+} from './harness'
 import { mockComplete, emptyResponseFor } from './mock'
 import { PIPELINE_VARIANTS, TESTS_TASK_PREFIX } from './surface'
 
@@ -140,6 +147,93 @@ describe('runCase — the simplify pass (#220)', () => {
     const simplify = vi.fn<SimplifyFn>(async (f) => f.map(() => undefined))
     await runCase(goldenCase, mockComplete(implFindings))
     expect(simplify).not.toHaveBeenCalled()
+  })
+})
+
+describe('runCase — cross-reviewer convergence (#206)', () => {
+  // Two personas describing ONE issue a few lines apart — the case the
+  // convergence pass exists for, and the case no fixture could produce before
+  // the multi-persona golden case existed.
+  const twoPersonaCase: GoldenCase = {
+    name: 'converge-case',
+    fixture: {
+      name: 'converge-case',
+      files: [{ path: 'src/draft.ts', patch: '@@ -1 +1 @@', contentAfter: 'x' }],
+      skills: [
+        { name: 'bug-hunter', content: 'Find bugs.' },
+        { name: 'reliability-reviewer', content: 'Find reliability problems.' },
+      ],
+    },
+    expected: {
+      real: [{ file: 'src/draft.ts', line: 10, description: 'store.put is not awaited' }],
+      noise: [],
+    },
+  }
+
+  const twoPersonaFindings = {
+    'skill:bug-hunter': JSON.stringify({
+      skillName: 'bug-hunter',
+      findings: [
+        { path: 'src/draft.ts', line: 10, severity: 'medium', body: 'store.put returns a promise that is not awaited' },
+      ],
+    }),
+    'skill:reliability-reviewer': JSON.stringify({
+      skillName: 'reliability-reviewer',
+      findings: [
+        { path: 'src/draft.ts', line: 12, severity: 'medium', body: 'the metric counts a save whose put is not awaited' },
+      ],
+    }),
+  }
+
+  const clusterBoth: ConvergeFn = async () => ({
+    clusters: [{ members: ['f0', 'f1'], primary: 'f0', reason: 'same un-awaited put' }],
+  })
+
+  it('attaches mergedFrom to the primary and marks the absorbed sibling', async () => {
+    const r = await runCase(twoPersonaCase, mockComplete(twoPersonaFindings), null, { converge: clusterBoth })
+    const primary = r.findings.find((f) => f.line === 10)
+    const absorbed = r.findings.find((f) => f.line === 12)
+    expect(primary?.mergedFrom).toHaveLength(1)
+    expect(primary?.mergedFrom?.[0]?.reviewer).toBe('reliability-reviewer')
+    expect(absorbed?.absorbedBy).toBe('f0')
+    // Loss-proof: the absorbed finding is still THERE, just marked.
+    expect(absorbed?.description).toContain('metric counts a save')
+  })
+
+  it('is inert on a single-persona case — there is nothing to converge across', async () => {
+    const converge = vi.fn<ConvergeFn>(async () => ({
+      clusters: [{ members: ['f0', 'f1'], primary: 'f0', reason: 'x' }],
+    }))
+    const r = await runCase(goldenCase, mockComplete(implFindings), null, { converge })
+    expect(converge).not.toHaveBeenCalled()
+    expect(r.findings.some((f) => f.mergedFrom || f.absorbedBy)).toBe(false)
+  })
+
+  it('is a NO-OP when the pass fails — originals stand, nothing is lost', async () => {
+    const failing: ConvergeFn = async () => {
+      throw new Error('verifier down')
+    }
+    const r = await runCase(twoPersonaCase, mockComplete(twoPersonaFindings), null, { converge: failing })
+    expect(r.findings.some((f) => f.absorbedBy !== undefined)).toBe(false)
+    expect(r.findings.filter((f) => f.taskKey.startsWith('skill:'))).toHaveLength(2)
+  })
+
+  it('rescues a weakly-verified MEDIUM from triage — the effect worth measuring', async () => {
+    // Both personas' findings get a 1-of-3 confirm: alone, findingTier buries a
+    // MEDIUM the verifiers would not back. Converged, two DISTINCT reviewers
+    // agreeing keeps it inline. The two variants must therefore disagree.
+    const verify: VerifyFn = async (findings) => ({
+      surfaced: findings.map(() => true),
+      verifications: findings.map(() => ({ confirmedBy: 1, polledModels: 3, surfaced: true, perModel: [] })),
+    })
+    const r = await runCase(twoPersonaCase, mockComplete(twoPersonaFindings), null, {
+      converge: clusterBoth,
+      verify,
+      crossVerify: true,
+      variants: PIPELINE_VARIANTS,
+    })
+    expect(r.variantScores['app-default']?.realCaught).toBe(1)
+    expect(r.variantScores['app-default/convergence-off']?.realCaught).toBe(0)
   })
 })
 

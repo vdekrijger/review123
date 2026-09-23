@@ -1,0 +1,46 @@
+{
+  "skill:bug-hunter": {
+    "skillName": "bug-hunter",
+    "findings": [
+      {
+        "path": "src/lib/memoCache.ts",
+        "line": 16,
+        "severity": "medium",
+        "body": "Unit confusion: `ttlMs` defaults to `DEFAULT_TTL_MINUTES`, whose value is 5. It is compared against a millisecond delta, so every caller that omits the argument gets a five-millisecond lifetime rather than the five minutes the doc comment promises.",
+        "suggestedFix": "Keep the default in milliseconds: `const DEFAULT_TTL_MS = 5 * 60_000` and default `ttlMs` to it."
+      },
+      {
+        "path": "src/lib/memoCache.ts",
+        "line": 27,
+        "severity": "medium",
+        "body": "Off-by-one: `slice(0, count - 1)` yields one fewer key than requested — `recentKeys(cache, 3)` returns two.",
+        "suggestedFix": "Use `sorted.slice(0, count)`; slice already excludes the end index."
+      }
+    ]
+  },
+  "attention": {
+    "readingOrder": [
+      "src/lib/memoCache.ts"
+    ],
+    "hotspots": [
+      {
+        "path": "src/lib/memoCache.ts",
+        "level": "medium",
+        "reason": "The new TTL default is a minutes value compared against a millisecond delta, so the default lifetime silently collapsed."
+      }
+    ],
+    "testFlags": [
+      {
+        "path": "src/lib/memoCache.ts",
+        "note": "No test pins the default TTL or the recentKeys count (inferred, not measured)."
+      }
+    ]
+  },
+  "verdict": {
+    "level": "significant-changes",
+    "evidence": [
+      "src/lib/memoCache.ts: the new ttlMs default is DEFAULT_TTL_MINUTES, a minutes value used as milliseconds, so the default lifetime collapsed from five minutes to five."
+    ],
+    "notAnalyzed": []
+  }
+}

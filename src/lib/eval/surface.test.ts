@@ -20,6 +20,7 @@ import type { FindingVerification } from '../ai/schemas'
 
 const ALL_OFF: PipelineStages = {
   crossVerify: false,
+  convergence: false,
   triage: false,
   mootnessGate: false,
   simplify: false,
@@ -170,6 +171,128 @@ describe('surfaceFindings — the mootness gate (#228)', () => {
   })
 })
 
+describe('surfaceFindings — cross-reviewer convergence (#206)', () => {
+  // Two personas raised the same MEDIUM issue; the pass made the first the
+  // primary and absorbed the second. The whole point is what this does to
+  // triage: a weakly-verified MEDIUM is buried alone and inline when convergent.
+  const weak = verification({ confirmedBy: 1, polledModels: 3, surfaced: true })
+  const primary = finding({
+    description: 'store.put is never awaited, so the write may not land',
+    reviewerName: 'bug-hunter',
+    verification: weak,
+    convergenceId: 'f0',
+    mergedFrom: [
+      { reviewer: 'reliability-reviewer', path: 'src/a.ts', line: 12, severity: 'medium', body: 'the put is not awaited' },
+    ],
+  })
+  const absorbed = finding({
+    line: 12,
+    description: 'the put is not awaited',
+    reviewerName: 'reliability-reviewer',
+    verification: weak,
+    convergenceId: 'f1',
+    absorbedBy: 'f0',
+  })
+
+  it('ON drops the absorbed sibling and keeps the merged primary', () => {
+    const out = surfaceFindings([primary, absorbed], { ...ALL_OFF, convergence: true })
+    expect(out.map((f) => f.description)).toEqual(['store.put is never awaited, so the write may not land'])
+  })
+
+  it('OFF keeps both cards — convergence never ran', () => {
+    const out = surfaceFindings([primary, absorbed], { ...ALL_OFF })
+    expect(out).toHaveLength(2)
+  })
+
+  it('OFF strips mergedFrom, so triage cannot read agreement the pass did not establish', () => {
+    // With convergence the MEDIUM is convergent → inline despite weak
+    // verification. Without it, the same finding is a lone weakly-verified
+    // MEDIUM → secondary. That difference IS the stage's effect on recall.
+    const on = surfaceFindings([primary, absorbed], {
+      ...ALL_OFF,
+      crossVerify: true,
+      convergence: true,
+      triage: true,
+    })
+    const off = surfaceFindings([primary, absorbed], { ...ALL_OFF, crossVerify: true, triage: true })
+    expect(on).toHaveLength(1)
+    expect(off).toHaveLength(0)
+  })
+
+  it('applies the merge’s max severity, so absorbing a HIGH never loses it', () => {
+    // The merge promotes the primary to the cluster's max severity. If the eval
+    // dropped that, absorbing a HIGH into a weakly-verified LOW would bury a
+    // finding the app renders inline — a recall drop invented by the harness.
+    const lowPrimary = finding({
+      severity: 'low',
+      description: 'same issue, milder wording',
+      verification: weak,
+      convergenceId: 'f0',
+      mergedFrom: [{ reviewer: 'other', path: 'src/a.ts', line: 10, severity: 'high', body: 'same issue' }],
+      mergedSeverity: 'high',
+    })
+    const highAbsorbed = finding({
+      severity: 'high',
+      description: 'same issue',
+      verification: weak,
+      convergenceId: 'f1',
+      absorbedBy: 'f0',
+    })
+    const stages = { ...ALL_OFF, crossVerify: true, convergence: true, triage: true }
+    expect(surfaceFindings([lowPrimary, highAbsorbed], stages)).toHaveLength(1)
+    // Without the promotion the same cluster is a weakly-verified LOW → buried.
+    expect(
+      surfaceFindings([{ ...lowPrimary, mergedSeverity: undefined }, highAbsorbed], stages),
+    ).toHaveLength(0)
+  })
+
+  it('does not resurrect verification when cross-verification is off', () => {
+    const merged = finding({
+      description: 'merged finding',
+      mergedVerification: verification({ confirmedBy: 3, polledModels: 3, surfaced: true }),
+    })
+    const out = surfaceFindings([merged], { ...ALL_OFF, convergence: true, triage: true })
+    // Verification was stripped by the crossVerify=false branch; the merge's
+    // own verification must not sneak back in.
+    expect(out).toHaveLength(1)
+  })
+
+  it('restores an absorbed finding when an earlier stage removed its primary', () => {
+    // The merge destroys nothing in the app, so a variant must not lose a point
+    // just because the card that carried it was filtered for another reason. If
+    // it did, the table would report a recall drop the app never had.
+    const testsPrimary = { ...primary, taskKey: `${TESTS_TASK_PREFIX}bug-hunter` }
+    const withTests = surfaceFindings([testsPrimary, absorbed], {
+      ...ALL_OFF,
+      convergence: true,
+      testsPass: true,
+    })
+    const withoutTests = surfaceFindings([testsPrimary, absorbed], {
+      ...ALL_OFF,
+      convergence: true,
+      testsPass: false,
+    })
+    expect(withTests.map((f) => f.description)).toEqual([primary.description])
+    expect(withoutTests.map((f) => f.description)).toEqual([absorbed.description])
+  })
+
+  it('also restores it when verification demoted the primary', () => {
+    const demotedPrimary = { ...primary, verification: verification({ surfaced: false }) }
+    const out = surfaceFindings([demotedPrimary, absorbed], {
+      ...ALL_OFF,
+      crossVerify: true,
+      convergence: true,
+    })
+    expect(out.map((f) => f.description)).toEqual([absorbed.description])
+  })
+
+  it('does not mutate the caller’s findings', () => {
+    surfaceFindings([primary, absorbed], { ...ALL_OFF })
+    expect(primary.mergedFrom).toHaveLength(1)
+    expect(absorbed.absorbedBy).toBe('f0')
+  })
+})
+
 describe('surfaceFindings — simplify (#220)', () => {
   const rewritten = finding({
     description: 'The slice end is computed as start + size - 1 against an exclusive slice.',
@@ -204,6 +327,7 @@ describe('PIPELINE_VARIANTS', () => {
     const appDefault = PIPELINE_VARIANTS.find((v) => v.key === 'app-default')
     expect(appDefault?.stages).toEqual({
       crossVerify: true,
+      convergence: true,
       triage: true,
       mootnessGate: true,
       simplify: true,
@@ -223,5 +347,11 @@ describe('PIPELINE_VARIANTS', () => {
     const showAll = PIPELINE_VARIANTS.find((v) => v.key === 'app-default/show-all')
     const appDefault = PIPELINE_VARIANTS.find((v) => v.key === 'app-default')
     expect({ ...appDefault!.stages, triage: false }).toEqual(showAll!.stages)
+
+    // Convergence (#206) gets the same treatment, which is new: before the
+    // multi-persona fixture there was no row that could move it at all.
+    const convOff = PIPELINE_VARIANTS.find((v) => v.key === 'app-default/convergence-off')
+    expect(convOff).toBeDefined()
+    expect({ ...appDefault!.stages, convergence: false }).toEqual(convOff!.stages)
   })
 })

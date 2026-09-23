@@ -112,7 +112,7 @@ async function main(): Promise<void> {
     if (run.verifiers) console.log(`  verifiers: ${run.verifiers.join(', ') || 'none'}`)
     console.log('')
 
-    const header = [pad('variant', 26), pad('findings', 9), pad('recall', 8), pad('precision', 10), pad('noise', 7)].join(' ')
+    const header = [pad('variant', 28), pad('findings', 9), pad('recall', 8), pad('precision', 10), pad('noise', 7)].join(' ')
     console.log(header)
     console.log('-'.repeat(header.length))
 
@@ -134,7 +134,7 @@ async function main(): Promise<void> {
       }
       console.log(
         [
-          pad(variant.key, 26),
+          pad(variant.key, 28),
           pad(String(agg.totalProduced), 9),
           pad(`${pct(agg.recall)} ${agg.realCaught}/${agg.realTotal}`, 8),
           pad(pct(agg.precision), 10),
@@ -144,7 +144,7 @@ async function main(): Promise<void> {
     }
 
     console.log('')
-    for (const variant of PIPELINE_VARIANTS) console.log(`  ${pad(variant.key, 26)} ${variant.label}`)
+    for (const variant of PIPELINE_VARIANTS) console.log(`  ${pad(variant.key, 28)} ${variant.label}`)
 
     if (perCase) {
       console.log('\nPer case — findings / real-caught / noise-flagged\n')
@@ -154,7 +154,7 @@ async function main(): Promise<void> {
           const idx = names.indexOf(name)
           const s = perVariantCases.get(variant.key)![idx]
           console.log(
-            `    ${pad(variant.key, 26)} ${String(s.produced).padStart(3)}f  real ${s.realCaught}/${s.realTotal}  noise ${s.noiseFlagged}/${s.noiseTotal}`,
+            `    ${pad(variant.key, 28)} ${String(s.produced).padStart(3)}f  real ${s.realCaught}/${s.realTotal}  noise ${s.noiseFlagged}/${s.noiseTotal}`,
           )
         }
       }

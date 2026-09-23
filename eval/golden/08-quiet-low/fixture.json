@@ -1,0 +1,17 @@
+{
+  "name": "08-quiet-low",
+  "files": [
+    {
+      "path": "src/lib/range.ts",
+      "patch": "@@ -1,5 +1,16 @@\n export function assertInRange(value: number, min: number, max: number): void {\n   if (!Number.isFinite(value) || value < min || value > max) {\n-    throw new RangeError(`${value} is out of range`)\n+    throw new RangeError(`${value} is outside ${min}..${min}`)\n   }\n }\n+\n+export function parsePort(raw: string): number {\n+  if (!/^[0-9]+$/.test(raw)) throw new RangeError(`invalid port: ${raw}`)\n+  const port = Number(raw)\n+  try {\n+    assertInRange(port, 1, 65535)\n+  } catch (err) {\n+    throw new RangeError(`invalid port: ${raw}`)\n+  }\n+  return port\n+}",
+      "contentBefore": "export function assertInRange(value: number, min: number, max: number): void {\n  if (!Number.isFinite(value) || value < min || value > max) {\n    throw new RangeError(`${value} is out of range`)\n  }\n}\n",
+      "contentAfter": "export function assertInRange(value: number, min: number, max: number): void {\n  if (!Number.isFinite(value) || value < min || value > max) {\n    throw new RangeError(`${value} is outside ${min}..${min}`)\n  }\n}\n\nexport function parsePort(raw: string): number {\n  if (!/^[0-9]+$/.test(raw)) throw new RangeError(`invalid port: ${raw}`)\n  const port = Number(raw)\n  try {\n    assertInRange(port, 1, 65535)\n  } catch (err) {\n    throw new RangeError(`invalid port: ${raw}`)\n  }\n  return port\n}\n"
+    }
+  ],
+  "skills": [
+    {
+      "name": "bug-hunter",
+      "content": "You are a correctness-focused reviewer. Flag off-by-one errors, boundary mistakes, copy-paste slips, null/undefined hazards, and error paths that lose information. Ignore style and naming."
+    }
+  ]
+}

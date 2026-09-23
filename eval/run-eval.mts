@@ -111,6 +111,12 @@ interface LoadedCase {
   mockResponses: Record<string, unknown>
   mockVerifyVerdicts: Record<string, string>
   /**
+   * Scripted convergence clusters for --mock (mock/convergence.json), in the
+   * validator's own shape. Only a MULTI-PERSONA case has any; absent → the
+   * convergence pass is not wired for that case at all.
+   */
+  mockConvergence: unknown | null
+  /**
    * Plan O: per-generator scripted responses for --fusion generate. Each entry
    * is one simulated generator's response map (same shape as mockResponses).
    * Loaded from mock/responses.<gen>.json (gen ∈ a, b, c…). When absent, the
@@ -152,6 +158,12 @@ function loadCase(name: string): LoadedCase {
   } catch {
     mockVerifyVerdicts = {}
   }
+  let mockConvergence: unknown | null = null
+  try {
+    mockConvergence = readJson(join(dir, 'mock', 'convergence.json'))
+  } catch {
+    mockConvergence = null
+  }
   // Plan O: optional per-generator scripted responses (mock/responses.<gen>.json).
   const mockGenerators: { name: string; responses: Record<string, unknown> }[] = []
   for (const gen of ['a', 'b', 'c', 'd', 'e']) {
@@ -162,7 +174,7 @@ function loadCase(name: string): LoadedCase {
       // absent → skip
     }
   }
-  return { name, fixture, expected, mockResponses, mockVerifyVerdicts, mockGenerators }
+  return { name, fixture, expected, mockResponses, mockVerifyVerdicts, mockConvergence, mockGenerators }
 }
 
 // ---------------------------------------------------------------------------
@@ -462,6 +474,7 @@ async function main(): Promise<void> {
     const crossVerifyMod = await server.ssrLoadModule('/src/lib/ai/crossVerify.ts')
     const tasksMod = await server.ssrLoadModule('/src/lib/ai/tasks.ts')
     const simplifyMod = await server.ssrLoadModule('/src/lib/ai/simplify.ts')
+    const convergenceMod = await server.ssrLoadModule('/src/lib/ai/convergence.ts')
 
     type ProducedFinding = {
       file: string
@@ -480,6 +493,17 @@ async function main(): Promise<void> {
       findings: ProducedFinding[],
     ) => Promise<{ surfaced: boolean[]; verifications?: (FindingVerification | undefined)[] }>
     type SimplifyFn = (findings: ProducedFinding[]) => Promise<(string | undefined)[]>
+    type ConvergenceInput = {
+      id: string
+      reviewer: string
+      path: string
+      line: number | null
+      severity: string
+      body: string
+    }
+    type ConvergeFn = (
+      inputs: ConvergenceInput[],
+    ) => Promise<{ clusters: { members: string[]; primary: string; reason: string }[] } | null>
 
     const { buildVerifyPrompt, validateVerifierResponse, aggregateFinding } = crossVerifyMod as {
       buildVerifyPrompt: (findings: unknown[], opts?: { grounded?: boolean }) => { system: string; user: string }
@@ -491,8 +515,19 @@ async function main(): Promise<void> {
         votes: { provider: string; verdict: string; reason: string; worth?: boolean }[],
       ) => FindingVerification
     }
-    const { simplifyPrompt } = tasksMod as {
+    const { simplifyPrompt, convergencePrompt } = tasksMod as {
       simplifyPrompt: (findings: { id: string; body: string }[]) => { system: string; user: string }
+      convergencePrompt: (
+        findings: ConvergenceInput[],
+        drafts: { id: string; path: string; line: number; body: string }[],
+      ) => { system: string; user: string }
+    }
+    const { validateConvergence } = convergenceMod as {
+      validateConvergence: (
+        x: unknown,
+        findingIds: ReadonlySet<string>,
+        draftIds: ReadonlySet<string>,
+      ) => { clusters: { members: string[]; primary: string; reason: string }[] } | null
     }
     const { validateSimplify } = simplifyMod as {
       validateSimplify: (x: unknown, ids: ReadonlySet<string>) => { rewrites: { id: string; simple: string }[] } | null
@@ -630,6 +665,47 @@ async function main(): Promise<void> {
       }
     }
 
+    // --- The cross-reviewer convergence pass (#206) -------------------------
+    // Uses the REAL prompt and the REAL validator; harness.ts then applies the
+    // REAL merge. Inert on a single-persona case (nothing to converge across),
+    // which is exactly why the 2026-09-22 baseline could not measure it.
+    function makeLiveConverge(): ConvergeFn {
+      return async (inputs) => {
+        const prompts = convergencePrompt(inputs, [])
+        const ids = new Set(inputs.map((i) => i.id))
+        try {
+          const raw = await transport.complete({
+            system: prompts.system,
+            user: prompts.user,
+            taskKey: 'convergence',
+          })
+          return validateConvergence(safeJson(raw), ids, new Set())
+        } catch {
+          return null
+        }
+      }
+    }
+
+    /**
+     * Scripted clusters from mock/convergence.json, run through the REAL
+     * validator. Scripted member ids are positional, so a fixture edit that
+     * adds or reorders reviewer findings silently invalidates them — and an
+     * invalid cluster set is a NO-OP, which would look like "convergence had no
+     * effect" rather than "the script rotted". Say so loudly instead.
+     */
+    function makeMockConverge(caseName: string, scripted: unknown): ConvergeFn {
+      return async (inputs) => {
+        const validated = validateConvergence(scripted, new Set(inputs.map((i) => i.id)), new Set())
+        if (validated === null) {
+          console.log(
+            `  ! ${caseName}: mock/convergence.json does not validate against this run's ${inputs.length} reviewer\n` +
+              `    findings (positional ids f0..f${inputs.length - 1}). The convergence pass is a NO-OP for it.`,
+          )
+        }
+        return validated
+      }
+    }
+
     let names = listCaseDirs()
     if (args.caseFilter) names = names.filter((n) => n === args.caseFilter)
     if (names.length === 0) {
@@ -653,6 +729,21 @@ async function main(): Promise<void> {
           `    actually exposes tools; the local bridge does NOT (/v1/infer runs --tools "").`,
       )
     }
+    // Convergence merges ACROSS reviewer personas, so a set of single-persona
+    // fixtures makes its comparison rows silently identical to their siblings.
+    // Say which cases can actually move it rather than letting a reader assume
+    // a flat row means "no effect".
+    const multiPersona = names.filter(
+      (n) => ((loadCase(n).fixture as { skills?: unknown[] }).skills?.length ?? 0) >= 2,
+    )
+    if (multiPersona.length === 0) {
+      console.log(
+        `\n  ! No fixture has 2+ reviewer personas, so cross-reviewer convergence (#206) has\n` +
+          `    nothing to merge — its rows are inert, NOT evidence that the pass does nothing.`,
+      )
+    } else {
+      console.log(`\n  Convergence (#206) is exercisable on: ${multiPersona.join(', ')}`)
+    }
     console.log('')
 
     const variants = args.matrix ? PIPELINE_VARIANTS : undefined
@@ -674,6 +765,21 @@ async function main(): Promise<void> {
           ? makeLiveVerify()
           : makeMockVerify(loaded.mockVerifyVerdicts)
         : undefined
+
+      // Cross-reviewer convergence (#206) is part of the app's default
+      // pipeline, not a flag — so it runs whenever a fixture actually has
+      // something to converge ACROSS (≥2 reviewer personas). Under --mock it
+      // needs scripted clusters; with none, wiring it would only prove that a
+      // pass with no input does nothing.
+      const personaCount = (loaded.fixture as { skills?: unknown[] }).skills?.length ?? 0
+      const caseConverge: ConvergeFn | undefined =
+        personaCount < 2
+          ? undefined
+          : args.live
+            ? makeLiveConverge()
+            : loaded.mockConvergence
+              ? makeMockConverge(name, loaded.mockConvergence)
+              : undefined
 
       // Plan O: per-generator completion functions for --fusion generate.
       let generators: { name: string; complete: CompleteFn }[] | undefined
@@ -703,6 +809,7 @@ async function main(): Promise<void> {
         crossVerify: args.crossVerify,
         testsPass: args.tests,
         ...(caseVerify ? { verify: caseVerify } : {}),
+        ...(caseConverge ? { converge: caseConverge } : {}),
         ...(args.live && args.matrix ? { simplify: makeLiveSimplify() } : {}),
         ...(args.fusion === 'generate' ? { fusionGenerate: true } : {}),
         ...(generators ? { generators } : {}),
@@ -785,7 +892,7 @@ async function main(): Promise<void> {
       console.log('\nPipeline stage comparison — ONE generation, scored under each stage combination.')
       console.log('Read the DELTAS, not the levels: recall falling while noise falls too means the')
       console.log('filters are hiding real findings, not just noise.\n')
-      const header = [pad('variant', 24), pad('findings', 9), pad('recall', 8), pad('precision', 10), pad('noise', 7)].join(' ')
+      const header = [pad('variant', 28), pad('findings', 9), pad('recall', 8), pad('precision', 10), pad('noise', 7)].join(' ')
       console.log(header)
       console.log('-'.repeat(header.length))
       for (const variant of variants) {
@@ -799,7 +906,7 @@ async function main(): Promise<void> {
         variantAggregates[variant.key] = { ...vAgg, label: variant.label, stages: variant.stages }
         console.log(
           [
-            pad(variant.key, 24),
+            pad(variant.key, 28),
             pad(String(vAgg.totalProduced), 9),
             pad(pct(vAgg.recall), 8),
             pad(pct(vAgg.precision), 10),
@@ -808,7 +915,7 @@ async function main(): Promise<void> {
         )
       }
       console.log('')
-      for (const variant of variants) console.log(`  ${pad(variant.key, 24)} ${variant.label}`)
+      for (const variant of variants) console.log(`  ${pad(variant.key, 28)} ${variant.label}`)
     }
 
     if (!args.live) {

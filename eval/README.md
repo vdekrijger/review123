@@ -13,8 +13,10 @@ actually catch more real bugs?" or "did this calibration tweak cut the noise?".
 >
 > The measurement that matters is the **per-case delta**, not the aggregate. A
 > filtering change that raises precision on `02-clean-pr` / `03-noise-trap` while
-> dropping recall on `01-real-bug` / `05-security` has not improved anything — it
-> has moved the failure from noise to blindness.
+> dropping recall on `07-quiet-medium` / `08-quiet-low` / `09-two-reviewers` has
+> not improved anything — it has moved the failure from noise to blindness.
+> Those three cases are the ones that can actually register that, because their
+> real defects land at MEDIUM and LOW, the only tiers `findingTier` demotes.
 
 The harness runs the **real** review code paths (the prompt builders in
 `src/lib/ai/tasks.ts` and the validators in `src/lib/ai/schemas.ts`) against a
@@ -79,26 +81,48 @@ The stages, and the PR each one came from, live in `src/lib/eval/surface.ts`:
 | `generate-only` | the raw reviewer output — the surface this harness measured before 2026-09 |
 | `+tests-pass` | the separate tests reviewer (#237) added |
 | `+verify` | cross-model verification drops demoted findings |
+| `+convergence` | cross-reviewer convergence (#206) merges the personas that agree |
 | `+triage` | `findingRank` (#226) keeps only the inline tier, with no verification data |
 | `verify+triage/moot-off` | verification + triage, **mootness gate off** |
 | `verify+triage` | the same with the mootness gate (#228) on — the isolating pair |
 | `app-default` | every stage on: what review123 shows inline today |
 | `app-default/show-all` | the same, with the "show all findings" escape hatch |
+| `app-default/…-off` | one stage knocked out of `app-default` — simplify, mootness, convergence, tests |
 
 Read the table as **deltas between adjacent rows**, and always per case:
 
 - `03-noise-trap` and `02-clean-pr` are the **over-filtering detectors** — they
   have no real findings, so filtering can only help there.
-- `01-real-bug` and `05-security` are the **under-filtering detectors** — they
-  each hold a genuine defect, so a recall drop there is a filter that went too far.
+- `01-real-bug`, `04-refactor`, `05-security` and `06-perf` hold a genuine defect
+  a model reports at HIGH. A HIGH is never demoted by triage, so these can only
+  detect an unusually violent filter.
+- `07-quiet-medium`, `08-quiet-low` and `09-two-reviewers` are the real
+  **under-filtering detectors**: their defects are genuine but land at MEDIUM
+  and LOW, which is exactly where `findingTier` makes decisions. A recall drop
+  there is a filter eating a bug. Before they existed recall was pinned at 4/4
+  in every variant of every run — the instrument could not have seen it.
+
+**Convergence needs ≥2 personas in one fixture**, since it merges *across*
+reviewers. On a single-persona case its rows are identical to their siblings by
+construction; that is inertness, not evidence. The runner prints which cases can
+actually move it at the top of every run.
 
 A stage that cuts noise-rate on the first pair while holding recall on the second
 earned its place. One that cuts both is trading blindness for tidiness.
 
-**The measured baseline lives in [`BASELINE.md`](./BASELINE.md)**, and the two
-runs behind it are committed at `eval/baseline-run.json` and
-`eval/repeat-run.json` (the second one so the run-to-run jitter — which decides
-whether your delta means anything — is checkable rather than asserted).
+**The measured baseline lives in [`BASELINE.md`](./BASELINE.md)**, and the runs
+behind it are committed so every number is re-checkable without paying for
+inference:
+
+| run | file |
+| --- | --- |
+| 2026-09-23, 9 cases (current) | `eval/expanded-baseline-run.json`, `eval/expanded-repeat-run.json` |
+| 2026-09-22, 6 cases (superseded) | `eval/baseline-run.json`, `eval/repeat-run.json` |
+
+Each measurement has two runs so the run-to-run jitter — which decides whether
+your delta means anything — is checkable rather than asserted. On the current
+set that jitter is **±22pp on precision but zero on recall**, so recall is the
+signal to trust and precision deltas under ~20pp are not evidence.
 
 ### Re-scoring a stored run for free (`pnpm eval:rescore`)
 
@@ -358,9 +382,10 @@ Each case is a directory under `eval/golden/<NN-name>/`:
 ```
 eval/golden/
   01-real-bug/
-    fixture.json         # the PR: changed files (patch + full contents) + reviewer personas
-    expected.json        # hand labels: KNOWN-REAL + KNOWN-NOISE
-    mock/responses.json  # scripted model output per task (for --mock only)
+    fixture.json           # the PR: changed files (patch + full contents) + reviewer personas
+    expected.json          # hand labels: KNOWN-REAL + KNOWN-NOISE
+    mock/responses.json    # scripted model output per task (for --mock only)
+    mock/convergence.json  # scripted convergence clusters (multi-persona cases only)
 ```
 
 ### `fixture.json`
@@ -451,19 +476,52 @@ mock metrics demonstrate the scoring end to end.
 }
 ```
 
+### `mock/convergence.json` (multi-persona cases, `--mock` only)
+
+The clusters the cross-reviewer convergence pass (#206) would return, in the
+validator's own shape. Member ids are **positional**: `f0…fN` enumerate the
+REVIEWER-pass findings only (skill + tests passes), in fixture `skills` order.
+So `f0` is the first persona's first finding, and adding or reordering findings
+renumbers everything.
+
+```jsonc
+{
+  "clusters": [
+    { "members": ["f0", "f1"], "primary": "f0", "reason": "both describe the un-awaited store.put" }
+  ]
+}
+```
+
+The runner validates this with the app's real `validateConvergence`, so a script
+that has gone stale is rejected — and because a rejected cluster set is a no-op
+that would silently read as "convergence did nothing", the runner prints a `!`
+warning naming the case. If you see that warning, fix the ids; don't trust the
+row.
+
 ## Growing the golden set
 
 0. **Easiest path:** `pnpm eval:capture <pr> --name <slug>` (see *Capturing a real
    PR as a golden case* above), then label the scaffolded `expected.json`.
 1. **Or hand-author.** Pick a real-ish PR that exercises a behavior you care
-   about. The six seed cases cover the archetypes: a real bug that **should** be
-   caught (`01-real-bug`), a clean refactor that should produce **~no** findings
-   (`02-clean-pr`), a noise-trap with tempting-but-moot things that should **not**
-   be flagged (`03-noise-trap`), a behavior-preserving refactor that hides one
-   genuine behavior change among equivalent rewrites (`04-refactor`), a real
-   injection alongside a tempting-but-safe parameterized/escaped pattern
-   (`05-security`), and a real N+1 alongside a noise micro-optimization
-   (`06-perf`).
+   about. The nine cases cover the archetypes:
+
+   | case | archetype | what it can detect |
+   | --- | --- | --- |
+   | `01-real-bug` | a real off-by-one that **should** be caught | gross under-filtering (HIGH) |
+   | `02-clean-pr` | a clean rename that should produce **~no** findings | over-flagging |
+   | `03-noise-trap` | tempting-but-moot things that should **not** be flagged | over-flagging |
+   | `04-refactor` | one genuine behavior change hidden among equivalent rewrites | HIGH recall |
+   | `05-security` | a real injection beside a safe parameterized/escaped pattern | HIGH recall |
+   | `06-perf` | a real N+1 beside a noise micro-optimization | HIGH recall |
+   | `07-quiet-medium` | a wrong-unit default and an off-by-one bound, both MEDIUM | **triage / mootness eating a bug** |
+   | `08-quiet-low` | a wrong bound in an error message and a rethrow that drops its cause, both LOW | **triage burying a lone LOW** |
+   | `09-two-reviewers` | two personas landing on one missing `await`, on different lines | **convergence (#206)** |
+
+   The first six were the 2026-09-22 seed set and all four of their real findings
+   are HIGH. `findingTier` never demotes a non-moot HIGH, so they could not detect
+   over-filtering *at all* — recall was 4/4 in all 22 measurements of that
+   baseline. 07-09 exist because of that: a new case earns its keep by being able
+   to **fail**.
 2. `mkdir eval/golden/07-your-case/` and add `fixture.json` + `expected.json`.
    Keep fixtures **small** — a focused hunk beats a giant diff.
 3. Label honestly: KNOWN-REAL = genuine defects a reviewer should catch;
@@ -481,16 +539,23 @@ mock metrics demonstrate the scoring end to end.
 - `src/lib/eval/scorer.ts` — matching + metrics + gates (pure, unit-tested).
 - `src/lib/eval/harness.ts` — golden-case → real prompts → findings (unit-tested).
 - `src/lib/eval/surface.ts` — the post-generation pipeline as toggles: cross-model
-  verification, `findingRank` triage, the mootness gate, simplify, the tests
-  pass. This is what `--matrix` varies, and it reuses the app's real
-  `rankFindings` rather than re-implementing the policy (unit-tested).
+  verification, cross-reviewer convergence, `findingRank` triage, the mootness
+  gate, simplify, the tests pass. This is what `--matrix` varies, and it reuses
+  the app's real `rankFindings` rather than re-implementing the policy
+  (unit-tested).
+  Every stage is **attached, not applied**, at generation time: `harness.ts`
+  records what verification and convergence decided and leaves the findings in
+  place, so a variant that switches a stage off really is off rather than "on
+  with different data". That is what makes `app-default/…-off` an isolation
+  instead of a re-run.
 - `src/lib/eval/mock.ts` — the scripted LLM stub for `--mock`.
 - `eval/run-eval.mts` — the thin CLI driver (`pnpm eval`). Loads the harness via a
   throwaway Vite SSR server so the app's bundler-style imports resolve under Node.
 - `eval/rescore.mts` — re-scores a stored run under the variants, offline
   (`pnpm eval:rescore`).
-- `eval/BASELINE.md` + `eval/baseline-run.json` + `eval/repeat-run.json` — the
-  measured baseline and the two runs behind it.
+- `eval/BASELINE.md` — the measured baselines (current + the superseded one,
+  kept for comparison), with `eval/expanded-{baseline,repeat}-run.json` and
+  `eval/{baseline,repeat}-run.json` as the runs behind them.
 
 The scorer/harness/mock live under `src/lib/` so they run under the normal
 `pnpm test`. Their tests are `src/lib/eval/*.test.ts`.

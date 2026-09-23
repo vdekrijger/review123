@@ -1,0 +1,26 @@
+{
+  "real": [
+    {
+      "file": "src/lib/range.ts",
+      "line": 3,
+      "description": "copy-paste slip in the new message: it interpolates min twice, so the upper bound is never shown and the error reads \"7 is outside 1..1\""
+    },
+    {
+      "file": "src/lib/range.ts",
+      "line": 13,
+      "description": "the catch block discards the caught error and rethrows a generic message, dropping the original RangeError bounds detail"
+    }
+  ],
+  "noise": [
+    {
+      "file": "src/lib/range.ts",
+      "line": 9,
+      "description": "the \"invalid port\" literal appears on two branches — hoist it into a shared constant"
+    },
+    {
+      "file": "src/lib/range.ts",
+      "line": 11,
+      "description": "1 and 65535 are magic numbers — pull them into named constants"
+    }
+  ]
+}
