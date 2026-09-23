@@ -4,48 +4,95 @@
   --font-mono: 'IBM Plex Mono', 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
   --font-prose: 'Newsreader', Georgia, serif;
 
-  /* ── Dark palette (default) ── */
-  --bg:             #14161a;
-  --surface:        #1b1e24;
-  --surface-raised: #22262d;
-  --hairline:       #2e333b;
-  --border-subtle:  var(--hairline);
-  --text:           #e8e6e1;
-  --text-muted:     #9a9890;
-  --accent:         #4db6a0;
-  --accent-subtle:  rgba(77,182,160,.12);
-  --accent-contrast: #0a1410;
+  /*
+   * ── THE PALETTE — ONE declaration per token ──────────────────────────────
+   *
+   * Every colour token carries BOTH themes in a single `light-dark(light, dark)`
+   * declaration, resolved against the `color-scheme` set on :root below.
+   *
+   * This is the de-duplication the refactor plan's P1-1 asks for
+   * (docs/design/ui-refactor-plan.md#p1-1). Before this, the light palette was
+   * written out TWICE — once under `:root[data-theme='light']` and again under
+   * `@media (prefers-color-scheme: light) { :root:not([data-theme]) }` — 30
+   * byte-identical declarations, so any token added to one and not the other
+   * silently diverged between an explicit light choice and OS-preference light
+   * (audit F17). CSS has no include, so `light-dark()` is the only construct
+   * that makes that divergence *unrepresentable* rather than merely tested for.
+   *
+   * The three modes are unchanged, and `auto` is still the default:
+   *   auto  → :root { color-scheme: light dark }  → follows the OS
+   *   light → :root[data-theme='light'] { color-scheme: light }
+   *   dark  → :root[data-theme='dark']  { color-scheme: dark }
+   *
+   * Only two theme-dependent tokens CANNOT live here, because `light-dark()`
+   * takes <color> and they are not colours: `--select-chevron` (a url()) and
+   * `--recede-opacity` (a number). Those two are declared light-first below and
+   * overridden in BOTH dark paths; src/lib/theme/contrast.test.ts pins the two
+   * dark declarations equal so they cannot drift.
+   *
+   * ── AUTHORING ORDER: LIGHT FIRST ──
+   * The light value comes first in every pair because light is now the AUTHORED
+   * palette — designed against white with dark text and contrast-verified there
+   * — and dark is DERIVED from it. Every ratio is asserted in
+   * src/lib/theme/contrast.test.ts; change a value and that test tells you what
+   * you broke.
+   */
 
-  /* ── Select chevron (stroke matches --text-muted; swapped per theme) ── */
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239a9890' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  /* Grounds. p.132: the page is the lightest grey, not pure white, so cards can
+     come FORWARD off it (p.167-168). */
+  --bg:             light-dark(#faf8f4, #14161a);
+  --surface:        light-dark(#ffffff, #1b1e24);
+  /* Wells, inputs, inactive chips — DARKER than --surface in light, which is
+     why it is "sunken", not "raised" (plan P1-5). --surface-raised is kept as a
+     deprecated alias so the ~40 existing call sites keep working untouched;
+     Phase 2 sweeps them as it restyles those components. */
+  --surface-sunken: light-dark(#f4f1ea, #22262d);
+  --surface-raised: var(--surface-sunken);
+
+  /* Decorative separation ONLY — deliberately below the 3:1 non-text floor.
+     Control boundaries use --border-control (audit F11 / SC 1.4.11). */
+  --hairline:       light-dark(#e3dfd6, #2e333b);
+  --border-subtle:  var(--hairline);
+
+  /* Three text tiers (p.34). */
+  --text:           light-dark(#1f2328, #e8e6e1);
+  --text-muted:     light-dark(#6e6a61, #9a9890);
+
+  --accent:         light-dark(#2e8b78, #4db6a0);
+  --accent-subtle:  light-dark(rgba(46,139,120,.10), rgba(77,182,160,.12));
+  --accent-contrast: light-dark(#ffffff, #0a1410);
+
+  /* ── Select chevron (stroke matches --text-muted; NOT a colour, so it cannot
+     use light-dark() — see the dark override blocks below) ── */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e6a61' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   /* ── Diff text colors (used by FileDiff stat counts) ── */
   --diff-add:   var(--legend-added-color);
   --diff-del:   var(--legend-removed-color);
 
   /* ── Legacy surface vars (keep for components not yet swept) ── */
-  --surface-overlay: var(--surface-raised);
-  --surface-banner:  #1a3050;
-  --border-banner:   #2a5080;
-  --border-banner-accent: #4db6a0;
-  --text-banner:     #c8dff0;
-  --surface-draft:   #2a2510;
-  --border-draft:    #a07820;
-  --text-draft:      #e8e0c8;
+  --surface-overlay: var(--surface-sunken);
+  --surface-banner:  light-dark(#ddeeff, #1a3050);
+  --border-banner:   light-dark(#90b8d8, #2a5080);
+  --border-banner-accent: light-dark(#2a7abf, #4db6a0);
+  --text-banner:     light-dark(#1a3050, #c8dff0);
+  --surface-draft:   light-dark(#fffbf0, #2a2510);
+  --border-draft:    light-dark(#f0b44488, #a07820);
+  --text-draft:      light-dark(#333333, #e8e0c8);
 
-  /* ── Legend / status chips (dark) ── */
-  --legend-added-bg:        #1a3a28;
-  --legend-added-border:    #2ea44f;
-  --legend-added-color:     #6dd49a;
-  --legend-removed-bg:      #3a1a1a;
-  --legend-removed-border:  #c93a49;
-  --legend-removed-color:   #e89898;
-  --legend-changed-bg:      #3a2e0e;
-  --legend-changed-border:  #c49828;
-  --legend-changed-color:   #e8c85a;
-  --legend-unchanged-bg:    #22262d;
-  --legend-unchanged-border:#3a3f48;
-  --legend-unchanged-color: #9a9890;
+  /* ── Legend / status chips ── */
+  --legend-added-bg:        light-dark(#dcffe4, #1a3a28);
+  --legend-added-border:    light-dark(#2ea44f, #2ea44f);
+  --legend-added-color:     light-dark(#1a7f37, #6dd49a);
+  --legend-removed-bg:      light-dark(#ffe5e5, #3a1a1a);
+  --legend-removed-border:  light-dark(#d73a49, #c93a49);
+  --legend-removed-color:   light-dark(#cb2431, #e89898);
+  --legend-changed-bg:      light-dark(#fff5cc, #3a2e0e);
+  --legend-changed-border:  light-dark(#d4a72c, #c49828);
+  --legend-changed-color:   light-dark(#9a6700, #e8c85a);
+  --legend-unchanged-bg:    light-dark(#f0f0f2, #22262d);
+  --legend-unchanged-border:light-dark(#bbbbbb, #3a3f48);
+  --legend-unchanged-color: light-dark(#666666, #9a9890);
 
   color-scheme: light dark;
   font-size: 15px;
@@ -115,81 +162,38 @@
   --font-ui: Charter, 'Bitstream Charter', 'Sitka Text', Cambria, Georgia, serif;
 }
 
-/* ── Theme overrides ── */
+/*
+ * ── Theme overrides ──
+ *
+ * `color-scheme` is the ONLY switch the colour palette needs: every colour token
+ * above is a `light-dark()` pair and resolves against it. Setting it here (and
+ * nowhere else in the app — no component overrides `color-scheme`) is what makes
+ * the explicit-choice and OS-preference paths provably identical.
+ */
 :root[data-theme='dark'] { color-scheme: dark; }
 :root[data-theme='light'] { color-scheme: light; }
 
-/* ── Light palette ── */
-:root[data-theme='light'] {
-  --bg:             #faf8f4;
-  --surface:        #ffffff;
-  --surface-raised: #f4f1ea;
-  --hairline:       #e3dfd6;
-  --text:           #1f2328;
-  --text-muted:     #6e6a61;
-  --accent:         #2e8b78;
-  --accent-subtle:  rgba(46,139,120,.10);
-  --accent-contrast: #ffffff;
-
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e6a61' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-
-  --surface-banner:  #ddeeff;
-  --border-banner:   #90b8d8;
-  --border-banner-accent: #2a7abf;
-  --text-banner:     #1a3050;
-  --surface-draft:   #fffbf0;
-  --border-draft:    #f0b44488;
-  --text-draft:      #333;
-
-  --legend-added-bg:        #dcffe4;
-  --legend-added-border:    #2ea44f;
-  --legend-added-color:     #1a7f37;
-  --legend-removed-bg:      #ffe5e5;
-  --legend-removed-border:  #d73a49;
-  --legend-removed-color:   #cb2431;
-  --legend-changed-bg:      #fff5cc;
-  --legend-changed-border:  #d4a72c;
-  --legend-changed-color:   #9a6700;
-  --legend-unchanged-bg:    #f0f0f2;
-  --legend-unchanged-border:#bbb;
-  --legend-unchanged-color: #666;
+/*
+ * ── The dark values `light-dark()` cannot carry ──
+ *
+ * `light-dark()` takes <color>. These tokens are not colours — a url() and a
+ * number — so they are declared light-first in :root and overridden here for the
+ * two ways a user reaches dark: an explicit choice, and `auto` + an OS that
+ * prefers dark. These two blocks MUST stay identical; that is the one remaining
+ * copy of the F17 hazard, so src/lib/theme/contrast.test.ts asserts them equal
+ * declaration-for-declaration, and e2e/theme-token-parity.spec.ts proves the two
+ * paths resolve identically in a real browser for EVERY token.
+ *
+ * Keep this block as small as possible. A new theme-dependent token belongs in
+ * the light-dark() palette above unless it genuinely is not a colour.
+ */
+:root[data-theme='dark'] {
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239a9890' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
-/* ── Auto light preference ── */
-@media (prefers-color-scheme: light) {
+@media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --bg:             #faf8f4;
-    --surface:        #ffffff;
-    --surface-raised: #f4f1ea;
-    --hairline:       #e3dfd6;
-    --text:           #1f2328;
-    --text-muted:     #6e6a61;
-    --accent:         #2e8b78;
-    --accent-subtle:  rgba(46,139,120,.10);
-    --accent-contrast: #ffffff;
-
-    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e6a61' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-
-    --surface-banner:  #ddeeff;
-    --border-banner:   #90b8d8;
-    --border-banner-accent: #2a7abf;
-    --text-banner:     #1a3050;
-    --surface-draft:   #fffbf0;
-    --border-draft:    #f0b44488;
-    --text-draft:      #333;
-
-    --legend-added-bg:        #dcffe4;
-    --legend-added-border:    #2ea44f;
-    --legend-added-color:     #1a7f37;
-    --legend-removed-bg:      #ffe5e5;
-    --legend-removed-border:  #d73a49;
-    --legend-removed-color:   #cb2431;
-    --legend-changed-bg:      #fff5cc;
-    --legend-changed-border:  #d4a72c;
-    --legend-changed-color:   #9a6700;
-    --legend-unchanged-bg:    #f0f0f2;
-    --legend-unchanged-border:#bbb;
-    --legend-unchanged-color: #666;
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239a9890' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   }
 }
 
