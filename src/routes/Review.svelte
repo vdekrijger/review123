@@ -8,7 +8,8 @@
   import ProviderIcon from '../components/ProviderIcon.svelte'
   import { getSettings, setDiffMode, setHideWhitespace, setRailCollapsed, setStoryMode, type DiffMode } from '../lib/settings/settings'
   import { activeProviderHasKey } from '../lib/llm/config'
-  import type { GraphResult, StoryOrderResult } from '../lib/ai/schemas'
+  import type { ConvergenceValue } from '../lib/ai/convergence'
+  import type { GraphResult, SkillReviewResult, StoryOrderResult, VerdictResult } from '../lib/ai/schemas'
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import ReviewProgress from '../components/ReviewProgress.svelte'
   import { beginSignIn, needsScopeUpgrade } from '../lib/auth/auth'
@@ -17,7 +18,12 @@
   import { createDecisionStore } from '../lib/eval/decisions'
   import VerdictStep from '../components/VerdictStep.svelte'
   import { createAiRun } from '../lib/ai/run.svelte'
-  import { listSkillsForPhase } from '../lib/skills/skills'
+  import { listSkills, listSkillsForPhase } from '../lib/skills/skills'
+  import { collectReadinessFacts, gradeReadiness } from '../lib/ai/readiness'
+  import { applyConvergence, type ReviewerFindings } from '../lib/ai/convergence'
+  import { crossModelVerifyEffective, verifierProviderConfigs } from '../lib/llm/config'
+  import { currentGrounding, describeGrounding } from '../lib/bridge/grounding'
+  import { getPhaseRecord, isApprovalStale, partitionFilesByPhase } from '../lib/guide/phase.svelte'
   import { shouldAutoStartReviewers } from '../lib/review/autoStartReviewers'
   import { buildAiRunInput, localHeadReader } from '../lib/ai/runInput'
   import { cancelPrepare } from '../lib/ai/prepare.svelte'
@@ -380,6 +386,103 @@
       : null
   }
   const inlineAskDisabledReason = $derived(getInlineAskDisabledReason())
+
+  // ---- Readiness basis (Step 3) ------------------------------------------
+  //
+  // The COMPOSITION ROOT for src/lib/ai/readiness.ts. That module is pure over
+  // stated facts; every reach into storage, settings or the bridge happens
+  // HERE, which is what keeps the grade unit-testable without any of them.
+  //
+  // Reactivity note: `step` is read FIRST and deliberately. Three of the facts
+  // (which reviewers are configured, which verifiers the panel resolves to, and
+  // whether the implementation has been approved) live in localStorage and are
+  // not reactive, and the approval in particular is written on Step 2 by a
+  // phase store this route does not own. Reading `step` makes arriving at Step
+  // 3 the recompute trigger, which is exactly when this is rendered.
+  const readinessReport = $derived.by(() => {
+    if (step !== 3) return null
+    const run = aiRun
+    if (!run || load.state.status !== 'ready') return null
+
+    // Effective findings = the reviewers' results with the convergence merge
+    // applied, exactly as InspectStep renders them, so "shown first" in the
+    // grade means what it means on screen. A failed/stale pass leaves them
+    // byte-identical.
+    const entries = [...run.skillReviews, ...run.testReviews]
+    const reviewerFindings: ReviewerFindings[] = []
+    for (const entry of entries) {
+      if (entry.state.status !== 'done' || !entry.state.value || typeof entry.state.value === 'string') continue
+      const value = entry.state.value as SkillReviewResult
+      reviewerFindings.push({
+        skillId: entry.skillId,
+        name: entry.name,
+        findings: Array.isArray(value.findings) ? value.findings : [],
+      })
+    }
+    const convergenceValue =
+      run.convergence.status === 'done' && run.convergence.value && typeof run.convergence.value === 'object'
+        ? (run.convergence.value as ConvergenceValue)
+        : null
+    const merged = convergenceValue ? applyConvergence(reviewerFindings, convergenceValue) : reviewerFindings
+    const findingsBySkill = new Map(merged.map((r) => [r.skillId, r.findings]))
+
+    const reviewers = entries.map((entry) => ({
+      name: entry.name,
+      done: entry.state.status === 'done',
+      errored: entry.state.status === 'error',
+      findings: findingsBySkill.get(entry.skillId) ?? [],
+    }))
+
+    // Files nobody was given: the test files when the on-demand tests pass has
+    // not run (the implementation pass packs 'implementation' scope), plus the
+    // verdict's own notAnalyzed list where it names a changed file.
+    const files = load.state.files
+    const notSent: string[] = []
+    if (run.testReviews.length === 0) {
+      for (const f of partitionFilesByPhase(files).tests) notSent.push(f.filename)
+    }
+    const verdictValue =
+      run.verdict.status === 'done' && run.verdict.value && typeof run.verdict.value === 'object'
+        ? (run.verdict.value as VerdictResult)
+        : null
+    if (verdictValue) notSent.push(...verdictValue.notAnalyzed)
+
+    const headSha = load.state.meta.headSha
+    const grounding = currentGrounding(headSha)
+    const phaseRecord = getPhaseRecord(prId)
+
+    return gradeReadiness(
+      collectReadinessFacts({
+        reviewers,
+        configuredReviewerNames: listSkills()
+          .filter((s) => s.enabled)
+          .map((s) => s.name),
+        // A panel with cross-model verification switched off, or with too few
+        // keyed models to hold a poll, has ZERO verifiers however many are
+        // listed — the same rule crossModelVerifyEffective states.
+        configuredVerifiers: crossModelVerifyEffective() ? verifierProviderConfigs().length : 0,
+        changedFilePaths: files.map((f) => f.filename),
+        filesNotSent: notSent,
+        grounding: {
+          local: grounding.mode === 'local',
+          dirty: grounding.dirty,
+          description: describeGrounding(grounding),
+        },
+        approval: {
+          approved: typeof phaseRecord.implApprovedAt === 'number',
+          stale: isApprovalStale(phaseRecord, headSha),
+          phase: phaseRecord.phase,
+          ...(phaseRecord.headShaAtApproval ? { approvedAtSha: phaseRecord.headShaAtApproval } : {}),
+        },
+        // DEFERRED, and said out loud rather than faked: the only real test
+        // outcome this app holds is the bridge fix loop's, which lives inside
+        // AgentFixPanel's own state and is not reachable from here. Until it
+        // is, the honest answer is that no test run is recorded — which is
+        // what the grade then says.
+        tests: { status: 'not-run' },
+      }),
+    )
+  })
 
   let railCollapsed = $state(getSettings().railCollapsed)
 
@@ -1024,6 +1127,7 @@
         modelPerformance={aiRun ? aiRun.modelPerformance : []}
         modelCostBreakdown={aiRun ? aiRun.modelCostBreakdown : []}
         totalUsage={aiRun ? aiRun.totalUsage : undefined}
+        readiness={readinessReport}
         {prComments}
         provider={activeProvider}
         authorLogin={load.state.meta.authorLogin}

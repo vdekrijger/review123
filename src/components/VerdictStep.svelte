@@ -31,6 +31,8 @@
   import GitHubSignInButton from './GitHubSignInButton.svelte'
   import Spinner from './Spinner.svelte'
   import AiProgress from './AiProgress.svelte'
+  import ReadinessBasis from './ReadinessBasis.svelte'
+  import type { ReadinessReport } from '../lib/ai/readiness'
   import type { PrRef } from '../lib/github/parse'
   import type { createDraftStore } from '../lib/drafts/drafts.svelte'
   import type { Draft } from '../lib/drafts/drafts.svelte'
@@ -102,6 +104,18 @@
     /** Sum of every task's captured usage for this review — the aggregate total. */
     totalUsage?: LlmUsage
     /**
+     * The COMPUTED readiness basis (src/lib/ai/readiness.ts) — the answer to
+     * "is this ready?", totted up from counted facts and rendered with those
+     * facts beside it. Review.svelte builds it; absent/null on mounts with no
+     * AI run (the demo route, standalone test mounts) and nothing renders.
+     *
+     * It sits here, on the step where the user decides what to submit, rather
+     * than on Inspect: Step 2 gathers the evidence, Step 3 is where a summary
+     * of it is worth anything. It renders ABOVE the verdict radios — the last
+     * thing read before the choice, never a substitute for reading the code.
+     */
+    readiness?: ReadinessReport | null
+    /**
      * Existing PR review comments — passed through to coachFn for duplicate detection.
      * Capped at 30, truncated at 200ch inside coachPrompt.
      */
@@ -138,6 +152,7 @@
     modelPerformance = [],
     modelCostBreakdown = [],
     totalUsage,
+    readiness = null,
     prComments = [],
     provider,
     authorLogin = null,
@@ -818,6 +833,12 @@
          showTokenCost; the impact readout always shows. Single place on Step 3
          for "what did this review cost / which models earned their keep". -->
     <ReviewCostPanel {modelCostBreakdown} {totalUsage} />
+
+    <!-- The computed readiness basis: what this review actually established,
+         and what it could not see. Placed immediately above the verdict so it
+         is the last thing read before the choice — and worded so it reports the
+         basis rather than making the call, which is still the reader's. -->
+    <ReadinessBasis report={readiness} />
 
     <!-- Verdict radio group -->
     <fieldset class="verdict-group">
