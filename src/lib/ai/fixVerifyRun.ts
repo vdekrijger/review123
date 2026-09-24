@@ -308,6 +308,44 @@ export interface FixVerifyShape {
   duration_ms: number
 }
 
+/**
+ * Fold a later round's re-read into what earlier rounds already observed.
+ *
+ * THE BOUNDED LOOP NEEDS THIS AND IT IS NOT A CONVENIENCE. Each round re-reads
+ * only the commits IT produced: a finding that got its commit in round 1 and
+ * was left alone afterwards has already been re-read against that exact commit,
+ * and asking again would spend model calls to be told the same thing. So the
+ * per-finding verdicts accumulate, latest round wins per finding, and the
+ * counts add up across the whole loop.
+ *
+ * New problems accumulate too, deduplicated on the key `mergeNewProblems`
+ * already assigns them — a problem raised against round 1's diff does not stop
+ * being raised because round 2 touched a different file.
+ */
+export function mergeFixVerifyReports(
+  prior: FixVerificationReport | null,
+  next: FixVerificationReport,
+): FixVerificationReport {
+  if (prior === null) return next
+
+  const byFinding = new Map(prior.byFinding.map((f) => [f.findingId, f]))
+  for (const f of next.byFinding) byFinding.set(f.findingId, f)
+
+  const problems = new Map(prior.newProblems.map((p) => [p.key, p]))
+  for (const p of next.newProblems) if (!problems.has(p.key)) problems.set(p.key, p)
+
+  const witnesses = [...prior.witnesses]
+  for (const w of next.witnesses) if (!witnesses.includes(w)) witnesses.push(w)
+
+  return {
+    byFinding: [...byFinding.values()],
+    newProblems: [...problems.values()],
+    witnesses,
+    calls: prior.calls + next.calls,
+    failedCalls: prior.failedCalls + next.failedCalls,
+  }
+}
+
 export function fixVerifyShape(outcome: FixVerifyOutcome): FixVerifyShape {
   const { report } = outcome
   const count = (o: FixFindingOutcome): number => report.byFinding.filter((f) => f.outcome === o).length

@@ -648,6 +648,15 @@ describe('decideFixLoopStop', () => {
     expect(decideFixLoopStop(p)).toBe('no-new-commit')
   })
 
+  // The precedence that is easy to get backwards: a round where every finding
+  // was SKIPPED has no commit to re-read, so nothing comes back still open.
+  // Calling that "quiet" would report a reviewer going quiet about work that
+  // never happened.
+  it('calls a round with no commit NO-NEW-COMMIT, never quiet', () => {
+    const p = progress({ rounds: [round(1, { commits: [], stillOpen: [] })] })
+    expect(decideFixLoopStop(p)).toBe('no-new-commit')
+  })
+
   it('stops on REPEAT-OUTCOME when a round leaves what the previous one left', () => {
     // Different commits each time — an agent rewriting the same file every turn
     // is still oscillating if the same complaints stand, so the signature is the

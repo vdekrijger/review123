@@ -305,15 +305,25 @@ export function describeFixReadiness(readiness: FixReadiness, prHead: string): s
   }
 }
 
-/** The live readiness, read from the connected bridge. */
-export function currentFixReadiness(prHead: string): FixReadiness {
+/**
+ * The live readiness, read from the connected bridge.
+ *
+ * `preferredCli` defaults to the stored choice, which is what every caller that
+ * only asks "may I?" wants. The panel passes its OWN copy instead, because
+ * localStorage is not reactive and a click on the picker has to move the label
+ * on the send button in the same frame.
+ */
+export function currentFixReadiness(
+  prHead: string,
+  preferredCli: BridgeCli | null = readFixCliPref(),
+): FixReadiness {
   return decideFixReadiness(
     {
       connected: bridgeState.status === 'connected',
       writeEnabled: bridgeAvailable('fix'),
       clis: bridgeInferenceClis(),
       git: bridgeState.git,
-      preferredCli: readFixCliPref(),
+      preferredCli,
     },
     prHead,
   )
@@ -742,11 +752,16 @@ function outcomeSignature(round: FixLoopRound): string {
  *
  *   1. run-failed      — a round could not run at all. Nothing else applies.
  *   2. stopped-by-user — they asked. Never overridden by a budget.
- *   3. quiet           — nothing is still open, so there is nothing to send.
- *   4. no-new-commit   — the round produced nothing; another asks for the same.
+ *   3. no-new-commit   — the round produced nothing; another asks for the same.
+ *   4. quiet           — nothing is still open, so there is nothing to send.
  *   5. repeat-outcome  — the round left what the previous one left.
  *   6. round-cap       — the configured number of rounds is used up.
  *   7. budget-spent    — the call budget or the wall clock is used up.
+ *
+ * 3 BEFORE 4 is the one that is easy to get backwards and was: a round where
+ * every finding was SKIPPED produces no commit, so there is nothing to re-read,
+ * so nothing comes back "still open" — and reporting that as `quiet` would tell
+ * the user a reviewer went quiet about work that never happened.
  *
  * 6 before 7 because the round cap is the limit the user chose and can see
  * counting down, and saying "out of rounds" when a round was in fact available
@@ -763,8 +778,8 @@ export function decideFixLoopStop(
   const last = rounds[rounds.length - 1]
   if (last === undefined) return null
 
-  if (last.stillOpen.length === 0) return 'quiet'
   if (last.commits.length === 0) return 'no-new-commit'
+  if (last.stillOpen.length === 0) return 'quiet'
 
   const prev = rounds[rounds.length - 2]
   if (prev !== undefined && outcomeSignature(prev) === outcomeSignature(last)) return 'repeat-outcome'
