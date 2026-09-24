@@ -228,9 +228,10 @@
    * a LABEL; this one also carries a sentence of somebody's comment, and
    * uppercasing prose destroys word shape — the snippet rendered as
    * "VDEKRIJGER: THERE IS NO CENTRALISED HELPER WE COULD USE FOR THIS? E.G. I…".
-   * So reset it here and re-apply it on .resolved-label alone, which IS a
-   * label. Class selectors (+ Svelte's scoping class) outrank the two type
-   * selectors in `details > summary`, so app.css stays untouched.
+   * The same rule's font-weight: 600 set the whole sentence semibold for the
+   * same reason. So reset all three here and re-apply them on .resolved-label
+   * alone, which IS a label. Class selectors (+ Svelte's scoping class) outrank
+   * the two type selectors in `details > summary`, so app.css stays untouched.
    */
   .resolved-summary {
     display: flex;
@@ -245,6 +246,7 @@
     user-select: none;
     text-transform: none;
     letter-spacing: normal;
+    font-weight: 400;
   }
 
   .resolved-summary::-webkit-details-marker {

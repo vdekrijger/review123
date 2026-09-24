@@ -1951,6 +1951,9 @@
     background: none;
     padding: var(--space-1);
     font: inherit;
+    /* Pinned, not inherited: inline in the diff this sits inside a monospace
+       row and would otherwise read as code rather than as a UI affordance. */
+    font-family: var(--font-ui);
     font-size: var(--text-xs);
     color: var(--text-muted);
     opacity: 0.75;

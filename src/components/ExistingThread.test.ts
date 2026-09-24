@@ -154,9 +154,14 @@ describe('ExistingThread — resolved summary casing (static CSS guard)', () => 
     expect(rule).toMatch(/letter-spacing:\s*normal/)
   })
 
-  it('.resolved-label re-applies the editorial caps — the LABEL, not the snippet', () => {
+  it('.resolved-summary resets the label weight too — a sentence is not a heading', () => {
+    expect(block('resolved-summary')).toMatch(/font-weight:\s*400/)
+  })
+
+  it('.resolved-label re-applies the editorial caps and weight — the LABEL, not the snippet', () => {
     const rule = block('resolved-label')
     expect(rule).toMatch(/text-transform:\s*uppercase/)
+    expect(rule).toMatch(/font-weight:\s*600/)
   })
 
   it('.resolved-snippet never sets a text-transform of its own', () => {

@@ -245,9 +245,15 @@ export const demoFiles: PrFile[] = [
  *     be taken from that Set's size
  *   - two RESOLVED file-level threads, which land in the per-file "General"
  *     group — the block the screenshot showed filling a viewport
- *   - bodies that OPEN with markup: an HTML link-wrapped badge image and a
- *     markdown badge. The collapsed one-line summary has to strip those to
- *     plain text before truncating, or it shows sixty characters of tags.
+ *   - bodies that OPEN with markup — a raw HTML link-wrapped badge and a
+ *     markdown link badge, the way review bots write them. The collapsed
+ *     one-line summary has to strip those to plain text before truncating, or
+ *     it shows sixty characters of tags and no words.
+ *
+ * DELIBERATELY NO <img>: the demo's contract is no network, and a remote badge
+ * image would fire a request from a rendered comment body (and make
+ * scripts/capture-shots.mjs non-deterministic). The image-alt path of the
+ * summary's markup stripping is covered in ExistingThread.test.ts instead.
  *
  * RIGHT line 7 of src/search/api.ts is the `fetch(..., { signal })` line and
  * line 5 is `signal?: AbortSignal,` — both present in that patch, so both
@@ -291,7 +297,7 @@ export const demoComments: PrComment[] = [
     id: 9004,
     author: 'demo-lint-bot[bot]',
     authorAvatar: null,
-    body: '<a href="#"><img alt="P1" src="https://example.com/badges/p1.svg"></a> Re-throwing a non-`AbortError` inside `.catch()` rejects with no handler, surfacing as an unhandled rejection. Route failures to component state instead.',
+    body: '<a href="#"><strong>P1</strong></a> Re-throwing a non-`AbortError` inside `.catch()` rejects with no handler, surfacing as an unhandled rejection. Route failures to component state instead.',
     createdAt: '2024-05-02T09:20:00Z',
     path: 'src/search/useSearch.ts',
     line: null,
@@ -302,7 +308,7 @@ export const demoComments: PrComment[] = [
     id: 9005,
     author: 'demo-lint-bot[bot]',
     authorAvatar: null,
-    body: '![P2](https://example.com/badges/p2.svg) The debounce test hard-codes 250ms — import `DEBOUNCE_MS` so the test and the implementation cannot drift apart.',
+    body: '[**P2**](https://example.com/rules/p2) The debounce test hard-codes 250ms — import `DEBOUNCE_MS` so the test and the implementation cannot drift apart.',
     createdAt: '2024-05-02T09:21:00Z',
     path: 'src/search/useSearch.ts',
     line: null,
