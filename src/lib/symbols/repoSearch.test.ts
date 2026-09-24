@@ -5,13 +5,15 @@
  * mocked provider; PR-file exclusion; the self-correcting head re-check
  * (deleted files drop out); the 20k-line size cap; per-symbol caching +
  * concurrent-click dedup; failure eviction (retry re-searches); the
- * rate-limit / auth error messages; and capability/context detection via
- * currentRepoSearchContext (route + method presence + head SHA).
+ * rate-limit / auth error messages; capability/context detection via
+ * currentRepoSearchContext (route + method presence + head SHA); and
+ * repoSearchIsFree, the cost question the popover asks before auto-resolving.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   currentRepoSearchContext,
+  repoSearchIsFree,
   searchRepoForSymbol,
   _resetRepoSearchCacheForTest,
   REPO_SEARCH_RATE_LIMIT_MESSAGE,
@@ -159,7 +161,7 @@ describe('searchRepoForSymbol — pipeline', () => {
   it('returns empty refs (ok) when the search finds nothing', async () => {
     const ctx = makeCtx({ paths: [] })
     const out = await searchRepoForSymbol('computeTotal', ctx)
-    expect(out).toEqual({ ok: true, definitions: [], references: [], filesScanned: 0, filesSkipped: 0, contentsByPath: new Map() })
+    expect(out).toEqual({ ok: true, definitions: [], references: [], filesScanned: 0, filesSkipped: 0, contentsByPath: new Map(), source: 'provider' })
   })
 
   it('carries each scanned file\'s head-SHA contents for the definition peek', async () => {
@@ -348,6 +350,52 @@ describe('currentRepoSearchContext — capability detection', () => {
     router.route = { ...reviewRoute, provider: 'gitlab' }
     // This is the user-visible gain: repo search where there was none.
     expect(currentRepoSearchContext('headsha123')).not.toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// repoSearchIsFree — the cost question the popover asks before auto-resolving.
+// ---------------------------------------------------------------------------
+
+describe('repoSearchIsFree', () => {
+  const reviewRoute = { name: 'review', provider: 'github', owner: 'org', repo: 'repo', number: 1, step: 2 } as const
+
+  it('is false before any context has been resolved', () => {
+    expect(repoSearchIsFree()).toBe(false)
+  })
+
+  it('is TRUE when a local bridge is grounded at the PR head (no quota to spend)', () => {
+    vi.mocked(groundingIsLocal).mockReturnValue(true)
+    router.route = { ...reviewRoute }
+    currentRepoSearchContext('headsha123')
+    expect(repoSearchIsFree()).toBe(true)
+  })
+
+  it('is FALSE on the provider path, where a search spends a rate-limited API call', () => {
+    vi.mocked(groundingIsLocal).mockReturnValue(false)
+    router.route = { ...reviewRoute }
+    currentRepoSearchContext('headsha123')
+    expect(repoSearchIsFree()).toBe(false)
+  })
+
+  it('goes false again the moment local grounding is lost mid-review', () => {
+    vi.mocked(groundingIsLocal).mockReturnValue(true)
+    router.route = { ...reviewRoute }
+    currentRepoSearchContext('headsha123')
+    expect(repoSearchIsFree()).toBe(true)
+    // The bridge died — grounding.ts latches the head and answers false.
+    vi.mocked(groundingIsLocal).mockReturnValue(false)
+    expect(repoSearchIsFree()).toBe(false)
+  })
+
+  it('does not keep answering for a PR that is no longer in view', () => {
+    vi.mocked(groundingIsLocal).mockReturnValue(true)
+    router.route = { ...reviewRoute }
+    currentRepoSearchContext('headsha123')
+    expect(repoSearchIsFree()).toBe(true)
+    // Navigated somewhere with no head SHA — the stale context must be dropped.
+    currentRepoSearchContext(undefined)
+    expect(repoSearchIsFree()).toBe(false)
   })
 })
 

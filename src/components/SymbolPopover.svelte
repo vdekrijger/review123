@@ -17,17 +17,32 @@
    * closes, focus is moved into the popover on open, and focus leaving the
    * popover closes it.
    *
-   * Tier 2 adds an on-demand "In repo" section: a [Search repo] button (never
-   * automatic — the code-search API allows ~10 searches/min) that finds call
-   * points OUTSIDE the PR's files via lib/symbols/repoSearch. Results are
-   * NON-clickable (those files aren't in the diff view) with a copyable path;
-   * a repo-found definition upgrades the "not in the changed files" state.
-   * The section only renders when the provider supports code search
-   * (onSearchRepo non-null — capability by method presence).
+   * Tier 2 adds an "In repo" section that finds call points OUTSIDE the PR's
+   * files via lib/symbols/repoSearch. Results are NON-clickable (those files
+   * aren't in the diff view) with a copyable path; a repo-found definition
+   * upgrades the "not in the changed files" state. The section only renders
+   * when repo search is available at all (onSearchRepo non-null).
+   *
+   * WHEN IT RUNS ITSELF. The search used to be strictly on-demand behind a
+   * [Search repo] button, for one reason: the provider's code-search API
+   * allows ~10 calls/min, so spending one had to be the reader's decision. A
+   * grounded local bridge has no such budget — it greps a checked-out tree —
+   * so when repoSearchIsFree() says this PR's search costs nothing, the
+   * popover resolves the definition ON OPEN and shows the first repo-found
+   * one already expanded. Someone who clicked a type wants to READ it, not to
+   * click twice more for the privilege. Provider-only reviews keep the button
+   * exactly as before, and a failed auto-search falls back to it.
    */
   import type { SymbolDefinition, SymbolReference, DiffSide } from '../lib/symbols/symbolIndex'
-  import type { RepoSearchOutcome } from '../lib/symbols/repoSearch'
-  import { peekDefinition, type DefinitionPeek } from '../lib/symbols/definitionPeek'
+  import { untrack } from 'svelte'
+  import { repoSearchIsFree, type RepoSearchOutcome } from '../lib/symbols/repoSearch'
+  import {
+    peekDefinition,
+    MAX_PEEK_LINES,
+    MAX_PEEK_EXPANDED_LINES,
+    type DefinitionPeek,
+  } from '../lib/symbols/definitionPeek'
+  import { popoverPlacement } from '../lib/symbols/popoverPlacement'
   import { symbolSourceFor } from '../lib/symbols/symbolSources'
   import { highlightSnippet, snippetLangForFilename } from '../lib/diff/highlightSnippet'
 
@@ -43,9 +58,12 @@
     onJump: (file: string, line: number, side: DiffSide) => void
     onClose: () => void
     /**
-     * Runs the repo-wide search for this symbol (Tier 2). null → the provider
-     * has no code search (or no head SHA is known) and the "In repo" section
-     * is omitted entirely.
+     * Runs the repo-wide search for this symbol (Tier 2). null → neither the
+     * provider's code search nor a local bridge can answer (or no head SHA is
+     * known) and the "In repo" section is omitted entirely.
+     *
+     * Whether this runs on open or behind the button is NOT decided here: the
+     * popover asks repoSearchIsFree() itself, so FileDiff needs no new prop.
      */
     onSearchRepo?: (() => Promise<RepoSearchOutcome>) | null
   }
@@ -76,9 +94,49 @@
 
   function togglePeek(key: string) {
     const next = new Set(expandedPeeks)
-    if (next.has(key)) next.delete(key)
-    else next.add(key)
+    if (next.has(key)) {
+      next.delete(key)
+      // Closing a peek forgets how far it had been revealed, so it always
+      // reopens compact. The alternative — reopening straight into 400 lines
+      // because of a click made minutes ago — is the kind of surprise a
+      // cursor-anchored popover can least afford.
+      const cleared = new Set(fullyExpandedPeeks)
+      cleared.delete(key)
+      fullyExpandedPeeks = cleared
+    } else next.add(key)
     expandedPeeks = next
+  }
+
+  /**
+   * Peeks the reader has asked to see BEYOND the first-render cap.
+   *
+   * The remainder used to be a dead label — "… (84 more lines)" told you the
+   * lines existed and gave you no way to reach them. Making it a control beats
+   * simply raising MAX_PEEK_LINES: the popover still opens compact for the
+   * common small definition, a long one is opt-in, and there is no constant to
+   * get wrong. Reveal is one-way (the row's own caret collapses the whole
+   * peek), so the reader can never lose lines they just asked for.
+   */
+  let fullyExpandedPeeks = $state<ReadonlySet<string>>(new Set())
+
+  function revealMore(key: string) {
+    fullyExpandedPeeks = new Set([...fullyExpandedPeeks, key])
+  }
+
+  /** How many lines to render for this peek — the cap, or the raised one. */
+  function peekMaxLines(key: string): number {
+    return fullyExpandedPeeks.has(key) ? MAX_PEEK_EXPANDED_LINES : MAX_PEEK_LINES
+  }
+
+  /**
+   * How many lines ONE click on the remainder control would actually add, so
+   * the label can promise exactly that and no more. 0 → no control (either
+   * nothing is left, or the reader is already at the expanded ceiling and the
+   * honest static remainder takes over).
+   */
+  function revealableLines(peek: DefinitionPeek, key: string): number {
+    if (fullyExpandedPeeks.has(key)) return 0
+    return Math.min(peek.moreLines, MAX_PEEK_EXPANDED_LINES - MAX_PEEK_LINES)
   }
 
   /**
@@ -87,7 +145,8 @@
    */
   function peekFor(def: SymbolDefinition): DefinitionPeek | null {
     const source = symbolSourceFor(def.file)
-    return source ? peekDefinition(source, def.side, def.line, def.endLine) : null
+    if (!source) return null
+    return peekDefinition(source, def.side, def.line, def.endLine, peekMaxLines(peekKey(def, 'pr')))
   }
 
   const PATCH_ONLY_NOTE = 'Only the changed lines are available for this file.'
@@ -125,11 +184,22 @@
   let repoState = $state<RepoPhase>({ phase: 'idle' })
 
   // Reset when the popover is retargeted to another symbol without unmount
-  // (clicking a different identifier replaces the props, not the component).
+  // (clicking a different identifier replaces the props, not the component),
+  // then resolve the definition straight away when that costs nothing.
+  //
+  // untrack is load-bearing: runRepoSearch READS repoState (its own re-entry
+  // guard) and dialogEl, while this effect WRITES repoState. Tracked, that is
+  // a loop — write, invalidate, reset, fire again. The dependency that should
+  // re-run it is `symbol` and nothing else, which is what the read above the
+  // untrack block registers.
   $effect(() => {
     void symbol
-    repoState = { phase: 'idle' }
-    expandedPeeks = new Set()
+    untrack(() => {
+      repoState = { phase: 'idle' }
+      expandedPeeks = new Set()
+      fullyExpandedPeeks = new Set()
+      if (onSearchRepo && repoSearchIsFree()) void runRepoSearch()
+    })
   })
 
   async function runRepoSearch() {
@@ -146,6 +216,13 @@
     // Drop a stale result if the popover was retargeted mid-flight.
     if (symbol !== forSymbol) return
     repoState = { phase: 'done', outcome }
+    // Show the body, not a link to the body. The reader clicked a type to
+    // understand a shape, so the FIRST repo-found definition opens expanded;
+    // any further ones stay collapsed, so the popover does not turn into a
+    // wall of code. Peeks the reader opened by hand are left open.
+    if (outcome.ok && outcome.definitions.length > 0) {
+      expandedPeeks = new Set([...expandedPeeks, peekKey(outcome.definitions[0], 'repo')])
+    }
   }
 
   const repoOutcome = $derived(repoState.phase === 'done' ? repoState.outcome : null)
@@ -163,7 +240,13 @@
   function repoPeekFor(def: SymbolDefinition): DefinitionPeek | null {
     const text = repoOk?.contentsByPath?.get(def.file)
     if (text === undefined) return null
-    return peekDefinition({ filename: def.file, contents: { before: null, after: text } }, def.side, def.line, def.endLine)
+    return peekDefinition(
+      { filename: def.file, contents: { before: null, after: text } },
+      def.side,
+      def.line,
+      def.endLine,
+      peekMaxLines(peekKey(def, 'repo')),
+    )
   }
 
   const repoRefsByFile = $derived.by(() => {
@@ -210,14 +293,22 @@
     onClose()
   }
 
-  // Clamp near the click, inside the viewport.
-  const POPOVER_WIDTH = 460
+  /**
+   * The box, decided once from the click point and the viewport.
+   *
+   * It depends on x/y ONLY — which change when the popover is retargeted to
+   * another identifier, never while one is open. So expanding a peek grows the
+   * popover's own scroll instead of resizing or moving the box, and nothing
+   * shifts out from under the cursor. The arithmetic (edge clamping, the flip
+   * above a click near the bottom, narrowing on a small viewport) lives in
+   * lib/symbols/popoverPlacement, where it is testable — jsdom measures every
+   * element as 0×0.
+   */
   const positionStyle = $derived.by(() => {
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1280
     const vh = typeof window !== 'undefined' ? window.innerHeight : 800
-    const left = Math.max(8, Math.min(x, vw - POPOVER_WIDTH - 8))
-    const top = Math.max(8, Math.min(y + 10, vh - 80))
-    return `left: ${left}px; top: ${top}px;`
+    const p = popoverPlacement(x, y, vw, vh)
+    return `left: ${p.left}px; top: ${p.top}px; width: ${p.width}px; max-height: ${p.maxHeight}px;`
   })
 
   const UNCHANGED_REGION_HINT = 'In an unchanged region — not shown in the rendered diff'
@@ -240,9 +331,13 @@
   </header>
 
   <!-- Expanded definition body: line-number gutter + highlighted code in ONE
-       scroll container (height-capped; horizontal overflow stays inside). -->
-  {#snippet peekBlock(peek: DefinitionPeek, file: string)}
+       container. It scrolls HORIZONTALLY only (long lines, with the gutter
+       stuck to the left edge); vertically it grows and the popover is the one
+       scrolling surface, so reading a long definition is never a scrollbar
+       inside a scrollbar. -->
+  {#snippet peekBlock(peek: DefinitionPeek, file: string, key: string)}
     {@const code = peek.lines.map((l) => l.text).join('\n')}
+    {@const reveal = revealableLines(peek, key)}
     <div class="peek-block" data-testid="definition-peek">
       <div class="peek-scroll">
         <pre class="peek-gutter" aria-hidden="true">{peek.lines.map((l) => l.line).join('\n')}</pre>
@@ -252,9 +347,21 @@
           <pre class="peek-code"><code>{@html highlighted}</code></pre>
         {/await}
       </div>
-      {#if peek.moreLines > 0}
+      <!-- The remainder is a DOOR, not a sign. It promises exactly the number
+           of lines one click adds — which is all of them unless the definition
+           is longer than the expanded ceiling, and then the honest static
+           count below takes over and jump-to-line is the way to the rest. -->
+      {#if reveal > 0}
+        <button class="peek-more-btn" type="button" onclick={() => revealMore(key)}>
+          <span class="peek-caret" aria-hidden="true">▾</span>
+          Show {reveal} more line{reveal === 1 ? '' : 's'}
+        </button>
+      {:else if peek.moreLines > 0}
         <p class="peek-more">… ({peek.moreLines} more line{peek.moreLines === 1 ? '' : 's'})</p>
       {/if}
+      <!-- A DIFFERENT state from the one above, and it must stay legible as
+           one: here the lines are not merely unshown, the source does not have
+           them. There is nothing an expand control could deliver. -->
       {#if peek.limitedToPatch}
         <p class="peek-partial">{PATCH_ONLY_NOTE}</p>
       {/if}
@@ -278,7 +385,7 @@
       <pre class="def-snippet">{def.snippet}</pre>
     </div>
     {#if peek !== null && open}
-      {@render peekBlock(peek, def.file)}
+      {@render peekBlock(peek, def.file, key)}
     {/if}
   {/snippet}
 
@@ -308,6 +415,12 @@
           <span class="loc" title={NOT_IN_DIFF_HINT}>{def.file}:{def.line} <span class="repo-tag">repo</span></span>
         </div>
       {/each}
+    {:else if repoState.phase === 'loading'}
+      <!-- A search is in flight and might yet answer this. Saying "not in the
+           changed files" now would be a verdict we are about to retract, and
+           the popover is anchored to a click point — so hold a line of the
+           same height instead of letting the answer flip under the cursor. -->
+      <p class="def-resolving">Looking up the definition…</p>
     {:else}
       <p class="not-found">Definition not in the changed files of this PR.</p>
     {/if}
@@ -369,7 +482,16 @@
             {/each}
           </div>
         {/if}
-        <p class="repo-footnote">Repo search uses the default branch index; results re-checked at this PR's head.</p>
+        <!-- Provenance, and it differs by source: the provider's index covers
+             the DEFAULT branch (hence the head re-check), while a local search
+             greps the checked-out tree at this PR's head and has no such gap.
+             Claiming the default-branch caveat for a local search would be a
+             fabricated hedge. -->
+        {#if repoOk.source === 'local'}
+          <p class="repo-footnote">Searched your local checkout at this PR's head.</p>
+        {:else}
+          <p class="repo-footnote">Repo search uses the default branch index; results re-checked at this PR's head.</p>
+        {/if}
       {:else}
         {#if repoError}
           <p class="repo-error" role="alert">{repoError}</p>
@@ -381,12 +503,15 @@
 </div>
 
 <style>
+  /*
+   * `width` and `max-height` come from the inline placement style — they
+   * depend on the click point and the viewport, so they cannot be static here.
+   * This is the popover's ONE vertical scrolling surface; nothing inside it
+   * may declare a second (see .peek-scroll).
+   */
   .symbol-popover {
     position: fixed;
     z-index: 250; /* above the topbar (200); below nothing that matters here */
-    width: 460px;
-    max-width: calc(100vw - 16px);
-    max-height: min(24rem, 70vh);
     overflow-y: auto;
     background: var(--surface-raised);
     border: 1px solid var(--hairline);
@@ -396,6 +521,24 @@
     font-size: 0.8rem;
     color: var(--text);
     outline: none;
+  }
+
+  /*
+   * The popover got wide enough to read a line of SOURCE without scrolling
+   * sideways. Prose did not ask for that: a status line or a footnote set to
+   * 760px is harder to read, not easier. So text keeps a readable measure
+   * while the code block below is free to use the whole width.
+   */
+  h4,
+  .not-found,
+  .def-resolving,
+  .more-note,
+  .repo-status,
+  .repo-error,
+  .repo-footnote,
+  .peek-more,
+  .peek-partial {
+    max-width: 62ch;
   }
 
   .popover-header {
@@ -475,11 +618,20 @@
 
   .peek-block { margin: 0.15rem 0 0.2rem; }
 
+  /*
+   * ONE scrolling axis here, deliberately.
+   *
+   * This used to cap itself at ~15 lines with `overflow: auto`, which put a
+   * vertical scrollbar inside the popover's own vertical scrollbar: reading a
+   * 124-line method meant scrolling a box inside a box. The height cap is gone
+   * and only the horizontal axis scrolls, so the popover is the single
+   * vertical surface. Horizontal stays because a long line has to go
+   * somewhere, and the sticky gutter depends on this element being the
+   * horizontal scroll container.
+   */
   .peek-scroll {
     display: flex;
-    overflow: auto;
-    /* ~15 lines visible; vertical scroll for the rest. */
-    max-height: calc(15 * 1.5 * 0.72rem);
+    overflow-x: auto;
     background: var(--surface);
     border: 1px solid var(--hairline);
     border-radius: 4px;
@@ -511,13 +663,37 @@
   }
   .peek-code code { font-family: inherit; }
 
+  /* The remainder control joins the STATIC remainder's rule rather than
+     declaring its own type and spacing: it is the same line of text, and the
+     change the reader should notice is that it can be clicked, not that it
+     shouts. (It also keeps this file off the off-scale ratchet.) */
   .peek-more,
-  .peek-partial {
+  .peek-partial,
+  .peek-more-btn {
     margin: 0.15rem 0 0;
     font-size: 0.68rem;
     color: var(--text-muted);
   }
   .peek-partial { font-style: italic; }
+
+  /* Caret + label, borrowing .peek-toggle's disclosure vocabulary so the two
+     controls read as one family. */
+  .peek-more-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
+    background: none;
+    border: none;
+    border-radius: 3px;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .peek-more-btn:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
 
   /*
    * ── The peek's syntax set (Phase 3; audit F17 + F5) ──
@@ -592,7 +768,11 @@
   }
   .loc.jump:hover { text-decoration-style: solid; }
 
-  .not-found {
+  /* .def-resolving shares this rule on purpose: it is the line .not-found
+     stands in for while a search is in flight, so resolving a definition
+     swaps the text without jogging the layout. */
+  .not-found,
+  .def-resolving {
     margin: 0;
     font-style: italic;
     color: var(--text-muted);

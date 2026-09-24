@@ -357,7 +357,7 @@ export async function readLocalFiles(
 
   for (let i = 0; i < missing.length; i += GROUNDING_FILES_PER_CALL) {
     const batch = missing.slice(i, i + GROUNDING_FILES_PER_CALL)
-    const key = `${prHead.toLowerCase()}|${batch.join(' ')}`
+    const key = `${prHead.toLowerCase()}|${batch.join('\0')}`
     let pending = filesInFlight.get(key)
     if (!pending) {
       pending = fetchBatch(cache, batch).finally(() => filesInFlight.delete(key))

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { peekDefinition, MAX_PEEK_LINES } from './definitionPeek'
+import { peekDefinition, MAX_PEEK_LINES, MAX_PEEK_EXPANDED_LINES, MAX_PEEK_DECORATOR_LINES } from './definitionPeek'
 import type { SymbolSource } from './symbolIndex'
 
 // ---------------------------------------------------------------------------
@@ -44,6 +44,24 @@ describe('peekDefinition — exact extent (tree-sitter endLine)', () => {
     expect(peek!.lines[39].line).toBe(40)
     expect(peek!.moreLines).toBe(21) // 61-line extent − 40 shown
     expect(peek!.limitedToPatch).toBe(false)
+  })
+
+  it('honours a caller-raised display cap, and moreLines follows it', () => {
+    // The popover re-peeks with MAX_PEEK_EXPANDED_LINES when the reader asks
+    // to see the rest, so the cap has to be a parameter, not a constant.
+    const body = ['function big() {', ...Array.from({ length: 59 }, (_, i) => `  step(${i})`), '}']
+    const src: SymbolSource = { filename: 'src/big.ts', contents: { before: null, after: body.join('\n') } }
+    const peek = peekDefinition(src, 'new', 1, 61, MAX_PEEK_EXPANDED_LINES)
+    expect(peek!.lines).toHaveLength(61)
+    expect(peek!.moreLines).toBe(0)
+  })
+
+  it('still caps at the raised limit when the extent outruns even that', () => {
+    const body = Array.from({ length: MAX_PEEK_EXPANDED_LINES + 40 }, (_, i) => `  step(${i})`)
+    const src: SymbolSource = { filename: 'src/huge.ts', contents: { before: null, after: body.join('\n') } }
+    const peek = peekDefinition(src, 'new', 1, body.length, MAX_PEEK_EXPANDED_LINES)
+    expect(peek!.lines).toHaveLength(MAX_PEEK_EXPANDED_LINES)
+    expect(peek!.moreLines).toBe(40)
   })
 
   it('clamps a (theoretical) endLine < startLine to a single line', () => {
@@ -208,5 +226,129 @@ describe('peekDefinition — side handling', () => {
       { line: 10, text: 'function keep() {' },
       { line: 11, text: '}' },
     ])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Python decorators — the case the auto-peek feature was built for: a reader
+// clicks a `@dataclass` type in a diff and wants to READ the struct.
+// ---------------------------------------------------------------------------
+
+/** A real-shaped dataclass module: two decorated classes, one after the other. */
+const PY_DATACLASSES = [
+  'from dataclasses import dataclass', // 1
+  '', // 2
+  '@dataclass', // 3
+  'class AnalyticsProps:', // 4
+  '    """Props for the analytics panel."""', // 5
+  '    user_id: str', // 6
+  '    events: list[str]', // 7
+  '    sampled: bool = False', // 8
+  '', // 9
+  '@dataclass(frozen=True)', // 10
+  'class OtherProps:', // 11
+  '    x: int', // 12
+].join('\n')
+
+const pyDataclassSource: SymbolSource = {
+  filename: 'app/analytics.py',
+  status: 'modified',
+  contents: { before: null, after: PY_DATACLASSES },
+}
+
+describe('peekDefinition — python decorators', () => {
+  it('heuristic extent: the @dataclass line, the whole field list, and nothing of the next class', () => {
+    const peek = peekDefinition(pyDataclassSource, 'new', 4)
+    expect(peek!.lines).toEqual([
+      { line: 3, text: '@dataclass' },
+      { line: 4, text: 'class AnalyticsProps:' },
+      { line: 5, text: '    """Props for the analytics panel."""' },
+      { line: 6, text: '    user_id: str' },
+      { line: 7, text: '    events: list[str]' },
+      { line: 8, text: '    sampled: bool = False' },
+    ])
+    expect(peek!.moreLines).toBe(0)
+    expect(peek!.limitedToPatch).toBe(false)
+  })
+
+  it('exact extent (tree-sitter endLine): the grammar excludes the decorator, the peek restores it', () => {
+    // tree-sitter's `class_definition` node starts at `class X:` (the decorator
+    // lives on the enclosing `decorated_definition`), so endLine is the class
+    // body's last line and the decorator is NOT inside the node's extent.
+    const peek = peekDefinition(pyDataclassSource, 'new', 4, 8)
+    expect(peek!.lines.map((l) => l.line)).toEqual([3, 4, 5, 6, 7, 8])
+  })
+
+  it('takes a whole stack of decorators', () => {
+    const code = ['@dataclass', '@register', 'class Thing:', '    a: int', 'NEXT = 1'].join('\n')
+    const src: SymbolSource = { filename: 'app/thing.py', contents: { before: null, after: code } }
+    expect(peekDefinition(src, 'new', 3)!.lines.map((l) => l.line)).toEqual([1, 2, 3, 4])
+  })
+
+  it('takes at most MAX_PEEK_DECORATOR_LINES so a decorator pile cannot crowd out the body', () => {
+    const decorators = Array.from({ length: MAX_PEEK_DECORATOR_LINES + 3 }, (_, i) => `@deco${i}`)
+    const code = [...decorators, 'class Piled:', '    a: int'].join('\n')
+    const src: SymbolSource = { filename: 'app/piled.py', contents: { before: null, after: code } }
+    const defLine = decorators.length + 1
+    const peek = peekDefinition(src, 'new', defLine)
+    expect(peek!.lines).toHaveLength(MAX_PEEK_DECORATOR_LINES + 2) // decorators taken + def + body
+    expect(peek!.lines[0].line).toBe(defLine - MAX_PEEK_DECORATOR_LINES)
+  })
+
+  it('covers a decorated, multi-line def signature (header walk + decorator)', () => {
+    const code = [
+      '@app.route("/x")', // 1
+      'def handler(', // 2
+      '    a: int,', // 3
+      '    b: int,', // 4
+      ') -> Response:', // 5
+      '    return ok(a + b)', // 6
+      'NEXT = 1', // 7
+    ].join('\n')
+    const src: SymbolSource = { filename: 'app/web.py', contents: { before: null, after: code } }
+    expect(peekDefinition(src, 'new', 2)!.lines.map((l) => l.line)).toEqual([1, 2, 3, 4, 5, 6])
+  })
+
+  it('takes a decorator on an indented method at the method own indent', () => {
+    const code = ['class Outer:', '    @property', '    def value(self):', '        return 1'].join('\n')
+    const src: SymbolSource = { filename: 'app/outer.py', contents: { before: null, after: code } }
+    expect(peekDefinition(src, 'new', 3)!.lines.map((l) => l.line)).toEqual([2, 3, 4])
+  })
+
+  it('stops at a blank line — an unrelated decorator further up is not swept in', () => {
+    const code = ['@unrelated', '', 'class Plain:', '    a: int'].join('\n')
+    const src: SymbolSource = { filename: 'app/plain.py', contents: { before: null, after: code } }
+    expect(peekDefinition(src, 'new', 3)!.lines.map((l) => l.line)).toEqual([3, 4])
+  })
+
+  it('leaves a WRAPPED decorator alone rather than guessing where it starts', () => {
+    // The line above the def is the decorator's `)`, not an `@` — the peek
+    // starts at the def line, which is incomplete but never wrong.
+    const code = ['@dataclass(', '    frozen=True,', ')', 'class Config:', '    x: int'].join('\n')
+    const src: SymbolSource = { filename: 'app/config.py', contents: { before: null, after: code } }
+    expect(peekDefinition(src, 'new', 4)!.lines.map((l) => l.line)).toEqual([4, 5])
+  })
+
+  it('is python-only — a TypeScript decorator is not pulled in', () => {
+    const code = ['@Component({})', 'class Widget {', '  render() {}', '}'].join('\n')
+    const src: SymbolSource = { filename: 'src/widget.ts', contents: { before: null, after: code } }
+    expect(peekDefinition(src, 'new', 2)!.lines.map((l) => l.line)).toEqual([2, 3, 4])
+  })
+
+  it('skips a decorator the patch does not carry', () => {
+    const patch = ['@@ -4,0 +4,3 @@', '+class AnalyticsProps:', '+    user_id: str', '+    events: list[str]'].join('\n')
+    const src: SymbolSource = { filename: 'app/analytics.py', status: 'modified', patch }
+    expect(peekDefinition(src, 'new', 4)!.lines.map((l) => l.line)).toEqual([4, 5, 6])
+  })
+
+  it('counts moreLines from the DEFINITION extent, not from the decorator', () => {
+    const body = Array.from({ length: 60 }, (_, i) => `    field_${i}: int`)
+    const code = ['@dataclass', 'class Wide:', ...body].join('\n')
+    const src: SymbolSource = { filename: 'app/wide.py', contents: { before: null, after: code } }
+    const peek = peekDefinition(src, 'new', 2)
+    expect(peek!.lines).toHaveLength(MAX_PEEK_LINES)
+    expect(peek!.lines[0]).toEqual({ line: 1, text: '@dataclass' })
+    // 62-line file, 40 shown from the decorator on → 22 available beyond.
+    expect(peek!.moreLines).toBe(22)
   })
 })

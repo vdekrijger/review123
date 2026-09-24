@@ -91,6 +91,16 @@ export type RepoSearchOutcome =
        * hand-built outcomes (tests, older callers) stay valid.
        */
       contentsByPath?: ReadonlyMap<string, string>
+      /**
+       * Which source produced the CANDIDATE PATHS — the step the UI's
+       * provenance footnote is about. 'provider' carries the default-branch
+       * caveat (its index is not the PR's head, which is why step 2 re-checks);
+       * 'local' greped the checked-out tree AT the head and carries none.
+       * A mid-search fallback reports 'provider', because the caveat then
+       * applies. Optional so hand-built outcomes (tests, older callers) stay
+       * valid — absent reads as 'provider', the cautious answer.
+       */
+      source?: 'local' | 'provider'
     }
   | { ok: false; message: string }
 
@@ -109,12 +119,51 @@ export type RepoSearchOutcome =
  * `/search/code` needs auth) repo search for the first time.
  */
 export function currentRepoSearchContext(headSha: string | undefined): RepoSearchContext | null {
+  lastContext = resolveContext(headSha)
+  return lastContext
+}
+
+function resolveContext(headSha: string | undefined): RepoSearchContext | null {
   if (!headSha) return null
   const route = router.route
   if (route.name !== 'review') return null
   const provider = providerFor(route.provider)
   if (typeof provider.searchCodePaths !== 'function' && !groundingIsLocal(headSha)) return null
   return { provider: provider as RepoSearchProvider, repo: { owner: route.owner, repo: route.repo }, headSha }
+}
+
+/**
+ * The context most recently resolved by currentRepoSearchContext.
+ *
+ * WHY module state and not a prop. The popover needs to know how EXPENSIVE its
+ * own repo search would be, and the head SHA that decides it lives on
+ * FileDiff's `currentHeadSha` prop, three components up. This module already
+ * resolves the rest of the route from module state rather than props (see the
+ * header note) for exactly the same reason, so recording the resolved context
+ * here extends a seam that exists instead of threading a new prop through
+ * components other work streams own.
+ *
+ * FileDiff re-derives the context whenever `currentHeadSha` changes and reads
+ * it in the template that renders the popover, so by the time a popover exists
+ * this is the context that popover's own search would use.
+ */
+let lastContext: RepoSearchContext | null = null
+
+/**
+ * Would a repo search for the PR in view cost nothing?
+ *
+ * TRUE only when a local bridge is grounded at this PR's head. That path
+ * greps a checked-out working tree: no API call, no quota, no rate limit, and
+ * no network round trip. FALSE means the search would spend one of the ~10
+ * code-search calls a minute the provider allows (the budget
+ * REPO_SEARCH_RATE_LIMIT_MESSAGE exists to explain running out of).
+ *
+ * That distinction is the whole reason repo search was an explicit button: the
+ * popover asks this to decide whether to resolve the definition on open or
+ * keep asking the reader to spend the call deliberately.
+ */
+export function repoSearchIsFree(): boolean {
+  return lastContext !== null && useLocal(lastContext)
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +221,7 @@ async function doSearch(symbol: string, ctx: RepoSearchContext): Promise<RepoSea
   // checked-out tree; through the provider it is a default-branch index that
   // step 2 then has to self-correct against the PR's head.
   let rawPaths: string[]
+  let searchedLocally = local
   try {
     rawPaths = local ? await searchLocalPaths(symbol) : await ctx.provider.searchCodePaths(ctx.repo, symbol)
   } catch (err) {
@@ -180,6 +230,7 @@ async function doSearch(symbol: string, ctx: RepoSearchContext): Promise<RepoSea
     // and retry through the provider rather than telling the user "no results"
     // for a symbol that may well have plenty.
     noteGroundingFailure(ctx.headSha)
+    searchedLocally = false
     rawPaths = await ctx.provider.searchCodePaths(ctx.repo, symbol)
   }
   const paths = rawPaths.filter((p) => !exclude.has(p)).slice(0, MAX_RESULT_FILES)
@@ -246,6 +297,7 @@ async function doSearch(symbol: string, ctx: RepoSearchContext): Promise<RepoSea
     filesScanned: fetched.length,
     filesSkipped: skipped,
     contentsByPath: new Map(fetched.map((f) => [f.path, f.text])),
+    source: searchedLocally ? 'local' : 'provider',
   }
 }
 
@@ -306,7 +358,8 @@ export async function searchRepoForSymbol(symbol: string, ctx: RepoSearchContext
   return outcome
 }
 
-/** Test-only: clear the search cache. */
+/** Test-only: clear the search cache and the last resolved context. */
 export function _resetRepoSearchCacheForTest(): void {
   cache.clear()
+  lastContext = null
 }

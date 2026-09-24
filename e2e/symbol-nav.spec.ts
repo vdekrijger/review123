@@ -263,3 +263,218 @@ test('inspect: Search repo lists call points outside the PR files', async ({ pag
   // Honest footnote about the default-branch index + head-SHA re-check.
   await expect(popover.getByText(/default branch index; results re-checked/)).toBeVisible()
 })
+
+// ---------------------------------------------------------------------------
+// Auto-resolve over a local bridge — the reason the manual button existed was
+// the provider's ~10 code-searches/min. A grounded local checkout has no such
+// budget, so the popover resolves the definition ON OPEN and shows its body.
+//
+// The symbol is a Python @dataclass defined OUTSIDE the PR's changed files:
+// exactly the case where Tier 1 can only say "not in the changed files".
+// ---------------------------------------------------------------------------
+
+/** 40-hex, because grounding compares it against the bridge's git head exactly. */
+const BRIDGE_HEAD = 'abc1234567890abcdef1234567890abcdef12345'
+const BRIDGE_PR = 78
+const BRIDGE_REVIEW_PATH = `/review/github/${OWNER}/${REPO}/${BRIDGE_PR}`
+
+// The struct the reader wants to read. It is NOT in the PR.
+const PROPS_PY = [
+  'from dataclasses import dataclass', // 1
+  '', // 2
+  '@dataclass', // 3
+  'class AnalyticsProps:', // 4
+  '    user_id: str', // 5
+  '    events: list[str]', // 6
+  '    sampled: bool = False', // 7
+  '', // 8
+  'DEFAULT_PROPS = None', // 9
+].join('\n')
+
+// The PR's own file merely USES it.
+const TRACK_PATCH = `@@ -1,2 +1,3 @@
+ from posthog.props import AnalyticsProps
++props = AnalyticsProps(user_id="u1", events=[])
+ VERSION = 1`
+
+async function stubBridgeForSymbols(page: import('@playwright/test').Page) {
+  await page.addInitScript(
+    ({ head, files }) => {
+      localStorage.setItem(
+        'review123:bridge',
+        JSON.stringify({ token: 'e2e-pairing-token-000000000000000000000000', port: 7321 }),
+      )
+      const realFetch = window.fetch.bind(window)
+      const json = (payload: unknown, status = 200) =>
+        new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } })
+
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+        if (!url.includes('127.0.0.1')) return realFetch(input as RequestInfo, init)
+        const body = typeof init?.body === 'string' ? init.body : null
+
+        if (url.includes('/v1/health')) {
+          return Promise.resolve(
+            json({
+              ok: true,
+              protocol: 1,
+              root: 'review123',
+              capabilities: { inference: [], infer: false, inferStream: false, inferAgentic: false, files: true, search: true },
+              git: { head, branch: 'main', dirty: false },
+              version: '0.1.0',
+            }),
+          )
+        }
+        if (url.includes('/v1/search')) {
+          const query = (JSON.parse(body ?? '{}') as { query?: string }).query ?? ''
+          const matches = Object.entries(files).flatMap(([path, text]) =>
+            (text as string)
+              .split('\n')
+              .map((line, i) => ({ path, line: i + 1, column: 1, preview: line }))
+              .filter((m) => query !== '' && m.preview.includes(query)),
+          )
+          return Promise.resolve(json({ ok: true, matches, truncated: false }))
+        }
+        if (url.includes('/v1/files')) {
+          const asked = (JSON.parse(body ?? '{}') as { paths?: string[] }).paths ?? []
+          return Promise.resolve(
+            json({
+              ok: true,
+              files: asked
+                .filter((p) => p in files)
+                .map((p) => ({ path: p, bytes: (files[p] as string).length, truncated: false, content: files[p], encoding: 'utf-8' })),
+              missing: asked.filter((p) => !(p in files)),
+              skipped: [],
+            }),
+          )
+        }
+        return Promise.resolve(json({ ok: false, error: 'not-found', message: 'no' }, 404))
+      }
+    },
+    { head: BRIDGE_HEAD, files: { 'posthog/props.py': PROPS_PY } as Record<string, string> },
+  )
+}
+
+/**
+ * Click an identifier by CARET POSITION rather than by locating a span.
+ *
+ * highlight.js gives a Python class reference no wrapper of its own —
+ * `props = AnalyticsProps(...)` highlights only the string literal — so there
+ * is no element to target. The popover's own click handler resolves the token
+ * from the caret under the pointer (see lib/symbols/clickToken), so measuring
+ * the token's rect with a Range and clicking its centre exercises exactly the
+ * path a reader's click takes.
+ */
+async function clickIdentifier(page: import('@playwright/test').Page, fileSlug: string, token: string) {
+  const point = await page.evaluate(
+    ({ slug, needle }) => {
+      const root = document.querySelector(`#file-${slug}`)
+      if (!root) return null
+      for (const raw of root.querySelectorAll('.diff-line-syntax-raw, .diff-line-content-raw')) {
+        const walker = document.createTreeWalker(raw, NodeFilter.SHOW_TEXT)
+        let node = walker.nextNode()
+        while (node) {
+          const index = (node.textContent ?? '').indexOf(needle)
+          if (index >= 0) {
+            const range = document.createRange()
+            range.setStart(node, index)
+            range.setEnd(node, index + needle.length)
+            const rect = range.getBoundingClientRect()
+            if (rect.width > 0 && rect.height > 0) {
+              return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+            }
+          }
+          node = walker.nextNode()
+        }
+      }
+      return null
+    },
+    { slug: fileSlug, needle: token },
+  )
+  expect(point, `identifier ${token} not found in #file-${fileSlug}`).not.toBeNull()
+  await page.mouse.click(point!.x, point!.y)
+}
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`inspect (${theme}): a definition outside the PR resolves on open and shows its body`, async ({ page }) => {
+    await page.route('**/*posthog.com/**', (route) => route.abort())
+    await page.route('**/us.i.posthog.com/**', (route) => route.abort())
+    await page.route('**/api.deepseek.com/**', (route) => route.abort())
+
+    await page.route('**/api.github.com/**', async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (path === `/repos/${OWNER}/${REPO}/pulls/${BRIDGE_PR}`) {
+        return route.fulfill({
+          json: {
+            title: 'Bridge symbol PR',
+            state: 'open', merged: false, body: null,
+            base: { sha: BASE_SHA, repo: { private: false } },
+            head: { sha: BRIDGE_HEAD },
+            changed_files: 1,
+          },
+        })
+      }
+      if (path === `/repos/${OWNER}/${REPO}/pulls/${BRIDGE_PR}/files`) {
+        return route.fulfill({
+          json: [{ filename: 'posthog/track.py', status: 'modified', patch: TRACK_PATCH, additions: 1, deletions: 0 }],
+        })
+      }
+      if (path === `/repos/${OWNER}/${REPO}/commits/${BRIDGE_HEAD}/check-runs`) {
+        return route.fulfill({ json: { total_count: 0, check_runs: [] } })
+      }
+      if (path === `/repos/${OWNER}/${REPO}/pulls/${BRIDGE_PR}/comments`) {
+        return route.fulfill({ json: [] })
+      }
+      return route.fulfill({ status: 404, json: { message: 'Not Found' } })
+    })
+
+    await stubBridgeForSymbols(page)
+    await page.addInitScript((settings) => {
+      localStorage.setItem('review123:settings', JSON.stringify(settings))
+    }, { deepseekKey: '', diffMode: 'unified', railCollapsed: true, focusMode: 'off' })
+
+    await page.goto(BRIDGE_REVIEW_PATH)
+    await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)
+    await expect(page.getByRole('heading', { name: /Bridge symbol PR/i })).toBeVisible({ timeout: 10_000 })
+    await page.getByRole('button', { name: 'Next step' }).click()
+    await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+
+    // Local grounding is live for this PR — the precondition for auto-resolve.
+    await expect(page.getByTestId('grounding-indicator')).toHaveAttribute('data-mode', 'local', { timeout: 10_000 })
+
+    await expect(page.locator('#file-posthog-track-py')).toBeVisible({ timeout: 10_000 })
+    await clickIdentifier(page, 'posthog-track-py', 'AnalyticsProps')
+
+    const popover = page.getByTestId('symbol-popover')
+    await expect(popover).toBeVisible()
+
+    // THE POINT: the body is there with no second click, and no button to press.
+    const peek = popover.getByTestId('definition-peek')
+    await expect(peek).toBeVisible({ timeout: 10_000 })
+    await expect(peek).toContainText('@dataclass')
+    await expect(peek).toContainText('user_id: str')
+    await expect(peek).toContainText('sampled: bool = False')
+    await expect(peek).not.toContainText('DEFAULT_PROPS')
+    await expect(popover.getByRole('button', { name: 'Search repo' })).toHaveCount(0)
+    await expect(popover.getByText(/Definition not in the changed files/)).toHaveCount(0)
+
+    // Honesty signals survive: the repo tag, the real file:line, and a
+    // provenance line that says LOCAL rather than the default-branch caveat.
+    await expect(popover.getByTestId('repo-definition')).toContainText('posthog/props.py:4')
+    await expect(popover.getByTestId('repo-definition')).toContainText('repo')
+    await expect(popover.getByText(/Searched your local checkout at this PR's head/)).toBeVisible()
+
+    // The popover is inside the viewport and the code block is not a second
+    // vertical scroll surface inside it.
+    const box = await popover.boundingBox()
+    const viewport = page.viewportSize()!
+    expect(box!.x).toBeGreaterThanOrEqual(0)
+    expect(box!.y).toBeGreaterThanOrEqual(0)
+    expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width)
+    expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height)
+    const scrollers = await popover.locator('.peek-scroll').evaluateAll((els) =>
+      els.filter((el) => el.scrollHeight > el.clientHeight).length,
+    )
+    expect(scrollers).toBe(0)
+  })
+}

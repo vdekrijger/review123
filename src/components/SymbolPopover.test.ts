@@ -1,9 +1,15 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 import SymbolPopover from './SymbolPopover.svelte'
 import type { SymbolDefinition, SymbolReference } from '../lib/symbols/symbolIndex'
-import type { RepoSearchOutcome } from '../lib/symbols/repoSearch'
+import { repoSearchIsFree, type RepoSearchOutcome } from '../lib/symbols/repoSearch'
+import { MAX_PEEK_LINES, MAX_PEEK_EXPANDED_LINES } from '../lib/symbols/definitionPeek'
 import { registerSymbolSource, _resetSymbolSourcesForTest } from '../lib/symbols/symbolSources'
+
+// The only thing the popover uses from repoSearch at runtime is the cost
+// question. Mocked (default: NOT free) so every pre-existing test keeps the
+// on-demand button, and the auto-resolve tests can flip one boolean.
+vi.mock('../lib/symbols/repoSearch', () => ({ repoSearchIsFree: vi.fn(() => false) }))
 
 const def: SymbolDefinition = {
   name: 'computeTotal',
@@ -325,14 +331,66 @@ describe('SymbolPopover — definition peek', () => {
     })
   })
 
-  it('caps long bodies at 40 lines with an honest more-lines marker', async () => {
+  it('opens long bodies at 40 lines and offers the rest as a control, not a label', async () => {
     const body = ['export function computeTotal() {', ...Array.from({ length: 59 }, (_, i) => `  step(${i})`), '}']
     registerUtilSource(body.join('\n'))
     renderPopover({ definitions: [{ ...def, line: 1, endLine: 61 }] })
     await fireEvent.click(screen.getByRole('button', { name: 'Definition body at src/util.ts:1' }))
     const block = screen.getByTestId('definition-peek')
     expect(block.querySelector('.peek-gutter')!.textContent!.split('\n')).toHaveLength(40)
-    expect(block.textContent).toContain('… (21 more lines)')
+    // The remainder is a door: it promises exactly what one click will add.
+    const more = screen.getByRole('button', { name: 'Show 21 more lines' })
+    await fireEvent.click(more)
+    expect(screen.getByTestId('definition-peek').querySelector('.peek-gutter')!.textContent!.split('\n')).toHaveLength(61)
+    expect(screen.queryByRole('button', { name: /Show \d+ more lines/ })).not.toBeInTheDocument()
+    expect(screen.getByTestId('definition-peek').textContent).not.toContain('more line')
+  })
+
+  it('stops at the expanded ceiling and falls back to the honest static remainder', async () => {
+    // Kept inside definitionPeek's 500-line availability walk, so the number
+    // under test is the display ceiling and not that separate bound.
+    const total = MAX_PEEK_EXPANDED_LINES + 60
+    const body = ['export function computeTotal() {', ...Array.from({ length: total - 2 }, (_, i) => `  step(${i})`), '}']
+    registerUtilSource(body.join('\n'))
+    renderPopover({ definitions: [{ ...def, line: 1, endLine: total }] })
+    await fireEvent.click(screen.getByRole('button', { name: 'Definition body at src/util.ts:1' }))
+    // One click can only add up to the ceiling, and the label says so.
+    const reveal = MAX_PEEK_EXPANDED_LINES - MAX_PEEK_LINES
+    await fireEvent.click(screen.getByRole('button', { name: `Show ${reveal} more lines` }))
+    const block = screen.getByTestId('definition-peek')
+    expect(block.querySelector('.peek-gutter')!.textContent!.split('\n')).toHaveLength(MAX_PEEK_EXPANDED_LINES)
+    // No control it cannot honour — the remaining count goes back to a label.
+    expect(screen.queryByRole('button', { name: /Show \d+ more lines/ })).not.toBeInTheDocument()
+    expect(block.textContent).toContain(`… (${total - MAX_PEEK_EXPANDED_LINES} more lines)`)
+  })
+
+  it('keeps the patch-only note distinct from a capped body — nothing to expand there', async () => {
+    // The source genuinely LACKS the lines, so there must be no control
+    // offering to reveal them; only the honest explanation.
+    registerSymbolSource({
+      filename: 'src/util.ts',
+      status: 'modified',
+      patch: ['@@ -1,2 +1,2 @@', ' export function computeTotal() {', '+  const added = 1'].join('\n'),
+    })
+    renderPopover({ definitions: [{ ...def, line: 1, endLine: undefined }] })
+    await fireEvent.click(screen.getByRole('button', { name: 'Definition body at src/util.ts:1' }))
+    expect(screen.getByTestId('definition-peek').textContent).toContain('Only the changed lines are available for this file.')
+    expect(screen.queryByRole('button', { name: /Show \d+ more lines/ })).not.toBeInTheDocument()
+  })
+
+  it('collapsing the row resets the reveal, so reopening starts compact again', async () => {
+    const body = ['export function computeTotal() {', ...Array.from({ length: 59 }, (_, i) => `  step(${i})`), '}']
+    registerUtilSource(body.join('\n'))
+    renderPopover({ definitions: [{ ...def, line: 1, endLine: 61 }] })
+    const toggle = screen.getByRole('button', { name: 'Definition body at src/util.ts:1' })
+    await fireEvent.click(toggle)
+    await fireEvent.click(screen.getByRole('button', { name: 'Show 21 more lines' }))
+    expect(screen.getByTestId('definition-peek').querySelector('.peek-gutter')!.textContent!.split('\n')).toHaveLength(61)
+    // Reveal is one-way WITHIN an open peek; the row's own caret is how you
+    // put it away, and it does not strand the peek in its expanded size.
+    await fireEvent.click(toggle)
+    await fireEvent.click(toggle)
+    expect(screen.getByTestId('definition-peek').querySelector('.peek-gutter')!.textContent!.split('\n')).toHaveLength(40)
   })
 
   it('shows the honest patch-only note when the hunk cuts the body off', async () => {
@@ -392,13 +450,17 @@ describe('SymbolPopover — definition peek', () => {
     renderPopover({ definitions: [], onSearchRepo: vi.fn().mockResolvedValue(withDef) })
     await fireEvent.click(screen.getByRole('button', { name: 'Search repo' }))
     await screen.findByTestId('repo-definition')
+    // The first repo-found definition opens EXPANDED — no second click needed.
     const toggle = screen.getByRole('button', { name: 'Definition body at src/other.ts:1' })
-    await fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
     const block = screen.getByTestId('definition-peek')
     expect(block.textContent).toContain('return values.length')
     expect(block.querySelector('.peek-gutter')!.textContent).toBe('1\n2\n3')
     // Fetched full contents → complete, no patch-only note.
     expect(block.textContent).not.toContain('Only the changed lines')
+    // And it still collapses on demand.
+    await fireEvent.click(toggle)
+    expect(screen.queryByTestId('definition-peek')).not.toBeInTheDocument()
   })
 
   it('repo definitions without carried contents offer no peek (hand-built outcomes)', async () => {
@@ -415,5 +477,116 @@ describe('SymbolPopover — definition peek', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Search repo' }))
     await screen.findByTestId('repo-definition')
     expect(screen.queryByRole('button', { name: /Definition body at/ })).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Auto-resolve — the popover runs the search itself when it costs nothing.
+//
+// The cost seam is repoSearchIsFree(): true only when a local bridge is
+// grounded at this PR's head. These tests own the DECISION (does it fire, and
+// what does the reader see); repoSearch.test.ts owns what the accessor means.
+// ---------------------------------------------------------------------------
+
+const PY_DATACLASS = [
+  '@dataclass', // 1
+  'class AnalyticsProps:', // 2
+  '    user_id: str', // 3
+  '    events: list[str]', // 4
+  '', // 5
+  'OTHER = 1', // 6
+].join('\n')
+
+/** The user's real case: a Python dataclass defined outside the PR's files. */
+const pyRepoOutcome: RepoSearchOutcome = {
+  ok: true,
+  definitions: [
+    { name: 'AnalyticsProps', kind: 'class', file: 'app/props.py', line: 2, endLine: 4, side: 'new', snippet: 'class AnalyticsProps:', inDiff: false },
+  ],
+  references: [],
+  filesScanned: 1,
+  filesSkipped: 0,
+  contentsByPath: new Map([['app/props.py', PY_DATACLASS]]),
+  source: 'local',
+}
+
+describe('SymbolPopover — auto-resolve when the search is free', () => {
+  beforeEach(() => {
+    vi.mocked(repoSearchIsFree).mockReturnValue(false)
+  })
+
+  it('does NOT search on open when only the rate-limited provider path is available', () => {
+    const onSearchRepo = vi.fn()
+    renderPopover({ symbol: 'AnalyticsProps', definitions: [], onSearchRepo })
+    expect(onSearchRepo).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Search repo' })).toBeInTheDocument()
+  })
+
+  it('searches on open, with no button and no click, when a local bridge is grounded', async () => {
+    vi.mocked(repoSearchIsFree).mockReturnValue(true)
+    const onSearchRepo = vi.fn().mockResolvedValue(pyRepoOutcome)
+    renderPopover({ symbol: 'AnalyticsProps', definitions: [], onSearchRepo })
+    expect(onSearchRepo).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: 'Search repo' })).not.toBeInTheDocument()
+    await screen.findByTestId('repo-definition')
+  })
+
+  it('holds a neutral line while resolving instead of a verdict it is about to retract', async () => {
+    vi.mocked(repoSearchIsFree).mockReturnValue(true)
+    let resolve!: (v: RepoSearchOutcome) => void
+    const onSearchRepo = vi.fn(() => new Promise<RepoSearchOutcome>((r) => { resolve = r }))
+    renderPopover({ symbol: 'AnalyticsProps', definitions: [], onSearchRepo })
+    expect(screen.getByText('Looking up the definition…')).toBeInTheDocument()
+    expect(screen.queryByText(/Definition not in the changed files/)).not.toBeInTheDocument()
+    resolve(pyRepoOutcome)
+    await screen.findByTestId('repo-definition')
+    expect(screen.queryByText('Looking up the definition…')).not.toBeInTheDocument()
+  })
+
+  it('shows the Python dataclass BODY on open — decorator, fields, real line numbers', async () => {
+    vi.mocked(repoSearchIsFree).mockReturnValue(true)
+    renderPopover({ symbol: 'AnalyticsProps', definitions: [], onSearchRepo: vi.fn().mockResolvedValue(pyRepoOutcome) })
+    const block = await screen.findByTestId('definition-peek')
+    expect(block.textContent).toContain('@dataclass')
+    expect(block.textContent).toContain('user_id: str')
+    expect(block.textContent).toContain('events: list[str]')
+    expect(block.textContent).not.toContain('OTHER = 1') // never spills past the struct
+    expect(block.querySelector('.peek-gutter')!.textContent).toBe('1\n2\n3\n4')
+    // The honesty signals survive: the file:line and the repo tag.
+    const entry = screen.getByTestId('repo-definition')
+    expect(entry.textContent).toContain('app/props.py:2')
+    expect(entry.textContent).toContain('repo')
+  })
+
+  it('keeps the honest not-found text AND restores the button when an auto-search fails', async () => {
+    vi.mocked(repoSearchIsFree).mockReturnValue(true)
+    const onSearchRepo = vi.fn().mockResolvedValue({ ok: false, message: 'Repo search failed — try again.' })
+    renderPopover({ symbol: 'AnalyticsProps', definitions: [], onSearchRepo })
+    await screen.findByRole('alert')
+    expect(screen.getByText(/Definition not in the changed files of this PR/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Search repo' })).toBeInTheDocument()
+  })
+
+  it('re-resolves for the next symbol when the popover is retargeted without unmounting', async () => {
+    vi.mocked(repoSearchIsFree).mockReturnValue(true)
+    const onSearchRepo = vi.fn().mockResolvedValue(pyRepoOutcome)
+    const { rerender } = renderPopover({ symbol: 'AnalyticsProps', definitions: [], onSearchRepo })
+    await screen.findByTestId('repo-definition')
+    await rerender({ symbol: 'OtherProps', definitions: [], onSearchRepo })
+    expect(onSearchRepo).toHaveBeenCalledTimes(2)
+  })
+
+  it('attributes a local search to the local checkout, not the default-branch index', async () => {
+    vi.mocked(repoSearchIsFree).mockReturnValue(true)
+    renderPopover({ symbol: 'AnalyticsProps', definitions: [], onSearchRepo: vi.fn().mockResolvedValue(pyRepoOutcome) })
+    await screen.findByTestId('repo-definition')
+    expect(screen.getByText(/Searched your local checkout at this PR's head/)).toBeInTheDocument()
+    expect(screen.queryByText(/default branch index/)).not.toBeInTheDocument()
+  })
+
+  it('keeps the default-branch caveat for a provider search', async () => {
+    renderPopover({ definitions: [], onSearchRepo: vi.fn().mockResolvedValue({ ...repoRefs, source: 'provider' }) })
+    await fireEvent.click(screen.getByRole('button', { name: 'Search repo' }))
+    await screen.findByText(/default branch index; results re-checked at this PR's head/)
   })
 })
