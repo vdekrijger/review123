@@ -30,18 +30,40 @@
 
   import Spinner from './Spinner.svelte'
   import {
+    FIX_LOOP_NOT_REVIEWED,
+    FIX_LOOP_ROUND_CAP,
     cherryPickCommand,
     currentFixReadiness,
+    decideFixLoopStop,
     describeFixFailure,
+    describeFixLoopStop,
     describeFixReadiness,
     describeFixSkip,
     describeFixStop,
     describeFixTests,
+    describeRetryableSkips,
+    describeUnsoftenedChanges,
+    fixCliChoices,
     fixSkipLabel,
     fixTestLabel,
+    readFixCliPref,
+    retryableSkips,
     runBridgeFix,
+    unsoftenedChanges,
+    writeFixCliPref,
     type FixFailure,
+    type FixLoopRound,
+    type FixLoopStopReason,
   } from '../lib/bridge/fixLoop'
+  import {
+    botCommentToFinding,
+    botRereaderPersona,
+    describeBotCommentRefusal,
+    loadBotComments,
+    type BotCommentCandidate,
+    type BotCommentIntake,
+    type BotCommentRefusal,
+  } from '../lib/bridge/botComments'
   import {
     checkoutPr,
     currentCheckoutReadiness,
@@ -56,9 +78,16 @@
     trustNeedsConfirmation,
     type CheckoutTrust,
   } from '../lib/bridge/runPr.svelte'
-  import { bridgeState } from '../lib/bridge/bridge.svelte'
+  import { bridgeState, bridgeInferenceClis } from '../lib/bridge/bridge.svelte'
   import { BRIDGE_START_COMMAND } from '../lib/bridge/install'
-  import { MAX_FIX_FINDINGS, type BridgeFixFinding, type BridgeFixResponse } from '../lib/bridge/protocol'
+  import {
+    MAX_FIX_FINDINGS,
+    type BridgeCli,
+    type BridgeFixChange,
+    type BridgeFixFinding,
+    type BridgeFixResponse,
+    type BridgeFixSkip,
+  } from '../lib/bridge/protocol'
   import { track } from '../lib/analytics/analytics'
   import {
     capPatchRows,
@@ -67,7 +96,8 @@
     patchRowCount,
     type ParsedPatch,
   } from '../lib/diff/commitPatch'
-  import { verifyAgentFix } from '../lib/ai/fixVerifyRun'
+  import { fixTestFactFor, noteFixTestFact } from '../lib/bridge/fixTestFact.svelte'
+  import { fixVerifyShape, mergeFixVerifyReports, verifyAgentFixDetailed } from '../lib/ai/fixVerifyRun'
   import {
     FIX_VERIFY_EVIDENCE_CAVEAT,
     FIX_VERIFY_NEW_PROBLEM_HEADING,
@@ -102,10 +132,31 @@
 
   let { headSha, candidates }: Props = $props()
 
+  // ---- Which CLI runs it ---------------------------------------------------
+  //
+  // The panel used to say "Send 4 to claude" because `preferredFixCli` ranked
+  // claude first. For a user running several agents deliberately that is a
+  // preference they never set, stated as a fact. So it is a choice — remembered
+  // per browser, defaulting to exactly today's behaviour, and offered ONLY when
+  // the bridge detected more than one CLI. One agent is not a decision.
+  //
+  // It is declared before readiness because readiness RESOLVES it: which CLI
+  // actually runs is one answer, computed in one place.
+  const cliChoices = $derived(fixCliChoices(bridgeInferenceClis()))
+  let cliPref = $state<BridgeCli | null>(readFixCliPref())
+
+  function chooseCli(choice: BridgeCli): void {
+    cliPref = choice
+    writeFixCliPref(choice)
+  }
+
   // ---- Readiness -----------------------------------------------------------
   // Read live from the bridge, so plugging one in mid-review lights the panel
   // up without a reload. `reason` is a named value, never a bare false.
-  const readiness = $derived(currentFixReadiness(headSha))
+  // `cliPref` is read here rather than inside `currentFixReadiness` because
+  // localStorage is not reactive: a click on the CLI picker has to move the
+  // label on the send button in the same frame.
+  const readiness = $derived(currentFixReadiness(headSha, cliPref))
 
   /**
    * Whether to render AT ALL.
@@ -225,12 +276,59 @@
     }
   }
 
+  // `readiness.cli` is the single source of "which CLI will actually run": it
+  // resolves the preference against what the bridge detected, so no label here
+  // can name one and run the other.
+  const cli = $derived(readiness.cli)
+
+  // ---- Review-bot comments -------------------------------------------------
+  //
+  // These PRs already carry findings nobody in this app produced. They are
+  // fetched ON DEMAND rather than on mount: it is two extra provider calls, the
+  // panel is useful without them, and a rate limit spent on a list the user did
+  // not ask for is a bad trade.
+  //
+  // Everything about how their TEXT is kept inert lives in
+  // src/lib/bridge/botComments.ts — it is wrapped once, at ingestion, and this
+  // component only ever renders the preview and forwards the wrapped body.
+  type BotState =
+    | { status: 'idle' }
+    | { status: 'loading' }
+    | { status: 'done'; intake: BotCommentIntake }
+    | { status: 'failed' }
+
+  let bots = $state<BotState>({ status: 'idle' })
+  const botCandidates = $derived(bots.status === 'done' ? bots.intake.offered : [])
+
+  /** Refusals grouped by reason, so the panel states counts instead of a list. */
+  const botRefusals = $derived.by(() => {
+    const out = new Map<BotCommentRefusal, number>()
+    if (bots.status === 'done') {
+      for (const r of bots.intake.refused) out.set(r.reason, (out.get(r.reason) ?? 0) + 1)
+    }
+    return [...out.entries()]
+  })
+
+  async function loadBots(): Promise<void> {
+    if (bots.status === 'loading') return
+    bots = { status: 'loading' }
+    const intake = await loadBotComments()
+    // null means "we could not ask", which is a different claim from "there are
+    // none" and gets a different sentence.
+    bots = intake === null ? { status: 'failed' } : { status: 'done', intake }
+  }
+
   // ---- Selection -----------------------------------------------------------
   // Default: every eligible finding is ticked. The user unticks what they want
   // to keep for themselves — the cheapest possible "you are in charge".
   let unticked = $state<Set<string>>(new Set())
 
-  const selectedKeys = $derived(candidates.filter((c) => !unticked.has(c.key)).map((c) => c.key))
+  /** Bot comments are opt-IN, which is why this is a ticked-set, not a cross-off. */
+  let botTicked = $state<Set<string>>(new Set())
+
+  const selectedFindingKeys = $derived(candidates.filter((c) => !unticked.has(c.key)).map((c) => c.key))
+  const selectedBotKeys = $derived(botCandidates.filter((b) => botTicked.has(b.key)).map((b) => b.key))
+  const selectedKeys = $derived([...selectedFindingKeys, ...selectedBotKeys])
   /** The batch is capped by the protocol; the UI says so rather than silently trimming. */
   const overCap = $derived(selectedKeys.length > MAX_FIX_FINDINGS)
 
@@ -245,15 +343,120 @@
     unticked = on ? new Set() : new Set(candidates.map((c) => c.key))
   }
 
+  function toggleBot(key: string): void {
+    const next = new Set(botTicked)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    botTicked = next
+  }
+
+  function tickAllBots(on: boolean): void {
+    botTicked = on ? new Set(botCandidates.map((b) => b.key)) : new Set()
+  }
+
   // ---- Run state -----------------------------------------------------------
+  //
+  // ────────────────────────────────────────────────────────────────────────
+  // THE LOOP IS BOUNDED BY A BUDGET, NOT BY A PROMISE.
+  //
+  // #280 made the user click "send the still-open ones back" by hand each
+  // round. That is now automatic — but automatic under a budget, never
+  // "iterate until there are no findings". This repo's own eval scored the
+  // same defect 1/3, 3/3, 2/3 and 1/3 across runs on identical code, so a
+  // quiet round is a SAMPLE and a loop that treated it as a fixed point would
+  // be promising something the measurement says is not there.
+  //
+  // `decideFixLoopStop` owns the rule; this component owns the state. It stops
+  // on the first of: a quiet round, a round with no commit, a round that
+  // repeated the last one, the round cap, the spend budget, the user, or a
+  // failed round — and the panel says WHICH.
+  //
+  // Everything that has landed survives a stop. The results below accumulate
+  // across rounds (latest outcome per finding wins), so pressing Stop in round
+  // four keeps rounds one to three.
+  // ────────────────────────────────────────────────────────────────────────
   type RunState =
     | { status: 'idle' }
-    | { status: 'running'; count: number }
-    | { status: 'done'; response: BridgeFixResponse }
+    | { status: 'running'; round: number; count: number; phase: 'fixing' | 're-reading' }
+    | { status: 'done' }
     | { status: 'failed'; failure: FixFailure }
 
   let run = $state<RunState>({ status: 'idle' })
   let abort: AbortController | null = null
+
+  /**
+   * The user's stop, as a plain flag rather than `$state`.
+   *
+   * The loop reads it synchronously between rounds; a reactive read would be a
+   * frame behind, and a round that started because the flag had not propagated
+   * yet is exactly the "long unattended run you cannot interrupt" this is for.
+   */
+  let stopRequested = false
+
+  /** One entry per round that produced an answer. Never rewritten, only pushed. */
+  let roundRecords = $state<FixLoopRound[]>([])
+  /** Every bridge response, in order. The results are derived from these. */
+  let responses = $state<{ round: number; response: BridgeFixResponse }[]>([])
+  /** Why the loop stopped. Null while it runs. */
+  let loopStop = $state<FixLoopStopReason | null>(null)
+
+  /**
+   * The LATEST outcome per finding, across every round.
+   *
+   * A round starts from this pull request's head again, so round 2's commit for
+   * a finding REPLACES round 1's rather than stacking on it — cherry-picking
+   * both would conflict. Insertion order is first-seen order, so the list does
+   * not reshuffle under the reader between rounds.
+   */
+  const latestOutcomes = $derived.by(() => {
+    const out = new Map<string, { change?: BridgeFixChange; skip?: BridgeFixSkip }>()
+    for (const r of responses) {
+      for (const c of r.response.changes) out.set(c.findingId, { change: c })
+      for (const s of r.response.skipped) out.set(s.findingId, { skip: s })
+    }
+    return out
+  })
+
+  const allChanges = $derived([...latestOutcomes.values()].flatMap((v) => (v.change ? [v.change] : [])))
+  const allSkips = $derived([...latestOutcomes.values()].flatMap((v) => (v.skip ? [v.skip] : [])))
+
+  /** The scratch branches the commits live on — one per round. */
+  const branches = $derived([...new Set(responses.map((r) => r.response.branch))])
+
+  /**
+   * Commits the re-read is NOT allowed to soften, whatever later rounds did.
+   *
+   * `round-cap` means the tests came back RED; `no-progress` and `repeat-diff`
+   * mean the agent was stuck or oscillating on that finding. Those are facts
+   * about a commit, and the outer loop running four more rounds over other
+   * findings does not touch them.
+   */
+  const unsoftened = $derived(unsoftenedChanges(allChanges))
+
+  /** Skips that never got a real answer — their own action, their own count. */
+  const retryable = $derived(retryableSkips(allSkips))
+
+  /** The last round's own bridge-level stop. Per-round, never the loop's. */
+  const lastResponse = $derived(responses.length > 0 ? responses[responses.length - 1]!.response : null)
+
+  /** A round is in flight. The results below are visible but not re-sendable. */
+  const busy = $derived(run.status === 'running')
+
+  /**
+   * PUBLISH THE ONLY REAL TEST SIGNAL THIS APP HOLDS.
+   *
+   * The readiness grade on Step 3 (#281) weights its `tests` check highest,
+   * because it is the one input where the code was actually EXECUTED — and it
+   * read `not-run` forever, because this was the only place the answer existed
+   * and it lived in this component's own state.
+   *
+   * It is DERIVED from `allChanges`, which keeps one commit per finding with the
+   * latest round winning. That is what stops a round-1 green from outliving the
+   * round-2 commit that replaced it: stale green is worse than no green.
+   */
+  $effect(() => {
+    noteFixTestFact(headSha, fixTestFactFor(allChanges))
+  })
 
   /** Per-change verdict. Absent = not yet judged; the user must choose. */
   let verdicts = $state<Record<string, 'approved' | 'rejected'>>({})
@@ -273,6 +476,11 @@
   // running and work if it fails outright — the human's judgment is the
   // authority here, and a check that could hold it hostage would have the
   // relationship backwards.
+  //
+  // ACROSS ROUNDS it accumulates rather than re-running: each round re-reads
+  // only the commits it produced, and a finding already re-read against the
+  // exact commit still on screen does not get asked again. `mergeFixVerifyReports`
+  // is where the latest verdict per finding wins.
   type VerifyState =
     | { status: 'idle' }
     | { status: 'running' }
@@ -289,10 +497,19 @@
   /** The findings this run leaves open — what another round would be FOR. */
   const stillOpen = $derived(verification === null ? [] : stillOpenFindingIds(verification))
 
-  async function runVerification(response: BridgeFixResponse): Promise<void> {
+  /**
+   * Re-read ONE round's commits and fold the result into what is already known.
+   *
+   * Returns how many model calls it spent, because that is the loop's budget:
+   * the fix itself runs on the user's CLI subscription and the bridge reports
+   * no token counts, so the re-read is the only spend this app can actually
+   * meter.
+   */
+  async function runVerification(response: BridgeFixResponse): Promise<number> {
+    const prior = verification
     verify = { status: 'running' }
     try {
-      const report = await verifyAgentFix(
+      const outcome = await verifyAgentFixDetailed(
         headSha,
         response.changes.map((c) => ({
           findingId: c.findingId,
@@ -301,23 +518,21 @@
           diff: c.diff,
           truncated: c.truncated,
         })),
-        candidates.map((c) => ({
-          key: c.key,
-          skillName: c.skillName,
-          path: c.path,
-          line: c.line,
-          body: c.body,
-          suggestedFix: c.suggestedFix,
-        })),
+        verifiableFindings(),
       )
-      verify = { status: 'done', report }
+      // Counts and enums only — see the PRIVACY DECISION block on
+      // fix_verify_completed in lib/analytics. `fixVerifyShape` derives the
+      // whole payload at the seam so this call site cannot improvise.
+      track('fix_verify_completed', fixVerifyShape(outcome))
+      verify = { status: 'done', report: mergeFixVerifyReports(prior, outcome.report) }
+      return outcome.report.calls
     } catch {
       // A thrown pass is reported as a pass that read nothing, which every
       // per-finding row then states plainly. Swallowing it into `idle` would
       // leave the panel silent, and silence here reads as "checked, clean".
       verify = {
         status: 'done',
-        report: {
+        report: mergeFixVerifyReports(prior, {
           byFinding: response.changes.map((c) => ({
             findingId: c.findingId,
             persona: reviewerFor(c.findingId),
@@ -330,9 +545,51 @@
           witnesses: [],
           calls: 0,
           failedCalls: 0,
-        },
+        }),
       }
+      return 0
     }
+  }
+
+  /**
+   * Every finding the re-read may be asked about — the reviewers' AND the bot
+   * comments'.
+   *
+   * A bot comment's `body` here is the SAME wrapped, fenced quote that went to
+   * the fixing agent: one wrapping applied at ingestion, used everywhere the
+   * text travels, rather than one per consumer. Its persona is "Standing in for
+   * <bot>", because the models doing the re-reading are the user's own and the
+   * bot never re-read anything.
+   */
+  function verifiableFindings(): {
+    key: string
+    skillName: string
+    path: string
+    line: number | null
+    body: string
+    suggestedFix: string
+  }[] {
+    return [
+      ...candidates.map((c) => ({
+        key: c.key,
+        skillName: c.skillName,
+        path: c.path,
+        line: c.line,
+        body: c.body,
+        suggestedFix: c.suggestedFix,
+      })),
+      ...botCandidates.map((b) => {
+        const wire = botCommentToFinding(b)
+        return {
+          key: b.key,
+          skillName: botRereaderPersona(b.author),
+          path: b.path,
+          line: b.line,
+          body: wire.body,
+          suggestedFix: wire.suggestedFix,
+        }
+      }),
+    ]
   }
 
   // ---- Rendering the agent's actual change --------------------------------
@@ -340,9 +597,7 @@
   // this is read inside an each block.
   const parsedDiffs = $derived.by(() => {
     const out = new Map<string, ParsedPatch>()
-    if (run.status === 'done') {
-      for (const c of run.response.changes) out.set(c.findingId, parseCommitPatch(c.diff))
-    }
+    for (const c of allChanges) out.set(c.findingId, parseCommitPatch(c.diff))
     return out
   })
 
@@ -359,19 +614,26 @@
     return parsedDiffs.get(findingId) ?? { files: [], additions: 0, deletions: 0 }
   }
 
-  const approvedChanges = $derived(
-    run.status === 'done' ? run.response.changes.filter((c) => verdicts[c.findingId] === 'approved') : [],
-  )
+  const approvedChanges = $derived(allChanges.filter((c) => verdicts[c.findingId] === 'approved'))
   const cherryPick = $derived(cherryPickCommand(approvedChanges))
+
+  function botFor(key: string): BotCommentCandidate | undefined {
+    return botCandidates.find((b) => b.key === key)
+  }
 
   function labelFor(key: string): string {
     const candidate = candidates.find((c) => c.key === key)
-    if (!candidate) return key
-    return `${candidate.path}${candidate.line === null ? '' : `:${candidate.line}`}`
+    if (candidate) return `${candidate.path}${candidate.line === null ? '' : `:${candidate.line}`}`
+    const bot = botFor(key)
+    if (bot) return `${bot.path}${bot.line === null ? '' : `:${bot.line}`}`
+    return key
   }
 
   function reviewerFor(key: string): string {
-    return candidates.find((c) => c.key === key)?.skillName ?? ''
+    const candidate = candidates.find((c) => c.key === key)
+    if (candidate) return candidate.skillName
+    const bot = botFor(key)
+    return bot ? botRereaderPersona(bot.author) : ''
   }
 
   function toWire(entry: FixCandidateEntry): BridgeFixFinding {
@@ -385,40 +647,48 @@
     }
   }
 
-  async function dispatch(keys: readonly string[]): Promise<void> {
-    if (!readiness.ready || readiness.cli === null) return
-    const chosen = candidates.filter((c) => keys.includes(c.key))
-    if (chosen.length === 0) return
+  /**
+   * The wire batch for a set of keys — reviewer findings and bot comments
+   * together, each converted by the module that owns its shape.
+   *
+   * A bot comment goes through `botCommentToFinding`, which is the only place
+   * its text is ever put on the wire and the only place `suggestedFix` is
+   * written. Nothing here interpolates a comment body into anything.
+   */
+  function wireFor(keys: readonly string[]): BridgeFixFinding[] {
+    const wire: BridgeFixFinding[] = []
+    for (const key of keys) {
+      const candidate = candidates.find((c) => c.key === key)
+      if (candidate) {
+        wire.push(toWire(candidate))
+        continue
+      }
+      const bot = botFor(key)
+      if (bot) wire.push(botCommentToFinding(bot))
+    }
+    return wire
+  }
 
-    verdicts = {}
-    verify = { status: 'idle' }
-    expanded = new Set()
-    run = { status: 'running', count: chosen.length }
+  /** One round: dispatch, record, re-read. Returns what the stop rule needs. */
+  async function runRound(
+    round: number,
+    keys: readonly string[],
+    cliToRun: BridgeCli,
+  ): Promise<{ record: FixLoopRound; failed: boolean }> {
+    const wire = wireFor(keys)
+    run = { status: 'running', round, count: wire.length, phase: 'fixing' }
     abort = new AbortController()
 
     // Analytics: counts and enums only. Nothing about the findings being fixed,
     // the code, the commits or the agent's own words ever leaves this machine —
     // see the PRIVACY DECISION block on bridge_fix_* in lib/analytics.
     const t0 = performance.now()
-    track('bridge_fix_dispatched', { findings: chosen.length, cli: readiness.cli })
+    track('bridge_fix_dispatched', { findings: wire.length, cli: cliToRun, round })
 
-    const outcome = await runBridgeFix(readiness.cli, headSha, chosen.map(toWire), {
-      signal: abort.signal,
-    })
+    const outcome = await runBridgeFix(cliToRun, headSha, wire, { signal: abort.signal })
     abort = null
 
-    if (outcome.ok) {
-      const changes = outcome.response.changes
-      track('bridge_fix_settled', {
-        outcome: 'done',
-        changes: changes.length,
-        skipped: outcome.response.skipped.length,
-        stop_reason: outcome.response.stopReason,
-        tests_passed: changes.filter((c) => c.tests?.status === 'passed').length,
-        tests_failed: changes.filter((c) => c.tests?.status === 'failed').length,
-        duration_ms: Math.round(performance.now() - t0),
-      })
-    } else {
+    if (!outcome.ok) {
       // A user cancellation is not a failure — the same distinction the
       // transport already makes, kept in the metric so an abandoned run never
       // reads as a broken one.
@@ -430,17 +700,111 @@
         ...(cancelled ? {} : { failure: outcome.failure.kind }),
         duration_ms: Math.round(performance.now() - t0),
       })
+      // A cancellation is the user stopping the loop, not a broken round: the
+      // rounds already landed stay on screen either way, but only a real
+      // failure gets the error surface.
+      if (cancelled) stopRequested = true
+      else run = { status: 'failed', failure: outcome.failure }
+      return { record: { round, sent: [...keys], commits: [], stillOpen: [], verifyCalls: 0 }, failed: !cancelled }
     }
 
-    run = outcome.ok
-      ? { status: 'done', response: outcome.response }
-      : { status: 'failed', failure: outcome.failure }
+    const changes = outcome.response.changes
+    track('bridge_fix_settled', {
+      outcome: 'done',
+      changes: changes.length,
+      skipped: outcome.response.skipped.length,
+      stop_reason: outcome.response.stopReason,
+      tests_passed: changes.filter((c) => c.tests?.status === 'passed').length,
+      tests_failed: changes.filter((c) => c.tests?.status === 'failed').length,
+      duration_ms: Math.round(performance.now() - t0),
+    })
 
-    // Close the loop: look once at what came back. Only when there IS a commit
-    // to look at — a run that produced nothing but skips has no diff to re-read
-    // and must not spend a model call saying so.
-    if (outcome.ok && outcome.response.changes.length > 0) {
-      void runVerification(outcome.response)
+    responses = [...responses, { round, response: outcome.response }]
+
+    // Look at what came back — but only when there IS a commit to look at. A
+    // round that produced nothing but skips has no diff to re-read and must not
+    // spend a model call saying so.
+    let verifyCalls = 0
+    if (changes.length > 0) {
+      run = { status: 'running', round, count: wire.length, phase: 're-reading' }
+      verifyCalls = await runVerification(outcome.response)
+    }
+
+    return {
+      record: {
+        round,
+        sent: [...keys],
+        commits: changes.map((c) => c.commit),
+        stillOpen: verification === null ? [] : stillOpenFindingIds(verification),
+        verifyCalls,
+      },
+      failed: false,
+    }
+  }
+
+  /**
+   * THE BOUNDED LOOP.
+   *
+   * `iterate: false` is the single-finding path — one round, no automation. A
+   * finding the user half-trusts, sent on its own to see what happens, is not
+   * the place to spend a multi-round budget.
+   */
+  async function dispatch(keys: readonly string[], iterate = true): Promise<void> {
+    if (!readiness.ready || cli === null) return
+    if (run.status === 'running') return
+    if (wireFor(keys).length === 0) return
+
+    verdicts = {}
+    verify = { status: 'idle' }
+    expanded = new Set()
+    responses = []
+    roundRecords = []
+    loopStop = null
+    stopRequested = false
+
+    const cliToRun = cli
+    const t0 = performance.now()
+    const records: FixLoopRound[] = []
+    let next: readonly string[] = keys
+    let round = 0
+    let stop: FixLoopStopReason | null = null
+
+    for (;;) {
+      round += 1
+      const { record, failed } = await runRound(round, next, cliToRun)
+      records.push(record)
+      roundRecords = [...records]
+
+      const decided = decideFixLoopStop({
+        rounds: records,
+        elapsedMs: performance.now() - t0,
+        interrupted: stopRequested,
+        failed,
+      })
+      if (decided !== null) {
+        stop = decided
+        break
+      }
+      // The single-finding path stops here whatever the rule says, and reports
+      // NO loop stop: there was no loop, and inventing a "1-round cap" sentence
+      // for a deliberate one-off would be a stop reason that never applied.
+      if (!iterate) break
+
+      next = record.stillOpen
+    }
+
+    loopStop = stop
+    if (run.status !== 'failed') run = { status: 'done' }
+
+    if (stop !== null) {
+      track('bridge_fix_looped', {
+        stop,
+        rounds: records.length,
+        commits: allChanges.length,
+        still_open: stillOpen.length,
+        unsoftened: unsoftened.length,
+        duration_ms: Math.round(performance.now() - t0),
+      })
     }
   }
 
@@ -456,17 +820,27 @@
    */
   export function sendOne(key: string): void {
     if (run.status === 'running') return
-    void dispatch([key])
+    // ONE round, never the loop: a finding sent on its own is the cheap way to
+    // try this out, and it should cost one round's worth of anything.
+    void dispatch([key], false)
     sectionEl?.scrollIntoView({ block: 'nearest' })
   }
 
   let sectionEl: HTMLElement | null = $state(null)
 
-  function cancel(): void {
+  /**
+   * Stop the loop and KEEP WHAT LANDED.
+   *
+   * A long unattended run that cannot be interrupted is worse than a manual
+   * one, so this is offered in every round. It aborts the in-flight request and
+   * sets the flag the loop reads between rounds; the commits earlier rounds
+   * already made stay on screen and stay on the bridge's scratch branch. The
+   * bridge itself never leaves anything behind in the user's checkout.
+   */
+  function stopLoop(): void {
+    stopRequested = true
     abort?.abort()
     abort = null
-    run = { status: 'idle' }
-    verify = { status: 'idle' }
   }
 
   function reset(): void {
@@ -474,22 +848,39 @@
     verdicts = {}
     verify = { status: 'idle' }
     expanded = new Set()
+    responses = []
+    roundRecords = []
+    loopStop = null
   }
 
   /**
-   * Send the findings this run left OPEN back for another round.
+   * Send the findings the loop left OPEN back for a FRESH budget.
    *
-   * THE USER'S CALL, ONE CLICK — never automatic. The inner loop in
-   * bridge/src/fix.ts terminates on the TESTS, an oracle with no opinion;
-   * looping out here on FINDINGS would terminate on reviewer judgment, which
-   * this repo has measured returning 1/3 and 3/3 on the same defect in
-   * identical code. A fixer optimising against its own reviewer converges on
-   * text that satisfies the reviewer, not on correct code. So the machine
-   * reports, and the person decides whether it is worth another turn.
+   * The loop stopped because a budget ran out, not because the findings became
+   * unfixable — so going past it stays a deliberate act with a click behind it.
+   * The inner loop in bridge/src/fix.ts terminates on the TESTS, an oracle with
+   * no opinion; this one terminates on reviewer judgment, which this repo has
+   * measured returning 1/3 and 3/3 on the same defect in identical code. A
+   * fixer optimising against its own reviewer converges on text that satisfies
+   * the reviewer, not on correct code. So the budget is small and spending
+   * another one is the person's decision.
    */
   function sendStillOpen(): void {
     if (stillOpen.length === 0 || run.status === 'running') return
     void dispatch(stillOpen)
+    sectionEl?.scrollIntoView({ block: 'nearest' })
+  }
+
+  /**
+   * Send back the findings that never got a real ANSWER.
+   *
+   * Its own action and its own count, deliberately not folded into "still
+   * open": a refusal is an answer and re-asking it is pointless, while an agent
+   * that crashed, timed out or never got a turn simply did not reply.
+   */
+  function retrySkipped(): void {
+    if (retryable.length === 0 || run.status === 'running') return
+    void dispatch(retryable.map((s) => s.findingId))
     sectionEl?.scrollIntoView({ block: 'nearest' })
   }
 
@@ -666,19 +1057,117 @@
               <button
                 type="button"
                 class="afx-only"
-                title="Send only this finding to {readiness.cli}"
-                onclick={() => dispatch([candidate.key])}
+                title="Send only this finding to {cli}"
+                onclick={() => dispatch([candidate.key], false)}
                 data-testid="agent-fix-send-one"
               >only this</button>
             </li>
           {/each}
         </ul>
 
+        <!-- REVIEW-BOT COMMENTS. Loaded on demand, ticked one by one, and
+             always second: these are third-party claims, not this app's own
+             findings, and the panel never blurs the two. -->
+        <div class="afx-bots" data-testid="agent-fix-bots" data-status={bots.status}>
+          {#if bots.status === 'idle'}
+            <button type="button" class="afx-link" data-testid="agent-fix-bots-load" onclick={loadBots}>
+              Also look at review-bot comments
+            </button>
+            <span class="afx-note">
+              Greptile and its kind post findings here as ordinary comments. They are fetched only if you
+              ask, and each one is sent as quoted text attributed to the bot — never as an instruction.
+            </span>
+          {:else if bots.status === 'loading'}
+            <p class="afx-note" role="status"><Spinner /> Reading this pull request’s comments…</p>
+          {:else if bots.status === 'failed'}
+            <p class="afx-note" data-testid="agent-fix-bots-failed">
+              The pull request’s comments could not be read, so there is nothing to show here. That is not
+              the same as there being none.
+            </p>
+          {:else}
+            {#if botCandidates.length > 0}
+              <div class="afx-select-head">
+                <span class="afx-count" data-testid="agent-fix-bots-count">
+                  {selectedBotKeys.length} of {botCandidates.length} bot comment{botCandidates.length === 1
+                    ? ''
+                    : 's'} selected
+                </span>
+                <button type="button" class="afx-link" onclick={() => tickAllBots(true)}>Select all</button>
+                <button type="button" class="afx-link" onclick={() => tickAllBots(false)}>Select none</button>
+              </div>
+              <ul class="afx-candidates">
+                {#each botCandidates as bot (bot.key)}
+                  <li class="afx-candidate" data-testid="agent-fix-bot-candidate" data-finding-key={bot.key}>
+                    <label class="afx-candidate-label">
+                      <input
+                        type="checkbox"
+                        checked={botTicked.has(bot.key)}
+                        onchange={() => toggleBot(bot.key)}
+                        data-testid="agent-fix-bot-checkbox"
+                      />
+                      <span class="afx-bot-chip">{bot.author}</span>
+                      <span class="afx-loc">
+                        {bot.path}{bot.line === null ? ' (whole file)' : `:${bot.line}`}
+                      </span>
+                      <span class="afx-body">{bot.preview}</span>
+                    </label>
+                  </li>
+                {/each}
+              </ul>
+            {:else}
+              <p class="afx-note" data-testid="agent-fix-bots-empty">
+                No review-bot comment on this pull request is anchored somewhere an agent could be pointed.
+              </p>
+            {/if}
+
+            <!-- NOTHING IS DROPPED SILENTLY. A list the user can see two dozen
+                 comments behind on GitHub, showing three, has to say why. -->
+            {#if botRefusals.length > 0 || bots.intake.human > 0}
+              <ul class="afx-bot-refusals" data-testid="agent-fix-bots-refused">
+                {#each botRefusals as [reason, count] (reason)}
+                  <li data-reason={reason}>{describeBotCommentRefusal(reason, count)}</li>
+                {/each}
+                {#if bots.intake.human > 0}
+                  <li data-reason="human">
+                    {bots.intake.human} comment{bots.intake.human === 1 ? '' : 's'} written by a person
+                    {bots.intake.human === 1 ? 'is' : 'are'} not offered. A colleague’s review comment expects
+                    an answer from you, not a commit that makes it go away.
+                  </li>
+                {/if}
+              </ul>
+            {/if}
+          {/if}
+        </div>
+
         {#if overCap}
           <p class="afx-warn" role="alert" data-testid="agent-fix-over-cap">
             The bridge accepts at most {MAX_FIX_FINDINGS} findings per run. Untick some, or send them in
             two batches.
           </p>
+        {/if}
+
+        <!-- WHICH AGENT RUNS IT. Only where there is a choice: one detected
+             CLI is not a decision, and rendering a picker for it would invent
+             a fork that does not exist. -->
+        {#if cliChoices.length > 1}
+          <fieldset class="afx-cli" data-testid="agent-fix-cli-picker">
+            <legend class="afx-cli-legend">Fix with</legend>
+            {#each cliChoices as choice (choice)}
+              <label class="afx-cli-option">
+                <input
+                  type="radio"
+                  name="agent-fix-cli"
+                  value={choice}
+                  checked={cli === choice}
+                  onchange={() => chooseCli(choice)}
+                  data-testid="agent-fix-cli-option"
+                  data-cli={choice}
+                />
+                <span>{choice}</span>
+              </label>
+            {/each}
+            <span class="afx-note">Remembered in this browser. Both are on this machine’s PATH.</span>
+          </fieldset>
         {/if}
 
         <div class="afx-actions">
@@ -689,24 +1178,32 @@
             onclick={() => dispatch(selectedKeys)}
             data-testid="agent-fix-send"
           >
-            Send {selectedKeys.length} to {readiness.cli}
+            Send {selectedKeys.length} to {cli}
           </button>
           <span class="afx-note">
             Runs on your machine, in a scratch worktree. Your checkout is never touched and nothing is
-            pushed.
+            pushed. What comes back is re-read, and anything still open goes round again — up to
+            {FIX_LOOP_ROUND_CAP} rounds, a spend budget, or the first round that repeats itself. You can stop
+            it at any point and keep what has landed.
           </span>
         </div>
       {/if}
 
       {#if run.status === 'running'}
-        <div class="afx-progress" data-testid="agent-fix-progress" role="status">
+        <div class="afx-progress" data-testid="agent-fix-progress" role="status" data-round={run.round} data-phase={run.phase}>
           <Spinner />
-          <span>
-            {run.count}
-            {run.count === 1 ? 'finding' : 'findings'} with {readiness.cli} — one commit each, tests after
-            every fix. This can take a few minutes.
+          <span data-testid="agent-fix-progress-text">
+            {#if run.phase === 'fixing'}
+              Round {run.round} of up to {FIX_LOOP_ROUND_CAP} — {run.count}
+              {run.count === 1 ? 'finding' : 'findings'} with {cli}, one commit each, tests after every fix.
+              This can take a few minutes.
+            {:else}
+              Round {run.round} — the reviewers are re-reading what came back, to see what is still open.
+            {/if}
           </span>
-          <button type="button" class="afx-link" onclick={cancel} data-testid="agent-fix-cancel">Cancel</button>
+          <button type="button" class="afx-link" onclick={stopLoop} data-testid="agent-fix-cancel">
+            Stop and keep what landed
+          </button>
         </div>
       {/if}
 
@@ -717,11 +1214,35 @@
         </div>
       {/if}
 
-      {#if run.status === 'done'}
+      <!-- RESULTS APPEAR AS THEY LAND, not when the loop ends. A loop that
+           shows nothing for three rounds is a loop the user cannot judge, and
+           "stop and keep what landed" is meaningless if they cannot see what
+           landed. -->
+      {#if responses.length > 0 || run.status === 'done'}
         <div class="afx-results">
-          <p class="afx-stop" data-testid="agent-fix-stop" data-stop={run.response.stopReason}>
-            {describeFixStop(run.response.stopReason, run.response.rounds)}
-          </p>
+          <!-- WHY THE LOOP STOPPED, before anything it produced. A budget ran
+               out, or a round repeated itself, or the user pressed stop — and
+               none of those is "it is fixed". -->
+          {#if loopStop !== null}
+            <p class="afx-loop-stop" data-testid="agent-fix-loop-stop" data-stop={loopStop}>
+              {describeFixLoopStop(loopStop, roundRecords.length, stillOpen.length)}
+            </p>
+          {/if}
+
+          <!-- THE INNER LOOP'S VERDICT, carried across every outer round. A red
+               commit is still red after five of them, and no quiet re-read
+               anywhere below gets to say otherwise. -->
+          {#if describeUnsoftenedChanges(unsoftened.length) !== null}
+            <p class="afx-warn" data-testid="agent-fix-unsoftened" data-count={unsoftened.length}>
+              {describeUnsoftenedChanges(unsoftened.length)}
+            </p>
+          {/if}
+
+          {#if lastResponse !== null}
+            <p class="afx-stop" data-testid="agent-fix-stop" data-stop={lastResponse.stopReason}>
+              {describeFixStop(lastResponse.stopReason, lastResponse.rounds)}
+            </p>
+          {/if}
 
           <!-- THE EVIDENCE CAVEAT, stated ONCE and before any result — it is a
                property of the pass, not of each row, and repeating it per
@@ -746,7 +1267,7 @@
             </div>
           {/if}
 
-          {#each run.response.changes as change (change.findingId)}
+          {#each allChanges as change (change.findingId)}
             {@const parsed = diffFor(change.findingId)}
             {@const capped = capPatchRows(
               parsed,
@@ -913,7 +1434,7 @@
             </article>
           {/each}
 
-          {#each run.response.skipped as skip (skip.findingId)}
+          {#each allSkips as skip (skip.findingId)}
             <!-- A skip is a RESULT, not a gap. A refusal especially: the agent
                  read the finding and disagreed, which is exactly what it was
                  asked to do when a finding is wrong. -->
@@ -927,7 +1448,7 @@
             </article>
           {/each}
 
-          {#if run.response.changes.length === 0 && run.response.skipped.length === 0}
+          {#if allChanges.length === 0 && allSkips.length === 0}
             <p class="afx-empty">The agent produced no changes and reported no reasons.</p>
           {/if}
 
@@ -960,31 +1481,54 @@
             </section>
           {/if}
 
-          <!-- ANOTHER ROUND IS A CHOICE, NOT A LOOP. One click, and it says
-               exactly what it would send. -->
+          <!-- GOING PAST THE BUDGET IS A CHOICE, NOT A CONTINUATION. The loop
+               stopped because a budget ran out, not because these became
+               unfixable — so spending another one has a click behind it. -->
           {#if stillOpen.length > 0}
             <div class="afx-actions" data-testid="agent-fix-still-open">
               <button
                 type="button"
                 class="afx-send"
                 data-testid="agent-fix-send-open"
-                disabled={run.status !== 'done'}
+                disabled={busy}
                 onclick={sendStillOpen}
               >
-                Send the {stillOpen.length} still-open {stillOpen.length === 1 ? 'finding' : 'findings'} back to {readiness.cli}
+                Send the {stillOpen.length} still-open {stillOpen.length === 1 ? 'finding' : 'findings'} back to {cli}
               </button>
               <span class="afx-note">
-                Starts a fresh run over just those, from this pull request's head again. Your approvals
+                Spends a fresh budget on just those, from this pull request's head again. Your approvals
                 above are cleared, and the commits already made stay on the scratch branch.
               </span>
             </div>
           {/if}
 
+          <!-- A SKIP THAT NEVER GOT AN ANSWER IS NOT A REFUSAL. Its own action,
+               its own count — never swept into the button above. -->
+          {#if retryable.length > 0}
+            <div class="afx-actions" data-testid="agent-fix-retryable">
+              <button
+                type="button"
+                class="afx-send"
+                data-testid="agent-fix-retry-skips"
+                disabled={busy}
+                onclick={retrySkipped}
+              >
+                Try the {retryable.length} unanswered {retryable.length === 1 ? 'finding' : 'findings'} again
+              </button>
+              <span class="afx-note">{describeRetryableSkips(retryable.length)}</span>
+            </div>
+          {/if}
+
           <footer class="afx-footer">
+            <!-- THE LAST WORD, under everything the loop produced. Five quiet
+                 rounds are five samples nobody has read. -->
+            <p class="afx-caveat" data-testid="agent-fix-not-reviewed">{FIX_LOOP_NOT_REVIEWED}</p>
             {#if approvedChanges.length > 0}
               <p class="afx-apply-note">
-                Nothing has been applied. These commits live on the bridge's scratch branch
-                <code>{run.response.branch}</code> in your own repository — take the ones you approved:
+                Nothing has been applied. These commits live on the bridge's scratch
+                {branches.length === 1 ? 'branch' : 'branches'}
+                {#each branches as branch, i (branch)}{i > 0 ? ', ' : ''}<code>{branch}</code>{/each}
+                in your own repository — take the ones you approved:
               </p>
               <div class="afx-cherry">
                 <code data-testid="agent-fix-cherry-pick">{cherryPick}</code>
@@ -1063,6 +1607,76 @@
   .afx-caveat {
     margin: 0;
     color: var(--text-secondary);
+    font-size: var(--text-xs);
+  }
+
+  /* ── The bounded loop ─────────────────────────────────────────────────────
+     Same restraint as the verification block: the loop's stop is an
+     observation, so it is quiet type. The only thing tinted is the line that
+     says commits came back red, which reuses the panel's existing warn
+     treatment rather than inventing a second one. */
+  .afx-loop-stop {
+    margin: 0;
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+  }
+
+  /* ── The CLI picker ───────────────────────────────────────────────────────
+     Rendered only where more than one agent was detected. Deliberately plain:
+     it is a preference, not a settings surface, and it sits inline with the
+     send action it changes. */
+  .afx-cli {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin: var(--space-2) 0 0;
+    padding: var(--space-2);
+    border: 1px solid var(--hairline);
+    border-radius: var(--space-1);
+  }
+
+  .afx-cli-legend {
+    padding: 0 var(--space-1);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+  }
+
+  .afx-cli-option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--text-xs);
+    font-family: var(--font-mono, ui-monospace, monospace);
+  }
+
+  /* ── Review-bot comments ──────────────────────────────────────────────────
+     Second, and visibly separate: these are third-party claims, not this app's
+     own findings, and the two must never read as one list. */
+  .afx-bots {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--hairline);
+  }
+
+  .afx-bot-chip {
+    flex: none;
+    padding: 0 var(--space-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--space-1);
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+  }
+
+  .afx-bot-refusals {
+    margin: 0;
+    padding-left: var(--space-4);
+    color: var(--text-muted);
     font-size: var(--text-xs);
   }
 

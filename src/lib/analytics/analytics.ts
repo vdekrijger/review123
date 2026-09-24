@@ -255,7 +255,13 @@ const EVENTS = {
   //                  same value already sent as bridge_connected.inference_clis.
   // Added so the single most expensive action in the product ("did anyone run
   // it, and with what?") is measurable at all.
-  bridge_fix_dispatched: ['findings', 'cli'],
+  //   - 'round'    : integer, 1-based — WHICH round of the bounded loop this
+  //                  batch was. Round 1 is a batch the user sent; anything
+  //                  above it is a round the loop sent on their behalf, and
+  //                  without it the loop's cost is indistinguishable from
+  //                  somebody clicking send five times. An integer counter over
+  //                  an app-controlled loop; it says nothing about the code.
+  bridge_fix_dispatched: ['findings', 'cli', 'round'],
   // The same run's OUTCOME. Counts and fixed enums only:
   //   - 'outcome'      : 'done' | 'failed' | 'cancelled'.
   //   - 'failure'      : the FixFailureKind enum ('unreachable', 'timeout',
@@ -271,6 +277,74 @@ const EVENTS = {
   // A fix run is minutes long and mostly succeeds or mostly does not; these
   // counts say which, and nothing about the code involved.
   bridge_fix_settled: ['outcome', 'failure', 'changes', 'skipped', 'stop_reason', 'tests_passed', 'tests_failed', 'duration_ms'],
+  // PRIVACY DECISION (the bounded fix loop): fired ONCE when the outer loop
+  // stops, whatever stopped it. The loop's whole design question is "does a
+  // budget actually terminate this, and on which condition" — unanswerable
+  // without the stop mix. Counts and fixed enums only:
+  //   - 'stop'       : the FixLoopStopReason enum ('quiet', 'round-cap',
+  //                    'budget-spent', 'no-new-commit', 'repeat-outcome',
+  //                    'stopped-by-user', 'run-failed'). The signal.
+  //   - 'rounds'     : integer count of outer rounds that ran.
+  //   - 'commits'    : integer count of commits the loop ended holding.
+  //   - 'still_open' : integer count of findings still open when it stopped.
+  //   - 'unsoftened' : integer count of commits that came back at the BRIDGE's
+  //                    own round cap, stuck or oscillating. A quiet loop that
+  //                    is still carrying red commits is the failure mode this
+  //                    feature most has to be watched for, and it is a count.
+  //   - 'duration_ms': elapsed ms (same convention as ai_task_completed).
+  // Nothing about the findings, the code, the commits or the agent's words.
+  bridge_fix_looped: ['stop', 'rounds', 'commits', 'still_open', 'unsoftened', 'duration_ms'],
+  // PRIVACY DECISION (#280's verification pass, deferred from that PR): the
+  // re-read sends the agent's diff to the configured models and gets back a
+  // per-finding verdict plus problems raised against the fix itself. EVERY
+  // interesting thing it touches is disqualified by definition — the finding
+  // text, the persona's criterion, the diff, the models' own sentences, the new
+  // problems' bodies and paths. NONE of that is sent. What is sent is the shape
+  // of the pass, as integers and one boolean:
+  //   - 'findings'         : how many findings were re-read at all.
+  //   - 'still_standing' / 'not_raised_again' / 'could_not_tell' /
+  //     'not_re_read'      : the four outcomes, as counts. This split IS the
+  //                          measurement: a pass that says "not raised again"
+  //                          every time is a pass that is not reading.
+  //   - 'new_problems'     : count of problems raised against the fix itself.
+  //   - 'models'           : how many distinct models answered. A count, never
+  //                          which — the witness list is display-only.
+  //   - 'failed_calls'     : count of calls that failed and are not counted.
+  //   - 'cached'           : boolean. A cache hit and a fresh poll are the same
+  //                          report and completely different events; blending
+  //                          them would report the feature getting cheaper
+  //                          every time somebody re-opens the panel.
+  //   - 'duration_ms'      : elapsed ms (same convention as ai_task_completed).
+  fix_verify_completed: [
+    'findings',
+    'still_standing',
+    'not_raised_again',
+    'could_not_tell',
+    'not_re_read',
+    'new_problems',
+    'models',
+    'failed_calls',
+    'cached',
+    'duration_ms',
+  ],
+  // PRIVACY DECISION (#281's readiness grade): fired once per graded report
+  // when the user lands on the verdict step. The grade is computed from stated
+  // facts about THIS pull request — which reviewers ran, which files were never
+  // read, which findings stand — and every one of those is a private repo
+  // identifier wearing a number. So none of them are sent. Fixed enums and
+  // counts only:
+  //   - 'band'  : the ReadinessBand enum ('broad' | 'partial' | 'thin' |
+  //               'minimal' | 'none'). The headline, and the only thing needed
+  //               to see whether the bands are calibrated at all.
+  //   - 'score' / 'max' : integers. `max` is a constant today and is sent
+  //               anyway, so a later reweighting does not silently reinterpret
+  //               every historical score.
+  //   - 'unmet' : integer count of checks that came back unmet. Which ones is
+  //               the interesting part and is exactly what cannot be sent — a
+  //               shortfall names reviewers and files.
+  // Explicitly NOT sent: check ids, labels, details, shortfalls, reviewer
+  // names, file paths, finding text, the disclaimer lines.
+  readiness_viewed: ['band', 'score', 'max', 'unmet'],
   // PRIVACY DECISION (standing rules): the distillation reads the user's OWN
   // review comments, their dismissal ledger, and their unsent draft comments,
   // and returns rules written in their vocabulary. Its permitted ceiling was

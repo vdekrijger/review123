@@ -151,7 +151,10 @@ describe('AgentFixPanel analytics', () => {
 
     const dispatched = eventsNamed('bridge_fix_dispatched')
     expect(dispatched).toHaveLength(1)
-    expect(dispatched[0]).toEqual({ findings: 2, cli: 'claude' })
+    // `round` joined the payload with the bounded loop: an integer counter over
+    // an app-owned loop, so that a loop's cost is distinguishable from somebody
+    // clicking send five times. Still counts and enums, still nothing else.
+    expect(dispatched[0]).toEqual({ findings: 2, cli: 'claude', round: 1 })
   })
 
   it('reports the outcome as counts + enums — no commit, intent, path or diff', async () => {

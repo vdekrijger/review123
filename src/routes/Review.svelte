@@ -20,6 +20,7 @@
   import { createAiRun } from '../lib/ai/run.svelte'
   import { listSkills, listSkillsForPhase } from '../lib/skills/skills'
   import { collectReadinessFacts, gradeReadiness } from '../lib/ai/readiness'
+  import { currentFixTestFact } from '../lib/bridge/fixTestFact.svelte'
   import { applyConvergence, type ReviewerFindings } from '../lib/ai/convergence'
   import { crossModelVerifyEffective, verifierProviderConfigs } from '../lib/llm/config'
   import { currentGrounding, describeGrounding } from '../lib/bridge/grounding'
@@ -474,14 +475,35 @@
           phase: phaseRecord.phase,
           ...(phaseRecord.headShaAtApproval ? { approvedAtSha: phaseRecord.headShaAtApproval } : {}),
         },
-        // DEFERRED, and said out loud rather than faked: the only real test
-        // outcome this app holds is the bridge fix loop's, which lives inside
-        // AgentFixPanel's own state and is not reachable from here. Until it
-        // is, the honest answer is that no test run is recorded — which is
-        // what the grade then says.
-        tests: { status: 'not-run' },
+        // The only real test outcome this app holds is the bridge fix loop's.
+        // It is published by AgentFixPanel and read here, keyed on this PR's
+        // head so a grade can never count a run that belongs to another
+        // commit — and derived from the commits the panel is CURRENTLY
+        // holding, so a later round's commit takes its predecessor's green
+        // with it. With no fix run, this is `{ status: 'not-run' }` and the
+        // grade says so.
+        tests: currentFixTestFact(headSha),
       }),
     )
+  })
+
+  // Counts and fixed enums only — see the PRIVACY DECISION block on
+  // `readiness_viewed` in lib/analytics. The band and the unmet COUNT are
+  // sendable; which checks were unmet is not, because a shortfall names
+  // reviewers and files. Fired once per distinct grade rather than on every
+  // recompute, so a re-render is not a second view.
+  let lastReadinessSeen = ''
+  $effect(() => {
+    const report = readinessReport
+    if (report === null) {
+      lastReadinessSeen = ''
+      return
+    }
+    const unmet = report.checks.filter((c) => c.state === 'unmet').length
+    const signature = `${report.band}:${report.score}:${report.max}:${unmet}`
+    if (signature === lastReadinessSeen) return
+    lastReadinessSeen = signature
+    track('readiness_viewed', { band: report.band, score: report.score, max: report.max, unmet })
   })
 
   let railCollapsed = $state(getSettings().railCollapsed)

@@ -5,7 +5,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   fixVerifyCacheKey,
+  fixVerifyShape,
   verifyAgentFix,
+  verifyAgentFixDetailed,
   type AgentFixChangeInput,
   type AgentFixFindingInput,
   type FixVerifyDeps,
@@ -223,5 +225,87 @@ describe('fixVerifyCacheKey', () => {
 
   it('carries the pass’s own prompt version, not another task’s', () => {
     expect(fixVerifyCacheKey(HEAD, [change('f1')], ['m1'])).toMatch(/\|fixVerify:[0-9a-f]+\|v1$/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Reporting on the pass — counts and enums, never a word of it
+// ---------------------------------------------------------------------------
+
+describe('verifyAgentFixDetailed', () => {
+  it('separates a fresh poll from a cache hit', async () => {
+    const fresh = await verifyAgentFixDetailed(HEAD, [change('f1')], [finding('f1')], deps())
+    expect(fresh.cached).toBe(false)
+    expect(fresh.report.calls).toBeGreaterThan(0)
+
+    const hit = await verifyAgentFixDetailed(
+      HEAD,
+      [change('f1')],
+      [finding('f1')],
+      deps({
+        readCache: async () =>
+          ({ byFinding: [], newProblems: [], witnesses: [], calls: 4, failedCalls: 0 }) as never,
+      }),
+    )
+    expect(hit.cached).toBe(true)
+  })
+
+  // A pass with nothing to re-read spent nothing AND read nothing. Reporting it
+  // as a cache hit would claim a saving that never existed.
+  it('does not call an empty pass cached', async () => {
+    const empty = await verifyAgentFixDetailed(HEAD, [], [], deps())
+    expect(empty.cached).toBe(false)
+    expect(empty.report.calls).toBe(0)
+  })
+})
+
+describe('fixVerifyShape', () => {
+  it('is counts, enums and one boolean — and carries nothing anyone said', () => {
+    const shape = fixVerifyShape({
+      cached: false,
+      durationMs: 1234.7,
+      report: {
+        byFinding: [
+          { findingId: 'f1', persona: 'Security', outcome: 'still-standing', votes: [], polledModels: 2, agreeing: 2 },
+          { findingId: 'f2', persona: 'Security', outcome: 'not-raised-again', votes: [], polledModels: 2, agreeing: 1 },
+          { findingId: 'f3', persona: 'Perf', outcome: 'could-not-tell', votes: [], polledModels: 2, agreeing: 1 },
+          { findingId: 'f4', persona: 'Perf', outcome: 'not-re-read', votes: [], polledModels: 0, agreeing: 0 },
+        ],
+        newProblems: [
+          {
+            key: 'np1',
+            path: 'src/secret.ts',
+            line: 9,
+            severity: 'high',
+            body: 'The new escape helper throws on null',
+            suggestedFix: 'guard it',
+            raisedBy: ['Anthropic · claude'],
+            polledModels: 2,
+          },
+        ],
+        witnesses: ['Anthropic · claude-x', 'OpenAI · gpt-y'],
+        calls: 4,
+        failedCalls: 1,
+      },
+    })
+
+    expect(shape).toEqual({
+      findings: 4,
+      still_standing: 1,
+      not_raised_again: 1,
+      could_not_tell: 1,
+      not_re_read: 1,
+      new_problems: 1,
+      models: 2,
+      failed_calls: 1,
+      cached: false,
+      duration_ms: 1235,
+    })
+
+    // The whole payload, stringified, carries no persona, path, body or model.
+    const blob = JSON.stringify(shape)
+    for (const leak of ['Security', 'src/secret.ts', 'escape helper', 'claude', 'OpenAI']) {
+      expect(blob).not.toContain(leak)
+    }
   })
 })
