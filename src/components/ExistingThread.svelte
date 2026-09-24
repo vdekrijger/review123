@@ -77,10 +77,73 @@
     }
   }
 
-  /** Truncates body to ~60 chars for the resolved summary line */
+  /** The handful of HTML entities that actually show up in PR comment bodies. */
+  const ENTITIES: Record<string, string> = {
+    amp: '&',
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: "'",
+    nbsp: ' ',
+    '#39': "'",
+    '#x27': "'",
+  }
+
+  /**
+   * Markup → plain text, for the one-line resolved summary ONLY.
+   *
+   * This is deliberately NOT renderMarkdown: the summary is a recap, not a
+   * rendered comment, and it must stay a single line of prose. It strips the
+   * markup a comment body can OPEN with so the snippet reads as words —
+   * review-bot comments in particular start with a badge image or a link
+   * (`[![P1](https://…)](…)`, `<a href="#"><img alt="P1" src="…">`), which
+   * used to be what the reader saw instead of the comment.
+   *
+   * Image alt text is KEPT: for `![P1](url)` the alt IS the content, and it is
+   * the conventional plain-text rendering of an image.
+   */
+  function toPlainText(body: string): string {
+    return (
+      body
+        // HTML comments (often a bot's machine-readable marker) and code fences
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/```[^\n]*/g, ' ')
+        // ![alt](src) and <img alt="…"> → the alt text
+        .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+        .replace(/<img\b[^>]*?\balt\s*=\s*"([^"]*)"[^>]*>/gi, '$1')
+        .replace(/<img\b[^>]*?\balt\s*=\s*'([^']*)'[^>]*>/gi, '$1')
+        // [text](href) → the link text
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+        // every remaining tag (a real tag only — `a < b` must survive)
+        .replace(/<\/?[a-zA-Z][^>]*>/g, ' ')
+        // emphasis / strike / inline code markers. Paired forms only, so a
+        // bare identifier like DEBOUNCE_MS keeps its underscores.
+        .replace(/\*\*([^*]+)\*\*/g, '$1')
+        .replace(/__([^_]+)__/g, '$1')
+        .replace(/\*([^*\n]+)\*/g, '$1')
+        .replace(/~~([^~]+)~~/g, '$1')
+        .replace(/`+/g, '')
+        // line-leading markup: headings, block quotes, list bullets
+        .replace(/^[ \t]*#{1,6}[ \t]+/gm, '')
+        .replace(/^[ \t]*>[ \t]?/gm, '')
+        .replace(/^[ \t]*(?:[-*+]|\d+\.)[ \t]+/gm, '')
+        // entities last, so a decoded `<` is never mistaken for a tag
+        .replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (m, name: string) => ENTITIES[name.toLowerCase()] ?? m)
+        .replace(/\s+/g, ' ')
+        .trim()
+    )
+  }
+
+  /**
+   * Truncates body to ~60 chars for the resolved summary line.
+   *
+   * Order matters: markup is stripped BEFORE the slice, so the 60 characters
+   * are 60 characters of CONTENT. Slicing the raw body first spent the whole
+   * budget on `<a href="#"><img alt="P1" src="https://greptile-static-asset…`.
+   */
   function truncateBody(body: string, maxLen = 60): string {
-    const oneLine = body.replace(/\s+/g, ' ').trim()
-    return oneLine.length > maxLen ? oneLine.slice(0, maxLen) + '…' : oneLine
+    const text = toPlainText(body)
+    return text.length > maxLen ? text.slice(0, maxLen) + '…' : text
   }
 </script>
 
@@ -158,6 +221,18 @@
     overflow: hidden;
   }
 
+  /*
+   * The global editorial rule `details > summary` (src/app.css) sets
+   * text-transform: uppercase + letter-spacing on EVERY summary, and both
+   * properties inherit into the children. That is right for a summary that is
+   * a LABEL; this one also carries a sentence of somebody's comment, and
+   * uppercasing prose destroys word shape — the snippet rendered as
+   * "VDEKRIJGER: THERE IS NO CENTRALISED HELPER WE COULD USE FOR THIS? E.G. I…".
+   * The same rule's font-weight: 600 set the whole sentence semibold for the
+   * same reason. So reset all three here and re-apply them on .resolved-label
+   * alone, which IS a label. Class selectors (+ Svelte's scoping class) outrank
+   * the two type selectors in `details > summary`, so app.css stays untouched.
+   */
   .resolved-summary {
     display: flex;
     align-items: center;
@@ -169,6 +244,9 @@
     background: var(--surface-raised);
     list-style: none;
     user-select: none;
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 400;
   }
 
   .resolved-summary::-webkit-details-marker {
@@ -181,10 +259,13 @@
     flex-shrink: 0;
   }
 
+  /* The one part of the summary that IS a label — keeps the editorial caps. */
   .resolved-label {
     font-weight: 600;
     color: var(--text-muted);
     flex-shrink: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .resolved-snippet {

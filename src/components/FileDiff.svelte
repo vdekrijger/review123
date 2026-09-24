@@ -48,6 +48,7 @@
     type HunkAttentionResult,
   } from '../lib/guide/hunkAttention'
   import { hunkAttentionPref } from '../lib/guide/hunkAttentionPref.svelte'
+  import { resolvedThreadsPref } from '../lib/guide/resolvedThreadsPref.svelte'
 
   /** A skill finding scoped to a specific line in this file */
   export interface SkillFinding {
@@ -836,6 +837,40 @@
     return resolvedCommentIds.has(thread.root.id)
   }
 
+  // ---- Excluding resolved threads -----------------------------------------
+  // A resolved thread is a finished conversation. Collapsing it to one line was
+  // not enough: eight of them still fill the viewport ahead of the unresolved
+  // comments that need an answer. Off switch: resolvedThreadsPref (localStorage
+  // review123:hide-resolved, toggled from the Inspect toolbar), default hidden.
+  //
+  // NOTHING IS HIDDEN SILENTLY. Every place threads were removed from states
+  // the count and carries a one-click reveal (`revealedRoots`), which is a
+  // LOCAL escape hatch: it shows this one group without flipping the global
+  // preference, the same shape as the findings-triage "Show all".
+  const hideResolved = $derived(resolvedThreadsPref.hidden)
+
+  /** Root ids the reader has explicitly revealed at their location. */
+  let revealedRoots = $state<Set<number>>(new Set())
+
+  function isThreadHidden(thread: Thread): boolean {
+    return hideResolved && isThreadResolved(thread) && !revealedRoots.has(thread.root.id)
+  }
+
+  function visibleThreads(list: Thread[]): Thread[] {
+    return list.filter((t) => !isThreadHidden(t))
+  }
+
+  function hiddenThreads(list: Thread[]): Thread[] {
+    return list.filter(isThreadHidden)
+  }
+
+  /** Reveal exactly the threads hidden at one location (reassign → reactive). */
+  function revealThreads(list: Thread[]): void {
+    const next = new Set(revealedRoots)
+    for (const t of list) next.add(t.root.id)
+    revealedRoots = next
+  }
+
   // Bottom list: unanchorable threads grouped by line (null = "General", last)
   const unanchoredThreadsByLine = $derived.by(() => {
     const map = new Map<number | null, Thread[]>()
@@ -1222,6 +1257,23 @@
         </ul>
       </div>
     {/if}
+    <!-- The counted escape hatch for excluded resolved threads. This codebase
+         never hides anything silently: wherever resolved threads were removed,
+         this states how many and reveals them in place with one click (without
+         flipping the global preference). Declared once and rendered at BOTH
+         thread surfaces — inline in the diff, and the per-file bottom list. -->
+    {#snippet resolvedHiddenNote(hidden: Thread[])}
+      {#if hidden.length > 0}
+        <button
+          type="button"
+          class="resolved-hidden-note"
+          data-testid="resolved-hidden-note"
+          title="These threads are resolved and excluded by the Inspect toolbar's “Hide resolved” switch. Show them here without changing that setting."
+          onclick={() => revealThreads(hidden)}
+        >{hidden.length} resolved thread{hidden.length === 1 ? '' : 's'} hidden — show</button>
+      {/if}
+    {/snippet}
+
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
@@ -1385,9 +1437,10 @@
         {/if}
         {#if entry?.threads?.length}
           <div class="inline-comment-threads" data-testid="inline-annotations" data-line={lineNumber} aria-label="Existing comment threads at line {lineNumber}">
-            {#each entry.threads as thread (thread.root.id)}
+            {#each visibleThreads(entry.threads) as thread (thread.root.id)}
               <ExistingThread {thread} resolved={isThreadResolved(thread)} {onReply} />
             {/each}
+            {@render resolvedHiddenNote(hiddenThreads(entry.threads))}
           </div>
         {/if}
       {/snippet}
@@ -1537,9 +1590,10 @@
             <div class="existing-line-label">
               {lineKey !== null ? `Line ${lineKey}` : 'General'} — {count} comment{count === 1 ? '' : 's'}
             </div>
-            {#each group as thread (thread.root.id)}
+            {#each visibleThreads(group) as thread (thread.root.id)}
               <ExistingThread {thread} resolved={isThreadResolved(thread)} {onReply} />
             {/each}
+            {@render resolvedHiddenNote(hiddenThreads(group))}
           </div>
         {/each}
       </div>
@@ -1885,6 +1939,34 @@
     margin-bottom: 0.15rem;
   }
 
+  /*
+   * "N resolved threads hidden — show". Deliberately quiet: it is a receipt
+   * for what was excluded, not a control competing with the comments that are
+   * still open. Same weight as .existing-line-label; underline on hover so it
+   * reads as the clickable escape hatch it is.
+   */
+  .resolved-hidden-note {
+    align-self: flex-start;
+    border: 0;
+    background: none;
+    padding: var(--space-1);
+    font: inherit;
+    /* Pinned, not inherited: inline in the diff this sits inside a monospace
+       row and would otherwise read as code rather than as a UI affordance. */
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    opacity: 0.75;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .resolved-hidden-note:hover,
+  .resolved-hidden-note:focus-visible {
+    opacity: 1;
+    text-decoration: underline;
+  }
+
   /* (Resolved-thread collapse styles live in ExistingThread.svelte) */
 
   /* ---- Per-file fallback block for unanchored findings ---- */
@@ -2022,6 +2104,7 @@
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.comment-header),
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.resolved-summary),
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.resolved-label),
+  :global(.diff-line-extend-wrapper) .inline-comment-threads .resolved-hidden-note,
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-hint),
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-pending-label),
   :global(.diff-line-extend-wrapper) .line-findings :global(.skill-line-note),

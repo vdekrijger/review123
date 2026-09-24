@@ -1727,12 +1727,12 @@ test('file-tree: drawer can be closed via the ✕ close button inside the drawer
 })
 
 // ---------------------------------------------------------------------------
-// Test 14: Resolved comment threads — collapsed with indicator, expandable
+// Test 14: Resolved comment threads — EXCLUDED by default (counted, one click
+//          away), then collapsed with indicator, then expandable
 // ---------------------------------------------------------------------------
 
-test('resolved-threads: resolved thread renders collapsed with ✓ Resolved summary; expanding shows full thread', async ({
-  page,
-}) => {
+/** Drives the PR to step 2 with comment 1001 marked resolved. */
+async function gotoInspectWithResolvedThread(page: import('@playwright/test').Page) {
   // Use auth so the GraphQL call fires; withResolvedThreads so comment 1001 is marked resolved
   await setupRoutes(page, { withGithubAuth: true, withResolvedThreads: true })
 
@@ -1742,7 +1742,6 @@ test('resolved-threads: resolved thread renders collapsed with ✓ Resolved summ
 
   await page.goto(APP_REVIEW_PATH)
 
-  // Wait for PR to load
   await expect(
     page.getByRole('heading', { name: /Test PR: add feature/i }),
   ).toBeVisible({ timeout: 10_000 })
@@ -1750,6 +1749,51 @@ test('resolved-threads: resolved thread renders collapsed with ✓ Resolved summ
   // Navigate to step 2 (Inspect) where comments appear
   await page.getByRole('button', { name: 'Next step' }).click()
   await expect(page.getByRole('group', { name: 'Diff mode' })).toBeVisible()
+}
+
+test('resolved-threads: excluded by default, but counted in the toolbar and one click from showing', async ({
+  page,
+}) => {
+  await gotoInspectWithResolvedThread(page)
+
+  // The toolbar switch is offered (this PR HAS a resolved thread) and is on
+  const toggle = page.getByTestId('hide-resolved-toggle')
+  await expect(toggle).toBeVisible({ timeout: 8_000 })
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+
+  // Nothing hidden silently: the count is stated next to it
+  await expect(page.getByTestId('resolved-hidden-count')).toContainText('1 resolved thread hidden')
+
+  // ...and the thread itself is gone from the diff
+  await expect(page.locator('details.resolved-thread')).toHaveCount(0)
+
+  // In-place escape hatch at the location the thread was removed from
+  const note = page.getByTestId('resolved-hidden-note').first()
+  await expect(note).toContainText('1 resolved thread hidden \u2014 show')
+  await note.click()
+  await expect(page.locator('details.resolved-thread')).toBeVisible({ timeout: 3_000 })
+
+  // A local reveal does NOT flip the global preference
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+})
+
+test('resolved-threads: turning the switch off restores every resolved thread', async ({ page }) => {
+  await gotoInspectWithResolvedThread(page)
+
+  await page.getByTestId('hide-resolved-toggle').click()
+  await expect(page.getByTestId('hide-resolved-toggle')).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByTestId('resolved-hidden-count')).toHaveCount(0)
+  await expect(page.getByTestId('resolved-hidden-note')).toHaveCount(0)
+  await expect(page.locator('details.resolved-thread')).toBeVisible({ timeout: 3_000 })
+})
+
+test('resolved-threads: resolved thread renders collapsed with ✓ Resolved summary; expanding shows full thread', async ({
+  page,
+}) => {
+  await gotoInspectWithResolvedThread(page)
+
+  // Show them first — the exclusion is the default now (see the test above)
+  await page.getByTestId('hide-resolved-toggle').click()
 
   // The resolved thread (comment 1001) should render as a collapsed <details>
   // with a summary showing "✓ Resolved"
@@ -1764,6 +1808,17 @@ test('resolved-threads: resolved thread renders collapsed with ✓ Resolved summ
   // Summary should contain author and truncated body from the fixture comment
   await expect(summary).toContainText('reviewer-bot')
   await expect(summary).toContainText('This inline comment is on src/feature.ts line 2')
+
+  // The snippet is PROSE: the global `details > summary` uppercase must not
+  // reach it (it destroyed word shape), while the "Resolved" LABEL keeps it.
+  const snippetTransform = await resolvedDetails
+    .locator('.resolved-snippet')
+    .evaluate((el) => getComputedStyle(el).textTransform)
+  expect(snippetTransform).toBe('none')
+  const labelTransform = await resolvedDetails
+    .locator('.resolved-label')
+    .evaluate((el) => getComputedStyle(el).textTransform)
+  expect(labelTransform).toBe('uppercase')
 
   // The full CommentThread should NOT be visible while collapsed
   // (details element is closed, content is hidden from the accessibility tree)

@@ -31,6 +31,8 @@
     demoMeta,
     demoFiles,
     demoCi,
+    demoComments,
+    demoResolvedCommentIds,
     DEMO_PR_KEY,
   } from '../lib/demo/fixture'
   import type { AttentionResult, StoryOrderResult } from '../lib/ai/schemas'
@@ -163,6 +165,8 @@
       attention={run.attention.status === 'done' ? (run.attention.value as AttentionResult) : null}
       {readingOrder}
       {viewedStore}
+      prComments={demoComments}
+      resolvedCommentIds={demoResolvedCommentIds}
       skillReviews={run.skillReviews}
       storyAvailable={true}
       {storyMode}

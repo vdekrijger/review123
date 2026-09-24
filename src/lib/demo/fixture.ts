@@ -11,6 +11,7 @@
  */
 
 import type { PrMeta, PrFile } from '../github/types'
+import type { PrComment } from '../github/comments'
 import type { CiSummary } from '../github/checks'
 import type { LlmUsage } from '../llm/llm'
 import type { ModelCostRow } from '../ai/modelCostBreakdown'
@@ -230,6 +231,102 @@ export const demoFiles: PrFile[] = [
 +}`,
   },
 ]
+
+/**
+ * Existing PR comments for the demo — the conversation a reviewer walks into.
+ *
+ * Illustrative, like everything else here: the authors are named `demo-*` and
+ * the URLs point at example.com, so nothing reads as a real person or vendor.
+ *
+ * Shaped to exercise what the comment surfaces actually have to handle:
+ *   - one UNRESOLVED thread anchored inside a hunk (renders inline in the diff)
+ *   - one RESOLVED thread WITH a reply, also anchored inline — the reply's id
+ *     is in demoResolvedCommentIds too, which is why a thread count can never
+ *     be taken from that Set's size
+ *   - two RESOLVED file-level threads, which land in the per-file "General"
+ *     group — the block the screenshot showed filling a viewport
+ *   - bodies that OPEN with markup — a raw HTML link-wrapped badge and a
+ *     markdown link badge, the way review bots write them. The collapsed
+ *     one-line summary has to strip those to plain text before truncating, or
+ *     it shows sixty characters of tags and no words.
+ *
+ * DELIBERATELY NO <img>: the demo's contract is no network, and a remote badge
+ * image would fire a request from a rendered comment body (and make
+ * scripts/capture-shots.mjs non-deterministic). The image-alt path of the
+ * summary's markup stripping is covered in ExistingThread.test.ts instead.
+ *
+ * RIGHT line 7 of src/search/api.ts is the `fetch(..., { signal })` line and
+ * line 5 is `signal?: AbortSignal,` — both present in that patch, so both
+ * anchor inline rather than falling back to the bottom list.
+ */
+export const demoComments: PrComment[] = [
+  {
+    id: 9001,
+    author: 'demo-reviewer',
+    authorAvatar: null,
+    body: 'Good — the signal reaches `fetch` here, so `abort()` actually cancels the in-flight request rather than just ignoring its result.',
+    createdAt: '2024-05-02T09:12:00Z',
+    path: 'src/search/api.ts',
+    line: 7,
+    side: 'RIGHT',
+    inReplyTo: null,
+  },
+  {
+    id: 9002,
+    author: 'demo-reviewer',
+    authorAvatar: null,
+    body: 'Should `signal` be required rather than optional? An optional one is easy to forget at a call site.',
+    createdAt: '2024-05-02T09:14:00Z',
+    path: 'src/search/api.ts',
+    line: 5,
+    side: 'RIGHT',
+    inReplyTo: null,
+  },
+  {
+    id: 9003,
+    author: 'demo-dev',
+    authorAvatar: null,
+    body: 'Optional keeps the existing call sites compiling; the one caller that matters passes it. Leaving it optional for now.',
+    createdAt: '2024-05-02T10:02:00Z',
+    path: 'src/search/api.ts',
+    line: 5,
+    side: 'RIGHT',
+    inReplyTo: 9002,
+  },
+  {
+    id: 9004,
+    author: 'demo-lint-bot[bot]',
+    authorAvatar: null,
+    body: '<a href="#"><strong>P1</strong></a> Re-throwing a non-`AbortError` inside `.catch()` rejects with no handler, surfacing as an unhandled rejection. Route failures to component state instead.',
+    createdAt: '2024-05-02T09:20:00Z',
+    path: 'src/search/useSearch.ts',
+    line: null,
+    side: null,
+    inReplyTo: null,
+  },
+  {
+    id: 9005,
+    author: 'demo-lint-bot[bot]',
+    authorAvatar: null,
+    body: '[**P2**](https://example.com/rules/p2) The debounce test hard-codes 250ms — import `DEBOUNCE_MS` so the test and the implementation cannot drift apart.',
+    createdAt: '2024-05-02T09:21:00Z',
+    path: 'src/search/useSearch.ts',
+    line: null,
+    side: null,
+    inReplyTo: null,
+  },
+]
+
+/**
+ * Which of demoComments belong to a RESOLVED thread — the shape
+ * provider.getResolvedCommentIds() returns (GitHub/GitLab; Bitbucket has no
+ * resolved threads and returns an empty Set).
+ *
+ * Note 9003: a resolved thread's REPLIES are in the Set too. Three threads are
+ * resolved here, not four, which is why the count shown in the UI is computed
+ * from grouped threads rather than from this Set's size.
+ */
+export const demoResolvedCommentIds: Set<number> = new Set([9002, 9003, 9004, 9005])
 
 /**
  * Canned Story-mode walkthrough (StoryOrderResult). The steps are already in
