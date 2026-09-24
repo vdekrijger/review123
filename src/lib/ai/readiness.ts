@@ -321,7 +321,13 @@ export interface ReadinessReport {
   /** Rounded, for display only — the band is decided on the exact ratio. */
   percent: number
   checks: ReadinessCheck[]
-  /** One sentence: the band plus the checks that pulled it down. */
+  /**
+   * WHY the band is what it is — the weakest links, named, without the label
+   * in front of it. Carried separately so a UI can typeset the band and the
+   * reason differently without slicing the sentence back apart.
+   */
+  reason: string
+  /** `label` + `reason`, for callers that want the whole sentence. */
   headline: string
   /** The case-specific half of the disclaimer: what THIS pass did not check. */
   notChecked: string[]
@@ -645,10 +651,10 @@ export function gradeReadiness(facts: ReadinessFacts): ReadinessReport {
     })
     .map((c) => c.shortfall as string)
 
-  const headline =
+  const reason =
     shortfalls.length === 0
-      ? `${label} — every check this app can make came back positive.`
-      : `${label} — ${andList(shortfalls.slice(0, 3))}.`
+      ? 'every check this app can make came back positive.'
+      : `${andList(shortfalls.slice(0, 3))}.`
 
   return {
     band,
@@ -657,7 +663,8 @@ export function gradeReadiness(facts: ReadinessFacts): ReadinessReport {
     max,
     percent: Math.round((score * 100) / max),
     checks,
-    headline,
+    reason,
+    headline: `${label} — ${reason}`,
     notChecked: notCheckedLines(facts),
   }
 }

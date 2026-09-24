@@ -183,6 +183,7 @@ describe('a richly checked review', () => {
 
   it('has no shortfall to report', () => {
     expect(report.checks.filter((c) => c.shortfall)).toEqual([])
+    expect(report.reason).toBe('every check this app can make came back positive.')
     expect(report.headline).toBe('Broadly checked — every check this app can make came back positive.')
   })
 
@@ -208,9 +209,10 @@ describe('a poorly checked review', () => {
   })
 
   it('SAYS WHY rather than only scoring lower — the headline names the weakest links', () => {
+    expect(report.headline).toBe(`${report.label} — ${report.reason}`)
     expect(report.headline).toMatch(/^Barely checked — /)
-    expect(report.headline).toContain('nothing could disagree with the model that looked')
-    expect(report.headline).toContain('high-severity finding is still standing')
+    expect(report.reason).toContain('nothing could disagree with the model that looked')
+    expect(report.reason).toContain('high-severity finding is still standing')
   })
 
   it('names each weak input as its own shortfall', () => {
