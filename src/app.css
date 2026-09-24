@@ -540,9 +540,12 @@
    *                      file's sticky header. It only has to beat the rows it
    *                      pins over, so it is the floor of the scale.
    *   --z-drawer         the file-tree drawer beside the diff.
-   *   --z-drawer-tab     its toggle tab: ONE step above its own drawer, so the
-   *                      control that closes the drawer is never covered by it.
-   *                      The adjacency is the meaning; this pair has no gap.
+   *   --z-drawer-tab     its toggle tab, above its own drawer so the control
+   *                      that closes the drawer is never covered by it. The
+   *                      ONLY adjacent pair in the scale, and not by design:
+   *                      20 and 21 are literals in a file this change is not
+   *                      allowed to touch, so the scale meets them where they
+   *                      are. Respace the pair when that file migrates.
    *   --z-progress       the fixed review-progress bar under the topbar. Below
    *                      the bars because the context rail crosses its right end.
    *   --z-bar            fixed app furniture: the bottom draft bar, the rail.
@@ -580,8 +583,10 @@
    *
    * ── GAPS ── Steps are 10 or 20 apart in the low band and 50-100 apart in the
    * high band, so a new surface can be slotted between two existing ones
-   * without renumbering anything. The two adjacent pairs (drawer/tab,
-   * scrim/takeover) are adjacent BECAUSE each is one surface and its shadow.
+   * without renumbering anything. --z-drawer-tab is the one exception, for the
+   * external reason given above. layerScale.test.ts asserts the gaps, which is
+   * how an earlier draft of this very comment — it claimed scrim/takeover were
+   * adjacent when they are 10 apart — got caught.
    */
   --z-pinned-header: 10;
   --z-drawer: 20;
