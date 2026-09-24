@@ -36,6 +36,8 @@ import {
   type StackFailureKind,
 } from './runPr.svelte'
 import { _resetBridgeForTest, connectBridge } from './bridge.svelte'
+import { currentFixReadiness } from './fixLoop'
+import { currentGrounding } from './grounding'
 import { BRIDGE_STORAGE_KEY } from './storage'
 import type { BridgeStackApp, BridgeStackState } from './protocol'
 import type { PrMeta, PrRepoRelation } from '../github/types'
@@ -797,5 +799,90 @@ describe('describeStackFailure', () => {
         describeStackFailure({ kind, detail: '', dirtyPaths: [], dirtyCount: 0 }),
       ).toMatch(/unchanged|as it was/i)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. ONE FACT, ONE SOURCE
+//
+// "Where is the served checkout right now" is ONE fact, and three surfaces
+// read it: the Inspect header (grounding), the top-bar indicator (this module)
+// and the agent fix panel (fixLoop). They used to read it from TWO holders —
+// `/v1/health`, probed once at app start and never again, and `/v1/stack`,
+// which every checkout and restore refreshes. The moment the user checked a PR
+// out through the app the two diverged, and the app told them three different
+// stories about the same working tree on the same screen.
+// ---------------------------------------------------------------------------
+
+describe('the head every surface reads', () => {
+  it('REPRO: a checkout through the app must not leave the other surfaces stale', async () => {
+    await pair({ fix: true, checkout: true })
+    fetchMock.mockResolvedValueOnce(jsonResponse(stackBody()))
+    await refreshStack()
+
+    // Before the checkout all three agree: the tree is somewhere else.
+    expect(stackState.onPrBranch(PR_HEAD)).toBe(false)
+    expect(currentFixReadiness(PR_HEAD).reason).toBe('head-mismatch')
+    expect(currentGrounding(PR_HEAD).reason).toBe('head-mismatch')
+
+    // The user clicks "Check out this PR" and the bridge does it.
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        git: { head: PR_HEAD, branch: null, dirty: false },
+        prior: {
+          branch: 'main', head: OTHER_HEAD, recordedAt: '',
+          checkedOutRef: 'refs/pull/1/head', checkedOutSha: PR_HEAD, stashRef: null,
+        },
+        stash: null,
+        app: REACHABLE_APP,
+      }),
+    )
+    await checkoutPr({ ref: 'refs/pull/1/head' })
+
+    // …and now every surface must tell the SAME story.
+    expect(stackState.onPrBranch(PR_HEAD)).toBe(true)
+    expect(currentFixReadiness(PR_HEAD).reason).toBe('ready')
+    expect(currentGrounding(PR_HEAD).mode).toBe('local')
+  })
+
+  it('a restore moves every surface back together', async () => {
+    await pair({ fix: true, checkout: true })
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(stackBody({ git: { head: PR_HEAD, branch: null, dirty: false } })),
+    )
+    await refreshStack()
+    expect(currentFixReadiness(PR_HEAD).reason).toBe('ready')
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        git: { head: OTHER_HEAD, branch: 'main', dirty: false },
+        prior: null,
+        stash: null,
+        app: REACHABLE_APP,
+      }),
+    )
+    await restoreCheckout()
+
+    expect(stackState.onPrBranch(PR_HEAD)).toBe(false)
+    expect(currentFixReadiness(PR_HEAD).reason).toBe('head-mismatch')
+    expect(currentGrounding(PR_HEAD).reason).toBe('head-mismatch')
+  })
+
+  it('a plain stack probe re-dates the fact for every surface', async () => {
+    // The user switched branches in their own terminal. `/v1/stack` is the
+    // only thing that re-reads the tree, so what it learns has to reach the
+    // surfaces that never probe it themselves.
+    await pair({ fix: true, checkout: true })
+    expect(currentFixReadiness(PR_HEAD).reason).toBe('head-mismatch')
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(stackBody({ git: { head: PR_HEAD, branch: 'feat/thing', dirty: false } })),
+    )
+    await refreshStack()
+
+    expect(currentFixReadiness(PR_HEAD).reason).toBe('ready')
+    expect(currentGrounding(PR_HEAD).mode).toBe('local')
   })
 })
