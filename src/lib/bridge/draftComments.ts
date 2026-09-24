@@ -85,6 +85,7 @@
 import type { Draft, DraftHandoff } from '../drafts/drafts.svelte'
 import { draftKey } from '../drafts/drafts.svelte'
 import type { PrFile } from '../github/types'
+import { promptVersionFor } from '../ai/tasks'
 import type { BridgeFixFinding } from './protocol'
 import { fenceNonce, safeRepoPath, sanitizeQuoted, type QuoteRules } from './quotedText'
 
@@ -209,9 +210,19 @@ export function describeDraftNoteRefusal(reason: DraftNoteRefusal, count: number
   }
 }
 
-/** The bridge finding id for one draft. Namespaced against every other source. */
+/**
+ * The bridge finding id for one draft. Namespaced against every other source.
+ *
+ * It carries PROMPT_VERSIONS.draftNote because the wrapper and
+ * DRAFT_NOTE_SUGGESTED_FIX are app-authored prompt text that reaches the
+ * verification re-read as part of this finding — and that re-read's cache key
+ * hashes finding ids but not their bodies. Stamping the version here is what
+ * makes bumping it a clean cache miss for notes and a clean hit for every AI
+ * finding beside them. Session-scoped either way: nothing persists a finding id
+ * (a note's own decision is stored under its `draftKey`, which never moves).
+ */
 export function draftNoteKey(draft: Pick<Draft, 'prKey' | 'path' | 'line' | 'side' | 'n'>): string {
-  return `draft-note:${draftKey(draft)}`
+  return `draft-note:v${promptVersionFor('draftNote')}:${draftKey(draft)}`
 }
 
 /**
@@ -313,6 +324,45 @@ export function intakeDraftNotes(
   }
 
   return { offered, refused }
+}
+
+/** One withdrawn note, as the panel's restore list needs it. */
+export interface WithdrawnNote {
+  /** The same bridge finding id it had when it was sent — see `withdrawnNotes`. */
+  key: string
+  draftKey: string
+  path: string
+  line: number
+  preview: string
+}
+
+/**
+ * The notes the reviewer has taken out of this review.
+ *
+ * Built from the SAME drafts the rest of the app holds — a withdrawal is a flag
+ * on the note, never a copy of it somewhere else, so there is exactly one place
+ * the words live and restoring one cannot resurrect a stale version. No path or
+ * staleness check here: a withdrawn note is not going anywhere near an agent,
+ * and refusing to list one would be refusing to offer its way back.
+ *
+ * It keeps its finding `key` anyway. A note withdrawn WHILE its result is on
+ * screen must not take the row's label and its own way back down with it — the
+ * panel looks a result's note up by that key, and a withdrawal that hid the
+ * control that undoes it would not be reversible in the moment it matters.
+ */
+export function withdrawnNotes(drafts: readonly Draft[]): WithdrawnNote[] {
+  const out: WithdrawnNote[] = []
+  for (const draft of drafts) {
+    if (draft.handoff !== 'withdrawn') continue
+    out.push({
+      key: draftNoteKey(draft),
+      draftKey: draftKey(draft),
+      path: draft.path,
+      line: draft.line,
+      preview: firstLine(sanitizeDraftText(draft.body)),
+    })
+  }
+  return out
 }
 
 function firstLine(text: string): string {

@@ -261,7 +261,12 @@ const EVENTS = {
   //                  without it the loop's cost is indistinguishable from
   //                  somebody clicking send five times. An integer counter over
   //                  an app-controlled loop; it says nothing about the code.
-  bridge_fix_dispatched: ['findings', 'cli', 'round'],
+  //                  'notes' is how many of the batch were the reviewer's OWN
+  //                  drafted comments rather than a model's findings or a bot's
+  //                  — an integer count, added because "does anyone hand their
+  //                  own notes to the agent" is the only question the feature
+  //                  that added them asks, and it cannot be read out of a total.
+  bridge_fix_dispatched: ['findings', 'cli', 'round', 'notes'],
   // The same run's OUTCOME. Counts and fixed enums only:
   //   - 'outcome'      : 'done' | 'failed' | 'cancelled'.
   //   - 'failure'      : the FixFailureKind enum ('unreachable', 'timeout',
@@ -294,6 +299,18 @@ const EVENTS = {
   //   - 'duration_ms': elapsed ms (same convention as ai_task_completed).
   // Nothing about the findings, the code, the commits or the agent's words.
   bridge_fix_looped: ['stop', 'rounds', 'commits', 'still_open', 'unsoftened', 'duration_ms'],
+  // PRIVACY DECISION (the reviewer's own drafted notes): fired once each time
+  // the reviewer decides what happens to one of their own notes after handing
+  // it to the fixing agent. ONE fixed enum and nothing else:
+  //   - 'decision' : the DraftHandoff enum — 'kept' (post it anyway, as
+  //                  written) or 'withdrawn' (take it out of the review; the
+  //                  words are not deleted and it can come back).
+  // The note's text, its path, the file it sits on and whether the agent's
+  // change was taken are all disqualified by definition and none of them is
+  // sent. The mix of the two values is the whole measurement: a feature whose
+  // answer is always "withdrawn" is deleting people's review comments with
+  // extra steps, and one that is never used is a question nobody wanted asked.
+  draft_note_decided: ['decision'],
   // PRIVACY DECISION (#280's verification pass, deferred from that PR): the
   // re-read sends the agent's diff to the configured models and gets back a
   // per-finding verdict plus problems raised against the fix itself. EVERY

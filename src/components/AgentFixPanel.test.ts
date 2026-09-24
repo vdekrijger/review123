@@ -154,7 +154,11 @@ describe('AgentFixPanel analytics', () => {
     // `round` joined the payload with the bounded loop: an integer counter over
     // an app-owned loop, so that a loop's cost is distinguishable from somebody
     // clicking send five times. Still counts and enums, still nothing else.
-    expect(dispatched[0]).toEqual({ findings: 2, cli: 'claude', round: 1 })
+    // `notes` joined the payload with the reviewer's own drafted comments: how
+    // many of the batch were the user's own words rather than a model's. It is
+    // present at 0 rather than omitted, so "nobody sends their own notes" and
+    // "this build does not report it" stay distinguishable.
+    expect(dispatched[0]).toEqual({ findings: 2, cli: 'claude', round: 1, notes: 0 })
   })
 
   it('reports the outcome as counts + enums — no commit, intent, path or diff', async () => {

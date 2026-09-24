@@ -9,8 +9,13 @@
   import { formatUsageLabel, formatTokens } from '../lib/ai/tokenCost'
   import { activeProviderHasKey, panelMode } from '../lib/llm/config'
   import type { DiffWidth } from '../lib/settings/settings'
-  import type { createDraftStore } from '../lib/drafts/drafts.svelte'
+  import type { createDraftStore, DraftHandoff } from '../lib/drafts/drafts.svelte'
   import { draftKey } from '../lib/drafts/drafts.svelte'
+  import {
+    intakeDraftNotes,
+    withdrawnNotes,
+    type DraftNoteRefusal,
+  } from '../lib/bridge/draftComments'
   import type { createDecisionStore, DecisionVerificationContext } from '../lib/eval/decisions'
   import { track } from '../lib/analytics/analytics'
   import { navigate } from '../lib/router/router.svelte'
@@ -263,7 +268,10 @@
   }
 
   function draftsForFile(path: string) {
-    return draftStore?.drafts.filter((d) => d.path === path) ?? []
+    // `all`, not the live subset: a note the reviewer withdrew from their review
+    // stays on the line it was written on, struck through, with its way back.
+    // Vanishing from the diff is what a deletion looks like, and this is not one.
+    return draftStore?.all.filter((d) => d.path === path) ?? []
   }
 
   /**
@@ -280,7 +288,7 @@
   /** Remove ONE draft at a line — the one with ordinal `n` (undefined = first). */
   async function handleRemoveDraft(path: string, line: number, side: 'LEFT' | 'RIGHT', n?: number) {
     if (!draftStore) return
-    const draft = draftStore.drafts.find(
+    const draft = draftStore.all.find(
       (d) => d.path === path && d.line === line && d.side === side && (n === undefined || (d.n ?? 0) === n),
     )
     if (draft) {
@@ -981,6 +989,45 @@
    *     the buttons up exactly as it lights up the panel.
    * The panel remains the single owner of run state; the card just asks it.
    */
+  // -------------------------------------------------------------------------
+  // THE REVIEWER'S OWN DRAFTED NOTES (steps 5 and 7 of the workflow).
+  //
+  // `fixCandidates` above is built from what the MODELS found. These are what
+  // the reviewer found, reading the code themselves — the output of steps 4 and
+  // 6, and the notes they trust most. They were the one input the panel could
+  // not take, which made "address what I found" the one step it did not
+  // support.
+  //
+  // Read from `draftStore.all` and intaken by src/lib/bridge/draftComments.ts,
+  // which owns every rule about which note may be offered, how it is quoted and
+  // what the agent is told about whose words it is reading. Nothing about that
+  // is decided here: this is the wiring, not the judgment.
+  //
+  // WITHDRAWN notes are excluded from the offer by the intake and listed
+  // separately, because a note the reviewer took out of their review is not a
+  // pending note — but it is still their words, and it still has a way back.
+  // -------------------------------------------------------------------------
+  const draftNoteIntake = $derived(
+    intakeDraftNotes(draftStore?.all ?? [], files, currentHeadSha),
+  )
+  const draftNotes = $derived(draftNoteIntake.offered)
+  const withdrawnDraftNotes = $derived(withdrawnNotes(draftStore?.all ?? []))
+
+  /** Refusals grouped by reason, so the panel states counts instead of a list. */
+  const draftNoteRefusals = $derived.by((): [DraftNoteRefusal, number][] => {
+    const out = new Map<DraftNoteRefusal, number>()
+    for (const r of draftNoteIntake.refused) out.set(r.reason, (out.get(r.reason) ?? 0) + 1)
+    return [...out.entries()]
+  })
+
+  function noteHandoff(key: string, handoff: DraftHandoff): void {
+    void draftStore?.setHandoff(key, handoff)
+  }
+
+  function notesSent(keys: string[]): void {
+    void draftStore?.markSent(keys)
+  }
+
   let fixPanel = $state<{ sendOne: (key: string) => void } | null>(null)
   const fixReady = $derived(currentHeadSha ? currentFixReadiness(currentHeadSha).ready : false)
   const agentFix = $derived(
@@ -2061,7 +2108,16 @@
        bridge is connected (see AgentFixPanel) — with none paired it is not
        even a hint, the same rule the grounding indicator follows. -->
   {#if currentHeadSha}
-    <AgentFixPanel headSha={currentHeadSha} candidates={fixCandidates} bind:this={fixPanel} />
+    <AgentFixPanel
+      headSha={currentHeadSha}
+      candidates={fixCandidates}
+      {draftNotes}
+      withdrawn={withdrawnDraftNotes}
+      {draftNoteRefusals}
+      onNoteHandoff={draftStore ? noteHandoff : null}
+      onNotesSent={draftStore ? notesSent : null}
+      bind:this={fixPanel}
+    />
   {/if}
 
 {/if}

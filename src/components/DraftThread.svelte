@@ -30,6 +30,15 @@
    * Keyboard: Ctrl/Cmd+Enter = Leave comment (Save). Esc with the expand preview open =
    * Keep my note.
    *
+   * WITHDRAWN NOTES. A note the reviewer handed to their own fixing agent and
+   * then took out of the review is NOT deleted — see DraftHandoff in the draft
+   * store. It stays here, on the line it was written on, dimmed and struck
+   * through, and this widget carries the way back. "Put it back" is a plain
+   * re-save of the same body: `upsert` lifts a withdrawal because writing a note
+   * again is the plainest statement that you want it, and routing the undo
+   * through the save path the widget already owns means the words can only ever
+   * come back as the words that are actually stored.
+   *
    * Gating: when askDisabledReason is set, the Ask AI and Expand buttons are shown but
    * disabled (the hint text is displayed below the action row) — same keyless handling
    * for both. Nothing else disables Ask AI: it used to be disabled whenever the composer
@@ -133,6 +142,15 @@
       ? draft.headSha.slice(0, 7)
       : null
   )
+
+  /** Has this note been taken out of the review the reviewer will submit? */
+  const withdrawn = $derived(draft?.handoff === 'withdrawn')
+
+  /** Put a withdrawn note back, by saving the body that is already stored. */
+  function restore(): void {
+    if (draft === null) return
+    onsave(draft.body)
+  }
 
   /**
    * The effective start line — either from the draft (when viewing a saved draft)
@@ -409,7 +427,13 @@
 
 <svelte:window onkeydown={handleExpandWindowKeydown} />
 
-<div class="draft-thread" data-testid="draft-thread" data-line={line}>
+<div
+  class="draft-thread"
+  data-testid="draft-thread"
+  data-line={line}
+  data-handoff={draft?.handoff ?? 'none'}
+  class:withdrawn
+>
   <div class="thread-header">
     {#if effectiveStartLine !== null}
       <span class="thread-label">Lines {effectiveStartLine}–{line}</span>
@@ -435,6 +459,18 @@
         data-testid="draft-created-at"
         title={draftTimeTitle(draft.createdAt)}
       >{draftTimeLabel(draft.createdAt)}</span>
+    {/if}
+    <!-- WHAT HAPPENED TO THIS NOTE. Shown where the words are, so the fate of a
+         comment is never something you can only learn in another panel. -->
+    {#if draft?.handoff !== undefined}
+      <span
+        class="thread-handoff"
+        data-testid="draft-handoff"
+        data-handoff={draft.handoff}
+        title={withdrawn
+          ? 'You took this note out of your review after handing it to your agent. It is not deleted and it will not be posted until you put it back.'
+          : 'You handed this note to your own coding agent. It is still part of your review and will be posted as written.'}
+      >{withdrawn ? 'withdrawn' : 'sent to your agent'}</span>
     {/if}
   </div>
 
@@ -607,7 +643,18 @@
     <div class="draft-body prose">
       {@html renderMarkdown(draft.body)}
     </div>
+    {#if withdrawn}
+      <!-- Not a warning and not an error — a statement of where this note
+           stands, and the one click that reverses it. -->
+      <p class="withdrawn-note" data-testid="draft-withdrawn-note">
+        Withdrawn from this review, so it will not be posted. Your words are kept exactly as you wrote
+        them.
+      </p>
+    {/if}
     <div class="thread-actions">
+      {#if withdrawn}
+        <button type="button" class="btn" onclick={restore} data-testid="draft-restore">Put it back</button>
+      {/if}
       <button type="button" class="btn" onclick={handleEdit}>Edit</button>
       <button type="button" class="btn btn-danger" onclick={handleDelete}>Delete</button>
     </div>
@@ -692,6 +739,43 @@
   .ai-badge ~ .thread-time,
   .thread-from-commit ~ .thread-time {
     margin-left: var(--space-1);
+  }
+
+  /* The handoff chip. Same treatment as the other chips on purpose: what
+     happened to a note is a fact about it, exactly like its age or the commit
+     it was written on, and giving it a louder colour would make a note the
+     reviewer sent read as a problem. */
+  .thread-handoff {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    line-height: 1;
+    padding: 0 var(--space-1);
+    border-radius: 999px;
+    border: 1px solid var(--border-draft, #f0b44488);
+    color: var(--text-muted, #b8862a);
+    white-space: nowrap;
+    margin-left: auto;
+    cursor: help;
+  }
+
+  .ai-badge ~ .thread-handoff,
+  .thread-from-commit ~ .thread-handoff,
+  .thread-time ~ .thread-handoff {
+    margin-left: var(--space-1);
+  }
+
+  /* A WITHDRAWN NOTE IS STILL ON SCREEN. Dimmed and struck through, because it
+     is not part of the review being submitted — never hidden, because hiding
+     somebody's words is the thing a withdrawal must not be mistaken for. */
+  .draft-thread.withdrawn .draft-body {
+    opacity: 0.6;
+    text-decoration: line-through;
+  }
+
+  .withdrawn-note {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
   }
 
   /*
