@@ -1702,7 +1702,7 @@
         aria-pressed={hideResolved}
         data-testid="hide-resolved-toggle"
         title="Exclude threads that are already resolved — finished conversations, not work. Nothing is hidden silently: the count is stated here and again wherever threads were removed, each one click from showing."
-        onclick={() => toggleHideResolvedThreads()}
+        onclick={() => track('hide_resolved_toggled', { enabled: toggleHideResolvedThreads() })}
       >Hide resolved</button>
     {/if}
   </div>
