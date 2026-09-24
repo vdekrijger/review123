@@ -478,6 +478,67 @@ export function currentCheckoutReadiness(prHead: string): CheckoutReadiness {
 }
 
 // ---------------------------------------------------------------------------
+// What the app knows about the pull request on screen
+// ---------------------------------------------------------------------------
+
+/**
+ * The two facts a checkout needs that only the review route holds: WHICH ref
+ * to fetch, and WHOSE code it is.
+ *
+ * It lives here rather than being threaded through props because the surfaces
+ * that need it are not all in the route's component tree — the agent fix panel
+ * is four levels down inside the Inspect step, and the whole point of this
+ * change is that its refusal can offer the resolving action. Two surfaces
+ * deriving the trust answer from two different inputs is exactly the class of
+ * bug this PR is fixing, so both read this one record.
+ */
+export interface PrCheckoutContext {
+  /** The PR's head sha, as the app knows it. */
+  headSha: string
+  /** The provider-agnostic ref, or null when the provider exposes none. */
+  ref: string | null
+  /** The provider's own provenance answer, for the trust rule. */
+  relation: PrRepoRelation
+}
+
+const prContext = $state<{ value: PrCheckoutContext | null }>({ value: null })
+
+/** Publish the pull request on screen. The review route is the only caller. */
+export function notePrCheckoutContext(value: PrCheckoutContext | null): void {
+  prContext.value = value
+}
+
+/**
+ * The checkout context for `prHead`, or null when the app is not showing that
+ * pull request.
+ *
+ * KEYED ON THE HEAD SHA ON PURPOSE. A surface deep in the tree must never be
+ * able to offer "check this out" against a ref left over from the PR the user
+ * was looking at a moment ago.
+ */
+export function prCheckoutContext(prHead: string): PrCheckoutContext | null {
+  const value = prContext.value
+  if (value === null) return null
+  return value.headSha.toLowerCase() === prHead.toLowerCase() ? value : null
+}
+
+/**
+ * After a checkout, did the tree land on the commit the review was run against?
+ *
+ * A pull-request ref is resolved at FETCH time, so a PR that advanced between
+ * the review and the click lands the user on a commit NEWER than the one the
+ * findings describe. That is a third thing to say — not "it worked", and not
+ * "it failed" — and saying nothing would leave the panel refusing again with no
+ * explanation of why the thing they just did did not help.
+ *
+ * Returns null when they match, i.e. when there is nothing to say.
+ */
+export function describeCheckoutLanding(landedHead: string, reviewedHead: string): string | null {
+  if (landedHead.toLowerCase() === reviewedHead.toLowerCase()) return null
+  return `Your checkout is now at ${short(landedHead)} — but this review ran against ${short(reviewedHead)}, so the pull request moved while you were reading it. Reload to review ${short(landedHead)}; the findings on screen describe the older commit.`
+}
+
+// ---------------------------------------------------------------------------
 // Transport
 // ---------------------------------------------------------------------------
 
@@ -811,4 +872,5 @@ export function _resetStackForTest(): void {
   holder.busy = false
   holder.error = null
   holder.stash = null
+  prContext.value = null
 }

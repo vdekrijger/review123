@@ -17,6 +17,7 @@ import userEvent from '@testing-library/user-event'
 import AgentFixPanel, { type FixCandidateEntry } from './AgentFixPanel.svelte'
 import { track, _setCaptureForTest } from '../lib/analytics/analytics'
 import { _resetBridgeForTest, connectBridge } from '../lib/bridge/bridge.svelte'
+import { _resetStackForTest } from '../lib/bridge/runPr.svelte'
 import { BRIDGE_STORAGE_KEY } from '../lib/bridge/storage'
 import { PROTOCOL_VERSION } from '../lib/bridge/protocol'
 
@@ -90,11 +91,47 @@ function eventsNamed(name: string): Record<string, unknown>[] {
   return captured.filter((c) => c.event === name).map((c) => c.props)
 }
 
+/** The `/v1/stack` answer the panel probes for on mount. */
+function stackBody(): unknown {
+  return {
+    ok: true,
+    git: { head: HEAD, branch: 'feat/x', dirty: false },
+    dirtyPaths: [],
+    dirtyCount: 0,
+    prior: null,
+    app: { url: null, source: 'unknown', reachable: false, detail: '' },
+    checkoutEnabled: false,
+  }
+}
+
+/**
+ * Answers for `/v1/fix`, in order.
+ *
+ * The panel probes `/v1/stack` on mount (the head its refusal rests on must be
+ * fresh, not from page load), so a bare `mockResolvedValueOnce` queue would
+ * hand the probe the answer meant for the fix run. Routing by URL keeps each
+ * test's intent where it belongs: this queue is only ever the fix route's.
+ */
+const fixQueue: ((url: string, init: RequestInit) => Promise<Response>)[] = []
+
+function queueFix(fn: (url: string, init: RequestInit) => Promise<Response> | Response): void {
+  fixQueue.push(async (url, init) => fn(url, init))
+}
+
 beforeEach(async () => {
   localStorage.clear()
   captured.length = 0
+  fixQueue.length = 0
   _resetBridgeForTest()
+  _resetStackForTest()
   fetchMock.mockReset()
+  fetchMock.mockImplementation((url: string, init: RequestInit) => {
+    const target = String(url)
+    if (target.endsWith('/v1/stack')) return Promise.resolve(json(stackBody()))
+    const next = fixQueue.shift()
+    if (next !== undefined) return next(target, init)
+    return Promise.reject(new TypeError('Failed to fetch'))
+  })
   vi.stubGlobal('fetch', fetchMock)
   _setCaptureForTest((event, props) => captured.push({ event, props }))
   await connectReadyBridge()
@@ -107,7 +144,7 @@ afterEach(() => {
 
 describe('AgentFixPanel analytics', () => {
   it('reports a dispatched batch as a COUNT and a CLI, and nothing else', async () => {
-    fetchMock.mockResolvedValueOnce(json(fixResponse()))
+    queueFix(() => json(fixResponse()))
     render(AgentFixPanel, { headSha: HEAD, candidates: [candidate('f1'), candidate('f2')] })
 
     await userEvent.click(screen.getByTestId('agent-fix-send'))
@@ -118,7 +155,7 @@ describe('AgentFixPanel analytics', () => {
   })
 
   it('reports the outcome as counts + enums — no commit, intent, path or diff', async () => {
-    fetchMock.mockResolvedValueOnce(json(fixResponse()))
+    queueFix(() => json(fixResponse()))
     render(AgentFixPanel, { headSha: HEAD, candidates: [candidate('f1'), candidate('f2')] })
 
     await userEvent.click(screen.getByTestId('agent-fix-send'))
@@ -145,7 +182,7 @@ describe('AgentFixPanel analytics', () => {
   })
 
   it('reports a FAILED run with its classified kind, never the bridge’s own words', async () => {
-    fetchMock.mockResolvedValueOnce(
+    queueFix(() =>
       json({ ok: false, error: 'write-disabled', message: 'start me with --allow-write, /Users/someone/repo' }, 403),
     )
     render(AgentFixPanel, { headSha: HEAD, candidates: [candidate('f1')] })
@@ -160,9 +197,9 @@ describe('AgentFixPanel analytics', () => {
   })
 
   it('does not report a user cancellation as a failure', async () => {
-    fetchMock.mockImplementationOnce(
+    queueFix(
       (_url: string, init: RequestInit) =>
-        new Promise((_resolve, reject) => {
+        new Promise<Response>((_resolve, reject) => {
           init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
         }),
     )

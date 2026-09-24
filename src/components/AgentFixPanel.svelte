@@ -42,6 +42,22 @@
     runBridgeFix,
     type FixFailure,
   } from '../lib/bridge/fixLoop'
+  import {
+    checkoutPr,
+    currentCheckoutReadiness,
+    decideCheckoutTrust,
+    describeCheckout,
+    describeCheckoutLanding,
+    describeCheckoutTrust,
+    describeStackFailure,
+    prCheckoutContext,
+    refreshStack,
+    stackState,
+    trustNeedsConfirmation,
+    type CheckoutTrust,
+  } from '../lib/bridge/runPr.svelte'
+  import { bridgeState } from '../lib/bridge/bridge.svelte'
+  import { BRIDGE_START_COMMAND } from '../lib/bridge/install'
   import { MAX_FIX_FINDINGS, type BridgeFixFinding, type BridgeFixResponse } from '../lib/bridge/protocol'
   import { track } from '../lib/analytics/analytics'
 
@@ -81,6 +97,114 @@
    * every other reason is worth saying, because the user can act on it.
    */
   const visible = $derived(readiness.reason !== 'no-bridge' && candidates.length > 0)
+
+  // ---- The way out of a refusal --------------------------------------------
+  //
+  // A refusal that names its reason and offers nothing is still a dead end.
+  // `head-mismatch` in particular refuses because the working tree is not where
+  // the findings are — and moving it there is a capability the user may already
+  // have granted (`--allow-checkout`), with its own prior-state, stash and
+  // restore handling. So the refusal offers it, ON THE SAME TERMS the top-bar
+  // panel does: the same readiness rule, the same trust rule, the same stash
+  // confirmation naming the files, and the same typed failures.
+  //
+  // `--allow-checkout` is a SEPARATE grant from `--allow-write`; neither implies
+  // the other. With it absent there is no control here at all, only the sentence
+  // that says which flag turns it on.
+
+  /** Which PR the route is showing, and whose code it is. Null for any other. */
+  const prCtx = $derived(prCheckoutContext(headSha))
+  /** The checkout rule's own answer — never a second opinion on the head. */
+  const checkout = $derived(currentCheckoutReadiness(headSha))
+  /** Absent provenance is treated exactly like a fork, as it is everywhere. */
+  const trust = $derived<CheckoutTrust>(
+    decideCheckoutTrust({ relation: prCtx?.relation ?? 'unknown' }),
+  )
+  /** May the resolving action be offered at all? */
+  const canOfferCheckout = $derived(
+    prCtx?.ref != null && (checkout.reason === 'ready' || checkout.reason === 'tree-dirty'),
+  )
+
+  const dirtyPaths = $derived(stackState.state?.dirtyPaths ?? checkout.dirtyPaths)
+  const dirtyCount = $derived(stackState.state?.dirtyCount ?? checkout.dirtyCount)
+
+  /** Which confirmation is open, if any. One at a time, always explicit. */
+  let confirm = $state<'trust' | 'stash' | null>(null)
+  /** The last checkout attempt's failure sentence. Its OWN, never a generic one. */
+  let checkoutError = $state<string | null>(null)
+  /** Set when the checkout landed somewhere other than the reviewed commit. */
+  let landing = $state<string | null>(null)
+
+  let probed = false
+  $effect(() => {
+    // Re-read the tree once this panel is on screen. The head this refusal
+    // rests on was last established at app start otherwise, and the user may
+    // have switched branches in their terminal since — refusing (or worse,
+    // offering) on a page-load-old fact is how this surface earned its bug.
+    if (bridgeState.status === 'connected' && !probed) {
+      probed = true
+      // `refreshStack` never rejects — it resolves to null on every failure.
+      void refreshStack()
+    }
+  })
+
+  function beginCheckout(): void {
+    if (!canOfferCheckout) return
+    landing = null
+    checkoutError = null
+    // The scarier question first: whether to run this code at all, before what
+    // to do with the user's edits. Same order as the top-bar panel.
+    if (trustNeedsConfirmation(trust)) {
+      confirm = 'trust'
+      return
+    }
+    if (checkout.reason === 'tree-dirty') {
+      confirm = 'stash'
+      return
+    }
+    void doCheckout(false)
+  }
+
+  function trustAccepted(): void {
+    confirm = null
+    if (checkout.reason === 'tree-dirty') {
+      confirm = 'stash'
+      return
+    }
+    void doCheckout(false)
+  }
+
+  async function doCheckout(stashDirty: boolean): Promise<void> {
+    confirm = null
+    const ref = prCtx?.ref ?? null
+    if (ref === null) return
+    checkoutError = null
+    const outcome = await checkoutPr({ ref, stashDirty })
+    if (!outcome.ok) {
+      // EVERY typed failure keeps its own sentence — `tree-dirty` and
+      // `ref-unknown` are different problems with different next steps and are
+      // never collapsed into "couldn't check out".
+      checkoutError = describeStackFailure(outcome.failure)
+      // The tree changed between the probe and the click. Offer the stash
+      // rather than only complaining about it.
+      if (outcome.failure.kind === 'tree-dirty') confirm = 'stash'
+      return
+    }
+    // It worked — but a PR ref resolves at fetch time, so "it worked" and
+    // "you are now on the reviewed commit" are not the same claim.
+    landing = describeCheckoutLanding(outcome.value.git.head, headSha)
+  }
+
+  let startCopied = $state(false)
+  async function copyStartCommand(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(BRIDGE_START_COMMAND)
+      startCopied = true
+      setTimeout(() => (startCopied = false), 1_500)
+    } catch {
+      // Clipboard denied — the command is on screen and selectable.
+    }
+  }
 
   // ---- Selection -----------------------------------------------------------
   // Default: every eligible finding is ticked. The user unticks what they want
@@ -249,6 +373,112 @@
         {describeFixReadiness(readiness, headSha)}
       </p>
     </header>
+
+    {#if !readiness.ready}
+      <!-- NEVER a refusal with nothing to do about it. Each reason gets the
+           resolving action it actually has — and the ones whose resolution is
+           only possible at the user's own terminal say so and stop there,
+           rather than growing a button that would lie. -->
+      <div class="afx-wayout" data-testid="agent-fix-wayout" data-reason={readiness.reason}>
+        {#if readiness.reason === 'head-mismatch'}
+          {#if canOfferCheckout}
+            <div class="afx-actions">
+              <button
+                type="button"
+                class="afx-send"
+                data-testid="agent-fix-checkout"
+                disabled={stackState.busy}
+                onclick={beginCheckout}
+              >
+                {#if stackState.busy}<Spinner />{/if}
+                Bring my checkout to this PR
+              </button>
+              <span class="afx-note" data-testid="agent-fix-checkout-note">
+                {checkout.reason === 'tree-dirty'
+                  ? `Your checkout has ${dirtyCount} uncommitted change${dirtyCount === 1 ? '' : 's'}. Nothing is touched until you choose to stash them.`
+                  : 'Moves your working tree onto this pull request. review123 records where you were, so the top bar can put it back.'}
+              </span>
+            </div>
+          {:else}
+            <!-- No control where the capability is absent — and the sentence
+                 names the flag that grants it, not the adjacent one. -->
+            <p
+              class="afx-note"
+              data-testid="agent-fix-checkout-blocked"
+              data-reason={prCtx?.ref == null ? 'no-ref' : checkout.reason}
+            >
+              {prCtx?.ref == null
+                ? 'This provider does not expose a pull-request ref the bridge can fetch, so review123 cannot move your checkout for you.'
+                : describeCheckout(checkout)}
+            </p>
+          {/if}
+        {:else if readiness.reason === 'write-disabled'}
+          <!-- The resolution is a command at the user's own terminal, so the
+               panel hands them the command rather than a button it cannot back. -->
+          <div class="afx-cherry">
+            <code data-testid="agent-fix-start-command">{BRIDGE_START_COMMAND}</code>
+            <button type="button" class="afx-link" onclick={copyStartCommand}>
+              {startCopied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        {/if}
+
+        {#if confirm === 'trust'}
+          <!-- Whose code is about to run. Same sentence, same rule, same
+               treatment of "cannot prove it is not a fork" as the top bar. -->
+          <div class="afx-confirm" data-testid="agent-fix-trust-confirm">
+            <p class="afx-confirm-text" data-testid="agent-fix-trust-text">{describeCheckoutTrust(trust)}</p>
+            <div class="afx-actions">
+              <button type="button" class="afx-send" data-testid="agent-fix-trust-accept" onclick={trustAccepted}>
+                I've read the diff — check it out
+              </button>
+              <button type="button" class="afx-link" data-testid="agent-fix-trust-cancel" onclick={() => (confirm = null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        {/if}
+
+        {#if confirm === 'stash'}
+          <div class="afx-confirm" data-testid="agent-fix-stash-confirm">
+            <p class="afx-confirm-text">
+              These {dirtyCount} file{dirtyCount === 1 ? '' : 's'} will be moved into a
+              <code>git stash</code> entry so this pull request can be checked out. Nothing is deleted,
+              and restoring puts them back.
+            </p>
+            <!-- NAMING THE FILES IS THE POINT: a prompt that says "you have
+                 uncommitted changes" asks the user to trust a claim they
+                 cannot check. -->
+            <ul class="afx-dirty-list" data-testid="agent-fix-dirty-list">
+              {#each dirtyPaths as path (path)}
+                <li><code>{path}</code></li>
+              {/each}
+            </ul>
+            {#if dirtyCount > dirtyPaths.length}
+              <p class="afx-note">…and {dirtyCount - dirtyPaths.length} more.</p>
+            {/if}
+            <div class="afx-actions">
+              <button type="button" class="afx-send" data-testid="agent-fix-stash-accept" onclick={() => doCheckout(true)}>
+                Stash and check out
+              </button>
+              <button type="button" class="afx-link" data-testid="agent-fix-stash-cancel" onclick={() => (confirm = null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        {/if}
+
+        {#if landing !== null}
+          <p class="afx-warn" role="status" data-testid="agent-fix-landing">{landing}</p>
+        {/if}
+
+        {#if checkoutError !== null}
+          <div class="afx-error" role="alert" data-testid="agent-fix-checkout-error">
+            <p>{checkoutError}</p>
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     {#if readiness.ready}
       {#if run.status === 'idle'}
@@ -613,6 +843,30 @@
     color: var(--text-muted);
     font-size: 0.75rem;
     margin: 0;
+  }
+
+  .afx-wayout {
+    margin-top: var(--space-2);
+  }
+
+  .afx-confirm {
+    margin-top: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--surface);
+  }
+
+  .afx-confirm-text {
+    margin: 0;
+    font-size: var(--text-xs);
+  }
+
+  .afx-dirty-list {
+    list-style: none;
+    margin: var(--space-2) 0 0;
+    padding: 0;
+    font-size: var(--text-xs);
   }
 
   .afx-warn {
