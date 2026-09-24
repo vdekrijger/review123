@@ -96,6 +96,7 @@
     patchRowCount,
     type ParsedPatch,
   } from '../lib/diff/commitPatch'
+  import { fixTestFactFor, noteFixTestFact } from '../lib/bridge/fixTestFact.svelte'
   import { fixVerifyShape, mergeFixVerifyReports, verifyAgentFixDetailed } from '../lib/ai/fixVerifyRun'
   import {
     FIX_VERIFY_EVIDENCE_CAVEAT,
@@ -440,6 +441,22 @@
 
   /** A round is in flight. The results below are visible but not re-sendable. */
   const busy = $derived(run.status === 'running')
+
+  /**
+   * PUBLISH THE ONLY REAL TEST SIGNAL THIS APP HOLDS.
+   *
+   * The readiness grade on Step 3 (#281) weights its `tests` check highest,
+   * because it is the one input where the code was actually EXECUTED — and it
+   * read `not-run` forever, because this was the only place the answer existed
+   * and it lived in this component's own state.
+   *
+   * It is DERIVED from `allChanges`, which keeps one commit per finding with the
+   * latest round winning. That is what stops a round-1 green from outliving the
+   * round-2 commit that replaced it: stale green is worse than no green.
+   */
+  $effect(() => {
+    noteFixTestFact(headSha, fixTestFactFor(allChanges))
+  })
 
   /** Per-change verdict. Absent = not yet judged; the user must choose. */
   let verdicts = $state<Record<string, 'approved' | 'rejected'>>({})

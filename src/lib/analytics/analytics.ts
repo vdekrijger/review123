@@ -327,6 +327,24 @@ const EVENTS = {
     'cached',
     'duration_ms',
   ],
+  // PRIVACY DECISION (#281's readiness grade): fired once per graded report
+  // when the user lands on the verdict step. The grade is computed from stated
+  // facts about THIS pull request — which reviewers ran, which files were never
+  // read, which findings stand — and every one of those is a private repo
+  // identifier wearing a number. So none of them are sent. Fixed enums and
+  // counts only:
+  //   - 'band'  : the ReadinessBand enum ('broad' | 'partial' | 'thin' |
+  //               'minimal' | 'none'). The headline, and the only thing needed
+  //               to see whether the bands are calibrated at all.
+  //   - 'score' / 'max' : integers. `max` is a constant today and is sent
+  //               anyway, so a later reweighting does not silently reinterpret
+  //               every historical score.
+  //   - 'unmet' : integer count of checks that came back unmet. Which ones is
+  //               the interesting part and is exactly what cannot be sent — a
+  //               shortfall names reviewers and files.
+  // Explicitly NOT sent: check ids, labels, details, shortfalls, reviewer
+  // names, file paths, finding text, the disclaimer lines.
+  readiness_viewed: ['band', 'score', 'max', 'unmet'],
   // PRIVACY DECISION (standing rules): the distillation reads the user's OWN
   // review comments, their dismissal ledger, and their unsent draft comments,
   // and returns rules written in their vocabulary. Its permitted ceiling was

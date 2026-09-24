@@ -19,6 +19,11 @@ import AgentFixPanel, { type FixCandidateEntry } from './AgentFixPanel.svelte'
 import { _setCaptureForTest } from '../lib/analytics/analytics'
 import { _resetBridgeForTest, connectBridge } from '../lib/bridge/bridge.svelte'
 import { _resetStackForTest } from '../lib/bridge/runPr.svelte'
+import {
+  NO_FIX_TEST_FACT,
+  _resetFixTestFactForTest,
+  currentFixTestFact,
+} from '../lib/bridge/fixTestFact.svelte'
 import { BRIDGE_STORAGE_KEY } from '../lib/bridge/storage'
 import { PROTOCOL_VERSION, type BridgeFixStopReason } from '../lib/bridge/protocol'
 // `intakeBotComments` survives the mock below (it spreads the real module), so
@@ -125,10 +130,13 @@ function candidate(key: string): FixCandidateEntry {
 }
 
 /** A `/v1/fix` answer that ECHOES the ids it was sent, one commit each. */
-function echoFix(opts: { stop?: BridgeFixStopReason; skip?: boolean } = {}) {
+function echoFix(
+  opts: { stop?: BridgeFixStopReason; skip?: boolean; tests?: 'passed' | 'failed' } = {},
+) {
   return (_url: string, init: RequestInit): Response => {
     const sent = JSON.parse(String(init.body)) as { findings: { id: string; path: string }[] }
     const stop = opts.stop ?? 'all-addressed'
+    const testStatus = opts.tests ?? (stop === 'round-cap' ? 'failed' : 'passed')
     return json({
       ok: true,
       cli: 'claude',
@@ -146,10 +154,12 @@ function echoFix(opts: { stop?: BridgeFixStopReason; skip?: boolean } = {}) {
             truncated: false,
             rounds: 1,
             stopReason: stop,
-            tests:
-              stop === 'round-cap'
-                ? { status: 'failed', command: 'pnpm test', durationMs: 9, output: '1 failing' }
-                : { status: 'passed', command: 'pnpm test', durationMs: 9, output: 'ok' },
+            tests: {
+              status: testStatus,
+              command: 'pnpm test',
+              durationMs: 9,
+              output: testStatus === 'failed' ? '1 failing' : 'ok',
+            },
           })),
       skipped: opts.skip
         ? sent.findings.map((f) => ({ findingId: f.id, reason: 'agent-failed', detail: 'the CLI died' }))
@@ -201,6 +211,7 @@ beforeEach(() => {
   hoisted.botIntake = null
   _resetBridgeForTest()
   _resetStackForTest()
+  _resetFixTestFactForTest()
   fetchMock.mockReset()
   fetchMock.mockImplementation((url: string, init: RequestInit) => {
     const target = String(url)
@@ -409,6 +420,58 @@ describe('unanswered skips', () => {
     expect(retry.textContent).toMatch(/Try the 2 unanswered findings again/)
     // And NOT folded into the still-open button, which is about something else.
     expect(screen.queryByTestId('agent-fix-send-open')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The only real test signal the app holds
+// ---------------------------------------------------------------------------
+
+describe('the test fact the readiness grade reads', () => {
+  it('is not-run until a fix run has actually executed something', async () => {
+    await connectReadyBridge()
+    render(AgentFixPanel, { headSha: HEAD, candidates: [candidate('f1')] })
+    expect(currentFixTestFact(HEAD)).toEqual(NO_FIX_TEST_FACT)
+  })
+
+  it('publishes a pass, scoped to the agent’s commit rather than to the PR', async () => {
+    await connectReadyBridge()
+    fixDefault = echoFix({ tests: 'passed' })
+    render(AgentFixPanel, { headSha: HEAD, candidates: [candidate('f1')] })
+
+    await userEvent.click(screen.getByTestId('agent-fix-send'))
+    await screen.findByTestId('agent-fix-loop-stop')
+
+    const fact = currentFixTestFact(HEAD)
+    expect(fact.status).toBe('passed')
+    expect(fact.command).toMatch(/on the agent's fix commit/)
+  })
+
+  // STALE GREEN IS WORSE THAN NO GREEN. Round one passed; round two replaced
+  // that commit with a red one, and the fact must move with the commit.
+  it('does not let an earlier round’s green outlive the commit it ran against', async () => {
+    await connectReadyBridge()
+    hoisted.openSequence = [['f1'], ['f1']]
+    queueFix(echoFix({ tests: 'passed' }))
+    queueFix(echoFix({ tests: 'failed' }))
+    render(AgentFixPanel, { headSha: HEAD, candidates: [candidate('f1')] })
+
+    await userEvent.click(screen.getByTestId('agent-fix-send'))
+    await screen.findByTestId('agent-fix-loop-stop')
+
+    expect(eventsNamed('bridge_fix_dispatched')).toHaveLength(2)
+    expect(currentFixTestFact(HEAD).status).toBe('failed')
+  })
+
+  it('is never read by another pull request’s grade', async () => {
+    await connectReadyBridge()
+    fixDefault = echoFix({ tests: 'passed' })
+    render(AgentFixPanel, { headSha: HEAD, candidates: [candidate('f1')] })
+
+    await userEvent.click(screen.getByTestId('agent-fix-send'))
+    await screen.findByTestId('agent-fix-loop-stop')
+
+    expect(currentFixTestFact('0'.repeat(40))).toEqual(NO_FIX_TEST_FACT)
   })
 })
 
