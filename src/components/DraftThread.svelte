@@ -36,6 +36,7 @@
    * was empty, which was a dead end with no stated reason (the panel has its own input
    * now, so an empty composer is irrelevant to it).
    */
+  import { tick } from 'svelte'
   import type { AskFocus } from '../lib/ai/tasks'
   import { renderMarkdown } from '../lib/markdown/render'
   import CommentEditor from './CommentEditor.svelte'
@@ -242,11 +243,15 @@
     askLoading = false
   }
 
-  function toggleAsk() {
+  async function toggleAsk() {
     askOpen = !askOpen
     if (askOpen) {
       // Keyboard-first: the panel's own input takes focus when it opens.
-      queueMicrotask(() => askInputEl?.focus())
+      // `tick()`, not queueMicrotask — the binding only exists after Svelte has
+      // flushed the DOM, and microtask ordering against that flush is not a
+      // guarantee worth relying on.
+      await tick()
+      askInputEl?.focus()
     }
   }
 
@@ -511,7 +516,7 @@
         <button
           type="button"
           class="btn"
-          onclick={toggleAsk}
+          onclick={() => void toggleAsk()}
           disabled={askToggleDisabled}
           aria-expanded={askOpen}
           aria-controls={panelId}

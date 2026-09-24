@@ -422,6 +422,15 @@ describe('DraftThread — action row (Leave comment / Ask AI / Cancel buttons)',
     expect(screen.queryByTestId('ask-panel')).not.toBeInTheDocument()
   })
 
+  it('opening the panel puts the caret in the panel input, not the composer', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, { props: { ...baseProps, askFn: makeAskFn() } })
+    await user.click(screen.getByRole('button', { name: /ask ai/i }))
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByTestId('ask-question-input')),
+    )
+  })
+
   it('typing then clicking Leave comment calls onsave with the textarea text', async () => {
     const user = userEvent.setup()
     const onsave = vi.fn()
