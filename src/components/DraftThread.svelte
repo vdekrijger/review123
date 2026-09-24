@@ -956,16 +956,24 @@
     font-size: var(--text-xs);
   }
 
-  /* The composer sits at the BOTTOM, next to the newest exchange. */
+  /*
+   * The composer sits at the BOTTOM, next to the newest exchange.
+   * It WRAPS rather than answering a viewport breakpoint: this widget's width
+   * comes from the diff container (split mode, the drawer, a narrow window),
+   * which a `max-width` media query cannot see. The input's own min-width is
+   * what decides when the button drops to its own line.
+   */
   .ask-composer {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     align-items: flex-start;
     gap: var(--space-2);
   }
 
   .ask-input {
-    flex: 1 1 auto;
-    min-width: 0;
+    flex: 1 1 14rem;
+    min-width: 12rem;
     resize: vertical;
     box-sizing: border-box;
     border: 1px solid var(--border-control);
@@ -993,18 +1001,5 @@
 
   .ask-send {
     flex-shrink: 0;
-  }
-
-  /* Narrow widgets (split diff, narrow window): the composer stacks rather
-     than squeezing the input to nothing. */
-  @media (max-width: 40rem) {
-    .ask-composer {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .ask-send {
-      align-self: flex-end;
-    }
   }
 </style>

@@ -320,15 +320,19 @@
     flex-wrap: wrap;
   }
 
+  /* Wraps on its own width rather than on a viewport breakpoint — this panel
+     lives in a rail/drawer whose width the viewport does not describe. */
   .ask-ai-input-area {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     align-items: flex-start;
     gap: var(--space-2);
   }
 
   .ask-ai-textarea {
-    flex: 1 1 auto;
-    min-width: 0;
+    flex: 1 1 14rem;
+    min-width: 12rem;
     resize: vertical;
     min-height: 4rem;
     /* D5 / SC 1.4.11: a control's boundary needs 3:1 — #8884 over an unknown
@@ -359,16 +363,5 @@
 
   .ask-ai-submit {
     flex-shrink: 0;
-  }
-
-  @media (max-width: 40rem) {
-    .ask-ai-input-area {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .ask-ai-submit {
-      align-self: flex-end;
-    }
   }
 </style>
