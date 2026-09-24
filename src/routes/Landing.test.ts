@@ -640,3 +640,195 @@ describe('Landing collapsible sections', () => {
     await screen.findByText(/no prs in your queue/i)
   })
 })
+
+/**
+ * The queue row's COLUMN STRUCTURE (docs/design/refactoring-ui-principles.md).
+ *
+ * These assert the structure that makes the columns alignable; whether they
+ * ACTUALLY align is geometry and is measured in a real browser by
+ * e2e/queue-columns.spec.ts. jsdom computes no layout, so a test here that
+ * claimed alignment would be claiming something it cannot see.
+ */
+describe('Landing queue row columns', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    sessionStorage.clear()
+    vi.restoreAllMocks()
+    vi.mocked(navigate).mockClear()
+    queueModule._resetQueueCacheForTest()
+  })
+
+  it('the diff-stat CELL is present before any size is known, so the column cannot reflow when one lands', async () => {
+    // Rubric C5: nothing may reflow under the reader when a late result lands.
+    // The cell reserves the column; the chip inside it is what waits.
+    const item = makeItem('github', 'org', 'repo', 5, 'Unsized PR', false)
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([item])
+    vi.spyOn(sizesModule, 'fetchMissingSizes').mockResolvedValue(undefined)
+
+    const { container } = render(Landing)
+    await screen.findByRole('button', { name: /org\/repo#5/i })
+
+    expect(container.querySelectorAll('.size-cell')).toHaveLength(1)
+    expect(screen.queryByTestId('queue-size')).not.toBeInTheDocument()
+  })
+
+  it('the repo group header is a real heading, not a div that looks like one', async () => {
+    // Rubric D1 — the document outline is part of the hierarchy.
+    const item = makeItem('github', 'org', 'repo', 5, 'PR', false)
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([item])
+    vi.spyOn(sizesModule, 'fetchMissingSizes').mockResolvedValue(undefined)
+
+    const { container } = render(Landing)
+    await screen.findByRole('button', { name: /org\/repo#5/i })
+
+    const header = container.querySelector('.repo-group-header')
+    expect(header?.tagName).toBe('H4')
+    // The repo is DATA: it must reach the DOM in its real case, because a repo
+    // name is case-sensitive and uppercasing it states something untrue.
+    expect(container.querySelector('.repo-group-name')?.textContent).toBe('org/repo')
+  })
+
+  it('the Prepare control is a real, focusable button in its own row cell — not a hover-only affordance', async () => {
+    const item = makeItem('github', 'org', 'repo', 5, 'PR', false)
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([item])
+    vi.spyOn(sizesModule, 'fetchMissingSizes').mockResolvedValue(undefined)
+
+    const { container } = render(Landing)
+    await screen.findByRole('button', { name: /org\/repo#5/i })
+
+    const cell = container.querySelector('.prepare-cell')
+    expect(cell).not.toBeNull()
+    const btn = screen.getByTestId('prepare-btn')
+    expect(cell?.contains(btn)).toBe(true)
+    // It must stay outside the row's own <button>: nesting interactive
+    // elements is invalid and would make it unreachable.
+    expect(screen.getByRole('button', { name: /org\/repo#5/i }).contains(btn)).toBe(false)
+  })
+})
+
+/**
+ * THE EFFORT GAUGE — the queue's only ranking signal, and the reason it is
+ * defensible: it is a pure function of churn, which the row already fetched.
+ */
+describe('Landing queue effort gauge', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    sessionStorage.clear()
+    vi.restoreAllMocks()
+    vi.mocked(navigate).mockClear()
+    queueModule._resetQueueCacheForTest()
+  })
+
+  const widthOf = (el: Element | null | undefined) =>
+    parseFloat(((el as HTMLElement | null)?.style.width ?? '0').replace('%', ''))
+
+  it('scales every row against the LARGEST diff in the queue, not against itself', async () => {
+    const big = makeItem('github', 'org', 'repo', 1, 'Huge', false)
+    const small = makeItem('github', 'org', 'repo', 2, 'Tiny', false)
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([big, small])
+    vi.spyOn(sizesModule, 'getCachedSizes').mockReturnValue({
+      [sizesModule.sizeKey(big)]: { additions: 600, deletions: 400 }, // 1000 churn
+      [sizesModule.sizeKey(small)]: { additions: 80, deletions: 20 }, // 100 churn
+    })
+    vi.spyOn(sizesModule, 'fetchMissingSizes').mockResolvedValue(undefined)
+
+    render(Landing)
+    const bigRow = await screen.findByRole('button', { name: /org\/repo#1/i })
+    const smallRow = screen.getByRole('button', { name: /org\/repo#2/i })
+
+    // The largest fills the gauge; the 100-churn row gets a tenth of it.
+    expect(widthOf(bigRow.querySelector('.churn-fill'))).toBe(100)
+    expect(widthOf(smallRow.querySelector('.churn-fill'))).toBeCloseTo(10, 5)
+  })
+
+  it('gives a tiny diff a visible floor rather than letting an outlier erase it', async () => {
+    const huge = makeItem('github', 'org', 'repo', 1, 'Huge', false)
+    const sliver = makeItem('github', 'org', 'repo', 2, 'Sliver', false)
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([huge, sliver])
+    vi.spyOn(sizesModule, 'getCachedSizes').mockReturnValue({
+      [sizesModule.sizeKey(huge)]: { additions: 100_000, deletions: 0 },
+      [sizesModule.sizeKey(sliver)]: { additions: 1, deletions: 0 },
+    })
+    vi.spyOn(sizesModule, 'fetchMissingSizes').mockResolvedValue(undefined)
+
+    render(Landing)
+    await screen.findByRole('button', { name: /org\/repo#1/i })
+    const sliverRow = screen.getByRole('button', { name: /org\/repo#2/i })
+
+    // 1/100000 would round to an invisible 0%; the floor keeps it readable as
+    // "present but tiny" instead of "not measured" (p.146-147).
+    expect(widthOf(sliverRow.querySelector('.churn-fill'))).toBe(4)
+  })
+
+  it('splits the gauge by the add/delete balance', async () => {
+    const item = makeItem('github', 'org', 'repo', 1, 'PR', false)
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([item])
+    vi.spyOn(sizesModule, 'getCachedSizes').mockReturnValue({
+      [sizesModule.sizeKey(item)]: { additions: 30, deletions: 10 },
+    })
+    vi.spyOn(sizesModule, 'fetchMissingSizes').mockResolvedValue(undefined)
+
+    render(Landing)
+    const row = await screen.findByRole('button', { name: /org\/repo#1/i })
+
+    expect((row.querySelector('.churn-add') as HTMLElement).style.flexGrow).toBe('30')
+    expect((row.querySelector('.churn-del') as HTMLElement).style.flexGrow).toBe('10')
+  })
+
+  it('draws the rail but no fill while the size is still unknown', async () => {
+    const item = makeItem('github', 'org', 'repo', 1, 'PR', false)
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([item])
+    vi.spyOn(sizesModule, 'fetchMissingSizes').mockResolvedValue(undefined)
+
+    const { container } = render(Landing)
+    await screen.findByRole('button', { name: /org\/repo#1/i })
+
+    expect(container.querySelector('.churn')).not.toBeNull()
+    expect(container.querySelector('.churn-fill')).toBeNull()
+  })
+
+  it('is hidden from assistive tech — the +/− figures already state the value', async () => {
+    const item = makeItem('github', 'org', 'repo', 1, 'PR', false)
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([item])
+    vi.spyOn(sizesModule, 'getCachedSizes').mockReturnValue({
+      [sizesModule.sizeKey(item)]: { additions: 5, deletions: 5 },
+    })
+    vi.spyOn(sizesModule, 'fetchMissingSizes').mockResolvedValue(undefined)
+
+    const { container } = render(Landing)
+    await screen.findByRole('button', { name: /org\/repo#1/i })
+
+    expect(container.querySelector('.churn')).toHaveAttribute('aria-hidden', 'true')
+  })
+})
+
+/**
+ * The hero's top margin is the returning user's tax; `has-content` is the
+ * switch that stops charging it. This file's registry mock is always
+ * authenticated, so it covers the CONTENT side; the signed-out side (where the
+ * hero legitimately keeps the whole screen) is in Landing.signedOut.test.ts.
+ */
+describe('Landing hero density', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    clearHistory()
+    vi.restoreAllMocks()
+    vi.mocked(navigate).mockClear()
+    queueModule._resetQueueCacheForTest()
+  })
+
+  it('stands the hero down once the queue section is on the page', async () => {
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([])
+    const { container } = render(Landing)
+    await screen.findByText(/no prs in your queue/i)
+    expect(container.querySelector('.landing')).toHaveClass('has-content')
+  })
+
+  it('stands the hero down for history alone, too', async () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
+    vi.spyOn(queueModule, 'fetchAllQueues').mockResolvedValue([])
+    const { container } = render(Landing)
+    await screen.findByText(/recent reviews/i)
+    expect(container.querySelector('.landing')).toHaveClass('has-content')
+  })
+})
