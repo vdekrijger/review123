@@ -452,10 +452,12 @@ test('inspect: the Tests phase never buries its own test files in the low-attent
   await page.getByTestId('phase-btn-tests').click()
 
   // THE FIX: the reviewer came here to read these, so they ARE the list — not
-  // one collapsed row, and not an empty tail either.
+  // one collapsed row, and not an empty tail either. Risk first still orders
+  // them (the sensitive src/auth path outranks src/app), which is only possible
+  // because they are attention files now rather than one undifferentiated tail.
   await expect(page.locator('details.attention-tail')).toHaveCount(0)
   await expect(page.locator('article.file-diff')).toHaveCount(2)
-  await expect(fileNames(page)).toHaveText(['src/app.test.ts', 'src/auth/core.spec.ts'])
+  await expect(fileNames(page)).toHaveText(['src/auth/core.spec.ts', 'src/app.test.ts'])
 })
 
 test('inspect: the phase switch is reachable from the list bottom, without scrolling back up', async ({ page }) => {
