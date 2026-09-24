@@ -1296,7 +1296,7 @@ async function bridgeComplete(
   if (json) effectiveSystem = `${effectiveSystem}\n\n${BRIDGE_JSON_INSTRUCTION}`
 
   const payload: InferRequest = {
-    cli: (model.id === 'codex' ? 'codex' : 'claude') as BridgeCli,
+    cli: bridgeCliFor(model),
     prompt: user,
     system: effectiveSystem,
     // The bridge clamps this to its own ceiling; sending our window keeps the
@@ -1492,7 +1492,7 @@ async function bridgeStream(
   const { timeoutSignal, effectiveSignal } = requestSignals(signal, timeoutMs)
 
   const payload: InferRequest = {
-    cli: (model.id === 'codex' ? 'codex' : 'claude') as BridgeCli,
+    cli: bridgeCliFor(model),
     prompt: user,
     system,
     // Same budget on both ends, so the CLI is killed at roughly the moment the
@@ -2001,6 +2001,112 @@ export async function llmJsonWithRepairFor<T>(
 // Reads the provider's key from SAVED settings (the UI saves before testing).
 // ---------------------------------------------------------------------------
 
+/**
+ * The ping window for an HTTP API provider.
+ *
+ * Unchanged by the bridge fix below, and deliberately short: a hosted endpoint
+ * that cannot answer a one-word prompt inside fifteen seconds genuinely IS
+ * broken, and saying so quickly is most of the button's value.
+ */
+export const API_TEST_TIMEOUT_MS = 15_000
+
+/**
+ * The ping window for a BRIDGE provider — a CLI running on this machine.
+ *
+ * The 15s above was sized for an HTTP round trip and is simply the wrong unit
+ * for a local CLI, which pays process startup, config load and an auth check
+ * BEFORE the model is reached at all. Measured against the real CLIs on this
+ * machine, one-word "reply ok" pings through `/v1/infer`:
+ *
+ *   codex   n=11   min 4.8s · median 15.6s · max 28.4s   (6 of 11 over 15s)
+ *   claude  n=8    min 3.1s · median  8.5s · max 16.7s   (1 of 8  over 15s)
+ *
+ * So the old window failed codex more often than it passed — the reported bug.
+ * It was never a codex-only problem, though: claude blew 15s too once the
+ * machine was busy. ONE shared window for both CLIs is therefore the honest
+ * shape. Two numbers would encode a difference in kind the data does not show;
+ * what it shows is a single slow, high-variance startup cost that both CLIs pay
+ * and neither bounds tightly.
+ *
+ * 90s is ~3x the slowest ping observed on a machine that was NOT heavily
+ * loaded, which is the headroom a loaded one needs. It stays under the bridge's
+ * own DEFAULT_INFER_TIMEOUT_MS (120s), so it asks the bridge for nothing beyond
+ * the budget that side already treats as normal.
+ *
+ * REVIEWS ARE NOT AFFECTED by any of this. They have always had their own
+ * windows — DEFAULT_TIMEOUT_MS, sizeAwareTimeoutMs, and the agentic budget —
+ * which is precisely why reviews worked while the test button could not.
+ */
+export const BRIDGE_TEST_TIMEOUT_MS = 90_000
+
+/**
+ * The CLI a bridge model row spawns. ONE rule, shared by the transport and by
+ * everything that NAMES the CLI, so a message can never blame a different
+ * process than the one that actually ran.
+ */
+function bridgeCliFor(model: LlmModelDef): BridgeCli {
+  return model.id === 'codex' ? 'codex' : 'claude'
+}
+
+/** The model a connection test pings: the caller's, else the provider default. */
+function resolveTestModel(provider: LlmProviderDef, modelId?: string): LlmModelDef {
+  return (
+    (modelId ? getModelDef(provider, modelId) : undefined) ??
+    getModelDef(provider, provider.defaultModel) ??
+    provider.models[0]
+  )
+}
+
+/**
+ * Which CLI a connection test for `providerId` would actually spawn, or null
+ * for an HTTP provider.
+ *
+ * Exported so the settings UI can name that CLI while the test is in flight
+ * without re-deriving the resolution. A bridge "model" IS a process name, and
+ * the UI's answer has to be the one llmTestConnection reaches — otherwise the
+ * progress line would talk about a different CLI than the one being tested.
+ */
+export function testConnectionCli(providerId: LlmProviderId, modelId?: string): BridgeCli | null {
+  const provider = getProvider(providerId)
+  if (!provider || provider.transport !== 'bridge') return null
+  return bridgeCliFor(resolveTestModel(provider, modelId))
+}
+
+/**
+ * The actionable half of a failed bridge test: WHICH CLI was slow, roughly how
+ * long it was given, and the one thing worth doing about it.
+ *
+ * It replaces what the user actually saw before this fix — the engine's own
+ * "The operation was aborted due to timeout", which names no CLI, carries no
+ * duration, and reads as though something had been cancelled. Same split as
+ * requestWindow's timeoutDetail and #209's errorDetail: a canned sentence
+ * carrying only a label and a duration, never model output.
+ */
+function bridgeTestTimeoutMessage(cli: BridgeCli, elapsedMs: number): string {
+  return (
+    `The ${cli} CLI didn't answer a one-word connection test within ` +
+    `${Math.round(elapsedMs / 1000)}s. It is most likely still starting up, signing in, ` +
+    `or busy — run \`${cli}\` once in a terminal, then test again.`
+  )
+}
+
+/**
+ * A failed bridge PING, re-told so the user learns which CLI was slow.
+ *
+ * ONLY a timeout is rewritten. A cancellation stays 'aborted' (#233/#234 — the
+ * user cancelled and nothing timed out, so it must never be dressed up as a
+ * timeout), and every other failure already carries the bridge's own specific
+ * copy, which is better than anything this could say. A RAW engine exception
+ * that escaped the transport unmapped is classified here too rather than
+ * reaching the UI as engine text — the same last-gate rule describeTaskError
+ * applies at the panel boundary.
+ */
+function mapBridgeTestFailure(err: unknown, cli: BridgeCli, elapsedMs: number): unknown {
+  const kind = err instanceof LlmError ? err.kind : rawTransportKind(err)
+  if (kind !== 'timeout') return err
+  return new LlmError('timeout', bridgeTestTimeoutMessage(cli, elapsedMs))
+}
+
 export async function llmTestConnection(
   providerId: LlmProviderId,
   modelId?: string,
@@ -2009,10 +2115,7 @@ export async function llmTestConnection(
   const provider = getProvider(providerId)
   if (!provider) throw new LlmError('server', `Unknown provider: ${providerId}`)
 
-  const model =
-    (modelId ? getModelDef(provider, modelId) : undefined) ??
-    getModelDef(provider, provider.defaultModel) ??
-    provider.models[0]
+  const model = resolveTestModel(provider, modelId)
 
   const opts: LlmCompleteOpts = {
     system: 'Connection test.',
@@ -2024,16 +2127,20 @@ export async function llmTestConnection(
     // max_tokens". The prompt keeps the real reply to one word, so the actual
     // spend stays ~tens of tokens despite this ceiling.
     maxTokens: 1024,
-    // The ping's own SHORT window (15s, not the 60s default) — expressed as
-    // timeoutMs so the adapter owns the timeout signal and can tell a timeout
-    // apart from a cancellation. `signal` stays the CALLER's cancellation
-    // channel and is now composed with the window rather than replacing it.
-    timeoutMs: 15_000,
+    // The ping's own window — expressed as timeoutMs so the adapter owns the
+    // timeout signal and can tell a timeout apart from a cancellation.
+    // `signal` stays the CALLER's cancellation channel and is composed with the
+    // window rather than replacing it.
+    //
+    // It is SHORTER than the 60s default for an HTTP provider and LONGER for a
+    // local CLI, because those two are not the same kind of wait: see the two
+    // constants for the measurements behind each.
+    timeoutMs: provider.transport === 'bridge' ? BRIDGE_TEST_TIMEOUT_MS : API_TEST_TIMEOUT_MS,
     ...(signal ? { signal } : {}),
   }
 
   switch (provider.transport) {
-    case 'bridge':
+    case 'bridge': {
       // A real round-trip through the bridge and into the CLI. It is the only
       // honest connection test here: /v1/health proves the bridge answers but
       // says nothing about whether the CLI is signed in, and guessing from a
@@ -2041,8 +2148,20 @@ export async function llmTestConnection(
       // The ping runs the model a review WOULD run through this CLI, not a
       // blanket default: a green "Save & test" that exercised a different model
       // than the panel's generator would be testing the wrong thing.
-      await bridgeComplete(provider, model, opts, false, activeBridgeModel(model.id))
+      //
+      // Timed so a failure can say how long the CLI actually had. The browser's
+      // window is what fires in practice — it starts before the request even
+      // reaches the bridge, so it always wins the race against the bridge's own
+      // (equal) budget, and the bridge's CLI-naming message never arrives.
+      const cli = bridgeCliFor(model)
+      const startedAt = Date.now()
+      try {
+        await bridgeComplete(provider, model, opts, false, activeBridgeModel(model.id))
+      } catch (err) {
+        throw mapBridgeTestFailure(err, cli, Date.now() - startedAt)
+      }
       return
+    }
     case 'openai-compat':
       await openaiCompatComplete(provider, model, opts, false)
       return

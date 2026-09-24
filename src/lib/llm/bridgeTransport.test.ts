@@ -20,6 +20,9 @@ import {
   llmJsonWithRepair,
   llmJsonWithRepairFor,
   llmTestConnection,
+  testConnectionCli,
+  API_TEST_TIMEOUT_MS,
+  BRIDGE_TEST_TIMEOUT_MS,
   LlmError,
   BRIDGE_AGENTIC_INSTRUCTION,
   BRIDGE_JSON_INSTRUCTION,
@@ -1330,6 +1333,152 @@ describe('bridge transport — llmTestConnection', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(errorResponse('cli-unavailable', 503, 'not installed')))
 
     await expect(llmTestConnection('bridge')).rejects.toMatchObject({ kind: 'no-key' })
+  })
+
+  // -------------------------------------------------------------------------
+  // THE WINDOW. Measured against the real CLIs, a one-word ping costs codex
+  // 4.8–28.4s and claude 3.1–16.7s, so the 15s window this shared with the API
+  // providers could not pass — while reviews, which have their own windows,
+  // worked fine. That gap IS the reported bug.
+  // -------------------------------------------------------------------------
+
+  it('gives the local CLI its own window, not the 15s sized for an HTTP hop', async () => {
+    pairBridge()
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(inferBody({ text: 'ok' })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmTestConnection('bridge')
+
+    expect(sentBody(fetchMock)['timeoutMs']).toBe(BRIDGE_TEST_TIMEOUT_MS)
+    expect(BRIDGE_TEST_TIMEOUT_MS).toBeGreaterThan(API_TEST_TIMEOUT_MS)
+  })
+
+  it('tells the bridge the SAME budget the browser is holding', async () => {
+    // Two different numbers would mean one end killed the CLI while the other
+    // was still waiting. 90s is well under the bridge's own clamp, so what we
+    // send is what both ends honour.
+    pairBridge()
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(inferBody({ cli: 'codex', text: 'ok' })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await llmTestConnection('bridge', 'codex')
+
+    expect(sentBody(fetchMock)['timeoutMs']).toBe(BRIDGE_TEST_TIMEOUT_MS)
+    // A ping is not an agentic run: the test window stays far below that budget.
+    expect(BRIDGE_TEST_TIMEOUT_MS).toBeLessThan(INFER_AGENTIC_REQUEST_TIMEOUT_MS)
+  })
+
+  // -------------------------------------------------------------------------
+  // THE MESSAGE. The browser's window starts before the request is even sent,
+  // so it always wins the race against the bridge's equal budget — the bridge's
+  // own CLI-naming answer never arrives, and what the user actually saw was the
+  // engine's bare "The operation was aborted due to timeout".
+  // -------------------------------------------------------------------------
+
+  it('a CLI that blows the window fails as a timeout that NAMES the CLI', async () => {
+    pairBridge()
+    vi.stubGlobal(
+      'fetch',
+      // Exactly what the reproduction produced against a real bridge.
+      vi.fn().mockRejectedValue(
+        new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+      ),
+    )
+
+    const err = await llmTestConnection('bridge', 'codex').catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(LlmError)
+    expect((err as LlmError).kind).toBe('timeout')
+    expect((err as LlmError).message).toContain('codex')
+    // Roughly how long it had — a bare "timed out" gives the user nothing.
+    expect((err as LlmError).message).toMatch(/within \d+s/)
+    // The engine's own wording must never reach the settings card.
+    expect((err as LlmError).message).not.toMatch(/aborted/i)
+  })
+
+  it('names the CLI that was actually tested, not the default one', async () => {
+    pairBridge()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(new DOMException('signal timed out', 'TimeoutError')),
+    )
+
+    const err = await llmTestConnection('bridge').catch((e: unknown) => e)
+
+    // The bridge provider's default row is claude, so claude is what ran.
+    expect((err as LlmError).message).toContain('claude')
+    expect((err as LlmError).message).not.toContain('codex')
+  })
+
+  it("re-tells the BRIDGE's own timeout too, so one story is told either way", async () => {
+    // The bridge answers 504 with "…did not finish within the 90000 ms budget".
+    // Honest, but it leaks a raw millisecond count and only arrives when the
+    // bridge happens to win the race — so the test speaks with one voice.
+    pairBridge()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        errorResponse('timeout', 504, 'The codex CLI did not finish within the 90000 ms budget and was stopped.'),
+      ),
+    )
+
+    const err = await llmTestConnection('bridge', 'codex').catch((e: unknown) => e)
+
+    expect((err as LlmError).kind).toBe('timeout')
+    expect((err as LlmError).message).toContain('codex')
+    expect((err as LlmError).message).not.toContain('90000 ms')
+  })
+
+  it('a CANCELLATION stays a cancellation — never dressed up as a slow CLI', async () => {
+    // #233/#234: the user cancelled and nothing timed out. Relabelling this as
+    // a timeout would invent a CLI problem that never happened.
+    pairBridge()
+    const controller = new AbortController()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+        controller.abort()
+        return Promise.reject(
+          Object.assign(new DOMException('The user aborted a request.', 'AbortError'), {
+            signal: init.signal,
+          }),
+        )
+      }),
+    )
+
+    const err = await llmTestConnection('bridge', 'codex', controller.signal).catch(
+      (e: unknown) => e,
+    )
+
+    expect((err as LlmError).kind).toBe('aborted')
+    expect((err as LlmError).message).toBe(CANCELLED_MESSAGE)
+    expect((err as LlmError).message).not.toMatch(/codex|connection test/i)
+  })
+
+  it('leaves a non-timeout failure exactly as the bridge told it', async () => {
+    pairBridge()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(errorResponse('cli-failed', 502, 'codex exited with status 1')),
+    )
+
+    const err = await llmTestConnection('bridge', 'codex').catch((e: unknown) => e)
+
+    expect((err as LlmError).kind).toBe('server')
+    expect((err as LlmError).message).toContain('exited with status 1')
+  })
+
+  // -------------------------------------------------------------------------
+  // testConnectionCli — what the settings UI names while the test is in flight.
+  // -------------------------------------------------------------------------
+
+  it('testConnectionCli reports the CLI a test would spawn, and null for an API provider', () => {
+    expect(testConnectionCli('bridge')).toBe('claude')
+    expect(testConnectionCli('bridge', 'codex')).toBe('codex')
+    // An unknown row falls back to the provider default, exactly as the ping does.
+    expect(testConnectionCli('bridge', 'not-a-cli')).toBe('claude')
+    expect(testConnectionCli('deepseek')).toBeNull()
+    expect(testConnectionCli('anthropic', 'claude-opus-4-8')).toBeNull()
   })
 })
 

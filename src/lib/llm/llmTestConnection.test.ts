@@ -7,7 +7,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { llmTestConnection, LlmError, INVALID_KEY_CHAR_MESSAGE } from './llm'
+import {
+  llmTestConnection,
+  LlmError,
+  INVALID_KEY_CHAR_MESSAGE,
+  API_TEST_TIMEOUT_MS,
+  BRIDGE_TEST_TIMEOUT_MS,
+} from './llm'
 import { activeProviderHasKey } from './config'
 import {
   setDeepseekKey,
@@ -139,6 +145,43 @@ describe('llmTestConnection', () => {
     await expect(
       llmTestConnection('nonsense' as never),
     ).rejects.toBeInstanceOf(LlmError)
+  })
+
+  // -------------------------------------------------------------------------
+  // THE WINDOW. Lengthening the ping for a local CLI (which pays process
+  // startup before the model is reached) must not lengthen it for a hosted
+  // endpoint: an API that needs more than 15s for one word genuinely IS broken,
+  // and reporting that quickly is most of this button's value.
+  // -------------------------------------------------------------------------
+
+  it('keeps the SHORT 15s window for an HTTP API provider', async () => {
+    setDeepseekKey('sk-ds-test')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      makeJsonResponse({ choices: [{ message: { content: 'ok' } }] }),
+    ))
+    // The window is not on the wire for an API provider — it is the abort
+    // signal the adapter composes, so that is what gets inspected.
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+
+    await llmTestConnection('deepseek')
+
+    expect(timeoutSpy).toHaveBeenCalledWith(API_TEST_TIMEOUT_MS)
+    expect(API_TEST_TIMEOUT_MS).toBe(15_000)
+  })
+
+  it.each([
+    ['anthropic', () => setAnthropicKey('sk-ant-test'), { content: [{ type: 'text', text: 'ok' }] }],
+    ['gemini', () => setGeminiKey('AIza-test'), { candidates: [{ content: { parts: [{ text: 'ok' }] } }] }],
+    ['openai', () => setOpenaiKey('sk-oa-test'), { choices: [{ message: { content: 'ok' } }] }],
+  ] as const)('%s also keeps the 15s window — the bridge change is bridge-only', async (id, setKey, body) => {
+    setKey()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeJsonResponse(body)))
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+
+    await llmTestConnection(id)
+
+    expect(timeoutSpy).toHaveBeenCalledWith(API_TEST_TIMEOUT_MS)
+    expect(timeoutSpy).not.toHaveBeenCalledWith(BRIDGE_TEST_TIMEOUT_MS)
   })
 })
 

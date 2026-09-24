@@ -10,7 +10,7 @@
   import { settingsState } from '../../lib/settings/settingsState.svelte'
   import { PROVIDERS, getProvider, getModelDef, type ApiProviderId, type LlmProviderId } from '../../lib/llm/providers'
   import { bridgeState, bridgeCanInfer } from '../../lib/bridge/bridge.svelte'
-  import { llmTestConnection, LlmError } from '../../lib/llm/llm'
+  import { llmTestConnection, testConnectionCli, LlmError } from '../../lib/llm/llm'
   import { activeProviderHasKey, providerIsUsable, resolvePanel, globalBridgeModel } from '../../lib/llm/config'
   import { isValidModelId } from '../../lib/bridge/protocol'
   import { verifierVotesCanDemote } from '../../lib/ai/crossVerify'
@@ -409,7 +409,12 @@
   // ---- Per-provider connection test (Save & test) ----
   // Saves the field first, then pings through the real transport adapter.
   // Never cached: llmTestConnection bypasses the AI cache entirely.
-  type TestState = { status: 'idle' | 'testing' | 'ok' | 'error'; message?: string }
+  type TestState = {
+    status: 'idle' | 'testing' | 'ok' | 'error'
+    message?: string
+    /** When the in-flight ping started — the progress line's clock. */
+    startedAt?: number
+  }
   let testStates = $state<Record<LlmProviderId, TestState>>({
     deepseek: { status: 'idle' },
     openai: { status: 'idle' },
@@ -419,8 +424,53 @@
     bridge: { status: 'idle' },
   })
 
+  // ---- "Still working" while a test is in flight ----
+  //
+  // A bridge test can now legitimately run for a minute and a half (a local CLI
+  // pays process startup before the model is reached), and a spinner that never
+  // changes is indistinguishable from a hung app after about ten seconds. So
+  // the elapsed time is shown, ticking, next to the button — the same shape as
+  // the "Saved ✓" and "✓ Connected" notes already in this row, not a new idiom.
+  //
+  // ONE interval for the whole section, running only while some test is in
+  // flight: a per-provider timer would mean six of them, and the tick is the
+  // same tick for all of them.
+  const PROGRESS_TICK_MS = 1000
+  let nowMs = $state(Date.now())
+  const anyTesting = $derived(PROVIDERS.some((p) => testStates[p.id].status === 'testing'))
+
+  $effect(() => {
+    if (!anyTesting) return
+    nowMs = Date.now()
+    const timer = setInterval(() => { nowMs = Date.now() }, PROGRESS_TICK_MS)
+    return () => clearInterval(timer)
+  })
+
+  /**
+   * The progress line for an in-flight test: how long it has been waiting and,
+   * for the bridge, WHICH CLI is being waited on. Naming the CLI is what makes
+   * a slow test legible — "codex is slow to start" rather than "something is
+   * stuck" — and it is resolved by llm.ts so it can never name a different CLI
+   * than the one the ping actually spawned.
+   */
+  function testProgressNote(id: LlmProviderId): string {
+    const startedAt = testStates[id].startedAt
+    const seconds = startedAt === undefined ? 0 : Math.max(0, Math.round((nowMs - startedAt) / 1000))
+    const cli = testConnectionCli(id, testModelId(id))
+    return cli === null ? `${seconds}s` : `waiting for ${cli} — ${seconds}s`
+  }
+
+  /**
+   * The model a test of `id` pings. Only the ACTIVE provider's test uses the
+   * row's selected model; every other card pings its provider default. Shared
+   * by the ping itself and by the progress line, so the two never disagree.
+   */
+  function testModelId(id: LlmProviderId): string | undefined {
+    return id === provider ? (modelSel[id] || undefined) : undefined
+  }
+
   async function handleSaveAndTest(id: LlmProviderId) {
-    testStates[id] = { status: 'testing' }
+    testStates[id] = { status: 'testing', startedAt: Date.now() }
     const wasDirty = dirtyKeys[id]
     try {
       saveKey(id) // test what's in the field: save first, then ping (button says so)
@@ -436,10 +486,7 @@
     // providers without a balance endpoint, or when the key was cleared).
     void refreshBalance(id)
     try {
-      // Only pass the selected model when testing the active provider;
-      // otherwise the provider's default model is pinged.
-      const modelId = id === provider ? (modelSel[id] || undefined) : undefined
-      await llmTestConnection(id, modelId)
+      await llmTestConnection(id, testModelId(id))
       testStates[id] = { status: 'ok' }
     } catch (e) {
       const message = e instanceof LlmError ? e.message : 'Connection test failed'
@@ -571,7 +618,10 @@
           </button>
           {#if dirtyKeys[p.id]}<span class="dirty-hint">Unsaved changes</span>{/if}
           <span class="saved-note" class:visible={savedStates[p.id]} aria-live="polite">{savedStates[p.id] ? 'Saved ✓' : ''}</span>
-          {#if testStates[p.id].status === 'ok'}
+          {#if testStates[p.id].status === 'testing'}
+            <span class="test-progress" role="status" data-testid="test-progress-{p.id}"
+              >{testProgressNote(p.id)}</span>
+          {:else if testStates[p.id].status === 'ok'}
             <span class="test-ok" role="status">✓ Connected</span>
           {:else if testStates[p.id].status === 'error'}
             <span class="test-error" role="alert">{testStates[p.id].message}</span>
@@ -1001,6 +1051,14 @@
   .test-ok {
     font-size: var(--text-xs);
     color: var(--ok, #1a7f37);
+  }
+
+  /* Muted on purpose: it is reassurance, not a result. Tabular figures so the
+     ticking seconds do not shift the line's width every second. */
+  .test-progress {
+    font-size: var(--text-xs);
+    color: var(--text-muted, #656d76);
+    font-variant-numeric: tabular-nums;
   }
 
   .test-error {

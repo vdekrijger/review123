@@ -418,6 +418,116 @@ describe('AiModelsSection — Save & test connection button', () => {
   })
 })
 
+// ===========================================================================
+// PROGRESS WHILE THE TEST IS IN FLIGHT
+//
+// A bridge test is allowed 90s now (a local CLI pays process startup before
+// the model is reached), and a spinner that never changes is indistinguishable
+// from a hung app long before that. The row shows what it is waiting on and
+// for how long — and stops the moment there is an answer either way.
+// ===========================================================================
+
+describe('AiModelsSection — in-flight test progress', () => {
+  /** A ping that never settles until the returned resolver is called. */
+  function pendingPing(): { resolve: () => void; reject: (e: unknown) => void } {
+    let resolve: () => void = () => {}
+    let reject: (e: unknown) => void = () => {}
+    llmTestConnectionMock.mockImplementation(
+      () => new Promise<void>((res, rej) => { resolve = res; reject = rej }),
+    )
+    return { resolve: () => resolve(), reject: (e) => reject(e) }
+  }
+
+  it('shows a progress note while the ping is in flight', async () => {
+    const ping = pendingPing()
+    saveTokens({ deepseekKey: 'sk-ds' })
+    render(AiModelsSection)
+    expect(screen.queryByTestId('test-progress-deepseek')).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: /save & test deepseek/i }))
+
+    expect(screen.getByTestId('test-progress-deepseek')).toBeInTheDocument()
+    ping.resolve()
+    await waitFor(() => expect(screen.queryByTestId('test-progress-deepseek')).toBeNull())
+  })
+
+  it('NAMES the CLI it is waiting on for a bridge test', async () => {
+    // "waiting for codex" is what makes a slow test legible; a bare spinner
+    // leaves the user guessing whether anything is happening at all.
+    pendingPing()
+    setAiProvider('bridge')
+    setAiModel('codex')
+    render(AiModelsSection)
+
+    await userEvent.click(screen.getByRole('button', { name: /^test local bridge connection$/i }))
+
+    expect(screen.getByTestId('test-progress-bridge')).toHaveTextContent(/waiting for codex/i)
+  })
+
+  it('names the CLI of the row actually selected, not a fixed default', async () => {
+    pendingPing()
+    setAiProvider('bridge')
+    setAiModel('claude')
+    render(AiModelsSection)
+
+    await userEvent.click(screen.getByRole('button', { name: /^test local bridge connection$/i }))
+
+    const note = screen.getByTestId('test-progress-bridge')
+    expect(note).toHaveTextContent(/waiting for claude/i)
+    expect(note).not.toHaveTextContent(/codex/i)
+  })
+
+  it('clears the progress note on SUCCESS, replaced by the result', async () => {
+    const ping = pendingPing()
+    saveTokens({ geminiKey: 'AIza-x' })
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /save & test gemini/i }))
+    expect(screen.getByTestId('test-progress-gemini')).toBeInTheDocument()
+
+    ping.resolve()
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('test-progress-gemini')).toBeNull()
+      expect(screen.getByRole('status')).toHaveTextContent(/connected/i)
+    })
+  })
+
+  it('clears the progress note on FAILURE, replaced by the error', async () => {
+    const ping = pendingPing()
+    saveTokens({ deepseekKey: 'sk-bad' })
+    render(AiModelsSection)
+    await userEvent.click(screen.getByRole('button', { name: /save & test deepseek/i }))
+    expect(screen.getByTestId('test-progress-deepseek')).toBeInTheDocument()
+
+    ping.reject(new LlmError('timeout', 'The codex CLI didn\'t answer a one-word connection test within 90s.'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('test-progress-deepseek')).toBeNull()
+      expect(screen.getByRole('alert')).toHaveTextContent(/didn't answer a one-word connection test/i)
+    })
+  })
+
+  it('shows the timeout message verbatim, CLI name and duration intact', async () => {
+    // The whole point of the new copy is that it survives to the card. A
+    // generic "Connection test failed" here would undo it.
+    llmTestConnectionMock.mockRejectedValue(
+      new LlmError('timeout', 'The codex CLI didn\'t answer a one-word connection test within 90s. It is most likely still starting up, signing in, or busy — run `codex` once in a terminal, then test again.'),
+    )
+    setAiProvider('bridge')
+    setAiModel('codex')
+    render(AiModelsSection)
+
+    await userEvent.click(screen.getByRole('button', { name: /^test local bridge connection$/i }))
+
+    await waitFor(() => {
+      const alert = screen.getByRole('alert')
+      expect(alert).toHaveTextContent(/codex/)
+      expect(alert).toHaveTextContent(/within 90s/)
+      expect(alert).not.toHaveTextContent(/aborted/i)
+    })
+  })
+})
+
 describe('AiModelsSection — save UX (zero ambiguous buttons)', () => {
   it('has NO section-level Save button — keys persist only via per-key Save & test', () => {
     render(AiModelsSection)
