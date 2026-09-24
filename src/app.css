@@ -581,6 +581,17 @@
    * because Review renders after App's header in document order — an ordering
    * that holds by accident and that the narrow-mode rail (300) already beat.
    *
+   * ── A STEP IS NOT A PROMISE, and this is the one way to misread the scale ──
+   * z-index only orders siblings WITHIN a stacking context. If any ancestor
+   * establishes one — a transform, filter, opacity < 1, contain, will-change,
+   * isolation, or a positioned ancestor with its own z-index — the whole
+   * subtree paints at the ANCESTOR's level and no step here can lift it out.
+   * There is a live example in the app: @git-diff-view puts `sticky` + `z-[1]`
+   * on its line-widget wrapper, so overlays rendered inside a diff row are
+   * pinned at 1 whatever they declare (see CommentThread.svelte). The escapes
+   * are structural — render outside the trapping subtree (SymbolPopover) or use
+   * the Popover API's top layer (VerifyVotesTooltip) — not a bigger number.
+   *
    * ── GAPS ── Steps are 10 or 20 apart in the low band and 50-100 apart in the
    * high band, so a new surface can be slotted between two existing ones
    * without renumbering anything. --z-drawer-tab is the one exception, for the
