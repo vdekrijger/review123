@@ -1280,7 +1280,7 @@
     bottom: 0;
     left: 0;
     right: 0;
-    z-index: 100;
+    z-index: var(--z-bar);
     background: var(--surface-raised);
     border-top: 1px solid var(--hairline);
     padding: 0.5rem 1rem;
@@ -1295,7 +1295,7 @@
   }
 
   /* With the preview panel open (≥1100px), keep the bar's controls (Prev/Next)
-     left of the panel — the panel sits above the bar (z-index 110 vs 100). */
+     left of the panel — the panel sits above the bar (--z-panel vs --z-bar). */
   @media (min-width: 1100px) {
     .draft-bar[data-preview-open="true"] {
       padding-right: calc(min(40vw, 560px) + 1rem);

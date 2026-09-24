@@ -196,7 +196,7 @@
     border-bottom: 1px solid var(--hairline);
     position: sticky;
     top: 0;
-    z-index: 200;
+    z-index: var(--z-topbar);
   }
   .topbar a {
     font-weight: 700;

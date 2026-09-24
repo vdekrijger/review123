@@ -508,6 +508,124 @@
      offset along -x instead of +y. */
   --elevation-drawer: -2px 0 6px var(--shadow-faint), -10px 0 24px var(--shadow-soft);
 
+  /*
+   * ── THE LAYER SCALE ──────────────────────────────────────────────────────
+   *
+   * The companion to the elevation scale above: elevation says how far off the
+   * page a surface looks, this says which surface actually wins the pixel.
+   *
+   * WHY IT EXISTS. There was no scale. Fourteen files each picked a z-index by
+   * hand — 5, 20, 21, 30, 90, 100, 110, 200, 250, 299, 300 — and, having no
+   * shared vocabulary, their comments cross-referenced each other's magic
+   * numbers instead: "just below the rail (300)", "above the topbar (200)",
+   * "above the diff rows, below the file-tree drawer/tab (20/21)". Every one of
+   * those comments is a dependency a grep cannot follow and a rename cannot
+   * update, which is how the reported bug happened: the Verdict step's
+   * Copy-review-command dropdown was authored at 30 as "a dropdown, above its
+   * siblings" and the sticky draft bar at 100 as "a fixed bar, above the page".
+   * Neither author was wrong about their own file. The two numbers had simply
+   * never been in the same sentence, so the menu opened underneath the bar.
+   *
+   * ── THE NUMBERS ARE INHERITED ON PURPOSE ──
+   * These are, with four deliberate exceptions listed below, exactly the values
+   * the app already computed. A scale whose first act is to renumber everything
+   * cannot be reviewed — the diff would be one large behavioural unknown rather
+   * than a rename. So the migration is a rename, and the exceptions are the
+   * change. Two values are pinned from OUTSIDE this file and cannot be chosen
+   * freely yet: --z-drawer / --z-drawer-tab (20/21) and --z-popover (250) are
+   * literals in files another change is holding — see layerScale.test.ts, which
+   * records them and fails when the count grows.
+   *
+   *   --z-pinned-header  content that pins WITHIN the scroll flow: a diff
+   *                      file's sticky header. It only has to beat the rows it
+   *                      pins over, so it is the floor of the scale.
+   *   --z-dock           the phase dock: sticky to the bottom of the file
+   *                      column, above the pinned header it scrolls past and
+   *                      well under the bars, so it reads as part of the list
+   *                      rather than as a second app-chrome bar.
+   *   --z-drawer         the file-tree drawer beside the diff.
+   *   --z-drawer-tab     its toggle tab, above its own drawer so the control
+   *                      that closes the drawer is never covered by it. One of
+   *                      the scale's two adjacent pairs, and not by design:
+   *                      20/21, like 5/6 above, are literals in a file this
+   *                      change is not allowed to touch, so the scale meets
+   *                      them where they are. Respace when that file migrates.
+   *   --z-progress       the fixed review-progress bar under the topbar. Below
+   *                      the bars because the context rail crosses its right end.
+   *   --z-bar            fixed app furniture: the bottom draft bar, the rail.
+   *   --z-panel          the preview panel, which owns the right edge while open
+   *                      and therefore outranks both the rail and the draft bar.
+   *   --z-topbar         the app topbar.
+   *   --z-popover        every transient, user-invoked surface: menus,
+   *                      dropdowns, comboboxes, tooltips.
+   *   --z-scrim          the dimmer that makes a takeover modal.
+   *   --z-takeover       a surface that takes the whole screen for one task —
+   *                      today only the context rail below 1100px.
+   *   --z-modal          a dialog. Nothing outranks it.
+   *
+   * ── WHY POPOVERS SIT ABOVE ALL THE CHROME, which is the fix ──
+   * A popover is transient and the user just asked for it; a bar is permanent
+   * and was already there. So the popover wins, always — there is no viewport
+   * position at which the right answer is "clip the menu the user just opened".
+   * Putting the whole class above --z-topbar rather than raising one dropdown
+   * past one bar is the actual repair: four sites (the Verdict dropdown, the
+   * comment menu, the model combobox, the verify-votes tooltip) shared the bug
+   * and only the symbol popover — at 250, above the topbar — had it right. The
+   * scale adopts that site's number as the layer, so the one call site that
+   * reasoned correctly is the one that did not have to move.
+   *
+   * ── THE FOUR VALUE CHANGES (everything else is a pure rename) ──
+   *   .review-cmd-dropdown    30 → 250   the reported bug
+   *   .comment-menu-popover   20 → 250   same defect, not yet reported
+   *   .combobox-panel         30 → 250   same defect, not yet reported
+   *   .skill-verify-tip       20 → 250   same defect, not yet reported
+   * and two that change no order: .rail-backdrop 299 → --z-scrim (290), paired
+   * with the takeover at 300 instead of counting down from it; .runpr-dialog
+   * 200 → --z-modal (400), which today TIES the topbar at 200 and wins only
+   * because Review renders after App's header in document order — an ordering
+   * that holds by accident and that the narrow-mode rail (300) already beat.
+   *
+   * ── A STEP IS NOT A PROMISE, and this is the one way to misread the scale ──
+   * z-index only orders siblings WITHIN a stacking context. If any ancestor
+   * establishes one — a transform, filter, opacity < 1, contain, will-change,
+   * isolation, or a positioned ancestor with its own z-index — the whole
+   * subtree paints at the ANCESTOR's level and no step here can lift it out.
+   * There is a live example in the app: @git-diff-view puts `sticky` + `z-[1]`
+   * on its line-widget wrapper, so overlays rendered inside a diff row are
+   * pinned at 1 whatever they declare (see CommentThread.svelte). The escapes
+   * are structural — render outside the trapping subtree (SymbolPopover) or use
+   * the Popover API's top layer (VerifyVotesTooltip) — not a bigger number.
+   *
+   * ── GAPS ── Steps are 10 or 20 apart in the low band and 50-100 apart in the
+   * high band, so a new surface can be slotted between two existing ones
+   * without renumbering anything. --z-dock and --z-drawer-tab are the two
+   * exceptions, both for the external reason given above. layerScale.test.ts
+   * asserts the gaps, which is how an earlier draft of this very comment — it
+   * claimed scrim/takeover were adjacent when they are 10 apart — got caught.
+   *
+   * ── WHY --z-pinned-header IS 5 AND NOT A ROUNDER 10 ──
+   * It was 10 in the first draft of this scale, on the reasoning that a rounder
+   * floor leaves room underneath. That was wrong, and the way it was caught is
+   * the argument for the whole file: while this change was open, PR #276 landed
+   * `.phase-dock` at a literal `z-index: 6` with the comment "sits just above
+   * FileDiff's sticky file header (z-index 5)". Renumbering the header to 10
+   * would have silently INVERTED that author's stated intent — the exact class
+   * of breakage the cross-referenced magic numbers cause, reproduced by the
+   * change meant to end it. The scale meets the literal where it is.
+   */
+  --z-pinned-header: 5;
+  --z-dock: 6;
+  --z-drawer: 20;
+  --z-drawer-tab: 21;
+  --z-progress: 80;
+  --z-bar: 100;
+  --z-panel: 120;
+  --z-topbar: 200;
+  --z-popover: 250;
+  --z-scrim: 290;
+  --z-takeover: 300;
+  --z-modal: 400;
+
   color-scheme: light dark;
   font-size: 15px;
   line-height: 1.6;

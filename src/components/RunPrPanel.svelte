@@ -451,11 +451,16 @@
 
   /* A plain fixed overlay rather than <dialog>: this component renders inside
      the review header, and showModal() there fights the sticky bars for the
-     top layer. The box is centred and the backdrop is inert. */
+     top layer. The box is centred and the backdrop is inert.
+
+     --z-modal is the top of the layer scale. It was a literal 200, which TIED
+     the topbar and won only because Review renders after App's header in
+     document order — and lost outright to the narrow-mode context rail (300).
+     A dialog that wins by accident is a dialog that will lose by accident. */
   .runpr-dialog {
     position: fixed;
     inset: 0;
-    z-index: 200;
+    z-index: var(--z-modal);
     display: flex;
     align-items: center;
     justify-content: center;

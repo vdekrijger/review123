@@ -294,7 +294,27 @@
     position: absolute;
     top: calc(100% + 4px);
     right: 0;
-    z-index: 20;
+    /*
+     * --z-popover is correct, and on its own it is NOT ENOUGH here. Measured in
+     * the built app: this popover's only stacking-context ancestor is
+     * @git-diff-view's line-widget wrapper, which carries the library's own
+     * `sticky` + `z-[1]` utility classes. That wrapper establishes a stacking
+     * context, so this subtree paints at 1 against the root no matter what
+     * number is written below — the draft bar at --z-bar still covers it.
+     *
+     * The experiment, so nobody has to redo it: park this popover over the
+     * draft bar and hit-test it → the bar wins. Then set ONLY the wrapper to
+     * `z-index: auto; position: static`, changing nothing about this element →
+     * this popover wins. The wrapper is what decides it.
+     *
+     * So the remaining fix is STRUCTURAL, not a bigger number, and this file
+     * already has two working idioms to copy: SymbolPopover is rendered outside
+     * <DiffView> entirely (FileDiff.svelte, just after the component closes),
+     * and VerifyVotesTooltip escapes via the Popover API's top layer. Deferred
+     * to its own change rather than smuggled into the layer-scale migration —
+     * the token here is a prerequisite for either fix, not a substitute.
+     */
+    z-index: var(--z-popover);
     min-width: 11rem;
     display: flex;
     flex-direction: column;
