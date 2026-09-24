@@ -1620,14 +1620,15 @@
    *
    * top:  sits directly below the app topbar (the only element sticky above the
    *       diff — the Unified/Side-by-side + hide-whitespace toolbar scrolls away).
-   * z-index 5: above the diff rows, below the file-tree drawer/tab (20/21) and
-   *       the topbar (200) and any modal. Background is the opaque surface token
-   *       so diff rows never show through behind the pinned header.
+   * z-index: --z-pinned-header, the floor of the layer scale (src/app.css) —
+   *       above the diff rows it pins over and below every other surface in the
+   *       app. Background is the opaque surface token so diff rows never show
+   *       through behind the pinned header.
    */
   header.sticky-header {
     position: sticky;
     top: var(--topbar-h, 2.75rem);
-    z-index: 5;
+    z-index: var(--z-pinned-header);
   }
   header code { font-family: var(--font-mono); font-size: 0.8125rem; }
   header.clickable { cursor: pointer; }

@@ -294,7 +294,7 @@
     position: absolute;
     top: calc(100% + 4px);
     right: 0;
-    z-index: 20;
+    z-index: var(--z-popover);
     min-width: 11rem;
     display: flex;
     flex-direction: column;

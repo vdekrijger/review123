@@ -288,7 +288,7 @@
     background: var(--surface);
     border-left: 1px solid var(--hairline);
     overflow-y: auto;
-    z-index: 100;
+    z-index: var(--z-bar);
     display: flex;
     flex-direction: column;
     transition: width 0.2s ease;
@@ -309,7 +309,9 @@
   @media (max-width: 1099px) {
     .context-rail:not(.collapsed) {
       width: 300px;
-      z-index: 300; /* above topbar (z-index: 200) */
+      /* Not --z-bar any more: open at this width the rail COVERS the page and
+         the topbar, which is a different surface with a different rank. */
+      z-index: var(--z-takeover);
       /* Edge-anchored overlay: it casts SIDEWAYS, which is the one thing
          --elevation-drawer exists for (Batch 2B). Was a hand-picked
          `-4px 0 16px rgba(0,0,0,0.4)` — the F10 signature, and 0.4 black is
@@ -330,7 +332,7 @@
       position: fixed;
       inset: 0;
       background: rgba(0, 0, 0, 0.4);
-      z-index: 299; /* just below the rail (300) */
+      z-index: var(--z-scrim); /* the dimmer that makes --z-takeover modal */
     }
   }
 

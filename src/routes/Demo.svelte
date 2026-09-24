@@ -276,7 +276,7 @@
     bottom: 0;
     left: 0;
     right: 0;
-    z-index: 100;
+    z-index: var(--z-bar);
     background: var(--surface-raised);
     border-top: 1px solid var(--hairline);
     padding: 0.5rem 1rem;

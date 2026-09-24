@@ -1247,7 +1247,13 @@
 
   .review-cmd-dropdown {
     position: absolute;
-    z-index: 30;
+    /* --z-popover, not a hand-picked number: at a literal 30 this dropdown
+       opened BEHIND the fixed draft bar (--z-bar) and the `gh CLI` row was
+       sliced in half. `.review-cmd-menu` below is position:relative with no
+       z-index, so it establishes no stacking context and this value is read
+       against the root — which is why the layer, not a structural change, is
+       the fix. See e2e/layer-scale.spec.ts. */
+    z-index: var(--z-popover);
     top: calc(100% + 0.35rem);
     left: 0;
     min-width: 16rem;

@@ -426,7 +426,7 @@
   /* The popover — anchored below the trigger, bounded, with its own scroll. */
   .combobox-panel {
     position: absolute;
-    z-index: 30;
+    z-index: var(--z-popover);
     top: calc(100% + 4px);
     left: 0;
     /* Wider than the (often narrow) provider card so full model titles +

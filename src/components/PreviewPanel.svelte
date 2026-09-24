@@ -12,8 +12,10 @@
    *
    * Security: the iframe loads a SANITIZED URL (https only, credentials and
    * query/hash stripped — tokens are never forwarded), is sandboxed, and sends
-   * no referrer. The panel sits under the sticky draft bar (z-index) and
-   * follows the rail/drawer responsive idioms (overlay below 1100px).
+   * no referrer. The panel sits at --z-panel, ABOVE the sticky draft bar and
+   * the context rail (both --z-bar) — this comment used to say "under", which
+   * never matched the stylesheet — and follows the rail/drawer responsive
+   * idioms (overlay below 1100px).
    *
    * ──────────────────────────────────────────────────────────────────────────
    * TWO SOURCES NOW, PICKED BY `decidePreviewSource`.
@@ -140,10 +142,10 @@
     top: var(--topbar-h, 2.75rem);
     right: 0;
     bottom: 0;
-    /* Above the context rail (100) and the sticky draft bar (100): the panel
-       owns the right edge while open — Review collapses the rail on open and
-       pads the draft bar so Prev/Next slide left of the panel. */
-    z-index: 110;
+    /* Above --z-bar (the context rail AND the sticky draft bar): the panel owns
+       the right edge while open — Review collapses the rail on open and pads
+       the draft bar so Prev/Next slide left of the panel. */
+    z-index: var(--z-panel);
     width: min(40vw, 560px);
     display: flex;
     flex-direction: column;

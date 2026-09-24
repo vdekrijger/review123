@@ -58,7 +58,7 @@
     top: var(--topbar-height, 48px);
     left: 0;
     right: 0;
-    z-index: 90;
+    z-index: var(--z-progress);
   }
 
   .progress-track {

@@ -212,7 +212,19 @@
     inset: auto;
     left: 0;
     top: 0;
-    z-index: 20;
+    /* FALLBACK ONLY, and worth knowing before you reason about it. While the
+       Popover API is supported this element lives in the browser TOP LAYER,
+       which is above every z-index in the document and immune to ancestor
+       stacking contexts — so this declaration does nothing. It matters only on
+       the unsupported path below, and there it must still clear the app's
+       fixed chrome, hence --z-popover rather than the old literal 20.
+
+       That distinction is load-bearing for this component in particular: it
+       renders inside ContextRail, which is `position: fixed` with a z-index and
+       therefore ESTABLISHES a stacking context. On the fallback path no z-index
+       here can lift the tooltip out of the rail. The Popover API is the escape;
+       the number is only the floor under it. */
+    z-index: var(--z-popover);
     width: max-content;
     max-width: min(22rem, 90vw);
     padding: 0.5rem 0.6rem;
