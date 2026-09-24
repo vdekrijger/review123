@@ -2102,24 +2102,31 @@
     </p>
   {/if}
 
-  <!-- AGENT FIX LOOP: findings with a concrete fix go straight to the user's
-       own coding agent over the bridge, which fixes them in a scratch worktree
-       and hands back one commit each. The panel renders itself only when a
-       bridge is connected (see AgentFixPanel) — with none paired it is not
-       even a hint, the same rule the grounding indicator follows. -->
-  {#if currentHeadSha}
-    <AgentFixPanel
-      headSha={currentHeadSha}
-      candidates={fixCandidates}
-      {draftNotes}
-      withdrawn={withdrawnDraftNotes}
-      {draftNoteRefusals}
-      onNoteHandoff={draftStore ? noteHandoff : null}
-      onNotesSent={draftStore ? notesSent : null}
-      bind:this={fixPanel}
-    />
-  {/if}
+{/if}
 
+<!-- AGENT FIX LOOP: findings with a concrete fix go straight to the user's own
+     coding agent over the bridge, which fixes them in a scratch worktree and
+     hands back one commit each. The panel renders itself only when a bridge is
+     connected (see AgentFixPanel) — with none paired it is not even a hint, the
+     same rule the grounding indicator follows.
+
+     It sits OUTSIDE the reviewer-run block, though it renders in exactly the
+     same place when that block is present. Its input is no longer only what the
+     models found: a reviewer who read the code themselves and drafted notes,
+     without running the reviewers at all, has the one thing this panel exists
+     to act on, and gating it on somebody else's findings would hide it from
+     them. -->
+{#if currentHeadSha}
+  <AgentFixPanel
+    headSha={currentHeadSha}
+    candidates={fixCandidates}
+    {draftNotes}
+    withdrawn={withdrawnDraftNotes}
+    {draftNoteRefusals}
+    onNoteHandoff={draftStore ? noteHandoff : null}
+    onNotesSent={draftStore ? notesSent : null}
+    bind:this={fixPanel}
+  />
 {/if}
 
 {#if files.length < changedFiles}
