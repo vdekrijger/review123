@@ -64,7 +64,7 @@ export const SCALE_BASELINE: Record<string, ScaleCounts> = {
   'src/components/settings/BridgeSection.svelte': { emFont: 10, offScaleFont: 10, offScaleSpace: 19, offScaleWeight: 0 },
   'src/components/settings/ProvidersSection.svelte': { emFont: 8, offScaleFont: 8, offScaleSpace: 22, offScaleWeight: 0 },
   'src/components/settings/SecretInput.svelte': { emFont: 0, offScaleFont: 0, offScaleSpace: 1, offScaleWeight: 0 },
-  'src/components/settings/SkillsSection.svelte': { emFont: 27, offScaleFont: 27, offScaleSpace: 75, offScaleWeight: 1 },
+  'src/components/settings/SkillsSection.svelte': { emFont: 27, offScaleFont: 27, offScaleSpace: 73, offScaleWeight: 1 },
   'src/components/settings/StandingRulesSection.svelte': { emFont: 14, offScaleFont: 14, offScaleSpace: 28, offScaleWeight: 0 },
   'src/routes/Demo.svelte': { emFont: 0, offScaleFont: 4, offScaleSpace: 14, offScaleWeight: 1 },
   'src/routes/Landing.svelte': { emFont: 0, offScaleFont: 29, offScaleSpace: 70, offScaleWeight: 0 },

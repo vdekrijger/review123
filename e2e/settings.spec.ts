@@ -102,9 +102,13 @@ test('sample reviewer: adding Pragmatic Senior Reviewer from the Built-in review
   // The Add button should be hidden now
   await expect(page.getByRole('button', { name: /add Pragmatic Senior Reviewer \(sample\)/i })).not.toBeVisible()
 
-  // The skill's checkbox should be checked (enabled)
-  const skillCheckbox = page.locator('.skill-item input[type="checkbox"]').first()
-  await expect(skillCheckbox).toBeChecked()
+  // Pragmatic Senior installs scoped to BOTH phases — both phase boxes checked.
+  await expect(
+    page.getByRole('checkbox', { name: /run Pragmatic Senior Reviewer \(sample\) in the implementation phase/i }),
+  ).toBeChecked()
+  await expect(
+    page.getByRole('checkbox', { name: /run Pragmatic Senior Reviewer \(sample\) in the tests phase/i }),
+  ).toBeChecked()
 })
 
 
@@ -225,10 +229,10 @@ test('appearance: Auto theme removes data-theme attribute', async ({ page }) => 
 })
 
 // ---------------------------------------------------------------------------
-// Built-in reviewer library: add Security reviewer → appears enabled in list
+// Built-in reviewer library: add Security reviewer → installs at its own scope
 // ---------------------------------------------------------------------------
 
-test('builtin-library: add Security Reviewer (OWASP-minded) from Built-in reviewers → appears enabled in the skill list', async ({
+test('builtin-library: add Security Reviewer (OWASP-minded) from Built-in reviewers → installs implementation-only', async ({
   page,
 }) => {
   await blockExternal(page)
@@ -254,9 +258,14 @@ test('builtin-library: add Security Reviewer (OWASP-minded) from Built-in review
   // The Add button for that skill should no longer be visible
   await expect(page.getByRole('button', { name: /add Security Reviewer \(OWASP-minded\)/i })).not.toBeVisible()
 
-  // The skill's toggle checkbox should be checked (enabled)
-  const skillCheckbox = page.locator('.skill-item').filter({ hasText: 'Security Reviewer (OWASP-minded)' }).locator('input[type="checkbox"]')
-  await expect(skillCheckbox).toBeChecked()
+  // Security installs IMPLEMENTATION-ONLY: an OWASP lens has nothing to say
+  // about a test file, so the tests box must start unchecked.
+  await expect(
+    page.getByRole('checkbox', { name: /run Security Reviewer \(OWASP-minded\) in the implementation phase/i }),
+  ).toBeChecked()
+  await expect(
+    page.getByRole('checkbox', { name: /run Security Reviewer \(OWASP-minded\) in the tests phase/i }),
+  ).not.toBeChecked()
 })
 
 // ---------------------------------------------------------------------------

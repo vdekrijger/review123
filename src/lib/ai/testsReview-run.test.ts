@@ -9,10 +9,10 @@
  *
  *   TESTS pass (runTestsReview) — ON DEMAND only. Nothing calls it: not start(),
  *   not the auto-start, not prepare-ahead. When the user clicks it, it runs
- *   EVERY enabled reviewer, AGENTICALLY whatever the user's `skills` deep
- *   setting says (harness permitting), over the WHOLE-PR context, under its own
- *   prompt and its own cache segment — and its findings flow through the same
- *   convergence / simplify / triage pipeline as any other.
+ *   every reviewer SCOPED to the tests phase, AGENTICALLY whatever the user's
+ *   `skills` deep setting says (harness permitting), over the WHOLE-PR context,
+ *   under its own prompt and its own cache segment — and its findings flow
+ *   through the same convergence / simplify / triage pipeline as any other.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -302,7 +302,7 @@ describe('tests reviewer pass — what it sends', () => {
     expect(calls.filter((c) => c === undefined)).toHaveLength(1)
   })
 
-  it('runs ALL enabled reviewers (the user chose the whole panel, not a subset)', async () => {
+  it('runs every reviewer scoped to this phase (all three default to "both")', async () => {
     seedSettings()
     addSkill('Security Reviewer', 'sec content')
     addSkill('Performance Reviewer', 'perf content')
@@ -319,7 +319,7 @@ describe('tests reviewer pass — what it sends', () => {
     ])
   })
 
-  it('skips DISABLED reviewers, exactly as the automatic pass does', async () => {
+  it('skips reviewers scoped OFF, exactly as the automatic pass does', async () => {
     seedSettings()
     addSkill('Security Reviewer', 'sec content')
     const off = addSkill('Performance Reviewer', 'perf content')
@@ -330,6 +330,139 @@ describe('tests reviewer pass — what it sends', () => {
     await run.runTestsReview()
 
     expect(run.testReviews.map((e) => e.name)).toEqual(['Security Reviewer'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PHASE SCOPE — which reviewers each pass actually dispatches
+//
+// The load-bearing claim is not just "it costs less". It is that a reviewer
+// scoped out of a phase leaves NO TRACE in that pass: no prompt, no token
+// spend, and — because every chip in the header is rendered from the entries
+// these passes create — no entry that could render as a green "no significant
+// issues" result the reviewer never earned.
+// ---------------------------------------------------------------------------
+
+describe('phase scope — reviewer selection per pass', () => {
+  it('the implementation pass runs only "both" and "implementation" reviewers', async () => {
+    seedSettings()
+    addSkill('Both Reviewer', 'b content', 'both')
+    addSkill('Impl Reviewer', 'i content', 'implementation')
+    addSkill('Tests Reviewer', 't content', 'tests')
+    addSkill('Off Reviewer', 'o content', 'off')
+    const { pack } = makePack()
+    const run = createAiRun(makeInput(pack), makeDeps())
+
+    await run.runSkillReviews()
+
+    expect(run.skillReviews.map((e) => e.name)).toEqual(['Both Reviewer', 'Impl Reviewer'])
+  })
+
+  it('the tests pass runs only "both" and "tests" reviewers', async () => {
+    seedSettings()
+    addSkill('Both Reviewer', 'b content', 'both')
+    addSkill('Impl Reviewer', 'i content', 'implementation')
+    addSkill('Tests Reviewer', 't content', 'tests')
+    addSkill('Off Reviewer', 'o content', 'off')
+    const { pack } = makePack()
+    const run = createAiRun(makeInput(pack), makeDeps())
+
+    await run.runTestsReview()
+
+    expect(run.testReviews.map((e) => e.name)).toEqual(['Both Reviewer', 'Tests Reviewer'])
+  })
+
+  it('an out-of-phase reviewer is never PROMPTED — no LLM call carries its persona', async () => {
+    seedSettings()
+    addSkill('Impl Reviewer', 'IMPL-ONLY-PERSONA-MARKER', 'implementation')
+    addSkill('Both Reviewer', 'BOTH-PERSONA-MARKER', 'both')
+    const deps = makeDeps()
+    const { pack } = makePack()
+
+    await createAiRun(makeInput(pack), deps).runTestsReview()
+
+    const systems = [
+      ...deps.llmJsonWithRepairWithUsage.mock.calls,
+      ...deps.llmToolLoop.mock.calls,
+    ].map((c) => (c[0] as { system: string }).system)
+    expect(systems.some((sys) => sys.includes('BOTH-PERSONA-MARKER'))).toBe(true)
+    expect(systems.some((sys) => sys.includes('IMPL-ONLY-PERSONA-MARKER'))).toBe(false)
+  })
+
+  it('an out-of-phase reviewer is never BILLED — it contributes no usage', async () => {
+    seedSettings()
+    addSkill('Impl Reviewer', 'i content', 'implementation')
+    const { pack } = makePack()
+    const run = createAiRun(makeInput(pack), makeDeps())
+
+    await run.runTestsReview()
+
+    expect(run.testReviews).toEqual([])
+    expect(run.totalUsage).toBeUndefined()
+  })
+
+  it('an out-of-phase reviewer produces NO ENTRY — so no chip can claim it came back clean', async () => {
+    seedSettings()
+    addSkill('SRE Reviewer', 'sre content', 'implementation')
+    addSkill('Test Quality Reviewer', 'tq content', 'tests')
+    const { pack } = makePack()
+    const run = createAiRun(makeInput(pack), makeDeps())
+
+    await run.runTestsReview()
+
+    // The header chips are built from these entries. A 'done' entry with an
+    // empty findings list is what renders as "no significant issues" — so the
+    // ONLY honest state for a reviewer that never ran is absence.
+    const names = run.testReviews.map((e) => e.name)
+    expect(names).toEqual(['Test Quality Reviewer'])
+    expect(names).not.toContain('SRE Reviewer')
+    expect(run.testReviews.every((e) => e.state.status === 'done')).toBe(true)
+  })
+
+  it('the two passes can run disjoint reviewer sets in the same session', async () => {
+    seedSettings()
+    addSkill('Impl Reviewer', 'i content', 'implementation')
+    addSkill('Tests Reviewer', 't content', 'tests')
+    const { pack } = makePack()
+    const run = createAiRun(makeInput(pack), makeDeps())
+
+    await run.runSkillReviews()
+    await run.runTestsReview()
+
+    expect(run.skillReviews.map((e) => e.name)).toEqual(['Impl Reviewer'])
+    expect(run.testReviews.map((e) => e.name)).toEqual(['Tests Reviewer'])
+  })
+
+  it('a pass with NOTHING scoped to it does not run at all (no entries, no calls)', async () => {
+    seedSettings()
+    addSkill('Impl Reviewer', 'i content', 'implementation')
+    const deps = makeDeps()
+    const { pack } = makePack()
+    const run = createAiRun(makeInput(pack), deps)
+
+    await run.runTestsReview()
+
+    expect(run.testReviews).toEqual([])
+    expect(deps.llmToolLoop).not.toHaveBeenCalled()
+    expect(deps.llmJsonWithRepairWithUsage).not.toHaveBeenCalled()
+  })
+
+  it('a legacy enabled:true skill still runs in BOTH passes after migration', async () => {
+    seedSettings()
+    localStorage.setItem(
+      'review123:reviewer-skills',
+      JSON.stringify([
+        { id: 'legacy1', name: 'Legacy Reviewer', content: 'legacy content', enabled: true, addedAt: 1 },
+      ]),
+    )
+    const { pack } = makePack()
+    const run = createAiRun(makeInput(pack), makeDeps())
+
+    await run.runSkillReviews()
+    await run.runTestsReview()
+
+    expect(run.skillReviews.map((e) => e.name)).toEqual(['Legacy Reviewer'])
+    expect(run.testReviews.map((e) => e.name)).toEqual(['Legacy Reviewer'])
   })
 })
 
