@@ -1087,3 +1087,83 @@ for (const theme of ['light', 'dark'] as const) {
     expect(m.betweenGap).toBeGreaterThan(m.insideGap * 3)
   })
 }
+
+// ---------------------------------------------------------------------------
+// Reviewer phase scope: the four-state per-reviewer control survives a reload
+//
+// The control is the user's answer to "don't run all eleven on the tests".
+// What matters end-to-end is that what it shows and what it stores agree, and
+// keep agreeing after a page load — a scope the UI forgets is worse than none.
+// ---------------------------------------------------------------------------
+
+test('reviewer scope: narrowing a reviewer to one phase persists across a reload', async ({
+  page,
+}) => {
+  await blockExternal(page)
+
+  await page.goto('/')
+
+  // Seed one reviewer in the RELEASED shape (`enabled`, no `scope`) — this also
+  // proves the silent migration on a real page load, not just in unit tests.
+  await page.evaluate(() => {
+    localStorage.setItem(
+      'review123:reviewer-skills',
+      JSON.stringify([
+        { id: 'sk-scope-e2e', name: 'Legacy Reviewer', content: '# Legacy\nCheck things.', enabled: true, addedAt: 1700000000000 },
+      ]),
+    )
+  })
+
+  await page.reload()
+  await openSettings(page)
+
+  const implBox = page.getByRole('checkbox', { name: /run Legacy Reviewer in the implementation phase/i })
+  const testsBox = page.getByRole('checkbox', { name: /run Legacy Reviewer in the tests phase/i })
+
+  // enabled:true migrated to 'both' — the reviewer keeps running everywhere.
+  await expect(implBox).toBeChecked()
+  await expect(testsBox).toBeChecked()
+
+  // Narrow it to the implementation phase.
+  await testsBox.uncheck()
+  await expect(testsBox).not.toBeChecked()
+
+  await page.reload()
+  await openSettings(page)
+
+  await expect(
+    page.getByRole('checkbox', { name: /run Legacy Reviewer in the implementation phase/i }),
+  ).toBeChecked()
+  await expect(
+    page.getByRole('checkbox', { name: /run Legacy Reviewer in the tests phase/i }),
+  ).not.toBeChecked()
+
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('review123:reviewer-skills') ?? '[]'),
+  )
+  expect(stored[0].scope).toBe('implementation')
+})
+
+test('reviewer scope: clearing both phases marks the reviewer Off', async ({ page }) => {
+  await blockExternal(page)
+
+  await page.goto('/')
+  await openSettings(page)
+
+  // Install a built-in that ships implementation-only.
+  await page.getByRole('button', { name: /add Resiliency & SRE Reviewer/i }).click()
+
+  const implBox = page.getByRole('checkbox', { name: /run Resiliency & SRE Reviewer in the implementation phase/i })
+  const testsBox = page.getByRole('checkbox', { name: /run Resiliency & SRE Reviewer in the tests phase/i })
+  await expect(implBox).toBeChecked()
+  await expect(testsBox).not.toBeChecked()
+
+  await implBox.uncheck()
+
+  // Neither phase → off, and the row says so rather than looking like the rest.
+  await expect(page.locator('.skill-item.skill-item-off .skill-off-tag')).toBeVisible()
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('review123:reviewer-skills') ?? '[]'),
+  )
+  expect(stored[0].scope).toBe('off')
+})
