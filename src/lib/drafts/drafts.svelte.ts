@@ -79,6 +79,57 @@ export interface Draft {
    * old app versions may lack it; consumers must tolerate undefined.
    */
   updatedAt?: number
+  /**
+   * WHAT HAPPENED TO THIS NOTE AFTER IT WAS HANDED TO THE FIXING AGENT.
+   *
+   * Undefined for every note that was never sent, which is nearly all of them.
+   * See `DraftHandoff` for what each value means and for why the default is
+   * "nothing changes".
+   */
+  handoff?: DraftHandoff
+  /** Epoch-ms the handoff last moved. Undefined when it never has. */
+  handoffAt?: number
+}
+
+/**
+ * THE FATE OF A NOTE THE REVIEWER HANDED TO THEIR OWN AGENT.
+ *
+ * ───────────────────────────────────────────────────────────────────────────
+ * THE PROBLEM. The reviewer drafts "this should use a Map, not a linear scan",
+ * sends it to their agent, reads the commit, takes it. At step 8 they submit
+ * the review — and that comment now asks the author for something the code
+ * already does. But silently deleting the note is worse than posting a stale
+ * one: they wrote it, and what a review says is theirs to decide.
+ *
+ * THE RULE. Nothing about what gets posted ever changes on its own. The app
+ * records what happened and offers the decision; the reviewer makes it, and can
+ * unmake it. No value here deletes anything.
+ *
+ *   'sent'      — mechanical fact, written when the note goes to the agent. The
+ *                 note is unchanged and posts exactly as it would have. This is
+ *                 the state a note sits in until the reviewer decides, which
+ *                 means "I ignored the question" and "I chose to post it" are
+ *                 distinguishable rather than both looking like agreement.
+ *   'kept'      — the reviewer looked at what came back and chose to post the
+ *                 note anyway. Same outcome as 'sent', different fact: a
+ *                 partially-addressed note, or one kept as the record of WHY
+ *                 the code changed, is a deliberate thing and reads as one.
+ *   'withdrawn' — the reviewer chose not to post it. THE WORDS ARE NOT DELETED.
+ *                 The draft stays in the database and stays on screen in the
+ *                 diff, struck through, with its way back on it; it is only
+ *                 taken out of the list that gets submitted. `upsert` clears a
+ *                 withdrawal, so re-saving or editing a withdrawn note puts it
+ *                 back — a note you have written again is a note you want.
+ *
+ * A REJECTED CHANGE MOVES NOTHING. Rejecting the agent's commit leaves the note
+ * exactly where it was; there is no path from "I did not take that diff" to a
+ * note of the reviewer's disappearing from their own review.
+ */
+export type DraftHandoff = 'sent' | 'kept' | 'withdrawn'
+
+/** Is this note excluded from the review the reviewer submits? */
+export function isWithdrawnDraft(draft: Pick<Draft, 'handoff'>): boolean {
+  return draft.handoff === 'withdrawn'
 }
 
 /**
@@ -506,8 +557,18 @@ async function migrateLegacyShaKeysToIdentity(db: IDBDatabase, identityPrKey: st
  *                   Optional (undefined for the demo route / older callers).
  */
 export function createDraftStore(prKey: string, dbName = 'review123-drafts', makerSha?: string) {
-  // $state-backed reactive array
-  let drafts = $state<Draft[]>([])
+  /**
+   * EVERY draft, withdrawn ones included. $state-backed reactive array.
+   *
+   * The public `drafts` getter is the LIVE subset, because that getter is what
+   * the submit path, the Verdict recap, the count and every export already
+   * read: expressing "not in this review" by filtering here means a withdrawal
+   * is honoured everywhere without a single consumer learning a new rule. The
+   * surfaces that must still SHOW a withdrawn note — the diff, and the fix
+   * panel's own list — ask for `all`, which is the honest name for it.
+   */
+  let all = $state<Draft[]>([])
+  const live = $derived(all.filter((d) => !isWithdrawnDraft(d)))
   let persistent = $state(true)
 
   // Database handle — resolved lazily on first use; null in fallback mode
@@ -535,16 +596,25 @@ export function createDraftStore(prKey: string, dbName = 'review123-drafts', mak
   }
 
   return {
-    get drafts() { return drafts },
+    /** The notes that are part of this review. Withdrawn ones are not. */
+    get drafts() { return live },
+    /** Every note, withdrawn ones included — for the surfaces that show them. */
+    get all() { return all },
+    /** The notes taken out of the review, still written, still restorable. */
+    get withdrawn() { return all.filter(isWithdrawnDraft) },
     get persistent() { return persistent },
-    get count() { return drafts.length },
+    get count() { return live.length },
 
     /**
      * Returns all drafts at a specific path/line/side, sorted by n ascending.
      * Fix-B: enables threaded display.
+     *
+     * Reads `all`: this feeds the inline thread widget, and a withdrawn note
+     * vanishing from the line it was written on would read as deletion — the
+     * one thing a withdrawal must never look like.
      */
     draftsAt(path: string, line: number, side: 'LEFT' | 'RIGHT'): Draft[] {
-      return drafts
+      return all
         .filter(d => d.path === path && d.line === line && d.side === side)
         .sort((a, b) => (a.n ?? 0) - (b.n ?? 0))
     },
@@ -581,7 +651,7 @@ export function createDraftStore(prKey: string, dbName = 'review123-drafts', mak
         }
         migrated.push(draft)
       }
-      drafts = migrated
+      all = migrated
     },
 
     /**
@@ -615,7 +685,9 @@ export function createDraftStore(prKey: string, dbName = 'review123-drafts', mak
       }
 
       let n: number
-      const existingAtLine = drafts.filter(
+      // `all`, not the live subset: a withdrawn note still occupies its ordinal,
+      // and appending over it would overwrite words nobody deleted.
+      const existingAtLine = all.filter(
         x => x.path === d.path && x.line === d.line && x.side === d.side
       )
 
@@ -637,16 +709,30 @@ export function createDraftStore(prKey: string, dbName = 'review123-drafts', mak
       // createdAt: stamped once at creation; a body edit PRESERVES the original
       // (including its absence on pre-timestamp drafts — never backfilled, so
       // "earlier session" stays honest). updatedAt tracks the last body write.
-      const existingIdx = drafts.findIndex((x) => draftKey(x) === key)
-      const createdAt = existingIdx >= 0 ? drafts[existingIdx].createdAt : Date.now()
-      const record: Draft = { path: d.path, line: d.line, side: d.side, body: d.body, prKey, n, updatedAt: Date.now(), ...(createdAt != null ? { createdAt } : {}), ...(startLine != null ? { startLine } : {}), ...(makerSha ? { headSha: makerSha } : {}), ...(d.aiAuthored ? { aiAuthored: true } : {}), ...(d.aiReviewer != null ? { aiReviewer: d.aiReviewer } : {}), ...(d.aiOriginalBody != null ? { aiOriginalBody: d.aiOriginalBody } : {}) }
+      const existingIdx = all.findIndex((x) => draftKey(x) === key)
+      const existing = existingIdx >= 0 ? all[existingIdx] : undefined
+      const createdAt = existing ? existing.createdAt : Date.now()
+      // THE HANDOFF SURVIVES AN EDIT, EXCEPT A WITHDRAWAL.
+      //
+      // 'sent' and 'kept' are facts about what happened to the note and are not
+      // undone by rewording it. 'withdrawn' is different: writing a note again
+      // — restoring it, or editing the text — is the plainest statement there
+      // is that you want it in your review, so the withdrawal lifts and the
+      // note goes back to 'kept' (decided, and kept). This is the ONLY
+      // transition the app makes on the user's behalf, and it only ever adds a
+      // note back to a review. Nothing here can take one out.
+      const handoff: DraftHandoff | undefined =
+        existing?.handoff === 'withdrawn' ? 'kept' : existing?.handoff
+      const handoffAt =
+        handoff === existing?.handoff ? existing?.handoffAt : Date.now()
+      const record: Draft = { path: d.path, line: d.line, side: d.side, body: d.body, prKey, n, updatedAt: Date.now(), ...(createdAt != null ? { createdAt } : {}), ...(startLine != null ? { startLine } : {}), ...(makerSha ? { headSha: makerSha } : {}), ...(d.aiAuthored ? { aiAuthored: true } : {}), ...(d.aiReviewer != null ? { aiReviewer: d.aiReviewer } : {}), ...(d.aiOriginalBody != null ? { aiOriginalBody: d.aiOriginalBody } : {}), ...(handoff != null ? { handoff } : {}), ...(handoffAt != null ? { handoffAt } : {}) }
 
       // Update in-memory state (last-write-wins: replace existing if same key)
       const idx = existingIdx
       if (idx >= 0) {
-        drafts[idx] = record
+        all[idx] = record
       } else {
-        drafts = [...drafts, record]
+        all = [...all, record]
       }
 
       // Persist
@@ -654,14 +740,50 @@ export function createDraftStore(prKey: string, dbName = 'review123-drafts', mak
       if (db) await idbPut(db, key, record)
     },
 
+    /**
+     * Record what the reviewer decided about a note they handed to their agent.
+     *
+     * The ONLY writer of `handoff`, and it never touches the body. Passing the
+     * value a note already has is a no-op rather than a fresh timestamp, so
+     * marking a batch 'sent' twice does not rewrite decisions the reviewer made
+     * in between — `markSent` below depends on that.
+     */
+    async setHandoff(key: string, handoff: DraftHandoff): Promise<void> {
+      const idx = all.findIndex((x) => draftKey(x) === key)
+      if (idx < 0) return
+      const current = all[idx]
+      if (current.handoff === handoff) return
+      const record: Draft = { ...current, handoff, handoffAt: Date.now() }
+      all[idx] = record
+      const db = await getDb()
+      if (db) await idbPut(db, key, record)
+    },
+
+    /**
+     * Mark notes as handed to the agent — WITHOUT overwriting a decision.
+     *
+     * A note the reviewer already decided about ('kept' or 'withdrawn') keeps
+     * that decision when it goes round again; only an undecided note moves to
+     * 'sent'. Sending a withdrawn note back for another attempt must not quietly
+     * put it back in the review.
+     */
+    async markSent(keys: readonly string[]): Promise<void> {
+      for (const key of keys) {
+        const idx = all.findIndex((x) => draftKey(x) === key)
+        if (idx < 0) continue
+        if (all[idx].handoff !== undefined) continue
+        await this.setHandoff(key, 'sent')
+      }
+    },
+
     async remove(key: string): Promise<void> {
-      drafts = drafts.filter((x) => draftKey(x) !== key)
+      all = all.filter((x) => draftKey(x) !== key)
       const db = await getDb()
       if (db) await idbDelete(db, key)
     },
 
     async clearAll(): Promise<void> {
-      drafts = []
+      all = []
       const db = await getDb()
       if (db) await idbClearRange(db, prKey)
     },

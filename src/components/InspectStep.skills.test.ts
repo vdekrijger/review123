@@ -47,6 +47,8 @@ function makeDraftStore(): ReturnType<typeof createDraftStore> {
   const draftsAt = vi.fn().mockReturnValue([])
   return {
     get drafts() { return [] },
+    get all() { return [] },
+    get withdrawn() { return [] },
     get count() { return 0 },
     get persistent() { return false },
     upsert,
@@ -54,6 +56,8 @@ function makeDraftStore(): ReturnType<typeof createDraftStore> {
     clearAll,
     load,
     draftsAt,
+    setHandoff: vi.fn().mockResolvedValue(undefined),
+    markSent: vi.fn().mockResolvedValue(undefined),
   }
 }
 
