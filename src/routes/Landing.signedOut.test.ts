@@ -146,3 +146,39 @@ describe('Landing — "Try a live demo" CTA', () => {
     ).not.toBeInTheDocument()
   })
 })
+
+/**
+ * THE HERO'S TWO JOBS. A newcomer needs the paste-a-URL hero to BE the page; a
+ * returning user needs their queue. The hero's 12vh top margin served the
+ * first and billed the second for it on every visit (measured: the queue's
+ * first row 355px down a 1000px viewport). `has-content` is that switch, and
+ * this file is where both sides of it can actually be driven, because its
+ * registry mock reads real auth.
+ */
+describe('Landing hero density gate', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    _resetSettingsStateForTest()
+    queueModule._resetQueueCacheForTest()
+  })
+
+  it('a cold-start visitor keeps the full-height hero — it IS the page', () => {
+    const { container } = render(Landing)
+    expect(container.querySelector('.landing')).not.toHaveClass('has-content')
+  })
+
+  it('signing in stands the hero down, because the queue is now the content', async () => {
+    const { container } = render(Landing)
+    expect(container.querySelector('.landing')).not.toHaveClass('has-content')
+
+    saveGithubAuth({ token: 'ghp_test', method: 'pat', scopes: [] })
+    await screen.findByText(/your review queue/i)
+    expect(container.querySelector('.landing')).toHaveClass('has-content')
+  })
+
+  it('history alone stands it down, with no sign-in at all', () => {
+    addToHistory({ owner: 'alice', repo: 'widgets', number: 42, title: 'Add feature' })
+    const { container } = render(Landing)
+    expect(container.querySelector('.landing')).toHaveClass('has-content')
+  })
+})

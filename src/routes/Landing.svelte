@@ -215,6 +215,32 @@
     })
   }
 
+  // ---- Effort gauge (rubric p.30-31: nothing at equal emphasis) -----------
+  // Fourteen rows at identical weight give the eye nothing to rank. The ONLY
+  // ranking signal this component actually holds is churn — additions +
+  // deletions, already fetched for the +/− chip — so that is the only one it
+  // claims. The gauge is scaled to the LARGEST churn currently in the queue,
+  // which is why it promises nothing absolute: it says "this one is big for
+  // your queue today", never "this one is important". No priority is invented.
+  const maxChurn = $derived.by(() => {
+    let max = 0
+    for (const size of Object.values(queueSizes)) {
+      const total = size.additions + size.deletions
+      if (total > max) max = total
+    }
+    return max
+  })
+
+  /** This row's share of the queue's largest diff, as a 0-100 percentage. */
+  function churnPercent(size: DiffSize | undefined): number {
+    if (!size || maxChurn <= 0) return 0
+    const total = size.additions + size.deletions
+    if (total <= 0) return 0
+    // A floor so the smallest diff still reads as "present but tiny" rather
+    // than as a missing measurement (p.146-147: the gauge must not vanish).
+    return Math.max((total / maxChurn) * 100, 4)
+  }
+
   async function loadQueue() {
     queueLoading = true
     queueItems = await fetchAllQueues(allProviders)
@@ -324,6 +350,16 @@
   // naturally on their first review — it's a one-time nicety, not a banner.
   let showFirstTimeHint = $derived(history.length === 0)
 
+  // A newcomer and a returning user want opposite things from this screen, and
+  // only the newcomer was being served: the hero's 12vh top margin pushed the
+  // queue 355px down the page on EVERY visit. So the hero keeps its generous
+  // framing exactly while it IS the page, and stands down the moment the page
+  // has real content of its own to lead with (p.30-31 — rank the surface; p.85
+  // — space belongs to what it introduces).
+  const hasContentBelow = $derived(
+    (hasQueueProviders && anyAuthConfigured) || inflightRows.length > 0 || history.length > 0,
+  )
+
   // SPA navigation for the hint's links — real <a href> for accessibility,
   // intercepted so we route in-app instead of a full reload. Mirrors the
   // goToSettings pattern used across the app (AiPanel, InspectStep, …).
@@ -354,6 +390,31 @@
       <span class="stat-del">−{size.deletions}</span>
     </span>
   {/if}
+{/snippet}
+
+<!--
+  sizeCell — the queue row's diff-stat COLUMN. The cell is always rendered so
+  the column reserves its width before the lazy size fetch lands (rubric C5:
+  nothing may reflow under the reader when a late result arrives); the chip
+  inside it still appears only once a size is actually known, which is what
+  every "no chip when the size is unknown" test asserts.
+
+  Inside, the effort gauge precedes the numbers: length is the ranking signal,
+  the +/− figures are the exact value, and the two never disagree because both
+  read the same DiffSize.
+-->
+{#snippet sizeCell(size: DiffSize | undefined)}
+  <span class="queue-cell size-cell">
+    <span class="churn" aria-hidden="true">
+      {#if size}
+        <span class="churn-fill" style:width="{churnPercent(size)}%">
+          <span class="churn-add" style:flex-grow={size.additions}></span>
+          <span class="churn-del" style:flex-grow={size.deletions}></span>
+        </span>
+      {/if}
+    </span>
+    {@render queueSize(size)}
+  </span>
 {/snippet}
 
 <!--
@@ -404,10 +465,10 @@
 
 {#snippet queueRows(items: QueueItem[])}
   {#each groupByRepo(items) as group (group.key)}
-    <div class="repo-group-header">
+    <h4 class="repo-group-header">
       <ProviderIcon provider={group.provider} size={12} label={PROVIDER_NAMES[group.provider]} />
       <span class="repo-group-name">{group.owner}/{group.repo}</span>
-    </div>
+    </h4>
     <ul class="queue-list grouped">
       {#each group.items as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
         <li class="queue-item">
@@ -417,20 +478,19 @@
             onclick={() => navigateToQueueItem(item)}
             aria-label="{item.ref.owner}/{item.ref.repo}#{item.ref.number} on {PROVIDER_NAMES[item.ref.provider]}"
           >
-            <span class="queue-ref">#{item.ref.number}</span>
-            <span class="queue-sep"> · </span>
+            <span class="queue-cell queue-ref">#{item.ref.number}</span>
             <span class="queue-title-text">{item.title}</span>
-            {@render queueSize(queueSizes[sizeKey(item)])}
-            <span class="queue-time">{relativeTime(item.updatedAt)}</span>
+            {@render sizeCell(queueSizes[sizeKey(item)])}
+            <span class="queue-cell queue-time">{relativeTime(item.updatedAt)}</span>
           </button>
-          {@render prepareControl(item)}
+          <span class="queue-cell prepare-cell">{@render prepareControl(item)}</span>
         </li>
       {/each}
     </ul>
   {/each}
 {/snippet}
 
-<section class="landing">
+<section class="landing" class:has-content={hasContentBelow}>
   <h1>Review 1‑2‑3</h1>
   <p>Paste a GitHub, GitLab, or Bitbucket pull request URL to start a guided review.</p>
   <form onsubmit={submit}>
@@ -511,7 +571,18 @@
           <span class="sr-only">Loading your queue…</span>
         </div>
       {:else if queueItems.length === 0}
-        <p class="queue-status">No PRs in your queue.</p>
+        <!-- p.203-204: an empty state is a designed state. A bare "no results"
+             line is the failure the rubric names, so the line is kept (it is
+             the honest answer) and given the one next step that actually
+             exists on this page — the URL field above. Nothing is implied that
+             the app does not already do (p.15-16). -->
+        <div class="queue-empty">
+          <span class="queue-empty-mark" aria-hidden="true">✓</span>
+          <p class="queue-status">
+            No PRs in your queue.
+            <span class="queue-empty-next">Nothing is waiting on you. Paste a pull request URL above to review one anyway.</span>
+          </p>
+        </div>
       {:else}
         <div
           class="queue-rows"
@@ -570,7 +641,6 @@
               </span>
               <span class="recent-ref">{row.owner}/{row.repo}#{row.number}</span>
               {#if row.title}
-                <span class="recent-sep"> — </span>
                 <span class="recent-title-text">{row.title}</span>
               {:else}
                 <span class="recent-title-text"></span>
@@ -600,7 +670,7 @@
   {#if history.length > 0}
     <div class="recent-reviews">
       <div class="recent-header">
-        <h2 class="recent-title">
+        <h2 class="section-title">
           <button
             type="button"
             class="section-toggle"
@@ -631,7 +701,6 @@
                 />
               </span>
               <span class="recent-ref">{entry.owner}/{entry.repo}#{entry.number}</span>
-              <span class="recent-sep"> — </span>
               <span class="recent-title-text">{entry.title}</span>
               {#if typeof entry.additions === 'number' && typeof entry.deletions === 'number'}
                 {@render queueSize({ additions: entry.additions, deletions: entry.deletions })}
@@ -667,36 +736,76 @@
 {/if}
 
 <style>
+  /* ---------------------------------------------------------------------
+     THE HERO HAS TWO JOBS AND ONLY EVER DID ONE OF THEM.
+     A first-time visitor needs the paste-a-URL hero to BE the page. A
+     returning user needs their queue. The hero's 12vh top margin served the
+     first and billed the second for it on every visit — measured at 1440x1000,
+     the queue's first row sat 355px down a 1000px viewport, better than a
+     third of the fold spent before any content. `.has-content` is the switch
+     (see hasContentBelow): generous framing while the hero IS the page, and a
+     plain section heading's worth of space the moment the page has content of
+     its own to lead with (p.30-31, p.85).
+     --------------------------------------------------------------------- */
   .landing {
     max-width: 40rem;
+    /* Viewport-relative deliberately (p.75 — a percentage is right when you
+       genuinely want the thing to scale with the viewport): a cold-start hero
+       should sit at the same optical height on a laptop and on a 27" display.
+       It is the ONLY viewport-relative length on this surface. */
     margin: 12vh auto 0;
     /* Bottom padding so a long recent-reviews list doesn't butt up against the
        global build footer (which lives outside .landing, in App.svelte). */
-    padding: 0 1.5rem 3rem;
+    padding: 0 var(--space-5) var(--space-7);
     text-align: center;
+  }
+
+  /* p.65-67: don't force one section to match another's width for symmetry.
+     40rem is the measure a HERO wants — a form plus one line of prose inside
+     the 45-75 character band (p.99-100). It is not the measure a five-column
+     table wants: at 40rem the aligned queue could only afford a 183px title
+     cell, ~25 characters, which buys alignment by throwing away the one field
+     that says what the PR is. So the content column widens for content, and
+     the hero keeps its own measure inside it (below). */
+  .landing.has-content {
+    margin-top: var(--space-6);
+    max-width: 52rem;
+  }
+
+  .landing.has-content > h1,
+  .landing.has-content > p,
+  .landing.has-content > form,
+  .landing.has-content > .demo-cta {
+    max-width: 40rem;
+    margin-left: auto;
+    margin-right: auto;
   }
 
   form {
     display: flex;
-    gap: 0.5rem;
-    margin-top: 1.5rem;
+    gap: var(--space-2);
+    margin-top: var(--space-5);
   }
 
   form input[type="text"] {
     flex: 1;
-    font-size: 1rem;
+    /* Without this the input's intrinsic size (default `size=20`) refuses to
+       shrink and becomes a source of horizontal overflow on a narrow screen. */
+    min-width: 0;
+    font-family: var(--font-ui);
+    font-size: var(--text-base);
   }
 
   form button[type="submit"] {
     display: inline-flex;
     align-items: center;
-    padding: 0.4rem 1.2rem;
+    padding: var(--space-2) var(--space-4);
     border: 1px solid var(--accent);
     border-radius: 6px;
     background: var(--accent);
     color: var(--on-accent);
     font-family: var(--font-ui);
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
@@ -709,16 +818,16 @@
 
   .error {
     color: var(--legend-removed-color);
-    font-size: 0.9rem;
-    margin-top: 0.5rem;
+    font-size: var(--text-sm);
+    margin-top: var(--space-2);
   }
 
   /* First-run footnote — a single unobtrusive muted line under the input.
      Deliberately NOT a card/section: no border, no background, just text. */
   .input-hint {
-    font-size: 0.8rem;
+    font-size: var(--text-xs);
     color: var(--text-muted);
-    margin: 0.6rem 0 0;
+    margin: var(--space-2) 0 0;
     line-height: 1.4;
   }
 
@@ -736,21 +845,21 @@
   /* Demo CTA — emphasized as a primary button for cold-start users, a quiet
      link once auth or an LLM key is configured. */
   .demo-cta {
-    margin-top: 0.85rem;
+    margin-top: var(--space-3);
   }
   .demo-cta.emphasized {
-    margin-top: 1.1rem;
+    margin-top: var(--space-4);
   }
   .demo-cta-btn {
     display: inline-flex;
     align-items: center;
-    padding: 0.5rem 1.25rem;
+    padding: var(--space-2) var(--space-4);
     border: 1px solid var(--accent);
     border-radius: 6px;
     background: transparent;
     color: var(--accent);
     font-family: var(--font-ui);
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
@@ -762,13 +871,13 @@
     color: var(--on-accent);
   }
   .demo-cta-sub {
-    font-size: 0.8rem;
+    font-size: var(--text-xs);
     color: var(--text-muted);
-    margin: 0.45rem 0 0;
+    margin: var(--space-1) 0 0;
     line-height: 1.4;
   }
   .demo-cta-link {
-    font-size: 0.8rem;
+    font-size: var(--text-xs);
     color: var(--text-muted);
     text-decoration: underline;
     text-underline-offset: 2px;
@@ -778,30 +887,68 @@
     color: var(--text);
   }
 
-  /* Queue section */
-  .queue-section {
-    margin-top: 2.5rem;
+  /* ---------------------------------------------------------------------
+     THE THREE CARDS. Queue, in-flight and recent were three copies of one
+     rule set; they are now one, so the page cannot drift into three slightly
+     different cards again.
+     --------------------------------------------------------------------- */
+  .queue-section,
+  .inflight-section,
+  .recent-reviews {
+    margin-top: var(--space-6);
     text-align: left;
     background: var(--surface);
     border: 1px solid var(--hairline);
     border-radius: 8px;
-    padding: 0.75rem 1rem;
+    padding: var(--space-3) var(--space-4);
   }
 
-  .queue-header {
+  .queue-header,
+  .inflight-header,
+  .recent-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 0.5rem;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+  }
+
+  /* ---------------------------------------------------------------------
+     ONE LABEL REGISTER, ONE DATA REGISTER.
+     The surface carried three heading treatments for three levels — all-caps
+     tracked (h2), sentence case (h3), and all-caps MONO (the repo header) —
+     so nothing about a heading's look told you which level it was. The system
+     is now: a LABEL is --text-xs, weight 600, uppercase with the +0.05em
+     tracking all-caps owes (p.117); levels are told apart by INK, not by a
+     third case or a third size (p.32-34). Anything that is DATA is not a label
+     and does not get that treatment at all — see .repo-group-header.
+     --------------------------------------------------------------------- */
+  .section-title,
+  .queue-group-title {
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    line-height: 1.4;
   }
 
   .section-title {
-    font-size: 0.8125rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     margin: 0;
+  }
+
+  .queue-group-title {
+    color: var(--text-muted);
+    /* p.85: clearly more space above than below, so the label attaches to the
+       rows it introduces instead of floating between two groups. */
+    margin: var(--space-5) 0 var(--space-2);
+  }
+
+  /* The first group heading in the card already has the card's padding above
+     it; a second helping would break the "space around > space inside" read. */
+  .queue-rows > .queue-group-title:first-child {
+    margin-top: 0;
   }
 
   /* Collapsible section header — mirrors the global details > summary
@@ -809,7 +956,7 @@
   .section-toggle {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: var(--space-1);
     background: none;
     border: none;
     padding: 0;
@@ -842,44 +989,81 @@
     transform: rotate(90deg);
   }
 
-  .refresh-btn {
+  .refresh-btn,
+  .clear-btn {
     background: none;
     border: none;
     cursor: pointer;
-    font-size: 0.8rem;
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
     color: var(--text-muted);
-    padding: 0.1rem 0.4rem;
+    padding: var(--space-1) var(--space-2);
     border-radius: 4px;
+    flex-shrink: 0;
     transition: color 150ms;
   }
 
-  .refresh-btn:hover {
+  .refresh-btn:hover,
+  .clear-btn:hover {
     color: var(--text);
     background: var(--surface-raised);
-  }
-
-  .queue-status {
-    font-size: 0.875rem;
-    color: var(--text-muted);
-    margin: 0.25rem 0;
-  }
-
-  /* Loading skeleton — same Skeleton-based treatment as AiPanel's loading state */
-  .queue-skeleton {
-    padding: 0.25rem 0.5rem;
-  }
-
-  /* Refresh-in-flight: keep rows visible but dimmed (content-stays-visible,
-     mirroring AiPanel's streaming treatment) */
-  .queue-rows.refreshing {
-    opacity: 0.5;
-    pointer-events: none;
-    transition: opacity 150ms ease;
   }
 
   .refresh-btn:disabled {
     cursor: default;
     opacity: var(--disabled-opacity);
+  }
+
+  /* Empty state (p.203-204): a bare "no results" line is a failure, so the
+     line keeps company with the one next step that actually exists here —
+     the URL field above. No new capability is implied (p.15-16). */
+  .queue-empty {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin: var(--space-3) 0 var(--space-2);
+    padding: 0 var(--space-2);
+  }
+
+  .queue-empty-mark {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--diff-add);
+    flex-shrink: 0;
+  }
+
+  .queue-status {
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    color: var(--text);
+    margin: 0;
+  }
+
+  .queue-empty-next {
+    display: block;
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    margin-top: var(--space-1);
+  }
+
+  /* Loading skeleton — same Skeleton-based treatment as AiPanel's loading state */
+  .queue-skeleton {
+    padding: var(--space-1) var(--space-2);
+  }
+
+  /* Refresh-in-flight. These rows are FINISHED content being re-fetched, so
+     they recede by GROUND, not by ink (p.167-168 — darker pushes back). The
+     `opacity: 0.5` this replaces took the row metadata down to 2.06:1 light /
+     2.45:1 dark, under the 3:1 a receded row still owes (B5, quick-scan 13) —
+     which is exactly B5's point that opacity is a poor de-emphasis tool. On
+     --bg (darker than --surface in BOTH themes) every ink on the row measures
+     4.79:1 or better. The header spinner and aria-busy carry the state, so no
+     meaning rides on the colour shift alone (p.146-147). */
+  .queue-rows.refreshing {
+    background: var(--bg);
+    border-radius: 4px;
+    pointer-events: none;
+    transition: background 150ms ease;
   }
 
   .sr-only {
@@ -894,12 +1078,30 @@
     border-width: 0;
   }
 
-  .queue-group-title {
-    font-size: 0.75rem;
+  /* The repo is DATA, not a label, so it is in the data register: mono, and
+     its REAL case. `text-transform: uppercase` was rendering `posthog/posthog`
+     as `POSTHOG/POSTHOG` — a case-sensitive identifier displayed as something
+     it is not (p.41-44: let the data be the data). It is a real <h4> so the
+     document outline matches the visual grouping (D1). */
+  .repo-group-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
     font-weight: 600;
+    text-transform: none;
+    letter-spacing: normal;
+    line-height: 1.4;
     color: var(--text-muted);
-    margin: 0.75rem 0 0.25rem;
-    letter-spacing: 0.03em;
+    /* Between two repo groups, comfortably more than the 4px inside one (p.83),
+       and more above than below so it attaches to its own rows (p.85). */
+    margin: var(--space-4) 0 var(--space-1);
+    padding: 0 var(--space-2);
+  }
+
+  .repo-group-name {
+    font-family: var(--font-mono);
   }
 
   .queue-list {
@@ -908,115 +1110,222 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.2rem;
+    gap: var(--space-1);
   }
 
+  /* ---------------------------------------------------------------------
+     THE ROW IS A TABLE ROW, NOT A SENTENCE.
+     Every column after the title used to ride on the end of a variable-width
+     title, so `#ref · title · +a −d · time · Prepare` landed at a different x
+     on every row. Measured on a 14-row queue at 1440px: the diff-stat column
+     spread 61.7px, the timestamp column 64.9px, the Prepare control 55.2px,
+     and the title's own truncation measure varied by 66.8px — raggedness
+     precisely where the eye wants a column to scan.
+
+     The same markup had a second, worse consequence: .queue-link was
+     `width: 100%` with a non-shrinking Prepare sibling, so on a long title the
+     row overflowed its own list item. At 1440px the Prepare button ended 55px
+     PAST the card's inner edge (outside the card's border entirely); at 400px
+     it pushed the document to 417px wide against a 400px viewport — 17px of
+     horizontal page scroll, which is what puts those buttons under the
+     scrollbar.
+
+     Fixed measures on the trailing columns fix both: the button now flexes
+     (`flex: 1; min-width: 0`) instead of claiming 100%, and because every
+     other cell is a known width, the title cell is the SAME width on every
+     row — one consistent truncation measure (p.113, p.212-213).
+     --------------------------------------------------------------------- */
   .queue-item {
     display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    border-radius: 4px;
+    transition: background 100ms;
+  }
+
+  /* The whole row lights up, not just the part inside the <button> — the row
+     reads as one object, which is the entire point of putting it in columns. */
+  .queue-item:hover {
+    background: var(--surface-raised);
   }
 
   .queue-link {
     display: flex;
     align-items: baseline;
-    gap: 0;
+    gap: var(--space-2);
+    flex: 1;
+    min-width: 0;
     background: none;
     border: none;
     cursor: pointer;
-    font-size: 0.9rem;
+    /* A <button> does NOT inherit font-family. Without this the queue titles
+       rendered in the UA default — measured as Arial — while every other
+       string on the page rendered in IBM Plex Sans. Same defect on
+       .recent-link and .inflight-link below. */
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
     text-align: left;
-    padding: 0.3rem 0.5rem;
-    border-radius: 4px;
-    width: 100%;
+    padding: var(--space-1) var(--space-2);
     color: var(--text);
-    transition: background 100ms;
   }
 
-  .queue-link:hover {
-    background: var(--surface-raised);
-  }
-
-  /* Compact repo header for queue lists — same muted small-caps register as
-     the other section labels. Every queue list is grouped under one of these. */
-  .repo-group-header {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-size: 0.72rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-muted);
-    margin: 0.55rem 0 0.15rem;
-    padding: 0 0.5rem;
-  }
-
-  .repo-group-name {
-    font-family: var(--font-mono);
+  .queue-link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    border-radius: 4px;
   }
 
   .queue-list.grouped .queue-link {
-    padding-left: 1.1rem;
+    padding-left: var(--space-4);
+  }
+
+  /* Every trailing column is a fixed measure so the columns line up ACROSS
+     rows. The widths are in `ch` — a count of characters the column must hold,
+     not a hand-picked pixel value (p.24-25). */
+  .queue-cell {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 
   .queue-ref {
     font-family: var(--font-mono);
-    font-size: 0.83rem;
+    font-size: var(--text-xs);
     color: var(--text-muted);
-    flex-shrink: 0;
-  }
-
-  .queue-sep {
-    color: var(--text-muted);
-    margin: 0 0.2rem;
-    flex-shrink: 0;
+    /* Room for a six-digit PR number, so every title starts at the same x. */
+    min-width: 7ch;
   }
 
   .queue-title-text {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 1;
+    color: var(--text);
   }
+
+  /* p.86 — the horizontal form of the grouping rule: the gauge and the figures
+     are ONE reading ("how big is this?"), so the gap inside the cell (4px) is
+     strictly smaller than the gap to the neighbouring columns (8px). At equal
+     gaps the gauge read as belonging to the title it sat next to. */
+  .size-cell {
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: var(--space-1);
+    min-width: 15ch;
+  }
+
+  /* Compact "+adds −dels" chip — same color tokens as FileDiff's stat chips.
+     p.113: digits only compare at a glance when they are right-aligned, so the
+     additions and the deletions each get their own right-aligned measure
+     rather than the pair being right-aligned as one blob. */
+  .queue-size {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-1);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+  }
+
+  .queue-size .stat-add {
+    min-width: 5ch;
+    text-align: right;
+    color: var(--diff-add);
+  }
+
+  .queue-size .stat-del {
+    min-width: 6ch;
+    text-align: right;
+    color: var(--diff-del);
+  }
+
+  /* THE EFFORT GAUGE (p.30-31 — no screen presents everything at equal
+     emphasis). Fourteen rows at identical weight give the eye nothing to rank,
+     and the only ranking signal this component holds is churn, which it has
+     already fetched for the chip. The rail is always drawn so a small value
+     reads as small rather than as a missing measurement; the fill is this
+     row's share of the LARGEST diff in the queue, split by the add/delete
+     balance. Length carries the ranking, the +/− figures carry the exact
+     value, and colour carries neither on its own (p.146-147). */
+  .churn {
+    flex: 0 0 var(--space-6);
+    align-self: center;
+    display: flex;
+    height: var(--space-1);
+    border-radius: 2px;
+    background: var(--hairline);
+    overflow: hidden;
+  }
+
+  .churn-fill {
+    display: flex;
+    height: 100%;
+  }
+
+  .churn-add,
+  .churn-del {
+    flex-basis: 0;
+    height: 100%;
+  }
+
+  .churn-add { background: var(--diff-add); }
+  .churn-del { background: var(--diff-del); }
 
   .queue-time {
-    font-size: 0.78rem;
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
     color: var(--text-muted);
-    margin-left: 0.5rem;
-    flex-shrink: 0;
+    min-width: 8ch;
+    text-align: right;
   }
 
-  /* Compact "+adds −dels" chip — same color tokens as FileDiff's stat chips */
-  .queue-size {
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    margin-left: 0.5rem;
-    flex-shrink: 0;
-    white-space: nowrap;
+  /* Vertical padding matches .queue-link's so the row's hover band is one
+     even height; the left padding is 0 because the row gap already separates
+     this cell from the timestamp. */
+  .prepare-cell {
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    padding: var(--space-1) var(--space-2) var(--space-1) 0;
+    min-width: 8ch;
   }
 
-  .queue-size .stat-add { color: var(--diff-add); }
-  .queue-size .stat-del { color: var(--diff-del); }
-
-  /* Prepare-ahead per-row control — a quiet side affordance, same register as
-     the inflight-discard button; the status chips echo the queue-size chip. */
+  /* PREPARE, FOURTEEN TIMES OVER (p.52-53, p.30-31, p.39-40).
+     The same bordered button on every row is fourteen boxes competing with the
+     content they annotate, and the fix for a noisy screen is to de-emphasise
+     the secondary, not to shout louder. Its border also used --hairline, which
+     app.css reserves for DECORATIVE rims: 1.41:1 light / 1.31:1 dark, well
+     under the 3:1 a control boundary owes (D5). Both problems have one answer
+     — stop drawing a boundary and rank this as what it is, a link-styled
+     tertiary. The label stays permanently visible and permanently focusable;
+     only the underline waits for hover or focus (p.110). It sits on
+     --text-secondary, one ink tier ABOVE the --text-muted metadata beside it,
+     so it still reads as the actionable thing in the row. */
   .prepare-btn {
-    align-self: center;
     background: none;
-    border: 1px solid var(--hairline);
-    border-radius: 4px;
+    border: none;
+    padding: 0;
+    margin: 0;
     cursor: pointer;
     font-family: var(--font-ui);
-    font-size: 0.72rem;
-    color: var(--text-muted);
-    padding: 0.15rem 0.5rem;
-    flex-shrink: 0;
+    font-size: var(--text-xs);
+    font-weight: 400;
+    color: var(--text-secondary);
     white-space: nowrap;
-    transition: color 150ms, background 100ms;
+    border-radius: 3px;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-underline-offset: 3px;
+    transition: color 150ms, text-decoration-color 150ms;
   }
 
-  .prepare-btn:hover:not(:disabled) {
+  .prepare-btn:hover:not(:disabled),
+  .prepare-btn:focus-visible {
     color: var(--text);
-    background: var(--surface-raised);
+    text-decoration-color: currentColor;
   }
 
   .prepare-btn:disabled {
@@ -1026,21 +1335,17 @@
 
   .prepare-btn:focus-visible {
     outline: 2px solid var(--accent);
-    outline-offset: 1px;
+    outline-offset: 2px;
   }
 
   .prepare-btn.prepare-error {
     color: var(--legend-removed-color);
-    border-color: var(--legend-removed-color);
   }
 
   .prepare-status {
-    align-self: center;
     font-family: var(--font-mono);
-    font-size: 0.72rem;
-    flex-shrink: 0;
+    font-size: var(--text-xs);
     white-space: nowrap;
-    padding: 0.15rem 0.25rem;
   }
 
   .prepare-status.preparing {
@@ -1055,99 +1360,70 @@
     color: var(--text-muted);
   }
 
-  /* Recent reviews section */
-  .recent-reviews {
-    margin-top: 2.5rem;
-    text-align: left;
-    background: var(--surface);
-    border: 1px solid var(--hairline);
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-  }
-
-  .recent-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.5rem;
-  }
-
-  .recent-title {
-    font-size: 0.8125rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-muted);
-    margin: 0;
-  }
-
-  .clear-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    padding: 0.1rem 0.4rem;
-    border-radius: 4px;
-    transition: color 150ms;
-  }
-
-  .clear-btn:hover {
-    color: var(--text);
-    background: var(--surface-raised);
-  }
-
-  .recent-list {
+  /* ---------------------------------------------------------------------
+     Recent reviews / In-flight reviews. Same row idiom as the queue, one
+     column fewer: these lists are flat, so the trailing cells get the same
+     fixed measures and the same ink tiers.
+     --------------------------------------------------------------------- */
+  .recent-list,
+  .inflight-list {
     list-style: none;
     margin: 0;
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.2rem;
+    gap: var(--space-1);
   }
 
-  .recent-item {
-    display: flex;
-  }
-
-  .recent-link {
+  .recent-item,
+  .inflight-item {
     display: flex;
     align-items: baseline;
-    gap: 0;
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 0.9rem;
-    text-align: left;
-    padding: 0.3rem 0.5rem;
+    gap: var(--space-2);
     border-radius: 4px;
-    width: 100%;
-    color: var(--text);
     transition: background 100ms;
   }
 
-  .recent-link:hover {
+  .recent-item:hover,
+  .inflight-item:hover {
     background: var(--surface-raised);
+  }
+
+  .recent-link,
+  .inflight-link {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    text-align: left;
+    padding: var(--space-1) var(--space-2);
+    color: var(--text);
+  }
+
+  .recent-link:focus-visible,
+  .inflight-link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    border-radius: 4px;
   }
 
   .recent-icon {
     align-self: center;
     display: inline-flex;
-    margin-right: 0.45rem;
     color: var(--text-muted);
     flex-shrink: 0;
   }
 
   .recent-ref {
     font-family: var(--font-mono);
-    font-size: 0.83rem;
+    font-size: var(--text-xs);
     color: var(--text-muted);
-    flex-shrink: 0;
-  }
-
-  .recent-sep {
-    color: var(--text-muted);
-    margin: 0 0.2rem;
     flex-shrink: 0;
   }
 
@@ -1155,85 +1431,37 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 1; /* pushes the diff-size chip to the row's right edge */
-  }
-
-  /* In-flight reviews — same card register as queue/recent sections */
-  .inflight-section {
-    margin-top: 2.5rem;
-    text-align: left;
-    background: var(--surface);
-    border: 1px solid var(--hairline);
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-  }
-
-  .inflight-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.5rem;
-  }
-
-  .inflight-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-
-  .inflight-item {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-  }
-
-  .inflight-link {
-    display: flex;
-    align-items: baseline;
-    gap: 0;
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 0.9rem;
-    text-align: left;
-    padding: 0.3rem 0.5rem;
-    border-radius: 4px;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     color: var(--text);
-    transition: background 100ms;
-  }
-
-  .inflight-link:hover {
-    background: var(--surface-raised);
   }
 
   /* Count chip — colored like the other count chips (uses the add token). */
   .inflight-count {
     font-family: var(--font-mono);
-    font-size: 0.75rem;
-    margin-left: 0.5rem;
+    font-size: var(--text-xs);
     flex-shrink: 0;
     white-space: nowrap;
+    text-align: right;
     color: var(--diff-add);
   }
 
   .inflight-hint {
-    font-size: 0.72rem;
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
     color: var(--text-muted);
     font-style: italic;
-    margin-left: 0.5rem;
     flex-shrink: 0;
     white-space: nowrap;
   }
 
   .inflight-time {
-    font-size: 0.78rem;
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
     color: var(--text-muted);
-    margin-left: 0.5rem;
     flex-shrink: 0;
+    min-width: 8ch;
+    text-align: right;
   }
 
   /* Discard ✕ — a fixed square so the glyph centers regardless of the
@@ -1251,9 +1479,10 @@
     border: none;
     cursor: pointer;
     color: var(--text-muted);
-    font-size: 0.85rem;
+    font-size: var(--text-sm);
     line-height: 1;
     padding: 0;
+    margin-right: var(--space-1);
     border-radius: 4px;
     flex-shrink: 0;
     transition: color 150ms, background 100ms;
@@ -1272,30 +1501,88 @@
   /* Discard confirmation dialog — base dialog styles come from app.css */
   .discard-actions {
     display: flex;
-    gap: 0.5rem;
-    margin-top: 1rem;
+    gap: var(--space-2);
+    margin-top: var(--space-4);
   }
 
   .discard-confirm {
-    padding: 0.4rem 1rem;
+    padding: var(--space-2) var(--space-4);
     border: 1px solid var(--legend-removed-color);
     border-radius: 6px;
     background: var(--legend-removed-color);
-    color: #0a1410;
+    /* WAS the literal #0a1410, which measures 3.42:1 on the LIGHT theme's
+       --legend-removed-color (#cb2431) — a WCAG failure on a destructive
+       confirm button, the one control that must be read before it is pressed.
+       --on-accent is the app's existing "ink that goes ON a saturated fill"
+       token and is the only declared token that carries this fill in both
+       themes: 5.47:1 light, 8.37:1 dark. No new palette value. */
+    color: var(--on-accent);
     font-family: var(--font-ui);
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
     font-weight: 600;
     cursor: pointer;
   }
 
   .discard-cancel {
-    padding: 0.4rem 1rem;
+    padding: var(--space-2) var(--space-4);
     border: 1px solid var(--hairline);
     border-radius: 6px;
     background: none;
     color: var(--text);
     font-family: var(--font-ui);
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
     cursor: pointer;
+  }
+
+  /* ---------------------------------------------------------------------
+     NARROW: THE TITLE GETS ITS OWN LINE.
+     Five reserved columns and a legible title cannot share 400px. Measured:
+     with the columns holding their measures the title cell shrank to 0px and
+     the row showed everything about the PR except which PR it was. So below
+     40rem the row becomes two lines — the title on the first, full width
+     (~300px at 400px, against 94-168px before this change), and the ref,
+     gauge, figures and timestamp on the second, where they still hold their
+     measures and still line up across rows. Nothing is dropped and nothing
+     overflows; one row simply costs two lines, which is the honest trade at
+     that width (p.68-71 — split into lines rather than cram).
+     --------------------------------------------------------------------- */
+  @media (max-width: 40rem) {
+    .queue-item,
+    .recent-item,
+    .inflight-item {
+      align-items: center;
+    }
+
+    .queue-link,
+    .recent-link,
+    .inflight-link {
+      flex-wrap: wrap;
+      row-gap: var(--space-1);
+    }
+
+    .queue-title-text,
+    .recent-title-text {
+      flex: 1 0 100%;
+      order: -1;
+    }
+
+    /* An in-flight row whose PR is not in history has no title to show; it must
+       not still pay for the line (C5's sibling — reserve space for what lands,
+       never for what cannot). */
+    .recent-title-text:empty {
+      display: none;
+    }
+
+    /* The reserved measures exist to align FIVE columns across a desktop
+       table. On the meta line they only force a third line (measured), so they
+       stand down and the cells pack. The ref keeps its measure because it is
+       the line's left edge and still aligns row to row, and the +/− figures
+       keep theirs inside the chip, so the digits still compare (p.113). */
+    .size-cell,
+    .queue-time,
+    .prepare-cell,
+    .inflight-time {
+      min-width: 0;
+    }
   }
 </style>
