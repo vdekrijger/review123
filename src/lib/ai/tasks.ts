@@ -15,6 +15,16 @@ import type { AiTaskId } from '../settings/settings'
 import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS, INTENT_MAX_ITEMS, OUTCOMES_MAX_ITEMS, STANDING_RULES_MAX, STANDING_RULE_EVIDENCE_MAX, STANDING_RULE_EXCERPT_MAX } from './schemas'
 
+// PROMPT_VERSIONS fixVerify 1 (verify the agent's fix, once): a NEW post-fix
+// prompt (src/lib/ai/fixVerify.ts buildFixVerifyPrompt) that re-reads the
+// coding agent's own diff. The persona that RAISED each finding judges whether
+// its complaint still stands, and the same call asks — as a separate job — for
+// problems THE FIX ITSELF introduced, which nothing else in the system looks
+// for. Deliberately a new entry rather than a bump of `skills`: it is a new
+// prompt over a new input (a commit patch, not the PR diff), and overloading
+// the skills entry would cold-invalidate every cached reviewer result for a
+// prompt change that never touched them. Its cache is keyed on the commits'
+// shas, so re-opening the panel re-spends nothing.
 // PROMPT_VERSIONS standingRules 1 (standing-rules knowledge base): a NEW
 // settings-time prompt (standingRulesPrompt) that distils the user's OWN past
 // review behaviour — their review comments, their dismissal ledger, their own
@@ -141,7 +151,7 @@ import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNI
  * version so the implementation pass's cache stays warm across tests-prompt
  * edits and vice versa.
  */
-export type PromptVersionedTaskId = AiTaskId | 'convergence' | 'skillsTests' | 'standingRules'
+export type PromptVersionedTaskId = AiTaskId | 'convergence' | 'skillsTests' | 'standingRules' | 'fixVerify'
 
 /**
  * Per-task prompt versions (H6 — cache-invalidation hygiene).
@@ -183,6 +193,7 @@ export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   convergence: 26,
   simplify: 1,
   standingRules: 1,
+  fixVerify: 1,
 }
 
 /** The prompt version that keys `task`'s cache entries. */

@@ -60,6 +60,25 @@
   import { BRIDGE_START_COMMAND } from '../lib/bridge/install'
   import { MAX_FIX_FINDINGS, type BridgeFixFinding, type BridgeFixResponse } from '../lib/bridge/protocol'
   import { track } from '../lib/analytics/analytics'
+  import {
+    capPatchRows,
+    parseCommitPatch,
+    patchIsEmpty,
+    patchRowCount,
+    type ParsedPatch,
+  } from '../lib/diff/commitPatch'
+  import { verifyAgentFix } from '../lib/ai/fixVerifyRun'
+  import {
+    FIX_VERIFY_EVIDENCE_CAVEAT,
+    FIX_VERIFY_NEW_PROBLEM_HEADING,
+    describeFixFinding,
+    describeNewProblems,
+    describeVerificationUnder,
+    fixOutcomeLabel,
+    stillOpenFindingIds,
+    type FixFindingVerification,
+    type FixVerificationReport,
+  } from '../lib/ai/fixVerify'
 
   /** One eligible finding, as the parent knows it. */
   export interface FixCandidateEntry {
@@ -239,6 +258,107 @@
   /** Per-change verdict. Absent = not yet judged; the user must choose. */
   let verdicts = $state<Record<string, 'approved' | 'rejected'>>({})
 
+  // ---- Verification -------------------------------------------------------
+  //
+  // ONE re-read of what the agent produced, never a loop. The reviewer that
+  // raised each finding is asked whether its complaint still stands, and the
+  // same call asks every polled model for problems THE FIX introduced — the
+  // output nothing else in this system looks for.
+  //
+  // It runs automatically when a fix run lands, because "did that work?" is the
+  // question the user already has at that moment, and it is cached on the
+  // commit shas so re-opening the panel re-spends nothing.
+  //
+  // IT NEVER BLOCKS THE VERDICT. Approve and Reject work while it is still
+  // running and work if it fails outright — the human's judgment is the
+  // authority here, and a check that could hold it hostage would have the
+  // relationship backwards.
+  type VerifyState =
+    | { status: 'idle' }
+    | { status: 'running' }
+    | { status: 'done'; report: FixVerificationReport }
+
+  let verify = $state<VerifyState>({ status: 'idle' })
+
+  const verification = $derived(verify.status === 'done' ? verify.report : null)
+
+  function verificationFor(findingId: string): FixFindingVerification | null {
+    return verification?.byFinding.find((f) => f.findingId === findingId) ?? null
+  }
+
+  /** The findings this run leaves open — what another round would be FOR. */
+  const stillOpen = $derived(verification === null ? [] : stillOpenFindingIds(verification))
+
+  async function runVerification(response: BridgeFixResponse): Promise<void> {
+    verify = { status: 'running' }
+    try {
+      const report = await verifyAgentFix(
+        headSha,
+        response.changes.map((c) => ({
+          findingId: c.findingId,
+          commit: c.commit,
+          intent: c.intent,
+          diff: c.diff,
+          truncated: c.truncated,
+        })),
+        candidates.map((c) => ({
+          key: c.key,
+          skillName: c.skillName,
+          path: c.path,
+          line: c.line,
+          body: c.body,
+          suggestedFix: c.suggestedFix,
+        })),
+      )
+      verify = { status: 'done', report }
+    } catch {
+      // A thrown pass is reported as a pass that read nothing, which every
+      // per-finding row then states plainly. Swallowing it into `idle` would
+      // leave the panel silent, and silence here reads as "checked, clean".
+      verify = {
+        status: 'done',
+        report: {
+          byFinding: response.changes.map((c) => ({
+            findingId: c.findingId,
+            persona: reviewerFor(c.findingId),
+            outcome: 'not-re-read' as const,
+            votes: [],
+            polledModels: 0,
+            agreeing: 0,
+          })),
+          newProblems: [],
+          witnesses: [],
+          calls: 0,
+          failedCalls: 0,
+        },
+      }
+    }
+  }
+
+  // ---- Rendering the agent's actual change --------------------------------
+  // Parsed ONCE per run, not per re-render: a commit patch can be 256KB and
+  // this is read inside an each block.
+  const parsedDiffs = $derived.by(() => {
+    const out = new Map<string, ParsedPatch>()
+    if (run.status === 'done') {
+      for (const c of run.response.changes) out.set(c.findingId, parseCommitPatch(c.diff))
+    }
+    return out
+  })
+
+  /** Changes whose full diff the user has asked to draw past the render cap. */
+  let expanded = $state<Set<string>>(new Set())
+
+  function expand(findingId: string): void {
+    const next = new Set(expanded)
+    next.add(findingId)
+    expanded = next
+  }
+
+  function diffFor(findingId: string): ParsedPatch {
+    return parsedDiffs.get(findingId) ?? { files: [], additions: 0, deletions: 0 }
+  }
+
   const approvedChanges = $derived(
     run.status === 'done' ? run.response.changes.filter((c) => verdicts[c.findingId] === 'approved') : [],
   )
@@ -271,6 +391,8 @@
     if (chosen.length === 0) return
 
     verdicts = {}
+    verify = { status: 'idle' }
+    expanded = new Set()
     run = { status: 'running', count: chosen.length }
     abort = new AbortController()
 
@@ -313,6 +435,13 @@
     run = outcome.ok
       ? { status: 'done', response: outcome.response }
       : { status: 'failed', failure: outcome.failure }
+
+    // Close the loop: look once at what came back. Only when there IS a commit
+    // to look at — a run that produced nothing but skips has no diff to re-read
+    // and must not spend a model call saying so.
+    if (outcome.ok && outcome.response.changes.length > 0) {
+      void runVerification(outcome.response)
+    }
   }
 
   /**
@@ -337,11 +466,31 @@
     abort?.abort()
     abort = null
     run = { status: 'idle' }
+    verify = { status: 'idle' }
   }
 
   function reset(): void {
     run = { status: 'idle' }
     verdicts = {}
+    verify = { status: 'idle' }
+    expanded = new Set()
+  }
+
+  /**
+   * Send the findings this run left OPEN back for another round.
+   *
+   * THE USER'S CALL, ONE CLICK — never automatic. The inner loop in
+   * bridge/src/fix.ts terminates on the TESTS, an oracle with no opinion;
+   * looping out here on FINDINGS would terminate on reviewer judgment, which
+   * this repo has measured returning 1/3 and 3/3 on the same defect in
+   * identical code. A fixer optimising against its own reviewer converges on
+   * text that satisfies the reviewer, not on correct code. So the machine
+   * reports, and the person decides whether it is worth another turn.
+   */
+  function sendStillOpen(): void {
+    if (stillOpen.length === 0 || run.status === 'running') return
+    void dispatch(stillOpen)
+    sectionEl?.scrollIntoView({ block: 'nearest' })
   }
 
   function setVerdict(findingId: string, verdict: 'approved' | 'rejected'): void {
@@ -574,7 +723,35 @@
             {describeFixStop(run.response.stopReason, run.response.rounds)}
           </p>
 
+          <!-- THE EVIDENCE CAVEAT, stated ONCE and before any result — it is a
+               property of the pass, not of each row, and repeating it per
+               finding would turn the thing that must be read into wallpaper.
+               It says what the re-read is worth AND that this is not the code
+               review: a reviewer going quiet is not a person having read it. -->
+          {#if verify.status !== 'idle'}
+            <div class="afx-verify-head" data-testid="agent-fix-verify-head">
+              <p class="afx-caveat">{FIX_VERIFY_EVIDENCE_CAVEAT}</p>
+              {#if verification !== null && verification.witnesses.length > 0}
+                <p class="afx-note" data-testid="agent-fix-witnesses">
+                  Who looked: {verification.witnesses.join(', ')}.
+                  {#if verification.failedCalls > 0}
+                    {verification.failedCalls} of {verification.calls} calls failed and are not counted.
+                  {/if}
+                </p>
+              {:else if verification !== null}
+                <p class="afx-note" data-testid="agent-fix-witnesses">
+                  No model answered, so nothing below was re-read.
+                </p>
+              {/if}
+            </div>
+          {/if}
+
           {#each run.response.changes as change (change.findingId)}
+            {@const parsed = diffFor(change.findingId)}
+            {@const capped = capPatchRows(
+              parsed,
+              expanded.has(change.findingId) ? Number.MAX_SAFE_INTEGER : undefined,
+            )}
             <article
               class="afx-change"
               data-testid="agent-fix-result"
@@ -616,10 +793,106 @@
                 </details>
               {/if}
 
-              <details class="afx-diff" data-testid="agent-fix-diff">
-                <summary>Show the diff{change.truncated ? ' (truncated)' : ''}</summary>
-                <pre>{change.diff}</pre>
-              </details>
+              <!-- WHAT THE RE-READ OBSERVED. Never a green check that says
+                   "fixed": the chip and the sentence both report a REVIEWER
+                   ("did not raise it again"), and the evidence caveat above
+                   the results says why that is not the same claim. -->
+              {#if verify.status === 'running'}
+                <p class="afx-verify afx-verify-pending" data-testid="agent-fix-verify" data-outcome="running">
+                  <Spinner />
+                  <span>{reviewerFor(change.findingId)} is re-reading this against the diff…</span>
+                </p>
+              {:else if verificationFor(change.findingId)}
+                {@const v = verificationFor(change.findingId)!}
+                <p
+                  class="afx-verify afx-verify-{v.outcome}"
+                  data-testid="agent-fix-verify"
+                  data-outcome={v.outcome}
+                >
+                  <span class="afx-verify-chip">{fixOutcomeLabel(v.outcome)}</span>
+                  <span class="afx-verify-text">{describeFixFinding(v)}</span>
+                </p>
+                <!-- DELIVERABLE 3: the loop's own verdict is not negotiable.
+                     round-cap means the commit came back RED; no-progress and
+                     repeat-diff mean stuck or oscillating. A quiet re-read does
+                     not get to soften any of them. -->
+                {#if describeVerificationUnder(change.stopReason) !== null}
+                  <p class="afx-warn" data-testid="agent-fix-verify-under" data-stop={change.stopReason}>
+                    {describeVerificationUnder(change.stopReason)}
+                  </p>
+                {/if}
+              {/if}
+
+              <!-- THE CHANGE ITSELF. The user asked to see it, not a summary of
+                   it, so it is drawn rather than hidden behind a disclosure. -->
+              <div class="afx-diff" data-testid="agent-fix-diff" data-truncated={change.truncated}>
+                {#if change.truncated}
+                  <!-- The BRIDGE's byte cap: part of this diff never arrived.
+                       Said before the rows, so an amputated diff is never read
+                       as a whole one. -->
+                  <p class="afx-warn" data-testid="agent-fix-diff-truncated">
+                    This diff was too large to send whole, so the bridge cut it. What follows is the
+                    beginning of the change, not all of it — read the commit itself before taking it.
+                  </p>
+                {/if}
+
+                {#if patchIsEmpty(parsed)}
+                  <p class="afx-note" data-testid="agent-fix-diff-empty">
+                    The commit carries no textual diff to show{change.files.length > 0
+                      ? ' for these files'
+                      : ''}.
+                  </p>
+                {:else}
+                  {#each capped.files as file, i (file.path + i)}
+                    <div class="afx-file">
+                      <div class="afx-file-head">
+                        <code class="afx-file-path">
+                          {#if file.oldPath !== null}{file.oldPath} &rarr; {/if}{file.path || 'unnamed file'}
+                        </code>
+                        <span class="afx-file-status">{file.status}</span>
+                        <span class="afx-file-stat afx-stat-add">+{file.additions}</span>
+                        <span class="afx-file-stat afx-stat-del">&minus;{file.deletions}</span>
+                      </div>
+                      {#if file.binary}
+                        <p class="afx-note">Binary file — git produced no textual diff.</p>
+                      {:else}
+                        {#each file.hunks as hunk, h (h)}
+                          <div class="afx-hunk-head"><code>{hunk.header}</code></div>
+                          {#each hunk.lines as line, l (l)}
+                            <div class="afx-row afx-row-{line.kind}">
+                              <span class="afx-ln">{line.oldLine ?? ''}</span>
+                              <span class="afx-ln">{line.newLine ?? ''}</span>
+                              <span class="afx-mark" aria-hidden="true"
+                                >{line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : ' '}</span
+                              >
+                              <code class="afx-code">{line.text}</code>
+                            </div>
+                          {/each}
+                        {/each}
+                      {/if}
+                    </div>
+                  {/each}
+
+                  {#if capped.hidden > 0}
+                    <!-- The RENDER cap, which is a different thing from the
+                         bridge's byte cap above and says so: this diff arrived
+                         whole, it is simply too long to draw at once. -->
+                    <div class="afx-actions">
+                      <button
+                        type="button"
+                        class="afx-link"
+                        data-testid="agent-fix-diff-expand"
+                        onclick={() => expand(change.findingId)}
+                      >
+                        Show the remaining {capped.hidden} lines
+                      </button>
+                      <span class="afx-note">
+                        All {patchRowCount(parsed)} lines arrived; only the first are drawn.
+                      </span>
+                    </div>
+                  {/if}
+                {/if}
+              </div>
 
               <div class="afx-verdict">
                 <button
@@ -658,6 +931,55 @@
             <p class="afx-empty">The agent produced no changes and reported no reasons.</p>
           {/if}
 
+          <!-- THE MOST VALUABLE OUTPUT HERE: problems the fix ITSELF introduced.
+               Nothing else in the system looks for these — the fix loop
+               terminates on the tests, and the tests only know what they
+               already covered. -->
+          {#if verification !== null && verify.status === 'done'}
+            <section class="afx-new" data-testid="agent-fix-new-problems" data-count={verification.newProblems.length}>
+              <h4 class="afx-new-title">{FIX_VERIFY_NEW_PROBLEM_HEADING}</h4>
+              <p class="afx-note">
+                {describeNewProblems(verification.newProblems.length, verification.calls - verification.failedCalls)}
+              </p>
+              {#each verification.newProblems as problem (problem.key)}
+                <article class="afx-new-item" data-testid="agent-fix-new-problem" data-severity={problem.severity}>
+                  <header class="afx-change-head">
+                    <span class="afx-sev afx-sev-{problem.severity}">{problem.severity}</span>
+                    <span class="afx-loc">{problem.path}{problem.line === null ? '' : `:${problem.line}`}</span>
+                    <span class="afx-new-chip">
+                      raised by {problem.raisedBy.length} of {problem.polledModels}
+                    </span>
+                  </header>
+                  <p class="afx-intent">{problem.body}</p>
+                  {#if problem.suggestedFix}
+                    <p class="afx-note">{problem.suggestedFix}</p>
+                  {/if}
+                  <p class="afx-note">{problem.raisedBy.join(', ')}</p>
+                </article>
+              {/each}
+            </section>
+          {/if}
+
+          <!-- ANOTHER ROUND IS A CHOICE, NOT A LOOP. One click, and it says
+               exactly what it would send. -->
+          {#if stillOpen.length > 0}
+            <div class="afx-actions" data-testid="agent-fix-still-open">
+              <button
+                type="button"
+                class="afx-send"
+                data-testid="agent-fix-send-open"
+                disabled={run.status !== 'done'}
+                onclick={sendStillOpen}
+              >
+                Send the {stillOpen.length} still-open {stillOpen.length === 1 ? 'finding' : 'findings'} back to {readiness.cli}
+              </button>
+              <span class="afx-note">
+                Starts a fresh run over just those, from this pull request's head again. Your approvals
+                above are cleared, and the commits already made stay on the scratch branch.
+              </span>
+            </div>
+          {/if}
+
           <footer class="afx-footer">
             {#if approvedChanges.length > 0}
               <p class="afx-apply-note">
@@ -687,6 +1009,211 @@
 {/if}
 
 <style>
+  /* ── The verification block ───────────────────────────────────────────────
+     Deliberately quiet. There is no green, no check mark and no success
+     colour anywhere in here: a finding going quiet is an observation, and
+     painting it with the palette's "good" signal would say the thing the
+     words are careful not to. Only the two states that ask for ATTENTION —
+     still raised, and a problem the fix introduced — are tinted at all. */
+  .afx-verify {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-xs);
+  }
+
+  .afx-verify-chip {
+    flex: none;
+    padding: 0 var(--space-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--space-1);
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  /* Still raised and could-not-tell are the states that want the eye. */
+  .afx-verify-still-standing .afx-verify-chip,
+  .afx-verify-could-not-tell .afx-verify-chip {
+    border-color: var(--legend-removed-border);
+    background: var(--legend-removed-bg);
+    color: var(--legend-removed-color);
+  }
+
+  .afx-verify-text {
+    flex: 1 1 16rem;
+    color: var(--text-secondary);
+  }
+
+  .afx-verify-pending {
+    color: var(--text-muted);
+  }
+
+  .afx-verify-head {
+    margin-top: var(--space-2);
+    padding: var(--space-2);
+    border: 1px solid var(--hairline);
+    border-radius: var(--space-1);
+    background: var(--surface);
+  }
+
+  .afx-caveat {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+  }
+
+  .afx-new {
+    margin-top: var(--space-3);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--hairline);
+  }
+
+  .afx-new-title {
+    margin: 0 0 var(--space-1);
+    font-size: var(--text-xs);
+    font-weight: 600;
+  }
+
+  .afx-new-item {
+    margin-top: var(--space-2);
+    padding: var(--space-2);
+    border: 1px solid var(--legend-removed-border);
+    border-radius: var(--space-1);
+    background: var(--surface);
+  }
+
+  .afx-new-chip {
+    padding: 0 var(--space-1);
+    border-radius: var(--space-1);
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+  }
+
+  /* ── The change itself ────────────────────────────────────────────────────
+     Painted from the SAME tokens as the real diff viewer's theme
+     (src/components/diff-view-theme.css), so the two surfaces read as one
+     system, without dragging in a renderer that needs whole files the bridge
+     never sends. */
+  .afx-file {
+    margin-top: var(--space-2);
+    border: 1px solid var(--hairline);
+    border-radius: var(--space-1);
+    overflow: hidden;
+  }
+
+  .afx-file-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    background: var(--surface-sunken);
+    border-bottom: 1px solid var(--hairline);
+    font-size: var(--text-xs);
+  }
+
+  .afx-file-path {
+    flex: 1 1 12rem;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-weight: 600;
+  }
+
+  .afx-file-status {
+    color: var(--text-muted);
+  }
+
+  .afx-file-stat {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .afx-stat-add {
+    color: var(--legend-added-color);
+  }
+
+  .afx-stat-del {
+    color: var(--legend-removed-color);
+  }
+
+  .afx-hunk-head {
+    padding: var(--space-1) var(--space-2);
+    background: var(--surface-sunken);
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    overflow-x: auto;
+  }
+
+  .afx-row {
+    display: flex;
+    align-items: flex-start;
+    background: var(--surface);
+    font-size: var(--text-xs);
+    line-height: 1.5;
+  }
+
+  .afx-row-add {
+    background: var(--legend-added-bg);
+  }
+
+  .afx-row-del {
+    background: var(--legend-removed-bg);
+  }
+
+  .afx-row-meta {
+    background: var(--surface-sunken);
+    color: var(--text-muted);
+  }
+
+  .afx-ln {
+    flex: none;
+    width: 3.5rem;
+    padding: 0 var(--space-1);
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+  }
+
+  .afx-row-add .afx-ln {
+    background: var(--diff-added-emphasis);
+  }
+
+  .afx-row-del .afx-ln {
+    background: var(--diff-removed-emphasis);
+  }
+
+  .afx-mark {
+    flex: none;
+    width: var(--space-4);
+    padding-left: var(--space-1);
+    color: var(--text-secondary);
+    user-select: none;
+  }
+
+  .afx-code {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding-right: var(--space-2);
+    color: var(--syntax-ink);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    tab-size: 2;
+  }
+
+  /* Narrow windows: the gutter is the first thing worth its space back. */
+  @media (max-width: 30rem) {
+    .afx-ln {
+      width: 2.25rem;
+    }
+  }
+
   .agent-fix {
     border: 1px solid var(--border-subtle);
     border-radius: 8px;
@@ -990,7 +1517,6 @@
     color: var(--text-muted);
   }
 
-  .afx-diff pre,
   .afx-test-output pre {
     margin: 0.35rem 0 0;
     padding: 0.4rem 0.5rem;
@@ -1004,7 +1530,10 @@
     white-space: pre;
   }
 
-  .afx-diff summary,
+  .afx-diff {
+    margin-top: var(--space-2);
+  }
+
   .afx-test-output summary {
     cursor: pointer;
     font-size: 0.76rem;

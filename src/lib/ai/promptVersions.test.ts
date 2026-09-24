@@ -66,6 +66,7 @@ describe('PROMPT_VERSIONS map', () => {
         'convergence',
         'simplify',
         'standingRules',
+        'fixVerify',
       ].sort(),
     )
   })
@@ -82,12 +83,13 @@ describe('PROMPT_VERSIONS map', () => {
     }
   })
 
-  it('post-migration tasks start at ≥1 (simplify, intent, outcomes, skillsTests and standingRules have their own version history)', () => {
+  it('post-migration tasks start at ≥1 (simplify, intent, outcomes, skillsTests, standingRules and fixVerify have their own version history)', () => {
     expect(PROMPT_VERSIONS.simplify).toBeGreaterThanOrEqual(1)
     expect(PROMPT_VERSIONS.intent).toBeGreaterThanOrEqual(1)
     expect(PROMPT_VERSIONS.outcomes).toBeGreaterThanOrEqual(1)
     expect(PROMPT_VERSIONS.skillsTests).toBeGreaterThanOrEqual(1)
     expect(PROMPT_VERSIONS.standingRules).toBeGreaterThanOrEqual(1)
+    expect(PROMPT_VERSIONS.fixVerify).toBeGreaterThanOrEqual(1)
   })
 
   it('the standing-rules distillation is a NEW entry, never a bump of an existing one', () => {

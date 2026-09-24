@@ -57,7 +57,7 @@ function makeCtx(text = 'PR context text here'): PackedContext {
  * version forward). Tasks added AFTER the migration (e.g. `simplify`, starting
  * its own history at 1) never lived through those shared eras and are excluded.
  */
-const POST_MIGRATION_TASKS = new Set(['simplify', 'intent', 'outcomes', 'skillsTests', 'standingRules'])
+const POST_MIGRATION_TASKS = new Set(['simplify', 'intent', 'outcomes', 'skillsTests', 'standingRules', 'fixVerify'])
 const MIN_PROMPT_VERSION = Math.min(
   ...Object.entries(PROMPT_VERSIONS)
     .filter(([task]) => !POST_MIGRATION_TASKS.has(task))
