@@ -17,16 +17,25 @@
    * closes, focus is moved into the popover on open, and focus leaving the
    * popover closes it.
    *
-   * Tier 2 adds an on-demand "In repo" section: a [Search repo] button (never
-   * automatic — the code-search API allows ~10 searches/min) that finds call
-   * points OUTSIDE the PR's files via lib/symbols/repoSearch. Results are
-   * NON-clickable (those files aren't in the diff view) with a copyable path;
-   * a repo-found definition upgrades the "not in the changed files" state.
-   * The section only renders when the provider supports code search
-   * (onSearchRepo non-null — capability by method presence).
+   * Tier 2 adds an "In repo" section that finds call points OUTSIDE the PR's
+   * files via lib/symbols/repoSearch. Results are NON-clickable (those files
+   * aren't in the diff view) with a copyable path; a repo-found definition
+   * upgrades the "not in the changed files" state. The section only renders
+   * when repo search is available at all (onSearchRepo non-null).
+   *
+   * WHEN IT RUNS ITSELF. The search used to be strictly on-demand behind a
+   * [Search repo] button, for one reason: the provider's code-search API
+   * allows ~10 calls/min, so spending one had to be the reader's decision. A
+   * grounded local bridge has no such budget — it greps a checked-out tree —
+   * so when repoSearchIsFree() says this PR's search costs nothing, the
+   * popover resolves the definition ON OPEN and shows the first repo-found
+   * one already expanded. Someone who clicked a type wants to READ it, not to
+   * click twice more for the privilege. Provider-only reviews keep the button
+   * exactly as before, and a failed auto-search falls back to it.
    */
   import type { SymbolDefinition, SymbolReference, DiffSide } from '../lib/symbols/symbolIndex'
-  import type { RepoSearchOutcome } from '../lib/symbols/repoSearch'
+  import { untrack } from 'svelte'
+  import { repoSearchIsFree, type RepoSearchOutcome } from '../lib/symbols/repoSearch'
   import { peekDefinition, type DefinitionPeek } from '../lib/symbols/definitionPeek'
   import { symbolSourceFor } from '../lib/symbols/symbolSources'
   import { highlightSnippet, snippetLangForFilename } from '../lib/diff/highlightSnippet'
@@ -43,9 +52,12 @@
     onJump: (file: string, line: number, side: DiffSide) => void
     onClose: () => void
     /**
-     * Runs the repo-wide search for this symbol (Tier 2). null → the provider
-     * has no code search (or no head SHA is known) and the "In repo" section
-     * is omitted entirely.
+     * Runs the repo-wide search for this symbol (Tier 2). null → neither the
+     * provider's code search nor a local bridge can answer (or no head SHA is
+     * known) and the "In repo" section is omitted entirely.
+     *
+     * Whether this runs on open or behind the button is NOT decided here: the
+     * popover asks repoSearchIsFree() itself, so FileDiff needs no new prop.
      */
     onSearchRepo?: (() => Promise<RepoSearchOutcome>) | null
   }
@@ -125,11 +137,21 @@
   let repoState = $state<RepoPhase>({ phase: 'idle' })
 
   // Reset when the popover is retargeted to another symbol without unmount
-  // (clicking a different identifier replaces the props, not the component).
+  // (clicking a different identifier replaces the props, not the component),
+  // then resolve the definition straight away when that costs nothing.
+  //
+  // untrack is load-bearing: runRepoSearch READS repoState (its own re-entry
+  // guard) and dialogEl, while this effect WRITES repoState. Tracked, that is
+  // a loop — write, invalidate, reset, fire again. The dependency that should
+  // re-run it is `symbol` and nothing else, which is what the read above the
+  // untrack block registers.
   $effect(() => {
     void symbol
-    repoState = { phase: 'idle' }
-    expandedPeeks = new Set()
+    untrack(() => {
+      repoState = { phase: 'idle' }
+      expandedPeeks = new Set()
+      if (onSearchRepo && repoSearchIsFree()) void runRepoSearch()
+    })
   })
 
   async function runRepoSearch() {
@@ -146,6 +168,13 @@
     // Drop a stale result if the popover was retargeted mid-flight.
     if (symbol !== forSymbol) return
     repoState = { phase: 'done', outcome }
+    // Show the body, not a link to the body. The reader clicked a type to
+    // understand a shape, so the FIRST repo-found definition opens expanded;
+    // any further ones stay collapsed, so the popover does not turn into a
+    // wall of code. Peeks the reader opened by hand are left open.
+    if (outcome.ok && outcome.definitions.length > 0) {
+      expandedPeeks = new Set([...expandedPeeks, peekKey(outcome.definitions[0], 'repo')])
+    }
   }
 
   const repoOutcome = $derived(repoState.phase === 'done' ? repoState.outcome : null)
@@ -308,6 +337,12 @@
           <span class="loc" title={NOT_IN_DIFF_HINT}>{def.file}:{def.line} <span class="repo-tag">repo</span></span>
         </div>
       {/each}
+    {:else if repoState.phase === 'loading'}
+      <!-- A search is in flight and might yet answer this. Saying "not in the
+           changed files" now would be a verdict we are about to retract, and
+           the popover is anchored to a click point — so hold a line of the
+           same height instead of letting the answer flip under the cursor. -->
+      <p class="def-resolving">Looking up the definition…</p>
     {:else}
       <p class="not-found">Definition not in the changed files of this PR.</p>
     {/if}
@@ -369,7 +404,16 @@
             {/each}
           </div>
         {/if}
-        <p class="repo-footnote">Repo search uses the default branch index; results re-checked at this PR's head.</p>
+        <!-- Provenance, and it differs by source: the provider's index covers
+             the DEFAULT branch (hence the head re-check), while a local search
+             greps the checked-out tree at this PR's head and has no such gap.
+             Claiming the default-branch caveat for a local search would be a
+             fabricated hedge. -->
+        {#if repoOk.source === 'local'}
+          <p class="repo-footnote">Searched your local checkout at this PR's head.</p>
+        {:else}
+          <p class="repo-footnote">Repo search uses the default branch index; results re-checked at this PR's head.</p>
+        {/if}
       {:else}
         {#if repoError}
           <p class="repo-error" role="alert">{repoError}</p>
@@ -593,6 +637,14 @@
   .loc.jump:hover { text-decoration-style: solid; }
 
   .not-found {
+    margin: 0;
+    font-style: italic;
+    color: var(--text-muted);
+  }
+
+  /* Same box as .not-found on purpose — the line it stands in for while a
+     search is in flight, so resolving a definition does not jog the layout. */
+  .def-resolving {
     margin: 0;
     font-style: italic;
     color: var(--text-muted);

@@ -20,35 +20,34 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
 
 /**
- * Extensions grep is expected to read as text. Deliberately an allowlist:
- * a genuinely binary asset (.wasm, .png) added under src/ later must not make
- * this test fail — only files a human greps for identifiers need to qualify.
+ * Every text source under src/, read through Vite's `?raw` — the same idiom
+ * scaleRatchet.test.ts uses, so no fs access and no @types/node.
+ *
+ * The extension list is deliberately an ALLOWLIST: a genuinely binary asset
+ * (.wasm, .png) added under src/ later must not fail this test — only files a
+ * human greps for identifiers need to qualify. The patterns must be string
+ * literals (Vite's transform requirement).
  */
-const TEXT_EXTENSIONS = ['.ts', '.tsx', '.js', '.mjs', '.svelte', '.css', '.json', '.md', '.html']
-
-function textFilesUnder(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name)
-    if (entry.isDirectory()) textFilesUnder(path, out)
-    else if (TEXT_EXTENSIONS.some((ext) => entry.name.endsWith(ext))) out.push(path)
-  }
-  return out
-}
+const rawSources = import.meta.glob<string>(
+  ['/src/**/*.ts', '/src/**/*.svelte', '/src/**/*.css', '/src/**/*.json', '/src/**/*.md', '/src/**/*.html'],
+  { query: '?raw', import: 'default', eager: true },
+)
 
 describe('source hygiene — no NUL bytes under src/', () => {
   it('finds source files to check at all (guards against a silently empty scan)', () => {
     // A guard that scans nothing passes forever. Anchor it on a floor well
     // below the real count so it never becomes a churn magnet.
-    expect(textFilesUnder('src').length).toBeGreaterThan(100)
+    expect(Object.keys(rawSources).length).toBeGreaterThan(100)
   })
 
   it('has no source file containing a 0x00 byte (grep must never call one binary)', () => {
-    // Raw bytes, NOT a decoded string: the point is what grep sees on disk.
-    const offenders = textFilesUnder('src').filter((path) => readFileSync(path).includes(0))
+    // A raw 0x00 on disk is valid UTF-8 (U+0000) and survives the decode, so
+    // this sees exactly what makes grep give up on a file.
+    const offenders = Object.entries(rawSources)
+      .filter(([, text]) => text.includes('\0'))
+      .map(([path]) => path)
     expect(offenders).toEqual([])
   })
 })

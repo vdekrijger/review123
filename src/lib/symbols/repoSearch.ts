@@ -91,6 +91,16 @@ export type RepoSearchOutcome =
        * hand-built outcomes (tests, older callers) stay valid.
        */
       contentsByPath?: ReadonlyMap<string, string>
+      /**
+       * Which source produced the CANDIDATE PATHS — the step the UI's
+       * provenance footnote is about. 'provider' carries the default-branch
+       * caveat (its index is not the PR's head, which is why step 2 re-checks);
+       * 'local' greped the checked-out tree AT the head and carries none.
+       * A mid-search fallback reports 'provider', because the caveat then
+       * applies. Optional so hand-built outcomes (tests, older callers) stay
+       * valid — absent reads as 'provider', the cautious answer.
+       */
+      source?: 'local' | 'provider'
     }
   | { ok: false; message: string }
 
@@ -211,6 +221,7 @@ async function doSearch(symbol: string, ctx: RepoSearchContext): Promise<RepoSea
   // checked-out tree; through the provider it is a default-branch index that
   // step 2 then has to self-correct against the PR's head.
   let rawPaths: string[]
+  let searchedLocally = local
   try {
     rawPaths = local ? await searchLocalPaths(symbol) : await ctx.provider.searchCodePaths(ctx.repo, symbol)
   } catch (err) {
@@ -219,6 +230,7 @@ async function doSearch(symbol: string, ctx: RepoSearchContext): Promise<RepoSea
     // and retry through the provider rather than telling the user "no results"
     // for a symbol that may well have plenty.
     noteGroundingFailure(ctx.headSha)
+    searchedLocally = false
     rawPaths = await ctx.provider.searchCodePaths(ctx.repo, symbol)
   }
   const paths = rawPaths.filter((p) => !exclude.has(p)).slice(0, MAX_RESULT_FILES)
@@ -285,6 +297,7 @@ async function doSearch(symbol: string, ctx: RepoSearchContext): Promise<RepoSea
     filesScanned: fetched.length,
     filesSkipped: skipped,
     contentsByPath: new Map(fetched.map((f) => [f.path, f.text])),
+    source: searchedLocally ? 'local' : 'provider',
   }
 }
 
