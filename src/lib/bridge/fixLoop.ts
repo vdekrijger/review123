@@ -33,7 +33,9 @@
 
 import { classifyFetchFailure, requestSignals } from '../net/signals'
 import { bridgeAvailable, bridgeCredentials, bridgeInferenceClis, bridgeState } from './bridge.svelte'
+import { stopReasonOutranksVerification } from '../ai/fixVerify'
 import {
+  BRIDGE_CLIS,
   FIX_REQUEST_TIMEOUT_MS,
   MAX_FIX_FINDINGS,
   bridgeUrl,
@@ -159,17 +161,93 @@ export interface FixSnapshot {
   /** `capabilities.inference` — CLIs detected on PATH. */
   clis: string[]
   git: { head: string; branch: string | null; dirty: boolean } | null
+  /**
+   * The user's stored CLI choice, or null for "no preference". Injected like
+   * every other input here so the rule stays pure and testable without storage.
+   */
+  preferredCli?: BridgeCli | null
 }
 
 /**
- * Which CLI to drive. `claude` first when both are present — it is the one
- * whose write-mode invocation this repo has actually verified end to end
- * (bridge/README.md § 7); `codex` is supported and is the fallback.
+ * WHICH CLI DRIVES THE FIX — a preference, not a fact.
+ *
+ * The rule used to be a hard-coded ranking: `claude` over `codex` whenever both
+ * were present. It produced a button reading "Send 4 to claude" for a user who
+ * had never chosen claude and had no way to say otherwise — a preference they
+ * never set, presented as a fact. People run several agents deliberately.
+ *
+ * So the ranking is now the DEFAULT, not the answer. `preferred` is the user's
+ * stored choice, and it wins whenever it names a CLI the bridge actually
+ * detected. When it names one that is ABSENT (uninstalled since, or a different
+ * machine) the ranking answers instead: refusing to run because of a stale
+ * preference would be worse than running the other one, and every label here
+ * names the CLI that will actually run.
+ *
+ * The ranking itself is unchanged: `claude` first, because it is the one whose
+ * write-mode invocation this repo has verified end to end (bridge/README.md
+ * § 7); `codex` is supported and is the fallback.
  */
-export function preferredFixCli(clis: readonly string[]): BridgeCli | null {
+export function preferredFixCli(
+  clis: readonly string[],
+  preferred: BridgeCli | null = null,
+): BridgeCli | null {
+  if (preferred !== null && clis.includes(preferred)) return preferred
   if (clis.includes('claude')) return 'claude'
   if (clis.includes('codex')) return 'codex'
   return null
+}
+
+/**
+ * The CLIs the user could choose between, in the ranking's order.
+ *
+ * SHORTER THAN TWO MEANS THERE IS NO CHOICE, and the panel renders no picker.
+ * One detected CLI is not a decision anybody gets to make; offering it as one
+ * would invent a fork that does not exist.
+ */
+export function fixCliChoices(clis: readonly string[]): BridgeCli[] {
+  return BRIDGE_CLIS.filter((c) => clis.includes(c))
+}
+
+/**
+ * Where the choice is remembered: per-browser, in localStorage.
+ *
+ * Storage: `review123:fix-cli`
+ * Schema:  { cli: 'claude' | 'codex' }
+ * Default: ABSENT — and absent reads as "no preference", which lands on the
+ *          ranking above. Nothing changes for anyone who never touches it.
+ *
+ * Deliberately NOT a settings.ts field — the same reasoning as
+ * src/lib/guide/hunkAttentionPref.svelte.ts and
+ * src/lib/guide/resolvedThreadsPref.svelte.ts. WHICH coding agent is installed
+ * is a property of this MACHINE, and settings are meant to travel with the
+ * user. A preference that followed them to a laptop without codex on it would
+ * be a preference for a CLI that is not there.
+ */
+export const FIX_CLI_PREF_KEY = 'review123:fix-cli'
+
+/** The stored choice, or null when none is stored (or storage is unreadable). */
+export function readFixCliPref(): BridgeCli | null {
+  try {
+    const raw = localStorage.getItem(FIX_CLI_PREF_KEY)
+    if (!raw) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+    const cli: unknown = (parsed as Record<string, unknown>)['cli']
+    return BRIDGE_CLIS.find((c) => c === cli) ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Persist the choice. `null` clears it back to the ranking's default. */
+export function writeFixCliPref(cli: BridgeCli | null): void {
+  try {
+    if (cli === null) localStorage.removeItem(FIX_CLI_PREF_KEY)
+    else localStorage.setItem(FIX_CLI_PREF_KEY, JSON.stringify({ cli }))
+  } catch {
+    // Storage denied (private window, blocked site data). The choice still
+    // drives this session from the panel's own state.
+  }
 }
 
 /**
@@ -190,7 +268,7 @@ export function decideFixReadiness(snapshot: FixSnapshot, prHead: string): FixRe
   if (!snapshot.connected) return { ...base, ready: false, reason: 'no-bridge' }
   if (!snapshot.writeEnabled) return { ...base, ready: false, reason: 'write-disabled' }
 
-  const cli = preferredFixCli(snapshot.clis)
+  const cli = preferredFixCli(snapshot.clis, snapshot.preferredCli ?? null)
   if (cli === null) return { ...base, ready: false, reason: 'no-cli' }
   if (snapshot.git === null) return { ...base, ready: false, reason: 'no-repo-state' }
   if (snapshot.git.head.toLowerCase() !== prHead.toLowerCase()) {
@@ -235,6 +313,7 @@ export function currentFixReadiness(prHead: string): FixReadiness {
       writeEnabled: bridgeAvailable('fix'),
       clis: bridgeInferenceClis(),
       git: bridgeState.git,
+      preferredCli: readFixCliPref(),
     },
     prHead,
   )
@@ -507,3 +586,258 @@ export function cherryPickCommand(changes: readonly BridgeFixChange[]): string {
   if (changes.length === 0) return ''
   return `git cherry-pick ${changes.map((c) => c.commit.slice(0, 12)).join(' ')}`
 }
+
+// ---------------------------------------------------------------------------
+// Skips worth sending again — and the ones that are answers
+// ---------------------------------------------------------------------------
+
+/**
+ * A SKIP IS NOT ONE THING, and #280 was right to refuse to sweep them all into
+ * the "still open" button. They split cleanly on a single question: did the
+ * finding get a real answer?
+ *
+ *   refused        — YES. The agent read the finding and disagreed. That is the
+ *                    thing it was asked to do when a finding is wrong; sending
+ *                    it again asks the same question of the same reader.
+ *   no-change      — YES, of a sort. It reported a fix and produced nothing.
+ *                    Whatever that is, another turn produces it again.
+ *   forbidden-path — YES, structurally. The finding points outside the
+ *                    repository and will point outside it next time too.
+ *   agent-failed   — NO. The CLI fell over.
+ *   timeout        — NO. It was stopped mid-thought.
+ *   budget         — NO. It never got a turn at all.
+ *
+ * Only the second group is worth a retry, and it gets its OWN action with its
+ * OWN count rather than being folded into the verification's "still open".
+ */
+export function skipIsRetryable(reason: BridgeFixSkip['reason']): boolean {
+  return reason === 'agent-failed' || reason === 'timeout' || reason === 'budget'
+}
+
+/** The skips that never got a real answer, in the order they came back. */
+export function retryableSkips(skips: readonly BridgeFixSkip[]): BridgeFixSkip[] {
+  return skips.filter((s) => skipIsRetryable(s.reason))
+}
+
+/** The sentence beside the retry action. Names WHY they are not refusals. */
+export function describeRetryableSkips(count: number): string {
+  return count === 1
+    ? 'One finding never got a real answer — the agent failed, ran out of time, or never got a turn. That is not a refusal, so it is worth sending again.'
+    : `${count} findings never got a real answer — the agent failed, ran out of time, or never got a turn. Those are not refusals, so they are worth sending again.`
+}
+
+// ---------------------------------------------------------------------------
+// The bounded loop
+// ---------------------------------------------------------------------------
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE STOP CONDITION IS A BUDGET, NOT A PROMISE.
+ *
+ * #280 deliberately shipped ONE verification round and a button the user
+ * clicked themselves, because looping on reviewer judgment terminates on an
+ * oracle that does not hold still: this repo's own eval scored the same defect
+ * 1/3, 3/3, 2/3 and 1/3 across runs on identical code. A quiet round is a
+ * SAMPLE, not a fixed point, and "loop until no findings" would be a promise
+ * the measurement says cannot be kept.
+ *
+ * So the loop exists, and it is bounded by things that are actually knowable:
+ * how many rounds, how much spend, whether anything was produced, and whether
+ * it is repeating itself. It stops on whichever of those comes first and SAYS
+ * WHICH — in the same plain register `describeFixStop` uses for the bridge's
+ * own inner loop.
+ *
+ * What it never says: fixed, resolved, done, clean, or anything with a green
+ * check on it. Five quiet rounds are still five samples nobody has read.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+
+/** How many outer rounds, at most. Small on purpose: see the block above. */
+export const FIX_LOOP_ROUND_CAP = 3
+
+/**
+ * The spend ceiling, in verification model calls across the WHOLE loop.
+ *
+ * This is the token/cost budget in the only currency this app actually spends
+ * and can count. The fix itself runs on the user's CLI subscription and the
+ * bridge reports no token counts, so pretending to meter it would be inventing
+ * a number; the re-read is ours, it is metered, and it is what makes another
+ * round cost anything here at all.
+ */
+export const FIX_LOOP_VERIFY_CALL_BUDGET = 24
+
+/** The wall-clock ceiling for the whole loop. A fix round is minutes long. */
+export const FIX_LOOP_WALL_BUDGET_MS = 20 * 60_000
+
+export interface FixLoopBudget {
+  /** Outer rounds, at most. */
+  maxRounds: number
+  /** Verification model calls across the whole loop, at most. */
+  maxVerifyCalls: number
+  /** Wall clock for the whole loop, ms. */
+  maxWallMs: number
+}
+
+export const DEFAULT_FIX_LOOP_BUDGET: FixLoopBudget = {
+  maxRounds: FIX_LOOP_ROUND_CAP,
+  maxVerifyCalls: FIX_LOOP_VERIFY_CALL_BUDGET,
+  maxWallMs: FIX_LOOP_WALL_BUDGET_MS,
+}
+
+/**
+ * Why the OUTER loop stopped. Every value is a different thing to tell the
+ * user, and none of them means "it is fixed".
+ */
+export type FixLoopStopReason =
+  | 'quiet'
+  | 'no-new-commit'
+  | 'repeat-outcome'
+  | 'round-cap'
+  | 'budget-spent'
+  | 'stopped-by-user'
+  | 'run-failed'
+
+/** What one completed outer round did. Recorded, never reconstructed. */
+export interface FixLoopRound {
+  /** 1-based. */
+  round: number
+  /** Finding ids sent this round. */
+  sent: readonly string[]
+  /** Commit shas the agent handed back this round. */
+  commits: readonly string[]
+  /** Finding ids the re-read left open after this round. */
+  stillOpen: readonly string[]
+  /** Verification model calls this round spent. */
+  verifyCalls: number
+}
+
+/** Everything the stop rule may look at. Injected, so the rule stays pure. */
+export interface FixLoopProgress {
+  rounds: readonly FixLoopRound[]
+  /** Wall clock since the loop started, ms. */
+  elapsedMs: number
+  /** The user pressed stop. */
+  interrupted: boolean
+  /** The last dispatch failed outright (the transport, not a per-finding skip). */
+  failed: boolean
+}
+
+/**
+ * Two rounds "repeat" when they leave EXACTLY the same findings open.
+ *
+ * Not the commits: an agent that rewrites the same file differently every turn
+ * and leaves the same complaints standing is oscillating, and comparing shas
+ * would let it do that forever.
+ */
+function outcomeSignature(round: FixLoopRound): string {
+  return [...round.stillOpen].sort().join(',')
+}
+
+/**
+ * Should another round run? `null` means yes; anything else is why not.
+ *
+ * THE ORDER IS THE CONTRACT, because more than one condition can hold at the
+ * same moment and the user gets told one sentence. It runs most-specific
+ * first, and a stop the user or the transport caused outranks everything:
+ *
+ *   1. run-failed      — a round could not run at all. Nothing else applies.
+ *   2. stopped-by-user — they asked. Never overridden by a budget.
+ *   3. quiet           — nothing is still open, so there is nothing to send.
+ *   4. no-new-commit   — the round produced nothing; another asks for the same.
+ *   5. repeat-outcome  — the round left what the previous one left.
+ *   6. round-cap       — the configured number of rounds is used up.
+ *   7. budget-spent    — the call budget or the wall clock is used up.
+ *
+ * 6 before 7 because the round cap is the limit the user chose and can see
+ * counting down, and saying "out of rounds" when a round was in fact available
+ * would be wrong; when both are spent the cap is the one they set.
+ */
+export function decideFixLoopStop(
+  progress: FixLoopProgress,
+  budget: FixLoopBudget = DEFAULT_FIX_LOOP_BUDGET,
+): FixLoopStopReason | null {
+  if (progress.failed) return 'run-failed'
+  if (progress.interrupted) return 'stopped-by-user'
+
+  const rounds = progress.rounds
+  const last = rounds[rounds.length - 1]
+  if (last === undefined) return null
+
+  if (last.stillOpen.length === 0) return 'quiet'
+  if (last.commits.length === 0) return 'no-new-commit'
+
+  const prev = rounds[rounds.length - 2]
+  if (prev !== undefined && outcomeSignature(prev) === outcomeSignature(last)) return 'repeat-outcome'
+
+  if (rounds.length >= budget.maxRounds) return 'round-cap'
+
+  const spent = rounds.reduce((n, r) => n + r.verifyCalls, 0)
+  if (spent >= budget.maxVerifyCalls || progress.elapsedMs >= budget.maxWallMs) return 'budget-spent'
+
+  return null
+}
+
+/**
+ * One sentence for why the loop stopped — `describeFixStop`'s register, for the
+ * outer loop. Reports what happened and what it does NOT mean.
+ */
+export function describeFixLoopStop(
+  reason: FixLoopStopReason,
+  rounds: number,
+  stillOpen: number,
+): string {
+  const turns = `${rounds} ${rounds === 1 ? 'round' : 'rounds'}`
+  const open = `${stillOpen} ${stillOpen === 1 ? 'finding' : 'findings'}`
+  switch (reason) {
+    case 'quiet':
+      return `Stopped after ${turns}: the last re-read left nothing still open. A quiet round is one sample of a reviewer's judgment, not a verdict on the code.`
+    case 'no-new-commit':
+      return `Stopped after ${turns}: a round produced no commit at all, so another turn would ask the same agent the same question for the same nothing. ${open} still open.`
+    case 'repeat-outcome':
+      return `Stopped after ${turns}: a round left exactly the findings the one before it left. It was repeating itself rather than converging. ${open} still open.`
+    case 'round-cap':
+      return `Stopped at the ${rounds}-round cap with ${open} still open. The cap is a budget this loop spends, not a judgment that the rest cannot be fixed.`
+    case 'budget-spent':
+      return `Stopped after ${turns}: this loop's budget for re-read calls and wall clock is spent, with ${open} still open. What landed is below; the rest were not attempted.`
+    case 'stopped-by-user':
+      return `You stopped this after ${turns}. Everything the agent had already committed is below and stays on the scratch branch — nothing was thrown away.`
+    case 'run-failed':
+      return `Stopped after ${turns}: a round could not run. The reason is above; whatever earlier rounds committed is still below.`
+  }
+}
+
+/**
+ * THE INNER LOOP'S VERDICT SURVIVES THE OUTER ONE.
+ *
+ * `round-cap` from bridge/src/fix.ts means the commit came back with the tests
+ * RED. `no-progress` and `repeat-diff` mean the agent was stuck or oscillating
+ * on that finding. Those are facts about a commit, and running four more outer
+ * rounds over OTHER findings does not touch them — a red commit is still red
+ * after five rounds.
+ *
+ * So the loop counts them and the panel states them, next to the stop sentence,
+ * for as long as the commit is on screen. `stopReasonOutranksVerification` is
+ * the same predicate the per-change re-read uses (src/lib/ai/fixVerify.ts), so
+ * there is exactly one definition of "the re-read may not soften this".
+ */
+export function unsoftenedChanges(changes: readonly BridgeFixChange[]): BridgeFixChange[] {
+  return changes.filter((c) => stopReasonOutranksVerification(c.stopReason))
+}
+
+/** The banner over a loop that produced commits the re-read may not soften. */
+export function describeUnsoftenedChanges(count: number): string | null {
+  if (count <= 0) return null
+  return count === 1
+    ? 'One commit below came back at the agent’s own round cap, stuck, or oscillating. More rounds of re-reading do not change that; read that commit before you take it.'
+    : `${count} commits below came back at the agent’s own round cap, stuck, or oscillating. More rounds of re-reading do not change that; read them before you take them.`
+}
+
+/**
+ * THE LINE THE PANEL MUST NEVER LET A QUIET LOOP ERASE.
+ *
+ * This whole surface is step 3 of the user's own workflow — a debris-clearing
+ * pass that runs BEFORE they read the code at step 4. A loop that ran five
+ * rounds and went quiet has cleared debris. It has not reviewed anything.
+ */
+export const FIX_LOOP_NOT_REVIEWED =
+  'No person has read any of this yet. This loop clears debris before your own review; it does not replace it.'

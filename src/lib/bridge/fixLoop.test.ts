@@ -7,28 +7,49 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
+  FIX_CLI_PREF_KEY,
+  FIX_LOOP_NOT_REVIEWED,
   cherryPickCommand,
+  decideFixLoopStop,
   decideFixReadiness,
   describeFixEligibility,
   describeFixFailure,
+  describeFixLoopStop,
   describeFixReadiness,
   describeFixSkip,
   describeFixStop,
   describeFixTests,
+  describeRetryableSkips,
+  describeUnsoftenedChanges,
+  fixCliChoices,
   fixEligibility,
   fixSkipLabel,
   fixTestLabel,
   isConcreteFix,
   preferredFixCli,
+  readFixCliPref,
+  retryableSkips,
   runBridgeFix,
+  skipIsRetryable,
+  unsoftenedChanges,
+  writeFixCliPref,
   type FixEligibility,
   type FixFailureKind,
+  type FixLoopProgress,
+  type FixLoopRound,
+  type FixLoopStopReason,
   type FixReadinessReason,
   type FixSnapshot,
 } from './fixLoop'
 import { _resetBridgeForTest, connectBridge } from './bridge.svelte'
 import { BRIDGE_STORAGE_KEY } from './storage'
-import { MAX_FIX_FINDINGS, PROTOCOL_VERSION, type BridgeFixFinding } from './protocol'
+import {
+  MAX_FIX_FINDINGS,
+  PROTOCOL_VERSION,
+  type BridgeFixChange,
+  type BridgeFixFinding,
+  type BridgeFixSkip,
+} from './protocol'
 
 const PR_HEAD = 'abc1234567890abcdef1234567890abcdef12345'
 const OTHER_HEAD = 'def4567890abcdef1234567890abcdef12345678'
@@ -493,5 +514,233 @@ describe('cherryPickCommand', () => {
       `git cherry-pick ${COMMIT_A.slice(0, 12)} ${COMMIT_B.slice(0, 12)}`,
     )
     expect(cherryPickCommand([])).toBe('')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Which CLI runs the fix — a choice, not a hard-coded fact
+// ---------------------------------------------------------------------------
+
+describe('the CLI the user picks', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('honours a stored choice over the built-in ranking', () => {
+    expect(preferredFixCli(['claude', 'codex'], 'codex')).toBe('codex')
+    expect(preferredFixCli(['claude', 'codex'], 'claude')).toBe('claude')
+  })
+
+  it('falls back to the ranking when the chosen CLI is not installed here', () => {
+    // A stale preference from another machine must not disable the feature.
+    expect(preferredFixCli(['claude'], 'codex')).toBe('claude')
+    expect(preferredFixCli([], 'codex')).toBeNull()
+  })
+
+  it('changes nothing for a user who never chose — today’s behaviour is the default', () => {
+    expect(preferredFixCli(['codex', 'claude'], null)).toBe('claude')
+    expect(readFixCliPref()).toBeNull()
+  })
+
+  it('offers no choice where there is none to make', () => {
+    expect(fixCliChoices(['claude'])).toEqual(['claude'])
+    expect(fixCliChoices([])).toEqual([])
+    // Two detected CLIs, in the ranking's order whatever order the bridge used.
+    expect(fixCliChoices(['codex', 'claude'])).toEqual(['claude', 'codex'])
+  })
+
+  it('round-trips through localStorage and clears back to no preference', () => {
+    writeFixCliPref('codex')
+    expect(readFixCliPref()).toBe('codex')
+    writeFixCliPref(null)
+    expect(readFixCliPref()).toBeNull()
+  })
+
+  it('reads a corrupt or unknown entry as no preference rather than throwing', () => {
+    localStorage.setItem(FIX_CLI_PREF_KEY, 'not json')
+    expect(readFixCliPref()).toBeNull()
+    localStorage.setItem(FIX_CLI_PREF_KEY, JSON.stringify({ cli: 'cursor' }))
+    expect(readFixCliPref()).toBeNull()
+  })
+
+  it('is the CLI the readiness rule reports, so no label can name another', () => {
+    const readiness = decideFixReadiness(
+      snapshot({ clis: ['claude', 'codex'], preferredCli: 'codex' }),
+      PR_HEAD,
+    )
+    expect(readiness).toMatchObject({ ready: true, cli: 'codex' })
+    expect(describeFixReadiness(readiness, PR_HEAD)).toContain('codex')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Skips worth sending again
+// ---------------------------------------------------------------------------
+
+describe('retryable skips', () => {
+  const skip = (reason: BridgeFixSkip['reason']): BridgeFixSkip => ({
+    findingId: reason,
+    reason,
+    detail: '',
+  })
+
+  it('offers back only the skips that never got a real answer', () => {
+    const skips = [
+      skip('refused'),
+      skip('no-change'),
+      skip('forbidden-path'),
+      skip('agent-failed'),
+      skip('timeout'),
+      skip('budget'),
+    ]
+    expect(retryableSkips(skips).map((s) => s.reason)).toEqual(['agent-failed', 'timeout', 'budget'])
+  })
+
+  // The whole point of a separate action: a refusal is an ANSWER, and sweeping
+  // it into a retry button would quietly re-ask a question already answered.
+  it('never treats a refusal as retryable', () => {
+    expect(skipIsRetryable('refused')).toBe(false)
+    expect(describeRetryableSkips(2)).toMatch(/not refusals/i)
+    expect(describeRetryableSkips(1)).toMatch(/not a refusal/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The bounded loop
+// ---------------------------------------------------------------------------
+
+describe('decideFixLoopStop', () => {
+  const round = (n: number, over: Partial<FixLoopRound> = {}): FixLoopRound => ({
+    round: n,
+    sent: ['f1'],
+    commits: [COMMIT_A],
+    stillOpen: ['f1'],
+    verifyCalls: 2,
+    ...over,
+  })
+
+  const progress = (over: Partial<FixLoopProgress> = {}): FixLoopProgress => ({
+    rounds: [round(1)],
+    elapsedMs: 1_000,
+    interrupted: false,
+    failed: false,
+    ...over,
+  })
+
+  it('runs another round while something is still open and nothing is spent', () => {
+    expect(decideFixLoopStop(progress())).toBeNull()
+  })
+
+  it('stops QUIET when a round leaves nothing open — and says it is a sample', () => {
+    const p = progress({ rounds: [round(1, { stillOpen: [] })] })
+    expect(decideFixLoopStop(p)).toBe('quiet')
+    const sentence = describeFixLoopStop('quiet', 1, 0)
+    expect(sentence).toMatch(/sample/i)
+    expect(sentence).not.toMatch(/\bfixed\b|\bresolved\b|\bdone\b/i)
+  })
+
+  it('stops at the ROUND CAP and calls the cap a budget, not a judgment', () => {
+    const p = progress({ rounds: [round(1), round(2, { stillOpen: ['f2'] }), round(3)] })
+    expect(decideFixLoopStop(p)).toBe('round-cap')
+    expect(describeFixLoopStop('round-cap', 3, 1)).toMatch(/budget this loop spends/i)
+  })
+
+  it('stops on NO-NEW-COMMIT when a round produced nothing', () => {
+    const p = progress({ rounds: [round(1, { commits: [] })] })
+    expect(decideFixLoopStop(p)).toBe('no-new-commit')
+  })
+
+  it('stops on REPEAT-OUTCOME when a round leaves what the previous one left', () => {
+    // Different commits each time — an agent rewriting the same file every turn
+    // is still oscillating if the same complaints stand, so the signature is the
+    // still-open set and never the shas.
+    const p = progress({
+      rounds: [
+        round(1, { stillOpen: ['f1', 'f2'], commits: [COMMIT_A] }),
+        round(2, { stillOpen: ['f2', 'f1'], commits: [COMMIT_B] }),
+      ],
+    })
+    expect(decideFixLoopStop(p)).toBe('repeat-outcome')
+  })
+
+  it('stops when the re-read CALL BUDGET is spent', () => {
+    const p = progress({ rounds: [round(1, { verifyCalls: 30 })] })
+    expect(decideFixLoopStop(p, { maxRounds: 9, maxVerifyCalls: 24, maxWallMs: 1_000_000 })).toBe(
+      'budget-spent',
+    )
+  })
+
+  it('stops when the WALL CLOCK is spent', () => {
+    const p = progress({ elapsedMs: 21 * 60_000 })
+    expect(decideFixLoopStop(p, { maxRounds: 9, maxVerifyCalls: 500, maxWallMs: 20 * 60_000 })).toBe(
+      'budget-spent',
+    )
+  })
+
+  // The user's stop and a dead transport outrank every budget: neither is a
+  // thing the loop gets to overrule with arithmetic.
+  it('stops for the USER before any budget, and keeps what landed', () => {
+    const p = progress({ interrupted: true, rounds: [round(1, { stillOpen: [] })] })
+    expect(decideFixLoopStop(p)).toBe('stopped-by-user')
+    expect(describeFixLoopStop('stopped-by-user', 2, 1)).toMatch(/stays on the scratch branch/i)
+  })
+
+  it('stops on a FAILED round before anything else', () => {
+    expect(decideFixLoopStop(progress({ failed: true, interrupted: true }))).toBe('run-failed')
+  })
+
+  it('has no opinion before the first round finishes', () => {
+    expect(decideFixLoopStop(progress({ rounds: [] }))).toBeNull()
+  })
+
+  it.each<FixLoopStopReason>([
+    'quiet',
+    'no-new-commit',
+    'repeat-outcome',
+    'round-cap',
+    'budget-spent',
+    'stopped-by-user',
+    'run-failed',
+  ])('has a sentence for %s that never claims a fix', (reason) => {
+    const sentence = describeFixLoopStop(reason, 3, 2)
+    expect(sentence.length).toBeGreaterThan(30)
+    // No sentence here may CLAIM a fix. ("not a judgment that the rest cannot
+    // be fixed" is the opposite of a claim, which is why the pattern is the
+    // assertion and not the bare word.)
+    expect(sentence).not.toMatch(/\b(is|are|were|been|now)\s+(fixed|resolved)\b|\ball clear\b/i)
+  })
+})
+
+describe('the inner loop’s verdict survives the outer one', () => {
+  const change = (stopReason: BridgeFixChange['stopReason'], id: string): BridgeFixChange => ({
+    findingId: id,
+    commit: COMMIT_A,
+    subject: '',
+    intent: '',
+    files: [],
+    diff: '',
+    truncated: false,
+    rounds: 3,
+    stopReason,
+    tests: null,
+  })
+
+  it('counts every commit a re-read may not soften, however many rounds ran', () => {
+    const changes = [
+      change('all-addressed', 'a'),
+      change('round-cap', 'b'),
+      change('no-progress', 'c'),
+      change('repeat-diff', 'd'),
+      change('budget-exhausted', 'e'),
+    ]
+    expect(unsoftenedChanges(changes).map((c) => c.findingId)).toEqual(['b', 'c', 'd'])
+  })
+
+  it('says so plainly, and says more rounds do not change it', () => {
+    expect(describeUnsoftenedChanges(0)).toBeNull()
+    expect(describeUnsoftenedChanges(2)).toMatch(/more rounds of re-reading do not change that/i)
+  })
+
+  it('never lets the loop imply a person has read anything', () => {
+    expect(FIX_LOOP_NOT_REVIEWED).toMatch(/no person has read/i)
+    expect(FIX_LOOP_NOT_REVIEWED).toMatch(/does not replace it/i)
   })
 })
