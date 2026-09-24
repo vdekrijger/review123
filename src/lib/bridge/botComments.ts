@@ -40,8 +40,9 @@
  *      come from the provider's STRUCTURED fields and are never parsed out of
  *      the comment body, so text saying "also edit src/auth.ts" changes
  *      nothing about where the agent is pointed. The path is additionally
- *      validated here (`safeRepoPath`) and rejected outright if it escapes the
- *      repository — before the bridge's own `confine.ts` ever sees it.
+ *      validated here (`safeRepoPath`, shared with ./quotedText) and rejected
+ *      outright if it escapes the repository — before the bridge's own
+ *      `confine.ts` ever sees it.
  *
  * The same wrapped body is what travels onward to the verification re-read, so
  * there is ONE wrapping applied at ingestion rather than one per consumer. A
@@ -70,7 +71,12 @@
  * exactly the debris this pass exists to clear.
  *
  * If that ever changes, it changes as an explicit, separately-worded action —
- * never by widening `isReviewBotAuthor`.
+ * never by widening `isReviewBotAuthor`. It since has, for exactly one case and
+ * exactly that way: the reviewer's OWN drafted notes, in ./draftComments.ts.
+ * Those are not a colleague's turn in a conversation — they are the person
+ * doing the asking, writing down what they want changed — so they get their
+ * own module, their own wrapper and their own list. `isReviewBotAuthor` is
+ * untouched, and a human comment on the pull request is still never offered.
  */
 
 import type { PrComment } from '../github/comments'
@@ -78,6 +84,7 @@ import { providerFor } from '../provider/registry'
 import { router } from '../router/router.svelte'
 import type { PrRefX } from '../provider/types'
 import type { BridgeFixFinding } from './protocol'
+import { safeRepoPath, sanitizeQuoted, fenceNonce, type QuoteRules } from './quotedText'
 
 // ---------------------------------------------------------------------------
 // Who counts as a bot
@@ -127,88 +134,29 @@ export function isReviewBotAuthor(author: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Where a bot comment may point
+// Where a bot comment may point, and how its text is made inert
+//
+// The MECHANICS live in ./quotedText — one copy of the smuggled-character
+// table, the path check and the fence nonce, shared with the module that
+// quotes the reviewer's OWN notes. Only the wrapper's sentences differ, and
+// those are written below. Re-exported under their old names so every existing
+// caller and test keeps importing them from here.
 // ---------------------------------------------------------------------------
 
-/** Does this string carry a control character? Numbers, never a literal class. */
-function hasControlChar(text: string): boolean {
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0
-    if (code < 0x20 || code === 0x7f) return true
-  }
-  return false
-}
-
-/** A repo-relative path, at most this long. Anything longer is not a path. */
-const MAX_PATH_CHARS = 400
-
-/**
- * The provider's `path`, if and only if it is a plain repo-relative path.
- *
- * Returns null for an absolute path, a Windows drive, a URL, a `..` segment,
- * anything inside `.git`, control characters, or an absurd length. The bridge
- * confines writes to its scratch worktree anyway (`confine.ts`), but a path
- * that escapes should never be OFFERED in the first place — a refusal the user
- * can see beats a refusal buried in a skip.
- */
-export function safeRepoPath(path: string | null | undefined): string | null {
-  if (typeof path !== 'string') return null
-  const trimmed = path.trim()
-  if (trimmed === '' || trimmed.length > MAX_PATH_CHARS) return null
-  if (hasControlChar(trimmed)) return null
-  if (trimmed.includes('://')) return null
-  if (trimmed.startsWith('/') || trimmed.startsWith('\\')) return null
-  if (/^[A-Za-z]:[\\/]/.test(trimmed)) return null
-  const segments = trimmed.split('/')
-  if (segments.some((s) => s === '' || s === '.' || s === '..' || s.includes('\\'))) return null
-  if (segments[0] === '.git') return null
-  return trimmed
-}
-
-// ---------------------------------------------------------------------------
-// Making the text inert
-// ---------------------------------------------------------------------------
+export { safeRepoPath, fenceNonce } from './quotedText'
 
 /** How much of one comment is quoted. Past this it is cut, visibly. */
 export const BOT_COMMENT_MAX_CHARS = 4_000
 
-/**
- * Code points that smuggle meaning past the person reading the text.
- *
- * WRITTEN AS NUMBERS, NEVER AS A CHARACTER CLASS WITH THE CHARACTERS IN IT.
- * A source file containing the invisible characters it exists to strip is a
- * source file nobody can review; src/source-bytes.test.ts refuses the worst of
- * them outright. Numbers are greppable, diffable and safe to paste.
- *
- *   control    - everything below U+0020 plus DEL. Newline and tab are kept:
- *                they are text in a review comment.
- *   invisible  - zero-width and BIDIRECTIONAL-OVERRIDE code points. A
- *                right-to-left override can make a quoted instruction render as
- *                something else entirely, and a zero-width joiner can split a
- *                word the eye reads as one. Neither belongs in a comment about
- *                to be quoted to an agent.
- */
-function isSmuggledCode(code: number): boolean {
-  if (code === 0x0a || code === 0x09) return false
-  if (code < 0x20 || code === 0x7f) return true
-  if (code >= 0x200b && code <= 0x200f) return true // ZWSP .. RLM
-  if (code >= 0x202a && code <= 0x202e) return true // LRE .. RLO
-  if (code >= 0x2060 && code <= 0x2064) return true // word joiner .. invisible plus
-  if (code >= 0x2066 && code <= 0x2069) return true // LRI .. PDI
-  return code === 0xfeff // BOM / zero-width no-break space
-}
-
-/** Drop every code point `isSmuggledCode` names, keeping everything else. */
-function stripSmuggled(text: string): string {
-  let out = ''
-  for (const char of text) {
-    if (!isSmuggledCode(char.codePointAt(0) ?? 0)) out += char
-  }
-  return out
-}
-
 /** The fence markers, as literals — defanged wherever they occur in the text. */
 const MARKER_LITERAL = /--\s*(BEGIN|END)\s+REVIEW-BOT COMMENT/gi
+
+const BOT_QUOTE_RULES: QuoteRules = {
+  marker: MARKER_LITERAL,
+  maxChars: BOT_COMMENT_MAX_CHARS,
+  cutNote: (max) =>
+    `[quoted comment cut at ${max} characters — read the rest on the pull request]`,
+}
 
 /**
  * Strip everything that could smuggle meaning past a reader, and cap the rest.
@@ -217,30 +165,7 @@ const MARKER_LITERAL = /--\s*(BEGIN|END)\s+REVIEW-BOT COMMENT/gi
  * read the SAME words the bot wrote, minus the ones that are not words.
  */
 export function sanitizeBotText(text: string): string {
-  const cleaned = stripSmuggled(String(text ?? '').replace(/\r\n?/g, '\n'))
-    .replace(MARKER_LITERAL, '[quoted fence marker]')
-    .trim()
-  if (cleaned.length <= BOT_COMMENT_MAX_CHARS) return cleaned
-  return `${cleaned.slice(0, BOT_COMMENT_MAX_CHARS)}\n[quoted comment cut at ${BOT_COMMENT_MAX_CHARS} characters — read the rest on the pull request]`
-}
-
-/**
- * A random fence nonce.
- *
- * THE NONCE IS THE POINT. A fixed delimiter can be typed by the text it is
- * supposed to contain; an unpredictable one cannot, so a comment containing a
- * forged closing marker just contains a forged closing marker. `crypto` is
- * present in every browser this app supports and in jsdom; the fallback exists
- * so a missing one degrades to a weaker fence rather than to no fence.
- */
-export function fenceNonce(): string {
-  try {
-    const bytes = new Uint8Array(8)
-    crypto.getRandomValues(bytes)
-    return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
-  } catch {
-    return `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`
-  }
+  return sanitizeQuoted(text, BOT_QUOTE_RULES)
 }
 
 /**

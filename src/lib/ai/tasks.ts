@@ -15,6 +15,20 @@ import type { AiTaskId } from '../settings/settings'
 import type { CoachCodeContext } from './coachContext'
 import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNIPPETS, INTENT_MAX_ITEMS, OUTCOMES_MAX_ITEMS, STANDING_RULES_MAX, STANDING_RULE_EVIDENCE_MAX, STANDING_RULE_EXCERPT_MAX } from './schemas'
 
+// PROMPT_VERSIONS draftNote 1 (the reviewer's own drafted notes, handed to the
+// fixing agent): NEW app-authored prompt text — the provenance wrapper that
+// tells the agent a quoted note was written by the person reviewing the pull
+// request, and DRAFT_NOTE_SUGGESTED_FIX, the constant that occupies the
+// imperative slot for every such note (both in src/lib/bridge/draftComments.ts).
+// Deliberately a new entry rather than a bump of `fixVerify`: bumping that one
+// would cold-invalidate every cached re-read of every AI finding for a prompt
+// change that never touched them.
+//
+// It is USED rather than merely recorded. `draftNoteKey` stamps this version
+// into each note's finding id, and the fixVerify cache key hashes the finding
+// ids — so changing either piece of text above and bumping this entry makes the
+// re-read a clean cache miss for notes and a clean HIT for everything else.
+// Nothing else keys on it: the bridge itself caches no prompt.
 // PROMPT_VERSIONS fixVerify 1 (verify the agent's fix, once): a NEW post-fix
 // prompt (src/lib/ai/fixVerify.ts buildFixVerifyPrompt) that re-reads the
 // coding agent's own diff. The persona that RAISED each finding judges whether
@@ -151,7 +165,13 @@ import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNI
  * version so the implementation pass's cache stays warm across tests-prompt
  * edits and vice versa.
  */
-export type PromptVersionedTaskId = AiTaskId | 'convergence' | 'skillsTests' | 'standingRules' | 'fixVerify'
+export type PromptVersionedTaskId =
+  | AiTaskId
+  | 'convergence'
+  | 'skillsTests'
+  | 'standingRules'
+  | 'fixVerify'
+  | 'draftNote'
 
 /**
  * Per-task prompt versions (H6 — cache-invalidation hygiene).
@@ -194,6 +214,7 @@ export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   simplify: 1,
   standingRules: 1,
   fixVerify: 1,
+  draftNote: 1,
 }
 
 /** The prompt version that keys `task`'s cache entries. */

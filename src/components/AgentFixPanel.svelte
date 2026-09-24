@@ -65,6 +65,15 @@
     type BotCommentRefusal,
   } from '../lib/bridge/botComments'
   import {
+    DRAFT_NOTE_PERSONA,
+    describeDraftNoteRefusal,
+    draftNoteToFinding,
+    type DraftNoteCandidate,
+    type DraftNoteRefusal,
+    type WithdrawnNote,
+  } from '../lib/bridge/draftComments'
+  import type { DraftHandoff } from '../lib/drafts/drafts.svelte'
+  import {
     checkoutPr,
     currentCheckoutReadiness,
     decideCheckoutTrust,
@@ -128,9 +137,37 @@
     headSha: string
     /** Every finding the routing rule found eligible, strongest first. */
     candidates: FixCandidateEntry[]
+    /**
+     * THE REVIEWER'S OWN DRAFTED NOTES, already intaken by draftComments.ts.
+     *
+     * Passed in rather than read here for the same reason `candidates` is: the
+     * draft store belongs to the review, and this panel owns run state, not
+     * data. Withdrawn notes are NOT in this list — they are in `withdrawn`.
+     */
+    draftNotes?: DraftNoteCandidate[]
+    /** Notes taken out of the review. Listed only so they can come back. */
+    withdrawn?: WithdrawnNote[]
+    /** Counted exclusions from the note intake, by reason. */
+    draftNoteRefusals?: [DraftNoteRefusal, number][]
+    /**
+     * Write one note's decision back to the draft store. Absent (the demo
+     * route, tests) means the decision is not offered at all rather than
+     * offered and dropped.
+     */
+    onNoteHandoff?: ((draftKey: string, handoff: DraftHandoff) => void) | null
+    /** Record that these notes were handed over. Never overwrites a decision. */
+    onNotesSent?: ((draftKeys: string[]) => void) | null
   }
 
-  let { headSha, candidates }: Props = $props()
+  let {
+    headSha,
+    candidates,
+    draftNotes = [],
+    withdrawn = [],
+    draftNoteRefusals = [],
+    onNoteHandoff = null,
+    onNotesSent = null,
+  }: Props = $props()
 
   // ---- Which CLI runs it ---------------------------------------------------
   //
@@ -166,7 +203,10 @@
    * same rule the grounding indicator follows. Once a bridge IS connected,
    * every other reason is worth saying, because the user can act on it.
    */
-  const visible = $derived(readiness.reason !== 'no-bridge' && candidates.length > 0)
+  const visible = $derived(
+    readiness.reason !== 'no-bridge' &&
+      (candidates.length > 0 || draftNotes.length > 0 || withdrawn.length > 0),
+  )
 
   // ---- The way out of a refusal --------------------------------------------
   //
@@ -326,9 +366,24 @@
   /** Bot comments are opt-IN, which is why this is a ticked-set, not a cross-off. */
   let botTicked = $state<Set<string>>(new Set())
 
+  /**
+   * The reviewer's own notes are opt-IN too — for a DIFFERENT reason than bot
+   * comments, and the panel says which.
+   *
+   * A bot comment is opt-in because it is a third party's claim. A drafted note
+   * is opt-in because not every note is a request: people write questions to
+   * themselves, nits they have not decided about, and "let's talk about this"
+   * in the same box they write "use a Map here". Turning all of them into agent
+   * tasks by default would be this app deciding what the reviewer meant, which
+   * is the over-reach #282 refused for a colleague's comment. One click ticks
+   * them all when that IS what was meant.
+   */
+  let noteTicked = $state<Set<string>>(new Set())
+
   const selectedFindingKeys = $derived(candidates.filter((c) => !unticked.has(c.key)).map((c) => c.key))
   const selectedBotKeys = $derived(botCandidates.filter((b) => botTicked.has(b.key)).map((b) => b.key))
-  const selectedKeys = $derived([...selectedFindingKeys, ...selectedBotKeys])
+  const selectedNoteKeys = $derived(draftNotes.filter((n) => noteTicked.has(n.key)).map((n) => n.key))
+  const selectedKeys = $derived([...selectedNoteKeys, ...selectedFindingKeys, ...selectedBotKeys])
   /** The batch is capped by the protocol; the UI says so rather than silently trimming. */
   const overCap = $derived(selectedKeys.length > MAX_FIX_FINDINGS)
 
@@ -352,6 +407,57 @@
 
   function tickAllBots(on: boolean): void {
     botTicked = on ? new Set(botCandidates.map((b) => b.key)) : new Set()
+  }
+
+  function toggleNote(key: string): void {
+    const next = new Set(noteTicked)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    noteTicked = next
+  }
+
+  function tickAllNotes(on: boolean): void {
+    noteTicked = on ? new Set(draftNotes.map((n) => n.key)) : new Set()
+  }
+
+  function noteFor(key: string): DraftNoteCandidate | undefined {
+    return draftNotes.find((n) => n.key === key)
+  }
+
+  /**
+   * Every note this run knows about, WITHDRAWN ONES INCLUDED, by finding key.
+   *
+   * A note withdrawn while its result is on screen leaves `draftNotes`. If the
+   * result row read only that list it would lose its label and, worse, the
+   * control that undoes the withdrawal — a decision you can only reverse after
+   * restarting the run is not reversible where it was made.
+   */
+  interface NoteFate {
+    key: string
+    draftKey: string
+    path: string
+    line: number
+    handoff?: DraftHandoff
+  }
+
+  const noteIndex = $derived.by(() => {
+    const out = new Map<string, NoteFate>()
+    for (const n of draftNotes) out.set(n.key, n)
+    for (const w of withdrawn) out.set(w.key, { ...w, handoff: 'withdrawn' })
+    return out
+  })
+
+  function fateFor(key: string): NoteFate | undefined {
+    return noteIndex.get(key)
+  }
+
+  /** Record one note's fate. A no-op where the store is not wired. */
+  function decideNote(draftKey: string, handoff: DraftHandoff): void {
+    onNoteHandoff?.(draftKey, handoff)
+    // Counts and enums only: WHICH decision, never the note, its path or its
+    // words. The accept/withdraw mix is the only measure of whether offering
+    // this decision was the right call at all.
+    track('draft_note_decided', { decision: handoff })
   }
 
   // ---- Run state -----------------------------------------------------------
@@ -589,6 +695,21 @@
           suggestedFix: wire.suggestedFix,
         }
       }),
+      // A note's re-read reads the SAME quoted body that went to the agent, for
+      // the same reason a bot comment's does: one wrapping at ingestion, not one
+      // per consumer. Its persona is "Your own note" — the models doing the
+      // re-reading are the user's own, and none of them wrote the note.
+      ...draftNotes.map((n) => {
+        const wire = draftNoteToFinding(n)
+        return {
+          key: n.key,
+          skillName: DRAFT_NOTE_PERSONA,
+          path: n.path,
+          line: n.line,
+          body: wire.body,
+          suggestedFix: wire.suggestedFix,
+        }
+      }),
     ]
   }
 
@@ -626,6 +747,8 @@
     if (candidate) return `${candidate.path}${candidate.line === null ? '' : `:${candidate.line}`}`
     const bot = botFor(key)
     if (bot) return `${bot.path}${bot.line === null ? '' : `:${bot.line}`}`
+    const note = fateFor(key)
+    if (note) return `${note.path}:${note.line}`
     return key
   }
 
@@ -633,7 +756,8 @@
     const candidate = candidates.find((c) => c.key === key)
     if (candidate) return candidate.skillName
     const bot = botFor(key)
-    return bot ? botRereaderPersona(bot.author) : ''
+    if (bot) return botRereaderPersona(bot.author)
+    return fateFor(key) ? DRAFT_NOTE_PERSONA : ''
   }
 
   function toWire(entry: FixCandidateEntry): BridgeFixFinding {
@@ -664,7 +788,12 @@
         continue
       }
       const bot = botFor(key)
-      if (bot) wire.push(botCommentToFinding(bot))
+      if (bot) {
+        wire.push(botCommentToFinding(bot))
+        continue
+      }
+      const note = noteFor(key)
+      if (note) wire.push(draftNoteToFinding(note))
     }
     return wire
   }
@@ -679,11 +808,30 @@
     run = { status: 'running', round, count: wire.length, phase: 'fixing' }
     abort = new AbortController()
 
+    // A note that goes to the agent is MARKED as having gone, before anything
+    // can come back. That fact is what later lets the panel ask what should
+    // happen to it — and `markSent` never overwrites a decision, so a note sent
+    // round again keeps whatever the reviewer already chose for it.
+    const sentNotes = keys.flatMap((k) => {
+      const note = noteFor(k)
+      return note ? [note.draftKey] : []
+    })
+    if (sentNotes.length > 0) onNotesSent?.(sentNotes)
+
     // Analytics: counts and enums only. Nothing about the findings being fixed,
     // the code, the commits or the agent's own words ever leaves this machine —
     // see the PRIVACY DECISION block on bridge_fix_* in lib/analytics.
     const t0 = performance.now()
-    track('bridge_fix_dispatched', { findings: wire.length, cli: cliToRun, round })
+    track('bridge_fix_dispatched', {
+      findings: wire.length,
+      cli: cliToRun,
+      round,
+      // How many of them were the reviewer's OWN notes. A count; the whole
+      // question this feature asks is whether anyone sends their own notes at
+      // all, and it is unanswerable if they are indistinguishable from a
+      // model's findings in the one metric that counts a batch.
+      notes: sentNotes.length,
+    })
 
     const outcome = await runBridgeFix(cliToRun, headSha, wire, { signal: abort.signal })
     abort = null
@@ -905,6 +1053,56 @@
   }
 </script>
 
+<!-- WHAT HAPPENS TO THE NOTE ITSELF.
+     The hard part of handing your own drafted comments to an agent is not
+     sending them — it is step 8. Post the note and you ask the author for
+     something the code already does; delete it and the app threw away words
+     somebody wrote. So neither happens on its own: the note stays in the
+     review until the reviewer says otherwise, withdrawing takes it out of what
+     gets submitted WITHOUT deleting it, and both directions are one click from
+     here and from the note's own list. A rejected change moves nothing. -->
+{#snippet noteFate(key: string)}
+  {@const note = fateFor(key)}
+  {#if note && onNoteHandoff !== null}
+    <div class="afx-fate" data-testid="agent-fix-result-note-fate" data-handoff={note.handoff ?? 'sent'}>
+      <span class="afx-fate-text">
+        {#if note.handoff === 'withdrawn'}
+          Withdrawn from your review — it will not be posted. Your words are not deleted: the note is still
+          on {note.path}:{note.line}.
+        {:else if note.handoff === 'kept'}
+          Staying in your review. It will be posted on {note.path}:{note.line} exactly as you wrote it.
+        {:else}
+          This was your own note. It is still in your review and will be posted as you wrote it — whether
+          that is what you want now is yours to say.
+        {/if}
+      </span>
+      {#if note.handoff === 'withdrawn'}
+        <button
+          type="button"
+          class="afx-link"
+          data-testid="agent-fix-result-note-restore"
+          onclick={() => decideNote(note.draftKey, 'kept')}
+        >Put it back</button>
+      {:else}
+        {#if note.handoff !== 'kept'}
+          <button
+            type="button"
+            class="afx-link"
+            data-testid="agent-fix-result-note-keep"
+            onclick={() => decideNote(note.draftKey, 'kept')}
+          >Keep it</button>
+        {/if}
+        <button
+          type="button"
+          class="afx-link"
+          data-testid="agent-fix-result-note-withdraw"
+          onclick={() => decideNote(note.draftKey, 'withdrawn')}
+        >Withdraw it</button>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
 {#if visible}
   <section class="agent-fix" data-testid="agent-fix-panel" data-ready={readiness.ready} bind:this={sectionEl}>
     <header class="afx-head">
@@ -1027,11 +1225,134 @@
 
     {#if readiness.ready}
       {#if run.status === 'idle'}
+        <!-- THE REVIEWER'S OWN NOTES, FIRST.
+             These are the output of reading the code themselves — the notes
+             they trust most — so they are not buried under a model's findings.
+             Opt-in, one by one, because not every note is a request. -->
+        {#if draftNotes.length > 0 || withdrawn.length > 0}
+          <div class="afx-notes" data-testid="agent-fix-notes">
+            {#if draftNotes.length > 0}
+              <div class="afx-select-head">
+                <span class="afx-count" data-testid="agent-fix-notes-count">
+                  {selectedNoteKeys.length} of {draftNotes.length} of your own
+                  {draftNotes.length === 1 ? 'note' : 'notes'} selected
+                </span>
+                <button type="button" class="afx-link" onclick={() => tickAllNotes(true)}>Select all</button>
+                <button type="button" class="afx-link" onclick={() => tickAllNotes(false)}>Select none</button>
+              </div>
+              <ul class="afx-candidates">
+                {#each draftNotes as note (note.key)}
+                  <li
+                    class="afx-candidate"
+                    data-testid="agent-fix-note-candidate"
+                    data-finding-key={note.key}
+                    data-handoff={note.handoff ?? 'none'}
+                  >
+                    <label class="afx-candidate-label">
+                      <input
+                        type="checkbox"
+                        checked={noteTicked.has(note.key)}
+                        onchange={() => toggleNote(note.key)}
+                        data-testid="agent-fix-note-checkbox"
+                      />
+                      <span class="afx-note-chip">your note</span>
+                      <span class="afx-loc">{note.path}:{note.line}</span>
+                      <span class="afx-body">{note.preview}</span>
+                    </label>
+                    {#if note.fromCommit !== null}
+                      <!-- The anchor drifted. Said here AND inside the quote the
+                           agent reads, so the label is never the only thing that
+                           knows the line number may have moved. -->
+                      <span class="afx-note" data-testid="agent-fix-note-moved">
+                        written on commit {note.fromCommit} — the agent is told the line may have moved
+                      </span>
+                    {/if}
+                    {#if note.handoff !== undefined && onNoteHandoff !== null}
+                      <!-- A note already handed over keeps its decision here,
+                           where it can be changed without a run in flight. -->
+                      <span class="afx-fate" data-testid="agent-fix-note-fate" data-handoff={note.handoff}>
+                        <span class="afx-fate-text">
+                          {note.handoff === 'kept'
+                            ? 'Sent to your agent · you are keeping it in the review.'
+                            : 'Sent to your agent · still in the review, as you wrote it.'}
+                        </span>
+                        {#if note.handoff !== 'kept'}
+                          <button
+                            type="button"
+                            class="afx-link"
+                            data-testid="agent-fix-note-keep"
+                            onclick={() => decideNote(note.draftKey, 'kept')}
+                          >Keep it</button>
+                        {/if}
+                        <button
+                          type="button"
+                          class="afx-link"
+                          data-testid="agent-fix-note-withdraw"
+                          onclick={() => decideNote(note.draftKey, 'withdrawn')}
+                        >Withdraw it</button>
+                      </span>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+
+            <!-- NOTHING IS DROPPED SILENTLY, here either. -->
+            {#if draftNoteRefusals.length > 0}
+              <ul class="afx-bot-refusals" data-testid="agent-fix-notes-refused">
+                {#each draftNoteRefusals as [reason, count] (reason)}
+                  <li data-reason={reason}>{describeDraftNoteRefusal(reason, count)}</li>
+                {/each}
+              </ul>
+            {/if}
+
+            <!-- WITHDRAWN NOTES ARE NOT GONE. They are listed, with their words,
+                 and one click puts each back. A withdrawal that could not be
+                 undone would be a deletion wearing a softer word. -->
+            {#if withdrawn.length > 0}
+              <div class="afx-withdrawn" data-testid="agent-fix-withdrawn">
+                <p class="afx-note">
+                  {withdrawn.length}
+                  {withdrawn.length === 1 ? 'note is' : 'notes are'} withdrawn from this review. Nothing was
+                  deleted — {withdrawn.length === 1 ? 'it is' : 'they are'} still on the line
+                  {withdrawn.length === 1 ? 'it was' : 'they were'} written on, and will not be posted until
+                  put back.
+                </p>
+                <ul class="afx-candidates">
+                  {#each withdrawn as note (note.draftKey)}
+                    <li class="afx-candidate" data-testid="agent-fix-withdrawn-note" data-draft-key={note.draftKey}>
+                      <span class="afx-loc">{note.path}:{note.line}</span>
+                      <span class="afx-body afx-struck">{note.preview}</span>
+                      {#if onNoteHandoff !== null}
+                        <button
+                          type="button"
+                          class="afx-link"
+                          data-testid="agent-fix-note-restore"
+                          onclick={() => decideNote(note.draftKey, 'kept')}
+                        >Put it back</button>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
+
+            {#if draftNotes.length > 0}
+              <span class="afx-note">
+                These are your own words, sent as your direction rather than as a claim to be judged. What
+                you decide to do with each note afterwards is asked below, once there is something to
+                decide about — and nothing is ever removed from your review on its own.
+              </span>
+            {/if}
+          </div>
+        {/if}
+
         <!-- Selection. Everything eligible is ticked; untick what you want to
              keep. The rule that got these here is stated once, plainly. -->
+        {#if candidates.length > 0}
         <div class="afx-select-head">
           <span class="afx-count" data-testid="agent-fix-count">
-            {selectedKeys.length} of {candidates.length} selected
+            {selectedFindingKeys.length} of {candidates.length} selected
           </span>
           <button type="button" class="afx-link" onclick={() => tickAll(true)}>Select all</button>
           <button type="button" class="afx-link" onclick={() => tickAll(false)}>Select none</button>
@@ -1064,6 +1385,7 @@
             </li>
           {/each}
         </ul>
+        {/if}
 
         <!-- REVIEW-BOT COMMENTS. Loaded on demand, ticked one by one, and
              always second: these are third-party claims, not this app's own
@@ -1431,6 +1753,8 @@
                   data-testid="agent-fix-reject"
                 >Reject</button>
               </div>
+
+              {@render noteFate(change.findingId)}
             </article>
           {/each}
 
@@ -1445,6 +1769,7 @@
                 <span class="afx-skip-chip">{fixSkipLabel(skip.reason)}</span>
               </header>
               <p class="afx-intent">{describeFixSkip(skip)}</p>
+              {@render noteFate(skip.findingId)}
             </article>
           {/each}
 
@@ -1648,6 +1973,64 @@
     gap: var(--space-1);
     font-size: var(--text-xs);
     font-family: var(--font-mono, ui-monospace, monospace);
+  }
+
+  /* ── The reviewer's own notes ─────────────────────────────────────────────
+     FIRST, and visibly separate — the same separation the bot list gets, for
+     the opposite reason: these are the only words in the panel the reviewer
+     wrote themselves, and a list that blurred them into a model's findings
+     would make "whose words are being sent" unanswerable at a glance.
+
+     Quiet, like everything else here. No success colour and no emphasis: a
+     note's fate is a fact about the review, not an achievement, and the only
+     thing given a tint is the strike-through on a withdrawn note, which is a
+     state the eye has to catch. */
+  .afx-notes {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .afx-note-chip {
+    flex: none;
+    padding: 0 var(--space-1);
+    border: 1px solid var(--hairline);
+    border-radius: var(--space-1);
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+  }
+
+  /* The decision row. It wraps rather than truncates: the sentence saying what
+     will happen to somebody's words is the part that must survive a narrow
+     window, and the two actions follow it rather than competing with it. */
+  .afx-fate {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+    font-size: var(--text-xs);
+  }
+
+  .afx-fate-text {
+    flex: 1 1 16rem;
+    color: var(--text-secondary);
+  }
+
+  .afx-withdrawn {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .afx-struck {
+    color: var(--text-muted);
+    text-decoration: line-through;
   }
 
   /* ── Review-bot comments ──────────────────────────────────────────────────

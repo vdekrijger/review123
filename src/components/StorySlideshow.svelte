@@ -438,7 +438,11 @@
   }
 
   function draftsFor(path: string) {
-    return draftStore?.drafts.filter((d) => d.path === path) ?? []
+    // `all`, not the live subset — the same rule InspectStep follows. A note the
+    // reviewer withdrew from their review stays on the line it was written on,
+    // struck through, with its way back; disappearing in one view of the diff
+    // and not the other is exactly the "did it get deleted?" this must not be.
+    return draftStore?.all.filter((d) => d.path === path) ?? []
   }
   function commentsFor(path: string): PrComment[] {
     return prComments.filter((c) => c.path === path)
