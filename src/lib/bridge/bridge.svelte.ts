@@ -409,6 +409,27 @@ function applyDisconnected(): void {
 }
 
 /**
+ * THE ONE SOURCE for "where is the served checkout right now".
+ *
+ * `holder.repoState` is that fact, and `/v1/health` is not the only route that
+ * learns it: `/v1/stack` re-reads the tree on demand, and `/v1/checkout` and
+ * `/v1/restore` MOVE it and report where they put it. Before this existed each
+ * of those updated a second holder in runPr.svelte.ts, and the two diverged the
+ * instant the app moved the user's tree — the top bar read the fresh one and
+ * said "Checked out here" while the fix panel and the Inspect header read the
+ * one from page load and said the checkout was somewhere else. Three surfaces,
+ * one working tree, three stories.
+ *
+ * So every route that learns the fact writes it HERE, and every surface reads
+ * it from here. Guarded on `connected` so a response that lands after the user
+ * disconnected cannot resurrect a tree state for a bridge that is gone.
+ */
+export function noteRepoState(git: BridgeGitState | null): void {
+  if (holder.status !== 'connected') return
+  holder.repoState = git
+}
+
+/**
  * USER-INITIATED pairing: store the token, probe, and report the outcome.
  * Returns true on success. A failure lands in `error` — this is the ONE path
  * where a failure is visible, because the user just asked for it.

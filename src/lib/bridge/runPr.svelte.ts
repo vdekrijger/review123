@@ -38,7 +38,7 @@
 
 import { classifyFetchFailure, requestSignals } from '../net/signals'
 import { deriveRepoRelation, type PrMeta, type PrRepoRelation } from '../github/types'
-import { bridgeAvailable, bridgeCredentials, bridgeState } from './bridge.svelte'
+import { bridgeAvailable, bridgeCredentials, bridgeState, noteRepoState } from './bridge.svelte'
 import {
   CHECKOUT_REQUEST_TIMEOUT_MS,
   bridgeUrl,
@@ -421,8 +421,14 @@ export const stackState = {
   get app(): BridgeStackApp | null {
     return holder.state?.app ?? null
   },
+  /**
+   * ONE FACT, ONE SOURCE. The tree's head does NOT come out of this module's
+   * own copy of the `/v1/stack` payload — it comes from `bridgeState`, which
+   * every route that learns it writes to (see `noteRepoState`). Reading the
+   * local copy is exactly how this surface came to contradict the other two.
+   */
   get git(): BridgeGitState | null {
-    return holder.state?.git ?? null
+    return bridgeState.git
   },
   get prior(): BridgeStackPrior | null {
     return holder.state?.prior ?? null
@@ -436,9 +442,18 @@ export const stackState = {
   get stash(): BridgeStackAction['stash'] {
     return holder.stash
   },
-  /** Is the served checkout sitting on this PR's head right now? */
+  /**
+   * Is the served checkout sitting on this PR's head right now?
+   *
+   * The head comes from the ONE SOURCE, so this can never disagree with the
+   * fix panel or the Inspect header. It still answers false with no `/v1/stack`
+   * answer at all: this drives an indicator whose job is to make sure the user
+   * is never surprised by where their tree is, and a surface that cannot ask
+   * the stack route should under-claim rather than assert.
+   */
   onPrBranch(prHead: string): boolean {
-    const head = holder.state?.git?.head
+    if (holder.state === null) return false
+    const head = bridgeState.git?.head
     return typeof head === 'string' && head.toLowerCase() === prHead.toLowerCase()
   },
 }
@@ -453,10 +468,74 @@ export function currentCheckoutReadiness(prHead: string): CheckoutReadiness {
       // reachable; either way we have no state, and `route-missing` is the
       // honest thing to say rather than pretending the repo has none.
       routeAvailable: holder.state !== null,
-      stack: holder.state,
+      // The stack payload supplies the app, the prior and the dirty list — but
+      // the HEAD is overlaid from the one source, so this rule and the two that
+      // read `bridgeState.git` directly can never answer differently.
+      stack: holder.state === null ? null : { ...holder.state, git: bridgeState.git },
     },
     prHead,
   )
+}
+
+// ---------------------------------------------------------------------------
+// What the app knows about the pull request on screen
+// ---------------------------------------------------------------------------
+
+/**
+ * The two facts a checkout needs that only the review route holds: WHICH ref
+ * to fetch, and WHOSE code it is.
+ *
+ * It lives here rather than being threaded through props because the surfaces
+ * that need it are not all in the route's component tree — the agent fix panel
+ * is four levels down inside the Inspect step, and the whole point of this
+ * change is that its refusal can offer the resolving action. Two surfaces
+ * deriving the trust answer from two different inputs is exactly the class of
+ * bug this PR is fixing, so both read this one record.
+ */
+export interface PrCheckoutContext {
+  /** The PR's head sha, as the app knows it. */
+  headSha: string
+  /** The provider-agnostic ref, or null when the provider exposes none. */
+  ref: string | null
+  /** The provider's own provenance answer, for the trust rule. */
+  relation: PrRepoRelation
+}
+
+const prContext = $state<{ value: PrCheckoutContext | null }>({ value: null })
+
+/** Publish the pull request on screen. The review route is the only caller. */
+export function notePrCheckoutContext(value: PrCheckoutContext | null): void {
+  prContext.value = value
+}
+
+/**
+ * The checkout context for `prHead`, or null when the app is not showing that
+ * pull request.
+ *
+ * KEYED ON THE HEAD SHA ON PURPOSE. A surface deep in the tree must never be
+ * able to offer "check this out" against a ref left over from the PR the user
+ * was looking at a moment ago.
+ */
+export function prCheckoutContext(prHead: string): PrCheckoutContext | null {
+  const value = prContext.value
+  if (value === null) return null
+  return value.headSha.toLowerCase() === prHead.toLowerCase() ? value : null
+}
+
+/**
+ * After a checkout, did the tree land on the commit the review was run against?
+ *
+ * A pull-request ref is resolved at FETCH time, so a PR that advanced between
+ * the review and the click lands the user on a commit NEWER than the one the
+ * findings describe. That is a third thing to say — not "it worked", and not
+ * "it failed" — and saying nothing would leave the panel refusing again with no
+ * explanation of why the thing they just did did not help.
+ *
+ * Returns null when they match, i.e. when there is nothing to say.
+ */
+export function describeCheckoutLanding(landedHead: string, reviewedHead: string): string | null {
+  if (landedHead.toLowerCase() === reviewedHead.toLowerCase()) return null
+  return `Your checkout is now at ${short(landedHead)} — but this review ran against ${short(reviewedHead)}, so the pull request moved while you were reading it. Reload to review ${short(landedHead)}; the findings on screen describe the older commit.`
 }
 
 // ---------------------------------------------------------------------------
@@ -664,10 +743,17 @@ export async function refreshStack(signal?: AbortSignal | null): Promise<BridgeS
   if (!outcome.ok) {
     // A 404 means an older bridge without the route. Leaving `state` null is
     // exactly right: `decideCheckout` then reports `route-missing`.
+    //
+    // `noteRepoState` is deliberately NOT called here. A failed probe learned
+    // nothing about the tree; blanking the one source would turn "I could not
+    // ask" into "there is no repository" for the Inspect header, which is a
+    // different — and false — claim.
     holder.state = null
     return null
   }
   holder.state = outcome.value
+  // This probe just re-read the tree, so it is the freshest answer anyone has.
+  noteRepoState(outcome.value.git)
   return outcome.value
 }
 
@@ -763,6 +849,10 @@ function applyOutcome(outcome: StackOutcome<BridgeStackAction>): StackOutcome<Br
   }
   holder.error = null
   holder.stash = outcome.value.stash
+  // THE ACTION MOVED THE TREE. Publishing where it landed is what keeps the
+  // top-bar indicator, the Inspect header and the fix panel describing the same
+  // working tree — they all read this one value.
+  noteRepoState(outcome.value.git)
   holder.state = {
     git: outcome.value.git,
     dirtyPaths: [],
@@ -782,4 +872,5 @@ export function _resetStackForTest(): void {
   holder.busy = false
   holder.error = null
   holder.stash = null
+  prContext.value = null
 }

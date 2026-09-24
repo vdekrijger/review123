@@ -1629,6 +1629,94 @@ test('run this PR: checked out but the dev server is down says so, and does not 
   await expect(page.getByTestId('runpr-open-app')).toHaveCount(0)
 })
 
+// ---------------------------------------------------------------------------
+// ONE WORKING TREE, ONE STORY.
+//
+// The bug this pins: the user checked a PR out through the app, and afterwards
+// the top bar showed a green "Checked out here" while the fix panel and the
+// Inspect header both said the checkout was on another commit. Two state
+// holders for one fact — `/v1/health`, read once at app start, and `/v1/stack`,
+// which every checkout refreshes.
+//
+// The fixture is deliberately the user's exact situation: `/v1/health` reports
+// `main`, and the checkout that follows moves the tree from inside the app.
+// ---------------------------------------------------------------------------
+
+test('the three surfaces tell ONE story, and the refusal offers the way out', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await setupReviewerProvider(page)
+  await stubBridgeStack(page, { checkoutEnabled: true })
+  await seedPairing(page)
+  await seedFixSkill(page)
+  await page.addInitScript((s) => localStorage.setItem('review123:settings', JSON.stringify(s)), fixSettings())
+
+  await runReviewers(page)
+
+  // ---- Before: all three agree the tree is somewhere else ----
+  const grounding = page.getByTestId('grounding-indicator')
+  await expect(grounding).toHaveAttribute('data-reason', 'head-mismatch', { timeout: 10_000 })
+  await expect(page.getByTestId('runpr-panel')).toHaveAttribute('data-on-pr', 'false')
+  const readiness = page.getByTestId('agent-fix-readiness')
+  await expect(readiness).toHaveAttribute('data-reason', 'head-mismatch')
+  // It names WHICH commit is on disk and WHICH one was reviewed.
+  await expect(readiness).toContainText(MAIN_SHA.slice(0, 7))
+  await expect(readiness).toContainText(HEAD_SHA.slice(0, 7))
+
+  // ---- The refusal has a way out, and it asks before moving anything ----
+  await page.getByTestId('agent-fix-checkout').click()
+  await expect(page.getByTestId('agent-fix-trust-text')).toContainText(/runs its code on your machine/i)
+  await page.getByTestId('agent-fix-trust-accept').click()
+
+  // ---- After: all three tell the SAME story ----
+  await expect(page.getByTestId('agent-fix-panel')).toHaveAttribute('data-ready', 'true', {
+    timeout: 10_000,
+  })
+  await expect(page.getByTestId('agent-fix-send')).toBeVisible()
+  await expect(page.getByTestId('runpr-panel')).toHaveAttribute('data-on-pr', 'true')
+  await expect(page.getByTestId('runpr-on-pr')).toContainText(/checked out here/i)
+  await expect(grounding).toHaveAttribute('data-mode', 'local')
+
+  // The bridge was sent a ref and the acknowledgement. Nothing else.
+  const sent = JSON.parse(
+    (
+      await page.evaluate(
+        () => (window as unknown as { __bridgeCalls: { url: string; body: string | null }[] }).__bridgeCalls,
+      )
+    ).find((c) => c.url.includes('/v1/checkout'))!.body ?? '{}',
+  )
+  expect(Object.keys(sent).sort()).toEqual(['acknowledgeUntrusted', 'ref'])
+  expect(sent.ref).toBe(`refs/pull/${PR_NUMBER}/head`)
+})
+
+test('the fix refusal offers NO way out without --allow-checkout', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await setupReviewerProvider(page)
+  // `fix: true` inside the stub — writing IS granted. Only the checkout grant
+  // is missing, which is exactly the confusion the separate flag prevents.
+  await stubBridgeStack(page, { checkoutEnabled: false })
+  await seedPairing(page)
+  await seedFixSkill(page)
+  await page.addInitScript((s) => localStorage.setItem('review123:settings', JSON.stringify(s)), fixSettings())
+
+  await runReviewers(page)
+
+  await expect(page.getByTestId('agent-fix-readiness')).toHaveAttribute('data-reason', 'head-mismatch', {
+    timeout: 10_000,
+  })
+  await expect(page.getByTestId('agent-fix-checkout')).toHaveCount(0)
+  const blocked = page.getByTestId('agent-fix-checkout-blocked')
+  await expect(blocked).toContainText('--allow-checkout')
+  await expect(blocked).toContainText('--allow-write does not enable this')
+
+  // THE INVARIANT: the route was never called.
+  const calls = await page.evaluate(
+    () => (window as unknown as { __bridgeCalls: { url: string; body: string | null }[] }).__bridgeCalls,
+  )
+  expect(calls.filter((c) => c.url.includes('/v1/checkout'))).toEqual([])
+})
+
 test('run this PR: with no bridge paired the surface does not exist at all', async ({ page }) => {
   await blockExternal(page)
   await setupGithub(page)

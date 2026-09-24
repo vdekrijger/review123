@@ -218,7 +218,12 @@ export function describeFixReadiness(readiness: FixReadiness, prHead: string): s
     case 'no-repo-state':
       return 'The paired bridge is not serving a git repository, so it cannot create the isolated worktree a fix needs.'
     case 'head-mismatch':
-      return `Your checkout is on ${readiness.branch ?? 'another branch'} (${short(readiness.bridgeHead)}); this PR's head is ${short(prHead)}. Check it out to fix findings against the code they describe.`
+      // Names both commits and what each one IS — which is on disk, which was
+      // reviewed. It no longer ends with "check it out": the panel offers that
+      // as an action when the bridge may do it, and says which flag grants it
+      // when it may not. An instruction with nothing to click was the whole
+      // complaint.
+      return `Your checkout is on ${readiness.branch ?? 'another branch'} at ${short(readiness.bridgeHead)}; these findings were reviewed at ${short(prHead)}. Fixing them here would produce a diff against code they do not describe.`
   }
 }
 

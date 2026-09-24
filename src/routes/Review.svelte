@@ -46,7 +46,7 @@
   import PreviewButton from '../components/PreviewButton.svelte'
   import PreviewPanel from '../components/PreviewPanel.svelte'
   import RunPrPanel from '../components/RunPrPanel.svelte'
-  import { prRefForProvider, stackState } from '../lib/bridge/runPr.svelte'
+  import { notePrCheckoutContext, prRefForProvider, stackState } from '../lib/bridge/runPr.svelte'
   import {
     pickBestPreview,
     loadPreviewPanelOpen,
@@ -183,6 +183,26 @@
   // Whether the picker is hidden due to commit fetch failure
   let pickerHidden = $state(false)
   let commitsInitializedForStep2 = false
+
+  // Publish which PR is on screen, and whose code it is, for the bridge
+  // surfaces that are not in this component's tree — the agent fix panel four
+  // levels down inside Inspect offers to bring the checkout to this PR when its
+  // head does not match, and it must decide trust from the SAME `repoRelation`
+  // the top-bar panel uses rather than deriving its own answer.
+  $effect(() => {
+    if (load.state.status !== 'ready') {
+      notePrCheckoutContext(null)
+      return
+    }
+    notePrCheckoutContext({
+      headSha: load.state.meta.headSha,
+      ref: prRefForProvider(prRefX.provider, number),
+      // A PrMeta from a build older than `repoRelation` has no such key. It
+      // reads as 'unknown' → `unverified` → the fork-grade confirmation, never
+      // as 'same-repo'.
+      relation: load.state.meta.repoRelation ?? 'unknown',
+    })
+  })
 
   $effect(() => {
     // Initialise the store once the PR is ready and we have the headSha
