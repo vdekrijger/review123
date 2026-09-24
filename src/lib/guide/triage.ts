@@ -25,6 +25,20 @@
  * findings/risk override forces `attention: 'novel'` — they are truthful data
  * about the file's shape; `attention` alone decides tail membership.
  *
+ * PHASE AWARENESS — exactly one reason depends on WHERE the reviewer is.
+ * "tests only" does not mean "this file is unimportant"; it means "read this
+ * LATER, in the phase that is about tests" (src/lib/guide/phase.svelte). That
+ * is correct while reviewing the implementation and wrong the moment the
+ * reviewer arrives in the Tests phase, where the test files are the entire
+ * subject — burying them there defers them to a phase the reviewer is already
+ * standing in. So `classifyFile` takes the phase and drops that ONE reason
+ * when phase === 'tests'.
+ *
+ * Every other signal stays phase-independent: a snapshot artifact, a generated
+ * file or a lockfile that happens to match isTestFile is still mechanical in
+ * the Tests phase, and still says why. Only the deferral reason goes away,
+ * because only the deferral has been honoured.
+ *
  * Framing contract (mirrors src/lib/risk): this estimates review ATTENTION —
  * where a human should spend their initial read — never "this file is safe".
  */
@@ -32,6 +46,9 @@
 import type { PrFile } from '../github/types'
 import type { RiskLevel } from '../risk/risk'
 import type { RiskFinding } from '../risk/risk'
+// TYPE-ONLY: erased at build, so this module stays pure and framework-free at
+// runtime even though the phase store it names is a runes module.
+import type { ReviewPhase } from './phase.svelte'
 import { isGeneratedFile } from '../diff/generated'
 import { isTestFile } from '../testFile'
 import { addedLines, removedLines } from '../risk/heuristics'
@@ -161,12 +178,17 @@ export function isVersionBumpOnly(patch: string | undefined): boolean {
  * @param contents  optional loaded contents, so generated-content markers
  *                  (`@generated` / DO NOT EDIT banners) are honored like the
  *                  Files-list sink does
+ * @param phase     the review phase this list is being read IN. In 'tests' the
+ *                  "tests only" deferral reason no longer applies (see the
+ *                  module header). Defaults to 'implementation' — the phase
+ *                  every non-phase-aware caller is implicitly in.
  */
 export function classifyFile(
   file: PrFile,
   fileRisk: RiskLevel,
   findings: readonly RiskFinding[],
   contents?: { before: string | null; after: string | null } | null,
+  phase: ReviewPhase = 'implementation',
 ): FileTriage {
   const reasons: string[] = []
 
@@ -178,7 +200,9 @@ export function classifyFile(
   } else if (isGeneratedFile(file.filename, contents)) {
     reasons.push('generated')
   }
-  if (isTestFile(file.filename)) reasons.push('tests only')
+  // The ONE phase-dependent reason: "read this later, in the Tests phase".
+  // Once the reviewer IS in the Tests phase there is no later to defer to.
+  if (phase !== 'tests' && isTestFile(file.filename)) reasons.push('tests only')
   if (isRenameWithoutChanges(file)) reasons.push('rename only')
   if (MANIFEST_NAMES.has(basenameOf(file.filename).toLowerCase()) && isVersionBumpOnly(file.patch)) {
     reasons.push('version bumps')

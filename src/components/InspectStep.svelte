@@ -353,6 +353,24 @@
   /** Approval staleness: new commits landed since the implementation was signed off. */
   const approvalStale = $derived(phaseApplies && phaseStore.isStale(currentHeadSha))
 
+  // The phase the ATTENTION classifier runs in (lib/guide/triage). Its "tests
+  // only" reason means "read this LATER, in the Tests phase" — so it must stop
+  // firing once the reviewer is looking AT the tests, or the very files they
+  // came to read collapse into the low-attention tail.
+  //
+  // That is true in two situations, not one:
+  //   - the Tests phase is active; and
+  //   - the PR is nothing BUT tests, where phases never engage (phaseApplies is
+  //     false because an empty Implementation phase helps nobody) and there is
+  //     therefore no later phase to defer anything to.
+  // Anything else — including Story mode, which shows the whole change — reads
+  // as 'implementation', the unchanged behaviour.
+  const triagePhase = $derived<ReviewPhase>(
+    testsPhaseActive || (!phaseApplies && implPhaseFiles.length === 0 && testPhaseFiles.length > 0)
+      ? 'tests'
+      : 'implementation',
+  )
+
   // Switching phase closes the low-attention tail: it belongs to the list you
   // were looking at, and re-opening it per phase is the honest default.
   // (No analytics here — EVENTS lives in the analytics module, which this
@@ -493,7 +511,9 @@
   }
 
   // Per-file mechanical-vs-novel triage. Risk level + findings feed the
-  // override (a flagged or high-risk file is NEVER buried in the tail).
+  // override (a flagged or high-risk file is NEVER buried in the tail), and
+  // triagePhase suppresses the "tests only" deferral once the reviewer has
+  // arrived at the tests (see triage.ts's PHASE AWARENESS note).
   const triageByPath = $derived.by(() => {
     const map = new Map<string, FileTriage>()
     for (const f of phaseFiles) {
@@ -502,7 +522,7 @@
         severity: s.severity,
         verification: s.verification,
       }))
-      map.set(f.filename, classifyAttention(f, level, findings, contentsMap?.get(f.filename)))
+      map.set(f.filename, classifyAttention(f, level, findings, contentsMap?.get(f.filename), triagePhase))
     }
     return map
   })

@@ -277,17 +277,69 @@ describe('InspectStep — sort, tail and progress inside a phase', () => {
     expect(container.querySelector('.attention-tail')).toBeNull()
   })
 
-  it('puts the Tests phase\'s mechanical test files in ITS tail under Risk first', async () => {
-    const { container } = render(InspectStep, { props: baseProps() })
+  it('never buries the Tests phase in its own tail — the tests ARE the subject', async () => {
+    const viewedStore = createViewedStore('o/r#1')
+    const { container } = render(InspectStep, { props: baseProps({ viewedStore }) })
     await fireEvent.click(screen.getByTestId('phase-btn-tests'))
     await fireEvent.click(screen.getByRole('button', { name: 'Risk first' }))
 
-    // Both test files are mechanical ("tests only") → the whole phase is tail.
+    // "tests only" means "read this LATER, in the Tests phase". The reviewer is
+    // now IN that phase, so it no longer applies and there is no tail at all —
+    // not an empty collapsed row, no row.
+    expect(container.querySelector('details.attention-tail')).toBeNull()
+    expect(mainCardIds(container)).toEqual(['file-src---tests---auth-ts', 'file-src-app-test-ts'])
+    expect(screen.getByTestId('attention-progress').textContent).toContain(
+      '0 of 2 attention files reviewed',
+    )
+  })
+
+  it('a test file with ANOTHER mechanical signal still tails in the Tests phase', async () => {
+    const files = [
+      makeFile('src/app.ts', { additions: 5 }),
+      makeFile('src/app.test.ts', { additions: 12 }),
+      makeFile('src/__snapshots__/render.test.ts.snap', { additions: 200 }),
+    ]
+    const { container } = render(InspectStep, { props: baseProps({ files, changedFiles: 3 }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Risk first' }))
+
+    // The snapshot is mechanical for being a SNAPSHOT, which is phase-independent.
     const tail = container.querySelector('details.attention-tail') as HTMLDetailsElement
     expect(tail).not.toBeNull()
-    expect(tail.textContent).toContain('2 low-attention files')
-    expect(tail.textContent).toContain('2 tests only')
-    expect(tailCardIds(container)).toEqual(['file-src---tests---auth-ts', 'file-src-app-test-ts'])
+    expect(tail.textContent).toContain('1 low-attention file')
+    expect(tail.textContent).toContain('1 snapshot')
+    // …and it does NOT claim the stale "tests only" deferral as the reason.
+    expect(tail.textContent).not.toContain('tests only')
+    expect(tailCardIds(container)).toEqual(['file-src---snapshots---render-test-ts-snap'])
+    // The real test file stays in the main list, where the reviewer can read it.
+    expect(mainCardIds(container)).toEqual(['file-src-app-test-ts'])
+  })
+
+  it('a tests-ONLY PR (no phases at all) is not buried either — there is no later', async () => {
+    const files = [
+      makeFile('src/app.test.ts', { additions: 12 }),
+      makeFile('src/__tests__/auth.ts', { additions: 9 }),
+    ]
+    const { container } = render(InspectStep, { props: baseProps({ files, changedFiles: 2 }) })
+    // Phases never engage here (an empty Implementation phase helps nobody).
+    expect(screen.queryByTestId('phase-bar')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Risk first' }))
+
+    expect(container.querySelector('details.attention-tail')).toBeNull()
+    expect(mainCardIds(container)).toEqual(['file-src---tests---auth-ts', 'file-src-app-test-ts'])
+  })
+
+  it('the Implementation phase still defers test files — the rule is not deleted', async () => {
+    // Guard against "fixing" this by dropping the deferral everywhere: with a
+    // test file visible in the implementation list (Story mode shows all files)
+    // the reason must still fire.
+    const { container } = render(InspectStep, { props: baseProps() })
+    await fireEvent.click(screen.getByRole('button', { name: 'Risk first' }))
+    // Implementation phase: the two test files are not here at all, and the two
+    // implementation files are both novel — so still no tail.
+    expect(container.querySelector('.attention-tail')).toBeNull()
+    expect(mainCardIds(container)).toEqual(['file-src-auth-big-ts', 'file-src-app-ts'])
+    expect(screen.getByTestId('phase-deferred-note').textContent).toContain('2 test files')
   })
 })
 
