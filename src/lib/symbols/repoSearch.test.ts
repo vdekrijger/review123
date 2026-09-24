@@ -161,7 +161,7 @@ describe('searchRepoForSymbol — pipeline', () => {
   it('returns empty refs (ok) when the search finds nothing', async () => {
     const ctx = makeCtx({ paths: [] })
     const out = await searchRepoForSymbol('computeTotal', ctx)
-    expect(out).toEqual({ ok: true, definitions: [], references: [], filesScanned: 0, filesSkipped: 0, contentsByPath: new Map() })
+    expect(out).toEqual({ ok: true, definitions: [], references: [], filesScanned: 0, filesSkipped: 0, contentsByPath: new Map(), source: 'provider' })
   })
 
   it('carries each scanned file\'s head-SHA contents for the definition peek', async () => {

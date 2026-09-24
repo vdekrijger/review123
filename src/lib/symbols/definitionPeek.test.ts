@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { peekDefinition, MAX_PEEK_LINES, MAX_PEEK_DECORATOR_LINES } from './definitionPeek'
+import { peekDefinition, MAX_PEEK_LINES, MAX_PEEK_EXPANDED_LINES, MAX_PEEK_DECORATOR_LINES } from './definitionPeek'
 import type { SymbolSource } from './symbolIndex'
 
 // ---------------------------------------------------------------------------
@@ -44,6 +44,24 @@ describe('peekDefinition — exact extent (tree-sitter endLine)', () => {
     expect(peek!.lines[39].line).toBe(40)
     expect(peek!.moreLines).toBe(21) // 61-line extent − 40 shown
     expect(peek!.limitedToPatch).toBe(false)
+  })
+
+  it('honours a caller-raised display cap, and moreLines follows it', () => {
+    // The popover re-peeks with MAX_PEEK_EXPANDED_LINES when the reader asks
+    // to see the rest, so the cap has to be a parameter, not a constant.
+    const body = ['function big() {', ...Array.from({ length: 59 }, (_, i) => `  step(${i})`), '}']
+    const src: SymbolSource = { filename: 'src/big.ts', contents: { before: null, after: body.join('\n') } }
+    const peek = peekDefinition(src, 'new', 1, 61, MAX_PEEK_EXPANDED_LINES)
+    expect(peek!.lines).toHaveLength(61)
+    expect(peek!.moreLines).toBe(0)
+  })
+
+  it('still caps at the raised limit when the extent outruns even that', () => {
+    const body = Array.from({ length: MAX_PEEK_EXPANDED_LINES + 40 }, (_, i) => `  step(${i})`)
+    const src: SymbolSource = { filename: 'src/huge.ts', contents: { before: null, after: body.join('\n') } }
+    const peek = peekDefinition(src, 'new', 1, body.length, MAX_PEEK_EXPANDED_LINES)
+    expect(peek!.lines).toHaveLength(MAX_PEEK_EXPANDED_LINES)
+    expect(peek!.moreLines).toBe(40)
   })
 
   it('clamps a (theoretical) endLine < startLine to a single line', () => {

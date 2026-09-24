@@ -62,8 +62,24 @@ export interface DefinitionPeek {
   limitedToPatch: boolean
 }
 
-/** Display cap — same 40-line idiom as the symbol-test snippets (#95/#109). */
+/**
+ * FIRST-RENDER display cap — the same 40-line idiom as the symbol-test
+ * snippets (#95/#109). Small on purpose: most definitions are well under it,
+ * and a popover that opens compact is easier to read than one that opens long.
+ */
 export const MAX_PEEK_LINES = 40
+
+/**
+ * Cap once the reader has asked to see the rest.
+ *
+ * There has to be a ceiling — "show everything" on a 5,000-line generated
+ * definition would render a whole file into a popover — but it is deliberately
+ * far above any hand-written definition, so in practice one click shows the
+ * whole thing. 400 also sits inside MAX_PEEK_SCAN, which already bounds how
+ * far the availability walk and the heuristic extent look ahead; a larger
+ * number here could not be honoured anyway.
+ */
+export const MAX_PEEK_EXPANDED_LINES = 400
 
 /** Forward-scan bound for the heuristic extent (and the availability probe). */
 const MAX_PEEK_SCAN = 500
@@ -197,12 +213,17 @@ function pythonDecoratorStart(map: ReadonlyMap<number, string>, defLine: number)
  * known; otherwise the extent is inferred heuristically (see module note).
  * Returns null when the start line isn't available at all (nothing honest to
  * show — the popover then simply offers no expand affordance).
+ *
+ * `maxLines` is how many lines to DISPLAY; the rest of the extent is reported
+ * in `moreLines`. Callers re-peek with a larger cap when the reader asks to
+ * see more, which is why the whole function is cheap and pure.
  */
 export function peekDefinition(
   source: SymbolSource,
   side: DiffSide,
   startLine: number,
   endLine?: number,
+  maxLines: number = MAX_PEEK_LINES,
 ): DefinitionPeek | null {
   const { lines: map, full } = availableSideLines(source, side)
   if (!map.has(startLine)) return null
@@ -230,7 +251,7 @@ export function peekDefinition(
   // `limitedToPatch` keep meaning exactly what they meant before.
   const peekStart = lang === 'python' ? pythonDecoratorStart(map, startLine) : startLine
 
-  const shownEnd = Math.min(extentEnd, availEnd, peekStart + MAX_PEEK_LINES - 1)
+  const shownEnd = Math.min(extentEnd, availEnd, peekStart + Math.max(1, maxLines) - 1)
   const lines: PeekLine[] = []
   for (let n = peekStart; n <= shownEnd; n++) lines.push({ line: n, text: map.get(n)! })
 

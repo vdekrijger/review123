@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 import SymbolPopover from './SymbolPopover.svelte'
 import type { SymbolDefinition, SymbolReference } from '../lib/symbols/symbolIndex'
 import { repoSearchIsFree, type RepoSearchOutcome } from '../lib/symbols/repoSearch'
+import { MAX_PEEK_LINES, MAX_PEEK_EXPANDED_LINES } from '../lib/symbols/definitionPeek'
 import { registerSymbolSource, _resetSymbolSourcesForTest } from '../lib/symbols/symbolSources'
 
 // The only thing the popover uses from repoSearch at runtime is the cost
@@ -330,14 +331,66 @@ describe('SymbolPopover — definition peek', () => {
     })
   })
 
-  it('caps long bodies at 40 lines with an honest more-lines marker', async () => {
+  it('opens long bodies at 40 lines and offers the rest as a control, not a label', async () => {
     const body = ['export function computeTotal() {', ...Array.from({ length: 59 }, (_, i) => `  step(${i})`), '}']
     registerUtilSource(body.join('\n'))
     renderPopover({ definitions: [{ ...def, line: 1, endLine: 61 }] })
     await fireEvent.click(screen.getByRole('button', { name: 'Definition body at src/util.ts:1' }))
     const block = screen.getByTestId('definition-peek')
     expect(block.querySelector('.peek-gutter')!.textContent!.split('\n')).toHaveLength(40)
-    expect(block.textContent).toContain('… (21 more lines)')
+    // The remainder is a door: it promises exactly what one click will add.
+    const more = screen.getByRole('button', { name: 'Show 21 more lines' })
+    await fireEvent.click(more)
+    expect(screen.getByTestId('definition-peek').querySelector('.peek-gutter')!.textContent!.split('\n')).toHaveLength(61)
+    expect(screen.queryByRole('button', { name: /Show \d+ more lines/ })).not.toBeInTheDocument()
+    expect(screen.getByTestId('definition-peek').textContent).not.toContain('more line')
+  })
+
+  it('stops at the expanded ceiling and falls back to the honest static remainder', async () => {
+    // Kept inside definitionPeek's 500-line availability walk, so the number
+    // under test is the display ceiling and not that separate bound.
+    const total = MAX_PEEK_EXPANDED_LINES + 60
+    const body = ['export function computeTotal() {', ...Array.from({ length: total - 2 }, (_, i) => `  step(${i})`), '}']
+    registerUtilSource(body.join('\n'))
+    renderPopover({ definitions: [{ ...def, line: 1, endLine: total }] })
+    await fireEvent.click(screen.getByRole('button', { name: 'Definition body at src/util.ts:1' }))
+    // One click can only add up to the ceiling, and the label says so.
+    const reveal = MAX_PEEK_EXPANDED_LINES - MAX_PEEK_LINES
+    await fireEvent.click(screen.getByRole('button', { name: `Show ${reveal} more lines` }))
+    const block = screen.getByTestId('definition-peek')
+    expect(block.querySelector('.peek-gutter')!.textContent!.split('\n')).toHaveLength(MAX_PEEK_EXPANDED_LINES)
+    // No control it cannot honour — the remaining count goes back to a label.
+    expect(screen.queryByRole('button', { name: /Show \d+ more lines/ })).not.toBeInTheDocument()
+    expect(block.textContent).toContain(`… (${total - MAX_PEEK_EXPANDED_LINES} more lines)`)
+  })
+
+  it('keeps the patch-only note distinct from a capped body — nothing to expand there', async () => {
+    // The source genuinely LACKS the lines, so there must be no control
+    // offering to reveal them; only the honest explanation.
+    registerSymbolSource({
+      filename: 'src/util.ts',
+      status: 'modified',
+      patch: ['@@ -1,2 +1,2 @@', ' export function computeTotal() {', '+  const added = 1'].join('\n'),
+    })
+    renderPopover({ definitions: [{ ...def, line: 1, endLine: undefined }] })
+    await fireEvent.click(screen.getByRole('button', { name: 'Definition body at src/util.ts:1' }))
+    expect(screen.getByTestId('definition-peek').textContent).toContain('Only the changed lines are available for this file.')
+    expect(screen.queryByRole('button', { name: /Show \d+ more lines/ })).not.toBeInTheDocument()
+  })
+
+  it('collapsing the row resets the reveal, so reopening starts compact again', async () => {
+    const body = ['export function computeTotal() {', ...Array.from({ length: 59 }, (_, i) => `  step(${i})`), '}']
+    registerUtilSource(body.join('\n'))
+    renderPopover({ definitions: [{ ...def, line: 1, endLine: 61 }] })
+    const toggle = screen.getByRole('button', { name: 'Definition body at src/util.ts:1' })
+    await fireEvent.click(toggle)
+    await fireEvent.click(screen.getByRole('button', { name: 'Show 21 more lines' }))
+    expect(screen.getByTestId('definition-peek').querySelector('.peek-gutter')!.textContent!.split('\n')).toHaveLength(61)
+    // Reveal is one-way WITHIN an open peek; the row's own caret is how you
+    // put it away, and it does not strand the peek in its expanded size.
+    await fireEvent.click(toggle)
+    await fireEvent.click(toggle)
+    expect(screen.getByTestId('definition-peek').querySelector('.peek-gutter')!.textContent!.split('\n')).toHaveLength(40)
   })
 
   it('shows the honest patch-only note when the hunk cuts the body off', async () => {
