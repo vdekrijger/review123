@@ -39,7 +39,7 @@
     <h3 class="readiness-title" id="readiness-title">Readiness basis</h3>
 
     <p class="readiness-headline" data-testid="readiness-headline">
-      <span class="readiness-band">{report.label}</span><span class="readiness-dash"> — </span><span
+      <span class="readiness-band">{report.label}</span><span class="readiness-dash">&nbsp;—&nbsp;</span><span
         class="readiness-reason">{report.reason}</span>
     </p>
 
