@@ -110,6 +110,47 @@ describe('InspectStep — "Run my reviewers" button', () => {
     listSkills().forEach(s => removeSkill(s.id))
   })
 
+  // PHASE SCOPE (#275): `enabled` means "runs in at least one phase", so the
+  // automatic (implementation) pass must count what will actually run in IT.
+  it('counts only the reviewers scoped to the implementation pass', () => {
+    addSkill('Security', 'check for XSS', 'implementation')
+    addSkill('Both', 'applies everywhere', 'both')
+    addSkill('Test critic', 'check the assertions', 'tests')
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test' }))
+    const files = makeFiles(['src/foo.ts'])
+    render(InspectStep, {
+      props: {
+        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null,
+        runSkillReviewsFn: vi.fn(),
+        skillReviews: [],
+      },
+    })
+    // Three reviewers are enabled; two of them run in this pass.
+    expect(screen.getByRole('button', { name: /run my reviewers \(2\)/i })).toBeInTheDocument()
+    listSkills().forEach(s => removeSkill(s.id))
+  })
+
+  it('offers no run button — and says why — when every reviewer is tests-scoped', () => {
+    addSkill('Test critic', 'check the assertions', 'tests')
+    addSkill('Other test critic', 'check the fixtures', 'tests')
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test' }))
+    const files = makeFiles(['src/foo.ts'])
+    render(InspectStep, {
+      props: {
+        files, changedFiles: 1, mode: 'unified', onmode: () => {}, draftStore: null,
+        runSkillReviewsFn: vi.fn(),
+        skillReviews: [],
+      },
+    })
+    // No dead click…
+    expect(screen.queryByRole('button', { name: /run my reviewers/i })).not.toBeInTheDocument()
+    // …and not a silent disappearance either: the count and a way back.
+    const note = screen.getByTestId('no-impl-reviewers-note')
+    expect(note.textContent).toContain('2 reviewers scoped to the tests phase only')
+    expect(note.querySelector('a')).toHaveAttribute('href', '/settings')
+    listSkills().forEach(s => removeSkill(s.id))
+  })
+
   it('does not show run button when no skills', () => {
     localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test' }))
     const files = makeFiles(['src/foo.ts'])

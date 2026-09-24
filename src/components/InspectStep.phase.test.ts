@@ -656,6 +656,36 @@ describe('InspectStep — the on-demand tests reviewer pass', () => {
     expect(screen.getByTestId('tests-review-hint').textContent).toContain('2 reviewers · agentic · runs on demand')
   })
 
+  // PHASE SCOPE (#275): the hint is the cost the click will ACTUALLY spend, so
+  // it counts the reviewers scoped to the tests pass, not the enabled ones.
+  it('the cost hint counts the tests-scoped reviewers, not every enabled one', async () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test' }))
+    addSkill('Security', 'check for XSS', 'implementation')
+    addSkill('Both', 'applies everywhere', 'both')
+    addSkill('Impl only too', 'more impl', 'implementation')
+    render(InspectStep, { props: baseProps({ runTestsReviewFn: () => {} }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+
+    // Three enabled, one runs here — the hint must not promise three.
+    expect(screen.getByTestId('tests-review-hint').textContent).toContain(
+      '1 reviewer · agentic · runs on demand',
+    )
+  })
+
+  it('offers no tests pass — and says why — when no reviewer is scoped to it', async () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test' }))
+    addSkill('Security', 'check for XSS', 'implementation')
+    render(InspectStep, { props: baseProps({ runTestsReviewFn: () => {} }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+
+    // No dead click…
+    expect(screen.queryByTestId('tests-review-run')).not.toBeInTheDocument()
+    // …and not silence either: a reason and one click to where the scope is set.
+    const note = screen.getByTestId('no-tests-reviewers-note')
+    expect(note.textContent).toContain('No reviewer is scoped to the tests phase')
+    expect(note.querySelector('a')).toHaveAttribute('href', '/settings')
+  })
+
   it('clicking it calls runTestsReviewFn — it never fires on its own', async () => {
     withKeyAndSkill()
     const runTestsReviewFn = vi.fn()

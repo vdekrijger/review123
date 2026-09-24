@@ -33,7 +33,7 @@
   import { rankFindings, getFindingsShowAll, setFindingsShowAll } from '../lib/ai/findingRank'
   import AgentFixPanel, { type FixCandidateEntry } from './AgentFixPanel.svelte'
   import { currentFixReadiness, fixEligibility } from '../lib/bridge/fixLoop'
-  import { listSkills } from '../lib/skills/skills'
+  import { listSkills, listSkillsForPhase } from '../lib/skills/skills'
   import { recordDismissal, type DismissReason } from '../lib/skills/calibration'
   import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
   import { computeFileRisk, type RiskLevel } from '../lib/risk/risk'
@@ -1380,7 +1380,15 @@
     addedDraftKeys = new Set([...addedDraftKeys, finding.key])
   }
 
-  // Show the run button when: skills exist + key present + runSkillReviewsFn provided
+  // PHASE SCOPE (#275): a skill declares WHICH phase it runs in, and `enabled`
+  // now only means "runs in at least one phase". So every control below asks
+  // the question it actually needs — "will THIS pass create an entry for it?"
+  // — because with a scope in play those are different numbers (the built-in
+  // defaults put 11 reviewers on the implementation pass and 3 on the tests
+  // pass, so "enabled" would promise eleven where three will run).
+  const implSkillCount = $derived(listSkillsForPhase('implementation').length)
+  const testsSkillCount = $derived(listSkillsForPhase('tests').length)
+  /** Reviewers that are on SOMEWHERE — the "do you have reviewers at all" question. */
   const enabledSkillCount = $derived(listSkills().filter(s => s.enabled).length)
   // Run button gates on the ACTIVE provider's key (Plan F), not deepseekKey
   const hasKey = $derived(activeProviderHasKey())
@@ -1388,9 +1396,20 @@
   // all — show a compact disabled note instead of the Run button. Reactive via
   // settingsState so toggling it in settings updates the step live.
   const skillsOff = $derived(settingsState.current.aiTaskModes.skills === 'off')
-  const showRunButton = $derived(!skillsOff && enabledSkillCount > 0 && hasKey && runSkillReviewsFn !== null)
+  // The automatic pass is the IMPLEMENTATION pass, so it is offered on the
+  // implementation count — never on "enabled", which would be a dead click for
+  // a reviewer set that is entirely tests-scoped.
+  const showRunButton = $derived(!skillsOff && implSkillCount > 0 && hasKey && runSkillReviewsFn !== null)
   // Show the disabled note only when reviewers WOULD otherwise be offered.
   const showSkillsDisabled = $derived(skillsOff && enabledSkillCount > 0 && hasKey && runSkillReviewsFn !== null)
+  // The zero case is REAL, not a reason to render nothing: you can have eleven
+  // reviewers on and none of them scoped to this pass. Say so, with the count
+  // and one click to where the scope is set — silence would read as "reviewers
+  // are broken". If implSkillCount is 0 while some reviewer is enabled, every
+  // enabled reviewer is necessarily tests-scoped, so the wording is provable.
+  const showNoImplReviewers = $derived(
+    !skillsOff && implSkillCount === 0 && enabledSkillCount > 0 && hasKey && runSkillReviewsFn !== null,
+  )
 
   // Plan J: link to settings from the disabled reviewers note (preserve return-to).
   function goToSettings(e: MouseEvent) {
@@ -1423,7 +1442,11 @@
   // itself: this is the expensive pass — every enabled reviewer, agentic — so
   // the user decides when to spend it, and the cost is stated BEFORE the click.
   const showTestsReviewAction = $derived(
-    testsPhaseActive && !skillsOff && enabledSkillCount > 0 && hasKey && runTestsReviewFn !== null,
+    testsPhaseActive && !skillsOff && testsSkillCount > 0 && hasKey && runTestsReviewFn !== null,
+  )
+  /** Same zero case on the tests side: reviewers exist, none is scoped here. */
+  const showNoTestsReviewers = $derived(
+    testsPhaseActive && !skillsOff && testsSkillCount === 0 && enabledSkillCount > 0 && hasKey && runTestsReviewFn !== null,
   )
   /** True once the tests pass has produced entries (run, or running). */
   const testsReviewStarted = $derived(testReviews.length > 0)
@@ -1432,7 +1455,7 @@
   )
   /** Honest cost hint shown BEFORE the click — what the click will actually spend. */
   const testsReviewCostHint = $derived(
-    `${enabledSkillCount} reviewer${enabledSkillCount === 1 ? '' : 's'} · agentic · runs on demand`,
+    `${testsSkillCount} reviewer${testsSkillCount === 1 ? '' : 's'} · agentic · runs on demand`,
   )
   // Actual spend AFTER the run, when the user has opted into cost display.
   const showCost = $derived(settingsState.current.showTokenCost)
@@ -1747,12 +1770,16 @@
       {#if isRunning}
         <Spinner size="0.75em" />Running…
       {:else}
-        Run my reviewers ({enabledSkillCount})
+        Run my reviewers ({implSkillCount})
       {/if}
     </button>
   {:else if showSkillsDisabled}
     <p class="reviewers-disabled-note">
       Reviewers disabled — <a href="/settings" onclick={goToSettings}>enable in AI settings</a>
+    </p>
+  {:else if showNoImplReviewers}
+    <p class="reviewers-disabled-note" data-testid="no-impl-reviewers-note">
+      {enabledSkillCount} reviewer{enabledSkillCount === 1 ? '' : 's'} scoped to the tests phase only — <a href="/settings" onclick={goToSettings}>change the scope</a>
     </p>
   {/if}
 </div>
@@ -2219,6 +2246,12 @@
           </span>
         {/if}
       </div>
+    {:else if showNoTestsReviewers}
+      <!-- The zero case said out loud: reviewers ARE on, none of them runs in
+           this pass. Silence here would read as "the tests pass is broken". -->
+      <p class="reviewers-disabled-note" data-testid="no-tests-reviewers-note">
+        No reviewer is scoped to the tests phase — <a href="/settings" onclick={goToSettings}>change the scope</a>
+      </p>
     {/if}
   {/if}
 
