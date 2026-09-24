@@ -304,23 +304,24 @@
   .tab-bar button {
     background: none;
     border: none;
-    padding: 0.4rem 1rem;
+    padding: var(--space-2) var(--space-4);
     cursor: pointer;
-    font-size: 0.9rem;
-    color: var(--text);
-    opacity: 0.7;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
   }
 
   .tab-bar button.active {
-    opacity: 1;
+    color: var(--text);
+    font-weight: 600;
     border-bottom: 2px solid currentColor;
     margin-bottom: -1px;
   }
 
   .toolbar {
     display: flex;
-    gap: 0.25rem;
-    padding: 0.35rem 0.5rem;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
     border-bottom: 1px solid var(--hairline);
     background: var(--surface-raised);
   }
@@ -329,11 +330,19 @@
     background: none;
     border: 1px solid transparent;
     border-radius: 4px;
-    padding: 0.2rem 0.5rem;
+    padding: var(--space-1) var(--space-2);
     cursor: pointer;
-    font-size: 0.85rem;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
     line-height: 1.2;
     color: var(--text);
+  }
+
+  /* The ` and ``` glyph buttons name a CODE affordance — they keep the code
+     face (A2) while the rest of the chrome is UI. */
+  .toolbar button :global(code) {
+    font-family: var(--font-mono);
+    font-size: inherit;
   }
 
   .toolbar button:hover {
@@ -341,15 +350,23 @@
     background: var(--accent-subtle);
   }
 
+  /*
+   * THE COMPOSER IS PROSE, NOT CODE. `font-family: inherit` here meant the box
+   * inherited the monospace diff surface this editor renders inside, so a review
+   * comment — a paragraph of English with the occasional `identifier` — was
+   * typed and read in IBM Plex Mono. The app declares three faces on purpose
+   * (app.css:3-5); this one is UI text the reviewer writes.
+   */
   textarea {
     width: 100%;
     min-height: 8rem;
     resize: vertical;
     border: none;
     border-radius: 0 0 6px 6px;
-    padding: 0.6rem 0.75rem;
-    font-family: inherit;
-    font-size: 0.95rem;
+    padding: var(--space-3);
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    line-height: 1.55;
     box-sizing: border-box;
     background: var(--surface);
     color: var(--text);
@@ -361,11 +378,38 @@
     color: var(--text-muted);
   }
 
+  /*
+   * Preview renders what the PUBLISHED comment will look like, so it uses the
+   * same prose face and the same measure the saved body does (p.99-101) —
+   * otherwise Preview is a preview of something else.
+   */
   .preview {
-    padding: 0.6rem 0.75rem;
+    padding: var(--space-3);
     min-height: 8rem;
     color: var(--text);
+    font-family: var(--font-prose);
+    font-size: var(--text-base);
+    line-height: 1.6;
+    max-width: var(--measure-prose);
   }
+
+  /* A2: code inside the preview keeps the code face and its own measure. */
+  .preview :global(code),
+  .preview :global(pre) { font-family: var(--font-mono); }
+  .preview :global(code) {
+    font-size: var(--text-xs);
+    background: var(--surface-sunken);
+    padding: 0.125rem var(--space-1);
+    border-radius: 3px;
+  }
+  .preview :global(pre) {
+    background: var(--surface-sunken);
+    padding: var(--space-2);
+    border-radius: 4px;
+    overflow-x: auto;
+    max-width: none;
+  }
+  .preview :global(pre code) { background: none; padding: 0; }
 
   /* ── Emoji picker popover ── */
 
@@ -382,7 +426,7 @@
     display: grid;
     grid-template-columns: repeat(6, auto);
     gap: 2px;
-    padding: 0.35rem;
+    padding: var(--space-1);
     background: var(--surface-raised);
     border: 1px solid var(--hairline);
     border-radius: 6px;
@@ -394,8 +438,8 @@
     background: none;
     border: 1px solid transparent;
     border-radius: 4px;
-    padding: 0.15rem 0.3rem;
-    font-size: 1rem;
+    padding: 0.125rem var(--space-1);
+    font-size: var(--text-base);
     line-height: 1.2;
     cursor: pointer;
   }
@@ -406,8 +450,12 @@
     background: var(--accent-subtle);
   }
 
+  /* An empty preview is a (small) empty state: it says what is missing in the
+     UI face at a legible ink, not as greyed-out prose (p.203-204, p.34-35). */
   .empty-preview {
-    opacity: 0.5;
-    font-style: italic;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    margin: 0;
   }
 </style>

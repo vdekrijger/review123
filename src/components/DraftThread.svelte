@@ -5,9 +5,19 @@
    * Shows an existing draft body (rendered via renderMarkdown) with Edit/Delete buttons,
    * or a CommentEditor in edit/new mode.
    *
+   * TWO SURFACES, NOT ONE. The composer is what you PUBLISH; the Ask AI panel is a
+   * consultation you do NOT publish. They used to share one textarea — "Ask AI" sent
+   * whatever was in the comment draft as the question — so the same sentence appeared
+   * both as an unsent draft and as a sent question bubble and no reader could tell
+   * which it was. One input with two meanings is the bug, so the question now has its
+   * own input inside the Ask AI panel and the composer is only ever the comment.
+   *
+   * The panel reads like every other chat surface: transcript ABOVE, composer BELOW,
+   * newest exchange adjacent to the input. It sits UNDER the action row, so "Leave
+   * comment" keeps its position no matter how long the conversation grows.
+   *
    * Single editor surface: typing then clicking "Leave comment" saves as draft (the Save
-   * flow), "Ask AI" sends the SAME textarea text as a question (streams the answer below,
-   * textarea stays for follow-ups), Cancel closes.
+   * flow), "Ask AI" opens/closes the consultation panel, Cancel closes.
    *
    * Expand (terse-note expander): "Expand" appears next to Ask AI when the composer has
    * text. It streams an LLM-expanded version of the note into a PREVIEW panel with
@@ -21,8 +31,10 @@
    * Keep my note.
    *
    * Gating: when askDisabledReason is set, the Ask AI and Expand buttons are shown but
-   * disabled (the hint text is displayed below the textarea) — same keyless handling
-   * for both.
+   * disabled (the hint text is displayed below the action row) — same keyless handling
+   * for both. Nothing else disables Ask AI: it used to be disabled whenever the composer
+   * was empty, which was a dead end with no stated reason (the panel has its own input
+   * now, so an empty composer is irrelevant to it).
    */
   import type { AskFocus } from '../lib/ai/tasks'
   import { renderMarkdown } from '../lib/markdown/render'
@@ -32,11 +44,23 @@
   import { draftTimeLabel, draftTimeTitle } from '../lib/drafts/drafts.svelte'
 
   interface ConversationEntry {
+    /**
+     * Stable identity for the keyed #each. The key USED to be
+     * `question + answer.slice(0, 20)`, which mutates on every streamed delta
+     * until the answer is 20 characters long — Svelte tears the block down and
+     * rebuilds it on each one — and collides outright when the same question is
+     * asked twice. A monotonic id is the identity; the text is the content.
+     */
+    id: number
     question: string
     answer: string
     streaming: boolean
     error: string | null
   }
+
+  /** Monotonic source for ConversationEntry.id — one counter per thread, which is
+      all a keyed #each needs (keys only have to be unique within their own block). */
+  let nextEntryId = 0
 
   interface Props {
     /** Existing draft for this line, or null when opening a new comment */
@@ -144,8 +168,10 @@
         editing = false
         editorValue = draft.body
       }
-      // A different draft loaded → any in-flight/preview expansion is stale.
+      // A different draft loaded → any in-flight/preview expansion, and the
+      // consultation that belonged to the old draft, are stale.
       resetExpand()
+      resetAsk()
     }
   })
 
@@ -154,6 +180,7 @@
       onsave(editorValue)
       editing = false
       resetExpand()
+      resetAsk()
     }
   }
 
@@ -168,6 +195,7 @@
 
   function handleCancel() {
     resetExpand()
+    resetAsk()
     if (draft === null) {
       // New draft cancelled: close the widget
       oncancel()
@@ -179,32 +207,74 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Ask AI state (unified with the comment editor surface)
+  // Ask AI — a consultation panel with its OWN input, separate from the composer
   // ---------------------------------------------------------------------------
 
   let askLoading = $state(false)
   let conversation = $state<ConversationEntry[]>([])
+  /** Is the consultation panel open? The "Ask AI" action row button toggles it. */
+  let askOpen = $state(false)
+  /** The QUESTION. Deliberately not `editorValue` — see the header comment. */
+  let askQuestion = $state('')
+  let askInputEl = $state<HTMLTextAreaElement | null>(null)
+  let transcriptEl = $state<HTMLElement | null>(null)
 
   const hasAskFn = $derived(askFn !== null && askFn !== undefined)
-  const askDisabled = $derived(!!askDisabledReason || askLoading || !editorValue.trim())
+  /**
+   * The TOGGLE is gated only by the keyless reason — which is stated, right
+   * below the row. An empty composer no longer disables it: the panel asks its
+   * own question, and a control disabled for a reason it does not give is a
+   * dead end (rubric p.52-53).
+   */
+  const askToggleDisabled = $derived(!!askDisabledReason)
+  /** The SEND button inside the panel: needs a question, and one at a time. */
+  const askSendDisabled = $derived(!!askDisabledReason || askLoading || !askQuestion.trim())
 
   const focus = $derived<AskFocus>({ path, line, excerpt })
+
+  /** Panel id for aria-controls — unique per mounted thread. */
+  const panelId = `ask-panel-${Math.random().toString(36).slice(2, 9)}`
+
+  function resetAsk() {
+    askOpen = false
+    askQuestion = ''
+    conversation = []
+    askLoading = false
+  }
+
+  function toggleAsk() {
+    askOpen = !askOpen
+    if (askOpen) {
+      // Keyboard-first: the panel's own input takes focus when it opens.
+      queueMicrotask(() => askInputEl?.focus())
+    }
+  }
+
+  /** Keep the newest exchange next to the input the way every chat surface does. */
+  function scrollTranscriptToEnd() {
+    const el = transcriptEl
+    if (el) el.scrollTop = el.scrollHeight
+  }
 
   async function submitAsk(q: string) {
     if (!q.trim() || askLoading || !askFn) return
 
     const trimmed = q.trim()
-    // NOTE: textarea stays filled (editorValue not cleared) so user can follow-up
+    // The QUESTION input clears on send (it has been sent); the COMPOSER is
+    // never touched by asking — that separation is the whole point.
+    askQuestion = ''
     askLoading = true
 
-    const entry: ConversationEntry = { question: trimmed, answer: '', streaming: true, error: null }
+    const entry: ConversationEntry = { id: nextEntryId++, question: trimmed, answer: '', streaming: true, error: null }
     conversation = [...conversation, entry]
     const entryIndex = conversation.length - 1
+    scrollTranscriptToEnd()
 
     const result = await askFn(trimmed, (delta) => {
       conversation = conversation.map((e, i) =>
         i === entryIndex ? { ...e, answer: e.answer + delta, streaming: true } : e,
       )
+      scrollTranscriptToEnd()
     }, focus)
 
     if (result.ok) {
@@ -218,10 +288,32 @@
     }
 
     askLoading = false
+    scrollTranscriptToEnd()
   }
 
-  function handleAskClick() {
-    void submitAsk(editorValue)
+  function handleAskSubmit() {
+    void submitAsk(askQuestion)
+  }
+
+  /** Retry drops the failed turn and re-asks the same question (mirrors AskAi). */
+  function retryAsk(entry: ConversationEntry) {
+    const q = entry.question
+    conversation = conversation.filter((e) => e.id !== entry.id)
+    void submitAsk(q)
+  }
+
+  function handleAskKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      askOpen = false
+      return
+    }
+    // Enter (or Cmd/Ctrl+Enter) sends; Shift+Enter inserts a newline.
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      if (!askSendDisabled) handleAskSubmit()
+    }
   }
 
   function copyAnswer(answer: string) {
@@ -347,50 +439,34 @@
   </div>
 
   {#if editing}
-    <!-- Single editor surface for comment + ask AI -->
+    <!--
+      REGION 1 — YOUR COMMENT. Everything down to the action row is the thing
+      that gets published: the composer, the expansion awaiting approval, and
+      the actions that act on them. The consultation lives below, on its own.
+    -->
     <CommentEditor
       value={editorValue}
       onchange={(v) => (editorValue = v)}
       onsubmit={handleSave}
     />
 
-    <!-- AI conversation: streamed answers appear below textarea -->
-    {#if conversation.length > 0}
-      <div class="ask-inline-conversation" aria-live="polite" data-testid="ask-conversation">
-        {#each conversation as entry (entry.question + entry.answer.slice(0, 20))}
-          <div class="ask-inline-question">{entry.question}</div>
-          {#if entry.streaming && !entry.error}
-            <div class="ask-inline-answer ask-inline-streaming">{entry.answer}<span class="ask-inline-cursor" aria-hidden="true"></span></div>
-          {:else if entry.error}
-            <div class="ask-inline-error" role="alert">{entry.error}</div>
-          {:else}
-            <div class="ask-inline-answer" data-testid="ask-answer">
-              <MarkdownView source={entry.answer} />
-              <button
-                type="button"
-                class="ask-copy-btn"
-                onclick={() => copyAnswer(entry.answer)}
-                aria-label="Copy answer"
-                data-testid="copy-answer-btn"
-              >Copy</button>
-            </div>
-          {/if}
-        {/each}
-      </div>
-    {/if}
-
-    <!-- Expand: streaming/loading state, preview panel, or inline error -->
+    <!--
+      Expand: streaming state, preview panel, or inline error. It sits DIRECTLY
+      under the composer because Use / Keep my note act on the composer — a
+      control belongs nearer its own target than the next group (p.83, p.86).
+      It used to sit below the whole transcript.
+    -->
     {#if expandLoading}
-      <div class="expand-preview" data-testid="expand-preview" aria-live="polite">
-        <div class="expand-preview-label">Expanding your note…</div>
+      <div class="ai-card expand-preview" data-testid="expand-preview" aria-live="polite">
+        <span class="ai-card-tag">AI · expanding your note…</span>
         {#if expandStreamText}
-          <div class="expand-streaming" data-testid="expand-streaming">{expandStreamText}<span class="ask-inline-cursor" aria-hidden="true"></span></div>
+          <div class="ai-card-body expand-streaming" data-testid="expand-streaming">{expandStreamText}<span class="ask-cursor" aria-hidden="true"></span></div>
         {/if}
       </div>
     {:else if expandPreview !== null}
-      <div class="expand-preview" data-testid="expand-preview">
-        <div class="expand-preview-label">Expanded comment</div>
-        <div class="expand-preview-body" data-testid="expand-preview-body">
+      <div class="ai-card expand-preview" data-testid="expand-preview">
+        <span class="ai-card-tag">AI · expanded comment</span>
+        <div class="ai-card-body expand-preview-body" data-testid="expand-preview-body">
           <MarkdownView source={expandPreview} />
         </div>
         <div class="expand-preview-actions">
@@ -407,12 +483,12 @@
       </div>
     {/if}
 
-    <!-- Ask disabled hint -->
-    {#if askDisabledReason}
-      <p class="ask-inline-hint" data-testid="ask-disabled-hint">{askDisabledReason}</p>
-    {/if}
-
-    <!-- Bottom action row: Leave comment | [Ask AI] | [Expand] | Cancel -->
+    <!--
+      Action row, ranked rather than four peers (p.52-53): ONE solid primary,
+      quiet outlined secondaries for the two AI actions, and a link-styled
+      tertiary for the dismissive one. It sits ABOVE the consultation panel, so
+      the button you came for never drifts as the conversation grows.
+    -->
     <div class="thread-actions">
       <button
         type="button"
@@ -420,28 +496,111 @@
         onclick={handleSave}
         disabled={!editorValue.trim()}
       >Leave comment</button>
-      {#if hasAskFn}
-        <button
-          type="button"
-          class="btn btn-ask"
-          onclick={handleAskClick}
-          disabled={askDisabled}
-          aria-busy={askLoading}
-        >Ask AI</button>
-      {/if}
       {#if expandVisible}
         <button
           type="button"
-          class="btn btn-ask"
+          class="btn"
           onclick={() => void submitExpand()}
           disabled={expandDisabled}
           aria-busy={expandLoading}
           data-testid="expand-btn"
-          title="Expand this note into a full review comment (AI) — you approve before it replaces anything"
+          title={askDisabledReason ?? 'Expand this note into a full review comment (AI) — you approve before it replaces anything'}
         >{expandLoading ? 'Expanding…' : 'Expand'}</button>
       {/if}
-      <button type="button" class="btn" onclick={handleCancel}>Cancel</button>
+      {#if hasAskFn}
+        <button
+          type="button"
+          class="btn"
+          onclick={toggleAsk}
+          disabled={askToggleDisabled}
+          aria-expanded={askOpen}
+          aria-controls={panelId}
+          data-testid="ask-toggle"
+          title={askDisabledReason ?? 'Ask a question about this line — the answer is never part of your comment'}
+        >Ask AI{#if conversation.length > 0 && !askOpen}&nbsp;({conversation.length}){/if}</button>
+      {/if}
+      <button type="button" class="btn btn-quiet" onclick={handleCancel}>Cancel</button>
     </div>
+
+    <!-- A disabled control that does not say why is a dead end — so the one
+         reason that DOES disable Ask AI and Expand is stated right here. -->
+    {#if askDisabledReason}
+      <p class="ask-hint" data-testid="ask-disabled-hint">{askDisabledReason}</p>
+    {/if}
+
+    <!--
+      REGION 2 — THE CONSULTATION. Its own input, its own transcript, and the
+      conventional reading order: history above, composer below, newest
+      exchange next to the box you type in.
+    -->
+    {#if hasAskFn && askOpen}
+      <section class="ask-panel" id={panelId} data-testid="ask-panel" aria-label="Ask AI about this line">
+        <p class="ask-panel-note">Answers are never part of your comment and are not saved.</p>
+
+        {#if conversation.length > 0}
+          <div class="ask-transcript" bind:this={transcriptEl} aria-live="polite" data-testid="ask-conversation">
+            {#each conversation as entry (entry.id)}
+              <div class="ask-turn">
+                <div class="ask-question" data-testid="ask-question">
+                  <span class="turn-tag">You</span>
+                  <span class="ask-question-text">{entry.question}</span>
+                </div>
+                {#if entry.streaming && !entry.error}
+                  <div class="ai-card ask-answer">
+                    <span class="ai-card-tag">AI</span>
+                    <div class="ai-card-body ask-streaming">{entry.answer}<span class="ask-cursor" aria-hidden="true"></span></div>
+                  </div>
+                {:else if entry.error}
+                  <div class="ask-error" role="alert" data-testid="ask-error">
+                    <span>{entry.error}</span>
+                    <button type="button" class="btn" onclick={() => retryAsk(entry)} data-testid="ask-retry">Retry</button>
+                  </div>
+                {:else}
+                  <div class="ai-card ask-answer">
+                    <span class="ai-card-tag">AI</span>
+                    <div class="ai-card-body" data-testid="ask-answer">
+                      <MarkdownView source={entry.answer} />
+                    </div>
+                    <div class="ai-card-foot">
+                      <button
+                        type="button"
+                        class="btn btn-quiet"
+                        onclick={() => copyAnswer(entry.answer)}
+                        data-testid="copy-answer-btn"
+                      >Copy answer</button>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="ask-empty">No questions yet. Ask about this line and its diff — grounded at {path}:{line}.</p>
+        {/if}
+
+        <div class="ask-composer">
+          <textarea
+            bind:this={askInputEl}
+            bind:value={askQuestion}
+            onkeydown={handleAskKeydown}
+            class="ask-input"
+            rows="2"
+            placeholder="Ask about this line…"
+            disabled={!!askDisabledReason}
+            aria-label="Ask AI a question about this line"
+            data-testid="ask-question-input"
+          ></textarea>
+          <button
+            type="button"
+            class="btn ask-send"
+            onclick={handleAskSubmit}
+            disabled={askSendDisabled}
+            aria-busy={askLoading}
+            data-testid="ask-send"
+          >{askLoading ? 'Asking…' : 'Ask'}</button>
+        </div>
+      </section>
+    {/if}
   {:else if draft !== null}
     <!-- View mode: show rendered body -->
     <!-- renderMarkdown output is the only accepted use of {@html} -->
@@ -459,30 +618,34 @@
   .draft-thread {
     border: 1px solid var(--border-draft, #f0b44488);
     border-radius: 6px;
-    padding: 0.5rem 0.75rem;
+    padding: var(--space-3);
     background: var(--surface-draft, #fffbf0);
     color: var(--text-draft, #333);
-    font-size: 0.9rem;
+    /* Chrome — labels, chips, buttons — is UI, not code. The widget renders
+       inside the monospace diff surface, so without this every word in it
+       inherits IBM Plex Mono. Prose blocks opt into --font-prose below. */
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
   }
 
   .thread-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 0.4rem;
+    margin-bottom: var(--space-2);
   }
 
   .thread-label {
-    font-size: 0.8rem;
-    opacity: 0.7;
+    font-size: var(--text-xs);
     font-weight: 500;
+    color: var(--text-secondary);
   }
 
   .ai-badge {
-    font-size: 0.72rem;
+    font-size: var(--text-xs);
     font-weight: 600;
     line-height: 1;
-    padding: 0.12rem 0.4rem;
+    padding: 0.125rem var(--space-1);
     border-radius: 999px;
     border: 1px solid var(--border-draft, #f0b44488);
     background: var(--surface-raised, #fff6df);
@@ -495,14 +658,14 @@
   /* When the AI badge is present it already claimed the auto margin; keep a small
      gap before the from-commit chip instead of a second auto push. */
   .ai-badge + .thread-from-commit {
-    margin-left: 0.4rem;
+    margin-left: var(--space-1);
   }
 
   .thread-from-commit {
-    font-size: 0.72rem;
+    font-size: var(--text-xs);
     font-weight: 500;
     opacity: 0.75;
-    padding: 0.05rem 0.4rem;
+    padding: 0.125rem var(--space-1);
     border-radius: 999px;
     border: 1px solid var(--border-draft, #f0b44488);
     color: var(--text-muted, #b8862a);
@@ -512,10 +675,10 @@
   }
 
   .thread-time {
-    font-size: 0.72rem;
+    font-size: var(--text-xs);
     font-weight: 500;
     opacity: 0.75;
-    padding: 0.05rem 0.4rem;
+    padding: 0.125rem var(--space-1);
     border-radius: 999px;
     border: 1px solid var(--border-draft, #f0b44488);
     color: var(--text-muted, #b8862a);
@@ -528,185 +691,315 @@
   /* Any earlier chip already claimed the auto margin — keep a small gap only. */
   .ai-badge ~ .thread-time,
   .thread-from-commit ~ .thread-time {
-    margin-left: 0.4rem;
+    margin-left: var(--space-1);
   }
 
+  /*
+   * The saved comment. `.prose` supplies Newsreader; this keeps the size a step
+   * down from a page-level prose block but KEEPS the measure. It used to say
+   * `max-width: none`, which let a saved comment run the full width of the diff
+   * — the same unbounded line the AI answer had (p.99-101).
+   */
   .draft-body {
-    padding: 0.25rem 0;
-    font-size: 0.9rem;
-    /* prose class sets font-family to Newsreader; override max-width and font-size */
-    max-width: none;
-    font-size: 0.9rem;
+    padding: var(--space-1) 0;
+    font-size: var(--text-base);
+    max-width: var(--measure-prose);
   }
 
   /* Normalize markdown output inside the draft body */
   .draft-body :global(p) { margin: 0 0 0.5em; }
   .draft-body :global(p:last-child) { margin-bottom: 0; }
-  .draft-body :global(pre) { background: var(--surface-raised); padding: 0.5rem; border-radius: 4px; overflow-x: auto; }
-  .draft-body :global(code) { font-size: 0.85em; background: var(--surface-raised); padding: 0.1em 0.3em; border-radius: 3px; }
+  /* A2: code keeps the code face and sets its own measure. */
+  .draft-body :global(code),
+  .draft-body :global(pre) { font-family: var(--font-mono); }
+  .draft-body :global(pre) { background: var(--surface-sunken); padding: var(--space-2); border-radius: 4px; overflow-x: auto; max-width: none; }
+  .draft-body :global(code) { font-size: var(--text-xs); background: var(--surface-sunken); padding: 0.125rem var(--space-1); border-radius: 3px; }
   .draft-body :global(pre code) { background: none; padding: 0; }
 
   .thread-actions {
     display: flex;
-    gap: 0.4rem;
-    margin-top: 0.5rem;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  /*
+   * TERTIARY action (p.52-53). Cancel is dismissive: it must not carry the same
+   * weight as a feature action. No fill, no rim — a link-styled control at
+   * secondary ink. It keeps .btn's padding and focus ring so the hit target and
+   * keyboard affordance are unchanged.
+   */
+  .btn-quiet {
+    background: none;
+    border-color: transparent;
+    color: var(--text-secondary);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+  }
+
+  .btn-quiet:hover:not(:disabled) {
+    background: none;
+    border-color: transparent;
+    color: var(--text);
+  }
+
+  /* ─────────────────────────────────────────────────────────────────────────
+     AI OUTPUT CARD — one treatment for every block of model-written prose in
+     this widget (a streamed answer, an expansion awaiting approval).
+     Four signals, not one (p.30-33): a card that a SHADOW lifts off the ground
+     (p.158 — a shadow is z-position, and unlike "lighter than its ground" it
+     reads the same in both themes), a 2px accent rail down its side (p.50-51,
+     p.195-197), an uppercase AI tag, and the prose face at full ink. The tag
+     and the rail are also the HONESTY signal: model text never renders as the
+     reviewer's own words.
+     ───────────────────────────────────────────────────────────────────────── */
+  .ai-card {
+    margin-top: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--hairline);
+    border-left: 2px solid var(--accent);
+    border-radius: 6px;
+    background: var(--surface);
+    box-shadow: var(--elevation-1);
+  }
+
+  /* 600: the AI tag is EMPHASIS, not a field label — it marks provenance and
+     has to be noticeable. The other new labels here are already demoted on both
+     size and colour, so stroke has nothing to pay back and they stay at 400. */
+  .ai-card-tag {
+    display: block;
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    /* p.117: all-caps runs get ~0.05em tracking. */
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-1);
+  }
+
+  /*
+   * THE ANSWER IS PROSE. Every font-family in this component used to be
+   * `inherit`, and the widget renders inside the monospace diff surface — so
+   * the model's sentences came out in IBM Plex Mono at whatever width the
+   * container happened to be. Prose gets the prose face and the prose measure
+   * (p.99-101, amendment A2); the code INSIDE it stays mono, below.
+   */
+  .ai-card-body {
+    font-family: var(--font-prose);
+    font-size: var(--text-sm);
+    line-height: 1.6;
+    max-width: var(--measure-prose);
+    color: var(--text-draft, #333);
+    word-break: break-word;
+  }
+
+  .ai-card-body :global(p:first-child) { margin-top: 0; }
+  .ai-card-body :global(p:last-child) { margin-bottom: 0; }
+  /* A2: code sets its own measure and keeps the code face. */
+  .ai-card-body :global(code),
+  .ai-card-body :global(pre) {
+    font-family: var(--font-mono);
+  }
+  .ai-card-body :global(code) {
+    font-size: var(--text-xs);
+    background: var(--surface-sunken);
+    padding: 0.125rem var(--space-1);
+    border-radius: 3px;
+  }
+  .ai-card-body :global(pre) {
+    background: var(--surface-sunken);
+    padding: var(--space-2);
+    border-radius: 4px;
+    overflow-x: auto;
+    max-width: none;
+  }
+  .ai-card-body :global(pre code) { background: none; padding: 0; }
+
+  .ai-card-foot {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: var(--space-2);
+  }
+
+  /* ── Expand preview (terse-note expander) ── */
+
+  .expand-preview-actions {
+    display: flex;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
     flex-wrap: wrap;
   }
 
-  /* Ask AI inline conversation panel */
-  .ask-inline-conversation {
+  .expand-streaming {
+    white-space: pre-wrap;
+  }
+
+  .expand-error {
+    /* theme-aware error red; concrete upstream detail rides on the title
+       attribute (hover) */
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    color: var(--legend-removed-color, #cf222e);
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    margin-top: var(--space-2);
+  }
+
+  /* ─────────────────────────────────────────────────────────────────────────
+     THE CONSULTATION PANEL — transcript above, composer below.
+     It hangs BELOW the action row, so "Leave comment" cannot drift, and it is
+     separated by space plus ONE hairline rather than a second box (p.206-209).
+     ───────────────────────────────────────────────────────────────────────── */
+  .ask-panel {
+    margin-top: var(--space-3);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--hairline);
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
-    max-height: 240px;
+    gap: var(--space-2);
+  }
+
+  .ask-panel-note,
+  .ask-empty,
+  .ask-hint {
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    line-height: 1.5;
+    color: var(--text-secondary);
+    margin: 0;
+  }
+
+  .ask-hint {
+    margin-top: var(--space-2);
+  }
+
+  .ask-transcript {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    max-height: 18rem;
     overflow-y: auto;
-    margin-top: 0.4rem;
   }
 
-  .ask-inline-hint {
-    font-size: 0.78rem;
-    opacity: 0.6;
-    margin: 0.25rem 0 0;
-    font-style: italic;
+  /* p.83: the space AROUND a turn exceeds the space INSIDE it, so a question
+     reads as attached to its own answer rather than to the next question. */
+  .ask-turn {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
   }
 
-  .ask-inline-question {
+  /*
+   * The question is SECONDARY — it is the reviewer's own words, already known.
+   * Demoted on size AND colour, so 500 is the standing weight exception.
+   */
+  .ask-question {
     align-self: flex-end;
-    background: #4443;
-    border-radius: 8px 8px 2px 8px;
-    padding: 0.25rem 0.5rem;
-    font-size: 0.78rem;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
     max-width: 90%;
+    padding: var(--space-1) var(--space-2);
+    border-radius: 8px 8px 2px 8px;
+    background: var(--surface-sunken);
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
     word-break: break-word;
   }
 
-  .ask-inline-answer {
-    font-size: 0.78rem;
-    line-height: 1.45;
-    word-break: break-word;
+  .turn-tag {
+    flex-shrink: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
   }
 
-  .ask-inline-streaming {
-    opacity: 0.85;
+  .ask-streaming {
+    /* Streaming is an honesty signal, not decoration: partial text must LOOK
+       partial. Colour, not opacity, so it never drops below the contrast floor. */
+    color: var(--text-secondary);
+    white-space: pre-wrap;
   }
 
-  .ask-inline-cursor {
+  .ask-cursor {
     display: inline-block;
     width: 5px;
     height: 0.85em;
     background: currentColor;
-    opacity: 0.6;
     animation: blink 1s step-end infinite;
     vertical-align: text-bottom;
     margin-left: 2px;
   }
 
   @keyframes blink {
-    0%, 100% { opacity: 0.6; }
+    0%, 100% { opacity: 1; }
     50% { opacity: 0; }
   }
 
-  .ask-inline-error {
-    /* theme-aware error red (was hardcoded #cf222e — unreadable on dark surfaces) */
-    color: var(--legend-removed-color, #cf222e);
-    font-size: 0.78rem;
+  @media (prefers-reduced-motion: reduce) {
+    .ask-cursor { animation: none; }
   }
 
-  /* Expand preview panel (terse-note expander) */
-  .expand-preview {
-    margin-top: 0.4rem;
-    padding: 0.4rem 0.55rem;
-    border: 1px solid #8884;
-    border-radius: 6px;
-    background: var(--surface-raised, #fff6df);
-  }
-
-  .expand-preview-label {
-    font-size: 0.72rem;
-    font-weight: 600;
-    opacity: 0.65;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    margin-bottom: 0.25rem;
-  }
-
-  .expand-preview-body {
-    font-size: 0.85rem;
-    line-height: 1.45;
-    word-break: break-word;
-  }
-
-  .expand-preview-body :global(p:first-child) { margin-top: 0; }
-  .expand-preview-body :global(p:last-child) { margin-bottom: 0; }
-  .expand-preview-body :global(code) { font-size: 0.85em; background: var(--surface, #fff); padding: 0.1em 0.3em; border-radius: 3px; }
-  .expand-preview-body :global(pre) { background: var(--surface, #fff); padding: 0.5rem; border-radius: 4px; overflow-x: auto; }
-  .expand-preview-body :global(pre code) { background: none; padding: 0; }
-
-  .expand-preview-actions {
-    display: flex;
-    gap: 0.4rem;
-    margin-top: 0.4rem;
-    flex-wrap: wrap;
-  }
-
-  .expand-streaming {
-    font-size: 0.85rem;
-    line-height: 1.45;
-    word-break: break-word;
-    opacity: 0.85;
-    white-space: pre-wrap;
-  }
-
-  .expand-error {
-    /* same theme-aware error red as the ask inline error; concrete upstream
-       detail rides on the title attribute (hover) */
+  .ask-error {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     flex-wrap: wrap;
     color: var(--legend-removed-color, #cf222e);
-    font-size: 0.78rem;
-    margin-top: 0.4rem;
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
   }
 
-  .btn-ask {
-    border: 1px solid #8884;
-    background: none;
-    border-radius: 4px;
-    padding: 0.25rem 0.7rem;
-    cursor: pointer;
-    font-size: 0.85rem;
-    font-family: inherit;
-    color: inherit;
-    transition: background 0.1s;
+  /*
+   * The composer sits at the BOTTOM, next to the newest exchange.
+   * It WRAPS rather than answering a viewport breakpoint: this widget's width
+   * comes from the diff container (split mode, the drawer, a narrow window),
+   * which a `max-width` media query cannot see. The input's own min-width is
+   * what decides when the button drops to its own line.
+   */
+  .ask-composer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: flex-start;
+    gap: var(--space-2);
   }
 
-  .btn-ask:hover:not(:disabled) {
-    background: #8881;
-    border-color: #8887;
+  .ask-input {
+    flex: 1 1 14rem;
+    min-width: 12rem;
+    resize: vertical;
+    box-sizing: border-box;
+    border: 1px solid var(--border-control);
+    border-radius: 6px;
+    padding: var(--space-2) var(--space-3);
+    /* The question is prose the reviewer writes, not code. */
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    background: var(--surface);
+    color: var(--text);
   }
 
-  .btn-ask:disabled {
+  .ask-input::placeholder { color: var(--text-muted); }
+
+  .ask-input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .ask-input:disabled {
     opacity: var(--disabled-opacity);
     cursor: not-allowed;
   }
 
-  .ask-copy-btn {
-    background: none;
-    border: 1px solid #8884;
-    border-radius: 3px;
-    padding: 0.1rem 0.4rem;
-    cursor: pointer;
-    font-size: 0.72rem;
-    font-family: inherit;
-    color: inherit;
-    opacity: 0.6;
-    display: block;
-    margin-top: 0.25rem;
-  }
-
-  .ask-copy-btn:hover {
-    opacity: 0.9;
-    background: #8881;
+  .ask-send {
+    flex-shrink: 0;
   }
 </style>

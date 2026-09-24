@@ -379,6 +379,16 @@ describe('DraftThread — action row (Leave comment / Ask AI / Cancel buttons)',
     expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument()
   })
 
+  /**
+   * Open the consultation panel and send one question through ITS input.
+   * The composer is deliberately not involved — that separation is the feature.
+   */
+  async function ask(user: ReturnType<typeof userEvent.setup>, question: string) {
+    await user.click(screen.getByRole('button', { name: /ask ai/i }))
+    await user.type(screen.getByTestId('ask-question-input'), question)
+    await user.click(screen.getByTestId('ask-send'))
+  }
+
   it('Leave comment button is disabled when textarea is empty', () => {
     render(DraftThread, {
       props: { ...baseProps, askFn: makeAskFn() },
@@ -386,11 +396,30 @@ describe('DraftThread — action row (Leave comment / Ask AI / Cancel buttons)',
     expect(screen.getByRole('button', { name: /leave comment/i })).toBeDisabled()
   })
 
-  it('Ask AI button is disabled when textarea is empty', () => {
+  // An empty composer used to disable Ask AI, with nothing saying why — a dead
+  // end (p.52-53). The panel asks its own question, so the composer is
+  // irrelevant to it and the only thing that still disables it states itself.
+  it('Ask AI button is ENABLED when the composer is empty', () => {
     render(DraftThread, {
       props: { ...baseProps, askFn: makeAskFn() },
     })
-    expect(screen.getByRole('button', { name: /ask ai/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /ask ai/i })).toBeEnabled()
+  })
+
+  it('the consultation panel is closed until Ask AI is clicked, and Ask AI toggles it', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, { props: { ...baseProps, askFn: makeAskFn() } })
+
+    const toggle = screen.getByRole('button', { name: /ask ai/i })
+    expect(screen.queryByTestId('ask-panel')).not.toBeInTheDocument()
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+    await user.click(toggle)
+    expect(screen.getByTestId('ask-panel')).toBeInTheDocument()
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+
+    await user.click(toggle)
+    expect(screen.queryByTestId('ask-panel')).not.toBeInTheDocument()
   })
 
   it('typing then clicking Leave comment calls onsave with the textarea text', async () => {
@@ -406,47 +435,102 @@ describe('DraftThread — action row (Leave comment / Ask AI / Cancel buttons)',
     expect(onsave).toHaveBeenCalledWith('My review comment')
   })
 
-  it('typing then clicking Ask AI sends the same textarea text as a question', async () => {
+  // THE REGRESSION THIS PASS EXISTS FOR. "Ask AI" used to send the comment
+  // draft as the question, so one textarea meant two things and the same
+  // sentence showed up as both an unsent draft and a sent question.
+  it('the question comes from the panel input, NOT the comment composer', async () => {
     const user = userEvent.setup()
     const askFn = makeAskFn('The answer is 42.')
-    render(DraftThread, {
-      props: { ...baseProps, askFn },
-    })
-    const textarea = screen.getByRole('textbox', { name: /comment body/i })
-    await user.type(textarea, 'Why is this here?')
-    await user.click(screen.getByRole('button', { name: /ask ai/i }))
+    render(DraftThread, { props: { ...baseProps, askFn } })
+
+    await user.type(screen.getByRole('textbox', { name: /comment body/i }), 'My review comment')
+    await ask(user, 'Why is this here?')
+
     expect(askFn).toHaveBeenCalledOnce()
     expect(askFn.mock.calls[0][0]).toBe('Why is this here?')
   })
 
-  it('Ask AI streams answer below the textarea', async () => {
+  it('clicking Ask AI alone never sends anything — it only opens the panel', async () => {
+    const user = userEvent.setup()
+    const askFn = makeAskFn()
+    render(DraftThread, { props: { ...baseProps, askFn } })
+
+    await user.type(screen.getByRole('textbox', { name: /comment body/i }), 'My review comment')
+    await user.click(screen.getByRole('button', { name: /ask ai/i }))
+
+    expect(askFn).not.toHaveBeenCalled()
+  })
+
+  it('Ask AI streams the answer into the panel transcript', async () => {
     const user = userEvent.setup()
     render(DraftThread, {
       props: { ...baseProps, askFn: makeAskFn('AI says: hello') },
     })
-    const textarea = screen.getByRole('textbox', { name: /comment body/i })
-    await user.type(textarea, 'My question')
-    await user.click(screen.getByRole('button', { name: /ask ai/i }))
+    await ask(user, 'My question')
     await vi.waitFor(() => {
       expect(screen.getByTestId('ask-answer')).toBeInTheDocument()
     })
     expect(screen.getByTestId('ask-answer').textContent).toContain('AI says: hello')
   })
 
-  it('textarea stays filled after Ask AI so user can leave a follow-up comment', async () => {
+  it('asking does not touch the comment composer', async () => {
     const user = userEvent.setup()
     render(DraftThread, {
       props: { ...baseProps, askFn: makeAskFn('The reason is XYZ.') },
     })
     const textarea = screen.getByRole('textbox', { name: /comment body/i })
-    await user.type(textarea, 'Why is this here?')
-    await user.click(screen.getByRole('button', { name: /ask ai/i }))
-    // Wait for the answer
+    await user.type(textarea, 'My unfinished note')
+    await ask(user, 'Why is this here?')
     await vi.waitFor(() => {
       expect(screen.getByTestId('ask-answer')).toBeInTheDocument()
     })
-    // Textarea should still have the text (not cleared)
-    expect((textarea as HTMLTextAreaElement).value).toBe('Why is this here?')
+    // The draft the reviewer is writing survives the consultation untouched.
+    expect((textarea as HTMLTextAreaElement).value).toBe('My unfinished note')
+  })
+
+  it('the question input clears on send — the question has been sent', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, { props: { ...baseProps, askFn: makeAskFn('answer') } })
+    await ask(user, 'Is this idiomatic?')
+    await vi.waitFor(() => expect(screen.getByTestId('ask-answer')).toBeInTheDocument())
+    expect((screen.getByTestId('ask-question-input') as HTMLTextAreaElement).value).toBe('')
+    // ...and the sent question is in the transcript exactly once.
+    expect(screen.getAllByTestId('ask-question')).toHaveLength(1)
+    expect(screen.getByTestId('ask-question').textContent).toContain('Is this idiomatic?')
+  })
+
+  it('several questions accumulate as separate turns', async () => {
+    const user = userEvent.setup()
+    render(DraftThread, { props: { ...baseProps, askFn: makeAskFn('answer') } })
+    await ask(user, 'First question')
+    await vi.waitFor(() => expect(screen.getAllByTestId('ask-answer')).toHaveLength(1))
+
+    await user.type(screen.getByTestId('ask-question-input'), 'Second question')
+    await user.click(screen.getByTestId('ask-send'))
+    await vi.waitFor(() => expect(screen.getAllByTestId('ask-answer')).toHaveLength(2))
+    expect(screen.getAllByTestId('ask-question')).toHaveLength(2)
+  })
+
+  it('a failed ask offers Retry, which re-asks the same question', async () => {
+    const user = userEvent.setup()
+    let calls = 0
+    const askFn = vi.fn(async (_q: string, onDelta: (t: string) => void) => {
+      calls += 1
+      if (calls === 1) return { ok: false as const, error: 'Upstream refused.' }
+      onDelta('Second time lucky.')
+      return { ok: true as const, answer: 'Second time lucky.' }
+    })
+    render(DraftThread, { props: { ...baseProps, askFn } })
+
+    await ask(user, 'Why?')
+    await vi.waitFor(() => expect(screen.getByTestId('ask-error')).toBeInTheDocument())
+    expect(screen.getByTestId('ask-error')).toHaveTextContent('Upstream refused.')
+
+    await user.click(screen.getByTestId('ask-retry'))
+    await vi.waitFor(() => expect(screen.getByTestId('ask-answer')).toBeInTheDocument())
+    expect(askFn.mock.calls[1][0]).toBe('Why?')
+    // The failed turn is replaced, not stacked on top of.
+    expect(screen.queryByTestId('ask-error')).not.toBeInTheDocument()
   })
 
   it('Ctrl+Enter triggers Leave comment (saves draft)', async () => {
@@ -477,9 +561,7 @@ describe('DraftThread — action row (Leave comment / Ask AI / Cancel buttons)',
     render(DraftThread, {
       props: { ...baseProps, path: 'src/b.ts', line: 55, askFn, excerpt: '-old\n+new' },
     })
-    const textarea = screen.getByRole('textbox', { name: /comment body/i })
-    await user.type(textarea, 'question')
-    await user.click(screen.getByRole('button', { name: /ask ai/i }))
+    await ask(user, 'question')
     expect(askFn.mock.calls[0][2]).toEqual({
       path: 'src/b.ts',
       line: 55,
@@ -492,9 +574,7 @@ describe('DraftThread — action row (Leave comment / Ask AI / Cancel buttons)',
     render(DraftThread, {
       props: { ...baseProps, askFn: makeAskFn('Finished answer') },
     })
-    const textarea = screen.getByRole('textbox', { name: /comment body/i })
-    await user.type(textarea, 'q')
-    await user.click(screen.getByRole('button', { name: /ask ai/i }))
+    await ask(user, 'q')
     await vi.waitFor(() => {
       expect(screen.getByTestId('copy-answer-btn')).toBeInTheDocument()
     })
@@ -574,9 +654,10 @@ describe('DraftThread — typed text flows into the ask prompt (DI seam)', () =>
       },
     })
 
-    const textarea = screen.getByRole('textbox', { name: /comment body/i })
-    await user.type(textarea, 'Does this handle the empty case?')
+    // The QUESTION is typed into the consultation panel's own input.
     await user.click(screen.getByRole('button', { name: /ask ai/i }))
+    await user.type(screen.getByTestId('ask-question-input'), 'Does this handle the empty case?')
+    await user.click(screen.getByTestId('ask-send'))
 
     await vi.waitFor(() => expect(askFn).toHaveBeenCalledOnce())
     expect(captured).not.toBeNull()
