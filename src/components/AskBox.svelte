@@ -99,14 +99,14 @@
   <div class="ask-box-actions">
     <button
       type="button"
-      class="ask-box-send"
+      class="btn ask-box-send"
       onclick={() => void submit()}
       disabled={!canSubmit}
       aria-busy={loading}
       data-testid="ask-box-send"
     >{loading ? 'Asking…' : 'Ask'}</button>
     {#if onclose}
-      <button type="button" class="ask-box-close" onclick={() => onclose?.()}>Close</button>
+      <button type="button" class="btn btn-quiet ask-box-close" onclick={() => onclose?.()}>Close</button>
     {/if}
   </div>
 
@@ -115,12 +115,21 @@
       {#if error}
         <div class="ask-box-error" role="alert" data-testid="ask-box-error">{error}</div>
       {:else if streaming && !answer}
-        <div class="ask-box-streaming" data-testid="ask-box-streaming">Thinking<span class="ask-box-cursor" aria-hidden="true"></span></div>
+        <div class="ai-card">
+          <span class="ai-card-tag">AI</span>
+          <div class="ai-card-body ask-box-streaming" data-testid="ask-box-streaming">Thinking<span class="ask-box-cursor" aria-hidden="true"></span></div>
+        </div>
       {:else if streaming}
-        <div class="ask-box-answer ask-box-answer-streaming" data-testid="ask-box-answer">{answer}<span class="ask-box-cursor" aria-hidden="true"></span></div>
+        <div class="ai-card">
+          <span class="ai-card-tag">AI</span>
+          <div class="ai-card-body ask-box-streaming" data-testid="ask-box-answer">{answer}<span class="ask-box-cursor" aria-hidden="true"></span></div>
+        </div>
       {:else}
-        <div class="ask-box-answer" data-testid="ask-box-answer">
-          <MarkdownView source={answer} />
+        <div class="ai-card">
+          <span class="ai-card-tag">AI</span>
+          <div class="ai-card-body" data-testid="ask-box-answer">
+            <MarkdownView source={answer} />
+          </div>
         </div>
       {/if}
     </div>
@@ -131,25 +140,31 @@
   .ask-box {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
-    margin-top: 0.4rem;
-    padding-top: 0.4rem;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+    padding-top: var(--space-2);
     border-top: 1px solid var(--border-subtle);
+    /* Chrome is UI text. This box drops into a finding card that sits on the
+       monospace diff surface, so without this the question and the answer both
+       inherit the code face. */
+    font-family: var(--font-ui);
   }
 
   .ask-box-input {
     width: 100%;
     box-sizing: border-box;
     resize: vertical;
-    font: inherit;
-    font-size: 0.8rem;
-    line-height: 1.4;
-    padding: 0.35rem 0.5rem;
-    border-radius: 4px;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    padding: var(--space-2) var(--space-3);
+    border-radius: 6px;
     border: 1px solid var(--border-control);
-    background: var(--surface-raised);
-    color: inherit;
+    background: var(--surface);
+    color: var(--text);
   }
+
+  .ask-box-input::placeholder { color: var(--text-muted); }
 
   .ask-box-input:focus-visible {
     outline: 2px solid var(--accent);
@@ -158,62 +173,94 @@
 
   .ask-box-actions {
     display: flex;
-    gap: 0.4rem;
+    gap: var(--space-2);
     align-items: center;
   }
 
-  .ask-box-send {
-    font-size: 0.78rem;
-    padding: 0.18rem 0.6rem;
-    border-radius: 4px;
-    border: 1px solid var(--accent);
-    background: transparent;
-    color: var(--accent);
-    cursor: pointer;
-    font-weight: 500;
+  /*
+   * TERTIARY (p.52-53): Close is dismissive and must not read as a peer of Ask.
+   * Ask keeps .btn's outlined secondary box; Close drops the fill and the rim.
+   */
+  .btn-quiet {
+    background: none;
+    border-color: transparent;
+    color: var(--text-secondary);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
   }
 
-  .ask-box-send:hover:not(:disabled) {
-    background: var(--legend-added-bg, color-mix(in srgb, var(--accent) 12%, transparent));
-  }
-
-  .ask-box-send:disabled {
-    opacity: var(--disabled-opacity);
-    cursor: not-allowed;
-  }
-
-  .ask-box-close {
-    font-size: 0.78rem;
-    padding: 0.18rem 0.55rem;
-    border-radius: 4px;
-    border: 1px solid var(--border-control);
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    opacity: 0.7;
-  }
-
-  .ask-box-close:hover {
-    opacity: 1;
-    background: var(--surface-raised);
+  .btn-quiet:hover:not(:disabled) {
+    background: none;
+    border-color: transparent;
+    color: var(--text);
   }
 
   .ask-box-answer-wrap {
-    font-size: 0.8rem;
-    line-height: 1.45;
-    max-height: 240px;
+    max-height: 20rem;
     overflow-y: auto;
+  }
+
+  /* Same AI-output card as DraftThread and AskAi — one treatment across all
+     three Ask surfaces rather than three near-identical ones. */
+  .ai-card {
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--hairline);
+    border-left: 2px solid var(--accent);
+    border-radius: 6px;
+    background: var(--surface);
+    box-shadow: var(--elevation-1);
+  }
+
+  /* 600: the AI tag is emphasis — it marks provenance and must be noticeable. */
+  .ai-card-tag {
+    display: block;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-1);
+  }
+
+  .ai-card-body {
+    font-family: var(--font-prose);
+    font-size: var(--text-sm);
+    line-height: 1.6;
+    max-width: var(--measure-prose);
+    color: var(--text);
     word-break: break-word;
   }
 
-  .ask-box-streaming,
-  .ask-box-answer-streaming {
-    opacity: 0.85;
+  .ai-card-body :global(p:first-child) { margin-top: 0; }
+  .ai-card-body :global(p:last-child) { margin-bottom: 0; }
+  /* A2: code keeps the code face and sets its own measure. */
+  .ai-card-body :global(code),
+  .ai-card-body :global(pre) { font-family: var(--font-mono); }
+  .ai-card-body :global(code) {
+    font-size: var(--text-xs);
+    background: var(--surface-sunken);
+    padding: 0.125rem var(--space-1);
+    border-radius: 3px;
+  }
+  .ai-card-body :global(pre) {
+    background: var(--surface-sunken);
+    padding: var(--space-2);
+    border-radius: 4px;
+    overflow-x: auto;
+    max-width: none;
+  }
+  .ai-card-body :global(pre code) { background: none; padding: 0; }
+
+  .ask-box-streaming {
+    /* Colour, not opacity — a receded ink that still clears the floor (B5). */
+    color: var(--text-secondary);
+    white-space: pre-wrap;
   }
 
   .ask-box-error {
     color: var(--legend-removed-color, #cf222e);
-    font-size: 0.8rem;
+    font-size: var(--text-xs);
   }
 
   .ask-box-cursor {
@@ -221,34 +268,17 @@
     width: 5px;
     height: 0.85em;
     background: currentColor;
-    opacity: 0.6;
     animation: ask-box-blink 1s step-end infinite;
     vertical-align: text-bottom;
     margin-left: 2px;
   }
 
   @keyframes ask-box-blink {
-    0%, 100% { opacity: 0.6; }
+    0%, 100% { opacity: 1; }
     50% { opacity: 0; }
   }
 
   @media (prefers-reduced-motion: reduce) {
     .ask-box-cursor { animation: none; }
   }
-
-  .ask-box-answer :global(p:first-child) { margin-top: 0; }
-  .ask-box-answer :global(p:last-child) { margin-bottom: 0; }
-  .ask-box-answer :global(code) {
-    font-size: 0.85em;
-    background: var(--surface-raised);
-    padding: 0.1em 0.3em;
-    border-radius: 3px;
-  }
-  .ask-box-answer :global(pre) {
-    background: var(--surface-raised);
-    padding: 0.5rem;
-    border-radius: 4px;
-    overflow-x: auto;
-  }
-  .ask-box-answer :global(pre code) { background: none; padding: 0; }
 </style>

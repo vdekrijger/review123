@@ -1905,35 +1905,65 @@ test('inline-ask-ai: seed draft, step 2, switch widget tab to Ask AI, ask stream
   await expect(editBtn).toBeVisible({ timeout: 5_000 })
   await editBtn.evaluate((el: HTMLButtonElement) => el.click())
 
-  // The "Ask AI" action button should be visible in the action row
+  // The "Ask AI" action button should be visible in the action row. It is a
+  // DISCLOSURE now: it opens a consultation panel that carries its own question
+  // input. It no longer sends the comment draft as the question.
   const askAiBtn = draftAnnotations.getByRole('button', { name: /ask ai/i })
   await expect(askAiBtn).toBeVisible({ timeout: 5_000 })
+  await expect(askAiBtn).toBeEnabled()
+  await expect(askAiBtn).toHaveAttribute('aria-expanded', 'false')
 
-  // The comment body textarea is the single editor surface
+  // The comment body textarea is the composer — what gets PUBLISHED.
   const commentTextarea = draftAnnotations.getByRole('textbox', { name: /comment body/i })
   await expect(commentTextarea).toBeVisible()
+  const draftNote = 'A note I am still writing.'
+  await commentTextarea.evaluate((el: HTMLTextAreaElement, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })) }, draftNote)
 
-  // Type a question into the textarea — include "ask-marker" so the fixture route recognizes it
-  await commentTextarea.evaluate((el: HTMLTextAreaElement, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })) }, 'ask-marker: Why is this change needed?')
-
-  // Click Ask AI button via JS to bypass overlay
-  await expect(askAiBtn).toBeEnabled()
+  // Open the panel (via JS to bypass any overlay)
   await askAiBtn.evaluate((el: HTMLButtonElement) => el.click())
+  const askPanel = draftAnnotations.getByTestId('ask-panel')
+  await expect(askPanel).toBeVisible()
+  await expect(askAiBtn).toHaveAttribute('aria-expanded', 'true')
+
+  // The QUESTION goes into the panel's own input — include "ask-marker" so the
+  // fixture route recognizes it.
+  const askInput = draftAnnotations.getByTestId('ask-question-input')
+  await askInput.evaluate((el: HTMLTextAreaElement, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })) }, 'ask-marker: Why is this change needed?')
+  await draftAnnotations.getByTestId('ask-send').evaluate((el: HTMLButtonElement) => el.click())
 
   // The answer should stream in from the fixture
   await expect(
     draftAnnotations.getByText(/This code is in this location/i),
   ).toBeVisible({ timeout: 15_000 })
 
-  // The question should remain visible in the conversation
+  // The question should remain visible in the transcript
   await expect(
     draftAnnotations.getByText(/ask-marker: Why is this change needed\?/i),
   ).toBeVisible()
+
+  // ...and the composer still holds the reviewer's own unfinished note. This is
+  // the whole point of the split: asking never touches what you will publish.
+  await expect(commentTextarea).toHaveValue(draftNote)
 
   // Copy button should appear under the answer
   await expect(
     draftAnnotations.getByRole('button', { name: /copy answer/i }),
   ).toBeVisible()
+
+  // READING ORDER: transcript above, composer below. The action row carrying
+  // "Leave comment" stays ABOVE the panel, so the primary action cannot drift
+  // down the page as the conversation grows.
+  const order = await draftAnnotations.evaluate((root: HTMLElement) => {
+    const y = (sel: string) => root.querySelector(sel)!.getBoundingClientRect().top
+    return {
+      answer: y('[data-testid="ask-answer"]'),
+      input: y('[data-testid="ask-question-input"]'),
+      leaveComment: y('.thread-actions'),
+      panel: y('[data-testid="ask-panel"]'),
+    }
+  })
+  expect(order.answer).toBeLessThan(order.input)
+  expect(order.leaveComment).toBeLessThan(order.panel)
 })
 
 // ---------------------------------------------------------------------------

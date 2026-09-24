@@ -713,7 +713,7 @@
   .draft-body :global(code),
   .draft-body :global(pre) { font-family: var(--font-mono); }
   .draft-body :global(pre) { background: var(--surface-sunken); padding: var(--space-2); border-radius: 4px; overflow-x: auto; max-width: none; }
-  .draft-body :global(code) { font-size: 0.85em; background: var(--surface-sunken); padding: 0.1em 0.3em; border-radius: 3px; }
+  .draft-body :global(code) { font-size: var(--text-xs); background: var(--surface-sunken); padding: 0.125rem var(--space-1); border-radius: 3px; }
   .draft-body :global(pre code) { background: none; padding: 0; }
 
   .thread-actions {
@@ -765,11 +765,14 @@
     box-shadow: var(--elevation-1);
   }
 
+  /* 600: the AI tag is EMPHASIS, not a field label — it marks provenance and
+     has to be noticeable. The other new labels here are already demoted on both
+     size and colour, so stroke has nothing to pay back and they stay at 400. */
   .ai-card-tag {
     display: block;
     font-family: var(--font-ui);
     font-size: var(--text-xs);
-    font-weight: 500;
+    font-weight: 600;
     /* p.117: all-caps runs get ~0.05em tracking. */
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -801,9 +804,9 @@
     font-family: var(--font-mono);
   }
   .ai-card-body :global(code) {
-    font-size: 0.85em;
+    font-size: var(--text-xs);
     background: var(--surface-sunken);
-    padding: 0.1em 0.3em;
+    padding: 0.125rem var(--space-1);
     border-radius: 3px;
   }
   .ai-card-body :global(pre) {
@@ -866,7 +869,6 @@
   .ask-hint {
     font-family: var(--font-ui);
     font-size: var(--text-xs);
-    font-weight: 500;
     line-height: 1.5;
     color: var(--text-secondary);
     margin: 0;
@@ -907,7 +909,6 @@
     background: var(--surface-sunken);
     font-family: var(--font-ui);
     font-size: var(--text-xs);
-    font-weight: 500;
     color: var(--text-secondary);
     word-break: break-word;
   }

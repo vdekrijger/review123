@@ -397,9 +397,9 @@
   .preview :global(code),
   .preview :global(pre) { font-family: var(--font-mono); }
   .preview :global(code) {
-    font-size: 0.85em;
+    font-size: var(--text-xs);
     background: var(--surface-sunken);
-    padding: 0.1em 0.3em;
+    padding: 0.125rem var(--space-1);
     border-radius: 3px;
   }
   .preview :global(pre) {
