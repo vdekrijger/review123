@@ -119,6 +119,22 @@ describe('verifyAgentFix — batching by persona', () => {
     expect(report.byFinding).toEqual([])
   })
 
+  it('spends nothing on a run that produced only SKIPS', async () => {
+    // A refused / agent-failed / no-change finding has no commit, so there is
+    // no diff to re-read and no model call to make. Structural: skips never
+    // enter `changes`, and the panel does not start the pass without one.
+    const complete = vi.fn(async () => ({ result: { reReads: [], newProblems: [] } }))
+    const report = await verifyAgentFix(
+      HEAD,
+      [],
+      [finding('f1')],
+      deps({ complete: complete as unknown as FixVerifyDeps['complete'] }),
+    )
+    expect(complete).not.toHaveBeenCalled()
+    expect(report.calls).toBe(0)
+    expect(report.byFinding).toEqual([])
+  })
+
   it('reports not-re-read — never silence — when there is no model configured', async () => {
     const report = await verifyAgentFix(
       HEAD,
