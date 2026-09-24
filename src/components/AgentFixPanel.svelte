@@ -412,15 +412,20 @@
                 : describeCheckout(checkout)}
             </p>
           {/if}
-        {:else if readiness.reason === 'write-disabled'}
-          <!-- The resolution is a command at the user's own terminal, so the
-               panel hands them the command rather than a button it cannot back. -->
+        {:else if readiness.reason === 'write-disabled' || readiness.reason === 'no-repo-state'}
+          <!-- Both resolve to the same thing: restart the bridge, from inside
+               the repository, with the grants. Nothing review123 sends can turn
+               either on — that is the point of the flags — so the panel hands
+               over the command rather than a button it cannot back. -->
           <div class="afx-cherry">
             <code data-testid="agent-fix-start-command">{BRIDGE_START_COMMAND}</code>
             <button type="button" class="afx-link" onclick={copyStartCommand}>
               {startCopied ? 'Copied' : 'Copy'}
             </button>
           </div>
+          {#if readiness.reason === 'no-repo-state'}
+            <p class="afx-note">Run it from inside the repository you are reviewing — <code>--root .</code> is what it serves.</p>
+          {/if}
         {/if}
 
         {#if confirm === 'trust'}

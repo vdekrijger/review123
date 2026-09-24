@@ -430,9 +430,18 @@ describe('the other refusals', () => {
   })
 
   it('says plainly that no agent was found, and offers nothing it cannot do', async () => {
+    // Installing a CLI on the bridge's PATH is not something a web page can do
+    // for anyone. An honest sentence and no control beats a button that lies.
     await setup({ caps: { inference: [] } })
     expect(screen.getByTestId('agent-fix-readiness')).toHaveAttribute('data-reason', 'no-cli')
     expect(screen.queryByTestId('agent-fix-checkout')).toBeNull()
     expect(screen.queryByTestId('agent-fix-start-command')).toBeNull()
+  })
+
+  it('tells a bridge serving no repository to restart from inside one', async () => {
+    await setup({ stack: { git: null } })
+    expect(screen.getByTestId('agent-fix-readiness')).toHaveAttribute('data-reason', 'no-repo-state')
+    expect(screen.getByTestId('agent-fix-start-command').textContent).toBe(BRIDGE_START_COMMAND)
+    expect(screen.queryByTestId('agent-fix-checkout')).toBeNull()
   })
 })
