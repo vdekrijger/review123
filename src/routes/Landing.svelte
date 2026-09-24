@@ -63,7 +63,15 @@
     number: number
     /** Every prKey (sha variant) contributing to this row. */
     prKeys: string[]
+    /**
+     * Notes that will be submitted. Withdrawn ones are NOT in here, because
+     * this number is rendered as "N comments drafted" — word for word the
+     * sentence Review.svelte renders from the store's live `count`, and the
+     * two describing the same PR differently is the bug, not a nuance.
+     */
     draftCount: number
+    /** Notes taken out of the review and still stored (shown, never dropped). */
+    withdrawnCount: number
     lastUpdatedAt: number
     /** Title from history when known, else null (falls back to the ref). */
     title: string | null
@@ -87,6 +95,7 @@
       if (existing) {
         existing.prKeys.push(s.prKey)
         existing.draftCount += s.draftCount
+        existing.withdrawnCount += s.withdrawnCount
         if (s.lastUpdatedAt > existing.lastUpdatedAt) existing.lastUpdatedAt = s.lastUpdatedAt
         if (s.headSha && !existing._shas.has(s.headSha)) existing._shas.add(s.headSha)
         existing.multipleShas = existing._shas.size > 1
@@ -101,6 +110,7 @@
           number: s.number,
           prKeys: [s.prKey],
           draftCount: s.draftCount,
+          withdrawnCount: s.withdrawnCount,
           lastUpdatedAt: s.lastUpdatedAt,
           title,
           multipleShas: false,
@@ -645,9 +655,24 @@
               {:else}
                 <span class="recent-title-text"></span>
               {/if}
+              <!-- Always rendered, including at zero: the cell is a COLUMN
+                   (#284), and "0 comments drafted" is already the phrase the
+                   review's own draft bar uses, so it reads the same here. -->
               <span class="inflight-count" data-testid="inflight-count">
                 {row.draftCount} comment{row.draftCount === 1 ? '' : 's'} drafted
               </span>
+              <!-- Withdrawn notes are named rather than folded into the count.
+                   Folding them in is what made this number disagree with the
+                   review's; dropping them silently would make a withdrawal
+                   look like a deletion, which is the one thing it must never
+                   look like. So they get their own word. -->
+              {#if row.withdrawnCount > 0}
+                <span
+                  class="inflight-withdrawn"
+                  data-testid="inflight-withdrawn"
+                  title="Taken out of this review — still written down, and reversible"
+                >{row.withdrawnCount} withdrawn</span>
+              {/if}
               {#if row.multipleShas}
                 <span class="inflight-hint" title="Some drafts were made on an earlier commit">from an earlier commit</span>
               {/if}
@@ -715,6 +740,11 @@
 </section>
 
 {#if pendingDiscard}
+  <!-- The TOTAL, withdrawn notes included — the one number on this row that
+       must NOT be the live subset. confirmDiscard clears every record under
+       the PR, so a withdrawn note is destroyed here too, and the sentence that
+       says "this can't be undone" has to count it. -->
+  {@const doomed = pendingDiscard.draftCount + pendingDiscard.withdrawnCount}
   <dialog
     bind:this={discardDialogEl}
     class="discard-dialog"
@@ -725,7 +755,7 @@
   >
     <h2>Discard unsubmitted comments?</h2>
     <p>
-      Discard {pendingDiscard.draftCount} unsubmitted comment{pendingDiscard.draftCount === 1 ? '' : 's'}
+      Discard {doomed} unsubmitted comment{doomed === 1 ? '' : 's'}
       on {pendingDiscard.owner}/{pendingDiscard.repo}#{pendingDiscard.number}? This can't be undone.
     </p>
     <div class="discard-actions">
@@ -1444,6 +1474,17 @@
     white-space: nowrap;
     text-align: right;
     color: var(--diff-add);
+  }
+
+  /* Withdrawn chip — the count's shape (mono, same size, same column rhythm)
+     but deliberately NOT the count's green: these notes are not going out, so
+     they must not read as part of the figure beside them. */
+  .inflight-withdrawn {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   .inflight-hint {

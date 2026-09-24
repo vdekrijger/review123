@@ -253,7 +253,25 @@ export interface DraftSummary {
   number: number
   /** The head SHA segment, or '' when the prKey carried none. */
   headSha: string
+  /**
+   * Notes that are part of the review — withdrawn ones are NOT counted here.
+   *
+   * This is the number the landing page renders as "N comments drafted", which
+   * is the same sentence Review.svelte renders from `store.count`. That getter
+   * is the live subset, so this one has to be too, or the app tells you "5
+   * comments drafted" on the landing page and "3 comments drafted" the moment
+   * you open the PR.
+   */
   draftCount: number
+  /**
+   * Notes the reviewer took OUT of the review and did not delete.
+   *
+   * Reported rather than dropped, because #285's contract is that withdrawing
+   * never looks like deleting — and folding a withdrawal into `draftCount`
+   * hides it just as effectively as omitting it. A caller that needs "how many
+   * notes does this person still hold" adds the two.
+   */
+  withdrawnCount: number
   lastUpdatedAt: number
 }
 
@@ -814,6 +832,14 @@ async function openSharedDb(dbName: string): Promise<IDBDatabase | null> {
  * most-recent updatedAt. SHA variants of the same PR remain SEPARATE summaries
  * here — the landing layer groups them by PR identity.
  *
+ * WITHDRAWN NOTES ARE SPLIT OUT, NOT SKIPPED. This function reads raw records
+ * off disk rather than going through createDraftStore, so it is the one place
+ * that has to apply `isWithdrawnDraft` by hand — and it did not, which is why
+ * the landing page used to say "5 comments drafted" about a PR whose draft bar
+ * said 3. It counts them into `withdrawnCount` instead of dropping them: a
+ * prKey whose notes are ALL withdrawn still gets a summary (with draftCount 0),
+ * so the PR keeps its row and a withdrawal never reads as a deletion.
+ *
  * Returns [] when IndexedDB is unavailable (in-memory fallback has no cross-PR
  * visibility, by design).
  */
@@ -821,7 +847,7 @@ export async function listDraftSummaries(dbName = 'review123-drafts'): Promise<D
   const db = await openSharedDb(dbName)
   if (!db) return []
 
-  type Acc = { count: number; lastUpdatedAt: number }
+  type Acc = { count: number; withdrawn: number; lastUpdatedAt: number }
   const byPrKey = new Map<string, Acc>()
 
   const tx = db.transaction(STORE_NAME, 'readonly')
@@ -836,12 +862,16 @@ export async function listDraftSummaries(dbName = 'review123-drafts'): Promise<D
         const prKey = pipeIdx === -1 ? rawKey : rawKey.slice(0, pipeIdx)
         const value = cursor.value as Draft
         const updatedAt = typeof value?.updatedAt === 'number' ? value.updatedAt : 0
+        // lastUpdatedAt reads EVERY record, withdrawn ones included, so a PR
+        // whose notes are all withdrawn still sorts by when it was worked on.
+        const withdrawn = isWithdrawnDraft(value ?? {}) ? 1 : 0
         const existing = byPrKey.get(prKey)
         if (existing) {
-          existing.count += 1
+          existing.count += 1 - withdrawn
+          existing.withdrawn += withdrawn
           if (updatedAt > existing.lastUpdatedAt) existing.lastUpdatedAt = updatedAt
         } else {
-          byPrKey.set(prKey, { count: 1, lastUpdatedAt: updatedAt })
+          byPrKey.set(prKey, { count: 1 - withdrawn, withdrawn, lastUpdatedAt: updatedAt })
         }
         cursor.continue()
       } else {
@@ -863,6 +893,7 @@ export async function listDraftSummaries(dbName = 'review123-drafts'): Promise<D
       number: parsed.number,
       headSha: parsed.headSha,
       draftCount: acc.count,
+      withdrawnCount: acc.withdrawn,
       lastUpdatedAt: acc.lastUpdatedAt,
     })
   }

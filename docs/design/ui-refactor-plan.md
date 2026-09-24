@@ -34,7 +34,7 @@ measure](#finding-measure), which constrains the prose and deliberately leaves
 the card, the diff column and the code alone.
 
 The screenshots in [`./shots/`](./shots/) are the **after** state of the whole
-tree, and **nothing in the set is stale any more**: all fourteen are re-captured
+tree, and **nothing in the set is stale any more**: all eighteen are re-captured
 together by [`scripts/capture-shots.mjs`](../../scripts/capture-shots.mjs), which
 is the committed recipe — see [the capture script](#capture-script). `focus-dim-*`
 stays byte-identical to `step2-inspect-unified-*`, and that is now a recorded
@@ -2046,13 +2046,13 @@ lot, because its card is not inside the diff table.)*
 ## The capture script — the recipe, committed
 
 [`scripts/capture-shots.mjs`](../../scripts/capture-shots.mjs) regenerates all
-fourteen shots. It exists because the recipe was never written down, so **three
+eighteen shots. It exists because the recipe was never written down, so **three
 separate agents reverse-engineered it**, each re-validating the guess by
 rebuilding `origin/main` and reproducing a committed shot — and the third still
 could not re-shoot six of the fourteen.
 
 ```
-node scripts/capture-shots.mjs                # build, serve, shoot all 14
+node scripts/capture-shots.mjs                # build, serve, shoot all 18
 node scripts/capture-shots.mjs --check        # shoot to a temp dir, compare, write nothing
 node scripts/capture-shots.mjs --only landing
 node scripts/capture-shots.mjs --base-url http://localhost:4173
@@ -2067,6 +2067,16 @@ state: no spinners, no streaming, no network, no clock.
 [`e2e/diff-density.spec.ts`](../../e2e/diff-density.spec.ts) already measured
 against it. Nothing had to be factored out of `e2e/`; the six shots were
 reachable the whole time. **All six are re-captured, and the set is current.**
+
+**The queue shots came later, and needed a fixture of their own.** `queue-*`
+and `queue-empty-*` photograph the review queue — the surface the landing
+refactor rewrote, and the only one in the set whose content does not come from
+a committed in-app fixture. The script carries that fixture (twelve PRs over
+four repos, diffs from `+4 −0` to `+1183 −1902`) and serves it by faking the
+GitHub API at the network boundary. Three things had to be pinned that no other
+shot needs: a fixed wall clock, so `8h ago` is a constant; the diff stats, which
+the rows fetch after they render; and the shutter, held until every row has its
+size, because the effort gauge scales to the largest churn *currently* loaded.
 
 **The recipe.** Viewport 1440x1000 at `deviceScaleFactor: 1`; the full settings
 object written to `localStorage` before first paint, so no shot inherits a
