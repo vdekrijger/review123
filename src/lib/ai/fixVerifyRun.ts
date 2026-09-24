@@ -45,6 +45,7 @@ import {
   buildFixVerifyPrompt,
   runFixVerification,
   validateFixVerifyResponse,
+  type FixFindingOutcome,
   type FixVerificationReport,
   type FixVerifyBatch,
   type FixVerifyParticipant,
@@ -168,12 +169,33 @@ export function fixVerifyCacheKey(
 }
 
 /**
+ * A finished pass, plus the two things about the PASS (not about the code) a
+ * caller needs and the report itself cannot carry.
+ *
+ * `cached` exists because a cache hit and a fresh poll are the same report and
+ * very different events: one spent model calls and minutes, the other spent
+ * nothing. A metric that cannot tell them apart is a metric that reports the
+ * feature getting cheaper every time somebody re-opens the panel.
+ */
+export interface FixVerifyOutcome {
+  report: FixVerificationReport
+  /** The answer came from the cache; no model was called. */
+  cached: boolean
+  /** Wall clock for this call, ms. Near-zero on a hit, by construction. */
+  durationMs: number
+}
+
+/**
  * Run the verification once for a finished fix run, or return the cached one.
  *
  * Never throws: a failure anywhere returns a report in which the affected
  * findings read `not-re-read`, which the panel states plainly. Silence would be
  * indistinguishable from "checked, and clean", which is the one thing this
  * feature must never imply.
+ *
+ * The plain form is kept as the panel's original entry point; callers that need
+ * to REPORT on the pass (the loop, and the analytics event) use
+ * `verifyAgentFixDetailed` instead.
  */
 export async function verifyAgentFix(
   headSha: string,
@@ -181,6 +203,18 @@ export async function verifyAgentFix(
   findings: readonly AgentFixFindingInput[],
   overrides: Partial<FixVerifyDeps> = {},
 ): Promise<FixVerificationReport> {
+  return (await verifyAgentFixDetailed(headSha, changes, findings, overrides)).report
+}
+
+/** The same pass, with whether it was cached and how long it took. */
+export async function verifyAgentFixDetailed(
+  headSha: string,
+  changes: readonly AgentFixChangeInput[],
+  findings: readonly AgentFixFindingInput[],
+  overrides: Partial<FixVerifyDeps> = {},
+): Promise<FixVerifyOutcome> {
+  const started = Date.now()
+  const since = (): number => Date.now() - started
   const deps: FixVerifyDeps = { ...DEFAULT_DEPS, ...overrides }
   const byKey = new Map(findings.map((f) => [f.key, f]))
 
@@ -188,14 +222,21 @@ export async function verifyAgentFix(
   // original complaint there is nothing to ask "does this still stand?" about.
   const attributable = changes.filter((c) => byKey.has(c.findingId))
   if (attributable.length === 0) {
-    return { byFinding: [], newProblems: [], witnesses: [], calls: 0, failedCalls: 0 }
+    return {
+      report: { byFinding: [], newProblems: [], witnesses: [], calls: 0, failedCalls: 0 },
+      // A pass with nothing to re-read spent nothing and read nothing. It is
+      // not a cache hit; calling it one would report a saving that never
+      // existed.
+      cached: false,
+      durationMs: since(),
+    }
   }
 
   const participants = deps.participants()
   const key = fixVerifyCacheKey(headSha, attributable, participants.map((p) => `${p.provider}:${p.model}`))
 
   const hit = await deps.readCache<FixVerificationReport>(key)
-  if (hit !== null) return hit
+  if (hit !== null) return { report: hit, cached: true, durationMs: since() }
 
   // One batch per PERSONA: the reviewer that raised a finding is the one asked
   // whether its own complaint still stands.
@@ -242,5 +283,46 @@ export async function verifyAgentFix(
   // in which every call failed would otherwise pin "not re-read" forever, and
   // the retry the user obviously wants would never reach a model.
   if (report.calls > 0 && report.failedCalls < report.calls) await deps.writeCache(key, report)
-  return report
+  return { report, cached: false, durationMs: since() }
+}
+
+/**
+ * The SHAPE of one verification pass, for the analytics event.
+ *
+ * Counts and enums only, derived here so the call site cannot improvise. Every
+ * field is an integer or a boolean; nothing here can carry a finding, a path, a
+ * persona's words, a model's output, a diff or a repo name — see the PRIVACY
+ * DECISION block on `fix_verify_completed` in lib/analytics/analytics.ts.
+ */
+export interface FixVerifyShape {
+  findings: number
+  still_standing: number
+  not_raised_again: number
+  could_not_tell: number
+  not_re_read: number
+  new_problems: number
+  /** How many DISTINCT models answered, not who they were. */
+  models: number
+  failed_calls: number
+  cached: boolean
+  duration_ms: number
+}
+
+export function fixVerifyShape(outcome: FixVerifyOutcome): FixVerifyShape {
+  const { report } = outcome
+  const count = (o: FixFindingOutcome): number => report.byFinding.filter((f) => f.outcome === o).length
+  return {
+    findings: report.byFinding.length,
+    still_standing: count('still-standing'),
+    not_raised_again: count('not-raised-again'),
+    could_not_tell: count('could-not-tell'),
+    not_re_read: count('not-re-read'),
+    new_problems: report.newProblems.length,
+    // `witnesses` is a list of display names ("Anthropic · claude-…"). Only its
+    // LENGTH leaves this function.
+    models: report.witnesses.length,
+    failed_calls: report.failedCalls,
+    cached: outcome.cached,
+    duration_ms: Math.round(outcome.durationMs),
+  }
 }
