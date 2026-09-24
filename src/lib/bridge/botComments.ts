@@ -155,7 +155,7 @@ const BOT_QUOTE_RULES: QuoteRules = {
   marker: MARKER_LITERAL,
   maxChars: BOT_COMMENT_MAX_CHARS,
   cutNote: (max) =>
-    `[quoted comment cut at ${max} characters \u2014 read the rest on the pull request]`,
+    `[quoted comment cut at ${max} characters — read the rest on the pull request]`,
 }
 
 /**
