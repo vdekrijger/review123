@@ -146,7 +146,7 @@ describe('verifyAgentFix — caching', () => {
       [change('f1')],
       [finding('f1')],
       deps({
-        readCache: async () => cached,
+        readCache: (async () => cached) as unknown as FixVerifyDeps['readCache'],
         complete: complete as unknown as FixVerifyDeps['complete'],
       }),
     )

@@ -249,3 +249,52 @@ export function parseCommitPatch(patch: string): ParsedPatch {
 export function patchIsEmpty(parsed: ParsedPatch): boolean {
   return parsed.files.every((f) => f.hunks.every((h) => h.lines.length === 0))
 }
+
+/** Total rendered rows across every file. */
+export function patchRowCount(parsed: ParsedPatch): number {
+  let n = 0
+  for (const f of parsed.files) for (const h of f.hunks) n += h.lines.length
+  return n
+}
+
+/**
+ * How many rows the panel draws before it stops and offers a button.
+ *
+ * The bridge's cap is 256KB PER COMMIT, and a batch can hold ten of them —
+ * tens of thousands of rows, which is enough DOM to lock the tab. This is a
+ * RENDER cap, entirely different from the bridge's byte cap, and the panel
+ * names it as such: one is "we did not receive the rest", the other is "we have
+ * it, press to draw it". Conflating them would tell the user their diff was
+ * truncated when it was not.
+ */
+export const MAX_RENDERED_PATCH_ROWS = 600
+
+export interface CappedPatch {
+  files: PatchFile[]
+  /** Rows the cap is holding back. 0 when everything is drawn. */
+  hidden: number
+}
+
+/** Trim a parsed patch to the render cap, keeping file and hunk structure. */
+export function capPatchRows(
+  parsed: ParsedPatch,
+  limit: number = MAX_RENDERED_PATCH_ROWS,
+): CappedPatch {
+  const total = patchRowCount(parsed)
+  if (total <= limit) return { files: parsed.files, hidden: 0 }
+
+  const files: PatchFile[] = []
+  let budget = limit
+  for (const f of parsed.files) {
+    if (budget <= 0) break
+    const hunks: PatchHunk[] = []
+    for (const h of f.hunks) {
+      if (budget <= 0) break
+      const lines = h.lines.slice(0, budget)
+      budget -= lines.length
+      hunks.push({ ...h, lines })
+    }
+    files.push({ ...f, hunks })
+  }
+  return { files, hidden: total - limit }
+}

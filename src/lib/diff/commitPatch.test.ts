@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseCommitPatch, patchIsEmpty } from './commitPatch'
+import { capPatchRows, parseCommitPatch, patchIsEmpty, patchRowCount } from './commitPatch'
 
 describe('parseCommitPatch — a real `git show` patch', () => {
   const patch = [
@@ -159,5 +159,41 @@ describe('parseCommitPatch — truncation and emptiness', () => {
 
   it('does not call a patch with rows empty', () => {
     expect(patchIsEmpty(parseCommitPatch('--- a/x\n+++ b/x\n@@ -1 +1 @@\n+a\n'))).toBe(false)
+  })
+})
+
+describe('capPatchRows — the RENDER cap, which is NOT the bridge byte cap', () => {
+  // Two different limits with two different meanings: the bridge's is "we did
+  // not receive the rest", this one is "we have it, press to draw it". The
+  // panel must never report one as the other.
+  const big = (rows: number, name = 'x.ts'): string => {
+    const lines = [`--- a/${name}`, `+++ b/${name}`, `@@ -1,${rows} +1,${rows} @@`]
+    for (let i = 0; i < rows; i++) lines.push(`+line ${i}`)
+    return lines.join('\n')
+  }
+
+  it('draws everything when the patch fits', () => {
+    expect(capPatchRows(parseCommitPatch(big(10)), 600).hidden).toBe(0)
+  })
+
+  it('stops at the limit and says how many rows it is holding back', () => {
+    const capped = capPatchRows(parseCommitPatch(big(1000)), 600)
+    expect(capped.hidden).toBe(400)
+    let drawn = 0
+    for (const f of capped.files) for (const h of f.hunks) drawn += h.lines.length
+    expect(drawn).toBe(600)
+  })
+
+  it('keeps file and hunk structure while trimming across several files', () => {
+    const capped = capPatchRows(parseCommitPatch([big(400), big(400, 'y.ts')].join('\n')), 600)
+    expect(capped.files.map((f) => f.path)).toEqual(['x.ts', 'y.ts'])
+    expect(capped.files[0].hunks[0].lines).toHaveLength(400)
+    expect(capped.files[1].hunks[0].lines).toHaveLength(200)
+    expect(capped.hidden).toBe(200)
+  })
+
+  it('counts rows across every file', () => {
+    expect(patchRowCount(parseCommitPatch(big(7)))).toBe(7)
+    expect(patchRowCount(parseCommitPatch(''))).toBe(0)
   })
 })
