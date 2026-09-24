@@ -176,11 +176,10 @@ describe('skillReviews state transitions', () => {
     const skillA = addSkill('Enabled', 'content')
     addSkill('Disabled', 'content')
 
-    // Toggle second skill off
-    const { toggleSkill } = await import('../skills/skills')
-    const skills = (await import('../skills/skills')).listSkills()
-    const disabledSkill = skills.find(s => s.name === 'Disabled')!
-    toggleSkill(disabledSkill.id)
+    // Scope the second skill off — it runs in neither phase
+    const { setSkillScope, listSkills } = await import('../skills/skills')
+    const disabledSkill = listSkills().find(s => s.name === 'Disabled')!
+    setSkillScope(disabledSkill.id, 'off')
 
     const deps = makeStubDeps({
       llmJsonWithRepair: vi.fn().mockResolvedValue({ findings: [] }),

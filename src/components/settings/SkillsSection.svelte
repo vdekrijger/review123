@@ -1,8 +1,9 @@
 <script lang="ts">
   import {
-    listSkills, addSkill, updateSkill, removeSkill, toggleSkill,
-    SKILLS_CAP, SKILL_CONTENT_CAP, type ReviewerSkill,
+    listSkills, addSkill, updateSkill, removeSkill, setSkillPhase, skillRunsIn,
+    SKILLS_CAP, SKILL_CONTENT_CAP, type ReviewerSkill, type SkillScope,
   } from '../../lib/skills/skills'
+  import type { ReviewPhase } from '../../lib/guide/phase.svelte'
   import { BUILTIN_SKILLS } from '../../lib/skills/builtinSkills'
   import {
     listAllCalibration, clearCalibration, removeCalibrationEntry,
@@ -168,14 +169,36 @@
   // Set of installed skill names for O(1) lookup
   const installedSkillNames = $derived(new Set(skills.map(s => s.name)))
 
-  function handleAddBuiltinSkill(name: string, content: string) {
-    addSkill(name, content)
+  function handleAddBuiltinSkill(name: string, content: string, scope: SkillScope) {
+    addSkill(name, content, scope)
     refreshSkills()
   }
 
-  function handleToggleSkill(id: string) {
-    toggleSkill(id)
+  /**
+   * Flip ONE phase for one reviewer. Two checkboxes per row express all four
+   * scopes exactly: both checked = 'both', one = that phase only, neither =
+   * 'off'. That keeps 11+ rows scannable — two aligned columns you read down —
+   * where eleven four-option selects would not be.
+   */
+  function handleSetPhase(id: string, phase: ReviewPhase, runs: boolean) {
+    setSkillPhase(id, phase, runs)
     refreshSkills()
+  }
+
+  /** The short column-ish label the built-in library shows for a default scope. */
+  function scopeShort(scope: SkillScope): string {
+    if (scope === 'both') return 'Impl + Tests'
+    if (scope === 'implementation') return 'Impl'
+    if (scope === 'tests') return 'Tests'
+    return 'Off'
+  }
+
+  /** Plain-language scope, for the row's screen-reader summary. */
+  function scopeLabel(scope: SkillScope): string {
+    if (scope === 'both') return 'runs in both phases'
+    if (scope === 'implementation') return 'runs in the implementation phase only'
+    if (scope === 'tests') return 'runs in the tests phase only'
+    return 'off — never runs'
   }
 
   function handleRemoveSkill(id: string) {
@@ -217,18 +240,40 @@
   <p class="hint auto-run-hint">Runs your reviewers as soon as a PR loads — while you're still on Understand — so findings are ready by the Inspect step. Failed reviewers retry automatically.</p>
 
   {#if skills.length > 0}
+    <!-- Phase scope. The review flow has two phases and most lenses only speak
+         to one of them, so each reviewer says where it runs. The columns are
+         labelled ONCE, here, instead of twenty-two times down the list. -->
+    <p class="hint phase-hint">Each reviewer runs only in the phases you check. Clear both to turn it off.</p>
+    <div class="skill-row skill-list-head">
+      <span class="skill-head-name">Reviewer</span>
+      <span class="phase-head">Impl</span>
+      <span class="phase-head">Tests</span>
+      <span class="skill-head-actions"></span>
+    </div>
     <ul class="skill-list">
       {#each skills as skill (skill.id)}
         <li class="skill-item-wrapper">
-          <div class="skill-item">
-            <label class="skill-toggle-label">
-              <input
-                type="checkbox"
-                checked={skill.enabled}
-                onchange={() => handleToggleSkill(skill.id)}
-              />
-              <span class="skill-name">{skill.name}</span>
-            </label>
+          <div class="skill-item skill-row" class:skill-item-off={skill.scope === 'off'}>
+            <span class="skill-name">
+              {skill.name}
+              {#if skill.scope === 'off'}<span class="skill-off-tag">Off</span>{/if}
+              <span class="visually-hidden">— {scopeLabel(skill.scope)}</span>
+            </span>
+            <input
+              type="checkbox"
+              class="phase-box"
+              checked={skillRunsIn(skill, 'implementation')}
+              aria-label="Run {skill.name} in the implementation phase"
+              onchange={(e) => handleSetPhase(skill.id, 'implementation', (e.currentTarget as HTMLInputElement).checked)}
+            />
+            <input
+              type="checkbox"
+              class="phase-box"
+              checked={skillRunsIn(skill, 'tests')}
+              aria-label="Run {skill.name} in the tests phase"
+              onchange={(e) => handleSetPhase(skill.id, 'tests', (e.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="skill-actions">
             <button
               class="skill-edit-btn"
               onclick={() => editingId === skill.id ? cancelEdit() : openEdit(skill)}
@@ -240,6 +285,7 @@
               onclick={() => handleRemoveSkill(skill.id)}
               aria-label="Delete {skill.name}"
             >Delete</button>
+            </span>
           </div>
 
           {#if editingId === skill.id}
@@ -320,11 +366,14 @@
           <div class="builtin-info">
             <span class="builtin-name">{builtin.name}</span>
             <span class="builtin-tagline">{builtin.tagline}</span>
+            <!-- Where this persona will run once installed — stated BEFORE the
+                 click, never discovered after it. Editable afterwards. -->
+            <span class="builtin-scope">Runs in: {scopeShort(builtin.defaultScope)}</span>
           </div>
           {#if !installedSkillNames.has(builtin.name)}
             <button
               class="builtin-add-btn"
-              onclick={() => handleAddBuiltinSkill(builtin.name, builtin.content)}
+              onclick={() => handleAddBuiltinSkill(builtin.name, builtin.content, builtin.defaultScope)}
               disabled={skills.length >= SKILLS_CAP}
               aria-label="Add {builtin.name}"
               title={skills.length >= SKILLS_CAP ? `Cannot add more than ${SKILLS_CAP} reviewer skills` : undefined}
@@ -482,23 +531,84 @@
     gap: 0.4rem;
   }
 
-  .skill-item {
-    display: flex;
+  /* ONE grid shared by the header and every row, so the two phase columns line
+     up down a list of 11+ reviewers and can be read as columns rather than as
+     eleven separate controls (p.113 — the "scan the column, not the row" rule
+     applied to checkboxes instead of numbers). */
+  .skill-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 3rem 3rem auto;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     font-size: 0.9em;
   }
 
-  .skill-toggle-label {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    flex: 1;
-    cursor: pointer;
+  /* Column headings are support, not content: smallest step, muted ink, and the
+     +0.05em all-caps tracking the type rules ask for. */
+  .skill-list-head {
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    padding-bottom: var(--space-1);
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: var(--space-2);
+  }
+
+  .phase-head {
+    text-align: center;
+  }
+
+  .skill-head-actions {
+    /* Reserves the Edit+Delete column so the phase columns don't drift. */
+    width: 5.5rem;
+  }
+
+  .phase-hint {
+    margin: 0 0 var(--space-2);
   }
 
   .skill-name {
-    flex: 1;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .skill-actions {
+    display: flex;
+    gap: var(--space-2);
+    justify-content: flex-end;
+    width: 5.5rem;
+  }
+
+  .phase-box {
+    justify-self: center;
+  }
+
+  /* An OFF reviewer stays legible but stops competing: soften the loser rather
+     than shouting at the winners (p.39-40). */
+  .skill-item-off .skill-name {
+    color: var(--text-muted);
+  }
+
+  .skill-off-tag {
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    padding: 0 var(--space-1);
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .skill-delete-btn {
@@ -830,6 +940,11 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .builtin-scope {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
   }
 
   .builtin-tagline {

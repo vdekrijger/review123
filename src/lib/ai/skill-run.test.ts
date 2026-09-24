@@ -142,9 +142,9 @@ describe('runSkillReviews — disabled skills skipped', () => {
   it('skips disabled skills and does not set state for them', async () => {
     const deps = makeDeps()
     const skill = addSkill('Security', 'check for XSS')
-    // Toggle to disable
-    const { toggleSkill } = await import('../skills/skills')
-    toggleSkill(skill.id)
+    // Scope it off — it now runs in neither phase
+    const { setSkillScope } = await import('../skills/skills')
+    setSkillScope(skill.id, 'off')
 
     const run = createAiRun(makeInput(), deps)
     await run.runSkillReviews()

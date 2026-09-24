@@ -18,7 +18,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createAiRun, isTestsPassEntryId, baseSkillId, TESTS_PASS_ID_SUFFIX } from './run.svelte'
 import { PROMPT_VERSIONS, TESTS_REVIEW_MARKER } from './tasks'
-import { addSkill, removeSkill, listSkills, toggleSkill } from '../skills/skills'
+import { addSkill, removeSkill, listSkills, setSkillScope } from '../skills/skills'
 import { djb2 } from '../viewed/viewed.svelte'
 import type { PackedContext, PackScope } from '../context/pack'
 import type { SkillReviewResult } from './schemas'
@@ -323,7 +323,7 @@ describe('tests reviewer pass — what it sends', () => {
     seedSettings()
     addSkill('Security Reviewer', 'sec content')
     const off = addSkill('Performance Reviewer', 'perf content')
-    toggleSkill(off.id)
+    setSkillScope(off.id, 'off')
     const { pack } = makePack()
     const run = createAiRun(makeInput(pack), makeDeps())
 

@@ -12,6 +12,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { BUILTIN_SKILLS } from './builtinSkills'
+import { isSkillScope } from './skills'
 import { SAMPLE_SKILL_NAME } from './sampleSkill'
 
 describe('BUILTIN_SKILLS', () => {
@@ -33,6 +34,56 @@ describe('BUILTIN_SKILLS', () => {
       expect(typeof skill.tagline).toBe('string')
       expect(typeof skill.content).toBe('string')
     }
+  })
+
+  it('every entry declares a valid defaultScope', () => {
+    for (const skill of BUILTIN_SKILLS) {
+      expect(isSkillScope(skill.defaultScope), `skill "${skill.name}"`).toBe(true)
+    }
+  })
+
+  /**
+   * The shipped phase defaults, pinned. This table IS the feature's out-of-the-
+   * box usefulness, so a change to it should be a deliberate edit here, not a
+   * side effect. The rule applied: what can this lens actually SAY about a test
+   * file? The reasoning per persona lives at each declaration in builtinSkills.ts.
+   */
+  it('ships the reviewed per-persona phase defaults', () => {
+    const actual = Object.fromEntries(BUILTIN_SKILLS.map((s) => [s.id, s.defaultScope]))
+    expect(actual).toEqual({
+      // Implementation only — nothing to say about a test file.
+      architecture: 'implementation',
+      'domain-modeling': 'implementation',
+      security: 'implementation',
+      ux: 'implementation',
+      sre: 'implementation',
+      performance: 'implementation',
+      'posthog-observability': 'implementation',
+      // Tests only — the point of the tests phase, and an absence-claim
+      // generator in the implementation phase (where tests are not packed).
+      'test-quality': 'tests',
+      // Both — these two read code as code, on either side of the split.
+      'comment-sensibility': 'both',
+      pragmatic: 'both',
+    })
+  })
+
+  it('no built-in ships OFF — a library entry you install should do something', () => {
+    expect(BUILTIN_SKILLS.some((s) => s.defaultScope === 'off')).toBe(false)
+  })
+
+  it('every phase has at least one built-in reviewer', () => {
+    const runsIn = (phase: 'implementation' | 'tests') =>
+      BUILTIN_SKILLS.filter((s) => s.defaultScope === 'both' || s.defaultScope === phase)
+    expect(runsIn('implementation').length).toBeGreaterThan(0)
+    expect(runsIn('tests').length).toBeGreaterThan(0)
+  })
+
+  it('the defaults actually reduce the tests pass — the whole point of the change', () => {
+    const inTests = BUILTIN_SKILLS.filter(
+      (s) => s.defaultScope === 'both' || s.defaultScope === 'tests',
+    )
+    expect(inTests.length).toBeLessThan(BUILTIN_SKILLS.length)
   })
 
   it('all ids are unique', () => {
