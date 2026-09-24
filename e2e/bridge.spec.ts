@@ -1023,6 +1023,37 @@ async function setupReviewerProvider(page: Page) {
     const system = (body?.messages?.find((m) => m.role === 'system')?.content ?? '').toLowerCase()
     if (system.includes('consolidating overlapping code-review findings')) return json({ clusters: [] })
     if (system.includes('rewriting code-review findings into plain')) return json({ rewrites: [] })
+
+    // The post-fix re-read (src/lib/ai/fixVerify.ts). Checked BEFORE the
+    // persona branch: its prompt carries the persona verbatim, so "reviewer
+    // persona" matches it too. The ids come back out of the user message, so
+    // the stub never has to know how a finding key is built.
+    if (system.includes('re-reading its actual diff')) {
+      const user = body?.messages?.find((m) => m.role === 'user')?.content ?? ''
+      const ids = [...user.matchAll(/### FINDING (.+)/g)].map((m) => m[1].trim())
+      return json({
+        // First finding stays open, second goes quiet — so one run shows both
+        // outcomes and the "send the still-open ones back" affordance.
+        reReads: ids.map((id, i) => ({
+          id,
+          verdict: i === 0 ? 'still-standing' : 'not-raised-again',
+          reason: i === 0 ? 'the escape is applied on the wrong side' : 'the value is escaped now',
+        })),
+        newProblems:
+          ids.length > 0
+            ? [
+                {
+                  path: 'src/render.ts',
+                  line: 42,
+                  severity: 'high',
+                  body: 'The new escape helper is called before the null check, so a null title now throws.',
+                  suggestedFix: 'Move the null guard above the escape call.',
+                },
+              ]
+            : [],
+      })
+    }
+
     if (system.includes('reviewer persona') || system.includes('security reviewer')) {
       return json(FIX_REVIEW_RESULT)
     }
@@ -1035,6 +1066,12 @@ interface FixStubOptions {
   writeEnabled: boolean
   /** When set, `/v1/fix` answers with this status + body instead of succeeding. */
   refuse?: { status: number; error: string; message: string }
+  /**
+   * When 'round-cap', every change comes back at the round cap with its tests
+   * RED, and the first change's diff is marked truncated — the two states a
+   * verification pass must not be allowed to soften or paper over.
+   */
+  stop?: 'round-cap'
 }
 
 /**
@@ -1044,7 +1081,7 @@ interface FixStubOptions {
  */
 async function stubBridgeFix(page: Page, opts: FixStubOptions) {
   await page.addInitScript(
-    ({ health, refuse }) => {
+    ({ health, refuse, stop }) => {
       const realFetch = window.fetch.bind(window)
       const calls: { url: string; body: string | null }[] = []
       ;(window as unknown as { __bridgeCalls: typeof calls }).__bridgeCalls = calls
@@ -1089,15 +1126,23 @@ async function stubBridgeFix(page: Page, opts: FixStubOptions) {
                 intent: `Agent intent ${i + 1}: made the smallest change that addresses it.`,
                 files: [f.path],
                 diff: `--- a/${f.path}\n+++ b/${f.path}\n@@ -1 +1 @@\n-old ${i}\n+new ${i}\n`,
-                truncated: false,
-                rounds: 1,
-                stopReason: 'all-addressed',
-                tests: { status: 'passed', command: 'pnpm test', durationMs: 900, output: '1 passing' },
+                // Only the FIRST change is marked cut, so one run shows both a
+                // whole diff and a truncated one.
+                truncated: stop === 'round-cap' && i === 0,
+                rounds: stop === 'round-cap' ? 3 : 1,
+                stopReason: stop === 'round-cap' ? 'round-cap' : 'all-addressed',
+                tests:
+                  stop === 'round-cap'
+                    ? { status: 'failed', command: 'pnpm test', durationMs: 900, output: '1 failing' }
+                    : { status: 'passed', command: 'pnpm test', durationMs: 900, output: '1 passing' },
               })),
               skipped: [],
-              rounds: 1,
-              stopReason: 'all-addressed',
-              tests: { status: 'passed', command: 'pnpm test', durationMs: 900, output: '1 passing' },
+              rounds: stop === 'round-cap' ? 3 : 1,
+              stopReason: stop === 'round-cap' ? 'round-cap' : 'all-addressed',
+              tests:
+                stop === 'round-cap'
+                  ? { status: 'failed', command: 'pnpm test', durationMs: 900, output: '1 failing' }
+                  : { status: 'passed', command: 'pnpm test', durationMs: 900, output: '1 passing' },
               durationMs: 4200,
             }),
           )
@@ -1116,6 +1161,7 @@ async function stubBridgeFix(page: Page, opts: FixStubOptions) {
         },
       }),
       refuse: opts.refuse ?? null,
+      stop: opts.stop ?? null,
     },
   )
 }
@@ -1172,9 +1218,16 @@ test('fix loop: two eligible findings go to the agent, one is approved and one r
   await expect(results.nth(1).getByTestId('agent-fix-intent')).toContainText('Agent intent 2')
   await expect(results.first().getByTestId('agent-fix-tests')).toHaveAttribute('data-status', 'passed')
 
-  // The diff is there to read before deciding.
-  await results.first().getByTestId('agent-fix-diff').locator('summary').click()
-  await expect(results.first().getByTestId('agent-fix-diff')).toContainText('+new 0')
+  // THE CHANGE ITSELF is drawn, per file, with no disclosure to open first —
+  // the user asked to see the changes rather than a summary of them.
+  const diff = results.first().getByTestId('agent-fix-diff')
+  await expect(diff).toBeVisible()
+  await expect(diff).toContainText('new 0')
+  await expect(diff).toContainText('old 0')
+  await expect(diff).toContainText('@@ -1 +1 @@')
+  // A whole diff is not labelled as a cut one.
+  await expect(diff).toHaveAttribute('data-truncated', 'false')
+  await expect(results.first().getByTestId('agent-fix-diff-truncated')).toHaveCount(0)
 
   // What the bridge was actually sent: ids for the two eligible findings and a
   // sha — no command, no cwd, no environment.
@@ -1200,6 +1253,104 @@ test('fix loop: two eligible findings go to the agent, one is approved and one r
   await expect(cherry).toContainText('git cherry-pick 111111111111')
   await expect(cherry).not.toContainText('222222222222')
   await expect(panel).toContainText(/Nothing has been applied/i)
+})
+
+test('fix verify: the re-read reports what was observed, and never that it is fixed', async ({
+  page,
+}) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await setupReviewerProvider(page)
+  await stubBridgeFix(page, { writeEnabled: true })
+  await seedPairing(page)
+  await seedFixSkill(page)
+  await page.addInitScript((s) => localStorage.setItem('review123:settings', JSON.stringify(s)), fixSettings())
+
+  await runReviewers(page)
+
+  const panel = page.getByTestId('agent-fix-panel')
+  await expect(panel).toBeVisible({ timeout: 10_000 })
+  await panel.getByTestId('agent-fix-send').click()
+  await expect(panel.getByTestId('agent-fix-result')).toHaveCount(2, { timeout: 15_000 })
+
+  // ---- The caveat is stated ONCE, above the results ----
+  const head = panel.getByTestId('agent-fix-verify-head')
+  await expect(head).toBeVisible({ timeout: 15_000 })
+  // It names the MEASUREMENT, because that is what makes the weakness concrete.
+  await expect(head).toContainText('1/3')
+  await expect(head).toContainText('3/3')
+  await expect(head).toContainText(/not that the defect is gone/i)
+  // And it refuses to let this pass stand in for a person reading the code.
+  await expect(head).toContainText(/read by a person/i)
+  // Who looked, by name.
+  await expect(panel.getByTestId('agent-fix-witnesses')).toContainText('Security Reviewer')
+
+  // ---- Per finding: an observation about a REVIEWER, not a claim about code ----
+  const verdicts = panel.getByTestId('agent-fix-verify')
+  await expect(verdicts).toHaveCount(2)
+  await expect(verdicts.first()).toHaveAttribute('data-outcome', 'still-standing')
+  await expect(verdicts.first()).toContainText('still raised')
+  await expect(verdicts.nth(1)).toHaveAttribute('data-outcome', 'not-raised-again')
+  await expect(verdicts.nth(1)).toContainText('not raised again')
+  await expect(verdicts.nth(1)).toContainText(
+    "re-read this against the agent's diff and did not raise it again",
+  )
+  // THE LOAD-BEARING ASSERTION: nothing on this surface says the defect is gone.
+  await expect(panel).not.toContainText(/\bfixed\b/i)
+  await expect(panel).not.toContainText(/\bresolved\b/i)
+
+  // ---- The most valuable output: a problem the fix ITSELF introduced ----
+  const problems = panel.getByTestId('agent-fix-new-problem')
+  await expect(problems).toHaveCount(1)
+  await expect(problems.first()).toContainText('a null title now throws')
+  await expect(problems.first()).toContainText('raised by 1 of 1')
+  await expect(panel.getByTestId('agent-fix-new-problems')).toHaveAttribute('data-count', '1')
+
+  // ---- Another round is a CHOICE: one click, and it says what it would send ----
+  const sendOpen = panel.getByTestId('agent-fix-send-open')
+  await expect(sendOpen).toContainText('Send the 1 still-open finding back')
+
+  // The verdict is never held hostage by the check — approving still works.
+  await panel.getByTestId('agent-fix-result').first().getByTestId('agent-fix-approve').click()
+  await expect(panel.getByTestId('agent-fix-result').first()).toHaveAttribute('data-verdict', 'approved')
+})
+
+test('fix verify: a quiet re-read does not soften a red round-cap commit', async ({ page }) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await setupReviewerProvider(page)
+  await stubBridgeFix(page, { writeEnabled: true, stop: 'round-cap' })
+  await seedPairing(page)
+  await seedFixSkill(page)
+  await page.addInitScript((s) => localStorage.setItem('review123:settings', JSON.stringify(s)), fixSettings())
+
+  await runReviewers(page)
+
+  const panel = page.getByTestId('agent-fix-panel')
+  await expect(panel).toBeVisible({ timeout: 10_000 })
+  await panel.getByTestId('agent-fix-send').click()
+  const results = panel.getByTestId('agent-fix-result')
+  await expect(results).toHaveCount(2, { timeout: 15_000 })
+
+  // The loop's own verdict, unchanged and blunt.
+  await expect(results.nth(1).getByTestId('agent-fix-tests')).toHaveAttribute('data-status', 'failed')
+  await expect(results.nth(1).getByTestId('agent-fix-change-stop')).toContainText(
+    /tests still failing/i,
+  )
+
+  // The finding the re-read found quiet is the one that could mislead — and the
+  // panel refuses to let it. The stop reason gets the last word, in its own row.
+  const second = results.nth(1)
+  await expect(second.getByTestId('agent-fix-verify')).toHaveAttribute('data-outcome', 'not-raised-again')
+  const under = second.getByTestId('agent-fix-verify-under')
+  await expect(under).toHaveAttribute('data-stop', 'round-cap')
+  await expect(under).toContainText('The tests are still failing on this commit')
+  await expect(under).toContainText('does not make them pass')
+
+  // A truncated diff says so BEFORE its rows, so it is never read as whole.
+  const truncated = results.first().getByTestId('agent-fix-diff-truncated')
+  await expect(truncated).toContainText(/too large to send whole/i)
+  await expect(results.first().getByTestId('agent-fix-diff')).toHaveAttribute('data-truncated', 'true')
 })
 
 test('fix loop: a READ-ONLY bridge is never offered as a write one', async ({ page }) => {
