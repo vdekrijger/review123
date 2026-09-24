@@ -595,9 +595,20 @@
    * subtree paints at the ANCESTOR's level and no step here can lift it out.
    * There is a live example in the app: @git-diff-view puts `sticky` + `z-[1]`
    * on its line-widget wrapper, so overlays rendered inside a diff row are
-   * pinned at 1 whatever they declare (see CommentThread.svelte). The escapes
-   * are structural — render outside the trapping subtree (SymbolPopover) or use
-   * the Popover API's top layer (VerifyVotesTooltip) — not a bigger number.
+   * pinned at 1 whatever they declare. The escapes are structural — render
+   * outside the trapping subtree (SymbolPopover) or use the Popover API's top
+   * layer (VerifyVotesTooltip) — not a bigger number.
+   *
+   * Both surfaces that were caught by it are now out: .comment-menu-popover
+   * (CommentThread) and .emoji-popover (CommentEditor) take the top-layer
+   * escape, and each keeps --z-popover only as the fallback floor for a browser
+   * without the API. Their stacking-context ancestor chains were MEASURED —
+   * exactly one entry each, that wrapper — as was the third suspect,
+   * .findings-popover (InspectStep), whose chain is EMPTY: it renders in the
+   * root context, so for it the token alone was the whole fix. The difference
+   * is why this section says a step is not a promise: three popovers, one
+   * token, two of them needing something the token cannot express.
+   * e2e/popover-escape.spec.ts hit-tests all of it in a real browser.
    *
    * ── GAPS ── Steps are 10 or 20 apart in the low band and 50-100 apart in the
    * high band, so a new surface can be slotted between two existing ones

@@ -11,19 +11,120 @@
   let { comments }: Props = $props()
 
   // ---- Per-comment actions menu ----
+  //
+  // ESCAPING THE DIFF'S STACKING TRAP. This menu renders inside an inline
+  // comment thread, which @git-diff-view puts inside a line-widget wrapper
+  // carrying its own `sticky` + `z-[1]` utilities. A positioned element with a
+  // z-index establishes a stacking context, so this whole subtree paints at 1
+  // against the root and NO z-index here can lift it out — measured: the menu
+  // lost to the draft bar at a literal 20 and lost identically at --z-popover
+  // (250). The token is a prerequisite for the fix, not a substitute for it.
+  //
+  // So the menu is promoted to the browser TOP LAYER via the Popover API, which
+  // sits above every stacking context in the document by construction. Same
+  // idiom, same reason, as VerifyVotesTooltip.
+  //
+  // `manual` rather than `auto` is deliberate: `auto` would hand light-dismiss
+  // and Escape to the UA on top of the handlers below that already implement
+  // them, and two dismissal paths racing on one piece of state is a worse
+  // outcome than the bug. Promotion is for PAINTING only — the element stays
+  // exactly where it is in the DOM, so `closest('[data-comment-menu]')` below,
+  // focus order, and focus return all keep working unchanged.
+  //
   // Only one menu is open at a time; keyed by comment id.
   let openMenuId = $state<number | null>(null)
+  /** The open menu's own element, for showPopover + placement. */
+  let menuEl = $state<HTMLDivElement | null>(null)
+  /** The trigger the open menu belongs to — its rect anchors the placement. */
+  let anchorEl: HTMLElement | null = null
   // Comment id currently showing the transient "Copied ✓" confirmation.
   let copiedId = $state<number | null>(null)
   let copiedTimer: ReturnType<typeof setTimeout> | undefined
 
-  function toggleMenu(id: number) {
-    openMenuId = openMenuId === id ? null : id
+  function toggleMenu(id: number, trigger: HTMLElement) {
+    if (openMenuId === id) {
+      closeMenu()
+      return
+    }
+    openMenuId = id
+    anchorEl = trigger
   }
 
   function closeMenu() {
     openMenuId = null
+    anchorEl = null
   }
+
+  /** Does this build have the Popover API? (jsdom / older browsers do not.) */
+  // NOTE the attribute is CONDITIONAL. `[popover]` brings a UA rule with it —
+  // `[popover]:not(:popover-open) { display: none }` — so on a build that has
+  // the attribute but not the API (jsdom, and any browser in that window) the
+  // element would be permanently hidden rather than merely un-promoted. Setting
+  // it only when showPopover() exists makes the fallback path byte-for-byte the
+  // behaviour we have today instead of a blank menu.
+  const supportsPopover = (): boolean =>
+    typeof HTMLElement !== 'undefined' &&
+    typeof (HTMLElement.prototype as { showPopover?: unknown }).showPopover === 'function'
+
+  const GAP = 4 // px between the trigger and the menu
+  const MARGIN = 8 // px min distance from any viewport edge
+
+  /**
+   * Place the menu against its trigger with position:fixed coords.
+   *
+   * In the top layer the containing block is the viewport, so the old
+   * `position: absolute; top: 100%; right: 0` no longer resolves against
+   * `.comment-menu` and placement becomes ours to do. Right-aligned to the
+   * trigger (what `right: 0` meant), flipped above when it would overflow the
+   * bottom, and clamped into the viewport on both axes.
+   */
+  function positionMenu(): void {
+    const menu = menuEl
+    const anchor = anchorEl
+    if (!menu || !anchor) return
+    const r = anchor.getBoundingClientRect()
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const w = menu.offsetWidth
+    const h = menu.offsetHeight
+
+    let left = r.right - w
+    left = Math.min(left, vw - w - MARGIN)
+    left = Math.max(MARGIN, left)
+
+    const spaceBelow = vh - r.bottom
+    const placeAbove = spaceBelow < h + GAP + MARGIN && r.top > spaceBelow
+    const top = placeAbove
+      ? Math.max(MARGIN, r.top - GAP - h)
+      : Math.min(r.bottom + GAP, Math.max(MARGIN, vh - h - MARGIN))
+
+    menu.style.left = `${Math.round(left)}px`
+    menu.style.top = `${Math.round(top)}px`
+  }
+
+  // Promote on open, and keep the menu glued to its trigger while it is open.
+  // A fixed-position element does not follow a scrolling anchor by itself, and
+  // the diff underneath this menu scrolls, so `scroll` is captured to catch any
+  // scrolling ancestor rather than only the window.
+  $effect(() => {
+    const menu = menuEl
+    if (!menu) return
+    if (supportsPopover()) {
+      try {
+        ;(menu as unknown as { showPopover: () => void }).showPopover()
+      } catch {
+        // Already-open popovers throw — ignore.
+      }
+    }
+    positionMenu()
+    const reflow = () => positionMenu()
+    window.addEventListener('scroll', reflow, true)
+    window.addEventListener('resize', reflow)
+    return () => {
+      window.removeEventListener('scroll', reflow, true)
+      window.removeEventListener('resize', reflow)
+    }
+  })
 
   /** Build a markdown blockquote of the comment for pasting into a reply. */
   function quoteOf(comment: PrComment): string {
@@ -73,7 +174,12 @@
 
   function onWindowKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape' && openMenuId !== null) {
+      // Capture the trigger before closeMenu() clears it: if focus had moved
+      // into the menu, closing would otherwise strand it on a removed node.
+      // Matches CommentEditor's emoji picker.
+      const trigger = anchorEl
       closeMenu()
+      trigger?.focus()
     }
   }
 
@@ -147,14 +253,20 @@
             aria-expanded={openMenuId === comment.id}
             onclick={(e) => {
               e.stopPropagation()
-              toggleMenu(comment.id)
+              toggleMenu(comment.id, e.currentTarget as HTMLElement)
             }}
           >
             <span aria-hidden="true">⋯</span>
           </button>
 
           {#if openMenuId === comment.id}
-            <div class="comment-menu-popover" role="menu" aria-label="Comment actions">
+            <div
+              class="comment-menu-popover"
+              role="menu"
+              aria-label="Comment actions"
+              popover={supportsPopover() ? 'manual' : undefined}
+              bind:this={menuEl}
+            >
               {#if comment.url}
                 <button
                   type="button"
@@ -291,29 +403,39 @@
   }
 
   .comment-menu-popover {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
     /*
-     * --z-popover is correct, and on its own it is NOT ENOUGH here. Measured in
-     * the built app: this popover's only stacking-context ancestor is
-     * @git-diff-view's line-widget wrapper, which carries the library's own
-     * `sticky` + `z-[1]` utility classes. That wrapper establishes a stacking
-     * context, so this subtree paints at 1 against the root no matter what
-     * number is written below — the draft bar at --z-bar still covers it.
+     * IN THE TOP LAYER. This element is `popover="manual"` and the script
+     * calls showPopover() when it opens, which promotes it above every
+     * stacking context in the document — the only thing that works here.
      *
-     * The experiment, so nobody has to redo it: park this popover over the
-     * draft bar and hit-test it → the bar wins. Then set ONLY the wrapper to
+     * WHY A NUMBER WAS NEVER GOING TO DO IT, so nobody retries it: this
+     * menu's only stacking-context ancestor is @git-diff-view's line-widget
+     * wrapper, which carries the library's own `sticky` + `z-[1]` utilities.
+     * That wrapper establishes a context, so this subtree paints at 1 against
+     * the root whatever is written below. Measured in the built app: park the
+     * menu over the draft bar and hit-test it → the BAR wins, at the old
+     * literal 20 and at --z-popover (250) alike. Set ONLY the wrapper to
      * `z-index: auto; position: static`, changing nothing about this element →
-     * this popover wins. The wrapper is what decides it.
+     * the MENU wins. Restyling the library's wrapper is not an option (it is
+     * sticky for a reason and is not our subtree), hence the top layer.
+     * e2e/popover-escape.spec.ts pins both halves.
      *
-     * So the remaining fix is STRUCTURAL, not a bigger number, and this file
-     * already has two working idioms to copy: SymbolPopover is rendered outside
-     * <DiffView> entirely (FileDiff.svelte, just after the component closes),
-     * and VerifyVotesTooltip escapes via the Popover API's top layer. Deferred
-     * to its own change rather than smuggled into the layer-scale migration —
-     * the token here is a prerequisite for either fix, not a substitute.
+     * `position: fixed` + JS-set left/top, because in the top layer the
+     * containing block is the viewport: the old `top: 100%; right: 0` no
+     * longer resolves against .comment-menu. See positionMenu().
+     *
+     * z-index is the FALLBACK FLOOR only. On a browser without the Popover API
+     * the attribute is inert, this stays an ordinary fixed element inside the
+     * trap, and --z-popover leaves it exactly where it is today — no better,
+     * and importantly no worse. Visibility is driven by the {#if} in the
+     * markup rather than by `:popover-open`, so the unsupported path still
+     * renders the menu instead of hiding it.
      */
+    position: fixed;
+    margin: 0;
+    inset: auto;
+    left: 0;
+    top: 0;
     z-index: var(--z-popover);
     min-width: 11rem;
     display: flex;
