@@ -13,6 +13,7 @@ import {
   stillOpenFindingIds,
   stopReasonOutranksVerification,
   validateFixVerifyResponse,
+  type FixReReadVerdict,
   type FixReReadVote,
   type FixVerifyParticipant,
   type FixVerifySubject,
@@ -293,18 +294,10 @@ describe('runFixVerification', () => {
   const persona = { name: 'Security', content: 'persona' }
 
   it('polls every participant and aggregates their votes', async () => {
-    const verify = vi.fn(async (c: ProviderConfig) => ({
-      result: {
-        reReads: [
-          {
-            id: 'f1',
-            verdict: (c.model.id === 'm1' ? 'not-raised-again' : 'still-standing') as const,
-            reason: 'r',
-          },
-        ],
-        newProblems: [],
-      },
-    }))
+    const verify = vi.fn(async (c: ProviderConfig) => {
+      const verdict: FixReReadVerdict = c.model.id === 'm1' ? 'not-raised-again' : 'still-standing'
+      return { result: { reReads: [{ id: 'f1', verdict, reason: 'r' }], newProblems: [] } }
+    })
     const report = await runFixVerification(
       [{ persona, subjects: [subject('f1')] }],
       [participant('OpenAI', 'm1'), participant('Anthropic', 'm2')],

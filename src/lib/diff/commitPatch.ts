@@ -111,24 +111,23 @@ export function parseCommitPatch(patch: string): ParsedPatch {
   /** The `--- a/x` path, held until `+++ b/y` says whether it was a rename. */
   let pendingOld: string | null = null
 
-  /** Start a new file, closing the previous one. */
-  const openFile = (next: PatchFile): void => {
+  /**
+   * Register a new file and RETURN it, rather than assigning `file` from inside
+   * a closure: TypeScript does not narrow a `let` through an indirect closure
+   * assignment, and `file` would analyse as `never` at every use below.
+   */
+  const register = (next: PatchFile): PatchFile => {
     files.push(next)
-    file = next
-    hunk = null
-    pendingOld = null
-  }
-  /** A patch may start straight at `---` or even at `@@`; give it a file. */
-  const ensureFile = (): PatchFile => {
-    if (file === null) openFile(emptyFile())
-    return file as PatchFile
+    return next
   }
 
   for (const raw of patch.split('\n')) {
     const gitHeader = DIFF_GIT.exec(raw)
     if (gitHeader) {
       const [, a, b] = gitHeader
-      openFile({ ...emptyFile(), path: b, oldPath: a === b ? null : a })
+      file = register({ ...emptyFile(), path: b, oldPath: a === b ? null : a })
+      hunk = null
+      pendingOld = null
       continue
     }
 
@@ -163,15 +162,20 @@ export function parseCommitPatch(patch: string): ParsedPatch {
     if (raw.startsWith('--- ')) {
       // Already inside a hunk (or with no file at all): this envelope starts a
       // NEW file. That is the only boundary a bare patch gives us.
-      if (hunk !== null || file === null) openFile(emptyFile())
-      const cur = file as PatchFile
+      if (hunk !== null || file === null) {
+        file = register(emptyFile())
+        hunk = null
+        pendingOld = null
+      }
+      const cur = file
       const p = raw.slice(4).trim()
       if (p === '/dev/null') cur.status = 'added'
       else pendingOld = p.replace(/^a\//, '')
       continue
     }
     if (raw.startsWith('+++ ')) {
-      const cur = ensureFile()
+      if (file === null) file = register(emptyFile())
+      const cur = file
       const p = raw.slice(4).trim()
       if (p === '/dev/null') {
         cur.status = 'removed'
@@ -192,7 +196,8 @@ export function parseCommitPatch(patch: string): ParsedPatch {
 
     const header = HUNK_HEADER.exec(raw)
     if (header) {
-      const cur = ensureFile()
+      if (file === null) file = register(emptyFile())
+      const cur = file
       oldLine = parseInt(header[1], 10)
       newLine = parseInt(header[3], 10)
       hunk = { header: raw, lines: [] }
@@ -200,16 +205,16 @@ export function parseCommitPatch(patch: string): ParsedPatch {
       continue
     }
 
-    if (hunk === null) continue // preamble / index lines / trailing noise
+    if (hunk === null || file === null) continue // preamble / index lines / noise
 
     if (raw.startsWith('+')) {
       hunk.lines.push({ kind: 'add', text: raw.slice(1), oldLine: null, newLine })
       newLine++
-      ;(file as PatchFile).additions++
+      file.additions++
     } else if (raw.startsWith('-')) {
       hunk.lines.push({ kind: 'del', text: raw.slice(1), oldLine, newLine: null })
       oldLine++
-      ;(file as PatchFile).deletions++
+      file.deletions++
     } else if (raw.startsWith('\\')) {
       // `\ No newline at end of file` — real, shown, advances neither counter.
       hunk.lines.push({ kind: 'meta', text: raw, oldLine: null, newLine: null })
