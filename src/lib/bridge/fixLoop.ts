@@ -811,7 +811,10 @@ export function describeFixLoopStop(
     case 'repeat-outcome':
       return `Stopped after ${turns}: a round left exactly the findings the one before it left. It was repeating itself rather than converging. ${open} still open.`
     case 'round-cap':
-      return `Stopped at the ${rounds}-round cap with ${open} still open. The cap is a budget this loop spends, not a judgment that the rest cannot be fixed.`
+      // Deliberately avoids the word "fixed" in any form: e2e/bridge.spec.ts
+      // asserts this whole surface never contains it, and that assertion is the
+      // honesty guard, not a lint.
+      return `Stopped at the ${rounds}-round cap with ${open} still open. The cap is a budget this loop spends, not a judgment about what is left.`
     case 'budget-spent':
       return `Stopped after ${turns}: this loop's budget for re-read calls and wall clock is spent, with ${open} still open. What landed is below; the rest were not attempted.`
     case 'stopped-by-user':

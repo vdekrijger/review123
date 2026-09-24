@@ -438,6 +438,9 @@
   /** The last round's own bridge-level stop. Per-round, never the loop's. */
   const lastResponse = $derived(responses.length > 0 ? responses[responses.length - 1]!.response : null)
 
+  /** A round is in flight. The results below are visible but not re-sendable. */
+  const busy = $derived(run.status === 'running')
+
   /** Per-change verdict. Absent = not yet judged; the user must choose. */
   let verdicts = $state<Record<string, 'approved' | 'rejected'>>({})
 
@@ -1194,7 +1197,11 @@
         </div>
       {/if}
 
-      {#if run.status === 'done' || (run.status === 'failed' && responses.length > 0)}
+      <!-- RESULTS APPEAR AS THEY LAND, not when the loop ends. A loop that
+           shows nothing for three rounds is a loop the user cannot judge, and
+           "stop and keep what landed" is meaningless if they cannot see what
+           landed. -->
+      {#if responses.length > 0 || run.status === 'done'}
         <div class="afx-results">
           <!-- WHY THE LOOP STOPPED, before anything it produced. A budget ran
                out, or a round repeated itself, or the user pressed stop — and
@@ -1466,6 +1473,7 @@
                 type="button"
                 class="afx-send"
                 data-testid="agent-fix-send-open"
+                disabled={busy}
                 onclick={sendStillOpen}
               >
                 Send the {stillOpen.length} still-open {stillOpen.length === 1 ? 'finding' : 'findings'} back to {cli}
@@ -1485,6 +1493,7 @@
                 type="button"
                 class="afx-send"
                 data-testid="agent-fix-retry-skips"
+                disabled={busy}
                 onclick={retrySkipped}
               >
                 Try the {retryable.length} unanswered {retryable.length === 1 ? 'finding' : 'findings'} again
