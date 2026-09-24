@@ -42,10 +42,100 @@
   let emojiOpen = $state(false)
   let emojiBtnEl: HTMLButtonElement | undefined = $state()
   let emojiWrapEl: HTMLElement | undefined = $state()
+  /** The picker's own element, for showPopover + placement. */
+  let emojiPopEl = $state<HTMLDivElement | null>(null)
 
   function toggleEmoji() {
     emojiOpen = !emojiOpen
   }
+
+  // ---- Escaping the diff's stacking trap (same defect as CommentThread) ----
+  //
+  // This editor renders inline inside a diff row (DraftThread and
+  // ExistingThread both mount it there), and @git-diff-view wraps every line
+  // widget in an element carrying its own `sticky` + `z-[1]` utilities. That
+  // wrapper establishes a stacking context, so this subtree paints at 1 against
+  // the root and no z-index here can lift the picker out — MEASURED: the
+  // picker's stacking-context ancestor chain is exactly one entry, that
+  // wrapper, identical to the comment menu's. Migrating the literal 30 to
+  // --z-popover was necessary and not sufficient.
+  //
+  // So the picker is promoted to the browser TOP LAYER via the Popover API.
+  // `manual`, not `auto`: this component already implements Escape-to-close
+  // with focus return and outside-pointerdown dismissal, and both are keyed off
+  // DOM ancestry (`emojiWrapEl.contains`) which promotion does not change —
+  // the element stays where it is in the DOM and only its PAINTING moves.
+  //
+  // The third mount site, VerdictStep, is not inside a diff and was never
+  // trapped; the top layer is correct there too, so there is one code path.
+
+  /** Does this build have the Popover API? (jsdom / older browsers do not.) */
+  // NOTE the attribute is CONDITIONAL. `[popover]` brings a UA rule with it —
+  // `[popover]:not(:popover-open) { display: none }` — so on a build that has
+  // the attribute but not the API (jsdom, and any browser in that window) the
+  // element would be permanently hidden rather than merely un-promoted. Setting
+  // it only when showPopover() exists makes the fallback path byte-for-byte the
+  // behaviour we have today instead of a blank menu.
+  const supportsPopover = (): boolean =>
+    typeof HTMLElement !== 'undefined' &&
+    typeof (HTMLElement.prototype as { showPopover?: unknown }).showPopover === 'function'
+
+  const EMOJI_GAP = 4 // px between the toggle and the picker
+  const EMOJI_MARGIN = 8 // px min distance from any viewport edge
+
+  /**
+   * Place the picker against its toggle with position:fixed coords. In the top
+   * layer the containing block is the viewport, so the old
+   * `position: absolute; top: 100%; left: 0` no longer resolves against
+   * .emoji-wrap. Left-aligned to the toggle (what `left: 0` meant), flipped
+   * above when it would overflow the bottom, clamped into the viewport.
+   */
+  function positionEmoji(): void {
+    const pop = emojiPopEl
+    const anchor = emojiBtnEl
+    if (!pop || !anchor) return
+    const r = anchor.getBoundingClientRect()
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const w = pop.offsetWidth
+    const h = pop.offsetHeight
+
+    let left = r.left
+    left = Math.min(left, vw - w - EMOJI_MARGIN)
+    left = Math.max(EMOJI_MARGIN, left)
+
+    const spaceBelow = vh - r.bottom
+    const placeAbove = spaceBelow < h + EMOJI_GAP + EMOJI_MARGIN && r.top > spaceBelow
+    const top = placeAbove
+      ? Math.max(EMOJI_MARGIN, r.top - EMOJI_GAP - h)
+      : Math.min(r.bottom + EMOJI_GAP, Math.max(EMOJI_MARGIN, vh - h - EMOJI_MARGIN))
+
+    pop.style.left = `${Math.round(left)}px`
+    pop.style.top = `${Math.round(top)}px`
+  }
+
+  // Promote on open, and keep the picker glued to its toggle while open: a
+  // fixed element does not follow a scrolling anchor, and the diff under this
+  // editor scrolls. `scroll` is captured so any scrolling ancestor counts.
+  $effect(() => {
+    const pop = emojiPopEl
+    if (!pop) return
+    if (supportsPopover()) {
+      try {
+        ;(pop as unknown as { showPopover: () => void }).showPopover()
+      } catch {
+        // Already-open popovers throw — ignore.
+      }
+    }
+    positionEmoji()
+    const reflow = () => positionEmoji()
+    window.addEventListener('scroll', reflow, true)
+    window.addEventListener('resize', reflow)
+    return () => {
+      window.removeEventListener('scroll', reflow, true)
+      window.removeEventListener('resize', reflow)
+    }
+  })
 
   function pickEmoji(emoji: string) {
     emojiOpen = false
@@ -245,7 +335,14 @@
           title="Insert emoji"
         >🙂</button>
         {#if emojiOpen}
-          <div class="emoji-popover" data-testid="emoji-picker" role="group" aria-label="Emoji picker">
+          <div
+            class="emoji-popover"
+            data-testid="emoji-picker"
+            role="group"
+            aria-label="Emoji picker"
+            popover={supportsPopover() ? 'manual' : undefined}
+            bind:this={emojiPopEl}
+          >
             {#each EMOJIS as emoji (emoji)}
               <button type="button" class="emoji-option" onclick={() => pickEmoji(emoji)}>{emoji}</button>
             {/each}
@@ -419,10 +516,28 @@
   }
 
   .emoji-popover {
-    position: absolute;
-    top: calc(100% + 4px);
+    /*
+     * IN THE TOP LAYER — `popover="manual"` + showPopover(). A z-index cannot
+     * fix this: inline in a diff row the only stacking-context ancestor is
+     * @git-diff-view's line-widget wrapper (`sticky` + `z-[1]`), so the whole
+     * subtree paints at 1 against the root whatever is written here. Measured;
+     * see the note in the script block and e2e/popover-escape.spec.ts.
+     *
+     * `position: fixed` + JS-set left/top because in the top layer the
+     * containing block is the viewport — the old `top: 100%; left: 0` no
+     * longer resolves against .emoji-wrap. See positionEmoji().
+     *
+     * z-index is the FALLBACK FLOOR only: on a browser without the Popover API
+     * the attribute is inert and --z-popover leaves the picker exactly where it
+     * is today. Visibility comes from the {#if} in the markup, not from
+     * `:popover-open`, so the unsupported path still renders it.
+     */
+    position: fixed;
+    margin: 0;
+    inset: auto;
     left: 0;
-    z-index: 30;
+    top: 0;
+    z-index: var(--z-popover);
     display: grid;
     grid-template-columns: repeat(6, auto);
     gap: 2px;

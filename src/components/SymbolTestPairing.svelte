@@ -282,7 +282,7 @@
   .sym-test-text { flex: 1; }
 
   .sym-test-title {
-    font-family: var(--mono, ui-monospace, monospace);
+    font-family: var(--font-mono, ui-monospace, monospace);
     color: var(--legend-changed-color);
   }
 
@@ -322,7 +322,7 @@
     margin-bottom: 0.25rem;
   }
 
-  .sym-test-file { font-family: var(--mono, ui-monospace, monospace); }
+  .sym-test-file { font-family: var(--font-mono, ui-monospace, monospace); }
 
   /* Clickable path for a test that IS in this PR's diff (jumps to its step). */
   .sym-test-jump {
@@ -399,7 +399,7 @@
   .sym-test-setup-toggle { font-weight: 600; }
 
   .sym-test-group {
-    font-family: var(--mono, ui-monospace, monospace);
+    font-family: var(--font-mono, ui-monospace, monospace);
     color: var(--text-muted);
     font-size: 0.7rem;
   }
@@ -414,7 +414,7 @@
     font-style: italic;
   }
   .sym-test-note code {
-    font-family: var(--mono, ui-monospace, monospace);
+    font-family: var(--font-mono, ui-monospace, monospace);
     font-style: normal;
   }
 
@@ -429,7 +429,7 @@
     line-height: 1.45;
   }
   .sym-test-pre code {
-    font-family: var(--mono, ui-monospace, monospace);
+    font-family: var(--font-mono, ui-monospace, monospace);
     white-space: pre;
   }
 

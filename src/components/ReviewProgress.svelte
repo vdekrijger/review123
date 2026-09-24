@@ -55,7 +55,25 @@
   /* ── Standalone variant ── */
   .review-progress {
     position: fixed;
-    top: var(--topbar-height, 48px);
+    /* --topbar-h, NOT --topbar-height: this read was misspelled from the day it
+       was written, so it silently used the 48px fallback for its whole life
+       (a var() typo is invalid-at-computed-value-time, never a build error).
+       Measured in the built app: --topbar-h resolves to 41.25px (2.75rem at
+       the :root 15px font-size) and the header's own rect is 41.25px, while
+       the misspelled read resolved to its 48px fallback — so this rule parked
+       the bar 6.75px BELOW the topbar it is meant to sit directly under.
+
+       WHAT THAT COST IN PRACTICE: nothing yet, and the reason is worth knowing
+       before someone "verifies the fix" by looking for a moved pixel. This
+       rule is on the STANDALONE variant, and the app's only call site
+       (Review.svelte) passes `inline`, so the standalone branch has no
+       renderer today — it is a supported, unit-tested default (`inline=false`)
+       that nothing currently mounts. The 6.75px was therefore latent, not
+       visible: two independent reasons this was inert, and fixing the spelling
+       removes the one that would have bitten silently the moment the variant
+       came back. The fallback matches the peer reads in ContextRail,
+       PreviewPanel, FileDiff and SettingsPage. */
+    top: var(--topbar-h, 2.75rem);
     left: 0;
     right: 0;
     z-index: var(--z-progress);
