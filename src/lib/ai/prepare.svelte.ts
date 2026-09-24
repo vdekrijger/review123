@@ -67,7 +67,7 @@ import {
 import { providerFor } from '../provider/registry'
 import { activeProviderHasKey } from '../llm/config'
 import { getSettings } from '../settings/settings'
-import { listSkills } from '../skills/skills'
+import { listSkillsForPhase } from '../skills/skills'
 import { track as defaultTrack } from '../analytics/analytics'
 import {
   llmStream as defaultLlmStream,
@@ -436,7 +436,11 @@ export async function preparePr(target: PrepareTarget, deps: PrepareDeps = {}): 
   flight.activeId = prId
 
   const skillsOn = getSettings().aiTaskModes.skills !== 'off'
-  const expectedSkills = skillsOn ? listSkills().filter((s) => s.enabled).length : 0
+  // Prepare-ahead runs the AUTOMATIC (implementation) pass, so the progress
+  // denominator is the reviewers scoped to THAT phase — not every reviewer that
+  // is on somewhere. Counting a tests-only reviewer here would leave the row
+  // waiting forever for an entry that is never created.
+  const expectedSkills = skillsOn ? listSkillsForPhase('implementation').length : 0
   rows[prId] = { status: 'preparing', expectedSkills }
 
   const t0 = now()

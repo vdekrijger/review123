@@ -174,6 +174,15 @@ const EVENTS = {
   //     here: turning the layer off is the signal that it is getting in the way.
   hunk_restored: ['changed'],
   hunk_focus_toggled: ['enabled'],
+  // PRIVACY DECISION (#272 hide-resolved threads): the Inspect toolbar can
+  // exclude already-resolved comment threads. Carries only
+  //   - 'enabled' : boolean — the new state of the toggle.
+  // Modelled exactly on hunk_focus_toggled, and for the same reason: BOTH
+  // directions matter, because turning it back off is the signal that hiding
+  // resolved conversations lost the reviewer something they wanted. Never the
+  // thread count, thread bodies, author logins, file paths, or repo identity —
+  // a boolean cannot reconstruct a conversation.
+  hide_resolved_toggled: ['enabled'],
   // Carries no content — fired when the user turns ON focus mode (any non-off).
   focus_mode_on: [],
   rail_expanded: [],

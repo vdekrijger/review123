@@ -33,7 +33,7 @@
   import { rankFindings, getFindingsShowAll, setFindingsShowAll } from '../lib/ai/findingRank'
   import AgentFixPanel, { type FixCandidateEntry } from './AgentFixPanel.svelte'
   import { currentFixReadiness, fixEligibility } from '../lib/bridge/fixLoop'
-  import { listSkills } from '../lib/skills/skills'
+  import { listSkills, listSkillsForPhase } from '../lib/skills/skills'
   import { recordDismissal, type DismissReason } from '../lib/skills/calibration'
   import { computeWhitespaceHiddenPatch, type WhitespaceDisplay } from '../lib/diff/whitespace'
   import { computeFileRisk, type RiskLevel } from '../lib/risk/risk'
@@ -353,6 +353,24 @@
   /** Approval staleness: new commits landed since the implementation was signed off. */
   const approvalStale = $derived(phaseApplies && phaseStore.isStale(currentHeadSha))
 
+  // The phase the ATTENTION classifier runs in (lib/guide/triage). Its "tests
+  // only" reason means "read this LATER, in the Tests phase" — so it must stop
+  // firing once the reviewer is looking AT the tests, or the very files they
+  // came to read collapse into the low-attention tail.
+  //
+  // That is true in two situations, not one:
+  //   - the Tests phase is active; and
+  //   - the PR is nothing BUT tests, where phases never engage (phaseApplies is
+  //     false because an empty Implementation phase helps nobody) and there is
+  //     therefore no later phase to defer anything to.
+  // Anything else — including Story mode, which shows the whole change — reads
+  // as 'implementation', the unchanged behaviour.
+  const triagePhase = $derived<ReviewPhase>(
+    testsPhaseActive || (!phaseApplies && implPhaseFiles.length === 0 && testPhaseFiles.length > 0)
+      ? 'tests'
+      : 'implementation',
+  )
+
   // Switching phase closes the low-attention tail: it belongs to the list you
   // were looking at, and re-opening it per phase is the honest default.
   // (No analytics here — EVENTS lives in the analytics module, which this
@@ -493,7 +511,9 @@
   }
 
   // Per-file mechanical-vs-novel triage. Risk level + findings feed the
-  // override (a flagged or high-risk file is NEVER buried in the tail).
+  // override (a flagged or high-risk file is NEVER buried in the tail), and
+  // triagePhase suppresses the "tests only" deferral once the reviewer has
+  // arrived at the tests (see triage.ts's PHASE AWARENESS note).
   const triageByPath = $derived.by(() => {
     const map = new Map<string, FileTriage>()
     for (const f of phaseFiles) {
@@ -502,7 +522,7 @@
         severity: s.severity,
         verification: s.verification,
       }))
-      map.set(f.filename, classifyAttention(f, level, findings, contentsMap?.get(f.filename)))
+      map.set(f.filename, classifyAttention(f, level, findings, contentsMap?.get(f.filename), triagePhase))
     }
     return map
   })
@@ -1360,7 +1380,15 @@
     addedDraftKeys = new Set([...addedDraftKeys, finding.key])
   }
 
-  // Show the run button when: skills exist + key present + runSkillReviewsFn provided
+  // PHASE SCOPE (#275): a skill declares WHICH phase it runs in, and `enabled`
+  // now only means "runs in at least one phase". So every control below asks
+  // the question it actually needs — "will THIS pass create an entry for it?"
+  // — because with a scope in play those are different numbers (the built-in
+  // defaults put 11 reviewers on the implementation pass and 3 on the tests
+  // pass, so "enabled" would promise eleven where three will run).
+  const implSkillCount = $derived(listSkillsForPhase('implementation').length)
+  const testsSkillCount = $derived(listSkillsForPhase('tests').length)
+  /** Reviewers that are on SOMEWHERE — the "do you have reviewers at all" question. */
   const enabledSkillCount = $derived(listSkills().filter(s => s.enabled).length)
   // Run button gates on the ACTIVE provider's key (Plan F), not deepseekKey
   const hasKey = $derived(activeProviderHasKey())
@@ -1368,9 +1396,20 @@
   // all — show a compact disabled note instead of the Run button. Reactive via
   // settingsState so toggling it in settings updates the step live.
   const skillsOff = $derived(settingsState.current.aiTaskModes.skills === 'off')
-  const showRunButton = $derived(!skillsOff && enabledSkillCount > 0 && hasKey && runSkillReviewsFn !== null)
+  // The automatic pass is the IMPLEMENTATION pass, so it is offered on the
+  // implementation count — never on "enabled", which would be a dead click for
+  // a reviewer set that is entirely tests-scoped.
+  const showRunButton = $derived(!skillsOff && implSkillCount > 0 && hasKey && runSkillReviewsFn !== null)
   // Show the disabled note only when reviewers WOULD otherwise be offered.
   const showSkillsDisabled = $derived(skillsOff && enabledSkillCount > 0 && hasKey && runSkillReviewsFn !== null)
+  // The zero case is REAL, not a reason to render nothing: you can have eleven
+  // reviewers on and none of them scoped to this pass. Say so, with the count
+  // and one click to where the scope is set — silence would read as "reviewers
+  // are broken". If implSkillCount is 0 while some reviewer is enabled, every
+  // enabled reviewer is necessarily tests-scoped, so the wording is provable.
+  const showNoImplReviewers = $derived(
+    !skillsOff && implSkillCount === 0 && enabledSkillCount > 0 && hasKey && runSkillReviewsFn !== null,
+  )
 
   // Plan J: link to settings from the disabled reviewers note (preserve return-to).
   function goToSettings(e: MouseEvent) {
@@ -1403,7 +1442,11 @@
   // itself: this is the expensive pass — every enabled reviewer, agentic — so
   // the user decides when to spend it, and the cost is stated BEFORE the click.
   const showTestsReviewAction = $derived(
-    testsPhaseActive && !skillsOff && enabledSkillCount > 0 && hasKey && runTestsReviewFn !== null,
+    testsPhaseActive && !skillsOff && testsSkillCount > 0 && hasKey && runTestsReviewFn !== null,
+  )
+  /** Same zero case on the tests side: reviewers exist, none is scoped here. */
+  const showNoTestsReviewers = $derived(
+    testsPhaseActive && !skillsOff && testsSkillCount === 0 && enabledSkillCount > 0 && hasKey && runTestsReviewFn !== null,
   )
   /** True once the tests pass has produced entries (run, or running). */
   const testsReviewStarted = $derived(testReviews.length > 0)
@@ -1412,7 +1455,7 @@
   )
   /** Honest cost hint shown BEFORE the click — what the click will actually spend. */
   const testsReviewCostHint = $derived(
-    `${enabledSkillCount} reviewer${enabledSkillCount === 1 ? '' : 's'} · agentic · runs on demand`,
+    `${testsSkillCount} reviewer${testsSkillCount === 1 ? '' : 's'} · agentic · runs on demand`,
   )
   // Actual spend AFTER the run, when the user has opted into cost display.
   const showCost = $derived(settingsState.current.showTokenCost)
@@ -1702,7 +1745,7 @@
         aria-pressed={hideResolved}
         data-testid="hide-resolved-toggle"
         title="Exclude threads that are already resolved — finished conversations, not work. Nothing is hidden silently: the count is stated here and again wherever threads were removed, each one click from showing."
-        onclick={() => toggleHideResolvedThreads()}
+        onclick={() => track('hide_resolved_toggled', { enabled: toggleHideResolvedThreads() })}
       >Hide resolved</button>
     {/if}
   </div>
@@ -1727,12 +1770,16 @@
       {#if isRunning}
         <Spinner size="0.75em" />Running…
       {:else}
-        Run my reviewers ({enabledSkillCount})
+        Run my reviewers ({implSkillCount})
       {/if}
     </button>
   {:else if showSkillsDisabled}
     <p class="reviewers-disabled-note">
       Reviewers disabled — <a href="/settings" onclick={goToSettings}>enable in AI settings</a>
+    </p>
+  {:else if showNoImplReviewers}
+    <p class="reviewers-disabled-note" data-testid="no-impl-reviewers-note">
+      {enabledSkillCount} reviewer{enabledSkillCount === 1 ? '' : 's'} scoped to the tests phase only — <a href="/settings" onclick={goToSettings}>change the scope</a>
     </p>
   {/if}
 </div>
@@ -2199,6 +2246,12 @@
           </span>
         {/if}
       </div>
+    {:else if showNoTestsReviewers}
+      <!-- The zero case said out loud: reviewers ARE on, none of them runs in
+           this pass. Silence here would read as "the tests pass is broken". -->
+      <p class="reviewers-disabled-note" data-testid="no-tests-reviewers-note">
+        No reviewer is scoped to the tests phase — <a href="/settings" onclick={goToSettings}>change the scope</a>
+      </p>
     {/if}
   {/if}
 
@@ -2317,6 +2370,41 @@
             </div>
           {/each}
         </details>
+      {/if}
+
+      <!-- PHASE DOCK: the Implementation|Tests switch, kept within reach.
+           The full control (switch + notes + approve/re-open) lives in
+           .phase-bar at the TOP of the list, which on a long diff is an entire
+           scroll away. This repeats ONLY the switch, sticky to the bottom of
+           the viewport, so changing phase never costs a scroll back up.
+           Same handler, same pill, and the same 🔒 — entering the Tests phase
+           unapproved is a labelled preview here exactly as it is up there. -->
+      {#if phaseApplies}
+        <div class="phase-dock" data-testid="phase-dock">
+          <div class="phase-switch" role="group" aria-label="Switch phase">
+            <button
+              class="phase-btn"
+              class:phase-active={!testsPhaseActive}
+              aria-pressed={!testsPhaseActive}
+              data-testid="phase-dock-implementation"
+              title="Back to the implementation files"
+              onclick={() => selectPhase('implementation')}
+            >Implementation <span class="phase-count">{implPhaseFiles.length}</span></button>
+            <button
+              class="phase-btn"
+              class:phase-active={testsPhaseActive}
+              aria-pressed={testsPhaseActive}
+              data-testid="phase-dock-tests"
+              title={phaseStore.implApproved
+                ? 'Review the tests against the implementation you approved'
+                : 'Unlocked by approving the implementation — you can still preview the tests now'}
+              onclick={() => selectPhase('tests')}
+            >
+              Tests <span class="phase-count">{testPhaseFiles.length}</span>
+              {#if !phaseStore.implApproved}<span class="phase-lock" aria-label="not unlocked yet" title="Preview — the implementation isn't approved yet">🔒</span>{/if}
+            </button>
+          </div>
+        </div>
       {/if}
     </div>
   </div>
@@ -3291,6 +3379,40 @@
   .phase-lock {
     font-size: 0.7rem;
     line-height: 1;
+  }
+
+  /* ---- Phase dock: the same switch, kept within reach of the list bottom ----
+   *
+   * STICKY, not fixed, and deliberately NOT a second app-chrome bar: it is the
+   * last child of .diff-column, so it tracks that column's width and reads as
+   * part of the file list. It floats above the diff while scrolling and then
+   * SETTLES into flow after the last file, where it doubles as the natural
+   * "end of this phase — what next?" step.
+   *
+   * Because sticky keeps the element's flow box, the end of the list already
+   * reserves the dock's own height: the last file card is never underneath it.
+   *
+   * `bottom` clears the route-level .draft-bar (Review.svelte — fixed, ~3rem,
+   * z-index 100). The dock stays well under that z-index so the two never
+   * fight, and sits just above FileDiff's sticky file header (z-index 5).
+   *
+   * The wrapper takes no pointer events, so the empty gutter either side of
+   * the pill stays click-through to the diff underneath it.
+   */
+  .phase-dock {
+    position: sticky;
+    bottom: 3.5rem;
+    z-index: 6;
+    display: flex;
+    justify-content: center;
+    margin-top: var(--space-3);
+    pointer-events: none;
+  }
+  .phase-dock .phase-switch {
+    background: var(--surface-raised);
+    box-shadow: var(--elevation-2);
+    pointer-events: auto;
+    max-width: 100%;
   }
 
   .phase-note-col {

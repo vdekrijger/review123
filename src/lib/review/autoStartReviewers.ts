@@ -11,7 +11,9 @@
  *   - the AI run exists and the PR load is ready
  *   - the active provider has a key
  *   - the 'skills' task mode is not 'off'
- *   - at least one reviewer skill is enabled
+ *   - at least one reviewer skill is scoped to the IMPLEMENTATION phase
+ *     (the pass the auto-start runs) — a reviewer scoped tests-only or off
+ *     would not produce a single entry, so starting for it is pure waste
  *   - reviewers have NOT already been auto-started for this PR identity
  *
  * The caller owns the one-shot guard: it passes the PR identity it last started
@@ -25,7 +27,7 @@ export function shouldAutoStartReviewers(args: {
   loadReady: boolean
   hasKey: boolean
   skillsMode: string
-  enabledSkillCount: number
+  implPhaseSkillCount: number
   alreadyStartedFor: string | null
   prId: string
 }): boolean {
@@ -35,7 +37,7 @@ export function shouldAutoStartReviewers(args: {
     args.loadReady &&
     args.hasKey &&
     args.skillsMode !== 'off' &&
-    args.enabledSkillCount > 0 &&
+    args.implPhaseSkillCount > 0 &&
     args.alreadyStartedFor !== args.prId
   )
 }

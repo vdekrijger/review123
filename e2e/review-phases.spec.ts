@@ -425,3 +425,85 @@ test('inspect: the automatic run reviews the implementation only, and the tests 
   await expect(page.getByText(/IMPL FINDING: deriveSecret is unsalted/)).toBeVisible()
   await expect(page.getByText(/TESTS FINDING: this assertion passes whatever/)).toHaveCount(0)
 })
+
+// ---------------------------------------------------------------------------
+// Two fixes to the phase flow:
+//
+//  1. The Tests phase stops burying its own test files. "tests only" is a
+//     DEFERRAL — "read this later, in the Tests phase" — so it must stop firing
+//     once the reviewer is standing in that phase, or the entire list collapses
+//     into one "N low-attention files — skim or mark all viewed" row.
+//  2. The Implementation|Tests switch is reachable from the bottom of the list,
+//     so changing phase never costs a scroll back to the top.
+// ---------------------------------------------------------------------------
+
+test('inspect: the Tests phase never buries its own test files in the low-attention tail', async ({ page }) => {
+  await setupRoutes(page)
+  await gotoInspect(page)
+
+  // The low-attention tail only exists under Risk first.
+  await page.getByRole('group', { name: 'File order' }).getByRole('button', { name: 'Risk first' }).click()
+
+  // Implementation phase: the deferral rule is intact — the test files are
+  // absent from this list entirely, and both implementation files are novel.
+  await expect(page.locator('details.attention-tail')).toHaveCount(0)
+  await expect(fileNames(page)).toHaveText(['src/auth/core.ts', 'src/app.ts'])
+
+  await page.getByTestId('phase-btn-tests').click()
+
+  // THE FIX: the reviewer came here to read these, so they ARE the list — not
+  // one collapsed row, and not an empty tail either. Risk first still orders
+  // them (the sensitive src/auth path outranks src/app), which is only possible
+  // because they are attention files now rather than one undifferentiated tail.
+  await expect(page.locator('details.attention-tail')).toHaveCount(0)
+  await expect(page.locator('article.file-diff')).toHaveCount(2)
+  await expect(fileNames(page)).toHaveText(['src/auth/core.spec.ts', 'src/app.test.ts'])
+})
+
+test('inspect: the phase switch is reachable from the list bottom, without scrolling back up', async ({ page }) => {
+  // A short viewport guarantees the top phase bar really does leave the screen.
+  await page.setViewportSize({ width: 900, height: 400 })
+  await setupRoutes(page)
+  await gotoInspect(page)
+
+  const dock = page.getByTestId('phase-dock')
+  await expect(dock).toBeVisible()
+
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+
+  // The top control is out of reach now — exactly the moment the dock exists
+  // for — and the dock is on screen.
+  await expect(page.getByTestId('phase-bar')).not.toBeInViewport()
+  await expect(dock).toBeInViewport()
+
+  // It states which phase you are in, not merely that a switch exists…
+  await expect(page.getByTestId('phase-dock-implementation')).toHaveAttribute('aria-pressed', 'true')
+  // …and carries the same preview signal as the top switch: no quiet skip.
+  await expect(page.getByTestId('phase-dock-tests')).toContainText('🔒')
+
+  await page.getByTestId('phase-dock-tests').click()
+
+  // One state, two controls: the top switch followed, and the list changed.
+  await expect(page.getByTestId('phase-dock-tests')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('phase-btn-tests')).toHaveAttribute('aria-pressed', 'true')
+  await expect(fileNames(page)).toHaveText(['src/app.test.ts', 'src/auth/core.spec.ts'])
+})
+
+test('inspect: the phase dock stays usable at a narrow width', async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 640 })
+  await setupRoutes(page)
+  await gotoInspect(page)
+
+  const dock = page.getByTestId('phase-dock')
+  await expect(dock).toBeVisible()
+
+  // The pill has not overflowed the viewport at phone width.
+  const overflows = await dock.evaluate((el) => {
+    const pill = el.querySelector('[role="group"]') as HTMLElement
+    return pill.getBoundingClientRect().width > document.documentElement.clientWidth
+  })
+  expect(overflows).toBe(false)
+
+  await page.getByTestId('phase-dock-tests').click()
+  await expect(page.getByTestId('phase-btn-tests')).toHaveAttribute('aria-pressed', 'true')
+})

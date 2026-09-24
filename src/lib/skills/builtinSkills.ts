@@ -4,10 +4,20 @@
  * Exports BUILTIN_SKILLS: an array of 10 curated reviewer personas (9 specialist
  * personas + the pragmatic sample skill migrated from sampleSkill.ts).
  *
+ * Each persona declares the PHASE SCOPE it installs with (`defaultScope`) — the
+ * reasoning is argued inline at every entry. The shape of the answer: most
+ * specialist lenses (security, SRE, performance, UX, architecture, domain
+ * modeling, PostHog) have nothing to say about a test file, so they install
+ * implementation-only; Test Quality & Coverage is the point of the tests phase
+ * and installs tests-only; the two lenses that read code as code — Pragmatic
+ * Senior and Comment Sensibility — install for both. The user can change any of
+ * them in Settings; nothing here is permanent.
+ *
  * SAMPLE_SKILL_NAME is re-exported from sampleSkill.ts for backward compatibility.
  */
 
 import { SAMPLE_SKILL_NAME, SAMPLE_SKILL_CONTENT } from './sampleSkill'
+import type { SkillScope } from './skills'
 
 export { SAMPLE_SKILL_NAME }
 
@@ -20,6 +30,17 @@ export interface BuiltinSkill {
   name: string
   tagline: string
   content: string
+  /**
+   * Which review phases this persona is installed with (src/lib/skills/skills.ts).
+   *
+   * The test is not "is this reviewer good?" but "what can this lens actually
+   * SAY about a test file?" — because a reviewer that runs with nothing to say
+   * still costs tokens and wall-clock, and still hands the user moot findings
+   * to validate. Each choice is argued at its declaration site below.
+   *
+   * A skill the USER writes is not guessed at: addSkill() defaults it to 'both'.
+   */
+  defaultScope: SkillScope
 }
 
 // ---------------------------------------------------------------------------
@@ -48,6 +69,11 @@ export const SHARED_CALIBRATION = `
 const BASE_SKILLS: BuiltinSkill[] = [
   {
     id: 'architecture',
+    // Dependency direction, layer boundaries and pattern fit are judgments about
+    // the SHIPPED shape. Test files legitimately break those rules — a test reaches
+    // across layers on purpose — so pointing this lens at them manufactures false
+    // positives rather than findings.
+    defaultScope: 'implementation',
     name: 'Architecture & Design Reviewer',
     tagline: 'Coupling, boundaries, patterns — is this the right shape?',
     content: `# Architecture & Design Reviewer
@@ -63,6 +89,10 @@ Cite only what the diff shows. A pattern violation is medium unless it creates a
   },
   {
     id: 'domain-modeling',
+    // Tell-Don't-Ask, anemic models and feature envy describe domain code. A test
+    // exists precisely to ASK an object about its state and assert on the answer,
+    // so this lens would flag the correct thing as a smell on every test file.
+    defaultScope: 'implementation',
     name: 'Domain Modeling & OO Principles',
     tagline: 'Anemic models, scattered rules — does the logic live with its data?',
     content: `# Domain Modeling & OO Principles Reviewer
@@ -80,6 +110,11 @@ These are judgment calls — flag only when the smell is CLEAR in the diff and t
   },
   {
     id: 'security',
+    // Injection surfaces, authz checks and secret handling are properties of code
+    // that ships and faces user input. A test file is neither deployed nor reachable
+    // by an attacker; the user named this reviewer as the clearest case of one with
+    // nothing to say about tests.
+    defaultScope: 'implementation',
     name: 'Security Reviewer (OWASP-minded)',
     tagline: 'Input trust, secrets, authz — the boring failures that hurt',
     content: `# Security Reviewer
@@ -95,6 +130,9 @@ High = exploitable from user input or secret exposure. Medium = defense-in-depth
   },
   {
     id: 'ux',
+    // Loading/empty/error states, focus management and affordances need a user.
+    // A test file has none.
+    defaultScope: 'implementation',
     name: 'UX & Interaction Reviewer',
     tagline: 'States, feedback, flow — what does the user feel?',
     content: `# UX & Interaction Reviewer
@@ -111,6 +149,9 @@ Only review what the diff touches. Frame findings as the user's experience ("aft
   },
   {
     id: 'sre',
+    // Timeouts, retry safety, blast radius and production observability are 3am
+    // questions about the running system. Nothing in a test file pages anyone.
+    defaultScope: 'implementation',
     name: 'Resiliency & SRE Reviewer',
     tagline: 'Timeouts, retries, blast radius — will it survive contact?',
     content: `# Resiliency & SRE Reviewer
@@ -127,6 +168,11 @@ Judge proportionally to the code's actual blast radius — a CLI script and a pa
   },
   {
     id: 'performance',
+    // Its own discipline demands a growth vector — "where does the scale come
+    // from?" Test data is fixed and tiny, so the honest answer on a test file is
+    // always "nowhere". A slow or flaky test is a test-quality concern, and the
+    // Test Quality persona already owns determinism and isolation.
+    defaultScope: 'implementation',
     name: 'Performance Reviewer',
     tagline: 'Work done per unit of value — quietly hot paths',
     content: `# Performance Reviewer
@@ -142,6 +188,11 @@ Every finding must name WHERE the scale comes from (user data? files? requests?)
   },
   {
     id: 'comment-sensibility',
+    // BOTH. A stale comment that lies, or a commented-out block left behind, costs
+    // the next reader exactly as much in a test file as in source — and this lens
+    // is purely textual, so it needs no production context to be right. Cheap, and
+    // equally valid on either side of the phase split.
+    defaultScope: 'both',
     name: 'Comment Sensibility Reviewer',
     tagline: 'Redundant, stale, commented-out — comments that add noise',
     content: `# Comment Sensibility Reviewer
@@ -156,6 +207,9 @@ Only flag a comment when removing or fixing it strictly improves the reader's ac
   },
   {
     id: 'posthog-observability',
+    // Its own prompt already says instrumentation "doesn't fit" tests. Running it
+    // in the tests phase buys a guaranteed empty result at full token price.
+    defaultScope: 'implementation',
     name: 'PostHog Observability Reviewer',
     tagline: 'Events, flags, errors — what would PostHog want to see?',
     content: `# PostHog Observability Reviewer
@@ -172,6 +226,12 @@ Suggest instrumentation only where it clearly helps the team learn or recover so
   },
   {
     id: 'test-quality',
+    // TESTS ONLY — and this is the sharpest case. It is the whole point of the
+    // tests phase. It is also actively harmful in the implementation phase, where
+    // the pack is scoped to implementation files: asked "what does no test cover?"
+    // with the tests withheld, it can only produce the absence claims SHARED_
+    // CALIBRATION calls the #1 false positive.
+    defaultScope: 'tests',
     name: 'Test Quality & Coverage Reviewer',
     tagline: 'Do the tests pin the new behavior — or just pass?',
     content: `# Test Quality & Coverage Reviewer
@@ -187,6 +247,10 @@ Scope every finding to behavior THIS diff adds or changes — do not demand test
   },
   {
     id: 'pragmatic',
+    // BOTH. Correctness, intent and hygiene read on test code too: a test that
+    // asserts the wrong thing is a correctness bug, and this is the one lens with
+    // no domain narrower than "is this code right?"
+    defaultScope: 'both',
     name: SAMPLE_SKILL_NAME,
     tagline: 'Correctness, intent, hygiene — the calm senior read',
     content: SAMPLE_SKILL_CONTENT,

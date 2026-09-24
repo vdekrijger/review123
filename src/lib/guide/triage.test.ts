@@ -98,6 +98,78 @@ describe('classifyFile — mechanical signals', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Phase awareness — "tests only" is a DEFERRAL, and the Tests phase is where
+// the deferral has already been honoured.
+// ---------------------------------------------------------------------------
+
+describe('classifyFile — phase awareness', () => {
+  it('defaults to the implementation phase when no phase is passed', () => {
+    const t = classifyFile(makeFile('src/lib/foo.test.ts'), 'low', NO_FINDINGS)
+    expect(t).toEqual({ attention: 'mechanical', reasons: ['tests only'] })
+  })
+
+  it('still defers tests when the phase is explicitly implementation', () => {
+    const t = classifyFile(makeFile('src/lib/foo.test.ts'), 'low', NO_FINDINGS, null, 'implementation')
+    expect(t).toEqual({ attention: 'mechanical', reasons: ['tests only'] })
+  })
+
+  it('in the tests phase a plain test file is novel — it is the whole subject', () => {
+    const t = classifyFile(makeFile('src/lib/foo.test.ts'), 'low', NO_FINDINGS, null, 'tests')
+    expect(t).toEqual({ attention: 'novel', reasons: [] })
+  })
+
+  it('drops ONLY the "tests only" reason — a snapshot test file stays mechanical', () => {
+    const file = makeFile('src/__snapshots__/render.test.ts.snap')
+    expect(classifyFile(file, 'low', NO_FINDINGS, null, 'implementation').reasons).toEqual([
+      'snapshot',
+      'tests only',
+    ])
+    const inTests = classifyFile(file, 'low', NO_FINDINGS, null, 'tests')
+    expect(inTests.attention).toBe('mechanical')
+    expect(inTests.reasons).toEqual(['snapshot'])
+  })
+
+  it('a GENERATED test file stays mechanical in the tests phase, and says why', () => {
+    const t = classifyFile(makeFile('src/__generated__/api.test.ts'), 'low', NO_FINDINGS, null, 'tests')
+    expect(t.attention).toBe('mechanical')
+    expect(t.reasons).toEqual(['generated'])
+  })
+
+  it('a lockfile is unaffected by the phase — it was never a test deferral', () => {
+    for (const phase of ['implementation', 'tests'] as const) {
+      const t = classifyFile(makeFile('pnpm-lock.yaml'), 'low', NO_FINDINGS, null, phase)
+      expect(t, phase).toEqual({ attention: 'mechanical', reasons: ['lockfile'] })
+    }
+  })
+
+  it('a rename-only test file keeps its own reason in the tests phase', () => {
+    const file = makeFile('src/lib/foo.test.ts', {
+      status: 'renamed',
+      additions: 0,
+      deletions: 0,
+      patch: undefined,
+      previousFilename: 'src/lib/old.test.ts',
+    })
+    const t = classifyFile(file, 'low', NO_FINDINGS, null, 'tests')
+    expect(t.attention).toBe('mechanical')
+    expect(t.reasons).toEqual(['rename only'])
+  })
+
+  it('the findings override still wins in the tests phase', () => {
+    const t = classifyFile(makeFile('src/__snapshots__/a.snap'), 'low', ONE_FINDING, null, 'tests')
+    expect(t.attention).toBe('novel')
+    expect(t.reasons).toEqual(['snapshot'])
+  })
+
+  it('the phase never promotes a non-test file — implementation files are untouched', () => {
+    for (const phase of ['implementation', 'tests'] as const) {
+      const t = classifyFile(makeFile('src/app.ts'), 'medium', NO_FINDINGS, null, phase)
+      expect(t, phase).toEqual({ attention: 'novel', reasons: [] })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Findings / high-risk override — never bury a flagged file
 // ---------------------------------------------------------------------------
 

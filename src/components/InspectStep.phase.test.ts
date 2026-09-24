@@ -277,17 +277,174 @@ describe('InspectStep — sort, tail and progress inside a phase', () => {
     expect(container.querySelector('.attention-tail')).toBeNull()
   })
 
-  it('puts the Tests phase\'s mechanical test files in ITS tail under Risk first', async () => {
-    const { container } = render(InspectStep, { props: baseProps() })
+  it('never buries the Tests phase in its own tail — the tests ARE the subject', async () => {
+    const viewedStore = createViewedStore('o/r#1')
+    const { container } = render(InspectStep, { props: baseProps({ viewedStore }) })
     await fireEvent.click(screen.getByTestId('phase-btn-tests'))
     await fireEvent.click(screen.getByRole('button', { name: 'Risk first' }))
 
-    // Both test files are mechanical ("tests only") → the whole phase is tail.
+    // "tests only" means "read this LATER, in the Tests phase". The reviewer is
+    // now IN that phase, so it no longer applies and there is no tail at all —
+    // not an empty collapsed row, no row.
+    expect(container.querySelector('details.attention-tail')).toBeNull()
+    expect(mainCardIds(container)).toEqual(['file-src---tests---auth-ts', 'file-src-app-test-ts'])
+    expect(screen.getByTestId('attention-progress').textContent).toContain(
+      '0 of 2 attention files reviewed',
+    )
+  })
+
+  it('a test file with ANOTHER mechanical signal still tails in the Tests phase', async () => {
+    const files = [
+      makeFile('src/app.ts', { additions: 5 }),
+      makeFile('src/app.test.ts', { additions: 12 }),
+      makeFile('src/__snapshots__/render.test.ts.snap', { additions: 200 }),
+    ]
+    const { container } = render(InspectStep, { props: baseProps({ files, changedFiles: 3 }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Risk first' }))
+
+    // The snapshot is mechanical for being a SNAPSHOT, which is phase-independent.
     const tail = container.querySelector('details.attention-tail') as HTMLDetailsElement
     expect(tail).not.toBeNull()
-    expect(tail.textContent).toContain('2 low-attention files')
-    expect(tail.textContent).toContain('2 tests only')
-    expect(tailCardIds(container)).toEqual(['file-src---tests---auth-ts', 'file-src-app-test-ts'])
+    expect(tail.textContent).toContain('1 low-attention file')
+    expect(tail.textContent).toContain('1 snapshot')
+    // …and it does NOT claim the stale "tests only" deferral as the reason.
+    expect(tail.textContent).not.toContain('tests only')
+    expect(tailCardIds(container)).toEqual(['file-src---snapshots---render-test-ts-snap'])
+    // The real test file stays in the main list, where the reviewer can read it.
+    expect(mainCardIds(container)).toEqual(['file-src-app-test-ts'])
+  })
+
+  it('a tests-ONLY PR (no phases at all) is not buried either — there is no later', async () => {
+    const files = [
+      makeFile('src/app.test.ts', { additions: 12 }),
+      makeFile('src/__tests__/auth.ts', { additions: 9 }),
+    ]
+    const { container } = render(InspectStep, { props: baseProps({ files, changedFiles: 2 }) })
+    // Phases never engage here (an empty Implementation phase helps nobody).
+    expect(screen.queryByTestId('phase-bar')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Risk first' }))
+
+    expect(container.querySelector('details.attention-tail')).toBeNull()
+    expect(mainCardIds(container)).toEqual(['file-src---tests---auth-ts', 'file-src-app-test-ts'])
+  })
+
+  it('the Implementation phase still defers test files — the rule is not deleted', async () => {
+    // Guard against "fixing" this by dropping the deferral everywhere: with a
+    // test file visible in the implementation list (Story mode shows all files)
+    // the reason must still fire.
+    const { container } = render(InspectStep, { props: baseProps() })
+    await fireEvent.click(screen.getByRole('button', { name: 'Risk first' }))
+    // Implementation phase: the two test files are not here at all, and the two
+    // implementation files are both novel — so still no tail.
+    expect(container.querySelector('.attention-tail')).toBeNull()
+    expect(mainCardIds(container)).toEqual(['file-src-auth-big-ts', 'file-src-app-ts'])
+    expect(screen.getByTestId('phase-deferred-note').textContent).toContain('2 test files')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The phase dock — the switch repeated at the bottom of the list, so changing
+// phase never costs a scroll back to the top.
+// ---------------------------------------------------------------------------
+
+describe('InspectStep — the phase dock', () => {
+  it('renders at the END of the file list, after every file card', () => {
+    const { container } = render(InspectStep, { props: baseProps() })
+    const column = container.querySelector('.diff-column') as HTMLElement
+    const dock = screen.getByTestId('phase-dock')
+    expect(column.contains(dock)).toBe(true)
+    // Every file card precedes it — it is the list's end, not a floating overlay.
+    const cards = [...column.querySelectorAll('[id^="file-"]')]
+    for (const card of cards) {
+      expect(dock.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+    }
+  })
+
+  it('appears exactly when the top phase bar does — never on a PR with no phases', () => {
+    render(InspectStep, { props: baseProps({ files: [makeFile('src/app.ts')], changedFiles: 1 }) })
+    expect(screen.queryByTestId('phase-bar')).toBeNull()
+    expect(screen.queryByTestId('phase-dock')).toBeNull()
+  })
+
+  it('is not rendered in Story mode — a story walks the WHOLE change', () => {
+    render(InspectStep, {
+      props: baseProps({
+        storyAvailable: true,
+        storyMode: true,
+        storyStatus: 'done',
+        story: { steps: [{ index: 0, files: ['src/app.ts'], caption: 'App.', layer: 'ui', relatedTests: [] }] },
+      }),
+    })
+    expect(screen.queryByTestId('phase-dock')).not.toBeInTheDocument()
+  })
+
+  it('states which phase you are in, not just the offer to switch', async () => {
+    render(InspectStep, { props: baseProps() })
+    const impl = screen.getByTestId('phase-dock-implementation')
+    const tests = screen.getByTestId('phase-dock-tests')
+    expect(impl).toHaveAttribute('aria-pressed', 'true')
+    expect(tests).toHaveAttribute('aria-pressed', 'false')
+
+    await fireEvent.click(tests)
+    expect(screen.getByTestId('phase-dock-implementation')).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByTestId('phase-dock-tests')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('carries the per-phase file counts, like the top switch', () => {
+    render(InspectStep, { props: baseProps() })
+    expect(screen.getByTestId('phase-dock-implementation').textContent).toContain('2')
+    expect(screen.getByTestId('phase-dock-tests').textContent).toContain('2')
+  })
+
+  it('switches the list, and the top switch follows — one state, two controls', async () => {
+    const { container } = render(InspectStep, { props: baseProps() })
+    await fireEvent.click(screen.getByTestId('phase-dock-tests'))
+
+    expect(screen.getByTestId('phase-btn-tests')).toHaveAttribute('aria-pressed', 'true')
+    expect(cardIds(container)).toEqual(['file-src-app-test-ts', 'file-src---tests---auth-ts'])
+
+    await fireEvent.click(screen.getByTestId('phase-dock-implementation'))
+    expect(screen.getByTestId('phase-btn-implementation')).toHaveAttribute('aria-pressed', 'true')
+    expect(cardIds(container)).toEqual(['file-src-app-ts', 'file-src-auth-big-ts'])
+  })
+
+  it('persists the phase it selected, exactly as the top switch does', async () => {
+    render(InspectStep, { props: baseProps() })
+    await fireEvent.click(screen.getByTestId('phase-dock-tests'))
+    expect(getPhaseRecord(PR_KEY).phase).toBe('tests')
+    // Selecting is NOT approving — the quiet override holds here too.
+    expect(getPhaseRecord(PR_KEY).implApprovedAt).toBeUndefined()
+  })
+
+  it('shows the same 🔒 preview signal — the dock never quietly skips the sign-off', async () => {
+    render(InspectStep, { props: baseProps() })
+    expect(screen.getByTestId('phase-dock-tests')).toHaveTextContent('🔒')
+
+    await fireEvent.click(screen.getByTestId('phase-approve'))
+    await tick()
+    expect(screen.getByTestId('phase-dock-tests')).not.toHaveTextContent('🔒')
+  })
+
+  it('is keyboard reachable and announced — real buttons in their own named group', () => {
+    const { container } = render(InspectStep, { props: baseProps() })
+    const group = container.querySelector('.phase-dock [role="group"]') as HTMLElement
+    expect(group).toHaveAttribute('aria-label', 'Switch phase')
+    for (const id of ['phase-dock-implementation', 'phase-dock-tests']) {
+      const btn = screen.getByTestId(id)
+      expect(btn.tagName).toBe('BUTTON')
+      expect(btn).not.toHaveAttribute('tabindex', '-1')
+      expect(btn).not.toBeDisabled()
+    }
+  })
+
+  it('does not collide with the top switch: distinct test ids and group names', () => {
+    render(InspectStep, { props: baseProps() })
+    // getByTestId throws on duplicates — these calls ARE the assertion.
+    expect(screen.getByTestId('phase-btn-tests')).toBeTruthy()
+    expect(screen.getByTestId('phase-dock-tests')).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Review phase' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Switch phase' })).toBeTruthy()
   })
 })
 
@@ -497,6 +654,36 @@ describe('InspectStep — the on-demand tests reviewer pass', () => {
     expect(screen.getByTestId('tests-review-run')).toBeInTheDocument()
     // The click is expensive; say what it costs before it is spent.
     expect(screen.getByTestId('tests-review-hint').textContent).toContain('2 reviewers · agentic · runs on demand')
+  })
+
+  // PHASE SCOPE (#275): the hint is the cost the click will ACTUALLY spend, so
+  // it counts the reviewers scoped to the tests pass, not the enabled ones.
+  it('the cost hint counts the tests-scoped reviewers, not every enabled one', async () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test' }))
+    addSkill('Security', 'check for XSS', 'implementation')
+    addSkill('Both', 'applies everywhere', 'both')
+    addSkill('Impl only too', 'more impl', 'implementation')
+    render(InspectStep, { props: baseProps({ runTestsReviewFn: () => {} }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+
+    // Three enabled, one runs here — the hint must not promise three.
+    expect(screen.getByTestId('tests-review-hint').textContent).toContain(
+      '1 reviewer · agentic · runs on demand',
+    )
+  })
+
+  it('offers no tests pass — and says why — when no reviewer is scoped to it', async () => {
+    localStorage.setItem('review123:settings', JSON.stringify({ deepseekKey: 'sk-test' }))
+    addSkill('Security', 'check for XSS', 'implementation')
+    render(InspectStep, { props: baseProps({ runTestsReviewFn: () => {} }) })
+    await fireEvent.click(screen.getByTestId('phase-btn-tests'))
+
+    // No dead click…
+    expect(screen.queryByTestId('tests-review-run')).not.toBeInTheDocument()
+    // …and not silence either: a reason and one click to where the scope is set.
+    const note = screen.getByTestId('no-tests-reviewers-note')
+    expect(note.textContent).toContain('No reviewer is scoped to the tests phase')
+    expect(note.querySelector('a')).toHaveAttribute('href', '/settings')
   })
 
   it('clicking it calls runTestsReviewFn — it never fires on its own', async () => {

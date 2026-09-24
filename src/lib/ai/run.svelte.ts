@@ -120,7 +120,7 @@ import {
   REVIEWER_CONCURRENCY,
   type ChunkOutcome,
 } from './coachBatch'
-import { listSkills } from '../skills/skills'
+import { listSkillsForPhase } from '../skills/skills'
 import { buildCalibrationBlock } from '../skills/calibration'
 import { djb2 } from '../viewed/viewed.svelte'
 import { addUsage } from './tokenCost'
@@ -3167,6 +3167,16 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     // prompt version (PROMPT_VERSIONS.skillsTests). The two passes can therefore
     // never overwrite each other's result for the same persona, and editing one
     // prompt leaves the other's cache warm.
+    //
+    // The skill's phase SCOPE is deliberately NOT part of this key. Scope decides
+    // WHICH pass a reviewer runs in, not what it produces: for a given (persona
+    // content, calibration, pass, deep) tuple the result is identical whatever
+    // the scope says. The pass segment below is therefore already the only
+    // discriminant a scope change can matter through — re-scoping a skill from
+    // 'both' to 'implementation' leaves its implementation result valid, and its
+    // tests result unreachable because the tests pass no longer asks for it.
+    // Hashing the scope in would cold-invalidate correct cache entries on every
+    // settings tweak, spending exactly the tokens this feature exists to save.
     const passSegment = pass === 'tests' ? '|tests' : ''
     const passVersion = promptVersionFor(pass === 'tests' ? 'skillsTests' : 'skills')
     const key = cacheKey(prKey, 'skill:' + contentHash + passSegment + (deep.enabled ? '|deep' : ''), passVersion)
@@ -3601,8 +3611,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const ctx = await getPackedContext('implementation')
     if (ctx === null) return
 
-    // Load enabled skills at call time
-    const skills = listSkills().filter((s) => s.enabled)
+    // Load the reviewers SCOPED TO THIS PASS at call time. A skill the user
+    // scoped to the tests phase (or off) is simply not in this list, so it is
+    // never prompted, never billed, and — because every chip downstream is
+    // rendered from the entries built below — never appears claiming a clean
+    // result it did not earn.
+    const skills = listSkillsForPhase('implementation')
     if (skills.length === 0) return
 
     // Deep review (Plan G/J): one mode resolution for the whole batch, driven
@@ -3734,8 +3748,11 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const ctx = await getPackedContext(pass === 'tests' ? 'all' : 'implementation')
     if (ctx === null) return
 
-    // Resolve the skill content fresh (the user may have edited it since the run).
-    const skill = listSkills().find((s) => s.id === skillId)
+    // Resolve the skill content fresh (the user may have edited it since the
+    // run) — and SCOPED to this pass, so a reviewer the user has since scoped
+    // out of this phase is not re-run and not re-billed. Its entry simply stays
+    // as it settled, which is the honest record of what happened.
+    const skill = listSkillsForPhase(pass).find((s) => s.id === skillId)
     if (!skill) return
 
     const deep = { enabled: skillsMode.deep, note: skillsMode.note }
@@ -3771,8 +3788,12 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
   // pass, and its question only makes sense once the implementation is settled.
   //
   // What it sends, and why:
-  //   - EVERY enabled reviewer, not a subset. The user's explicit choice: the
-  //     same lenses that judged the code should judge its tests.
+  //   - Every reviewer the user SCOPED to the tests phase ('tests' or 'both') —
+  //     not every enabled one. Most specialist lenses (security, SRE,
+  //     performance, UX, architecture, domain modeling, PostHog observability)
+  //     have nothing to say about a test file, so running them here only spends
+  //     tokens to produce moot findings the user then has to validate. The
+  //     scope is per-skill and user-editable in Settings.
   //   - The WHOLE-PR context (PackScope 'all' — the same memo the automatic
   //     tasks already warmed, so this costs no extra packing). Judging whether
   //     a test pins behaviour is impossible without the behaviour.
@@ -3802,7 +3823,9 @@ export function createAiRun(input: AiRunInput, deps?: Partial<AiRunDeps>): AiRun
     const ctx = await getPackedContext('all')
     if (ctx === null) return
 
-    const skills = listSkills().filter((s) => s.enabled)
+    // The reviewers the user scoped to the TESTS phase — see the implementation
+    // pass above for why the scope is applied here rather than after dispatch.
+    const skills = listSkillsForPhase('tests')
     if (skills.length === 0) return
 
     const deep = { enabled: mode.deep, ...(mode.note ? { note: mode.note } : {}) }
