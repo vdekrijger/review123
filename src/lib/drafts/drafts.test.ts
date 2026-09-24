@@ -519,6 +519,74 @@ describe('listDraftSummaries', () => {
     const { listDraftSummaries } = await import('./drafts.svelte')
     expect(await listDraftSummaries('whatever')).toEqual([])
   })
+
+  // -------------------------------------------------------------------------
+  // Withdrawn notes. `draftCount` is the number the landing page renders as
+  // "N comments drafted" — the SAME sentence Review.svelte renders from
+  // store.count, which is the live subset. So it has to mean the same thing,
+  // or the app disagrees with itself about one PR. `withdrawnCount` is how the
+  // withdrawn notes stay visible instead of just being dropped.
+  // -------------------------------------------------------------------------
+
+  it('counts withdrawn notes separately from the ones that will be submitted', async () => {
+    const db = `test-db-summaries-withdrawn-${++testIndex}`
+    const { createDraftStore, listDraftSummaries, draftKey } = await import('./drafts.svelte')
+
+    const prKey = 'github:acme/widgets#7@sha7'
+    const store = createDraftStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'stays' })
+    await store.upsert({ path: 'a.ts', line: 2, side: 'RIGHT', body: 'stays too' })
+    await store.upsert({ path: 'a.ts', line: 3, side: 'RIGHT', body: 'the agent fixed this' })
+    await store.setHandoff(
+      draftKey({ prKey, path: 'a.ts', line: 3, side: 'RIGHT' }),
+      'withdrawn',
+    )
+
+    const summary = (await listDraftSummaries(db)).find((s) => s.prKey === prKey)
+    expect(summary?.draftCount).toBe(2)
+    expect(summary?.withdrawnCount).toBe(1)
+    // The landing number and the review-flow number are the same number.
+    expect(summary?.draftCount).toBe(store.count)
+  })
+
+  it('still reports a PR whose notes are ALL withdrawn, so withdrawing never reads as deleting', async () => {
+    const db = `test-db-summaries-all-withdrawn-${++testIndex}`
+    const { createDraftStore, listDraftSummaries, draftKey } = await import('./drafts.svelte')
+
+    const prKey = 'github:acme/widgets#8@sha8'
+    const store = createDraftStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'withdrawn but written' })
+    await store.setHandoff(
+      draftKey({ prKey, path: 'a.ts', line: 1, side: 'RIGHT' }),
+      'withdrawn',
+    )
+
+    const summary = (await listDraftSummaries(db)).find((s) => s.prKey === prKey)
+    expect(summary).toBeDefined()
+    expect(summary?.draftCount).toBe(0)
+    expect(summary?.withdrawnCount).toBe(1)
+    // The words are still there and still dated — the row can still be shown.
+    expect(summary?.lastUpdatedAt).toBeGreaterThan(0)
+  })
+
+  it("leaves 'sent' and 'kept' notes in the submitted count — only withdrawal takes one out", async () => {
+    const db = `test-db-summaries-handoff-${++testIndex}`
+    const { createDraftStore, listDraftSummaries, draftKey } = await import('./drafts.svelte')
+
+    const prKey = 'github:acme/widgets#9@sha9'
+    const store = createDraftStore(prKey, db)
+    await store.load()
+    await store.upsert({ path: 'a.ts', line: 1, side: 'RIGHT', body: 'sent to the agent' })
+    await store.upsert({ path: 'a.ts', line: 2, side: 'RIGHT', body: 'kept on purpose' })
+    await store.setHandoff(draftKey({ prKey, path: 'a.ts', line: 1, side: 'RIGHT' }), 'sent')
+    await store.setHandoff(draftKey({ prKey, path: 'a.ts', line: 2, side: 'RIGHT' }), 'kept')
+
+    const summary = (await listDraftSummaries(db)).find((s) => s.prKey === prKey)
+    expect(summary?.draftCount).toBe(2)
+    expect(summary?.withdrawnCount).toBe(0)
+  })
 })
 
 // ---------------------------------------------------------------------------

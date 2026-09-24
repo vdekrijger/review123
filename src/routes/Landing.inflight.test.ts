@@ -34,7 +34,13 @@ vi.mock('../lib/provider/registry', () => ({
 // on disk; Landing enumerates them raw (via listDraftSummaries) and groups by
 // identity. Writing directly (not via the store, whose load() runs the re-key
 // migration) lets these tests exercise that raw-summary grouping faithfully.
-async function seedDraft(prKey: string, path: string, line: number, body: string) {
+async function seedDraft(
+  prKey: string,
+  path: string,
+  line: number,
+  body: string,
+  handoff?: 'sent' | 'kept' | 'withdrawn',
+) {
   await new Promise<void>((resolve, reject) => {
     const open = indexedDB.open('review123-drafts', 1)
     open.onupgradeneeded = () => {
@@ -44,7 +50,7 @@ async function seedDraft(prKey: string, path: string, line: number, body: string
     open.onsuccess = () => {
       const db = open.result
       const tx = db.transaction('drafts', 'readwrite')
-      tx.objectStore('drafts').put({ prKey, path, line, side: 'RIGHT', body, n: 0, updatedAt: Date.now() }, `${prKey}|${path}|${line}|RIGHT|0`)
+      tx.objectStore('drafts').put({ prKey, path, line, side: 'RIGHT', body, n: 0, updatedAt: Date.now(), ...(handoff ? { handoff, handoffAt: Date.now() } : {}) }, `${prKey}|${path}|${line}|RIGHT|0`)
       tx.oncomplete = () => { db.close(); resolve() }
       tx.onerror = () => reject(tx.error)
     }
@@ -164,5 +170,98 @@ describe('Landing in-flight reviews section', () => {
 
     expect(screen.getByTestId('inflight-section')).toBeInTheDocument()
     expect(await listDraftSummaries()).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Withdrawn notes (PR #285 handoff states).
+//
+// "N comments drafted" is word for word what Review.svelte renders from the
+// store's LIVE count, so the two have to agree about a PR. They did not: this
+// section counted raw IndexedDB keys, so a withdrawn note inflated the landing
+// number while the review's draft bar excluded it.
+//
+// The fix is not to make withdrawn notes disappear — #285's whole contract is
+// that withdrawing never looks like deleting. They are named instead.
+// ---------------------------------------------------------------------------
+describe('Landing in-flight reviews — withdrawn notes', () => {
+  beforeEach(async () => {
+    localStorage.clear()
+    vi.restoreAllMocks()
+    vi.mocked(navigate).mockClear()
+    queueModule._resetQueueCacheForTest?.()
+    await clearAllDrafts()
+  })
+
+  it('counts only the notes that will be submitted, and names the withdrawn ones', async () => {
+    await seedDraft('github:acme/widgets#42@sha1', 'a.ts', 1, 'first')
+    await seedDraft('github:acme/widgets#42@sha1', 'a.ts', 2, 'second')
+    await seedDraft('github:acme/widgets#42@sha1', 'a.ts', 3, 'the agent fixed this', 'withdrawn')
+
+    render(Landing)
+    await screen.findByTestId('inflight-section')
+
+    const row = screen.getByRole('button', { name: /Resume review of acme\/widgets#42/i })
+    expect(within(row).getByTestId('inflight-count')).toHaveTextContent('2 comments drafted')
+    expect(within(row).getByTestId('inflight-withdrawn')).toHaveTextContent('1 withdrawn')
+  })
+
+  it("leaves 'sent' and 'kept' notes in the count — they still post", async () => {
+    await seedDraft('github:acme/widgets#42@sha1', 'a.ts', 1, 'sent', 'sent')
+    await seedDraft('github:acme/widgets#42@sha1', 'a.ts', 2, 'kept', 'kept')
+
+    render(Landing)
+    await screen.findByTestId('inflight-section')
+
+    const row = screen.getByRole('button', { name: /Resume review of acme\/widgets#42/i })
+    expect(within(row).getByTestId('inflight-count')).toHaveTextContent('2 comments drafted')
+    expect(within(row).queryByTestId('inflight-withdrawn')).not.toBeInTheDocument()
+  })
+
+  it('keeps the row when EVERY note is withdrawn, so a withdrawal never reads as a deletion', async () => {
+    await seedDraft('github:acme/widgets#42@sha1', 'a.ts', 1, 'withdrawn but written', 'withdrawn')
+    await seedDraft('github:acme/widgets#42@sha1', 'a.ts', 2, 'also withdrawn', 'withdrawn')
+
+    render(Landing)
+    await screen.findByTestId('inflight-section')
+
+    const row = screen.getByRole('button', { name: /Resume review of acme\/widgets#42/i })
+    expect(row).toBeInTheDocument()
+    expect(within(row).getByTestId('inflight-count')).toHaveTextContent('0 comments drafted')
+    expect(within(row).getByTestId('inflight-withdrawn')).toHaveTextContent('2 withdrawn')
+  })
+
+  it('discard counts the withdrawn notes too — it destroys them as well', async () => {
+    await seedDraft('github:acme/widgets#42@sha1', 'a.ts', 1, 'first')
+    await seedDraft('github:acme/widgets#42@sha1', 'a.ts', 2, 'withdrawn', 'withdrawn')
+
+    render(Landing)
+    await screen.findByTestId('inflight-section')
+
+    await fireEvent.click(screen.getByRole('button', { name: /Discard drafts for acme\/widgets#42/i }))
+    const dialog = await screen.findByRole('dialog', { name: /Discard drafts/i })
+    // 2, not 1: clearDraftsForPr removes every record under the PR.
+    expect(
+      within(dialog).getByText(/Discard 2 unsubmitted comments on acme\/widgets#42/i),
+    ).toBeInTheDocument()
+
+    await fireEvent.click(within(dialog).getByRole('button', { name: /^Discard$/i }))
+    await vi.waitFor(async () => {
+      expect(screen.queryByTestId('inflight-section')).not.toBeInTheDocument()
+    })
+    expect(await listDraftSummaries()).toHaveLength(0)
+  })
+
+  it('sums live and withdrawn counts separately across head-SHA variants', async () => {
+    await seedDraft('github:acme/widgets#7@oldsha', 'a.ts', 1, 'on old commit', 'withdrawn')
+    await seedDraft('github:acme/widgets#7@newsha', 'a.ts', 1, 'on new commit')
+    await seedDraft('github:acme/widgets#7@newsha', 'a.ts', 2, 'second new', 'withdrawn')
+
+    render(Landing)
+    await screen.findByTestId('inflight-section')
+
+    const row = screen.getByRole('button', { name: /Resume review of acme\/widgets#7/i })
+    expect(within(row).getByTestId('inflight-count')).toHaveTextContent('1 comment drafted')
+    expect(within(row).getByTestId('inflight-withdrawn')).toHaveTextContent('2 withdrawn')
   })
 })
