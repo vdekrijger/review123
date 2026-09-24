@@ -20,6 +20,21 @@ describe('analytics privacy choke-point', () => {
     expect(props).not.toHaveProperty('token')
   })
 
+  it('hide_resolved_toggled carries the boolean state and nothing about the threads', () => {
+    track('hide_resolved_toggled', { enabled: true })
+    expect(capture).toHaveBeenCalledWith('hide_resolved_toggled', { enabled: true })
+  })
+
+  it('hide_resolved_toggled drops thread content, counts and file paths', () => {
+    track('hide_resolved_toggled', {
+      enabled: false,
+      resolved_count: 3,
+      path: 'src/a.ts',
+      body: 'looks good to me',
+    } as never)
+    expect(capture.mock.calls[0][1]).toEqual({ enabled: false })
+  })
+
   it('never sends repo identifiers for private repos (EC-18b)', () => {
     track('pr_loaded', { visibility: 'private', repo: 'acme/secret' } as never)
     expect(capture.mock.calls[0][1]).not.toHaveProperty('repo')
