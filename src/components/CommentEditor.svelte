@@ -422,7 +422,7 @@
     position: absolute;
     top: calc(100% + 4px);
     left: 0;
-    z-index: 30;
+    z-index: var(--z-popover);
     display: grid;
     grid-template-columns: repeat(6, auto);
     gap: 2px;

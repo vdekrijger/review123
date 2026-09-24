@@ -22,10 +22,14 @@
  *      orderings the bug fix depends on, stated as behaviour ("a popover
  *      outranks every fixed bar") rather than as arithmetic on two literals;
  *   2. no component declares a raw numeric z-index, with an EXACT allowlist of
- *      the files a concurrent change is holding;
- *   3. those held files' raw numbers still land in the right BAND of the new
- *      scale — the part a plain allowlist would not catch, and the part that
- *      makes finishing them safe to defer rather than merely permitted.
+ *      the files a concurrent change is holding. That allowlist is now EMPTY:
+ *      every component reads a --z-* token, so part 2 covers the whole tree.
+ *
+ * The allowlist kept a third part while it had entries — an assertion that each
+ * held file's raw numbers still landed in the right BAND of the scale, which is
+ * what made deferring them honest rather than merely permitted. Those files are
+ * migrated, so the band checks went with them: a token cannot be in the wrong
+ * band. The mechanism below stays armed for the next concurrent change.
  *
  * WHAT THIS CANNOT SEE, stated so nobody trusts it too far: it reads
  * DECLARATIONS. A correct z-index still loses if an ancestor establishes a
@@ -95,21 +99,12 @@ const SCALE = [
  * for, so the follow-up is a lookup rather than a re-derivation.
  */
 const HELD: Record<string, { count: number; destined: string[]; why: string }> = {
-  'src/components/InspectStep.svelte': {
-    count: 4,
-    destined: ['--z-drawer', '--z-drawer-tab', '--z-popover', '--z-dock'],
-    why: 'held by a concurrent change; 20/21 are the file-tree drawer and its tab, 30 is .findings-popover, 6 is .phase-dock (arrived in PR #276 while this change was open — which is exactly what this list is for)',
-  },
-  'src/components/CommentEditor.svelte': {
-    count: 1,
-    destined: ['--z-popover'],
-    why: 'held by a concurrent change; 30 is .emoji-popover',
-  },
-  'src/components/SymbolPopover.svelte': {
-    count: 1,
-    destined: ['--z-popover'],
-    why: 'PR #274 reworked its placement; its 250 already EQUALS --z-popover, so this is a rename with no behaviour in it',
-  },
+  // EMPTY, and that is the finished state: InspectStep, CommentEditor and
+  // SymbolPopover — the three files the scale's own PR could not touch — now
+  // read tokens, so the `var(--z-*)` guard below scans every component with no
+  // exemptions. The mechanism is left in place, not deleted, because the next
+  // concurrent change will need it: add an entry, and deleting that entry is
+  // what the migrating change has to do to go green.
 }
 
 /** Every raw numeric `z-index: <n>` in a source, comments already stripped. */
@@ -134,10 +129,14 @@ describe('the layer scale itself', () => {
   it('leaves room to insert a layer between steps, except the pinned pairs', () => {
     // A scale with no gaps is a scale the next surface has to renumber.
     //
-    // The two exceptions are NOT design choices: 5/6 (pinned header, phase
-    // dock) and 20/21 (drawer, its tab) are literals inside a file another
-    // change is holding, so the scale has to meet them where they are. When
-    // that file migrates, both pairs can be respaced like every other step.
+    // The two exceptions started as literals inside a file the scale's PR was
+    // not allowed to touch: 5/6 (pinned header, phase dock) and 20/21 (drawer,
+    // its tab). That file has since migrated, so respacing them is now POSSIBLE
+    // — and deliberately not done here. Both pairs are adjacent-but-correctly-
+    // ordered, nothing needs to slot between them, and renumbering them would
+    // turn a rename into a behavioural change for no gain. Respace when a real
+    // surface needs the room, not for tidiness — see the pinned-header note in
+    // src/app.css for what tidiness cost last time.
     const PINNED = new Set(['dock', 'drawer-tab'])
     for (let i = 1; i < SCALE.length; i++) {
       const gap = layer(SCALE[i]) - layer(SCALE[i - 1])
@@ -234,46 +233,6 @@ describe('no component picks a layer by hand', () => {
         expect(() => layer(token.replace(/^--z-/, '')), `${path} → ${token}`).not.toThrow()
       }
       expect(entry.why.length, `${path} must say why`).toBeGreaterThan(20)
-    }
-  })
-})
-
-describe('the held files still land in the right band of the new scale', () => {
-  // A raw number is only safe to defer if it still SORTS correctly beside the
-  // tokens. These are the assertions that make deferring honest; without them
-  // the allowlist would permit a literal that the new scale had quietly moved
-  // out from under.
-
-  it("InspectStep's drawer, tab and dock are exactly those steps", () => {
-    const raw = rawLayers(components().get('src/components/InspectStep.svelte')!)
-    expect(raw).toContain(layer('drawer'))
-    expect(raw).toContain(layer('drawer-tab'))
-    expect(raw).toContain(layer('dock'))
-  })
-
-  it("SymbolPopover's literal is exactly --z-popover, so it already clears the chrome", () => {
-    const raw = rawLayers(components().get('src/components/SymbolPopover.svelte')!)
-    expect(raw).toEqual([layer('popover')])
-  })
-
-  it('the two un-migrated popovers keep the rank they have today, no worse', () => {
-    // CommentEditor's .emoji-popover and InspectStep's .findings-popover are
-    // both a literal 30 and both carry the SAME bug the Verdict dropdown had:
-    // below --z-bar, so a fixed bar can still cover them. Migrating them to
-    // --z-popover is the fix and is deferred, not forgotten. What this pins is
-    // that the new scale has not made them WORSE — they must still outrank the
-    // drawer they sit above, and still be the only thing left below the chrome.
-    const emoji = rawLayers(components().get('src/components/CommentEditor.svelte')!)
-    expect(emoji).toEqual([30])
-    const placed = new Set([layer('drawer'), layer('drawer-tab'), layer('dock')])
-    const findings = rawLayers(components().get('src/components/InspectStep.svelte')!).filter(
-      (n) => !placed.has(n),
-    )
-    expect(findings).toEqual([30])
-
-    for (const value of [...emoji, ...findings]) {
-      expect(value, 'still above the drawer tab it overlays').toBeGreaterThan(layer('drawer-tab'))
-      expect(value, 'still below the chrome — this is the deferred bug').toBeLessThan(layer('bar'))
     }
   })
 })

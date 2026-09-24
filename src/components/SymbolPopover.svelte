@@ -511,7 +511,7 @@
    */
   .symbol-popover {
     position: fixed;
-    z-index: 250; /* above the topbar (200); below nothing that matters here */
+    z-index: var(--z-popover); /* above the topbar; below nothing that matters here */
     overflow-y: auto;
     background: var(--surface-raised);
     border: 1px solid var(--hairline);

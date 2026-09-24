@@ -2472,7 +2472,7 @@
     cursor: pointer;
     color: inherit;
     font-size: 0.78rem;
-    z-index: 21; /* above the drawer's z-index so tab stays clickable */
+    z-index: var(--z-drawer-tab); /* above its own drawer so the tab stays clickable */
     transition: background 0.15s;
     align-self: flex-start;
   }
@@ -2521,7 +2521,7 @@
     width: 0;
     flex-shrink: 0;
     align-self: flex-start;
-    z-index: 20;
+    z-index: var(--z-drawer);
     max-height: calc(100vh - 5rem);
     overflow: visible; /* allow the absolutely-positioned nav to extend leftward */
   }
@@ -3193,7 +3193,7 @@
     position: absolute;
     top: calc(100% + 0.3rem);
     left: 0;
-    z-index: 30;
+    z-index: var(--z-popover);
     min-width: 22rem;
     max-width: min(40rem, 90vw);
     max-height: 28rem;
@@ -3393,8 +3393,10 @@
    * reserves the dock's own height: the last file card is never underneath it.
    *
    * `bottom` clears the route-level .draft-bar (Review.svelte — fixed, ~3rem,
-   * z-index 100). The dock stays well under that z-index so the two never
-   * fight, and sits just above FileDiff's sticky file header (z-index 5).
+   * --z-bar). The dock stays well under that step so the two never fight, and
+   * sits just above FileDiff's sticky file header (--z-pinned-header). Both
+   * orderings are asserted in src/lib/theme/layerScale.test.ts, so they are no
+   * longer prose cross-referencing another file's magic number.
    *
    * The wrapper takes no pointer events, so the empty gutter either side of
    * the pill stays click-through to the diff underneath it.
@@ -3402,7 +3404,7 @@
   .phase-dock {
     position: sticky;
     bottom: 3.5rem;
-    z-index: 6;
+    z-index: var(--z-dock);
     display: flex;
     justify-content: center;
     margin-top: var(--space-3);
