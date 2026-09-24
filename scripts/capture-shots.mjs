@@ -59,7 +59,7 @@
  * downsampled to 780px wide with `sips`, which is what keeps a 6000px page to
  * ~550KB. `sips` is macOS-only; the script says so rather than failing oddly.
  *
- * SIZE DISCIPLINE. Eighteen shots, ~2.8MB total. If a change pushes that up,
+ * SIZE DISCIPLINE. Eighteen shots, ~2.9MB total. If a change pushes that up,
  * that is a signal to look at the shot, not to raise the budget.
  *
  * WHAT DETERMINISM DOES NOT COVER, because it will mislead you otherwise. Two
