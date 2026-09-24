@@ -17,6 +17,7 @@
   import type { AttentionResult } from '../lib/ai/schemas'
   import type { createViewedStore } from '../lib/viewed/viewed.svelte'
   import type { PrComment } from '../lib/github/comments'
+  import { groupThreads } from '../lib/github/commentThreads'
   import type { ReplyOutcome } from '../lib/github/replies'
   import { slugify } from '../lib/slug'
   import { renderInlineMarkdown } from '../lib/markdown/render'
@@ -40,6 +41,7 @@
   import { classifyFile as classifyAttention, sortRiskFirst, pathCompare, type FileTriage } from '../lib/guide/triage'
   import { getInspectSort, setInspectSort, type InspectSort } from '../lib/guide/sortPref'
   import { hunkAttentionPref, toggleHunkAttention } from '../lib/guide/hunkAttentionPref.svelte'
+  import { resolvedThreadsPref, toggleHideResolvedThreads } from '../lib/guide/resolvedThreadsPref.svelte'
   import { createPhaseStore, partitionFilesByPhase, type ReviewPhase } from '../lib/guide/phase.svelte'
   import { pairStepTests } from '../lib/diff/symbolTests'
   import { isGeneratedFile, sortGeneratedLast } from '../lib/diff/generated'
@@ -622,6 +624,32 @@
   // The dimming itself lives in FileDiff, which reads the same reactive
   // preference — so Story mode's diffs follow the toggle with no extra wiring.
   const hunkAttentionOn = $derived(hunkAttentionPref.enabled)
+
+  // ---- Exclude resolved threads (toolbar) ---------------------------------
+  // A resolved thread is a finished conversation; on a real PR the "General"
+  // block can be eight of them deep and, even collapsed to one line each, they
+  // fill the viewport ahead of the comments that still need an answer. Default
+  // HIDDEN — the user called them noise. Storage is the per-browser
+  // localStorage idiom (review123:hide-resolved), same as hunk focus.
+  //
+  // The hiding itself lives in FileDiff, which reads the same reactive
+  // preference — so Story mode's diffs follow the toggle with no extra wiring.
+  const hideResolved = $derived(resolvedThreadsPref.hidden)
+
+  // How many threads the switch actually affects. Counted from the real
+  // threads (resolvedCommentIds holds every comment id in a resolved thread,
+  // replies included, so its size is NOT a thread count).
+  //
+  // This count also GATES the control: zero → no button, no note. That is what
+  // keeps it honest on Bitbucket, where nothing is ever reported resolved
+  // (resolvedThreads capability false, getResolvedCommentIds returns an empty
+  // Set) — the toolbar never offers a switch for a capability the provider
+  // lacks. It is the same rule for a GitHub PR that simply has none resolved.
+  const resolvedThreadCount = $derived(
+    prComments.length === 0 || resolvedCommentIds.size === 0
+      ? 0
+      : groupThreads(prComments).filter((t) => resolvedCommentIds.has(t.root.id)).length,
+  )
 
   // ---- Viewport thresholds ----
   // The margin-vs-inline drawer decision is pure CSS (see the drawer CSS block
@@ -1665,10 +1693,27 @@
       title="Within a file: list the decision points and recede the mechanical hunks (formatting, imports, comments, renames, fixture data). Nothing is ever hidden — a receded hunk restores with one click."
       onclick={() => track('hunk_focus_toggled', { enabled: toggleHunkAttention() })}
     >{hunkAttentionOn ? 'Hunk focus: on' : 'Hunk focus: off'}</button>
+    <!-- Only rendered when this PR actually HAS resolved threads, so it never
+         implies a capability the provider lacks (Bitbucket reports none). -->
+    {#if resolvedThreadCount > 0}
+      <button
+        class="btn view-toggle hide-resolved-toggle"
+        class:btn-active={hideResolved}
+        aria-pressed={hideResolved}
+        data-testid="hide-resolved-toggle"
+        title="Exclude threads that are already resolved — finished conversations, not work. Nothing is hidden silently: the count is stated here and again wherever threads were removed, each one click from showing."
+        onclick={() => toggleHideResolvedThreads()}
+      >Hide resolved</button>
+    {/if}
   </div>
   {#if hideWhitespace && whitespaceToggleEnabled && whitespaceOnlyCount > 0}
     <span class="ws-only-note" role="status">
       {whitespaceOnlyCount} whitespace-only file{whitespaceOnlyCount === 1 ? '' : 's'} hidden
+    </span>
+  {/if}
+  {#if hideResolved && resolvedThreadCount > 0}
+    <span class="resolved-hidden-count" role="status" data-testid="resolved-hidden-count">
+      {resolvedThreadCount} resolved thread{resolvedThreadCount === 1 ? '' : 's'} hidden
     </span>
   {/if}
   {#if showRunButton}
@@ -2632,6 +2677,14 @@
   }
   .ws-only-note {
     font-size: 0.78rem;
+    color: var(--text-muted);
+    align-self: center;
+  }
+
+  /* Companion receipt to the Hide-resolved switch — same shape as .ws-only-note
+     (a toggle that removes content always states how much it removed). */
+  .resolved-hidden-count {
+    font-size: var(--text-xs);
     color: var(--text-muted);
     align-self: center;
   }
