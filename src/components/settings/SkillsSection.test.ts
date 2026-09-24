@@ -46,21 +46,14 @@ describe('SkillsSection — Reviewer skills section', () => {
     expect(screen.getByText('My Custom Performance Reviewer')).toBeInTheDocument()
   })
 
-  it('shows enabled toggle for each skill', () => {
+  it('shows one phase checkbox per phase for each skill', () => {
     addSkill('Security', 'content')
     render(SkillsSection)
     const toggles = document.querySelectorAll('.skill-item input[type="checkbox"]')
-    expect(toggles).toHaveLength(1)
+    expect(toggles).toHaveLength(2)
+    // A user-written skill installs as 'both', so both boxes start checked.
     expect((toggles[0] as HTMLInputElement).checked).toBe(true)
-  })
-
-  it('toggling a skill checkbox changes its enabled state in localStorage', async () => {
-    addSkill('Security', 'content')
-    render(SkillsSection)
-    const toggle = document.querySelector('.skill-item input[type="checkbox"]') as HTMLInputElement
-    await userEvent.click(toggle)
-    const skills = listSkills()
-    expect(skills[0].enabled).toBe(false)
+    expect((toggles[1] as HTMLInputElement).checked).toBe(true)
   })
 
   it('delete button removes the skill from localStorage', async () => {
@@ -621,5 +614,164 @@ describe('SkillsSection — dismissal-calibration surface', () => {
     await userEvent.click(screen.getByRole('button', { name: /delete security/i }))
     expect(listSkills()).toHaveLength(0)
     expect(listAllCalibration()).toEqual({})
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// Phase scope — the four-state per-reviewer control
+//
+// Two checkboxes per row express all four scopes exactly: both checked =
+// 'both', one = that phase only, neither = 'off'. These tests pin the mapping
+// in BOTH directions (stored scope → rendered checkboxes, and click → stored
+// scope), because a control that silently disagrees with what actually runs is
+// worse than no control.
+// ---------------------------------------------------------------------------
+
+function implBox(name: string): HTMLInputElement {
+  return screen.getByRole('checkbox', {
+    name: new RegExp(`run ${escapeRegex(name)} in the implementation phase`, 'i'),
+  }) as HTMLInputElement
+}
+
+function testsBox(name: string): HTMLInputElement {
+  return screen.getByRole('checkbox', {
+    name: new RegExp(`run ${escapeRegex(name)} in the tests phase`, 'i'),
+  }) as HTMLInputElement
+}
+
+describe('SkillsSection — per-reviewer phase scope', () => {
+  it('labels the two phase columns once, not once per row', () => {
+    addSkill('A', 'c')
+    addSkill('B', 'c')
+    render(SkillsSection)
+    expect(document.querySelectorAll('.phase-head')).toHaveLength(2)
+  })
+
+  it('renders each stored scope as the right pair of checkboxes', () => {
+    addSkill('Both One', 'c', 'both')
+    addSkill('Impl One', 'c', 'implementation')
+    addSkill('Tests One', 'c', 'tests')
+    addSkill('Off One', 'c', 'off')
+    render(SkillsSection)
+
+    expect(implBox('Both One').checked).toBe(true)
+    expect(testsBox('Both One').checked).toBe(true)
+
+    expect(implBox('Impl One').checked).toBe(true)
+    expect(testsBox('Impl One').checked).toBe(false)
+
+    expect(implBox('Tests One').checked).toBe(false)
+    expect(testsBox('Tests One').checked).toBe(true)
+
+    expect(implBox('Off One').checked).toBe(false)
+    expect(testsBox('Off One').checked).toBe(false)
+  })
+
+  it('unchecking one phase narrows the scope to the other, and persists', async () => {
+    addSkill('Security', 'content', 'both')
+    render(SkillsSection)
+    await userEvent.click(testsBox('Security'))
+    expect(listSkills()[0].scope).toBe('implementation')
+    expect(listSkills()[0].enabled).toBe(true)
+  })
+
+  it('unchecking BOTH phases turns the reviewer off', async () => {
+    addSkill('Security', 'content', 'both')
+    render(SkillsSection)
+    await userEvent.click(testsBox('Security'))
+    await userEvent.click(implBox('Security'))
+    expect(listSkills()[0].scope).toBe('off')
+    expect(listSkills()[0].enabled).toBe(false)
+  })
+
+  it('checking a phase on an OFF reviewer scopes it to exactly that phase', async () => {
+    addSkill('Security', 'content', 'off')
+    render(SkillsSection)
+    await userEvent.click(testsBox('Security'))
+    expect(listSkills()[0].scope).toBe('tests')
+  })
+
+  it('checking the second phase widens the scope to both', async () => {
+    addSkill('Security', 'content', 'implementation')
+    render(SkillsSection)
+    await userEvent.click(testsBox('Security'))
+    expect(listSkills()[0].scope).toBe('both')
+  })
+
+  it('marks an off reviewer as Off rather than leaving it look like the others', () => {
+    addSkill('Quiet One', 'c', 'off')
+    render(SkillsSection)
+    const row = document.querySelector('.skill-item')!
+    expect(row.classList.contains('skill-item-off')).toBe(true)
+    expect(row.querySelector('.skill-off-tag')?.textContent).toMatch(/off/i)
+  })
+
+  it('does NOT mark a scoped-but-running reviewer as Off', () => {
+    addSkill('Tests Only', 'c', 'tests')
+    render(SkillsSection)
+    const row = document.querySelector('.skill-item')!
+    expect(row.classList.contains('skill-item-off')).toBe(false)
+    expect(row.querySelector('.skill-off-tag')).toBeNull()
+  })
+
+  it('a re-scope survives a re-render (it is read back from storage, not kept in the DOM)', async () => {
+    addSkill('Security', 'content', 'both')
+    const { unmount } = render(SkillsSection)
+    await userEvent.click(implBox('Security'))
+    unmount()
+    render(SkillsSection)
+    expect(implBox('Security').checked).toBe(false)
+    expect(testsBox('Security').checked).toBe(true)
+  })
+})
+
+describe('SkillsSection — built-in library installs each persona at its own scope', () => {
+  it('states where a built-in will run BEFORE it is installed', () => {
+    render(SkillsSection)
+    const entries = document.querySelectorAll('.builtin-entry')
+    expect(entries).toHaveLength(BUILTIN_SKILLS.length)
+    for (const entry of entries) {
+      expect(entry.querySelector('.builtin-scope')?.textContent).toMatch(/runs in:/i)
+    }
+  })
+
+  it('installs the Security reviewer implementation-only, not in both phases', async () => {
+    render(SkillsSection)
+    const security = BUILTIN_SKILLS.find((s) => s.id === 'security')!
+    await userEvent.click(
+      screen.getByRole('button', { name: new RegExp(`add ${escapeRegex(security.name)}`, 'i') }),
+    )
+    await waitFor(() => {
+      const installed = listSkills().find((s) => s.name === security.name)
+      expect(installed?.scope).toBe('implementation')
+    })
+  })
+
+  it('installs the Test Quality reviewer tests-only', async () => {
+    render(SkillsSection)
+    const tq = BUILTIN_SKILLS.find((s) => s.id === 'test-quality')!
+    await userEvent.click(
+      screen.getByRole('button', { name: new RegExp(`add ${escapeRegex(tq.name)}`, 'i') }),
+    )
+    await waitFor(() => {
+      expect(listSkills().find((s) => s.name === tq.name)?.scope).toBe('tests')
+    })
+  })
+
+  it('installs every built-in at its declared defaultScope', async () => {
+    render(SkillsSection)
+    for (const builtin of BUILTIN_SKILLS) {
+      await userEvent.click(
+        screen.getByRole('button', { name: new RegExp(`add ${escapeRegex(builtin.name)}`, 'i') }),
+      )
+    }
+    await waitFor(() => {
+      expect(listSkills()).toHaveLength(BUILTIN_SKILLS.length)
+    })
+    const byName = new Map(listSkills().map((s) => [s.name, s.scope]))
+    for (const builtin of BUILTIN_SKILLS) {
+      expect(byName.get(builtin.name), builtin.name).toBe(builtin.defaultScope)
+    }
   })
 })
