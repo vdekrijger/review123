@@ -2338,6 +2338,41 @@
           {/each}
         </details>
       {/if}
+
+      <!-- PHASE DOCK: the Implementation|Tests switch, kept within reach.
+           The full control (switch + notes + approve/re-open) lives in
+           .phase-bar at the TOP of the list, which on a long diff is an entire
+           scroll away. This repeats ONLY the switch, sticky to the bottom of
+           the viewport, so changing phase never costs a scroll back up.
+           Same handler, same pill, and the same 🔒 — entering the Tests phase
+           unapproved is a labelled preview here exactly as it is up there. -->
+      {#if phaseApplies}
+        <div class="phase-dock" data-testid="phase-dock">
+          <div class="phase-switch" role="group" aria-label="Switch phase">
+            <button
+              class="phase-btn"
+              class:phase-active={!testsPhaseActive}
+              aria-pressed={!testsPhaseActive}
+              data-testid="phase-dock-implementation"
+              title="Back to the implementation files"
+              onclick={() => selectPhase('implementation')}
+            >Implementation <span class="phase-count">{implPhaseFiles.length}</span></button>
+            <button
+              class="phase-btn"
+              class:phase-active={testsPhaseActive}
+              aria-pressed={testsPhaseActive}
+              data-testid="phase-dock-tests"
+              title={phaseStore.implApproved
+                ? 'Review the tests against the implementation you approved'
+                : 'Unlocked by approving the implementation — you can still preview the tests now'}
+              onclick={() => selectPhase('tests')}
+            >
+              Tests <span class="phase-count">{testPhaseFiles.length}</span>
+              {#if !phaseStore.implApproved}<span class="phase-lock" aria-label="not unlocked yet" title="Preview — the implementation isn't approved yet">🔒</span>{/if}
+            </button>
+          </div>
+        </div>
+      {/if}
     </div>
   </div>
 {/if}
@@ -3311,6 +3346,40 @@
   .phase-lock {
     font-size: 0.7rem;
     line-height: 1;
+  }
+
+  /* ---- Phase dock: the same switch, kept within reach of the list bottom ----
+   *
+   * STICKY, not fixed, and deliberately NOT a second app-chrome bar: it is the
+   * last child of .diff-column, so it tracks that column's width and reads as
+   * part of the file list. It floats above the diff while scrolling and then
+   * SETTLES into flow after the last file, where it doubles as the natural
+   * "end of this phase — what next?" step.
+   *
+   * Because sticky keeps the element's flow box, the end of the list already
+   * reserves the dock's own height: the last file card is never underneath it.
+   *
+   * `bottom` clears the route-level .draft-bar (Review.svelte — fixed, ~3rem,
+   * z-index 100). The dock stays well under that z-index so the two never
+   * fight, and sits just above FileDiff's sticky file header (z-index 5).
+   *
+   * The wrapper takes no pointer events, so the empty gutter either side of
+   * the pill stays click-through to the diff underneath it.
+   */
+  .phase-dock {
+    position: sticky;
+    bottom: 3.5rem;
+    z-index: 6;
+    display: flex;
+    justify-content: center;
+    margin-top: var(--space-3);
+    pointer-events: none;
+  }
+  .phase-dock .phase-switch {
+    background: var(--surface-raised);
+    box-shadow: var(--elevation-2);
+    pointer-events: auto;
+    max-width: 100%;
   }
 
   .phase-note-col {

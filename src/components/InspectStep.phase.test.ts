@@ -344,6 +344,111 @@ describe('InspectStep — sort, tail and progress inside a phase', () => {
 })
 
 // ---------------------------------------------------------------------------
+// The phase dock — the switch repeated at the bottom of the list, so changing
+// phase never costs a scroll back to the top.
+// ---------------------------------------------------------------------------
+
+describe('InspectStep — the phase dock', () => {
+  it('renders at the END of the file list, after every file card', () => {
+    const { container } = render(InspectStep, { props: baseProps() })
+    const column = container.querySelector('.diff-column') as HTMLElement
+    const dock = screen.getByTestId('phase-dock')
+    expect(column.contains(dock)).toBe(true)
+    // Every file card precedes it — it is the list's end, not a floating overlay.
+    const cards = [...column.querySelectorAll('[id^="file-"]')]
+    for (const card of cards) {
+      expect(dock.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+    }
+  })
+
+  it('appears exactly when the top phase bar does — never on a PR with no phases', () => {
+    render(InspectStep, { props: baseProps({ files: [makeFile('src/app.ts')], changedFiles: 1 }) })
+    expect(screen.queryByTestId('phase-bar')).toBeNull()
+    expect(screen.queryByTestId('phase-dock')).toBeNull()
+  })
+
+  it('is not rendered in Story mode — a story walks the WHOLE change', () => {
+    render(InspectStep, {
+      props: baseProps({
+        storyAvailable: true,
+        storyMode: true,
+        storyStatus: 'done',
+        story: { steps: [{ index: 0, files: ['src/app.ts'], caption: 'App.', layer: 'ui', relatedTests: [] }] },
+      }),
+    })
+    expect(screen.queryByTestId('phase-dock')).not.toBeInTheDocument()
+  })
+
+  it('states which phase you are in, not just the offer to switch', async () => {
+    render(InspectStep, { props: baseProps() })
+    const impl = screen.getByTestId('phase-dock-implementation')
+    const tests = screen.getByTestId('phase-dock-tests')
+    expect(impl).toHaveAttribute('aria-pressed', 'true')
+    expect(tests).toHaveAttribute('aria-pressed', 'false')
+
+    await fireEvent.click(tests)
+    expect(screen.getByTestId('phase-dock-implementation')).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByTestId('phase-dock-tests')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('carries the per-phase file counts, like the top switch', () => {
+    render(InspectStep, { props: baseProps() })
+    expect(screen.getByTestId('phase-dock-implementation').textContent).toContain('2')
+    expect(screen.getByTestId('phase-dock-tests').textContent).toContain('2')
+  })
+
+  it('switches the list, and the top switch follows — one state, two controls', async () => {
+    const { container } = render(InspectStep, { props: baseProps() })
+    await fireEvent.click(screen.getByTestId('phase-dock-tests'))
+
+    expect(screen.getByTestId('phase-btn-tests')).toHaveAttribute('aria-pressed', 'true')
+    expect(cardIds(container)).toEqual(['file-src-app-test-ts', 'file-src---tests---auth-ts'])
+
+    await fireEvent.click(screen.getByTestId('phase-dock-implementation'))
+    expect(screen.getByTestId('phase-btn-implementation')).toHaveAttribute('aria-pressed', 'true')
+    expect(cardIds(container)).toEqual(['file-src-app-ts', 'file-src-auth-big-ts'])
+  })
+
+  it('persists the phase it selected, exactly as the top switch does', async () => {
+    render(InspectStep, { props: baseProps() })
+    await fireEvent.click(screen.getByTestId('phase-dock-tests'))
+    expect(getPhaseRecord(PR_KEY).phase).toBe('tests')
+    // Selecting is NOT approving — the quiet override holds here too.
+    expect(getPhaseRecord(PR_KEY).implApprovedAt).toBeUndefined()
+  })
+
+  it('shows the same 🔒 preview signal — the dock never quietly skips the sign-off', async () => {
+    render(InspectStep, { props: baseProps() })
+    expect(screen.getByTestId('phase-dock-tests')).toHaveTextContent('🔒')
+
+    await fireEvent.click(screen.getByTestId('phase-approve'))
+    await tick()
+    expect(screen.getByTestId('phase-dock-tests')).not.toHaveTextContent('🔒')
+  })
+
+  it('is keyboard reachable and announced — real buttons in their own named group', () => {
+    const { container } = render(InspectStep, { props: baseProps() })
+    const group = container.querySelector('.phase-dock [role="group"]') as HTMLElement
+    expect(group).toHaveAttribute('aria-label', 'Switch phase')
+    for (const id of ['phase-dock-implementation', 'phase-dock-tests']) {
+      const btn = screen.getByTestId(id)
+      expect(btn.tagName).toBe('BUTTON')
+      expect(btn).not.toHaveAttribute('tabindex', '-1')
+      expect(btn).not.toBeDisabled()
+    }
+  })
+
+  it('does not collide with the top switch: distinct test ids and group names', () => {
+    render(InspectStep, { props: baseProps() })
+    // getByTestId throws on duplicates — these calls ARE the assertion.
+    expect(screen.getByTestId('phase-btn-tests')).toBeTruthy()
+    expect(screen.getByTestId('phase-dock-tests')).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Review phase' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Switch phase' })).toBeTruthy()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Findings follow their file's phase
 // ---------------------------------------------------------------------------
 
