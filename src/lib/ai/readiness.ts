@@ -483,7 +483,11 @@ function testsCheck(f: ReadinessTestFact): Omit<ReadinessCheck, 'id' | 'max' | '
   const where = f.command ? ` (${f.command})` : ''
   switch (f.status) {
     case 'passed':
-      return { label: 'Tests', points: 2, detail: `A test run${where} passed on this code.` }
+      return {
+        label: 'Tests',
+        points: 2,
+        detail: `A test run${where} passed on this code.${f.detail ? ` ${f.detail}` : ''}`,
+      }
     case 'failed':
       return {
         label: 'Tests',
