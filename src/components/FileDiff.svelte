@@ -1622,7 +1622,8 @@
    *       diff — the Unified/Side-by-side + hide-whitespace toolbar scrolls away).
    * z-index: --z-pinned-header, the floor of the layer scale (src/app.css) —
    *       above the diff rows it pins over and below every other surface in the
-   *       app. Background is the opaque surface token so diff rows never show
+   *       app, InspectStep's --z-dock phase dock immediately above it included.
+   *       Background is the opaque surface token so diff rows never show
    *       through behind the pinned header.
    */
   header.sticky-header {

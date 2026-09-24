@@ -74,6 +74,7 @@ function layer(name: string): number {
  */
 const SCALE = [
   'pinned-header',
+  'dock',
   'drawer',
   'drawer-tab',
   'progress',
@@ -95,9 +96,9 @@ const SCALE = [
  */
 const HELD: Record<string, { count: number; destined: string[]; why: string }> = {
   'src/components/InspectStep.svelte': {
-    count: 3,
-    destined: ['--z-drawer', '--z-drawer-tab', '--z-popover'],
-    why: 'held by a concurrent change; 20/21 are the file-tree drawer and its tab, 30 is .findings-popover',
+    count: 4,
+    destined: ['--z-drawer', '--z-drawer-tab', '--z-popover', '--z-dock'],
+    why: 'held by a concurrent change; 20/21 are the file-tree drawer and its tab, 30 is .findings-popover, 6 is .phase-dock (arrived in PR #276 while this change was open — which is exactly what this list is for)',
   },
   'src/components/CommentEditor.svelte': {
     count: 1,
@@ -130,14 +131,14 @@ describe('the layer scale itself', () => {
     }
   })
 
-  it('leaves room to insert a layer between steps, except the one pinned pair', () => {
+  it('leaves room to insert a layer between steps, except the pinned pairs', () => {
     // A scale with no gaps is a scale the next surface has to renumber.
     //
-    // --z-drawer-tab is the single exception, and NOT for a design reason: the
-    // drawer and its tab are literals 20 and 21 inside a file another change is
-    // holding, so the scale has to meet them where they are. When that file is
-    // migrated this pair can be respaced like every other step.
-    const PINNED = new Set(['drawer-tab'])
+    // The two exceptions are NOT design choices: 5/6 (pinned header, phase
+    // dock) and 20/21 (drawer, its tab) are literals inside a file another
+    // change is holding, so the scale has to meet them where they are. When
+    // that file migrates, both pairs can be respaced like every other step.
+    const PINNED = new Set(['dock', 'drawer-tab'])
     for (let i = 1; i < SCALE.length; i++) {
       const gap = layer(SCALE[i]) - layer(SCALE[i - 1])
       if (PINNED.has(SCALE[i])) expect(gap, `--z-${SCALE[i]}`).toBe(1)
@@ -180,6 +181,16 @@ describe('the orderings the reported bug turned on', () => {
   it('the pinned diff header is the floor — it only has to beat the rows it pins over', () => {
     expect(layer('pinned-header')).toBeLessThan(layer('drawer'))
     expect(layer('pinned-header')).toBeGreaterThan(0)
+  })
+
+  it('the phase dock sits above the pinned header it scrolls past, and well under the bars', () => {
+    // PR #276 landed `.phase-dock` at a literal 6 whose comment reads "sits
+    // just above FileDiff's sticky file header (z-index 5)". An early draft of
+    // this scale moved the header to 10 for tidiness and would have inverted
+    // that silently. This is the assertion that keeps the two in the order
+    // their authors wrote down, whichever file migrates first.
+    expect(layer('dock')).toBeGreaterThan(layer('pinned-header'))
+    expect(layer('dock')).toBeLessThan(layer('bar'))
   })
 })
 
@@ -233,10 +244,11 @@ describe('the held files still land in the right band of the new scale', () => {
   // the allowlist would permit a literal that the new scale had quietly moved
   // out from under.
 
-  it("InspectStep's drawer and tab are exactly the drawer steps", () => {
+  it("InspectStep's drawer, tab and dock are exactly those steps", () => {
     const raw = rawLayers(components().get('src/components/InspectStep.svelte')!)
     expect(raw).toContain(layer('drawer'))
     expect(raw).toContain(layer('drawer-tab'))
+    expect(raw).toContain(layer('dock'))
   })
 
   it("SymbolPopover's literal is exactly --z-popover, so it already clears the chrome", () => {
@@ -253,8 +265,9 @@ describe('the held files still land in the right band of the new scale', () => {
     // drawer they sit above, and still be the only thing left below the chrome.
     const emoji = rawLayers(components().get('src/components/CommentEditor.svelte')!)
     expect(emoji).toEqual([30])
+    const placed = new Set([layer('drawer'), layer('drawer-tab'), layer('dock')])
     const findings = rawLayers(components().get('src/components/InspectStep.svelte')!).filter(
-      (n) => n !== layer('drawer') && n !== layer('drawer-tab'),
+      (n) => !placed.has(n),
     )
     expect(findings).toEqual([30])
 
