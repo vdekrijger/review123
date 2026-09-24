@@ -55,7 +55,15 @@
   /* ── Standalone variant ── */
   .review-progress {
     position: fixed;
-    top: var(--topbar-height, 48px);
+    /* --topbar-h, NOT --topbar-height: this read was misspelled from the day it
+       was written, so it silently used the 48px fallback for its whole life
+       (a var() typo is invalid-at-computed-value-time, never a build error).
+       App.svelte declares --topbar-h: 2.75rem = 41.25px at the :root 15px
+       font-size, so the bar was parked 6.75px BELOW the topbar it is meant to
+       sit directly under, leaving a strip of scrolling page showing through
+       the gap. The fallback matches the peer reads in ContextRail,
+       PreviewPanel, FileDiff and SettingsPage. */
+    top: var(--topbar-h, 2.75rem);
     left: 0;
     right: 0;
     z-index: var(--z-progress);
