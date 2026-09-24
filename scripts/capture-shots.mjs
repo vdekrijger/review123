@@ -2,7 +2,7 @@
 /**
  * scripts/capture-shots.mjs — regenerates docs/design/shots/.
  *
- *   node scripts/capture-shots.mjs                  # build, serve, shoot all 14
+ *   node scripts/capture-shots.mjs                  # build, serve, shoot all 18
  *   node scripts/capture-shots.mjs --check          # shoot to a temp dir, compare, write nothing
  *   node scripts/capture-shots.mjs --only step2-inspect-split
  *   node scripts/capture-shots.mjs --base-url http://localhost:4173   # reuse a running preview
@@ -34,6 +34,17 @@
  *   - analytics blocked, so no network request can vary a shot;
  *   - fonts loaded and two animation frames idle before the shutter.
  *
+ * THE QUEUE SHOTS pin three more things, because the review queue is the one
+ * surface in this set whose content does NOT come from a committed in-app
+ * fixture. See QUEUE_ROWS and seedQueue below:
+ *   - a fixed wall clock, so `8h ago` is a constant and not "8h after whenever
+ *     you ran this";
+ *   - the whole GitHub API faked at the network boundary, so the rows and their
+ *     diff stats are the fixture's and nothing is fetched;
+ *   - the shutter held until EVERY row's size chip has landed, because the
+ *     effort gauge is scaled to the largest churn CURRENTLY in the queue — a
+ *     shot taken mid-fetch would size every bar against a smaller maximum.
+ *
  * FULL PAGE vs VIEWPORT, which is the one genuinely non-obvious part. Most
  * surfaces are shot `fullPage`, but the two step-2 diff surfaces are shot at
  * the VIEWPORT, because the demo diff makes that document ~2900px (unified) and
@@ -48,20 +59,28 @@
  * downsampled to 780px wide with `sips`, which is what keeps a 6000px page to
  * ~550KB. `sips` is macOS-only; the script says so rather than failing oddly.
  *
- * SIZE DISCIPLINE. Fourteen shots, ~2.5MB total. If a change pushes that up,
+ * SIZE DISCIPLINE. Eighteen shots, ~2.8MB total. If a change pushes that up,
  * that is a signal to look at the shot, not to raise the budget.
  *
  * WHAT DETERMINISM DOES NOT COVER, because it will mislead you otherwise. Two
- * runs of the SAME build give fourteen byte-identical files. Across commits,
- * SIX of them change even when nothing visual moved: BuildIndicator.svelte
+ * runs of the SAME build give eighteen byte-identical files. Across commits,
+ * TEN of them change even when nothing visual moved: BuildIndicator.svelte
  * renders BUILD_SHA and BUILD_TIME (Vite bakes them in at build time), and that
  * footer falls inside the captured area on landing-* (y=969 of a 1000px page),
- * settings-models-* (y=5983 of 6014) and step1-understand-* (y=1089 of 1120 —
- * the footer is why that shot is 1120 and not 1000). It never enters the step-2
- * shots, which clip at 1000px while the footer sits at y=2836, and on
- * step3-verdict-* the sticky draft bar covers it. So a byte diff on those six
- * proves nothing on its own; the reported DIMENSIONS, and the other eight
+ * settings-models-* (y=5983 of 6014), step1-understand-* (y=1089 of 1120 — the
+ * footer is why that shot is 1120 and not 1000) and both queue-* pairs. It never
+ * enters the step-2 shots, which clip at 1000px while the footer sits at y=2836,
+ * and on step3-verdict-* the sticky draft bar covers it. So a byte diff on those
+ * ten proves nothing on its own; the reported DIMENSIONS, and the other eight
  * files, are the signal worth reading.
+ *
+ * The queue shots cannot escape that, and it is worth saying why rather than
+ * leaving the next person to retry it. Both queue pages are SHORTER than the
+ * viewport, and App.svelte's sticky-footer column therefore pins the footer to
+ * the bottom of the frame (e2e/build-footer-sticky.spec.ts). Clipping earlier
+ * does not help: the footer only leaves the frame once the content itself
+ * reaches 1000px, at which point the clip cuts the queue card instead. A
+ * complete card with a changing footer beats a truncated card without one.
  */
 
 import { chromium } from '@playwright/test'
@@ -95,16 +114,93 @@ const REVIEW_SETTINGS = {
 }
 
 /**
+ * The review queue's settings. The queue section only EXISTS when a provider
+ * has auth configured, and Prepare only renders live (rather than disabled with
+ * a "no API key" title) when the active LLM provider has a credential — so both
+ * are pinned here. Neither token is ever used: every request either side of
+ * them would make is faked in seedQueue.
+ */
+const QUEUE_SETTINGS = {
+  githubAuth: { token: 'ghp_design_shot', method: 'pat', scopes: [] },
+  deepseekKey: 'sk-design-shot',
+  aiProvider: 'deepseek',
+}
+
+/**
+ * The wall clock the queue shots are taken at. `relativeTime` renders every row
+ * as "35m ago" / "3d ago" against Date.now(), so without a fixed clock the
+ * ages in the committed PNGs would be whatever they happened to be the day
+ * someone re-shot them, and every re-shoot would diff.
+ */
+const QUEUE_NOW = new Date('2026-03-12T15:00:00.000Z')
+
+/**
+ * The queue fixture — twelve pull requests over four repos.
+ *
+ * It exists to PHOTOGRAPH the row layout, so it is shaped to make that layout
+ * work: five-digit PR numbers next to two-digit ones, titles from 12 to 95
+ * characters, diffs from `+4 −0` to `+1183 −1902` (a 760× churn spread, so the
+ * effort gauge has both ends of its range on screen), four repo groups, and
+ * both lists — "Awaiting your review" and "Your open PRs" — non-empty.
+ *
+ * `e2e/queue-columns.spec.ts` has a deliberately similar fixture and they are
+ * NOT shared on purpose: that one MEASURES column alignment and is free to
+ * change its data whenever a tighter measurement wants different numbers, while
+ * this one is the subject of committed PNGs and must not move under them.
+ *
+ * `ageMin` is minutes before QUEUE_NOW, not before now.
+ */
+const QUEUE_OWNER = 'posthog'
+const QUEUE_ROWS = [
+  // Awaiting your review.
+  { repo: 'posthog', n: 21902, title: 'fix: flaky test', add: 4, del: 0, ageMin: 35 },
+  { repo: 'posthog', n: 21841, title: 'feat(surveys): allow multiple choice questions to be randomized', add: 216, del: 179, ageMin: 480 },
+  { repo: 'posthog', n: 21733, title: 'refactor(insights): extract the trends query runner out of the insight serializer', add: 66, del: 4, ageMin: 125 },
+  { repo: 'posthog', n: 20117, title: 'chore(deps): bump the whole frontend toolchain to the latest majors and regenerate the lockfile', add: 1183, del: 1902, ageMin: 4320 },
+  { repo: 'posthog-js', n: 1211, title: 'feat: session recording canvas support behind a flag', add: 402, del: 88, ageMin: 1560 },
+  { repo: 'posthog-js', n: 1204, title: 'fix(autocapture): do not capture password inputs', add: 18, del: 7, ageMin: 300 },
+  { repo: 'posthog-js', n: 1180, title: 'docs: readme', add: 6, del: 2, ageMin: 10080 },
+  { repo: 'plugin-server', n: 3312, title: 'fix(ingestion): drop events with malformed distinct ids instead of dead-lettering them', add: 240, del: 64, ageMin: 15 },
+  { repo: 'plugin-server', n: 3290, title: 'chore: tidy imports', add: 12, del: 30, ageMin: 2880 },
+  // Your open PRs.
+  { repo: 'posthog', n: 21990, title: 'feat: add a new dashboard tile type', add: 41, del: 12, ageMin: 90, mine: true },
+  { repo: 'posthog-foss', n: 91, title: 'feat(api): expose the query endpoint to personal api keys with scoped permissions', add: 155, del: 43, ageMin: 45, mine: true },
+  { repo: 'posthog-foss', n: 88, title: 'build: pin node to 20', add: 9, del: 9, ageMin: 720, mine: true },
+]
+
+/**
  * The set. Each entry is shot once per theme as `<name>-<theme>.png`.
  *
  * `step` is how far into the demo review flow to walk: 1 = Understand (the
  * landing step of /demo), 2 = Inspect, 3 = Verdict.
+ *
+ * `queue` is 'rows' or 'empty' — see seedQueue.
  */
 const SHOTS = [
   {
     name: 'landing',
     path: '/',
     settings: {},
+    fullPage: true,
+  },
+  {
+    // The review queue, signed in and full. Twelve rows still fit inside the
+    // viewport, so full-page and a viewport clip produce the same 1440x1000
+    // frame — full-page is the honest label for what it is.
+    name: 'queue',
+    path: '/',
+    settings: QUEUE_SETTINGS,
+    queue: 'rows',
+    fullPage: true,
+  },
+  {
+    // The queue's empty state (p.203-204: an empty state is a designed state).
+    // Signed in, nothing waiting. Full-page, because the whole document is
+    // shorter than the viewport.
+    name: 'queue-empty',
+    path: '/',
+    settings: QUEUE_SETTINGS,
+    queue: 'empty',
     fullPage: true,
   },
   {
@@ -245,6 +341,66 @@ async function gotoStep(page, step) {
   }
 }
 
+/**
+ * Fake the whole GitHub API for a queue shot.
+ *
+ * `mode` is 'rows' (serve QUEUE_ROWS) or 'empty' (serve nothing, so the queue's
+ * designed empty state renders — note it needs auth configured to exist at all,
+ * which is why the empty shot still carries QUEUE_SETTINGS).
+ *
+ * Two endpoints matter. `/search/issues` is asked twice by
+ * githubProvider.getMyQueue — once with `review-requested:@me` and once with
+ * `author:@me` — and those two answers are what split the page's two lists.
+ * `/repos/:owner/:repo/pulls/:number` is the per-row diff-size fetch that fills
+ * the +/− chip and the effort gauge. Anything else answers `[]` rather than
+ * escaping to the network.
+ */
+async function seedQueue(context, mode) {
+  const rows = mode === 'empty' ? [] : QUEUE_ROWS
+  const searchItem = (r) => ({
+    number: r.n,
+    title: r.title,
+    updated_at: new Date(QUEUE_NOW.getTime() - r.ageMin * 60_000).toISOString(),
+    repository_url: `https://api.github.com/repos/${QUEUE_OWNER}/${r.repo}`,
+  })
+
+  await context.route('**/api.github.com/**', (route) => {
+    const url = new URL(route.request().url())
+
+    if (url.pathname === '/search/issues') {
+      const mine = (url.searchParams.get('q') ?? '').includes('author:')
+      const items = rows.filter((r) => Boolean(r.mine) === mine).map(searchItem)
+      return route.fulfill({ json: { total_count: items.length, items } })
+    }
+
+    const m = url.pathname.match(/^\/repos\/[^/]+\/([^/]+)\/pulls\/(\d+)$/)
+    if (m) {
+      const row = rows.find((r) => r.repo === m[1] && String(r.n) === m[2])
+      return route.fulfill({ json: { additions: row?.add ?? 0, deletions: row?.del ?? 0 } })
+    }
+
+    return route.fulfill({ json: [] })
+  })
+}
+
+/**
+ * Hold the shutter until every queue row has its size.
+ *
+ * The sizes are fetched AFTER the list renders, four at a time, and the effort
+ * gauge scales each bar to the largest churn currently known — so a shot taken
+ * with ten of twelve sizes in hand draws ten bars against the wrong maximum and
+ * differs from the next run. Waiting for the full count is what makes the
+ * gauge a constant.
+ */
+async function settleQueueSizes(page, expected) {
+  if (expected === 0) return
+  await page.waitForFunction(
+    (n) => document.querySelectorAll('[data-testid="queue-size"]').length === n,
+    expected,
+    { timeout: 30_000 },
+  )
+}
+
 /** Fonts done + two idle frames, so nothing is mid-layout when the shutter fires. */
 async function settle(page) {
   await page.evaluate(async () => {
@@ -259,6 +415,11 @@ async function capture(browser, base, shot, theme) {
   // No shot may depend on the network.
   await context.route('**/*posthog.com/**', (r) => r.abort())
   await context.route('**/us.i.posthog.com/**', (r) => r.abort())
+  if (shot.queue) {
+    // Date.now() frozen; timers keep running, so the app still loads normally.
+    await context.clock.setFixedTime(QUEUE_NOW)
+    await seedQueue(context, shot.queue)
+  }
   await context.addInitScript(
     (s) => localStorage.setItem('review123:settings', JSON.stringify(s)),
     { ...shot.settings, theme },
@@ -267,6 +428,7 @@ async function capture(browser, base, shot, theme) {
   const page = await context.newPage()
   await page.goto(base + shot.path, { waitUntil: 'networkidle' })
   await gotoStep(page, shot.step ?? 1)
+  if (shot.queue) await settleQueueSizes(page, shot.queue === 'empty' ? 0 : QUEUE_ROWS.length)
   await settle(page)
 
   const file = join(outDir, `${shot.name}-${theme}.png`)
