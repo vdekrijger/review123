@@ -17,7 +17,7 @@
   import { createDecisionStore } from '../lib/eval/decisions'
   import VerdictStep from '../components/VerdictStep.svelte'
   import { createAiRun } from '../lib/ai/run.svelte'
-  import { listSkills } from '../lib/skills/skills'
+  import { listSkillsForPhase } from '../lib/skills/skills'
   import { shouldAutoStartReviewers } from '../lib/review/autoStartReviewers'
   import { buildAiRunInput, localHeadReader } from '../lib/ai/runInput'
   import { cancelPrepare } from '../lib/ai/prepare.svelte'
@@ -613,7 +613,10 @@
   // remount also makes a fresh aiRun per PR, so a new PR auto-starts cleanly.
   let autoStartedFor = $state<string | null>(null)
   $effect(() => {
-    const enabledCount = listSkills().filter((s) => s.enabled).length
+    // The auto-start fires the IMPLEMENTATION pass, so gate on (and report) the
+    // reviewers scoped to that phase — a tests-only reviewer contributes
+    // nothing here and must not make the gate think there is work to do.
+    const implPhaseCount = listSkillsForPhase('implementation').length
     if (
       shouldAutoStartReviewers({
         autoRunReviewers: settingsState.current.autoRunReviewers,
@@ -621,7 +624,7 @@
         loadReady: load.state.status === 'ready',
         hasKey: activeProviderHasKey(),
         skillsMode: settingsState.current.aiTaskModes.skills,
-        enabledSkillCount: enabledCount,
+        implPhaseSkillCount: implPhaseCount,
         alreadyStartedFor: autoStartedFor,
         prId,
       })
@@ -630,7 +633,7 @@
       const run = aiRun
       if (run == null) return
       autoStartedFor = prId
-      track('reviewers_auto_started', { count: enabledCount })
+      track('reviewers_auto_started', { count: implPhaseCount })
       // prComments is lazily fetched (may still be empty on step 1) — pass
       // whatever is available; the existing-comments list is only a dedupe aid,
       // never a blocker. autoRetry: 3 so transient failures settle on their own.

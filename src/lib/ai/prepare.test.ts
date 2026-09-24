@@ -15,7 +15,9 @@
  *  - consent: private repo without stored consent → 'declined' (headless
  *    ask never pops a dialog)
  *  - persistence: updatedAt-based invalidation + LRU bound
- *  - skills phase: reviewers run in prepare (with existing comments fetched)
+ *  - skills phase: reviewers run in prepare (with existing comments fetched),
+ *    scoped to the IMPLEMENTATION phase — a tests-only reviewer neither runs
+ *    nor inflates the progress denominator
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -577,6 +579,65 @@ describe('preparePr — skill reviewers', () => {
     // Exactly one ENABLED reviewer ran and cached under its content hash.
     expect([...d.cache.keys()].some((k) => k.includes('|skill:'))).toBe(true)
     expect(preparedRecord(PR_ID)?.tasksRun).toBe(10) // 9 auto + 1 reviewer
+  })
+
+  it('a TESTS-ONLY reviewer never runs in prepare — prepare drives the implementation pass', async () => {
+    seedSettings()
+    localStorage.setItem(
+      'review123:reviewer-skills',
+      JSON.stringify([
+        { id: 'sk1', name: 'Impl reviewer', content: 'Check the code.', scope: 'implementation', addedAt: 1 },
+        { id: 'sk2', name: 'Tests reviewer', content: 'Check the tests.', scope: 'tests', addedAt: 2 },
+      ]),
+    )
+    const d = makeDeps()
+
+    await preparePr(TARGET, d.asPrepareDeps())
+
+    // Exactly ONE reviewer ran: the tests-only one is not part of this pass.
+    expect(preparedRecord(PR_ID)?.tasksRun).toBe(10) // 9 auto + 1 reviewer
+  })
+
+  it('progress counts only the reviewers the implementation pass will actually create', async () => {
+    // The denominator is `expectedSkills`. Counting a tests-only reviewer here
+    // would leave the row one short of its total forever.
+    seedSettings()
+    localStorage.setItem(
+      'review123:reviewer-skills',
+      JSON.stringify([
+        { id: 'sk1', name: 'Impl reviewer', content: 'c', scope: 'implementation', addedAt: 1 },
+        { id: 'sk2', name: 'Tests reviewer', content: 'c', scope: 'tests', addedAt: 2 },
+        { id: 'sk3', name: 'Off reviewer', content: 'c', scope: 'off', addedAt: 3 },
+      ]),
+    )
+    const d = makeDeps()
+    const releases: Array<() => void> = []
+    d.llmJsonWithRepair.mockImplementation(async (_o: unknown, validate: ValidateFn) => {
+      await new Promise<void>((resolve) => releases.push(resolve))
+      return dispatchByValidator(validate)
+    })
+    d.llmStream.mockImplementation(async (_o: unknown, onDelta: (s: string) => void) => {
+      await new Promise<void>((resolve) => releases.push(resolve))
+      onDelta('s')
+      return 's'
+    })
+
+    const p = preparePr(TARGET, d.asPrepareDeps())
+    await vi.waitFor(() => {
+      expect(releases.length).toBe(9)
+    })
+
+    // 9 pending auto tasks + skipped intent + ONE expected reviewer = 11.
+    // (Two more reviewers are stored; neither is scoped to this pass.)
+    expect(prepareProgress(PR_ID)).toEqual({ done: 1, total: 11 })
+
+    // Drain every gate — the reviewer's is only queued once the automatic
+    // tasks settle, so one pass over `releases` is not enough.
+    await vi.waitFor(async () => {
+      while (releases.length) releases.shift()!()
+      expect(prepareProgress(PR_ID)).toBeNull()
+    })
+    await p
   })
 
   it('skills mode off → no reviewer phase, no comment fetch', async () => {

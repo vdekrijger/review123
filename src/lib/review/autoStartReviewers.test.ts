@@ -22,7 +22,7 @@ function base(overrides: Partial<Parameters<typeof shouldAutoStartReviewers>[0]>
     loadReady: true,
     hasKey: true,
     skillsMode: 'standard',
-    enabledSkillCount: 2,
+    implPhaseSkillCount: 2,
     alreadyStartedFor: null,
     prId: PR_ID,
     ...overrides,
@@ -47,7 +47,7 @@ describe('shouldAutoStartReviewers', () => {
   })
 
   it('does not fire when no skills are enabled', () => {
-    expect(shouldAutoStartReviewers(base({ enabledSkillCount: 0 }))).toBe(false)
+    expect(shouldAutoStartReviewers(base({ implPhaseSkillCount: 0 }))).toBe(false)
   })
 
   it('does not fire before the AI run exists or the PR load is ready', () => {
