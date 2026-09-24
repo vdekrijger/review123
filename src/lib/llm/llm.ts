@@ -2082,7 +2082,7 @@ export function testConnectionCli(providerId: LlmProviderId, modelId?: string): 
  * requestWindow's timeoutDetail and #209's errorDetail: a canned sentence
  * carrying only a label and a duration, never model output.
  */
-export function bridgeTestTimeoutMessage(cli: BridgeCli, elapsedMs: number): string {
+function bridgeTestTimeoutMessage(cli: BridgeCli, elapsedMs: number): string {
   return (
     `The ${cli} CLI didn't answer a one-word connection test within ` +
     `${Math.round(elapsedMs / 1000)}s. It is most likely still starting up, signing in, ` +
