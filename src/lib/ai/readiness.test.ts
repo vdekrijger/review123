@@ -380,6 +380,33 @@ describe('silence is not evidence', () => {
     expect(check.detail).toContain('pnpm test')
     expect(check.detail).toContain('3 specs red.')
   })
+
+  // The caveat that matters most rides on the FAVOURABLE branch: the bridge
+  // runs the tests on the agent's fix commit, which is not the PR as it
+  // stands. Dropping `detail` only when the run passed would have lost that
+  // qualification on the one outcome a reader is most likely to stop reading
+  // after — and on the heaviest-weighted check in the scale.
+  it('a PASSING test run keeps its qualification, like every other outcome', () => {
+    const facts = richFacts()
+    facts.tests = {
+      status: 'passed',
+      command: 'pnpm test',
+      detail: 'Ran on the agent\'s fix commit, not on the PR as it stands.',
+    }
+    const check = checkOf(gradeReadiness(facts), 'tests')
+    expect(check.detail).toContain('passed')
+    expect(check.detail).toContain('pnpm test')
+    expect(check.detail).toContain('not on the PR as it stands')
+  })
+
+  it('every test outcome surfaces a supplied detail — no branch silently drops it', () => {
+    const statuses = ['passed', 'failed', 'skipped'] as const
+    for (const status of statuses) {
+      const facts = richFacts()
+      facts.tests = { status, command: 'pnpm test', detail: `why-${status}` }
+      expect(checkOf(gradeReadiness(facts), 'tests').detail).toContain(`why-${status}`)
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
