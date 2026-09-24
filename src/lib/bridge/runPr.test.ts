@@ -885,4 +885,18 @@ describe('the head every surface reads', () => {
     expect(currentFixReadiness(PR_HEAD).reason).toBe('ready')
     expect(currentGrounding(PR_HEAD).mode).toBe('local')
   })
+
+  it('the on-PR indicator under-claims when /v1/stack never answered', async () => {
+    // An older bridge 404s the route. The head from /v1/health may well match,
+    // but the indicator exists so the user is never surprised by where their
+    // tree is — and it has no way home to offer here, so it stays quiet and
+    // `decideCheckout` says `route-missing` instead.
+    await pair({ fix: true, checkout: true })
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ ok: false, error: 'not-found', message: 'no' }, 404),
+    )
+    await refreshStack()
+    expect(stackState.onPrBranch(OTHER_HEAD)).toBe(false)
+    expect(currentCheckoutReadiness(OTHER_HEAD).reason).toBe('route-missing')
+  })
 })
