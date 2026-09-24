@@ -14,6 +14,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import ExistingThread from './ExistingThread.svelte'
+import componentSource from './ExistingThread.svelte?raw'
 import type { PrComment } from '../lib/github/comments'
 import type { CommentThread } from '../lib/github/commentThreads'
 import type { ReplyOutcome } from '../lib/github/replies'
@@ -60,6 +61,106 @@ describe('ExistingThread — display', () => {
   it('no onReply → no Reply affordance (provider lacks capability)', () => {
     render(ExistingThread, { props: { thread: makeThread() } })
     expect(screen.queryByRole('button', { name: /reply/i })).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * The resolved summary is a one-line RECAP. Two bugs made it read as garbage:
+ * the global `details > summary` uppercase reached the prose, and the 60-char
+ * slice happened on the RAW body, so a comment opening with a badge image
+ * showed `<a href="#"><img alt="P1" src="https://…` instead of any words.
+ */
+describe('ExistingThread — resolved summary snippet', () => {
+  /** The snippet with the `author: ` prefix removed — just the recapped body. */
+  function resolvedSnippet(body: string): string {
+    const { container } = render(ExistingThread, {
+      props: { thread: { root: comment({ id: 1, body }), replies: [] }, resolved: true },
+    })
+    const text = container.querySelector('.resolved-snippet')!.textContent!
+    expect(text.startsWith('alice: ')).toBe(true)
+    return text.slice('alice: '.length)
+  }
+
+  it('strips a leading HTML link+image (the bot case) instead of spending the budget on tags', () => {
+    const body =
+      '<a href="#"><img alt="P1" src="https://greptile-static-assets.s3.amazonaws.com/p1.svg"></a> ' +
+      'Potential race condition when two fetches settle out of order.'
+    const text = resolvedSnippet(body)
+    expect(text).not.toContain('<')
+    expect(text).not.toContain('href')
+    expect(text).not.toContain('src=')
+    // Image alt text is content — kept, like any plain-text rendering of an image
+    expect(text).toContain('P1')
+    expect(text).toContain('Potential race condition')
+  })
+
+  it('strips a leading markdown badge image and keeps its alt text', () => {
+    const text = resolvedSnippet('![P1](https://example.com/p1.svg) Unhandled rejection here.')
+    expect(text).toContain('P1')
+    expect(text).toContain('Unhandled rejection here.')
+    expect(text).not.toContain('https://')
+  })
+
+  it('renders link text, not the URL', () => {
+    const text = resolvedSnippet('See [the debounce helper](https://example.com/a/very/long/url) for this.')
+    expect(text).toContain('the debounce helper')
+    expect(text).not.toContain('https://example.com')
+  })
+
+  it('truncates on the PLAIN text, so 60 chars are 60 chars of content', () => {
+    const prose = 'A'.repeat(200)
+    const text = resolvedSnippet(`<img alt="" src="https://example.com/very/long/badge.svg"> ${prose}`)
+    expect(text.endsWith('…')).toBe(true)
+    // 60 content chars + the ellipsis — none of the budget eaten by the tag
+    expect(text).toBe('A'.repeat(60) + '…')
+  })
+
+  it('short bodies are left whole, with no ellipsis', () => {
+    expect(resolvedSnippet('Fixed, thanks.')).toBe('Fixed, thanks.')
+  })
+
+  it('drops markdown emphasis, code fences, headings, quotes and bullets', () => {
+    const text = resolvedSnippet('> **Nit:** use `DEBOUNCE_MS`\n\n- and a bullet')
+    expect(text).toContain('Nit:')
+    expect(text).toContain('DEBOUNCE_MS') // underscores in identifiers survive
+    expect(text).not.toContain('**')
+    expect(text).not.toContain('`')
+    expect(text).not.toContain('>')
+    expect(text).not.toMatch(/^\s*-/)
+  })
+
+  it('decodes the common HTML entities', () => {
+    expect(resolvedSnippet('a &lt; b &amp;&amp; c &gt; d')).toBe('a < b && c > d')
+  })
+
+  it('leaves a bare comparison alone (not every angle bracket is a tag)', () => {
+    expect(resolvedSnippet('guard that a < b before the slice')).toBe('guard that a < b before the slice')
+  })
+})
+
+describe('ExistingThread — resolved summary casing (static CSS guard)', () => {
+  const css = componentSource.match(/<style[^>]*>([\s\S]*?)<\/style>/)![1]
+
+  /** The declaration block of a single-class rule in this component's <style>. */
+  function block(className: string): string {
+    const match = css.match(new RegExp(`\\.${className}\\s*\\{([^}]*)\\}`))
+    expect(match, `no .${className} rule in ExistingThread.svelte`).not.toBeNull()
+    return match![1]
+  }
+
+  it('.resolved-summary resets the global details>summary uppercase (prose must keep word shape)', () => {
+    const rule = block('resolved-summary')
+    expect(rule).toMatch(/text-transform:\s*none/)
+    expect(rule).toMatch(/letter-spacing:\s*normal/)
+  })
+
+  it('.resolved-label re-applies the editorial caps — the LABEL, not the snippet', () => {
+    const rule = block('resolved-label')
+    expect(rule).toMatch(/text-transform:\s*uppercase/)
+  })
+
+  it('.resolved-snippet never sets a text-transform of its own', () => {
+    expect(block('resolved-snippet')).not.toMatch(/text-transform/)
   })
 })
 
