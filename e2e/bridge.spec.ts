@@ -1583,6 +1583,155 @@ test('fix loop: a review bot’s comment is fixable input, and stays DATA all th
   expect(body).toContain('catastrophically backtracking')
 })
 
+/**
+ * Seed the reviewer's OWN drafted notes straight into IndexedDB, before any app
+ * code runs — the state a reviewer is in at step 5: they have read the code
+ * themselves and written down what they want changed.
+ */
+async function seedDraftedNotes(page: Page, notes: { line: number; body: string }[]) {
+  await page.addInitScript(
+    ({ prKey, seeds }) =>
+      new Promise<void>((resolve) => {
+        const open = indexedDB.open('review123-drafts', 1)
+        open.onupgradeneeded = () => {
+          const db = open.result
+          if (!db.objectStoreNames.contains('drafts')) db.createObjectStore('drafts')
+        }
+        open.onsuccess = () => {
+          const db = open.result
+          const tx = db.transaction('drafts', 'readwrite')
+          const store = tx.objectStore('drafts')
+          const now = Date.now()
+          for (const seed of seeds) {
+            store.put(
+              {
+                prKey,
+                path: 'src/feature.ts',
+                line: seed.line,
+                side: 'RIGHT',
+                body: seed.body,
+                n: 0,
+                createdAt: now,
+                updatedAt: now,
+              },
+              `${prKey}|src/feature.ts|${seed.line}|RIGHT|0`,
+            )
+          }
+          tx.oncomplete = () => { db.close(); resolve() }
+          tx.onerror = () => { db.close(); resolve() }
+        }
+        open.onerror = () => resolve()
+      }),
+    { prKey: `github:${OWNER}/${REPO}#${PR_NUMBER}`, seeds: notes },
+  )
+}
+
+/**
+ * STEPS 5 AND 7 OF THE WORKFLOW, end to end.
+ *
+ * The reviewer reads the code themselves (step 4) and drafts notes. Those notes
+ * are the output of the step the whole tool is built around, and until now they
+ * were the one input the fix panel could not take — it offered a model's
+ * findings and a bot's comments, and not one word the reviewer wrote.
+ *
+ * What this pins is the part that is a PROMISE rather than a feature: the
+ * reviewer's words go to the agent as their own direction, and nothing that
+ * happens afterwards removes them from the review unless the reviewer says so —
+ * visibly, and reversibly.
+ */
+test('fix loop: the reviewer’s own drafted notes go to the agent, and stay theirs', async ({
+  page,
+}) => {
+  await blockExternal(page)
+  await setupGithub(page)
+  await setupReviewerProvider(page)
+  await stubBridgeFix(page, { writeEnabled: true })
+  await seedPairing(page)
+  await seedFixSkill(page)
+  await seedDraftedNotes(page, [
+    { line: 3, body: 'Use a Map here — this linear scan runs on every render.' },
+    { line: 4, body: 'this feels wrong' },
+  ])
+  await page.addInitScript((s) => localStorage.setItem('review123:settings', JSON.stringify(s)), fixSettings())
+
+  await runReviewers(page)
+
+  const panel = page.getByTestId('agent-fix-panel')
+  await expect(panel).toBeVisible({ timeout: 10_000 })
+
+  // 1. THE REVIEWER'S OWN NOTES ARE THEIR OWN LIST. Separate from the AI's
+  //    findings, listed first, and OPT-IN: not every note is a request, and
+  //    turning "this feels wrong" into an agent task by default would be the
+  //    app deciding what the reviewer meant.
+  const notes = panel.getByTestId('agent-fix-note-candidate')
+  await expect(notes).toHaveCount(2)
+  await expect(notes.first()).toContainText('src/feature.ts:3')
+  await expect(notes.first()).toContainText('Use a Map here')
+  await expect(panel.getByTestId('agent-fix-notes-count')).toContainText('0 of 2')
+  for (const box of await panel.getByTestId('agent-fix-note-checkbox').all()) {
+    await expect(box).not.toBeChecked()
+  }
+
+  // Send the clear one alongside the AI findings — three sources, one run.
+  await panel.getByTestId('agent-fix-note-checkbox').first().check()
+  await panel.getByTestId('agent-fix-send').click()
+
+  const results = panel.getByTestId('agent-fix-result')
+  await expect(results).toHaveCount(3, { timeout: 15_000 })
+
+  // 2. THE AGENT IS TOLD WHOSE WORDS IT IS READING. The note travels quoted,
+  //    with the reviewer named as its author — and its imperative slot holds a
+  //    constant this repo wrote, never a suggestedFix synthesised from the note.
+  const calls = await page.evaluate(
+    () => (window as unknown as { __bridgeCalls: { url: string; body: string | null }[] }).__bridgeCalls,
+  )
+  const fixCall = calls.filter((c) => c.url.includes('/v1/fix')).pop()!
+  const findings = (JSON.parse(fixCall.body!) as { findings: Record<string, unknown>[] }).findings
+  const note = findings.find((f) => String(f['id']).startsWith('draft-note:'))!
+  const body = String(note['body'])
+  expect(body).toContain("REVIEWER'S OWN NOTE")
+  expect(body).toContain('Use a Map here')
+  // The opposite of what a bot comment's wrapper says — a note the reviewer
+  // wrote is their direction, and telling the agent it carries no authority
+  // would defeat sending it at all.
+  expect(body).not.toContain('THIRD-PARTY DATA')
+  expect(String(note['suggestedFix'])).not.toContain('Use a Map here')
+  expect(String(note['suggestedFix'])).toContain('SKIP')
+  expect(note['path']).toBe('src/feature.ts')
+
+  // 3. THE RESULT SAYS WHOSE IT WAS. Three sources on screen, none of them
+  //    blurred into the others.
+  await expect(panel).toContainText('Your own note')
+  await expect(panel).toContainText('Security')
+
+  // 4. THE NOTE'S FATE IS ASKED, NOT ASSUMED. The default is that it stays in
+  //    the review and posts exactly as written.
+  const fate = panel.getByTestId('agent-fix-result-note-fate')
+  await expect(fate).toHaveCount(1)
+  await expect(fate).toHaveAttribute('data-handoff', 'sent')
+  await expect(fate).toContainText(/still in your review/i)
+
+  // And nothing the panel did discharges the reviewer's own read of the code.
+  await expect(panel.getByTestId('agent-fix-not-reviewed')).toContainText(/no person has read/i)
+
+  // 5. WITHDRAWING DOES NOT DELETE. The words stay, the way back is right here,
+  //    and the note is struck through in the diff rather than disappearing.
+  await fate.getByTestId('agent-fix-result-note-withdraw').click()
+  await expect(fate).toHaveAttribute('data-handoff', 'withdrawn')
+  await expect(fate).toContainText(/not deleted/i)
+
+  await panel.getByTestId('agent-fix-done').click()
+  const withdrawn = panel.getByTestId('agent-fix-withdrawn-note')
+  await expect(withdrawn).toContainText('Use a Map here')
+  // The withdrawn note is no longer offered to the agent; the vague one still is.
+  await expect(panel.getByTestId('agent-fix-note-candidate')).toHaveCount(1)
+
+  // 6. AND IT COMES BACK. One click, from the list that never hid it.
+  await panel.getByTestId('agent-fix-note-restore').click()
+  await expect(panel.getByTestId('agent-fix-note-candidate')).toHaveCount(2)
+  await expect(panel.getByTestId('agent-fix-withdrawn-note')).toHaveCount(0)
+})
+
 test('fix loop: a READ-ONLY bridge is never offered as a write one', async ({ page }) => {
   await blockExternal(page)
   await setupGithub(page)
