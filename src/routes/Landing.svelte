@@ -4,10 +4,11 @@
   import { navigate } from '../lib/router/router.svelte'
   import { getHistory, clearHistory, type HistoryEntry } from '../lib/history/history'
   import { fetchAllQueues, _resetQueueCacheForTest } from '../lib/provider/queue'
+  import { fetchAllQueueSignals } from '../lib/provider/queueSignals'
   import { relativeTime } from '../lib/time'
   import { isSectionCollapsed, setSectionCollapsed, type LandingSectionId } from '../lib/landing/collapse'
   import { groupByRepo } from '../lib/landing/groupQueue'
-  import { getCachedSizes, fetchMissingSizes, sizeKey, type DiffSize } from '../lib/landing/queueSizes'
+  import { getCachedSizes, fetchMissingSizes, primeSize, sizeKey, type DiffSize } from '../lib/landing/queueSizes'
   import { listDraftSummaries, clearDraftsForPr, type DraftSummary } from '../lib/drafts/drafts.svelte'
   import { settingsState } from '../lib/settings/settingsState.svelte'
   import { activeProviderHasKey } from '../lib/llm/config'
@@ -18,7 +19,7 @@
   import ProviderIcon from '../components/ProviderIcon.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import Spinner from '../components/Spinner.svelte'
-  import type { QueueItem } from '../lib/provider/types'
+  import type { QueueItem, QueueSignal, CiState } from '../lib/provider/types'
 
   // Human-readable provider names for accessible text alternatives.
   // Local map (not the registry) so the component stays renderable when the
@@ -27,6 +28,29 @@
     github: 'GitHub',
     gitlab: 'GitLab',
     bitbucket: 'Bitbucket',
+  }
+
+  /**
+   * CI, as one glyph and one sentence.
+   *
+   * Three DIFFERENT shapes, not three colours of the same mark: the state has to
+   * survive a reader who cannot separate the green from the red (p.146-147), and
+   * the label is both the hover title and the screen-reader text.
+   *
+   * A mixed run — nine green jobs and one red — arrives as 'failing', because
+   * that is what the rollup of a mixed run is and it is the actionable read of a
+   * PR with a red check on it. The per-check breakdown is one click away on the
+   * review page's CI panel; a queue row is not where nine job names belong.
+   */
+  const CI_GLYPHS: Record<'passing' | 'failing' | 'running', string> = {
+    passing: '✓',
+    failing: '✕',
+    running: '•',
+  }
+  const CI_LABELS: Record<'passing' | 'failing' | 'running', string> = {
+    passing: 'CI passing',
+    failing: 'CI failing',
+    running: 'CI running',
   }
 
   let input = $state('')
@@ -213,16 +237,79 @@
   let awaitingReview = $derived(queueItems.filter((i) => !i.authorIsMe))
   let myOpenPrs = $derived(queueItems.filter((i) => i.authorIsMe))
 
+  // ---- SECTION ORDER IS THE FIRST TOOL, NOT THE ONLY ONE -------------------
+  // The page led with "Awaiting your review" and put the user's own PRs second,
+  // which inverts what they actually come here for. The order flips; the extra
+  // weight the leading group gets is applied by INK and SPACE (see
+  // .queue-group-title.lead in the styles), never by a third type size or a
+  // fourth weight — #284 fixed this surface at two sizes, two weights and three
+  // inks and emphasis has to be earned inside that budget (p.30-34).
+  //
+  // Building it as a LIST rather than two hard-coded blocks is what keeps the
+  // newcomer honest: whichever group is actually first gets the lead treatment,
+  // so a user with no open PRs never lands on a page whose most prominent
+  // section is an empty one — there simply is no empty section.
+  interface QueueGroup {
+    id: 'mine' | 'awaiting'
+    title: string
+    items: QueueItem[]
+  }
+
+  const queueGroups = $derived.by<QueueGroup[]>(() => {
+    const groups: QueueGroup[] = []
+    if (myOpenPrs.length > 0) groups.push({ id: 'mine', title: 'Your open PRs', items: myOpenPrs })
+    if (awaitingReview.length > 0) {
+      groups.push({ id: 'awaiting', title: 'Awaiting your review', items: awaitingReview })
+    }
+    return groups
+  })
+
   // Diff sizes per row, keyed by sizeKey(item) — progressive enhancement:
   // cached sizes render with the list; missing ones pop in as batches resolve.
   let queueSizes = $state<Record<string, DiffSize>>({})
 
-  function refreshQueueSizes(items: QueueItem[]) {
-    queueSizes = getCachedSizes(items)
+  // ---- Per-row signals (CI, unresolved conversations, base standing) -------
+  // One batched provider call for the WHOLE queue, keyed by sizeKey(item).
+  // A row the provider could not answer for is simply absent — never a zero.
+  let queueSignals = $state<Record<string, QueueSignal>>({})
+
+  function refreshQueueSizes(items: QueueItem[], fromSignals: Record<string, DiffSize> = {}) {
+    queueSizes = { ...getCachedSizes(items), ...fromSignals }
     // Un-awaited intentionally — sizes must never block or delay the queue render.
     void fetchMissingSizes(items, (key, size) => {
       queueSizes = { ...queueSizes, [key]: size }
     })
+  }
+
+  /**
+   * Fetch the queue's signals, then its sizes.
+   *
+   * The signals query ALREADY answers "how big is this diff" for every row, so
+   * the sizes it returns are written into the size cache before the REST pass
+   * runs — which makes that pass find nothing pending and fetch nothing. That is
+   * where the per-row request saving actually lands: the old page cost one REST
+   * call per GitHub row for sizes alone.
+   *
+   * Cached sizes are painted first so a slow or failing signals query costs the
+   * chips nothing they already had, and a provider with no getQueueSignals
+   * resolves here without a network call at all and falls straight through to
+   * the REST path it has always used.
+   */
+  async function loadQueueSignals(items: QueueItem[]) {
+    queueSizes = getCachedSizes(items)
+    // Base standing is only resolved for the user's OWN PRs: "update this
+    // branch" is only ever offered on a PR they can push to, so asking about
+    // anyone else's costs a request to learn something no row will render.
+    const signals = await fetchAllQueueSignals(allProviders, items, items.filter((i) => i.authorIsMe))
+    queueSignals = signals
+    const fromSignals: Record<string, DiffSize> = {}
+    for (const item of items) {
+      const size = signals[sizeKey(item)]?.size
+      if (!size) continue
+      primeSize(item, size)
+      fromSignals[sizeKey(item)] = size
+    }
+    refreshQueueSizes(items, fromSignals)
   }
 
   // ---- Effort gauge (rubric p.30-31: nothing at equal emphasis) -----------
@@ -255,7 +342,7 @@
     queueLoading = true
     queueItems = await fetchAllQueues(allProviders)
     queueLoading = false
-    refreshQueueSizes(queueItems)
+    void loadQueueSignals(queueItems)
   }
 
   async function handleRefreshQueue() {
@@ -266,7 +353,7 @@
       queueRefreshing = true
       try {
         queueItems = await fetchAllQueues(allProviders)
-        refreshQueueSizes(queueItems)
+        void loadQueueSignals(queueItems)
       } finally {
         queueRefreshing = false
       }
@@ -350,6 +437,61 @@
     return formatUsageLabel(usage ?? undefined)
   }
 
+  // ---- Update branch (Deliverable 2) ---------------------------------------
+  // GitHub's own "Update branch" button calls PUT …/pulls/{n}/update-branch: the
+  // base is merged into the head ON THE SERVER, so this works on a PR the user
+  // has never had checked out — which is most of a landing queue. The local
+  // bridge is deliberately not involved; it would make an app-wide affordance
+  // depend on a paired machine for an operation that needs no working tree.
+  type BranchUpdate =
+    | { status: 'updating' }
+    | { status: 'error'; detail: string }
+
+  let branchUpdates = $state<Record<string, BranchUpdate>>({})
+
+  /** The provider that owns a row, or undefined (registry may be a subset). */
+  function providerOf(item: QueueItem) {
+    return allProviders.find((p) => p.id === item.ref.provider)
+  }
+
+  /**
+   * Whether to OFFER the update, which is a stricter question than "is it
+   * behind". All three must hold: the base has actually moved on, the viewer can
+   * push to the branch, and there is no conflict — a conflict cannot be resolved
+   * server-side, so a button there is a button that fails. The conflicting case
+   * says so in words instead (see the baseCell snippet).
+   */
+  function canOfferUpdate(signal: QueueSignal | undefined): boolean {
+    const base = signal?.base
+    return base?.kind === 'behind' && base.canUpdate
+  }
+
+  async function handleUpdateBranch(item: QueueItem) {
+    const key = sizeKey(item)
+    const provider = providerOf(item)
+    if (!provider?.updateBranch) return
+
+    branchUpdates = { ...branchUpdates, [key]: { status: 'updating' } }
+    const outcome = await provider.updateBranch(item.ref, queueSignals[key]?.headOid ?? null)
+
+    // Counts and enums only — never the repo, the PR number or the branch.
+    track('queue_branch_updated', { outcome: outcome.ok ? 'updated' : outcome.kind })
+
+    if (!outcome.ok) {
+      branchUpdates = { ...branchUpdates, [key]: { status: 'error', detail: outcome.message } }
+      return
+    }
+
+    // The merge puts a NEW commit on the head branch, so the head SHA changes
+    // and CI starts over. Rather than assert what the new CI state will be, we
+    // re-read the queue's signals and render whatever GitHub actually reports —
+    // which is how "CI is running again" ends up on the row honestly.
+    branchUpdates = Object.fromEntries(
+      Object.entries(branchUpdates).filter(([k]) => k !== key),
+    )
+    await loadQueueSignals(queueItems)
+  }
+
   function handleClearHistory() {
     clearHistory()
     history = []
@@ -413,6 +555,106 @@
   the +/− figures are the exact value, and the two never disagree because both
   read the same DiffSize.
 -->
+<!--
+  THE THREE SIGNAL CELLS — CI, unresolved conversations, base standing.
+
+  All three follow sizeCell's rule: the CELL is always rendered so the column
+  reserves its width before the batched signals query lands (rubric C5 — nothing
+  may reflow under the reader when a late result arrives), and the CONTENT inside
+  appears only once there is something true to say.
+
+  "Nothing to say" covers four different facts that all render as an empty cell,
+  and they are genuinely different: the provider has no getQueueSignals at all
+  (GitLab, Bitbucket), the query could not answer for this row, the PR has no CI
+  configured, and there are zero unresolved conversations. None of them is a
+  state the reader can act on, so none of them gets ink — but the module keeps
+  them apart (CiState 'none' vs a null ci) so a test can tell, and so nobody
+  later reads an empty cell as a green one.
+-->
+{#snippet ciCell(signal: QueueSignal | undefined)}
+  {@const state = signal?.ci ?? null}
+  <span class="queue-cell ci-cell">
+    {#if state === 'passing' || state === 'failing' || state === 'running'}
+      <!-- p.146-147: the state is carried by the GLYPH first — a tick, a cross
+           and a dot are three different shapes — with colour only reinforcing
+           it, so the row still reads with colour vision that cannot separate
+           the green from the red, and reads aloud through the sr-only text. -->
+      <span class="ci-chip ci-{state}" data-testid="queue-ci" data-ci={state} title={CI_LABELS[state]}>
+        <span aria-hidden="true">{CI_GLYPHS[state]}</span>
+        <span class="sr-only">{CI_LABELS[state]}</span>
+      </span>
+    {/if}
+  </span>
+{/snippet}
+
+{#snippet unresolvedCell(signal: QueueSignal | undefined)}
+  {@const count = signal?.unresolved ?? 0}
+  {@const more = signal?.unresolvedTruncated === true}
+  <span class="queue-cell threads-cell">
+    {#if count > 0}
+      <!-- "N open" rather than "N unresolved": at --text-xs the long word costs
+           ~12ch of a row that has six other columns to seat, and the phrase the
+           number actually means rides on the title and the accessible name,
+           where it is read in full. -->
+      <span
+        class="threads-chip"
+        data-testid="queue-unresolved"
+        title="{count}{more ? '+' : ''} unresolved conversation{count === 1 && !more ? '' : 's'}"
+      >
+        <span aria-hidden="true">{count}{more ? '+' : ''} open</span>
+        <span class="sr-only">{count}{more ? ' or more' : ''} unresolved conversation{count === 1 && !more ? '' : 's'}</span>
+      </span>
+    {/if}
+  </span>
+{/snippet}
+
+<!--
+  baseCell — where the PR stands against its base, and the one place on this row
+  that is also an ACTION.
+
+  The signal IS the affordance: a PR that is behind and that you can push to
+  offers "Update", link-styled exactly like Prepare (p.52-53 — a bordered button
+  on every row is thirty-five boxes competing with the content they annotate).
+  A PR that is behind and that you cannot push to says so and stops there. A
+  CONFLICTING PR gets words, not a button, because the server-side merge cannot
+  resolve a conflict and an affordance that is going to fail is worse than none.
+-->
+{#snippet baseCell(item: QueueItem, signal: QueueSignal | undefined)}
+  {@const update = branchUpdates[sizeKey(item)]}
+  {@const base = signal?.base}
+  <span class="queue-cell base-cell">
+    {#if update?.status === 'updating'}
+      <span class="base-chip base-working" data-testid="queue-base">Updating…</span>
+    {:else if update?.status === 'error'}
+      <button
+        type="button"
+        class="base-btn base-error"
+        data-testid="queue-base"
+        onclick={() => handleUpdateBranch(item)}
+        title={update.detail}
+        aria-label="Updating {item.ref.owner}/{item.ref.repo}#{item.ref.number} failed: {update.detail}. Retry."
+      >Retry</button>
+    {:else if canOfferUpdate(signal)}
+      <button
+        type="button"
+        class="base-btn"
+        data-testid="queue-base"
+        onclick={() => handleUpdateBranch(item)}
+        title="Merge the base branch in, on the server. CI will start over."
+        aria-label="Update the branch of {item.ref.owner}/{item.ref.repo}#{item.ref.number} with its base"
+      >Update</button>
+    {:else if base?.kind === 'behind'}
+      <span class="base-chip" data-testid="queue-base" title="Behind its base branch — you don't have push access to update it from here">behind</span>
+    {:else if base?.kind === 'conflicted'}
+      <span
+        class="base-chip base-conflict"
+        data-testid="queue-base"
+        title="Conflicts with the base branch. A conflict can't be merged on the server — this one needs a checkout."
+      >conflicts</span>
+    {/if}
+  </span>
+{/snippet}
+
 {#snippet sizeCell(size: DiffSize | undefined)}
   <span class="queue-cell size-cell">
     <span class="churn" aria-hidden="true">
@@ -490,9 +732,14 @@
           >
             <span class="queue-cell queue-ref">#{item.ref.number}</span>
             <span class="queue-title-text">{item.title}</span>
+            {@render ciCell(queueSignals[sizeKey(item)])}
+            {@render unresolvedCell(queueSignals[sizeKey(item)])}
             {@render sizeCell(queueSizes[sizeKey(item)])}
             <span class="queue-cell queue-time">{relativeTime(item.updatedAt)}</span>
           </button>
+          <!-- Outside the navigating <button>: both are controls, and a button
+               inside a button is not markup a browser will honour. -->
+          {@render baseCell(item, queueSignals[sizeKey(item)])}
           <span class="queue-cell prepare-cell">{@render prepareControl(item)}</span>
         </li>
       {/each}
@@ -600,15 +847,15 @@
           aria-busy={queueRefreshing}
           data-testid="queue-rows"
         >
-        {#if awaitingReview.length > 0}
-          <h3 class="queue-group-title">Awaiting your review</h3>
-          {@render queueRows(awaitingReview)}
-        {/if}
-
-        {#if myOpenPrs.length > 0}
-          <h3 class="queue-group-title">Your open PRs</h3>
-          {@render queueRows(myOpenPrs)}
-        {/if}
+        <!-- Order comes from queueGroups (own PRs first). The FIRST group gets
+             the lead treatment whichever one it is, so a user with no open PRs
+             is led by a section that has rows in it. -->
+        {#each queueGroups as group, i (group.id)}
+          <h3 class="queue-group-title" class:lead={i === 0} data-testid="queue-group-{group.id}">
+            {group.title}
+          </h3>
+          {@render queueRows(group.items)}
+        {/each}
         </div>
       {/if}
       </div>
@@ -797,9 +1044,16 @@
      cell, ~25 characters, which buys alignment by throwing away the one field
      that says what the PR is. So the content column widens for content, and
      the hero keeps its own measure inside it (below). */
+  /* 52rem seated five trailing columns. The queue now carries seven — CI state
+     and the unresolved-conversation count are two more reserved measures, and
+     the base-standing cell a third — and the column the widening protects is
+     the TITLE: at 52rem those three would have eaten it down to the ~330px
+     floor e2e/queue-columns.spec.ts holds, which is the width at which the row
+     stops saying which PR it is. The hero keeps its own 40rem measure inside
+     (below), so the prose is untouched. */
   .landing.has-content {
     margin-top: var(--space-6);
-    max-width: 52rem;
+    max-width: 60rem;
   }
 
   .landing.has-content > h1,
@@ -973,6 +1227,34 @@
     /* p.85: clearly more space above than below, so the label attaches to the
        rows it introduces instead of floating between two groups. */
     margin: var(--space-5) 0 var(--space-2);
+  }
+
+  /* ---------------------------------------------------------------------
+     THE LEADING GROUP, PAID FOR IN INK AND SPACE.
+     "Your open PRs" is what this page is for and it was second. Order alone
+     is a weak instrument once a reader has scrolled, so the lead group is
+     also one ink tier brighter (--text-secondary, the tier the card's own
+     title already sits at — three inks on this surface, not four) and the
+     group after it is pushed down and ruled off, so the first group reads as
+     a block that ENDS rather than as the top of one long list (p.30-34, p.85,
+     p.101: emphasise by de-emphasising the surroundings).
+
+     No new type size, no new weight, no new colour. `.lead` is applied by
+     POSITION, not by section id, which is what makes the newcomer case fall
+     out for free: with no open PRs, "Awaiting your review" is first and gets
+     the lead treatment itself. Nothing prominent is ever empty.
+     --------------------------------------------------------------------- */
+  .queue-group-title.lead {
+    color: var(--text-secondary);
+  }
+
+  /* A second group is a DIFFERENT, lesser thing — separated rather than
+     merely spaced. The rule is --hairline, the same decorative rim the card
+     itself uses; no new token and no new ink tier. */
+  .queue-group-title:not(.lead) {
+    margin-top: var(--space-6);
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--hairline);
   }
 
   /* The first group heading in the card already has the card's padding above
@@ -1232,6 +1514,118 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text);
+  }
+
+  /* ---------------------------------------------------------------------
+     CI · UNRESOLVED · BASE — three more fixed measures.
+
+     Each is its own column with its own `ch` measure, for the reason the
+     other five are: a cell whose width depends on its content puts the next
+     column at a different x on every row, and e2e/queue-columns.spec.ts holds
+     the whole set to a spread of zero.
+
+     The measures are what the content actually needs — one glyph, "100+ open",
+     "conflicts" — not hand-picked pixels (p.24-25).
+     --------------------------------------------------------------------- */
+  .ci-cell {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    min-width: 2ch;
+  }
+
+  .ci-chip {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: 1;
+  }
+
+  /* The CI trio the review page's own CiSummary already speaks (.ci-pass /
+     .ci-pending / .ci-failures). Reusing it means the same check reads the
+     same on both surfaces; inventing a second CI palette for the queue is how
+     two screens end up disagreeing about what amber means. */
+  .ci-chip.ci-passing { color: var(--diff-add); }
+  .ci-chip.ci-failing { color: var(--diff-del); }
+  .ci-chip.ci-running { color: var(--legend-changed-color); }
+
+  .threads-cell {
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    min-width: 8ch;
+  }
+
+  /* Metadata ink, like the timestamp beside it. An unresolved conversation is
+     a fact about the PR, not an alarm — the row already spends its two loud
+     inks on the diff figures and the CI mark, and a third shouting column
+     would leave the eye nothing to rank (p.30-31). */
+  .threads-chip {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  /* Wide enough for the longest thing it holds — "conflicts" / "Updating…". */
+  .base-cell {
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    padding: var(--space-1) 0;
+    min-width: 10ch;
+  }
+
+  .base-chip {
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .base-chip.base-conflict {
+    color: var(--legend-changed-color);
+  }
+
+  /* Update — link-styled, exactly like Prepare and for the same reason
+     (p.52-53): a bordered button repeated down a queue is a column of boxes
+     competing with the rows they annotate. Same ink tier as Prepare too, so
+     the row has ONE actionable register rather than two. */
+  .base-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    font-weight: 400;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    border-radius: 3px;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-underline-offset: 3px;
+    transition: color 150ms, text-decoration-color 150ms;
+  }
+
+  .base-btn:hover,
+  .base-btn:focus-visible {
+    color: var(--text);
+    text-decoration-color: currentColor;
+  }
+
+  .base-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .base-btn.base-error {
+    color: var(--legend-removed-color);
+  }
+
+  .base-chip.base-working {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
   }
 
   /* p.86 — the horizontal form of the grouping rule: the gauge and the figures
@@ -1622,6 +2016,9 @@
     .size-cell,
     .queue-time,
     .prepare-cell,
+    .ci-cell,
+    .threads-cell,
+    .base-cell,
     .inflight-time {
       min-width: 0;
     }

@@ -46,14 +46,25 @@ const FAILURE_MESSAGES: Record<UpdateBranchFailure, string> = {
   failed: "The update didn't go through.",
 }
 
+/**
+ * ghFetch fills a message-less 422 with the literal status phrase. That is HTTP
+ * boilerplate, not an explanation, and this string ends up in a row's tooltip —
+ * so it is treated as "GitHub said nothing" and our own sentence is used.
+ */
+const HTTP_PLACEHOLDERS = new Set(['Unprocessable Entity', ''])
+
+function useful(message: string | undefined, fallback: string): string {
+  return message && !HTTP_PLACEHOLDERS.has(message) ? message : fallback
+}
+
 function classify(err: unknown): { kind: UpdateBranchFailure; message: string } {
   if (err instanceof GithubApiError) {
     const detail = err.detail
     if (detail.kind === 'unprocessable') {
-      return { kind: 'conflict', message: detail.message || FAILURE_MESSAGES.conflict }
+      return { kind: 'conflict', message: useful(detail.message, FAILURE_MESSAGES.conflict) }
     }
     if (detail.kind === 'forbidden') {
-      return { kind: 'forbidden', message: detail.message || FAILURE_MESSAGES.forbidden }
+      return { kind: 'forbidden', message: useful(detail.message, FAILURE_MESSAGES.forbidden) }
     }
     if (detail.kind === 'not-found') {
       return { kind: 'not-found', message: FAILURE_MESSAGES['not-found'] }
