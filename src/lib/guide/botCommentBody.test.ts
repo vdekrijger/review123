@@ -107,6 +107,13 @@ describe('topLevelDisclosures', () => {
     expect(topLevelDisclosures('text </details>')).toBeNull()
   })
 
+  it('a body with no disclosure markup at all short-circuits to []', () => {
+    // The early-out every other function funnels through. `<detailsomething>`
+    // is not a <details> tag and must not trip it.
+    expect(topLevelDisclosures('Should `signal` be required?')).toEqual([])
+    expect(topLevelDisclosures('<detailsome>x</detailsome>')).toEqual([])
+  })
+
   it('reads an existing open attribute', () => {
     expect(topLevelDisclosures('<details open><summary>x</summary>y</details>')![0].alreadyOpen).toBe(
       true,

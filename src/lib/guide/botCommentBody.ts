@@ -127,6 +127,14 @@ const DETAILS_CLOSE = /<\/details\s*>/gi
  * Returns null when the tags do not balance — the caller then does nothing.
  */
 export function topLevelDisclosures(src: string): DisclosureSpan[] | null {
+  // Early out for the overwhelmingly common case — a comment of plain prose.
+  // Every function below funnels through here, so one cheap test keeps an
+  // ordinary thread from paying for any of the scanning at all.
+  //
+  // The test matches a CLOSING tag too, so a body carrying only a stray
+  // `</details>` still falls through to the real scan and is reported as
+  // unbalanced (null) rather than as "nothing here".
+  if (!/<\/?details[\s>]/i.test(src)) return []
   const scan = maskCode(src)
   type Tok = { at: number; end: number; open: boolean; attrs: string }
   const toks: Tok[] = []
