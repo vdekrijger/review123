@@ -93,6 +93,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { createServer } from 'node:net'
 
 const SHOTS_DIR = 'docs/design/shots'
 
@@ -300,7 +301,36 @@ const arg = (flag) => {
 const CHECK = argv.includes('--check')
 const ONLY = arg('--only')
 const BASE_URL = arg('--base-url')
-const PORT = Number(arg('--port') ?? 4820)
+/**
+ * A port nothing else is on.
+ *
+ * The default used to be the literal 4820. Every finished agent worktree in
+ * this repo tends to leave a `vite preview` behind, so a fixed default is a
+ * collision waiting to happen — and with --strictPort the failure is a bare
+ * "port in use", while WITHOUT it the far worse outcome is photographing
+ * another worktree's build and never knowing. playwright.config.ts documents
+ * the same hazard and answers it with E2E_PORT; this asks the OS instead, so
+ * there is no number for anyone to keep out of the way of.
+ *
+ * An explicit --port is still honoured verbatim, and still strict: someone who
+ * names a port wants that port, and should be told when it is taken.
+ */
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = createServer()
+    srv.once('error', reject)
+    // No host: bind every interface, so the probe sees a port as taken whether
+    // the squatter is on 127.0.0.1 or ::1. `vite preview` binds ::1, and the
+    // stale servers this exists to dodge were all IPv6 — probing 127.0.0.1
+    // alone would have called those ports free.
+    srv.listen(0, () => {
+      const { port } = srv.address()
+      srv.close(() => resolve(port))
+    })
+  })
+}
+
+const PORT = arg('--port') !== undefined ? Number(arg('--port')) : await freePort()
 
 const selected = ONLY ? SHOTS.filter((s) => s.name === ONLY) : SHOTS
 if (selected.length === 0) {
