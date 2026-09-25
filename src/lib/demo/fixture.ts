@@ -243,12 +243,24 @@ export const demoFiles: PrFile[] = [
  *   - one RESOLVED thread WITH a reply, also anchored inline — the reply's id
  *     is in demoResolvedCommentIds too, which is why a thread count can never
  *     be taken from that Set's size
- *   - two RESOLVED file-level threads, which land in the per-file "General"
- *     group — the block the screenshot showed filling a viewport
+ *   - two RESOLVED file-level threads, BOTH written by a bot, which land in the
+ *     per-file "General" group — the block the screenshot showed filling a
+ *     viewport. These are what proves the two filters do not double-count: they
+ *     are resolved AND a bot's, and exactly one of the toolbar's two counts
+ *     claims them.
+ *   - one UNRESOLVED BOT thread whose entire body is NESTED DISCLOSURES, the
+ *     shape that costs ~200px to show nothing — and which carries a "Prompt to
+ *     fix with AI (copy-paste)" section, so the drop and its receipt are
+ *     demonstrable
+ *   - one UNRESOLVED BOT thread A PERSON HAS ANSWERED, which the "Hide bots"
+ *     switch must never take away: the reviewer's words are the point
  *   - bodies that OPEN with markup — a raw HTML link-wrapped badge and a
  *     markdown link badge, the way review bots write them. The collapsed
  *     one-line summary has to strip those to plain text before truncating, or
  *     it shows sixty characters of tags and no words.
+ *
+ * Two DIFFERENT bot logins, because a real PR has them: the vendor name is not
+ * what makes a comment a bot's, the `[bot]` suffix is (isReviewBotAuthor).
  *
  * DELIBERATELY NO <img>: the demo's contract is no network, and a remote badge
  * image would fire a request from a rendered comment body (and make
@@ -257,7 +269,11 @@ export const demoFiles: PrFile[] = [
  *
  * RIGHT line 7 of src/search/api.ts is the `fetch(..., { signal })` line and
  * line 5 is `signal?: AbortSignal,` — both present in that patch, so both
- * anchor inline rather than falling back to the bottom list.
+ * anchor inline rather than falling back to the bottom list. In
+ * src/search/useSearch.ts, RIGHT line 22 is the `if (err.name !== 'AbortError')
+ * throw err` line and line 16 is `controllerRef.current?.abort()` — likewise
+ * both in the patch, so the two new bot threads render INLINE where the noise
+ * actually hurts, rather than in the bottom list.
  */
 export const demoComments: PrComment[] = [
   {
@@ -315,6 +331,81 @@ export const demoComments: PrComment[] = [
     side: null,
     inReplyTo: null,
   },
+  {
+    // THE 200px COMMENT. Four collapsed <details> and nothing outside them, the
+    // shape that renders as a stack of shut doors conveying a title. Anchored
+    // inline at RIGHT line 22, unresolved, and written by a DIFFERENT bot from
+    // the two above — a real PR carries more than one.
+    //
+    // It is here so three behaviours stay demonstrable forever: the first
+    // section opens instead of showing nothing, the "Prompt to fix with AI
+    // (copy-paste)" section is dropped with a stated receipt, and the section
+    // labels are the AUTHOR'S words rather than uppercase semibold chrome.
+    id: 9006,
+    author: 'demo-scan-bot[bot]',
+    authorAvatar: null,
+    body: [
+      '<details><summary>Issue description</summary>',
+      '',
+      'Re-throwing inside `.catch()` rejects a promise nobody is holding, so the',
+      'failure surfaces as an unhandled rejection rather than as an error the',
+      'component can render.',
+      '',
+      '</details>',
+      '<details><summary>Why we think this is a valid issue</summary>',
+      '',
+      'The effect returns a cleanup function, not the promise, so there is no',
+      'rejection handler anywhere up the chain.',
+      '',
+      '</details>',
+      '<details><summary>Suggested fix</summary>',
+      '',
+      'Set an error state instead of re-throwing:',
+      '',
+      '```ts',
+      ".catch((err) => { if (err.name !== 'AbortError') setError(err) })",
+      '```',
+      '',
+      '</details>',
+      '<details><summary>Prompt to fix with AI (copy-paste)</summary>',
+      '',
+      'In src/search/useSearch.ts, replace the re-throw in the catch handler with',
+      'component error state. Keep the AbortError check.',
+      '',
+      '</details>',
+    ].join('\n'),
+    createdAt: '2024-05-02T09:25:00Z',
+    path: 'src/search/useSearch.ts',
+    line: 22,
+    side: 'RIGHT',
+    inReplyTo: null,
+  },
+  {
+    // A BOT FINDING THE REVIEWER ANSWERED. Unresolved, anchored inline at RIGHT
+    // line 16. The "Hide bots" switch must leave this whole thread alone — the
+    // reply below is a person's reasoning, it exists nowhere else in this app,
+    // and "hide the noise" was never a request to hide it.
+    id: 9007,
+    author: 'demo-scan-bot[bot]',
+    authorAvatar: null,
+    body: 'Calling `abort()` on every keystroke cancels a request that may already have resolved. Consider checking `controller.signal.aborted` first.',
+    createdAt: '2024-05-02T09:26:00Z',
+    path: 'src/search/useSearch.ts',
+    line: 16,
+    side: 'RIGHT',
+    inReplyTo: null,
+  },
+  {
+    id: 9008,
+    author: 'demo-reviewer',
+    authorAvatar: null,
+    body: 'Aborting a settled request is a no-op, so the check would only add a branch. Leaving it.',
+    createdAt: '2024-05-02T09:31:00Z',
+    path: 'src/search/useSearch.ts',
+    line: 16,
+    side: 'RIGHT',
+    inReplyTo: 9007,
+  },
 ]
 
 /**
@@ -325,6 +416,11 @@ export const demoComments: PrComment[] = [
  * Note 9003: a resolved thread's REPLIES are in the Set too. Three threads are
  * resolved here, not four, which is why the count shown in the UI is computed
  * from grouped threads rather than from this Set's size.
+ *
+ * 9006–9008 are deliberately ABSENT: the two new bot threads are open, so the
+ * demo shows the bot filter doing its own work rather than riding on the
+ * resolved one. 9004 and 9005 are in both categories at once, which is the case
+ * the two toolbar counts must not each claim.
  */
 export const demoResolvedCommentIds: Set<number> = new Set([9002, 9003, 9004, 9005])
 

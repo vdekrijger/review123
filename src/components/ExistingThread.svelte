@@ -12,6 +12,7 @@
    * - Optimistic insert: the reply body appears in the thread as a pending
    *   entry while the POST is in flight; on failure it is removed and the
    *   error is surfaced with the editor content kept for retry.
+   * - Bodies pass through presentCommentBody first — see § THE BULK, below.
    */
   import type { PrComment } from '../lib/github/comments'
   import type { CommentThread as Thread } from '../lib/github/commentThreads'
@@ -20,6 +21,8 @@
   import CommentThread from './CommentThread.svelte'
   import CommentEditor from './CommentEditor.svelte'
   import { track } from '../lib/analytics/analytics'
+  import { presentCommentBody } from '../lib/guide/botCommentBody'
+  import { isReviewBotAuthor } from '../lib/bridge/botComments'
 
   interface Props {
     thread: Thread
@@ -35,7 +38,37 @@
 
   let { thread, resolved = false, onReply = null }: Props = $props()
 
-  const comments = $derived(threadComments(thread))
+  // ---- THE BULK: what a revealed bot comment costs to show ----------------
+  //
+  // Hiding bot comments is the default, not the only state. In the screenshot
+  // that prompted the filter, each posthog[bot] comment cost ~200px TO SHOW
+  // NOTHING: its whole body was four collapsed <details> — "Issue
+  // description", "Why we think it's a valid issue", "Suggested fix", "Prompt
+  // to fix with AI (copy-paste)". Four disclosure rows conveying a title.
+  //
+  // src/lib/guide/botCommentBody.ts does two narrow things about it, on the
+  // markdown SOURCE, before it reaches the existing renderMarkdown → marked →
+  // DOMPurify boundary. Nothing here interprets the text or weakens that
+  // boundary: a bot comment is still untrusted third-party data, rendered
+  // exactly as it was, minus one redundant section and with one <details>
+  // starting open. See that module's header for why the matching is as narrow
+  // as it is — this is somebody else's markdown.
+  //
+  // The AI-prompt drop is gated on the author being a review bot, reusing the
+  // SAME isReviewBotAuthor the filter and the fixing panel use. Opening a
+  // shut-by-default first section is not, because a person whose body is four
+  // collapsed <details> has the identical problem and nothing is removed.
+  const presented = $derived(
+    threadComments(thread).map((c) => {
+      const out = presentCommentBody(c.body, isReviewBotAuthor(c.author))
+      return { comment: out.body === c.body ? c : { ...c, body: out.body }, stripped: out.stripped }
+    }),
+  )
+
+  const comments = $derived(presented.map((p) => p.comment))
+
+  /** How many comments here lost their copy-paste AI prompt. Stated, never silent. */
+  const promptSectionsHidden = $derived(presented.filter((p) => p.stripped).length)
 
   // ---- Reply state ----
   let replying = $state(false)
@@ -149,6 +182,15 @@
 
 {#snippet threadBody()}
   <CommentThread {comments} />
+
+  <!-- Nothing is hidden silently, a section of somebody's comment least of
+       all. One line per thread, in the same muted register as the reply hint,
+       saying what went and why it is not a loss. -->
+  {#if promptSectionsHidden > 0}
+    <p class="prompt-section-note" data-testid="bot-prompt-section-hidden">
+      Copy-paste AI prompt hidden — this app sends the comment itself to the fixing agent.
+    </p>
+  {/if}
 
   {#if pendingBody !== null}
     <div class="reply-pending" data-testid="reply-pending" role="status">
@@ -280,26 +322,95 @@
     padding: 0.4rem;
   }
 
+  /*
+   * THE SAME GLOBAL RULE, LEAKING SOMEWHERE ELSE.
+   *
+   * `details > summary` in src/app.css is the EDITORIAL pattern: uppercase,
+   * letter-spaced, weight 600 — right for a summary that is a label of ours.
+   * .resolved-summary above resets all three because it also carries a
+   * sentence of somebody's comment. A bot comment body is FULL of <details>,
+   * and its section labels are the author's words, not our chrome.
+   *
+   * CommentThread already resets text-transform and letter-spacing on
+   * `.comment-body details summary`. It does NOT reset font-weight, so the
+   * global 600 was still landing on every disclosure a comment contains:
+   * "Issue description", "Suggested fix" and whatever prose a summary carries
+   * with them, all set semibold against the author's intent, and semibold at
+   * --text-sm inside a 0.9rem body reads as a heading the author never wrote.
+   *
+   * MEASURED, not assumed. Delete the font-weight below and
+   * e2e/bot-comments.spec.ts reads 600 off a real bot comment's section label
+   * in BOTH themes; restore it and both read 400. The other two properties pass
+   * either way, which is how we know CommentThread's reset already covers them
+   * and the leak here was exactly one property wide.
+   *
+   * So: 400 here, and the summary's editorial padding tightened to one scale
+   * step, because four of these stacked is a third of the height the
+   * screenshot complained about. Scoped to the thread wrappers this component
+   * owns — a class selector plus Svelte's scoping class outranks the two type
+   * selectors in app.css, so app.css and CommentThread stay untouched.
+   */
+  .existing-thread :global(.comment-body details > summary),
+  .thread-content :global(.comment-body details > summary) {
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: normal;
+    padding: var(--space-1) 0;
+  }
+
+  /* An opened first section should not sit flush against its own label. */
+  .existing-thread :global(.comment-body details[open] > summary),
+  .thread-content :global(.comment-body details[open] > summary) {
+    margin-bottom: var(--space-1);
+  }
+
   /* ---- Reply affordance ---- */
   .reply-actions {
     display: flex;
     gap: 0.4rem;
   }
 
+  /*
+   * QUIETER THAN A BUTTON, LOUDER THAN NOTHING.
+   *
+   * One of these sits under EVERY comment, so on the screenshot's thread the
+   * repeated bordered box was chrome competing with the findings it was meant
+   * to sit beneath — a filled outline repeated four times reads as the loudest
+   * thing on the block. It loses the border and the background and becomes a
+   * text affordance: --text-xs (one step down, and a token rather than the old
+   * hand-picked 0.78rem) in --text-muted, the same register the reply hint and
+   * the comment header already occupy.
+   *
+   * It does NOT take the --chrome-muted-opacity treatment the ⋯ menu button
+   * uses. That is right for pure chrome revealed on hover; this is an ACTION,
+   * and an action a reader cannot see is not quiet, it is missing. Full
+   * opacity, underline on hover/focus so it still reads as clickable.
+   */
   .reply-open-btn {
-    font-size: 0.78rem;
-    padding: 0.18rem 0.55rem;
-    border-radius: 4px;
-    border: 1px solid var(--border-subtle, var(--hairline));
-    background: transparent;
-    color: inherit;
+    padding: var(--space-1) 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
     cursor: pointer;
-    opacity: 0.85;
   }
 
-  .reply-open-btn:hover {
-    opacity: 1;
-    background: var(--surface-raised);
+  .reply-open-btn:hover,
+  .reply-open-btn:focus-visible {
+    color: var(--text);
+    text-decoration: underline;
+  }
+
+  /* The receipt for a dropped copy-paste AI prompt. Same ink and size as the
+     reply hint: it is a note about the comment, not part of it. */
+  .prompt-section-note {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    font-style: italic;
   }
 
   .reply-editor {

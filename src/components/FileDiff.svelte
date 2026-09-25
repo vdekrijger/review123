@@ -49,6 +49,8 @@
   } from '../lib/guide/hunkAttention'
   import { hunkAttentionPref } from '../lib/guide/hunkAttentionPref.svelte'
   import { resolvedThreadsPref } from '../lib/guide/resolvedThreadsPref.svelte'
+  import { botThreadsPref } from '../lib/guide/botThreadsPref.svelte'
+  import { isBotThread } from '../lib/guide/botThreads'
 
   /** A skill finding scoped to a specific line in this file */
   export interface SkillFinding {
@@ -837,31 +839,53 @@
     return resolvedCommentIds.has(thread.root.id)
   }
 
-  // ---- Excluding resolved threads -----------------------------------------
+  // ---- Excluding threads: two independent filters --------------------------
   // A resolved thread is a finished conversation. Collapsing it to one line was
   // not enough: eight of them still fill the viewport ahead of the unresolved
   // comments that need an answer. Off switch: resolvedThreadsPref (localStorage
   // review123:hide-resolved, toggled from the Inspect toolbar), default hidden.
+  //
+  // A review bot's thread is noise of a different kind — "quite noisy and
+  // distracting during a review with no way to hide or filter them out" — and
+  // gets its own switch, botThreadsPref (review123:hide-bot-comments), also
+  // default hidden. What counts as one lives in src/lib/guide/botThreads.ts,
+  // which imports the SAME `isReviewBotAuthor` the fixing panel uses; a bot
+  // comment a PERSON has replied to is not a bot thread and never hides.
+  //
+  // THE TWO ARE INDEPENDENT, which is why hiding is expressed as a REASON
+  // rather than a boolean. A thread that is both resolved and a bot's is
+  // attributed to ONE of them — resolved first, the filter that shipped first
+  // and whose toolbar count already claims it — so it is never counted twice.
+  // And because the reason is recomputed, unticking either switch cannot
+  // resurrect what the other is still hiding: the thread simply moves to the
+  // surviving filter's note and stays gone.
   //
   // NOTHING IS HIDDEN SILENTLY. Every place threads were removed from states
   // the count and carries a one-click reveal (`revealedRoots`), which is a
   // LOCAL escape hatch: it shows this one group without flipping the global
   // preference, the same shape as the findings-triage "Show all".
   const hideResolved = $derived(resolvedThreadsPref.hidden)
+  const hideBots = $derived(botThreadsPref.hidden)
 
   /** Root ids the reader has explicitly revealed at their location. */
   let revealedRoots = $state<Set<number>>(new Set())
 
-  function isThreadHidden(thread: Thread): boolean {
-    return hideResolved && isThreadResolved(thread) && !revealedRoots.has(thread.root.id)
+  /** Which filter is holding this thread back, if any. Order is the rule. */
+  type HiddenReason = 'resolved' | 'bot'
+
+  function hiddenReason(thread: Thread): HiddenReason | null {
+    if (revealedRoots.has(thread.root.id)) return null
+    if (hideResolved && isThreadResolved(thread)) return 'resolved'
+    if (hideBots && isBotThread(thread)) return 'bot'
+    return null
   }
 
   function visibleThreads(list: Thread[]): Thread[] {
-    return list.filter((t) => !isThreadHidden(t))
+    return list.filter((t) => hiddenReason(t) === null)
   }
 
-  function hiddenThreads(list: Thread[]): Thread[] {
-    return list.filter(isThreadHidden)
+  function hiddenThreads(list: Thread[], reason: HiddenReason): Thread[] {
+    return list.filter((t) => hiddenReason(t) === reason)
   }
 
   /** Reveal exactly the threads hidden at one location (reassign → reactive). */
@@ -1257,20 +1281,25 @@
         </ul>
       </div>
     {/if}
-    <!-- The counted escape hatch for excluded resolved threads. This codebase
-         never hides anything silently: wherever resolved threads were removed,
-         this states how many and reveals them in place with one click (without
-         flipping the global preference). Declared once and rendered at BOTH
-         thread surfaces — inline in the diff, and the per-file bottom list. -->
-    {#snippet resolvedHiddenNote(hidden: Thread[])}
+    <!-- The counted escape hatch for excluded threads. This codebase never
+         hides anything silently: wherever threads were removed, this states how
+         many and reveals them in place with one click (without flipping the
+         global preference). One snippet, one per REASON, rendered at BOTH
+         thread surfaces — inline in the diff, and the per-file bottom list — so
+         a group holding both kinds says so in two separate sentences instead of
+         blurring them into one count the reader cannot act on. -->
+    {#snippet hiddenThreadsNote(reason: HiddenReason, hidden: Thread[])}
       {#if hidden.length > 0}
+        {@const noun = reason === 'resolved' ? 'resolved thread' : 'bot thread'}
         <button
           type="button"
-          class="resolved-hidden-note"
-          data-testid="resolved-hidden-note"
-          title="These threads are resolved and excluded by the Inspect toolbar's “Hide resolved” switch. Show them here without changing that setting."
+          class="threads-hidden-note"
+          data-testid={reason === 'resolved' ? 'resolved-hidden-note' : 'bot-hidden-note'}
+          title={reason === 'resolved'
+            ? 'These threads are resolved and excluded by the Inspect toolbar’s “Hide resolved” switch. Show them here without changing that setting.'
+            : 'A review bot wrote these, and nobody replied. They are excluded by the Inspect toolbar’s “Hide bots” switch — a reading preference for this diff only, which never removes them from what the fixing agent can be sent. Show them here without changing that setting.'}
           onclick={() => revealThreads(hidden)}
-        >{hidden.length} resolved thread{hidden.length === 1 ? '' : 's'} hidden — show</button>
+        >{hidden.length} {noun}{hidden.length === 1 ? '' : 's'} hidden — show</button>
       {/if}
     {/snippet}
 
@@ -1440,7 +1469,8 @@
             {#each visibleThreads(entry.threads) as thread (thread.root.id)}
               <ExistingThread {thread} resolved={isThreadResolved(thread)} {onReply} />
             {/each}
-            {@render resolvedHiddenNote(hiddenThreads(entry.threads))}
+            {@render hiddenThreadsNote('resolved', hiddenThreads(entry.threads, 'resolved'))}
+            {@render hiddenThreadsNote('bot', hiddenThreads(entry.threads, 'bot'))}
           </div>
         {/if}
       {/snippet}
@@ -1593,7 +1623,8 @@
             {#each visibleThreads(group) as thread (thread.root.id)}
               <ExistingThread {thread} resolved={isThreadResolved(thread)} {onReply} />
             {/each}
-            {@render resolvedHiddenNote(hiddenThreads(group))}
+            {@render hiddenThreadsNote('resolved', hiddenThreads(group, 'resolved'))}
+            {@render hiddenThreadsNote('bot', hiddenThreads(group, 'bot'))}
           </div>
         {/each}
       </div>
@@ -1942,12 +1973,13 @@
   }
 
   /*
-   * "N resolved threads hidden — show". Deliberately quiet: it is a receipt
-   * for what was excluded, not a control competing with the comments that are
-   * still open. Same weight as .existing-line-label; underline on hover so it
-   * reads as the clickable escape hatch it is.
+   * "N resolved threads hidden — show" / "N bot threads hidden — show".
+   * Deliberately quiet: it is a receipt for what was excluded, not a control
+   * competing with the comments that are still open. Same weight as
+   * .existing-line-label; underline on hover so it reads as the clickable
+   * escape hatch it is. One class for both reasons — they are the same object.
    */
-  .resolved-hidden-note {
+  .threads-hidden-note {
     align-self: flex-start;
     border: 0;
     background: none;
@@ -1963,8 +1995,8 @@
     text-align: left;
   }
 
-  .resolved-hidden-note:hover,
-  .resolved-hidden-note:focus-visible {
+  .threads-hidden-note:hover,
+  .threads-hidden-note:focus-visible {
     opacity: 1;
     text-decoration: underline;
   }
@@ -2106,8 +2138,10 @@
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.comment-header),
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.resolved-summary),
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.resolved-label),
-  :global(.diff-line-extend-wrapper) .inline-comment-threads .resolved-hidden-note,
+  :global(.diff-line-extend-wrapper) .inline-comment-threads .threads-hidden-note,
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-hint),
+  :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-open-btn),
+  :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.prompt-section-note),
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-pending-label),
   :global(.diff-line-extend-wrapper) .line-findings :global(.skill-line-note),
   :global(.diff-line-extend-wrapper) .line-findings :global(.finding-drag-handle) {

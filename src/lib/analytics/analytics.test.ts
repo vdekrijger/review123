@@ -35,6 +35,24 @@ describe('analytics privacy choke-point', () => {
     expect(capture.mock.calls[0][1]).toEqual({ enabled: false })
   })
 
+  it('hide_bots_toggled carries the boolean state and nothing about the bots', () => {
+    track('hide_bots_toggled', { enabled: true })
+    expect(capture).toHaveBeenCalledWith('hide_bots_toggled', { enabled: true })
+  })
+
+  it('hide_bots_toggled drops the bot login, the count and the comment body', () => {
+    // WHICH vendor a team reviews its code with is a fact about that team, so
+    // the author is as unwelcome here as the comment text.
+    track('hide_bots_toggled', {
+      enabled: false,
+      author: 'greptile-apps[bot]',
+      bot_count: 4,
+      path: 'src/a.ts',
+      body: 'This regex backtracks',
+    } as never)
+    expect(capture.mock.calls[0][1]).toEqual({ enabled: false })
+  })
+
   it('never sends repo identifiers for private repos (EC-18b)', () => {
     track('pr_loaded', { visibility: 'private', repo: 'acme/secret' } as never)
     expect(capture.mock.calls[0][1]).not.toHaveProperty('repo')

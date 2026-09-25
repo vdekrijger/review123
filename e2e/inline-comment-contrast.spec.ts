@@ -202,6 +202,15 @@ for (const theme of ['dark', 'light'] as const) {
     await page.addInitScript(() => {
       localStorage.setItem('review123:ai-consent', JSON.stringify({ public: true, private: false }))
     })
+    // The probe comment is a BOT's, and the Inspect toolbar's "Hide bots"
+    // switch excludes unanswered bot threads from the diff by default. This
+    // spec is about the COLOR of an inline comment, not about which comments
+    // are shown, and a bot author is the realistic case for the extend-row
+    // rendering it guards — so the reading preference is turned off here
+    // rather than the fixture's author being changed to dodge it.
+    await page.addInitScript(() => {
+      localStorage.setItem('review123:hide-bot-comments', JSON.stringify({ hidden: false }))
+    })
 
     await page.goto(APP_REVIEW_PATH)
 
