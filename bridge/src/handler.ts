@@ -64,6 +64,7 @@ import {
   type FilesOutcome,
 } from './files.js'
 import { parseCiFixRequest, runCiFix, type CiFixOutcome } from './ciFix.js'
+import { parseCommitsRequest, presentCommits } from './commits.js'
 import { parseFixRequest, runFixLoop, statusForFixError, type FixOutcome } from './fix.js'
 import {
   PushError,
@@ -81,12 +82,14 @@ import {
 import { parseSearchRequest, runSearch } from './search.js'
 import { runStreamInference, type StreamEmit } from './inferStream.js'
 import {
+  COMMITS_PATH,
   encodeStreamEvent,
   INFER_STREAM_CONTENT_TYPE,
   INFER_STREAM_PATH,
   MAX_BODY_BYTES,
   PROTOCOL_VERSION,
   type BridgeCapabilities,
+  type CommitsResponse,
   type BridgeErrorCode,
   type CheckoutRequest,
   type CiFixRequest,
@@ -223,6 +226,13 @@ export interface HandlerContext {
   /** Runs `/v1/search`. Injected for the same reason `infer` is. */
   search: (req: SearchRequest) => Promise<SearchResponse>
   /**
+   * Runs `/v1/commits` — the containment probe. Injected for the same reason
+   * `repoState` is: the handler's own tests want to exercise "present",
+   * "absent" and "git could not answer" as data, without a real repository
+   * holding a real commit.
+   */
+  commits: (shas: readonly string[]) => Promise<string[]>
+  /**
    * Runs `/v1/fix`. Injected so the handler's tests can exercise every
    * protocol rule — above all the `--allow-write` gate — without a real
    * worktree, a real agent, or a real commit.
@@ -297,6 +307,11 @@ export function defaultSearch(realRoot: string, hasRipgrep: () => Promise<boolea
 /** The real repo-state probe, used unless a test injects its own. */
 export function defaultRepoState(realRoot: string) {
   return (): Promise<GitState | null> => readGitState(realRoot)
+}
+
+/** The real containment probe, used unless a test injects its own. */
+export function defaultCommits(realRoot: string) {
+  return (shas: readonly string[]): Promise<string[]> => presentCommits(realRoot, shas)
 }
 
 /** The real dev-server probe. `appUrl` is the `--app-url` flag, or null. */
@@ -440,6 +455,10 @@ function failPush(err: PushError, cors: Record<string, string>): BridgeResponse 
  */
 const POST_ROUTES = new Set([
   '/v1/infer',
+  // The containment probe. A POST because it carries a list of shas, NOT
+  // because it changes anything — it is a read, and it is gated by the pairing
+  // token alone. See protocol.ts § /v1/commits.
+  COMMITS_PATH,
   // Listed so a GET is told the METHOD is wrong rather than that the route is
   // missing. The POST itself never reaches handleRequest: server.ts hands it
   // to handleStreamRequest, which cannot return a single BridgeResponse.
@@ -694,6 +713,21 @@ export async function handleRequest(
       // understand — so it must never be synthesized here.
       ...(outcome.agentic ? { agentic: outcome.agentic } : {}),
     }
+    return json(200, payload, cors)
+  }
+
+  if (req.method === 'POST' && req.path === COMMITS_PATH) {
+    // NO WRITE GATE, AND NO CHECKOUT GATE, DELIBERATELY. This route runs
+    // `rev-parse --verify` against the object store and returns which ids
+    // resolved. It creates nothing and it reaches no remote, so requiring
+    // `--allow-write` would mean a read-only bridge could not tell a client
+    // whether a fix run is even possible — which is the question the client
+    // asks precisely so it can avoid offering a button that would then be
+    // refused. The pairing token is the gate, as it is for /v1/files.
+    const parsed = parseCommitsRequest(parseJsonBody(req.body))
+    if ('error' in parsed) return fail(400, 'bad-request', parsed.error, cors)
+
+    const payload: CommitsResponse = { ok: true, present: await ctx.commits(parsed.shas) }
     return json(200, payload, cors)
   }
 

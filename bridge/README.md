@@ -26,9 +26,9 @@ with no bridge running the app behaves exactly as it does today.
 ## Status
 
 Protocol **v1**, complete. `GET /v1/health`, `POST /v1/infer`,
-`POST /v1/infer/stream`, `POST /v1/files`, `POST /v1/search`, `POST /v1/fix`,
-`GET /v1/stack`, `POST /v1/checkout` and `POST /v1/restore` are all
-implemented — nothing answers `501` any more.
+`POST /v1/infer/stream`, `POST /v1/files`, `POST /v1/search`,
+`POST /v1/commits`, `POST /v1/fix`, `GET /v1/stack`, `POST /v1/checkout` and
+`POST /v1/restore` are all implemented — nothing answers `501` any more.
 
 - With `/v1/infer` live, review123 runs its reviews through the CLI you already
   pay for: pick **Local bridge** under Settings → AI models.
@@ -136,7 +136,7 @@ Vercel deploy), which is a bad trade for a shorter command.
 It prints a banner with the pairing token:
 
 ```
-review123 bridge 0.4.0  ·  protocol v1
+review123 bridge 0.5.0  ·  protocol v1
 
   repo     /Users/you/code/your-repo
   listen   http://127.0.0.1:7321   (loopback only)
@@ -1188,6 +1188,45 @@ cannot tell the difference.
 
 A malformed `regex` is a `400` you can act on, not a mystery two layers down.
 
+### `POST /v1/commits` — implemented
+
+Ask which of a list of commits this repository already **has**. A read: no
+grant, no flag, no network.
+
+```ts
+interface CommitsRequest {
+  shas: string[]            // full 40-hex commit ids, max 64
+}
+
+interface CommitsResponse {
+  ok: true
+  present: string[]         // the subset this object store holds, as COMMITS
+}
+```
+
+**Why it exists.** `POST /v1/fix` and `POST /v1/ci-fix` create their scratch
+worktree with `git worktree add … <headSha>`, which materialises the commit out
+of the **local object store**. Nothing about that requires your working tree to
+be sitting on it. Before this route the browser could only ask `/v1/health`
+where `HEAD` is and compare for equality — a stricter test than the one the
+worktree actually needs — so a queue of twenty of your own pull requests could
+offer the fix loop on at most **one** row. This route asks the question the
+mechanism asks.
+
+**It does not fetch.** The answer is `git rev-parse --verify --quiet
+<sha>^{commit}`, once per sha, against what is on disk. A commit this repository
+has never seen comes back **absent**, and review123 names the one command that
+fixes that (`git fetch origin <sha>`) or offers `/v1/checkout`, which is a
+different route behind a different grant (§8). Reaching a remote is a different
+act from reading what is already here, and a probe that quietly did the first
+would contact a server nobody asked it to.
+
+`^{commit}` makes the check type-exact: a tree or blob id resolves to nothing
+here, because a worktree cannot be created at one.
+
+Absent from `present` means **"cannot run here"**, never "unknown" — a probe
+that answered `200` answered completely.
+
 ### `POST /v1/fix` — implemented, **`--allow-write` only**
 
 Hand findings to your local coding agent, let it fix them in a scratch
@@ -1537,3 +1576,10 @@ Since `bridge-v0.4.0` they must also say that `--allow-push` exists, that it is
 to download a binary that might write to their team's remote should not have to
 open the README to find that out. The workflow's generated notes carry that
 paragraph; a hand-cut release must too.
+
+`bridge-v0.5.0` adds `POST /v1/commits` and **needs no new grant**, because it
+adds no new capability: it reads ids out of the object store. It is worth a
+line in the notes anyway, because it is what makes **Fix CI** reachable from
+more than one row of the queue — a 0.4.0 bridge will keep working, and will
+keep offering the fix loop only on the commit your checkout happens to be
+sitting on.

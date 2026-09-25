@@ -208,6 +208,25 @@ export interface BridgeCapabilities {
    */
   fix: boolean
   /**
+   * `POST /v1/commits` — the containment probe. A route-READINESS boolean like
+   * `infer` and `inferStream`, flipped in the commit that implemented it.
+   *
+   * IT IS NOT A GRANT, AND MUST NEVER BECOME ONE. What the route does is ask
+   * `git rev-parse --verify --quiet <sha>^{commit}` — a READ of the object
+   * store that already exists on disk. It creates nothing, fetches nothing,
+   * moves nothing and spawns no agent, so no `--allow-*` flag turns it on or
+   * off. A build that gated it behind `--allow-write` would be saying that
+   * looking at what is in the repository is the same act as writing to it.
+   *
+   * It is load-bearing for the fix loop's readiness rule in the same way
+   * `inferAgentic` is load-bearing for deep review: a bridge predating this
+   * route simply 404s, and a client that did not check would read that as "the
+   * commit is absent" for every commit. So the client checks the flag and, when
+   * it is false, falls back to the older and stricter HEAD-equality test rather
+   * than to a guess.
+   */
+  commits: boolean
+  /**
    * `/v1/checkout` and `/v1/restore` — the routes that move the USER'S OWN
    * working tree. Reports `--allow-checkout`, and nothing else.
    *
@@ -1147,6 +1166,71 @@ export interface FixResponse {
    */
   tests: FixTestOutcome | null
   durationMs: number
+}
+
+// ---------------------------------------------------------------------------
+// `POST /v1/commits` — IS THIS COMMIT HERE?
+//
+// THE QUESTION THE FIX LOOP ACTUALLY HAS. `prepareScratchWorktree` runs
+// `git worktree add … <headSha>`, which materialises the PR head OUT OF THE
+// LOCAL OBJECT STORE. It does not read the working tree, it does not care which
+// branch is checked out, and it does not fetch. So the precondition for a fix
+// run is CONTAINMENT — "this repository has that commit" — and nothing else.
+//
+// Before this route the client could only ask `/v1/health` where HEAD is, and
+// compared it for equality. Equality answers a stricter question than the one
+// worktree.ts asks, and the cost was concrete: a user looking at a queue of
+// twenty of their own pull requests could offer the fix loop on at most ONE
+// row, because a checkout sits on one commit at a time. The feature shipped and
+// was unreachable exactly where it was worth having.
+//
+// WHAT THIS ROUTE IS NOT. It does not fetch. `git fetch` is a NETWORK operation
+// and this package has exactly one of those (`/v1/checkout`, behind
+// `--allow-checkout`, on a ref the browser names). Reading what is already on
+// disk and reaching out to a remote are different acts, and a probe that
+// quietly did the second would make "the bridge answered in milliseconds" false
+// and would contact a remote nobody asked it to. A commit this repository has
+// never seen comes back ABSENT, and the client says which command fixes that.
+// ---------------------------------------------------------------------------
+
+/** `POST /v1/commits`. */
+export const COMMITS_PATH = '/v1/commits'
+
+/**
+ * Commits one probe may ask about.
+ *
+ * Sized for the CALLER that needs it: the review queue is ~35 rows across two
+ * sections, so a cap below that would make the queue issue a second request to
+ * answer one question about one page. 64 covers it with room, and it bounds the
+ * work at 64 `rev-parse` invocations — a few hundred milliseconds on a cold
+ * cache, well inside the request budget.
+ */
+export const MAX_COMMIT_PROBE_SHAS = 64
+
+/** Budget for ONE `rev-parse --verify` in the probe. It is a local lookup. */
+export const COMMIT_PROBE_TIMEOUT_MS = 5_000
+
+export interface CommitsRequest {
+  /**
+   * Full 40-character commit shas, lowercase. Anything else is refused rather
+   * than coerced: an abbreviated sha is ambiguous by construction, and a value
+   * that is not a sha has no business being appended to a git command line.
+   */
+  shas: string[]
+}
+
+export interface CommitsResponse {
+  ok: true
+  /**
+   * The subset of the requested shas this repository has, as COMMITS.
+   *
+   * A sha that is absent from this array is absent from the object store — or
+   * is an object of some other type, which `^{commit}` refuses on purpose,
+   * because a worktree cannot be created at a tree or a blob. The client must
+   * read "not in `present`" as "cannot run here", never as "unknown": a probe
+   * that answered 200 answered completely.
+   */
+  present: string[]
 }
 
 // ---------------------------------------------------------------------------

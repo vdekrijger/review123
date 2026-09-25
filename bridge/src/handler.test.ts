@@ -12,7 +12,7 @@ import {
   type HandlerContext,
   type StreamSink,
 } from './handler.js'
-import { MAX_BODY_BYTES, PROTOCOL_VERSION, type HealthResponse } from './protocol.js'
+import { COMMITS_PATH, MAX_BODY_BYTES, PROTOCOL_VERSION, type HealthResponse } from './protocol.js'
 import { REVIEW123_ORIGIN, REVIEW123_WWW_ORIGIN } from './cors.js'
 
 const TOKEN = 'test-token-0000000000000000000000000000000'
@@ -56,6 +56,7 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
       inferAgentic: true,
       files: true,
       search: true,
+      commits: true,
       fix: false,
       checkout: false,
       push: false,
@@ -111,6 +112,10 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
       durationMs: 7,
     }),
     repoState: async () => ({ head: HEAD_SHA, branch: 'main', dirty: false }),
+    // The containment probe. The default repo "has" only its own HEAD, which
+    // is the pre-#293 world the equality test assumed — so a test that wants a
+    // commit the checkout is NOT sitting on has to say so, and says it as data.
+    commits: async (shas) => shas.filter((sha) => sha === HEAD_SHA),
     // Default stubs for the run-this-PR family. Like their siblings above, the
     // handler's own tests never run a git command; checkout.test.ts owns those
     // mechanics and this file owns the protocol gates.
@@ -176,6 +181,7 @@ describe('GET /v1/health', () => {
         inferAgentic: true,
         files: true,
         search: true,
+        commits: true,
         fix: false,
         checkout: false,
         push: false,
@@ -205,7 +211,7 @@ describe('GET /v1/health', () => {
 
   it('re-probes capabilities per request so a newly installed CLI shows up', async () => {
     let installed: string[] = []
-    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false, push: false }) })
+    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, inferStream: true, inferAgentic: true, files: true, search: true, commits: true, fix: false, checkout: false, push: false }) })
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
       inference: [],
       infer: true,
@@ -213,6 +219,7 @@ describe('GET /v1/health', () => {
       inferAgentic: true,
       files: true,
       search: true,
+      commits: true,
       fix: false,
       checkout: false,
       push: false,
@@ -225,6 +232,7 @@ describe('GET /v1/health', () => {
       inferAgentic: true,
       files: true,
       search: true,
+      commits: true,
       fix: false,
       checkout: false,
       push: false,
@@ -557,7 +565,7 @@ describe('POST /v1/infer', () => {
   it('503s a KNOWN cli that is not installed — checked before the worker runs', async () => {
     let spawnedAnyway = false
     const context = ctx({
-      capabilities: async () => ({ inference: [], infer: true, inferStream: true, inferAgentic: true, files: false, search: false, fix: false, checkout: false, push: false }),
+      capabilities: async () => ({ inference: [], infer: true, inferStream: true, inferAgentic: true, files: false, search: false, commits: true, fix: false, checkout: false, push: false }),
       infer: async () => {
         spawnedAnyway = true
         return { ok: true as const, text: '', truncated: false, durationMs: 0 }
@@ -712,6 +720,87 @@ describe('POST /v1/files', () => {
     const res = await handleRequest(req({ method: 'GET', path: '/v1/files' }), ctx())
     expect(res.status).toBe(405)
     expect(res.headers['Allow']).toBe('POST, OPTIONS')
+  })
+})
+
+describe('POST /v1/commits — the containment probe', () => {
+  const OTHER_SHA = 'b'.repeat(40)
+
+  it('answers which of the requested commits this repository has', async () => {
+    const res = await handleRequest(
+      req({
+        method: 'POST',
+        path: COMMITS_PATH,
+        body: Buffer.from(JSON.stringify({ shas: [HEAD_SHA, OTHER_SHA] })),
+      }),
+      ctx({ commits: async (shas) => shas.filter((s) => s === OTHER_SHA) }),
+    )
+    expect(res.status).toBe(200)
+    expect(parse(res.body)).toEqual({ ok: true, present: [OTHER_SHA] })
+  })
+
+  it('ANSWERS ON A READ-ONLY BRIDGE — it is a read, and it gets no write gate', async () => {
+    // The whole point: a client asks this BEFORE it offers the fix button, and
+    // a bridge without --allow-write must still be able to say "yes, that
+    // commit is here" so the refusal it does show names the right reason.
+    const res = await handleRequest(
+      req({
+        method: 'POST',
+        path: COMMITS_PATH,
+        body: Buffer.from(JSON.stringify({ shas: [OTHER_SHA] })),
+      }),
+      ctx({ allowWrite: false, commits: async (shas) => [...shas] }),
+    )
+    expect(res.status).toBe(200)
+    expect(parse(res.body)['present']).toEqual([OTHER_SHA])
+  })
+
+  it('a commit the repository has never seen comes back absent, not as an error', async () => {
+    const res = await handleRequest(
+      req({
+        method: 'POST',
+        path: COMMITS_PATH,
+        body: Buffer.from(JSON.stringify({ shas: [OTHER_SHA] })),
+      }),
+      ctx({ commits: async () => [] }),
+    )
+    expect(res.status).toBe(200)
+    expect(parse(res.body)).toEqual({ ok: true, present: [] })
+  })
+
+  it('400s a malformed body before the probe is ever called', async () => {
+    let called = false
+    const res = await handleRequest(
+      req({ method: 'POST', path: COMMITS_PATH, body: Buffer.from(JSON.stringify({ shas: ['abc'] })) }),
+      ctx({
+        commits: async () => {
+          called = true
+          return []
+        },
+      }),
+    )
+    expect(res.status).toBe(400)
+    expect(parse(res.body)['error']).toBe('bad-request')
+    expect(called).toBe(false)
+  })
+
+  it('405s the route reached with the wrong method', async () => {
+    const res = await handleRequest(req({ method: 'GET', path: COMMITS_PATH }), ctx())
+    expect(res.status).toBe(405)
+    expect(res.headers['Allow']).toBe('POST, OPTIONS')
+  })
+
+  it('still needs the pairing token, like every other route', async () => {
+    const res = await handleRequest(
+      req({
+        method: 'POST',
+        path: COMMITS_PATH,
+        body: Buffer.from(JSON.stringify({ shas: [OTHER_SHA] })),
+        headers: { authorization: 'Bearer wrong' },
+      }),
+      ctx(),
+    )
+    expect(res.status).toBe(401)
   })
 })
 
@@ -902,7 +991,7 @@ describe('POST /v1/fix — the other gates still apply', () => {
   it('refuses a CLI that is not installed, with 503 rather than a confusing 501', async () => {
     const res = await handleRequest(
       fixReq({ ...FIX_BODY, cli: 'codex' }),
-      ctx({ ...write, capabilities: async () => ({ inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: true, checkout: false, push: false }) }),
+      ctx({ ...write, capabilities: async () => ({ inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, commits: true, fix: true, checkout: false, push: false }) }),
     )
     expect(res.status).toBe(503)
     expect(parse(res.body)['error']).toBe('cli-unavailable')
@@ -1393,6 +1482,7 @@ describe('POST /v1/infer/stream — what is decided BEFORE the status line', () 
           inferAgentic: true,
           files: true,
           search: true,
+          commits: true,
           fix: false,
           checkout: false,
           push: false,
