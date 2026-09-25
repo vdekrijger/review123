@@ -2140,6 +2140,8 @@
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.resolved-label),
   :global(.diff-line-extend-wrapper) .inline-comment-threads .threads-hidden-note,
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-hint),
+  :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-open-btn),
+  :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.prompt-section-note),
   :global(.diff-line-extend-wrapper) .inline-comment-threads :global(.reply-pending-label),
   :global(.diff-line-extend-wrapper) .line-findings :global(.skill-line-note),
   :global(.diff-line-extend-wrapper) .line-findings :global(.finding-drag-handle) {
