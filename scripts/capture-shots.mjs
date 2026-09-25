@@ -39,11 +39,16 @@
  * fixture. See QUEUE_ROWS and seedQueue below:
  *   - a fixed wall clock, so `8h ago` is a constant and not "8h after whenever
  *     you ran this";
- *   - the whole GitHub API faked at the network boundary, so the rows and their
- *     diff stats are the fixture's and nothing is fetched;
- *   - the shutter held until EVERY row's size chip has landed, because the
- *     effort gauge is scaled to the largest churn CURRENTLY in the queue — a
- *     shot taken mid-fetch would size every bar against a smaller maximum.
+ *   - the whole GitHub API faked at the network boundary — REST *and* GraphQL,
+ *     since the row's CI state, unresolved-conversation count, diff size and
+ *     base standing all arrive in one batched GraphQL query now — so the rows
+ *     are the fixture's and nothing is fetched;
+ *   - the shutter held until EVERY row's signals have landed, not just its size
+ *     chip. The effort gauge is scaled to the largest churn CURRENTLY in the
+ *     queue, so a shot taken mid-fetch sizes every bar against a smaller
+ *     maximum; and a shot taken before the CI marks land is a different
+ *     picture of the same page. settleQueueSignals waits on all four counts,
+ *     each derived from the fixture so it cannot drift from it.
  *
  * FULL PAGE vs VIEWPORT, which is the one genuinely non-obvious part. Most
  * surfaces are shot `fullPage`, but the two step-2 diff surfaces are shot at
@@ -141,7 +146,22 @@ const QUEUE_NOW = new Date('2026-03-12T15:00:00.000Z')
  * work: five-digit PR numbers next to two-digit ones, titles from 12 to 95
  * characters, diffs from `+4 −0` to `+1183 −1902` (a 760× churn spread, so the
  * effort gauge has both ends of its range on screen), four repo groups, and
- * both lists — "Awaiting your review" and "Your open PRs" — non-empty.
+ * both lists — "Your open PRs" and "Awaiting your review" — non-empty.
+ *
+ * The signals columns are fixtured the same way, so the shot documents STATES
+ * and not just a layout. Between them the rows cover every branch the row can
+ * take:
+ *   ci         — 'SUCCESS' | 'FAILURE' | 'PENDING', and `null` for a PR with no
+ *                checks configured at all (which draws no mark — the one thing
+ *                it must not look like is a pass).
+ *   unresolved — 0 through 12, so the column has an empty case and a two-digit
+ *                one. Every row is served one RESOLVED thread on top, which is
+ *                what makes the shot evidence that the count is of threads and
+ *                not of everything in the list.
+ *   merge      — 'BEHIND' (draws the Update control), 'DIRTY' (draws
+ *                "conflicts", deliberately NOT a button) and 'CLEAN' (draws
+ *                nothing). Only meaningful on `mine` rows, since that is the
+ *                only subset whose base standing the page resolves.
  *
  * `e2e/queue-columns.spec.ts` has a deliberately similar fixture and they are
  * NOT shared on purpose: that one MEASURES column alignment and is free to
@@ -152,20 +172,20 @@ const QUEUE_NOW = new Date('2026-03-12T15:00:00.000Z')
  */
 const QUEUE_OWNER = 'posthog'
 const QUEUE_ROWS = [
+  // Your open PRs — the section the page now leads with.
+  { repo: 'posthog', n: 21990, title: 'feat: add a new dashboard tile type', add: 41, del: 12, ageMin: 90, mine: true, ci: 'SUCCESS', unresolved: 2, merge: 'BEHIND' },
+  { repo: 'posthog-foss', n: 91, title: 'feat(api): expose the query endpoint to personal api keys with scoped permissions', add: 155, del: 43, ageMin: 45, mine: true, ci: 'FAILURE', unresolved: 4, merge: 'DIRTY' },
+  { repo: 'posthog-foss', n: 88, title: 'build: pin node to 20', add: 9, del: 9, ageMin: 720, mine: true, ci: 'SUCCESS', unresolved: 0, merge: 'CLEAN' },
   // Awaiting your review.
-  { repo: 'posthog', n: 21902, title: 'fix: flaky test', add: 4, del: 0, ageMin: 35 },
-  { repo: 'posthog', n: 21841, title: 'feat(surveys): allow multiple choice questions to be randomized', add: 216, del: 179, ageMin: 480 },
-  { repo: 'posthog', n: 21733, title: 'refactor(insights): extract the trends query runner out of the insight serializer', add: 66, del: 4, ageMin: 125 },
-  { repo: 'posthog', n: 20117, title: 'chore(deps): bump the whole frontend toolchain to the latest majors and regenerate the lockfile', add: 1183, del: 1902, ageMin: 4320 },
-  { repo: 'posthog-js', n: 1211, title: 'feat: session recording canvas support behind a flag', add: 402, del: 88, ageMin: 1560 },
-  { repo: 'posthog-js', n: 1204, title: 'fix(autocapture): do not capture password inputs', add: 18, del: 7, ageMin: 300 },
-  { repo: 'posthog-js', n: 1180, title: 'docs: readme', add: 6, del: 2, ageMin: 10080 },
-  { repo: 'plugin-server', n: 3312, title: 'fix(ingestion): drop events with malformed distinct ids instead of dead-lettering them', add: 240, del: 64, ageMin: 15 },
-  { repo: 'plugin-server', n: 3290, title: 'chore: tidy imports', add: 12, del: 30, ageMin: 2880 },
-  // Your open PRs.
-  { repo: 'posthog', n: 21990, title: 'feat: add a new dashboard tile type', add: 41, del: 12, ageMin: 90, mine: true },
-  { repo: 'posthog-foss', n: 91, title: 'feat(api): expose the query endpoint to personal api keys with scoped permissions', add: 155, del: 43, ageMin: 45, mine: true },
-  { repo: 'posthog-foss', n: 88, title: 'build: pin node to 20', add: 9, del: 9, ageMin: 720, mine: true },
+  { repo: 'posthog', n: 21902, title: 'fix: flaky test', add: 4, del: 0, ageMin: 35, ci: 'SUCCESS', unresolved: 0 },
+  { repo: 'posthog', n: 21841, title: 'feat(surveys): allow multiple choice questions to be randomized', add: 216, del: 179, ageMin: 480, ci: 'FAILURE', unresolved: 3 },
+  { repo: 'posthog', n: 21733, title: 'refactor(insights): extract the trends query runner out of the insight serializer', add: 66, del: 4, ageMin: 125, ci: 'PENDING', unresolved: 1 },
+  { repo: 'posthog', n: 20117, title: 'chore(deps): bump the whole frontend toolchain to the latest majors and regenerate the lockfile', add: 1183, del: 1902, ageMin: 4320, ci: 'SUCCESS', unresolved: 12 },
+  { repo: 'posthog-js', n: 1211, title: 'feat: session recording canvas support behind a flag', add: 402, del: 88, ageMin: 1560, ci: 'FAILURE', unresolved: 0 },
+  { repo: 'posthog-js', n: 1204, title: 'fix(autocapture): do not capture password inputs', add: 18, del: 7, ageMin: 300, ci: null, unresolved: 2 },
+  { repo: 'posthog-js', n: 1180, title: 'docs: readme', add: 6, del: 2, ageMin: 10080, ci: 'SUCCESS', unresolved: 0 },
+  { repo: 'plugin-server', n: 3312, title: 'fix(ingestion): drop events with malformed distinct ids instead of dead-lettering them', add: 240, del: 64, ageMin: 15, ci: 'PENDING', unresolved: 5 },
+  { repo: 'plugin-server', n: 3290, title: 'chore: tidy imports', add: 12, del: 30, ageMin: 2880, ci: 'SUCCESS', unresolved: 0 },
 ]
 
 /**
@@ -348,11 +368,15 @@ async function gotoStep(page, step) {
  * designed empty state renders — note it needs auth configured to exist at all,
  * which is why the empty shot still carries QUEUE_SETTINGS).
  *
- * Two endpoints matter. `/search/issues` is asked twice by
+ * Three endpoints matter. `/search/issues` is asked twice by
  * githubProvider.getMyQueue — once with `review-requested:@me` and once with
  * `author:@me` — and those two answers are what split the page's two lists.
- * `/repos/:owner/:repo/pulls/:number` is the per-row diff-size fetch that fills
- * the +/− chip and the effort gauge. Anything else answers `[]` rather than
+ * `/graphql` is the batched signals query: CI state, unresolved review threads,
+ * diff size and base standing for every row in one document (and a second,
+ * separate document for the `mine` rows' merge state). `/repos/:o/:r/pulls/:n`
+ * is the REST size fetch, which is now only reached for rows the GraphQL query
+ * could not answer — it stays faked so a fixture mistake shows up as a missing
+ * chip rather than as a live request. Anything else answers `[]` rather than
  * escaping to the network.
  */
 async function seedQueue(context, mode) {
@@ -364,8 +388,58 @@ async function seedQueue(context, mode) {
     repository_url: `https://api.github.com/repos/${QUEUE_OWNER}/${r.repo}`,
   })
 
+  /**
+   * Pull the aliased PRs out of a signals document, in order.
+   *
+   * Both documents the app sends are built the same way — `pN: repository(owner:
+   * "…", name: "…") { … pullRequest(number: N) …` — so one matcher reads either,
+   * and the response is keyed by the alias the app itself chose rather than by
+   * an index this file would have to keep in step.
+   */
+  const aliasesOf = (query) =>
+    [...query.matchAll(/(p\d+): repository\(owner: "[^"]+", name: "([^"]+)"\)[\s\S]*?pullRequest\(number: (\d+)\)/g)]
+      .map(([, alias, repo, number]) => ({
+        alias,
+        row: rows.find((r) => r.repo === repo && String(r.n) === number),
+      }))
+
+  const signalsNode = (row) => ({
+    viewerPermission: 'WRITE',
+    pullRequest: {
+      additions: row.add,
+      deletions: row.del,
+      mergeable: row.merge === 'DIRTY' ? 'CONFLICTING' : 'MERGEABLE',
+      headRefOid: `sha${row.n}`,
+      reviewThreads: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          ...Array.from({ length: row.unresolved ?? 0 }, () => ({ isResolved: false })),
+          // One RESOLVED thread on every row. The count in the shot is of
+          // unresolved threads, and a fixture that only ever served unresolved
+          // ones would photograph a total just as happily.
+          { isResolved: true },
+        ],
+      },
+      commits: { nodes: [{ commit: { statusCheckRollup: row.ci ? { state: row.ci } : null } }] },
+    },
+  })
+
   await context.route('**/api.github.com/**', (route) => {
     const url = new URL(route.request().url())
+
+    if (url.pathname === '/graphql') {
+      const query = JSON.parse(route.request().postData() ?? '{}').query ?? ''
+      // The merge-state document is the one that does NOT ask for threads.
+      const isMergeState = !query.includes('reviewThreads')
+      const data = {}
+      for (const { alias, row } of aliasesOf(query)) {
+        if (!row) continue
+        data[alias] = isMergeState
+          ? { pullRequest: { mergeStateStatus: row.merge ?? 'CLEAN' } }
+          : signalsNode(row)
+      }
+      return route.fulfill({ json: { data } })
+    }
 
     if (url.pathname === '/search/issues') {
       const mine = (url.searchParams.get('q') ?? '').includes('author:')
@@ -384,21 +458,45 @@ async function seedQueue(context, mode) {
 }
 
 /**
- * Hold the shutter until every queue row has its size.
+ * What the queue shot must be holding before the shutter fires, derived from
+ * QUEUE_ROWS so it cannot drift from the fixture.
  *
- * The sizes are fetched AFTER the list renders, four at a time, and the effort
- * gauge scales each bar to the largest churn currently known — so a shot taken
- * with ten of twelve sizes in hand draws ten bars against the wrong maximum and
- * differs from the next run. Waiting for the full count is what makes the
- * gauge a constant.
+ * A count per column, because every one of them is filled ASYNCHRONOUSLY and
+ * each has its own way of making two runs differ:
+ *   size       — the effort gauge scales each bar to the largest churn CURRENTLY
+ *                known, so a shot with ten of twelve sizes in hand draws ten
+ *                bars against the wrong maximum;
+ *   ci         — a mark that lands after the shutter is simply a different
+ *                picture of the same page;
+ *   unresolved — same;
+ *   base       — the Update control and the "conflicts" note arrive on a SECOND
+ *                request (the merge-state document), so they can land a beat
+ *                after everything else.
+ *
+ * Only rows that actually DRAW something are counted: a PR with no CI
+ * configured draws no mark, a PR with nothing unresolved draws no count, and a
+ * CLEAN branch draws nothing at all. Counting rows instead of marks would wait
+ * forever on elements that are correctly absent.
  */
-async function settleQueueSizes(page, expected) {
-  if (expected === 0) return
-  await page.waitForFunction(
-    (n) => document.querySelectorAll('[data-testid="queue-size"]').length === n,
-    expected,
-    { timeout: 30_000 },
-  )
+function queueExpectations() {
+  return {
+    'queue-size': QUEUE_ROWS.length,
+    'queue-ci': QUEUE_ROWS.filter((r) => r.ci).length,
+    'queue-unresolved': QUEUE_ROWS.filter((r) => (r.unresolved ?? 0) > 0).length,
+    'queue-base': QUEUE_ROWS.filter((r) => r.merge === 'BEHIND' || r.merge === 'DIRTY').length,
+  }
+}
+
+/** Hold the shutter until every signal the fixture promises is on screen. */
+async function settleQueueSignals(page, mode) {
+  if (mode === 'empty') return
+  for (const [testid, expected] of Object.entries(queueExpectations())) {
+    await page.waitForFunction(
+      ({ testid: id, n }) => document.querySelectorAll(`[data-testid="${id}"]`).length === n,
+      { testid, n: expected },
+      { timeout: 30_000 },
+    )
+  }
 }
 
 /** Fonts done + two idle frames, so nothing is mid-layout when the shutter fires. */
@@ -428,7 +526,7 @@ async function capture(browser, base, shot, theme) {
   const page = await context.newPage()
   await page.goto(base + shot.path, { waitUntil: 'networkidle' })
   await gotoStep(page, shot.step ?? 1)
-  if (shot.queue) await settleQueueSizes(page, shot.queue === 'empty' ? 0 : QUEUE_ROWS.length)
+  if (shot.queue) await settleQueueSignals(page, shot.queue)
   await settle(page)
 
   const file = join(outDir, `${shot.name}-${theme}.png`)

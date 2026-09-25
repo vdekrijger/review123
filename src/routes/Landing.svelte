@@ -1044,16 +1044,18 @@
      cell, ~25 characters, which buys alignment by throwing away the one field
      that says what the PR is. So the content column widens for content, and
      the hero keeps its own measure inside it (below). */
-  /* 52rem seated five trailing columns. The queue now carries seven — CI state
-     and the unresolved-conversation count are two more reserved measures, and
-     the base-standing cell a third — and the column the widening protects is
-     the TITLE: at 52rem those three would have eaten it down to the ~330px
-     floor e2e/queue-columns.spec.ts holds, which is the width at which the row
-     stops saying which PR it is. The hero keeps its own 40rem measure inside
-     (below), so the prose is untouched. */
+  /* 52rem seated five trailing columns. The queue now carries eight — CI state,
+     the unresolved-conversation count and the base-standing cell are three more
+     reserved measures — and the column the widening protects is the TITLE.
+     MEASURED: at 52rem the new columns took the title's one truncation measure
+     to 197px, and at 60rem to 325.5px, under the 330px floor
+     e2e/queue-columns.spec.ts holds (the old layout's WORST row) — which is the
+     width at which a row shows everything about a PR except which PR it is.
+     62rem puts it back to ~357px. The hero keeps its own 40rem measure inside
+     (below), so the prose is untouched by any of this. */
   .landing.has-content {
     margin-top: var(--space-6);
-    max-width: 60rem;
+    max-width: 62rem;
   }
 
   .landing.has-content > h1,
