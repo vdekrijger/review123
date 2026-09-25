@@ -1217,25 +1217,28 @@
     for (const [key, threads] of byKey) {
       const side = threads[0].root.side as 'LEFT' | 'RIGHT'
       const line = threads[0].root.line as number
-      const reasons = HIDDEN_REASONS.filter((r) => suppressedThreads(threads, r).length > 0)
+      const groups = HIDDEN_REASONS.map((reason) => ({
+        reason,
+        list: suppressedThreads(threads, reason),
+      })).filter((g) => g.list.length > 0)
       const revealed = threads.every((t) => revealedRoots.has(t.root.id))
       // "Line 19 — 1 resolved thread shown, 1 bot thread hidden. Show them
       // here." Each reason states its OWN count and its OWN state, so a line
       // holding both never reduces to one number the reader cannot act on.
-      const clauses = reasons.map((r) => {
-        const group = suppressedThreads(threads, r)
-        const shown = group.every((t) => revealedRoots.has(t.root.id))
-        return `${reasonPhrase(group.length, r)} ${shown ? 'shown' : 'hidden'}`
+      const clauses = groups.map((g) => {
+        const shown = g.list.every((t) => revealedRoots.has(t.root.id))
+        return `${reasonPhrase(g.list.length, g.reason)} ${shown ? 'shown' : 'hidden'}`
       })
-      const action = revealed ? 'Hide them again.' : 'Show them here.'
       out.push({
         key,
         side,
         line,
         threads,
-        reasons: [...reasons],
+        reasons: groups.map((g) => g.reason),
         revealed,
-        label: `Line ${line} — ${clauses.join(', ')}. ${action}`,
+        label: `Line ${line} — ${clauses.join(', ')}. ${
+          revealed ? 'Hide them again.' : 'Show them here.'
+        }`,
       })
     }
     return out
