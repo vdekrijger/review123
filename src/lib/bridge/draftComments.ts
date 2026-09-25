@@ -113,6 +113,75 @@ export function sanitizeDraftText(text: string): string {
   return sanitizeQuoted(text, DRAFT_QUOTE_RULES)
 }
 
+// ---------------------------------------------------------------------------
+// §1b — THE REVIEWER'S OVERALL COMMENT, AS BACKGROUND
+//
+// A note says what to change at one place. An overall comment says what the
+// reviewer thinks of the change as a whole — "stop throwing, use the Result
+// helper", "this all needs to survive a cold cache" — and an agent acting on a
+// note without it can satisfy the note while contradicting the review.
+//
+// So it travels, and it travels UNDER A DIFFERENT HEADER from the note. The
+// bridge's fix route is one finding, one agent turn, one commit: there is no
+// shared preamble a run can carry, so the only way shared context reaches every
+// turn is inside each one. That makes the header's job explicit — this is
+// background, the note above is the task, and the agent must not widen its
+// change to cover it or make a separate change for it.
+//
+// THE VERDICT DOES NOT TRAVEL, and that is a decision rather than an omission.
+// Approve / Request changes is a statement to the pull request's author about
+// what happens next; it is not a claim about code and carries no instruction an
+// agent could act on. Telling a fixing agent "the reviewer already requested
+// changes" would push against the one answer #285 works hardest to keep cheap —
+// SKIP — by implying a change is owed. It stays on the review, where it is
+// addressed to a person.
+// ---------------------------------------------------------------------------
+
+/**
+ * How much of the overall comment is quoted. Deliberately SMALLER than a note's
+ * own cap: the bridge accepts 8,000 characters of `body` per finding, the note
+ * is the task, and background must never be able to crowd it out.
+ */
+export const REVIEW_CONTEXT_MAX_CHARS = 1_500
+
+/** The context fence's markers, as literals — defanged wherever they occur. */
+const CONTEXT_MARKER_LITERAL = /--\s*(BEGIN|END)\s+REVIEWER OVERALL COMMENT/gi
+
+const CONTEXT_QUOTE_RULES: QuoteRules = {
+  marker: CONTEXT_MARKER_LITERAL,
+  maxChars: REVIEW_CONTEXT_MAX_CHARS,
+  cutNote: (max) =>
+    `[your overall comment was cut at ${max} characters — the agent did not see the rest]`,
+}
+
+/** Same mechanics as a note: strip what hides meaning, cap the rest. */
+export function sanitizeReviewContext(text: string): string {
+  return sanitizeQuoted(text, CONTEXT_QUOTE_RULES)
+}
+
+/**
+ * The overall comment, fenced and labelled as BACKGROUND.
+ *
+ * Its header is the opposite of DRAFT_NOTE_SUGGESTED_FIX's: the note is the
+ * reviewer's direction and is meant to be acted on, this is the reviewer's view
+ * of the whole change and is meant to be read. Both are the same person's
+ * words, so neither carries the untrusted-data disclaimer #282 writes for a
+ * third party's comment.
+ */
+export function fenceReviewContext(text: string, nonce: string): string {
+  return [
+    "THE REVIEWER'S OVERALL COMMENT ON THIS PULL REQUEST — BACKGROUND, NOT YOUR TASK.",
+    'The same person wrote it, about the change as a whole rather than about the',
+    'location above. Read it so the change you make fits what they are asking for.',
+    'Do NOT make a separate change for it, and do not widen this task to cover it:',
+    'your task is the note above, at the path and line above. Where the two pull in',
+    'different directions, follow the note.',
+    `--BEGIN REVIEWER OVERALL COMMENT ${nonce}--`,
+    text,
+    `--END REVIEWER OVERALL COMMENT ${nonce}--`,
+  ].join('\n')
+}
+
 /**
  * THE ONLY IMPERATIVE SENTENCE A DRAFTED NOTE EVER GETS.
  *
@@ -134,6 +203,8 @@ export function fenceDraftNote(
   input: { path: string; line: number; fromCommit: string | null },
   text: string,
   nonce: string,
+  /** The reviewer's SANITISED overall comment, or '' when there is none. */
+  context = '',
 ): string {
   const lines = [
     "REVIEWER'S OWN NOTE — THE PERSON REVIEWING THIS PULL REQUEST WROTE THIS.",
@@ -156,6 +227,10 @@ export function fenceDraftNote(
     text,
     `--END REVIEWER NOTE ${nonce}--`,
   )
+  // AFTER the note, never before it: the first thing the agent reads has to be
+  // the thing it is being asked to do. Same nonce, different markers — one
+  // unguessable delimiter per note, so neither block can close the other.
+  if (context !== '') lines.push('', fenceReviewContext(context, nonce))
   return lines.join('\n')
 }
 
@@ -221,8 +296,21 @@ export function describeDraftNoteRefusal(reason: DraftNoteRefusal, count: number
  * finding beside them. Session-scoped either way: nothing persists a finding id
  * (a note's own decision is stored under its `draftKey`, which never moves).
  */
-export function draftNoteKey(draft: Pick<Draft, 'prKey' | 'path' | 'line' | 'side' | 'n'>): string {
-  return `draft-note:v${promptVersionFor('draftNote')}:${draftKey(draft)}`
+export function draftNoteKey(
+  draft: Pick<Draft, 'prKey' | 'path' | 'line' | 'side' | 'n'>,
+  /**
+   * Whether this note travels WITH the reviewer's overall comment.
+   *
+   * PRESENCE ONLY, never the comment's text. The id has to stay still while the
+   * reviewer types in the overall-comment box: the results list looks a note's
+   * fate up by this key, and `withdrawnNotes` recomputes it from the store —
+   * a key that moved on every keystroke would take a withdrawn note's way back
+   * down with it, which is exactly the bug `noteIndex` exists to prevent.
+   */
+  withContext = false,
+): string {
+  const context = withContext ? `+c${promptVersionFor('reviewContext')}` : ''
+  return `draft-note:v${promptVersionFor('draftNote')}${context}:${draftKey(draft)}`
 }
 
 /**
@@ -278,9 +366,16 @@ export function intakeDraftNotes(
   drafts: readonly Draft[],
   files: readonly Pick<PrFile, 'filename'>[],
   currentHeadSha?: string,
+  /**
+   * The reviewer's overall review comment, when there is one — sent with every
+   * note as BACKGROUND (see §1b). Absent, empty or whitespace reads as "none",
+   * and then nothing about the wire shape changes at all.
+   */
+  overall?: string | null,
 ): DraftNoteIntake {
   const offered: DraftNoteCandidate[] = []
   const refused: DraftNoteRefused[] = []
+  const context = typeof overall === 'string' ? sanitizeReviewContext(overall) : ''
 
   for (const draft of drafts) {
     const key = draftKey(draft)
@@ -311,13 +406,13 @@ export function intakeDraftNotes(
         : null
     const nonce = fenceNonce()
     offered.push({
-      key: draftNoteKey(draft),
+      key: draftNoteKey(draft, context !== ''),
       draftKey: key,
       path,
       line: draft.line,
       side: draft.side,
       preview: firstLine(text),
-      quoted: fenceDraftNote({ path, line: draft.line, fromCommit }, text, nonce),
+      quoted: fenceDraftNote({ path, line: draft.line, fromCommit }, text, nonce, context),
       fromCommit,
       ...(draft.handoff !== undefined ? { handoff: draft.handoff } : {}),
     } satisfies DraftNoteCandidate)
@@ -350,12 +445,20 @@ export interface WithdrawnNote {
  * panel looks a result's note up by that key, and a withdrawal that hid the
  * control that undoes it would not be reversible in the moment it matters.
  */
-export function withdrawnNotes(drafts: readonly Draft[]): WithdrawnNote[] {
+export function withdrawnNotes(
+  drafts: readonly Draft[],
+  /**
+   * The SAME flag the intake was given. A caller that sends the overall comment
+   * must pass it here too, or a withdrawn note's key would not match the one its
+   * result row was filed under.
+   */
+  withContext = false,
+): WithdrawnNote[] {
   const out: WithdrawnNote[] = []
   for (const draft of drafts) {
     if (draft.handoff !== 'withdrawn') continue
     out.push({
-      key: draftNoteKey(draft),
+      key: draftNoteKey(draft, withContext),
       draftKey: draftKey(draft),
       path: draft.path,
       line: draft.line,
