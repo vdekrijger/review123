@@ -68,6 +68,7 @@ describe('PROMPT_VERSIONS map', () => {
         'standingRules',
         'fixVerify',
         'draftNote',
+        'reviewContext',
       ].sort(),
     )
   })

@@ -285,7 +285,13 @@ const EVENTS = {
   //                  — an integer count, added because "does anyone hand their
   //                  own notes to the agent" is the only question the feature
   //                  that added them asks, and it cannot be read out of a total.
-  bridge_fix_dispatched: ['findings', 'cli', 'round', 'notes'],
+  //                  'surface' is 'inspect' | 'verdict' — WHICH entry point
+  //                  sent the batch. The Verdict step hands over a finished
+  //                  review rather than findings read mid-diff, and whether
+  //                  anybody does that is unanswerable from a total. A
+  //                  two-valued, app-owned enum; it says nothing about the
+  //                  review, the code or the repository.
+  bridge_fix_dispatched: ['findings', 'cli', 'round', 'notes', 'surface'],
   // The same run's OUTCOME. Counts and fixed enums only:
   //   - 'outcome'      : 'done' | 'failed' | 'cancelled'.
   //   - 'failure'      : the FixFailureKind enum ('unreachable', 'timeout',

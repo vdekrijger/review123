@@ -47,6 +47,14 @@
   import type { VerdictModelBreakdown } from '../lib/ai/run.svelte'
   import type { ModelCostRow } from '../lib/ai/modelCostBreakdown'
   import { buildReviewPrompt } from '../lib/ai/reviewPrompt'
+  import AgentFixPanel from './AgentFixPanel.svelte'
+  import {
+    intakeDraftNotes,
+    withdrawnNotes,
+    type DraftNoteRefusal,
+  } from '../lib/bridge/draftComments'
+  import { currentFixReadiness } from '../lib/bridge/fixLoop'
+  import type { DraftHandoff } from '../lib/drafts/drafts.svelte'
   import { buildReviewCommand, type ReviewExportFormat } from '../lib/github/reviewExport'
   import type { PrFile } from '../lib/github/types'
 
@@ -531,6 +539,103 @@
     commandCopyTimer = setTimeout(() => { commandCopied = false }, 2000)
   }
 
+  // ---- Hand the finished review to the local coding agent -----------------
+  //
+  // ────────────────────────────────────────────────────────────────────────
+  // THE SUBSTANCE ALREADY EXISTED. THE MISSING THING WAS THE MOMENT.
+  //
+  // The fix panel on Step 2 can already send the reviewer's own drafted notes
+  // to their coding agent: scratch worktree, one commit per note, a bounded
+  // loop, one verification re-read, and a decision about each note afterwards.
+  // What it cannot do is serve the moment this step is about. On Inspect the
+  // reviewer is mid-read and works note by note; here they have finished, and
+  // what they want to hand over is the whole thing.
+  //
+  // So this is the SAME panel, not a second one. Nothing about the loop, the
+  // verification, the wording or the note's fate is re-implemented — the only
+  // things that differ are named props (`surface`, `offerBotComments`, `title`,
+  // `lead`) and the one thing this step has that Inspect does not: a finished
+  // overall comment, which travels with every note as background.
+  //
+  // WHAT DOES NOT TRAVEL IS THE VERDICT. Approve / Request changes is a
+  // statement to the pull request's author about what happens next, not a claim
+  // about code; the reasoning is in src/lib/bridge/draftComments.ts §1b.
+  //
+  // AND IT IS NOT SUBMITTING. Like "Copy as LLM prompt", it posts nothing and
+  // clears nothing. A reviewer who hands the work over and then decides not to
+  // submit can do exactly that, and a note withdrawn in the panel leaves the
+  // review without being deleted — `store.drafts` (the submitted list) drops it
+  // while `store.all` keeps the words.
+  // ────────────────────────────────────────────────────────────────────────
+
+  /** The overall comment, or null when there is none to carry. */
+  const handoverContext = $derived(body.trim() === '' ? null : body)
+
+  // Intaken by src/lib/bridge/draftComments.ts, which owns every rule about
+  // which note may be offered, how it is quoted and what the agent is told about
+  // whose words it is reading. Read from `store.all` so a withdrawn note is
+  // listed with its way back rather than vanishing.
+  const noteIntake = $derived(intakeDraftNotes(store.all, files, commitId, handoverContext))
+  const handoverNotes = $derived(noteIntake.offered)
+  const handoverWithdrawn = $derived(withdrawnNotes(store.all, handoverContext !== null))
+
+  /** Refusals grouped by reason — the panel states counts, never a silence. */
+  const handoverRefusals = $derived.by((): [DraftNoteRefusal, number][] => {
+    const out = new Map<DraftNoteRefusal, number>()
+    for (const r of noteIntake.refused) out.set(r.reason, (out.get(r.reason) ?? 0) + 1)
+    return [...out.entries()]
+  })
+
+  /**
+   * Notes going to the agent whose LINE the posting path has to re-route.
+   *
+   * These are the drafts the `offdiff-presubmit-note` above is about: their line
+   * is not in the current diff, so posting them becomes a file comment (and a
+   * one-shot review command has to fold them into the body). None of that is a
+   * limit an agent has — a note about a file is perfectly actionable — so they
+   * are sent like any other, and the copy says so rather than leaving the
+   * reviewer to assume the export's limitation applies here too.
+   */
+  const handoverOffDiff = $derived(
+    handoverNotes.filter((n) => offDiffKeys.has(n.draftKey)).length,
+  )
+
+  /**
+   * Is a bridge paired at all? The panel's own first rule, mirrored here so the
+   * framing around it never renders over an empty space.
+   *
+   * With none paired, nothing appears and "Copy as LLM prompt" is exactly what it
+   * was — telling somebody who has never heard of the bridge what they are
+   * missing is noise, the same rule the grounding indicator follows. Every OTHER
+   * refusal is worth saying, and the panel says it: which grant is missing and
+   * the command that starts a bridge with it.
+   */
+  const bridgePaired = $derived(currentFixReadiness(commitId).reason !== 'no-bridge')
+
+  const handoverVisible = $derived(
+    bridgePaired && (handoverNotes.length > 0 || handoverWithdrawn.length > 0),
+  )
+
+  /**
+   * A bridge is there and there is nothing anchored to hand it.
+   *
+   * An overall comment names no file and no line, and the fix route is one
+   * finding at one location per agent turn. Inventing a location for it would be
+   * this component claiming a structure the reviewer never wrote — so it says so
+   * instead, and points at the export that CAN carry a whole review as text.
+   */
+  const handoverEmpty = $derived(bridgePaired && !handoverVisible && body.trim() !== '')
+
+  /** Record one note's fate. The store is the only writer of `handoff`. */
+  function noteHandoff(key: string, handoff: DraftHandoff): void {
+    void store.setHandoff(key, handoff)
+  }
+
+  /** Mark notes as handed over. Never overwrites a decision already made. */
+  function notesSent(keys: string[]): void {
+    void store.markSent(keys)
+  }
+
   // ---- Submit handler ----
 
   async function handleSubmit() {
@@ -952,8 +1057,62 @@
         Review prompt copied to clipboard.
       {/if}
     </p>
+
+    <!-- HAND THE FINISHED REVIEW TO THE LOCAL AGENT.
+         The same panel Step 2 mounts, with this step's own framing. Placed BELOW
+         the actions rather than under the readiness basis on purpose: a
+         "hand it all over" control sitting directly beneath a grade is exactly
+         where a reader could conclude the checking has been discharged, and the
+         verdict and the actions sit between the two. -->
+    {#if handoverVisible}
+      <AgentFixPanel
+        headSha={commitId}
+        candidates={[]}
+        surface="verdict"
+        offerBotComments={false}
+        title="Hand these notes to your coding agent"
+        lead={handoverLead}
+        draftNotes={handoverNotes}
+        withdrawn={handoverWithdrawn}
+        draftNoteRefusals={handoverRefusals}
+        onNoteHandoff={noteHandoff}
+        onNotesSent={notesSent}
+      />
+    {:else if handoverEmpty}
+      <p class="handover-empty" data-testid="verdict-handover-empty">
+        A bridge is connected, but there is nothing here to hand it: an overall comment names no
+        file and no line, and your agent is given one location at a time. Draft a line note and it
+        can go — or use <strong>Copy as LLM prompt</strong>, which carries this whole review as
+        text, your comment and verdict included.
+      </p>
+    {/if}
   </div>
 {/if}
+
+<!-- This step's own framing for the shared panel. It is a snippet rather than
+     prose inside AgentFixPanel because these sentences are about THIS moment:
+     what the reviewer has just finished, what is about to leave the page, and
+     the grade sitting further up that none of it answers. -->
+{#snippet handoverLead()}
+  <p class="handover-line" data-testid="verdict-handover-separable">
+    This hands over your notes, not your review. Nothing is submitted, nothing is cleared, and not
+    a word of what you wrote changes — sending and submitting are separate acts, in either order or
+    not at all. Submitting does clear your drafts and takes this panel with them, so copy anything
+    you still want from the agent's results first.
+  </p>
+  <p class="handover-line" data-testid="verdict-handover-proposal">
+    What comes back is one commit per note, on a scratch branch your checkout never sees, for you to
+    read and take or leave. It is a proposal, not a change — and it is not an answer to what the
+    readiness basis further up is about. That measures how much of this pull request was actually
+    read; an agent writing code is not that being done.
+  </p>
+  <p class="handover-line" data-testid="verdict-handover-payload">
+    Each note travels anchored to its own file and line{#if handoverOffDiff > 0}, the {handoverOffDiff === 1 ? 'one that can only post as a file comment' : `${handoverOffDiff} that can only post as file comments`} included — an agent has no such limit{/if}.
+    {#if handoverContext !== null}Your overall comment travels with them as background, marked as
+      context rather than a task.{/if} Your verdict does not travel: it is something you say to the
+    pull request's author, not an instruction about code.
+  </p>
+{/snippet}
 
 <style>
   .signed-out {
@@ -1224,6 +1383,27 @@
     min-height: 1.1rem;
     font-size: 0.85rem;
     color: var(--legend-added-color);
+  }
+
+  /* The agent handover's own framing + its "nothing to hand over" sentence.
+     On the type and spacing scales: the ratchet governs what gets written
+     from here on, not only what was written before it. */
+  .handover-line {
+    margin: 0 0 var(--space-1);
+    font-size: var(--text-xs);
+  }
+
+  .handover-line:last-child {
+    margin-bottom: 0;
+  }
+
+  .handover-empty {
+    margin: 0;
+    padding: var(--space-3);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
   }
 
   .copy-status .copy-error {

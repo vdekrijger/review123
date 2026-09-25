@@ -29,6 +29,21 @@ import { STORY_LAYERS, STORY_MAX_STEPS, IMPACT_MAX_PER_GROUP, RISK_JUDGE_MAX_SNI
 // ids — so changing either piece of text above and bumping this entry makes the
 // re-read a clean cache miss for notes and a clean HIT for everything else.
 // Nothing else keys on it: the bridge itself caches no prompt.
+// PROMPT_VERSIONS reviewContext 1 (the reviewer's overall comment, carried to
+// the fixing agent as background): NEW app-authored prompt text — the fenced
+// "BACKGROUND, NOT YOUR TASK" wrapper in src/lib/bridge/draftComments.ts that
+// travels with a note sent from the Verdict step, where the reviewer has a whole
+// finished review rather than one note. A new entry rather than a bump of
+// `draftNote`: bumping that one would move the finding id of every note sent
+// from the Inspect step, for a prompt change those notes never carry.
+//
+// It is USED, and used PRESENCE-ONLY: `draftNoteKey` appends this version when a
+// note travels with an overall comment and omits it otherwise, so a note sent
+// with context and the same note sent without are different findings. The
+// comment's TEXT is deliberately not in the id — the fixVerify cache is keyed on
+// the agent's commit shas, which are content-addressed over what the agent
+// actually produced, and an id that moved while the reviewer typed would break
+// the result row's lookup of the note it belongs to.
 // PROMPT_VERSIONS fixVerify 1 (verify the agent's fix, once): a NEW post-fix
 // prompt (src/lib/ai/fixVerify.ts buildFixVerifyPrompt) that re-reads the
 // coding agent's own diff. The persona that RAISED each finding judges whether
@@ -172,6 +187,7 @@ export type PromptVersionedTaskId =
   | 'standingRules'
   | 'fixVerify'
   | 'draftNote'
+  | 'reviewContext'
 
 /**
  * Per-task prompt versions (H6 — cache-invalidation hygiene).
@@ -215,6 +231,7 @@ export const PROMPT_VERSIONS: Record<PromptVersionedTaskId, number> = {
   standingRules: 1,
   fixVerify: 1,
   draftNote: 1,
+  reviewContext: 1,
 }
 
 /** The prompt version that keys `task`'s cache entries. */
