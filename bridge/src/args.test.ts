@@ -24,6 +24,10 @@ describe('parseArgs defaults', () => {
       // which is a SEPARATE default for a separate grant: nothing about
       // enabling one may enable the other.
       allowCheckout: false,
+      // And push capability is OFF unless the user typed --allow-push — a
+      // THIRD separate default, for the one grant whose effects other people
+      // can see and that nobody can undo. Neither of the two above enables it.
+      allowPush: false,
       appUrl: null,
       help: false,
     })

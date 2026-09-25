@@ -63,7 +63,14 @@ import {
   statusForFilesError,
   type FilesOutcome,
 } from './files.js'
+import { parseCiFixRequest, runCiFix, type CiFixOutcome } from './ciFix.js'
 import { parseFixRequest, runFixLoop, statusForFixError, type FixOutcome } from './fix.js'
+import {
+  PushError,
+  parsePushRequest,
+  runPush,
+  statusForPushError,
+} from './push.js'
 import { readGitState } from './gitState.js'
 import {
   parseInferRequest,
@@ -82,6 +89,8 @@ import {
   type BridgeCapabilities,
   type BridgeErrorCode,
   type CheckoutRequest,
+  type CiFixRequest,
+  type CiFixResponse,
   type ErrorResponse,
   type FilesRequest,
   type FixRequest,
@@ -90,6 +99,8 @@ import {
   type HealthResponse,
   type InferRequest,
   type InferResponse,
+  type PushRequest,
+  type PushResponse,
   type RestoreRequest,
   type SearchRequest,
   type SearchResponse,
@@ -169,6 +180,16 @@ export interface HandlerContext {
    * handler never falls back from one to the other.
    */
   allowCheckout: boolean
+  /**
+   * `--allow-push`. THE authorisation for `/v1/push`, and the only one.
+   *
+   * A THIRD PROPERTY, read from neither of the others. `allowWrite` authorises
+   * an agent to write in a directory the user can delete; `allowCheckout`
+   * authorises moving a branch the user can move back. This one authorises the
+   * only thing here that other people can see and that nobody can take back, so
+   * the handler never falls back to it from either of the other two.
+   */
+  allowPush: boolean
   /** Re-probed per health request so plugging in a CLI does not need a restart. */
   capabilities: () => Promise<BridgeCapabilities>
   version: string
@@ -207,6 +228,18 @@ export interface HandlerContext {
    * worktree, a real agent, or a real commit.
    */
   fix: (req: FixRequest, availableClis: readonly string[]) => Promise<FixOutcome>
+  /**
+   * Runs `/v1/ci-fix`. Injected for the same reason `fix` is — and with one
+   * extra thing worth exercising as data: the ROUND-ZERO gate, which decides
+   * whether an agent runs at all.
+   */
+  ciFix: (req: CiFixRequest, availableClis: readonly string[]) => Promise<CiFixOutcome>
+  /**
+   * Runs `/v1/push`. Injected so the handler's tests can exercise the
+   * `--allow-push` gate — and every refusal behind it — without a remote, a
+   * network, or any possibility of a real push escaping a test run.
+   */
+  push: (req: PushRequest) => Promise<PushResponse>
   /**
    * The working tree's repo state for `/v1/health`, or null when it cannot be
    * established. Injected so the handler's tests can exercise every state
@@ -294,6 +327,21 @@ export function defaultStack(realRoot: string, appUrl: string | null) {
   }
 }
 
+/** The real `/v1/push` worker, used unless a test injects its own. */
+export function defaultPush(realRoot: string) {
+  return (req: PushRequest): Promise<PushResponse> => runPush(realRoot, req)
+}
+
+/**
+ * The real `/v1/ci-fix` worker. Closes over the same terminal-owned settings
+ * `defaultFix` does — above all the test command, which is what round zero
+ * runs to decide whether the failure reproduces here at all.
+ */
+export function defaultCiFix(realRoot: string, testCommand: readonly string[], noTests: boolean) {
+  return (req: CiFixRequest, availableClis: readonly string[]): Promise<CiFixOutcome> =>
+    runCiFix(req, { realRoot, availableClis, testCommand, noTests })
+}
+
 /** The real `/v1/checkout` worker, used unless a test injects its own. */
 export function defaultCheckout(realRoot: string) {
   return (
@@ -359,6 +407,24 @@ function failCheckout(err: CheckoutError, cors: Record<string, string>): BridgeR
 }
 
 /**
+ * A push refusal, rendered with its evidence.
+ *
+ * Same shape as failCheckout, and `tree-dirty` carries its paths for the same
+ * reason: a refusal that says only "your tree is dirty" before the one
+ * irreversible operation in the package makes the user take the bridge's word
+ * for what is in the way.
+ */
+function failPush(err: PushError, cors: Record<string, string>): BridgeResponse {
+  const payload: ErrorResponse = {
+    ok: false,
+    error: err.kind,
+    message: err.message,
+    ...(err.kind === 'tree-dirty' ? { dirtyPaths: err.dirtyPaths, dirtyCount: err.dirtyCount } : {}),
+  }
+  return json(statusForPushError(err.kind), payload, cors)
+}
+
+/**
  * Every POST route in protocol v1. Used for the 405 check, so a GET to a real
  * route is told the METHOD is wrong rather than that the route is missing.
  *
@@ -387,6 +453,11 @@ const POST_ROUTES = new Set([
   // on; a 404 would read as "update your bridge".
   '/v1/checkout',
   '/v1/restore',
+  '/v1/ci-fix',
+  // Listed even without `--allow-push`, for the same reason as its two
+  // siblings: `403 push-disabled` names a flag the user can type. A 404 would
+  // send them looking for a bridge update they do not need.
+  '/v1/push',
 ])
 
 /** Parse a request body as JSON, or null. Never throws. */
@@ -687,6 +758,82 @@ export async function handleRequest(
       durationMs: outcome.durationMs,
     }
     return json(200, payload, cors)
+  }
+
+  if (req.method === 'POST' && req.path === '/v1/ci-fix') {
+    // THE WRITE GATE, not a push gate. This route writes in a scratch worktree
+    // and commits there; it never reaches a remote. Pushing what it produced is
+    // a separate request, with a separate grant and a separate confirmation —
+    // so requiring --allow-push here would misdescribe what this route does.
+    if (!ctx.allowWrite) {
+      return fail(
+        403,
+        'write-disabled',
+        'This bridge is read-only. Restart it with --allow-write to let review123 hand a failing CI job to your local coding agent.',
+        cors,
+      )
+    }
+
+    const parsed = parseCiFixRequest(parseJsonBody(req.body))
+    if ('error' in parsed) return fail(400, 'bad-request', parsed.error, cors)
+
+    const { inference } = await ctx.capabilities()
+    if (!inference.includes(parsed.cli)) {
+      return fail(
+        503,
+        'cli-unavailable',
+        `The ${parsed.cli} CLI is not on this machine's PATH. Install it, then restart the bridge.`,
+        cors,
+      )
+    }
+
+    const outcome = await ctx.ciFix(parsed, inference)
+    if (!outcome.ok) {
+      return fail(statusForFixError(outcome.code), outcome.code, outcome.message, cors)
+    }
+
+    const payload: CiFixResponse = {
+      ok: true,
+      cli: parsed.cli,
+      reproduction: outcome.reproduction,
+      baseline: outcome.baseline,
+      baseSha: outcome.baseSha,
+      branch: outcome.branch,
+      changes: outcome.changes,
+      skipped: outcome.skipped,
+      rounds: outcome.rounds,
+      stopReason: outcome.stopReason,
+      tests: outcome.tests,
+      headCommit: outcome.headCommit,
+      durationMs: outcome.durationMs,
+    }
+    return json(200, payload, cors)
+  }
+
+  if (req.method === 'POST' && req.path === '/v1/push') {
+    // ---- THE PUSH GATE ----
+    // First, before parsing, and long before any git command could contact a
+    // remote. It reads `allowPush` and NOTHING ELSE. A bridge started with
+    // --allow-write and --allow-checkout refuses here, because those grants
+    // authorise local, reversible changes and this one does not.
+    if (!ctx.allowPush) {
+      return fail(
+        403,
+        'push-disabled',
+        'This bridge may not write to a remote. Restart it with --allow-push to let review123 move one existing branch forward, fast-forward only, after you confirm each push. (Neither --allow-write nor --allow-checkout enables this: those change things on your machine, and a push cannot be undone.)',
+        cors,
+      )
+    }
+
+    const parsed = parsePushRequest(parseJsonBody(req.body))
+    if ('error' in parsed) return fail(400, 'bad-request', parsed.error, cors)
+
+    try {
+      return json(200, await ctx.push(parsed), cors)
+    } catch (err) {
+      if (err instanceof PushError) return failPush(err, cors)
+      throw err
+    }
   }
 
   if (req.method === 'POST' && req.path === '/v1/search') {

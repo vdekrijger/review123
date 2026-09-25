@@ -399,7 +399,12 @@ export interface FixInvocation {
  * no way to disable its tools individually, so it is confined to writing inside
  * its working directory instead.
  */
-export function buildFixInvocation(cli: InferenceCli, prompt: string, tmpDir: string): FixInvocation {
+export function buildFixInvocation(
+  cli: InferenceCli,
+  prompt: string,
+  tmpDir: string,
+  systemPrompt: string = FIX_SYSTEM_PROMPT,
+): FixInvocation {
   if (cli === 'claude') {
     const systemFile = join(tmpDir, 'fix-system.txt')
     return {
@@ -445,7 +450,7 @@ export function buildFixInvocation(cli: InferenceCli, prompt: string, tmpDir: st
       `${BLOCK}`,
       'SYSTEM INSTRUCTIONS',
       `${BLOCK}`,
-      FIX_SYSTEM_PROMPT,
+      systemPrompt,
       `${BLOCK}`,
       'END SYSTEM INSTRUCTIONS',
       `${BLOCK}`,
@@ -704,6 +709,40 @@ function sanitizeDiagnosticLine(line: string): string {
 // The loop
 // ---------------------------------------------------------------------------
 
+/**
+ * The three pieces of TEXT a fix loop needs, gathered so the LOOP can be reused
+ * with different ones.
+ *
+ * The loop's shape — one item at a time, edit, fingerprint the index, re-check,
+ * repeat up to MAX_FIX_ROUNDS, commit once at the end, stop for one of five
+ * named reasons — is the same whether the thing being repaired is a reviewer's
+ * finding or a red CI job. What is NOT the same is what to tell the agent.
+ *
+ * A review finding is a CLAIM that may be wrong, so its prompt spends most of
+ * its words making refusal cheap. A CI log is EVIDENCE that something really
+ * did fail, so its prompt spends them on not cheating: do not delete the test,
+ * do not widen the timeout, do not mark it flaky. Reusing one prompt for both
+ * would mean lying to the agent about what it is holding.
+ *
+ * So the text is a parameter and the loop is not. There is exactly one fix
+ * loop in this package and `ciFix.ts` calls it rather than copying it.
+ */
+export interface FixPrompts {
+  /** The system turn. Verified against both CLIs' flags in buildFixInvocation. */
+  system: string
+  /** The user turn. `failure` is set from round 2, carrying the red run. */
+  build: (finding: FixFinding, failure?: FixTestOutcome) => string
+  /** The commit message for one item's single commit. */
+  commit: (finding: FixFinding, intent: string, cli: string) => string
+}
+
+/** The review-finding wording. What `/v1/fix` has always used. */
+export const DEFAULT_FIX_PROMPTS: FixPrompts = {
+  system: FIX_SYSTEM_PROMPT,
+  build: buildFindingPrompt,
+  commit: commitMessage,
+}
+
 export interface RunFixOptions {
   realRoot: string
   /** CLIs detected on PATH. A request naming anything else is refused. */
@@ -721,6 +760,11 @@ export interface RunFixOptions {
   prepare?: (realRoot: string, headSha: string) => Promise<ScratchWorktree>
   /** Total wall clock. Injected so a test can prove the budget stop. */
   totalBudgetMs?: number
+  /**
+   * What to SAY to the agent. Defaults to the review-finding wording; `ciFix.ts`
+   * supplies the failing-CI wording. See FixPrompts.
+   */
+  prompts?: FixPrompts
 }
 
 /** One finding's whole loop: a commit, or a documented skip. Never nothing. */
@@ -814,6 +858,7 @@ export async function runFixLoop(req: FixRequest, opts: RunFixOptions): Promise<
       now,
       tests: testOptions,
       remaining,
+      prompts: opts.prompts ?? DEFAULT_FIX_PROMPTS,
     })
 
     if (outcome.kind === 'commit') {
@@ -874,6 +919,7 @@ interface FindingLoopOptions {
   now: () => number
   tests: TestRunnerOptions
   remaining: () => number
+  prompts: FixPrompts
 }
 
 /**
@@ -959,7 +1005,12 @@ async function fixOneFinding(finding: FixFinding, opts: FindingLoopOptions): Pro
     stopReason = 'round-cap'
   }
 
-  const commit = await stageAndCommit(worktree.dir, commitMessage(finding, intent, opts.cli), opts.cli, git)
+  const commit = await stageAndCommit(
+    worktree.dir,
+    opts.prompts.commit(finding, intent, opts.cli),
+    opts.cli,
+    git,
+  )
   if (commit === null) {
     return {
       kind: 'skip',
@@ -1013,9 +1064,14 @@ async function runAgentTurn(
   const tmpDir = await mkdtemp(join(tmpdir(), 'review123-fix-'))
   let agentText: string
   try {
-    const invocation = buildFixInvocation(opts.cli, buildFindingPrompt(finding, failure), tmpDir)
+    const invocation = buildFixInvocation(
+      opts.cli,
+      opts.prompts.build(finding, failure),
+      tmpDir,
+      opts.prompts.system,
+    )
     if (invocation.systemFile !== null) {
-      await writeFile(invocation.systemFile, FIX_SYSTEM_PROMPT, { mode: 0o600 })
+      await writeFile(invocation.systemFile, opts.prompts.system, { mode: 0o600 })
     }
     const run = opts.run ?? runProcess
     const result = await run({

@@ -51,6 +51,24 @@ export interface BridgeOptions {
    */
   allowCheckout: boolean
   /**
+   * `--allow-push` — the switch that lets `/v1/push` exist, i.e. the ONLY way
+   * anything this package does can leave the machine.
+   *
+   * A THIRD GRANT, implied by neither of the other two and implying neither.
+   * That is not symmetry for its own sake. `--allow-write` and
+   * `--allow-checkout` both authorise LOCAL changes the person who granted them
+   * can undo: delete a scratch worktree, restore a branch. A push cannot be
+   * undone by anyone — the moment it lands, everybody who can see the
+   * repository can see it. Someone who wanted agent fixes, or wanted a pull
+   * request checked out under their dev server, must not discover that they
+   * also handed a web origin the ability to write to their team's remote.
+   *
+   * Like its siblings it is a COMMAND-LINE flag and nothing else: no request
+   * field, no header, no settings file, no browser affordance can turn it on.
+   * It lives for the process and dies with Ctrl-C.
+   */
+  allowPush: boolean
+  /**
    * `--app-url` — where the user's dev server is, when they know and the
    * bridge could not work it out.
    *
@@ -102,6 +120,16 @@ Options:
                        a second, explicit confirmation and uses git stash push
                        (never a force, a reset or a drop). The branch you were
                        on is recorded first, so it can always be restored.
+  --allow-push         Enable POST /v1/push: let review123 move ONE existing
+                       remote branch FORWARD to one commit, after you confirm
+                       the exact move. THE ONLY THING THIS TOOL DOES THAT
+                       LEAVES YOUR MACHINE, and it cannot be undone. Separate
+                       from --allow-write and --allow-checkout; neither enables
+                       it. Fast-forward only — a push that would drop commits
+                       is refused, and there is no force anywhere in the
+                       protocol. Never the remote's default branch. The branch
+                       must already exist on the remote. Without this flag the
+                       route answers 403 and capabilities.push is false.
   --app-url <url>      Where your dev server listens, e.g. http://localhost:8010.
                        Must be a loopback address. Default: detected from the
                        repo (PostHog → 8010; else a dev/start script's port).
@@ -110,7 +138,9 @@ Options:
 The bridge binds 127.0.0.1 only and requires the printed pairing token on every
 request. It grants the allowed web origin READ access to the repo it is started
 in, for as long as it runs — and, with --allow-write, the ability to ask your
-local coding agent for fixes in an isolated worktree.`
+local coding agent for fixes in an isolated worktree. With --allow-push it may
+additionally move one existing remote branch forward, fast-forward only, once
+per explicit confirmation.`
 
 /** Parse argv (WITHOUT the node/script entries). Throws BridgeArgError. */
 export function parseArgs(argv: readonly string[], cwd: string): BridgeOptions {
@@ -123,6 +153,7 @@ export function parseArgs(argv: readonly string[], cwd: string): BridgeOptions {
     testCommand: [],
     noTests: false,
     allowCheckout: false,
+    allowPush: false,
     appUrl: null,
     help: false,
   }
@@ -157,6 +188,9 @@ export function parseArgs(argv: readonly string[], cwd: string): BridgeOptions {
         break
       case '--allow-checkout':
         options.allowCheckout = true
+        break
+      case '--allow-push':
+        options.allowPush = true
         break
       case '--app-url':
         options.appUrl = parseAppUrl(takeValue(argv, (i += 1), '--app-url'))

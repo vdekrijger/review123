@@ -43,6 +43,11 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
     // SEPARATE default: a test that does not say `allowCheckout: true` is
     // asserting the behaviour of a bridge the user started without that flag.
     allowCheckout: false,
+    // AND SEPARATELY AGAIN, for the grant whose effects other people can see:
+    // a test that does not say `allowPush: true` is asserting the behaviour of
+    // a bridge that may not write to a remote. That is almost all of them, and
+    // it is the default a mistake should fall back to.
+    allowPush: false,
     capabilities: async () => ({
       inference: ['claude'],
       infer: true,
@@ -52,6 +57,8 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
       search: true,
       fix: false,
       checkout: false,
+      push: false,
+      push: false,
     }),
     version: '0.1.0',
     // Default stubs: the handler's own tests never spawn a CLI, open a file or
@@ -75,6 +82,33 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
       stopReason: 'all-addressed' as const,
       tests: null,
       durationMs: 5,
+    }),
+    ciFix: async () => ({
+      ok: true as const,
+      reproduction: 'reproduced' as const,
+      baseline: { status: 'failed' as const, command: 'pnpm test', durationMs: 20, output: 'stub red' },
+      baseSha: HEAD_SHA,
+      branch: 'review123/fix/1234567890ab',
+      changes: [],
+      skipped: [],
+      rounds: 1,
+      stopReason: 'all-addressed' as const,
+      tests: null,
+      headCommit: null,
+      durationMs: 5,
+    }),
+    // A stub that RESOLVES. Every push refusal in this file is asserted by
+    // making the gate refuse, or by throwing a PushError from an override —
+    // never by letting a real git command run, which is what keeps a test run
+    // structurally incapable of pushing anything anywhere.
+    push: async (req) => ({
+      ok: true as const,
+      remote: req.remote,
+      branch: req.branch,
+      before: req.expectedRemoteSha,
+      after: req.sha,
+      commits: 1,
+      durationMs: 7,
     }),
     repoState: async () => ({ head: HEAD_SHA, branch: 'main', dirty: false }),
     // Default stubs for the run-this-PR family. Like their siblings above, the
@@ -144,6 +178,8 @@ describe('GET /v1/health', () => {
         search: true,
         fix: false,
         checkout: false,
+        push: false,
+        push: false,
       },
       git: { head: HEAD_SHA, branch: 'main', dirty: false },
       version: '0.1.0',
@@ -170,7 +206,7 @@ describe('GET /v1/health', () => {
 
   it('re-probes capabilities per request so a newly installed CLI shows up', async () => {
     let installed: string[] = []
-    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false }) })
+    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false, push: false }) })
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
       inference: [],
       infer: true,
@@ -180,6 +216,7 @@ describe('GET /v1/health', () => {
       search: true,
       fix: false,
       checkout: false,
+      push: false,
     })
     installed = ['codex']
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
@@ -191,6 +228,7 @@ describe('GET /v1/health', () => {
       search: true,
       fix: false,
       checkout: false,
+      push: false,
     })
   })
 })
@@ -520,7 +558,7 @@ describe('POST /v1/infer', () => {
   it('503s a KNOWN cli that is not installed — checked before the worker runs', async () => {
     let spawnedAnyway = false
     const context = ctx({
-      capabilities: async () => ({ inference: [], infer: true, inferStream: true, inferAgentic: true, files: false, search: false, fix: false, checkout: false }),
+      capabilities: async () => ({ inference: [], infer: true, inferStream: true, inferAgentic: true, files: false, search: false, fix: false, checkout: false, push: false }),
       infer: async () => {
         spawnedAnyway = true
         return { ok: true as const, text: '', truncated: false, durationMs: 0 }
@@ -865,7 +903,7 @@ describe('POST /v1/fix — the other gates still apply', () => {
   it('refuses a CLI that is not installed, with 503 rather than a confusing 501', async () => {
     const res = await handleRequest(
       fixReq({ ...FIX_BODY, cli: 'codex' }),
-      ctx({ ...write, capabilities: async () => ({ inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: true, checkout: false }) }),
+      ctx({ ...write, capabilities: async () => ({ inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: true, checkout: false, push: false }) }),
     )
     expect(res.status).toBe(503)
     expect(parse(res.body)['error']).toBe('cli-unavailable')
@@ -1358,6 +1396,8 @@ describe('POST /v1/infer/stream — what is decided BEFORE the status line', () 
           search: true,
           fix: false,
           checkout: false,
+          push: false,
+          push: false,
         }),
       }),
       c.sink,

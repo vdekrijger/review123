@@ -17,8 +17,10 @@ import { PRIVATE_NETWORK_REQUEST_HEADER } from './cors.js'
 import {
   defaultAppState,
   defaultCheckout,
+  defaultCiFix,
   defaultFiles,
   defaultFix,
+  defaultPush,
   defaultInfer,
   defaultInferStream,
   defaultRepoState,
@@ -60,6 +62,13 @@ export interface BridgeServerOptions {
    * the user's working tree, which is the whole reason the flag exists.
    */
   allowCheckout?: boolean
+  /**
+   * `--allow-push`. Defaults to FALSE, and is read SEPARATELY from both of the
+   * others: a server constructed with write access and checkout access may
+   * still not write to a remote. This is the one grant whose effects leave the
+   * machine, so it is never inferred.
+   */
+  allowPush?: boolean
   /** `--app-url`, already validated to a loopback origin. Null → detect. */
   appUrl?: string | null
   /** Overrides the real `/v1/infer` worker. Tests only — see handler.ts. */
@@ -72,6 +81,10 @@ export interface BridgeServerOptions {
   search?: HandlerContext['search']
   /** Overrides the real `/v1/fix` worker. Tests only. */
   fix?: HandlerContext['fix']
+  /** Overrides the real `/v1/ci-fix` worker. Tests only. */
+  ciFix?: HandlerContext['ciFix']
+  /** Overrides the real `/v1/push` worker. Tests only — see handler.ts. */
+  push?: HandlerContext['push']
   /** Overrides the real repo-state probe. Tests only. */
   repoState?: HandlerContext['repoState']
   /** Overrides the real `/v1/stack` probe. Tests only. */
@@ -91,6 +104,7 @@ export function createContext(opts: BridgeServerOptions): HandlerContext {
   const testCommand = opts.testCommand ?? []
   const noTests = opts.noTests === true
   const allowCheckout = opts.allowCheckout === true
+  const allowPush = opts.allowPush === true
   const appUrl = opts.appUrl ?? null
   return {
     token: opts.token,
@@ -100,16 +114,19 @@ export function createContext(opts: BridgeServerOptions): HandlerContext {
     extraOrigins: opts.extraOrigins ?? [],
     allowWrite,
     allowCheckout,
+    allowPush,
     // `capabilities.fix` is the --allow-write flag itself and
     // `capabilities.checkout` is --allow-checkout, re-read per health request
     // like the CLI detection beside them. Each can only be true for a process
     // the user started with THAT flag — they are passed separately here so one
     // can never stand in for the other.
-    capabilities: () => detectCapabilities(deps, allowWrite, allowCheckout),
+    capabilities: () => detectCapabilities(deps, allowWrite, allowCheckout, allowPush),
     version: opts.version,
     infer: opts.infer ?? defaultInfer(opts.realRoot),
     inferStream: opts.inferStream ?? defaultInferStream(opts.realRoot),
     fix: opts.fix ?? defaultFix(opts.realRoot, testCommand, noTests),
+    ciFix: opts.ciFix ?? defaultCiFix(opts.realRoot, testCommand, noTests),
+    push: opts.push ?? defaultPush(opts.realRoot),
     files: opts.files ?? defaultFiles(opts.realRoot),
     // The ripgrep probe is re-run per search, exactly as capability detection
     // is re-run per health request, so installing `rg` does not need a bridge

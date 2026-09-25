@@ -17,7 +17,7 @@ import { PROTOCOL_VERSION } from './protocol.js'
 import { createBridgeServer, listenLoopback, LOOPBACK_HOST } from './server.js'
 
 /** Kept in step with package.json; printed in /v1/health. */
-export const BRIDGE_VERSION = '0.3.0'
+export const BRIDGE_VERSION = '0.4.0'
 
 export async function main(argv: readonly string[], cwd: string): Promise<number> {
   let options: BridgeOptions
@@ -52,6 +52,7 @@ export async function main(argv: readonly string[], cwd: string): Promise<number
     testCommand: options.testCommand,
     noTests: options.noTests,
     allowCheckout: options.allowCheckout,
+    allowPush: options.allowPush,
     appUrl: options.appUrl,
   })
 
@@ -69,6 +70,7 @@ export async function main(argv: readonly string[], cwd: string): Promise<number
       testCommand: options.testCommand,
       noTests: options.noTests,
       allowCheckout: options.allowCheckout,
+      allowPush: options.allowPush,
       appUrl: options.appUrl,
     }),
   )
@@ -95,6 +97,7 @@ interface BannerInput {
   testCommand: string[]
   noTests: boolean
   allowCheckout: boolean
+  allowPush: boolean
   appUrl: string | null
 }
 
@@ -117,6 +120,10 @@ export function banner(input: BannerInput): string {
     // grants and a banner that implied otherwise would misinform the one
     // person who can actually change them.
     `  checkout ${input.allowCheckout ? 'ENABLED (--allow-checkout) — this bridge may switch your branch' : 'disabled — your working tree is never changed'}`,
+    // The third grant gets the third line, for the same reason the second one
+    // does — and this is the line that matters most, because it is the only
+    // capability whose effects other people can see.
+    `  push     ${input.allowPush ? 'ENABLED (--allow-push) — this bridge may write to a remote' : 'disabled — nothing ever leaves this machine'}`,
     ...(input.appUrl !== null ? [`  app      ${input.appUrl} (--app-url)`] : []),
     ...(input.allowWrite
       ? [
@@ -145,7 +152,9 @@ export function banner(input: BannerInput): string {
           '  --allow-write is ON. review123 can ask your local coding agent to fix',
           '  findings in a SCRATCH WORKTREE under your temp directory, and can run',
           "  this repo's own test command there. Your checkout, branch, index and",
-          '  uncommitted work are never touched, and nothing is ever pushed.',
+          ...(input.allowPush
+            ? ['  uncommitted work are never touched. Pushing is a separate grant, below.']
+            : ['  uncommitted work are never touched, and nothing is ever pushed.']),
         ]
       : []),
     ...(input.allowCheckout
@@ -157,6 +166,21 @@ export function banner(input: BannerInput): string {
           '  moving your uncommitted work needs a second confirmation and uses',
           '  `git stash push` — nothing is ever forced, reset or dropped, and the',
           '  branch you were on is recorded so it can always be restored.',
+        ]
+      : []),
+    ...(input.allowPush
+      ? [
+          '',
+          '  --allow-push is ON. THIS IS THE ONLY THING THIS TOOL DOES THAT LEAVES',
+          '  YOUR MACHINE, and a push cannot be undone. review123 may ask to move one',
+          '  EXISTING remote branch FORWARD to one commit, and each push needs its own',
+          '  confirmation naming the remote, the branch and both commit shas.',
+          '  Fast-forward only: a push that would make any commit unreachable is',
+          "  refused, and there is no force anywhere in the protocol. The remote's",
+          '  default branch is never pushed to, and no branch is ever created.',
+          '  The bridge cannot check who authored a pull request — it has no account',
+          '  and no token — so it does not claim to. Fast-forward-only is the',
+          '  guarantee it can actually keep.',
         ]
       : []),
     '  Stop it with Ctrl-C when you are done.',
