@@ -39,6 +39,16 @@ interface Row {
   ci?: string | null
   /** Unresolved review THREADS. 0 draws no chip. */
   unresolved?: number
+  /**
+   * RESOLVED threads, which are the rest of the `x/y` denominator. Default 1.
+   *
+   * It is here so one row can be given the WIDEST fraction the cell can ever
+   * hold — `100/100 open`, three digits either side. The unresolved column is a
+   * fixed measure, so the row that needs the most is the row that decides
+   * whether the measure is big enough; a fixture of tidy single digits would
+   * pass while the real thing pushed the next column sideways.
+   */
+  resolved?: number
 }
 
 // The signal columns are as uneven as the rest of the fixture ON PURPOSE: a
@@ -47,7 +57,9 @@ interface Row {
 const ROWS: Row[] = [
   { repo: 'posthog', n: 21841, title: 'feat(surveys): allow multiple choice questions to be randomized', add: 216, del: 179, ageMin: 480, ci: 'FAILURE', unresolved: 3 },
   { repo: 'posthog', n: 21902, title: 'fix: flaky test', add: 4, del: 0, ageMin: 35, ci: 'SUCCESS', unresolved: 0 },
-  { repo: 'posthog', n: 20117, title: 'chore(deps): bump the whole frontend toolchain to the latest majors and regenerate lockfile', add: 883, del: 1131, ageMin: 4320, ci: 'SUCCESS', unresolved: 12 },
+  // The widest fraction the cell can hold, on the row with the widest diff
+  // stats and the longest title — the worst case in every column at once.
+  { repo: 'posthog', n: 20117, title: 'chore(deps): bump the whole frontend toolchain to the latest majors and regenerate lockfile', add: 883, del: 1131, ageMin: 4320, ci: 'SUCCESS', unresolved: 100, resolved: 0 },
   { repo: 'posthog', n: 21733, title: 'refactor(insights): extract the trends query runner', add: 66, del: 4, ageMin: 120, ci: 'PENDING', unresolved: 1 },
   { repo: 'posthog', n: 21990, title: 'feat: add a new dashboard tile type', add: 41, del: 12, ageMin: 90, ci: null, unresolved: 0 },
   { repo: 'posthog-js', n: 1204, title: 'fix(autocapture): do not capture password inputs', add: 18, del: 7, ageMin: 300, ci: 'SUCCESS', unresolved: 2 },
@@ -93,7 +105,7 @@ async function seedQueue(page: Page) {
               pageInfo: { hasNextPage: false },
               nodes: [
                 ...Array.from({ length: row.unresolved ?? 0 }, () => ({ isResolved: false })),
-                { isResolved: true },
+                ...Array.from({ length: row.resolved ?? 1 }, () => ({ isResolved: true })),
               ],
             },
             commits: { nodes: [{ commit: { statusCheckRollup: row.ci ? { state: row.ci } : null } }] },
@@ -220,6 +232,11 @@ test('the title truncates at ONE measure, so no row is shortened by its neighbou
   // And the one measure has to be worth having: the old layout's BEST row got
   // 396px, its worst 330px. A regression that aligned everything at 180px
   // would pass the spread check and still be a loss.
+  //
+  // THIS IS THE ASSERTION THAT PRICED THE `x/y` FRACTION. Widening the
+  // unresolved cell from 8ch to 12ch took this to 324px at the old 62rem card,
+  // and the fix was to widen the CARD to 64rem rather than to let the title
+  // pay — a row that shows everything about a PR except which PR it is.
   expect(Math.min(...widths)).toBeGreaterThan(330)
 })
 

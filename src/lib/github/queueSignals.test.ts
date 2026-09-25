@@ -128,6 +128,47 @@ describe('fetchQueueSignals', () => {
     expect(out.get(refKey(REF('o', 'r', 1)))?.unresolved).toBe(2)
   })
 
+  it('counts ALL threads as the denominator, so the row can say 2 of 3', async () => {
+    mockGraphql({
+      p0: repoNode(
+        prNode({
+          reviewThreads: {
+            pageInfo: { hasNextPage: false },
+            nodes: [{ isResolved: false }, { isResolved: true }, { isResolved: false }],
+          },
+        }),
+      ),
+    })
+    const signal = (await fetchQueueSignals([REF('o', 'r', 1)])).get(refKey(REF('o', 'r', 1)))
+    expect(signal?.unresolved).toBe(2)
+    expect(signal?.threads).toBe(3)
+  })
+
+  it('counts a thread whose isResolved GitHub did not send, so the share is not overstated', async () => {
+    mockGraphql({
+      p0: repoNode(
+        prNode({
+          reviewThreads: {
+            pageInfo: { hasNextPage: false },
+            nodes: [{ isResolved: false }, {}],
+          },
+        }),
+      ),
+    })
+    const signal = (await fetchQueueSignals([REF('o', 'r', 1)])).get(refKey(REF('o', 'r', 1)))
+    // Only the explicit `false` is unresolved — but the unknown one is still a
+    // conversation, so 1 of 2 rather than 1 of 1.
+    expect(signal?.unresolved).toBe(1)
+    expect(signal?.threads).toBe(2)
+  })
+
+  it('leaves both halves null when the query could not answer at all', async () => {
+    mockGraphql({ p0: repoNode(prNode({ reviewThreads: null })) })
+    const signal = (await fetchQueueSignals([REF('o', 'r', 1)])).get(refKey(REF('o', 'r', 1)))
+    expect(signal?.unresolved).toBeNull()
+    expect(signal?.threads).toBeNull()
+  })
+
   it('reports zero unresolved when every thread is resolved', async () => {
     mockGraphql({
       p0: repoNode(
@@ -159,6 +200,10 @@ describe('fetchQueueSignals', () => {
     // The count is a FLOOR, and the row renders it as "2+" rather than as a
     // number it cannot stand behind.
     expect(signal?.unresolvedTruncated).toBe(true)
+    // And so is the denominator — same page, same limit. ONE flag covers both,
+    // which is why the row drops the fraction here instead of printing two
+    // floors with a slash between them.
+    expect(signal?.threads).toBe(2)
   })
 
   // -------------------------------------------------------------------------

@@ -101,6 +101,7 @@ function signal(over: Partial<QueueSignal> = {}): QueueSignal {
   return {
     ci: 'failing',
     unresolved: null,
+    threads: null,
     unresolvedTruncated: false,
     size: null,
     base: { kind: 'unknown' },

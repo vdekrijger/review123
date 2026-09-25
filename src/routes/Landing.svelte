@@ -763,20 +763,44 @@
 
 {#snippet unresolvedCell(signal: QueueSignal | undefined)}
   {@const count = signal?.unresolved ?? 0}
+  {@const total = signal?.threads ?? null}
   {@const more = signal?.unresolvedTruncated === true}
+  <!--
+    A FRACTION, BECAUSE THE NUMERATOR ALONE RANKS NOTHING. "3 open" says the
+    same thing on a review with three conversations and on one with thirty: in
+    the first the author has read nothing, in the second they have worked
+    through twenty-seven. `3/3` and `3/30` are two different rows to open.
+
+    THE FRACTION IS SHOWN ONLY WHEN BOTH HALVES ARE EXACT. Past GitHub's
+    100-thread page both numbers are floors, and `29+/100+` is not a fraction —
+    it is two unknowns with a slash between them, and the reader would do
+    arithmetic on it anyway. So truncation falls back to the single floored
+    count this row has always shown there, which is a number it can stand
+    behind. `total` null is the same case for the same reason: the query could
+    not answer, so there is no denominator to claim.
+
+    The word stays "open" rather than "unresolved" (#287): at --text-xs the long
+    word costs ~12ch of a row seating eight columns, and the phrase the numbers
+    actually mean rides on the title and the accessible name, where it is read
+    in full — now including the denominator.
+  -->
+  {@const exact = !more && typeof total === 'number' && total >= count}
   <span class="queue-cell threads-cell">
     {#if count > 0}
-      <!-- "N open" rather than "N unresolved": at --text-xs the long word costs
-           ~12ch of a row that has six other columns to seat, and the phrase the
-           number actually means rides on the title and the accessible name,
-           where it is read in full. -->
       <span
         class="threads-chip"
         data-testid="queue-unresolved"
-        title="{count}{more ? '+' : ''} unresolved conversation{count === 1 && !more ? '' : 's'}"
+        data-total={exact ? total : null}
+        title={exact
+          ? `${count} of ${total} conversation${total === 1 ? '' : 's'} unresolved`
+          : `${count}${more ? '+' : ''} unresolved conversation${count === 1 && !more ? '' : 's'}`}
       >
-        <span aria-hidden="true">{count}{more ? '+' : ''} open</span>
-        <span class="sr-only">{count}{more ? ' or more' : ''} unresolved conversation{count === 1 && !more ? '' : 's'}</span>
+        <span aria-hidden="true">{exact ? `${count}/${total}` : `${count}${more ? '+' : ''}`} open</span>
+        <span class="sr-only">
+          {exact
+            ? `${count} of ${total} conversation${total === 1 ? '' : 's'} unresolved`
+            : `${count}${more ? ' or more' : ''} unresolved conversation${count === 1 && !more ? '' : 's'}`}
+        </span>
       </span>
     {/if}
   </span>
@@ -1286,10 +1310,18 @@
      e2e/queue-columns.spec.ts holds (the old layout's WORST row) — which is the
      width at which a row shows everything about a PR except which PR it is.
      62rem puts it back to ~357px. The hero keeps its own 40rem measure inside
-     (below), so the prose is untouched by any of this. */
+     (below), so the prose is untouched by any of this.
+
+     64rem, MEASURED THE SAME WAY, because the unresolved cell grew from 8ch to
+     12ch to seat the `x/y` fraction. At 62rem that took the title to 324px —
+     under the floor, and the spec said so. The 4ch had to come from somewhere,
+     and it comes from HERE rather than from the title: an extra 32px of card is
+     a card 3% wider, while 6px off the title floor is the row starting to hide
+     which PR it is, which is the one thing the floor exists to prevent. 64rem
+     puts the title at ~356px. */
   .landing.has-content {
     margin-top: var(--space-6);
-    max-width: 62rem;
+    max-width: 64rem;
   }
 
   .landing.has-content > h1,
@@ -1784,11 +1816,20 @@
   .ci-chip.ci-failing { color: var(--diff-del); }
   .ci-chip.ci-running { color: var(--legend-changed-color); }
 
+  /* 12ch, up from 8ch, for the widest EXACT thing this cell can hold:
+     "100/100 open". The truncated form it used to be sized for ("100+ open")
+     is 9ch and still fits inside it.
+
+     MEASURED, not estimated: the 4ch it costs come out of the card's own
+     padding, not out of the title — e2e/queue-columns.spec.ts holds the title
+     to a floor of 330px and it lands at ~345px with this. A cell that sized to
+     its content instead would put the next column at a different x on every
+     row, which is the whole reason every trailing measure here is fixed. */
   .threads-cell {
     display: flex;
     align-items: baseline;
     justify-content: flex-end;
-    min-width: 8ch;
+    min-width: 12ch;
   }
 
   /* Metadata ink, like the timestamp beside it. An unresolved conversation is
