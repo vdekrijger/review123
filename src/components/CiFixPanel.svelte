@@ -41,6 +41,7 @@
     readFixCliPref,
     writeFixCliPref,
   } from '../lib/bridge/fixLoop'
+  import { refreshLocalCommits } from '../lib/bridge/localCommits.svelte'
   import {
     CI_FIX_LOCAL_ONLY,
     CI_FIX_NOT_REVIEWED,
@@ -89,7 +90,9 @@
     /**
      * The pull request's head sha — the commit CI failed on, and the commit the
      * bridge's scratch worktree is created from. The panel refuses to run when
-     * the paired bridge's checkout is somewhere else.
+     * the paired repository does not HAVE that commit. Not when its checkout is
+     * elsewhere: the worktree is materialised from the object store, so where
+     * HEAD happens to be sitting is not the question.
      */
     headSha: string
     /**
@@ -154,6 +157,18 @@
   const logsMissing = $derived(
     run.status === 'done' && run.evidence.length > 0 && run.evidence.every((e) => e.logUnavailable),
   )
+
+  // Ask once, when the panel comes on screen, whether the repository still HAS
+  // this commit. The queue asked when its signals landed, which may have been
+  // minutes and a `git gc` ago, and this panel is about to offer a run that
+  // depends on the answer. `refreshLocalCommits` never rejects.
+  let probedCommit = false
+  $effect(() => {
+    if (bridgeState.status === 'connected' && !probedCommit) {
+      probedCommit = true
+      void refreshLocalCommits([headSha])
+    }
+  })
 
   function chooseCli(cli: BridgeCli): void {
     cliChoice = cli

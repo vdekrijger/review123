@@ -17,6 +17,7 @@
   import { formatUsageLabel } from '../lib/ai/tokenCost'
   import { track } from '../lib/analytics/analytics'
   import { currentFixReadiness } from '../lib/bridge/fixLoop'
+  import { ensureLocalCommits } from '../lib/bridge/localCommits.svelte'
   import ProviderIcon from '../components/ProviderIcon.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import Spinner from '../components/Spinner.svelte'
@@ -312,6 +313,36 @@
       fromSignals[sizeKey(item)] = size
     }
     refreshQueueSizes(items, fromSignals)
+    probeLocalCommits(items, signals)
+  }
+
+  /**
+   * Ask the paired bridge which of these commits it already HAS.
+   *
+   * ONE REQUEST FOR THE WHOLE PAGE, fired once the signals land — because the
+   * signals are where `headOid` comes from, and there is nothing to ask about
+   * before them. Without it `canOfferCiFix` can only fall back to the old HEAD
+   * equality test, under which at most one row in the list could ever offer the
+   * control: a checkout sits on one commit at a time.
+   *
+   * ONLY THE USER'S OWN PRs are asked about, and only where CI is red. That is
+   * not an optimisation, it is the same rule `canOfferCiFix` applies — asking
+   * about a row that could never offer the control would spend the probe's
+   * 64-sha budget on rows that cannot use it, and on a long queue would push
+   * the ones that can off the end of the list.
+   *
+   * `ensureLocalCommits` never throws, never rejects and asks about each sha
+   * once, so re-running this on a re-render costs nothing.
+   */
+  function probeLocalCommits(items: QueueItem[], signals: Record<string, QueueSignal>): void {
+    const heads = items
+      .filter((i) => i.authorIsMe && i.ref.provider === 'github')
+      .map((i) => signals[sizeKey(i)])
+      .filter((s): s is QueueSignal => s?.ci === 'failing')
+      .map((s) => s.headOid)
+      .filter((sha): sha is string => typeof sha === 'string' && sha !== '')
+    if (heads.length === 0) return
+    void ensureLocalCommits(heads)
   }
 
   // ---- Effort gauge (rubric p.30-31: nothing at equal emphasis) -----------
@@ -539,11 +570,20 @@
    *   4. THERE IS A HEAD SHA. It is what the scratch worktree is created from
    *      and what the push is guarded against; without it there is no run.
    *   5. THE BRIDGE IS READY FOR THIS COMMIT — a paired, write-enabled bridge
-   *      with a CLI whose checkout is AT this PR's head. That last part is why
-   *      at most one row ever offers this: the panel's own readiness rule
-   *      refuses a checkout that is somewhere else, and a control that opens a
-   *      panel whose only content is that refusal is a control that fails.
-   *      With no bridge paired there is nothing here at all — the same rule
+   *      with a CLI, whose repository HAS this PR's head commit. Containment,
+   *      not equality: the scratch worktree is materialised from the object
+   *      store, so every row whose branch the user has ever pushed from this
+   *      machine qualifies, and the checkout can be sitting anywhere.
+   *
+   *      This used to require the checkout to be AT the head, which meant at
+   *      most ONE row in a queue could offer the control and realistically
+   *      none — the feature shipped and could not be reached. It is still the
+   *      strict question, for the reason it always was: a control that opens a
+   *      panel whose only content is a refusal is a control that fails.
+   *
+   *      On a bridge too old to answer the containment question the rule falls
+   *      back to the old equality test, so nothing regresses there. With no
+   *      bridge paired there is nothing here at all — the same rule
    *      AgentFixPanel follows, for the same reason.
    */
   function canOfferCiFix(item: QueueItem, signal: QueueSignal | undefined): boolean {
