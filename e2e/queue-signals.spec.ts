@@ -52,6 +52,16 @@ const UNRESOLVED_MARKS = ROWS.filter((r) => r.unresolved > 0).length
 /** Every api.github.com path the page asked for, in order. */
 type Seen = string[]
 
+/**
+ * A 40-hex commit id for a row. It has to BE one: the bridge's health document
+ * refuses a `git.head` that is not 40 hex characters, and the fix panel is only
+ * offered when the bridge's head equals the pull request's — so a fixture with
+ * placeholder shas could never exercise that path.
+ */
+function sha(n: number): string {
+  return String(n).padStart(40, 'a')
+}
+
 interface SeedOptions {
   /** Outcome of PUT …/update-branch. Default: 202 Accepted. */
   updateStatus?: number
@@ -97,7 +107,7 @@ async function seedQueue(page: Page, seen: Seen, opts: SeedOptions = {}) {
                 additions: row.add,
                 deletions: row.del,
                 mergeable: row.merge === 'DIRTY' ? 'CONFLICTING' : 'MERGEABLE',
-                headRefOid: `sha${row.n}`,
+                headRefOid: sha(row.n),
                 reviewThreads: {
                   pageInfo: { hasNextPage: false },
                   nodes: [
@@ -130,6 +140,30 @@ async function seedQueue(page: Page, seen: Seen, opts: SeedOptions = {}) {
       })
     }
 
+    // The two REST calls a CiSummary costs, served so that opening one fix
+    // panel can be MEASURED rather than mocked away. Annotations first: both
+    // paths contain "check-runs".
+    if (path.endsWith('/annotations')) {
+      return route.fulfill({ json: [{ message: 'expected 1 to be 2' }] })
+    }
+    if (path.endsWith('/check-runs')) {
+      return route.fulfill({
+        json: {
+          total_count: 2,
+          check_runs: [
+            { id: 1, name: 'lint', status: 'completed', conclusion: 'success' },
+            {
+              id: 9001,
+              name: 'unit (node 22)',
+              status: 'completed',
+              conclusion: 'failure',
+              html_url: `https://github.com/${OWNER}/${REPO}/runs/9001`,
+            },
+          ],
+        },
+      })
+    }
+
     return route.fulfill({ json: [] })
   })
 
@@ -140,6 +174,57 @@ async function seedQueue(page: Page, seen: Seen, opts: SeedOptions = {}) {
     deepseekKey: 'sk-signals-test',
     aiProvider: 'deepseek',
   })
+}
+
+/**
+ * Pair a bridge that is READY at `head`, stubbed at the `window.fetch` seam.
+ *
+ * Same technique as e2e/bridge.spec.ts and for the same reason: the real call
+ * is cross-origin to 127.0.0.1 with an Authorization header, so intercepting it
+ * with page.route would drag CORS into assertions that are not about CORS.
+ * Everything that is not the bridge falls through to the real fetch, so the
+ * api.github.com counting this file exists for is untouched.
+ */
+async function pairBridge(page: Page, head: string, push = true) {
+  await page.addInitScript(
+    ({ health, key }) => {
+      localStorage.setItem(key, JSON.stringify({ token: 'e2e-queue-bridge-token', port: 7321 }))
+      const realFetch = window.fetch.bind(window)
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+        if (url.includes('127.0.0.1') && url.includes('/v1/health')) {
+          return Promise.resolve(
+            new Response(JSON.stringify(health), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            }),
+          )
+        }
+        return realFetch(input as RequestInfo, init)
+      }
+    },
+    {
+      key: 'review123:bridge',
+      health: {
+        ok: true,
+        protocol: 1,
+        root: 'web',
+        version: '0.1.0',
+        capabilities: {
+          inference: ['claude'],
+          infer: true,
+          inferStream: true,
+          inferAgentic: true,
+          files: true,
+          search: true,
+          fix: true,
+          checkout: true,
+          push,
+        },
+        git: { head, branch: 'feat/thing', dirty: false },
+      },
+    },
+  )
 }
 
 async function waitForSignals(page: Page) {
@@ -188,6 +273,108 @@ test('the signals query does not grow a request when the queue grows', async ({ 
   // the unit tests at the boundary.
   const signalDocs = seen.filter((s) => s.endsWith('/graphql'))
   expect(signalDocs.length).toBeLessThanOrEqual(2)
+})
+
+// ---------------------------------------------------------------------------
+// The CI-fix panel's share of the budget
+//
+// The panel needs a full CiSummary, which the batched signals query does not
+// and cannot carry: the query answers a rollup STATE per row, and the summary
+// is a REST pass over check-runs plus one annotations call per failed job.
+// Doing that for every red row on render is exactly the per-row shape this
+// whole feature was built to kill — so it is fetched when a panel is OPENED,
+// and these two tests are what keeps that measured rather than assumed.
+//
+// #102 is the only row that can offer it: the user's own (a push goes to its
+// head branch), on GitHub, actually failing, and — with the bridge below paired
+// at its head — the one commit the bridge could work on.
+// ---------------------------------------------------------------------------
+
+test('a red queue still renders inside the same budget, panel offer and all', async ({ page }) => {
+  const seen: Seen = []
+  await seedQueue(page, seen)
+  await pairBridge(page, sha(102))
+  await page.goto('/')
+  await waitForSignals(page)
+
+  // Offered on exactly one row, and on the right one.
+  await expect(page.getByTestId('queue-ci-fix')).toHaveCount(1, { timeout: 10_000 })
+  await expect(page.locator('.queue-item', { hasText: '#102' }).getByTestId('queue-ci-fix')).toBeVisible()
+  // #201 is red too, but it is somebody else's pull request.
+  await expect(page.locator('.queue-item', { hasText: '#201' }).getByTestId('queue-ci-fix')).toHaveCount(0)
+
+  await page.waitForTimeout(1000)
+  // Not one check-run read. The offer costs nothing; only accepting it does.
+  expect(seen.filter((s) => s.includes('/check-runs'))).toHaveLength(0)
+  expect(seen).toHaveLength(4)
+})
+
+test('the actions column still lands at one x, on the row with two controls too', async ({ page }) => {
+  const seen: Seen = []
+  await seedQueue(page, seen)
+  await pairBridge(page, sha(102))
+  await page.goto('/')
+  await waitForSignals(page)
+  await expect(page.getByTestId('queue-ci-fix')).toHaveCount(1, { timeout: 10_000 })
+
+  // #287's whole row design is a table: every trailing column at the same x on
+  // every row, held to half a pixel by e2e/queue-columns.spec.ts. A control that
+  // widened only its own row's actions cell broke that by 12.9px at 1440 —
+  // which is why the column is reserved for the list, not for the row.
+  const lefts = async () =>
+    page.locator('.prepare-cell').evaluateAll((els) =>
+      els.map((e) => Math.round(e.getBoundingClientRect().left * 10) / 10),
+    )
+
+  const closed = await lefts()
+  expect(closed.length).toBeGreaterThan(1)
+  expect(Math.max(...closed) - Math.min(...closed)).toBeLessThanOrEqual(0.5)
+
+  // And opening it does not move anything either: the measure is sized for the
+  // wider of the two labels, so "Fix CI" → "Hide CI" reflows nothing.
+  await page.locator('.queue-item', { hasText: '#102' }).getByTestId('queue-ci-fix').click()
+  await expect(page.getByTestId('ci-fix-panel')).toBeVisible({ timeout: 10_000 })
+  const open = await lefts()
+  expect(Math.max(...open) - Math.min(...open)).toBeLessThanOrEqual(0.5)
+  expect(Math.abs(open[0] - closed[0])).toBeLessThanOrEqual(0.5)
+})
+
+test('opening one panel fetches one summary, for that row’s head and no other', async ({ page }) => {
+  const seen: Seen = []
+  await seedQueue(page, seen)
+  await pairBridge(page, sha(102))
+  await page.goto('/')
+  await waitForSignals(page)
+
+  const row = page.locator('.queue-item', { hasText: '#102' })
+  await row.getByTestId('queue-ci-fix').click()
+
+  // The panel has the real failure list — the rollup word could not have
+  // produced a job name.
+  await expect(page.getByTestId('ci-fix-panel')).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByTestId('ci-fix-jobs')).toContainText('unit (node 22)')
+
+  await page.waitForTimeout(500)
+  const checkRuns = seen.filter((s) => s.endsWith('/check-runs'))
+  const annotations = seen.filter((s) => s.endsWith('/annotations'))
+  expect(checkRuns).toEqual([`GET /repos/${OWNER}/${REPO}/commits/${sha(102)}/check-runs`])
+  // One per FAILED run, not per run: `lint` passed and was never asked about.
+  expect(annotations).toHaveLength(1)
+  // Four to draw the page, two to open one panel.
+  expect(seen).toHaveLength(6)
+
+  // Closing costs nothing, and discards the summary with the panel. Reopening
+  // therefore reads CI again rather than showing what it said minutes ago —
+  // which is the right trade for a user-driven click on a page whose whole
+  // point is that it does not fetch per row.
+  await row.getByTestId('queue-ci-fix').click()
+  await expect(page.getByTestId('ci-fix-panel')).toHaveCount(0)
+  expect(seen).toHaveLength(6)
+
+  await row.getByTestId('queue-ci-fix').click()
+  await expect(page.getByTestId('ci-fix-panel')).toBeVisible()
+  await page.waitForTimeout(500)
+  expect(seen).toHaveLength(8)
 })
 
 // ---------------------------------------------------------------------------

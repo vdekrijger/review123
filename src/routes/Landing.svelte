@@ -16,10 +16,12 @@
   import { prepareStore, preparePr, preparePrId, prepareProgress, isPreparedFor, preparedRecord } from '../lib/ai/prepare.svelte'
   import { formatUsageLabel } from '../lib/ai/tokenCost'
   import { track } from '../lib/analytics/analytics'
+  import { currentFixReadiness } from '../lib/bridge/fixLoop'
   import ProviderIcon from '../components/ProviderIcon.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import Spinner from '../components/Spinner.svelte'
-  import type { QueueItem, QueueSignal, CiState } from '../lib/provider/types'
+  import CiFixPanel from '../components/CiFixPanel.svelte'
+  import type { QueueItem, QueueSignal, CiState, CiSummary } from '../lib/provider/types'
 
   // Human-readable provider names for accessible text alternatives.
   // Local map (not the registry) so the component stays renderable when the
@@ -492,6 +494,138 @@
     await loadQueueSignals(queueItems)
   }
 
+  // ---- Fix CI (mounting CiFixPanel from a failing row) ---------------------
+  //
+  // WHAT THE ROW HAS AND WHAT THE PANEL NEEDS ARE NOT THE SAME THING. The
+  // batched signals query answers `ci` as a ROLLUP STATE — one word for the
+  // whole commit. CiFixPanel needs the FAILURE LIST: job names, annotations and
+  // deep links, which is `CiSummary`, and the only place that comes from is
+  // `provider.getCiSummary(ref, headSha)` — the same call Review.svelte and the
+  // prepare-ahead pipeline make. It is REST, it pages over check-runs and it
+  // costs one more request per failed job for annotations.
+  //
+  // So it is fetched ON DEMAND, for the ONE row whose panel the user opened,
+  // and never on render. #287 got this page from 37 requests to a handful by
+  // refusing to do anything per-row; fetching a summary for every red row would
+  // hand that straight back. e2e/queue-signals.spec.ts counts the traffic so
+  // this stays measured rather than asserted.
+  //
+  // `null` IS NOT GREEN. CiFixPanel takes `ci: CiSummary | null` and renders
+  // nothing when there are no failures — which is right for the panel and wrong
+  // for a row the queue has already marked red. So a summary we could not read,
+  // and a summary that named no failing job, are never passed through as null:
+  // each gets its own sentence on the row saying which of the two happened.
+  type CiFixRow =
+    | { status: 'loading' }
+    | { status: 'ready'; headSha: string; ci: CiSummary }
+    | { status: 'unreadable'; why: string }
+
+  /** Open panels, keyed like every other per-row map. Absent = closed. */
+  let ciFixRows = $state<Record<string, CiFixRow>>({})
+
+  /**
+   * Whether to OFFER the panel — the stricter question, exactly as
+   * `canOfferUpdate` is stricter than "is it behind". Five things must hold,
+   * and each of them is a way the bridge would otherwise refuse after the user
+   * had already decided:
+   *
+   *   1. THE PR IS THE USER'S OWN. The flow ends in a push to the head branch.
+   *      Offering that on someone else's PR in "Awaiting your review" would be
+   *      offering to write to a branch that is not theirs.
+   *   2. THE PROVIDER IS GITHUB. `getPushTarget` returns null for anything
+   *      else and `gatherCiFailures` reads GitHub Actions job logs, so on
+   *      GitLab or Bitbucket the panel could only ever apologise.
+   *   3. CI IS ACTUALLY FAILING. Not unknown, not pending, not 'none'.
+   *   4. THERE IS A HEAD SHA. It is what the scratch worktree is created from
+   *      and what the push is guarded against; without it there is no run.
+   *   5. THE BRIDGE IS READY FOR THIS COMMIT — a paired, write-enabled bridge
+   *      with a CLI whose checkout is AT this PR's head. That last part is why
+   *      at most one row ever offers this: the panel's own readiness rule
+   *      refuses a checkout that is somewhere else, and a control that opens a
+   *      panel whose only content is that refusal is a control that fails.
+   *      With no bridge paired there is nothing here at all — the same rule
+   *      AgentFixPanel follows, for the same reason.
+   */
+  function canOfferCiFix(item: QueueItem, signal: QueueSignal | undefined): boolean {
+    if (!item.authorIsMe) return false
+    if (item.ref.provider !== 'github') return false
+    if (signal?.ci !== 'failing') return false
+    const headSha = signal.headOid
+    if (!headSha) return false
+    return currentFixReadiness(headSha).ready
+  }
+
+  /**
+   * Whether the actions column must make room for a second control.
+   *
+   * #287's row is a TABLE ROW: every trailing column has a fixed measure so it
+   * lands at the same x on every row, and e2e/queue-columns.spec.ts holds that
+   * to half a pixel. A control that appears on one row and widens only that
+   * row's actions cell breaks exactly that — measured at 12.9px of drift on the
+   * active row at 1440px.
+   *
+   * So the column is widened for the WHOLE list as soon as any row in it can
+   * offer the control, which is the same "reserve the cell, not the content"
+   * rule the four signal cells follow. It is conditional rather than permanent
+   * because almost nobody has a bridge: charging every reader ~58px of title
+   * measure, forever, for an affordance that appears on at most one row and
+   * only for a bridge user, is the trade C5 exists to refuse.
+   */
+  const ciFixColumn = $derived(
+    queueItems.some(
+      (i) => canOfferCiFix(i, queueSignals[sizeKey(i)]) || ciFixRows[sizeKey(i)] !== undefined,
+    ),
+  )
+
+  /**
+   * An id that survives being an id. `queueKey` is `github:org/repo#12`, which
+   * is a legal HTML id but not a legal CSS selector without escaping — so the
+   * one place the string becomes an attribute gets a sanitised form.
+   */
+  function ciFixDomId(key: string): string {
+    return `ci-fix-${key.replace(/[^a-zA-Z0-9]+/g, '-')}`
+  }
+
+  async function toggleCiFix(item: QueueItem, signal: QueueSignal | undefined) {
+    const key = sizeKey(item)
+    if (ciFixRows[key]) {
+      ciFixRows = Object.fromEntries(Object.entries(ciFixRows).filter(([k]) => k !== key))
+      return
+    }
+    const headSha = signal?.headOid
+    const provider = providerOf(item)
+    if (!headSha || !provider) return
+
+    ciFixRows = { ...ciFixRows, [key]: { status: 'loading' } }
+    let summary: CiSummary | null = null
+    try {
+      summary = await provider.getCiSummary(item.ref, headSha)
+    } catch {
+      summary = null
+    }
+    if (summary === null) {
+      ciFixRows = {
+        ...ciFixRows,
+        [key]: {
+          status: 'unreadable',
+          why: 'review123 could not read this pull request’s checks, so it cannot say which job failed. Nothing was run. This is not a passing result — the row is still red.',
+        },
+      }
+      return
+    }
+    if (summary.failures.length === 0) {
+      ciFixRows = {
+        ...ciFixRows,
+        [key]: {
+          status: 'unreadable',
+          why: 'GitHub reports this commit as failing but named no failing check run for it — a commit status from an external service, most likely. There is no job output to hand to an agent. This is not a passing result.',
+        },
+      }
+      return
+    }
+    ciFixRows = { ...ciFixRows, [key]: { status: 'ready', headSha, ci: summary } }
+  }
+
   function handleClearHistory() {
     clearHistory()
     history = []
@@ -715,13 +849,67 @@
   {/if}
 {/snippet}
 
+<!--
+  ciFixControl — the actions column's second affordance, beside Prepare and in
+  the same tertiary register (p.52-53): the queue must not grow a column of
+  bordered boxes. It is a TOGGLE, not a navigation, and it says which way it
+  goes; `aria-expanded` and `aria-controls` tie it to the panel it opens so the
+  relationship is not carried by adjacency alone.
+
+  It appears when the row can act OR when its panel is already open — the second
+  half matters, because a re-read that turns the row green must not strand an
+  open panel with nothing to close it.
+-->
+{#snippet ciFixControl(item: QueueItem, signal: QueueSignal | undefined)}
+  {@const key = sizeKey(item)}
+  {@const open = ciFixRows[key] !== undefined}
+  <button
+    type="button"
+    class="prepare-btn ci-fix-btn"
+    data-testid="queue-ci-fix"
+    aria-expanded={open}
+    aria-controls={ciFixDomId(key)}
+    onclick={() => void toggleCiFix(item, signal)}
+    title="CI is failing on this commit. Your bridge runs this repository's own test command here first — an agent only starts if the failure happens on your machine too."
+  >{open ? 'Hide CI' : 'Fix CI'}</button>
+{/snippet}
+
+<!--
+  The panel's own row. A sibling <li>, not something nested inside the queue
+  row: #287's row is a fixed-column table row and a panel folded into it would
+  have to unpick that. The list is a column, so a full-width item below the row
+  is the whole change.
+-->
+{#snippet ciFixRow(item: QueueItem)}
+  {@const key = sizeKey(item)}
+  {@const row = ciFixRows[key]}
+  {#if row}
+    <li class="queue-fix-item" id={ciFixDomId(key)} data-testid="queue-ci-fix-row">
+      {#if row.status === 'loading'}
+        <p class="queue-fix-note" role="status" data-testid="queue-ci-fix-loading">
+          <Spinner /> Reading what CI reported…
+        </p>
+      {:else if row.status === 'unreadable'}
+        <p class="queue-fix-note" role="status" data-testid="queue-ci-fix-unreadable">{row.why}</p>
+      {:else}
+        <CiFixPanel
+          pr={item.ref}
+          headSha={row.headSha}
+          ci={row.ci}
+          onRefreshCi={() => void loadQueueSignals(queueItems)}
+        />
+      {/if}
+    </li>
+  {/if}
+{/snippet}
+
 {#snippet queueRows(items: QueueItem[])}
   {#each groupByRepo(items) as group (group.key)}
     <h4 class="repo-group-header">
       <ProviderIcon provider={group.provider} size={12} label={PROVIDER_NAMES[group.provider]} />
       <span class="repo-group-name">{group.owner}/{group.repo}</span>
     </h4>
-    <ul class="queue-list grouped">
+    <ul class="queue-list grouped" class:ci-fix-column={ciFixColumn}>
       {#each group.items as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
         <li class="queue-item">
           <button
@@ -740,8 +928,14 @@
           <!-- Outside the navigating <button>: both are controls, and a button
                inside a button is not markup a browser will honour. -->
           {@render baseCell(item, queueSignals[sizeKey(item)])}
-          <span class="queue-cell prepare-cell">{@render prepareControl(item)}</span>
+          <span class="queue-cell prepare-cell">
+            {#if canOfferCiFix(item, queueSignals[sizeKey(item)]) || ciFixRows[sizeKey(item)]}
+              {@render ciFixControl(item, queueSignals[sizeKey(item)])}
+            {/if}
+            {@render prepareControl(item)}
+          </span>
         </li>
+        {@render ciFixRow(item)}
       {/each}
     </ul>
   {/each}
@@ -1715,8 +1909,48 @@
     display: flex;
     align-items: baseline;
     justify-content: flex-end;
+    gap: var(--space-2);
     padding: var(--space-1) var(--space-2) var(--space-1) 0;
     min-width: 8ch;
+  }
+
+  /* Room for BOTH controls, on every row of a list where any row has two, so
+     the actions column lands at the same x whether or not this particular row
+     offers the fix. Sized for the wider label ("Hide CI") so opening the panel
+     cannot reflow the row either. */
+  .ci-fix-column .prepare-cell {
+    min-width: 16ch;
+  }
+
+  /* Fix CI — the actions column's second control, in Prepare's register and
+     ranked one tier below it: Prepare is the thing every row offers, this one
+     appears on at most the single row your checkout is actually on. It borrows
+     .prepare-btn wholesale (same link styling, same focus ring) rather than
+     re-declaring it, so the two cannot drift apart. */
+  .ci-fix-btn {
+    color: var(--text-muted);
+  }
+
+  .ci-fix-btn:hover,
+  .ci-fix-btn:focus-visible {
+    color: var(--text);
+  }
+
+  /* The panel's row. Its left edge lines up with the grouped rows' text rather
+     than with the list's outer edge, so the panel reads as belonging to the row
+     above it. The panel brings its own border, background and vertical
+     margin. */
+  .queue-fix-item {
+    padding: 0 var(--space-2) 0 var(--space-4);
+  }
+
+  .queue-fix-note {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: var(--space-2) 0;
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
   }
 
   /* PREPARE, FOURTEEN TIMES OVER (p.52-53, p.30-31, p.39-40).
@@ -2018,6 +2252,12 @@
     .size-cell,
     .queue-time,
     .prepare-cell,
+    /* Including the widened form: the whole point of the measures standing
+       down here is that the actions cell must not take the title's line, and a
+       16ch reservation would take twice as much of it. The two controls still
+       end at the same right edge as a lone Prepare, which is the alignment
+       this width actually promises. */
+    .ci-fix-column .prepare-cell,
     .ci-cell,
     .threads-cell,
     .base-cell,
