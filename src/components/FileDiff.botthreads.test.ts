@@ -171,41 +171,60 @@ describe('FileDiff — bot threads inline in the diff', () => {
   // RIGHT line 2 IS in the patch → the thread renders inline, not in the list.
   const anchoredBot = comment({ id: 20, line: 2, author: 'posthog[bot]', body: 'inline-bot-marker' })
 
-  async function renderInline(mode: 'unified' | 'split', comments = [anchoredBot]) {
-    const r = render(FileDiff, {
+  // #295 moved the inline count OUT of the code flow: a line whose threads are
+  // all hidden no longer renders the banner block at all, and its count lives
+  // in the gutter marker. The marker's own behaviour is pinned in
+  // FileDiff.gutterthreads.test.ts; what belongs HERE is that the bot filter
+  // still reaches the inline surface in both modes.
+  const markerSel = '[data-testid="hidden-threads-marker"]'
+
+  function renderInline(mode: 'unified' | 'split', comments = [anchoredBot]) {
+    return render(FileDiff, {
       props: { file: modified, mode, comments, resolvedCommentIds: new Set<number>() },
     })
-    await vi.waitFor(() => {
-      expect(r.container.querySelector('.inline-comment-threads')).toBeInTheDocument()
-    })
-    return r
   }
 
   for (const mode of ['unified', 'split'] as const) {
-    it(`${mode}: hides the bot thread and states the count in its place`, async () => {
-      const { container } = await renderInline(mode)
-      const inline = container.querySelector('.inline-comment-threads')!
-      expect(inline.textContent).not.toContain('inline-bot-marker')
-      expect(inline.querySelector(botNote)!.textContent).toContain('1 bot thread hidden')
+    it(`${mode}: hides the bot thread and states the count in the gutter`, async () => {
+      const { container } = renderInline(mode)
+      await vi.waitFor(() => {
+        expect(container.querySelector(markerSel)).toBeInTheDocument()
+      })
+      expect(container.textContent).not.toContain('inline-bot-marker')
+      expect(container.querySelector(markerSel)!.getAttribute('aria-label')).toContain(
+        '1 bot thread hidden',
+      )
+      expect(container.querySelector('.inline-comment-threads')).not.toBeInTheDocument()
     })
 
-    it(`${mode}: the inline note reveals the thread at its line`, async () => {
-      const { container } = await renderInline(mode)
-      await fireEvent.click(container.querySelector(`.inline-comment-threads ${botNote}`)!)
-      const inline = container.querySelector('.inline-comment-threads')!
-      expect(inline.textContent).toContain('inline-bot-marker')
+    it(`${mode}: the gutter marker reveals the thread at its line`, async () => {
+      const { container } = renderInline(mode)
+      await vi.waitFor(() => {
+        expect(container.querySelector(markerSel)).toBeInTheDocument()
+      })
+      await fireEvent.click(container.querySelector(markerSel)!)
+      await vi.waitFor(() => {
+        expect(container.querySelector('.inline-comment-threads')).toBeInTheDocument()
+      })
+      expect(container.querySelector('.inline-comment-threads')!.textContent).toContain(
+        'inline-bot-marker',
+      )
     })
   }
 
-  it('an inline bot thread a person answered is untouched and draws no note', async () => {
-    const { container } = await renderInline('unified', [
+  it('an inline bot thread a person answered is untouched and draws no marker', async () => {
+    const { container } = renderInline('unified', [
       anchoredBot,
       comment({ id: 21, line: 2, inReplyTo: 20, body: 'my-inline-answer' }),
     ])
+    await vi.waitFor(() => {
+      expect(container.querySelector('.inline-comment-threads')).toBeInTheDocument()
+    })
     const inline = container.querySelector('.inline-comment-threads')!
     expect(inline.textContent).toContain('my-inline-answer')
     expect(inline.textContent).toContain('inline-bot-marker')
     expect(inline.querySelector(botNote)).not.toBeInTheDocument()
+    expect(container.querySelector(markerSel)).not.toBeInTheDocument()
   })
 })
 

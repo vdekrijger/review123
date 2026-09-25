@@ -864,6 +864,12 @@
   // the count and carries a one-click reveal (`revealedRoots`), which is a
   // LOCAL escape hatch: it shows this one group without flipping the global
   // preference, the same shape as the findings-triage "Show all".
+  //
+  // AND NOTHING IS REVEALED IRREVERSIBLY (#295). Revealing used to be a
+  // one-way door: `revealThreads` only ever ADDED, so the only way back was
+  // the global toolbar switch — which un-hides every OTHER group in the PR as
+  // a side effect. Reveal is now a TOGGLE, with `rehideThreads` as its exact
+  // inverse, and it stays as local as the reveal it undoes.
   const hideResolved = $derived(resolvedThreadsPref.hidden)
   const hideBots = $derived(botThreadsPref.hidden)
 
@@ -873,11 +879,28 @@
   /** Which filter is holding this thread back, if any. Order is the rule. */
   type HiddenReason = 'resolved' | 'bot'
 
-  function hiddenReason(thread: Thread): HiddenReason | null {
-    if (revealedRoots.has(thread.root.id)) return null
+  /** The two reasons in their fixed order — resolved first, as above. */
+  const HIDDEN_REASONS: readonly HiddenReason[] = ['resolved', 'bot'] as const
+
+  /**
+   * Which filter CLAIMS this thread, ignoring any local reveal.
+   *
+   * This is the group's stable identity, and it is what the gutter marker and
+   * the re-hide control are named from: a thread the reader has revealed is
+   * still "one of the resolved ones at line 19", and putting it back has to
+   * mean exactly that. `hiddenReason` below is this minus what is on screen
+   * right now — the two were one function until reveal became reversible, and
+   * collapsing them again is how a re-hide control loses track of its group.
+   */
+  function suppressedReason(thread: Thread): HiddenReason | null {
     if (hideResolved && isThreadResolved(thread)) return 'resolved'
     if (hideBots && isBotThread(thread)) return 'bot'
     return null
+  }
+
+  function hiddenReason(thread: Thread): HiddenReason | null {
+    if (revealedRoots.has(thread.root.id)) return null
+    return suppressedReason(thread)
   }
 
   function visibleThreads(list: Thread[]): Thread[] {
@@ -888,11 +911,34 @@
     return list.filter((t) => hiddenReason(t) === reason)
   }
 
+  /** Every thread a filter claims here, revealed or not — the group's extent. */
+  function suppressedThreads(list: Thread[], reason: HiddenReason): Thread[] {
+    return list.filter((t) => suppressedReason(t) === reason)
+  }
+
+  /** The claimed threads the reader has pulled back on screen at this location. */
+  function revealedThreads(list: Thread[], reason: HiddenReason): Thread[] {
+    return suppressedThreads(list, reason).filter((t) => revealedRoots.has(t.root.id))
+  }
+
   /** Reveal exactly the threads hidden at one location (reassign → reactive). */
   function revealThreads(list: Thread[]): void {
     const next = new Set(revealedRoots)
     for (const t of list) next.add(t.root.id)
     revealedRoots = next
+  }
+
+  /** Put them back. The inverse of revealThreads, and just as local. */
+  function rehideThreads(list: Thread[]): void {
+    const next = new Set(revealedRoots)
+    for (const t of list) next.delete(t.root.id)
+    revealedRoots = next
+  }
+
+  /** "2 resolved threads" / "1 bot thread" — the only place this is worded. */
+  function reasonPhrase(count: number, reason: HiddenReason): string {
+    const noun = reason === 'resolved' ? 'resolved thread' : 'bot thread'
+    return `${count} ${noun}${count === 1 ? '' : 's'}`
   }
 
   // Bottom list: unanchorable threads grouped by line (null = "General", last)
@@ -1066,7 +1112,15 @@
       if (!lines.has(f.line)) continue
       entryAt(f.anchorSide === 'LEFT' ? oldFile : newFile, f.line).findings.push(f)
     }
+    // ONLY the threads that will actually be shown (#295). A hidden thread used
+    // to enter extendData so the note announcing it could render in its place —
+    // which is why a line whose threads were every one of them hidden still
+    // produced an extend ROW, in unified and (with the library's own
+    // same-height placeholder on the far side) in split. The count lives in the
+    // gutter marker now, so a fully hidden line contributes no entry, hence no
+    // row, hence nothing at all to the reading column.
     for (const t of anchoredThreads) {
+      if (hiddenReason(t) !== null) continue
       const map = t.root.side === 'LEFT' ? oldFile : newFile
       entryAt(map, t.root.line!).threads.push(t)
     }
@@ -1086,6 +1140,224 @@
     }
     return { oldFile, newFile }
   })
+
+  // ---- The gutter marker for hidden threads (#295) ------------------------
+  //
+  // THE REPORT. "would be great if we could re-hide the resolved threads by
+  // the click of a button, and if the blue thing maybe just becomes a marker
+  // on the left side at the line numbers so we don't take away from the
+  // reading code experience" — with a screenshot of FOUR full-width
+  // "N resolved threads hidden — show" bands stacked through twenty lines of
+  // Python. The notice was correct and the count was right; its PLACEMENT was
+  // the problem. It rendered inside `.inline-comment-threads`, which is a
+  // banner-tinted block in the extend row, so a line whose threads were ALL
+  // hidden still cost a full banded row of the reading column to say so.
+  //
+  // So the notice leaves the code flow entirely. A line whose threads are all
+  // hidden now produces NO extend row at all (see `renderExtendLine`), and the
+  // count moves to a marker in @git-diff-view's OWN line-number cell.
+  //
+  // WHY THAT CELL IS REACHABLE — measured, not assumed. #279 established that
+  // the library's `.diff-line-extend-wrapper` is `sticky z-[1]` and traps
+  // absolutely-positioned descendants, so "it is in the diff, therefore it is
+  // trapped" was the thing to disprove. `td.diff-line-num` computes to
+  // `position: sticky` at layer 1, with `overflow: visible; contain: none;
+  // transform: none; isolation: auto` — a containing block with nothing that
+  // clips. An injected `position: absolute` child reports that very `td` as
+  // its `offsetParent`, `document.elementFromPoint` at the child's centre
+  // returns the child (the stack under it is td → table → wrapper), and a real
+  // browser mouse click lands on it. The library itself already parks an
+  // absolutely-positioned child there — `.diff-add-widget-wrapper`, the "+"
+  // add-comment button at `left: 100%`. No overlay, no measurement, no
+  // scroll-sync: the marker is a child of the row it describes.
+  //
+  // WHY IT IS PORTALLED. The library exposes snippets for the widget row and
+  // the extend row only; the gutter cell has no slot. So the markers are
+  // synced into it by an action + MutationObserver — the same idiom `focusDim`
+  // has used to decorate library-rendered cells since the focus-mode work, and
+  // the same reason (their DOM is theirs; we may add to it, not restyle it).
+
+  interface GutterThreadMarker {
+    /** `SIDE|line`, stable across re-renders — the marker's identity. */
+    key: string
+    side: 'LEFT' | 'RIGHT'
+    line: number
+    /** Every thread a filter claims at this line, revealed or not. */
+    threads: Thread[]
+    /** The reasons present here, in HIDDEN_REASONS order. */
+    reasons: HiddenReason[]
+    /** True once every claimed thread here is on screen. */
+    revealed: boolean
+    /** The accessible name — where the count lives now. */
+    label: string
+  }
+
+  /**
+   * One marker per (side, line) a filter is holding threads back at, built
+   * from the SAME anchored threads `extendData` is built from so the marker
+   * and the group it opens can never disagree about where they are.
+   *
+   * ONE marker per line, not one per reason. A gutter is ten pixels wide and
+   * two glyphs there would be unreadable — but the two filters stay two things
+   * where acting on them separately matters: the label names each reason's
+   * count in its own clause (never a blurred "3 hidden"), the marker draws one
+   * bar per reason, and the group it opens carries a SEPARATE re-hide control
+   * per reason.
+   */
+  const gutterThreadMarkers = $derived.by((): GutterThreadMarker[] => {
+    const byKey = new Map<string, Thread[]>()
+    for (const t of anchoredThreads) {
+      if (suppressedReason(t) === null) continue
+      const key = `${t.root.side}|${t.root.line}`
+      const arr = byKey.get(key) ?? []
+      arr.push(t)
+      byKey.set(key, arr)
+    }
+    const out: GutterThreadMarker[] = []
+    for (const [key, threads] of byKey) {
+      const side = threads[0].root.side as 'LEFT' | 'RIGHT'
+      const line = threads[0].root.line as number
+      const groups = HIDDEN_REASONS.map((reason) => ({
+        reason,
+        list: suppressedThreads(threads, reason),
+      })).filter((g) => g.list.length > 0)
+      const revealed = threads.every((t) => revealedRoots.has(t.root.id))
+      // "Line 19 — 1 resolved thread shown, 1 bot thread hidden. Show them
+      // here." Each reason states its OWN count and its OWN state, so a line
+      // holding both never reduces to one number the reader cannot act on.
+      const clauses = groups.map((g) => {
+        const shown = g.list.every((t) => revealedRoots.has(t.root.id))
+        return `${reasonPhrase(g.list.length, g.reason)} ${shown ? 'shown' : 'hidden'}`
+      })
+      out.push({
+        key,
+        side,
+        line,
+        threads,
+        reasons: groups.map((g) => g.reason),
+        revealed,
+        label: `Line ${line} — ${clauses.join(', ')}. ${
+          revealed ? 'Hide them again.' : 'Show them here.'
+        }`,
+      })
+    }
+    return out
+  })
+
+  /**
+   * The library's line-number cell for one (side, line), in EITHER mode.
+   *
+   * Unified renders a single `td.diff-line-num` carrying an old span and a new
+   * span; an addition row has only `[data-line-new-num]`, a deletion row only
+   * `[data-line-old-num]`, a context row both. Split gives each side its own
+   * `td.diff-line-{old,new}-num` holding one `[data-line-num]`. Both shapes are
+   * already the ones `cellRowNums` reads for the focus-dim pass.
+   *
+   * WHICH GUTTER OWNS THE MARKER IN SPLIT MODE: the thread's OWN anchor side.
+   * A LEFT-anchored thread's extend row renders in the left column and a
+   * RIGHT-anchored one's in the right, so a marker on the other side would
+   * open a group in a column the reader is not looking at.
+   */
+  function gutterCellFor(root: HTMLElement, side: 'LEFT' | 'RIGHT', line: number): HTMLElement | null {
+    const split = root.querySelector(
+      side === 'LEFT'
+        ? `td.diff-line-old-num [data-line-num="${line}"]`
+        : `td.diff-line-new-num [data-line-num="${line}"]`,
+    )
+    if (split) return split.closest('td')
+    const unified = root.querySelector(
+      side === 'LEFT'
+        ? `td.diff-line-num [data-line-old-num="${line}"]`
+        : `td.diff-line-num [data-line-new-num="${line}"]`,
+    )
+    return unified ? unified.closest('td') : null
+  }
+
+  function toggleGutterMarker(ev: Event): void {
+    const el = ev.currentTarget as HTMLElement | null
+    const marker = gutterThreadMarkers.find((m) => m.key === el?.dataset.markerKey)
+    if (!marker) return
+    if (marker.revealed) rehideThreads(marker.threads)
+    else revealThreads(marker.threads)
+  }
+
+  /**
+   * Bring the markers in the DOM in line with `gutterThreadMarkers`. Idempotent
+   * on purpose: the MutationObserver below sees our own appends, and the guard
+   * (`parentElement !== cell`) is what makes the next pass a no-op instead of a
+   * loop.
+   */
+  function syncGutterMarkers(root: HTMLElement): void {
+    const wanted = new Map(gutterThreadMarkers.map((m) => [m.key, m]))
+    for (const el of [...root.querySelectorAll<HTMLElement>('.gutter-thread-marker')]) {
+      if (!wanted.has(el.dataset.markerKey ?? '')) el.remove()
+    }
+    for (const m of gutterThreadMarkers) {
+      const cell = gutterCellFor(root, m.side, m.line)
+      if (!cell) continue
+      let el = root.querySelector<HTMLElement>(
+        `.gutter-thread-marker[data-marker-key="${m.key}"]`,
+      )
+      if (!el) {
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.className = 'gutter-thread-marker'
+        button.dataset.markerKey = m.key
+        button.dataset.testid = 'hidden-threads-marker'
+        button.addEventListener('click', toggleGutterMarker)
+        el = button
+      }
+      el.dataset.line = String(m.line)
+      el.dataset.side = m.side
+      // Enums, not prose: `resolved`, `bot`, or `resolved bot`.
+      el.dataset.reasons = m.reasons.join(' ')
+      el.setAttribute('aria-expanded', String(m.revealed))
+      el.setAttribute('aria-label', m.label)
+      el.title = m.label
+      el.classList.toggle('is-revealed', m.revealed)
+      // One bar per reason, so "two filters are holding something here" is
+      // legible without reading the label. The bars are identical, so their
+      // COUNT is the only thing that can need rebuilding.
+      if (el.childElementCount !== m.reasons.length) {
+        el.replaceChildren(
+          ...m.reasons.map(() => {
+            const bar = document.createElement('span')
+            bar.className = 'gutter-thread-marker-bar'
+            bar.setAttribute('aria-hidden', 'true')
+            return bar
+          }),
+        )
+      }
+      if (el.parentElement !== cell) cell.appendChild(el)
+    }
+  }
+
+  /**
+   * Svelte action: keep the gutter markers in place as the threads, the diff
+   * mode and the library's own re-renders (highlight load, context expansion)
+   * change. Same shape as `focusDim` right above — one rAF-debounced pass, one
+   * MutationObserver, both torn down on destroy.
+   */
+  function gutterMarkers(node: HTMLElement, _: unknown) {
+    let raf = 0
+    const schedule = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => syncGutterMarkers(node))
+    }
+    schedule()
+    const mo = new MutationObserver(schedule)
+    mo.observe(node, { childList: true, subtree: true })
+    return {
+      update() {
+        schedule()
+      },
+      destroy() {
+        cancelAnimationFrame(raf)
+        mo.disconnect()
+        for (const el of node.querySelectorAll('.gutter-thread-marker')) el.remove()
+      },
+    }
+  }
 
   // Drafts whose anchor is NOT in the current diff — fallback block below the diff
   const unanchoredDrafts = $derived(drafts.filter((d) => !isAnchoredDraft(d)))
@@ -1281,16 +1553,17 @@
         </ul>
       </div>
     {/if}
-    <!-- The counted escape hatch for excluded threads. This codebase never
-         hides anything silently: wherever threads were removed, this states how
-         many and reveals them in place with one click (without flipping the
-         global preference). One snippet, one per REASON, rendered at BOTH
-         thread surfaces — inline in the diff, and the per-file bottom list — so
-         a group holding both kinds says so in two separate sentences instead of
-         blurring them into one count the reader cannot act on. -->
+    <!-- The counted escape hatch for excluded threads, for the ONE surface
+         that has no line to hang a gutter marker on: the per-file bottom list.
+         Those groups (file-level comments, and threads whose line is not in
+         the patch) are not in the code flow and are not what the report was
+         about, so they keep the sentence they had. This codebase never hides
+         anything silently: it states how many and reveals them in place with
+         one click, without flipping the global preference. One per REASON, so
+         a group holding both kinds says so in two separate sentences instead
+         of blurring them into one count the reader cannot act on. -->
     {#snippet hiddenThreadsNote(reason: HiddenReason, hidden: Thread[])}
       {#if hidden.length > 0}
-        {@const noun = reason === 'resolved' ? 'resolved thread' : 'bot thread'}
         <button
           type="button"
           class="threads-hidden-note"
@@ -1299,7 +1572,37 @@
             ? 'These threads are resolved and excluded by the Inspect toolbar’s “Hide resolved” switch. Show them here without changing that setting.'
             : 'A review bot wrote these, and nobody replied. They are excluded by the Inspect toolbar’s “Hide bots” switch — a reading preference for this diff only, which never removes them from what the fixing agent can be sent. Show them here without changing that setting.'}
           onclick={() => revealThreads(hidden)}
-        >{hidden.length} {noun}{hidden.length === 1 ? '' : 's'} hidden — show</button>
+        >{reasonPhrase(hidden.length, reason)} hidden — show</button>
+      {/if}
+    {/snippet}
+
+    <!-- THE WAY BACK (#295). Revealing used to be a one-way door; this is the
+         door handle on the inside, and it sits at the FOOT of the group the
+         reveal opened, because that is where the reader's eye is once they
+         have read it — not back up at the marker that opened it. (The marker
+         toggles too, for the reader who never left it.)
+
+         One control per REASON, never one "hide all": the two filters are two
+         different decisions with two different switches, and a line holding a
+         resolved thread and a bot thread must let the reader put back the one
+         they are done with. Same weight as the note above — a way back, not a
+         control competing with the comments that are still open. -->
+    {#snippet rehideControls(list: Thread[])}
+      {@const back = HIDDEN_REASONS.map((r) => ({ reason: r, threads: revealedThreads(list, r) })).filter((g) => g.threads.length > 0)}
+      {#if back.length > 0}
+        <div class="threads-rehide" data-testid="threads-rehide">
+          {#each back as group (group.reason)}
+            <button
+              type="button"
+              class="threads-hidden-note threads-rehide-btn"
+              data-testid={group.reason === 'resolved' ? 'resolved-rehide' : 'bot-rehide'}
+              title={group.reason === 'resolved'
+                ? 'Put these resolved threads back out of the way. Local to this group — the Inspect toolbar’s “Hide resolved” switch is untouched.'
+                : 'Put these bot threads back out of the way. Local to this group — the Inspect toolbar’s “Hide bots” switch is untouched.'}
+              onclick={() => rehideThreads(group.threads)}
+            >Hide {reasonPhrase(group.threads.length, group.reason)} again</button>
+          {/each}
+        </div>
       {/if}
     {/snippet}
 
@@ -1310,6 +1613,7 @@
       class:reanchor-dragging={reanchorDragActive}
       data-focus-mode={focusMode}
       use:focusDim={[focusMode, file.filename, mode, isGenerated, hunkAttentionOn, mechanicalRowIndex, restoredHunks]}
+      use:gutterMarkers={[gutterThreadMarkers, file.filename, mode, wsCollapsed]}
       onclick={handleDiffClick}
       ondragover={handleFindingDragOver}
       ondrop={handleFindingDrop}
@@ -1464,13 +1768,20 @@
             {/each}
           </div>
         {/if}
+        <!-- THE BANNER ROW EXISTS ONLY FOR THREADS THAT ARE ON SCREEN (#295):
+             `entry.threads` is already filtered to those, so a line whose
+             threads are every one of them hidden reaches neither this block nor
+             the extend row that would host it. It used to render whenever the
+             line had threads AT ALL, which is why four hidden groups through
+             twenty lines of the report's screenshot were four banner-tinted
+             bands across the reading column. The count lives in the gutter
+             marker now (`gutterThreadMarkers`), which costs no row at all. -->
         {#if entry?.threads?.length}
           <div class="inline-comment-threads" data-testid="inline-annotations" data-line={lineNumber} aria-label="Existing comment threads at line {lineNumber}">
-            {#each visibleThreads(entry.threads) as thread (thread.root.id)}
+            {#each entry.threads as thread (thread.root.id)}
               <ExistingThread {thread} resolved={isThreadResolved(thread)} {onReply} />
             {/each}
-            {@render hiddenThreadsNote('resolved', hiddenThreads(entry.threads, 'resolved'))}
-            {@render hiddenThreadsNote('bot', hiddenThreads(entry.threads, 'bot'))}
+            {@render rehideControls(entry.threads)}
           </div>
         {/if}
       {/snippet}
@@ -1625,6 +1936,7 @@
             {/each}
             {@render hiddenThreadsNote('resolved', hiddenThreads(group, 'resolved'))}
             {@render hiddenThreadsNote('bot', hiddenThreads(group, 'bot'))}
+            {@render rehideControls(group)}
           </div>
         {/each}
       </div>
@@ -1999,6 +2311,102 @@
   .threads-hidden-note:focus-visible {
     opacity: 1;
     text-decoration: underline;
+  }
+
+  /*
+   * ── The way back, at the foot of what was revealed (#295) ──
+   * A row rather than a column: with two reasons revealed at one line these
+   * are two short peers ("Hide 2 resolved threads again" / "Hide 1 bot thread
+   * again"), not a stack the eye has to descend.
+   */
+  .threads-rehide {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  /*
+   * ── The gutter marker (#295) ──
+   *
+   * `:global` because these elements are NOT in this component's markup: they
+   * are synced into @git-diff-view's own `td.diff-line-num` cell by the
+   * `gutterMarkers` action (see the long note beside `gutterThreadMarkers`),
+   * so Svelte's scoping class never lands on them. The class names are unique
+   * to this feature, which is what keeps a global rule honest.
+   *
+   * GEOMETRY. `left: 0` is the cell's padding-box edge, and the library gives
+   * that cell `padding-left: 10px` before the (right-aligned) line numbers
+   * start — so the painted glyph, 3px wide, sits in a strip that is empty by
+   * construction in both modes. The BUTTON is wider than the glyph (1.25rem)
+   * and spans the row's full height, because a 3px hit target is not a target;
+   * the extra width is transparent and lands on the blank left half of a
+   * right-aligned number, never on the "+" add-comment widget (which the
+   * library parks at `left: 100%`, the opposite edge).
+   *
+   * NO z-index, and none needed: the marker is a child of the cell, so the
+   * cell's own `z-[1]` stacking context carries it, and nothing inside that
+   * cell overlaps the strip. (`src/lib/theme/layerScale.test.ts` scans this
+   * file with an empty allowlist — a raw z-index here would fail the suite,
+   * and the right answer was not to reach for the scale but to not need it.)
+   *
+   * THE COUNT is in `aria-label` and in the native `title` tooltip, which is
+   * rendered by the browser OUTSIDE the document — the one tooltip that cannot
+   * be trapped by the sticky, z-indexed wrapper #279 proved traps our own
+   * popovers. The Inspect toolbar's "N … hidden" counts are unchanged.
+   */
+  :global(.gutter-thread-marker) {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: var(--space-1);
+    padding: 0;
+    margin: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    line-height: 0;
+  }
+
+  /*
+   * One bar per REASON. Two filters holding threads at one line reads as two
+   * ticks without the reader opening anything; which is which, and how many of
+   * each, is in the label. The bars share the row, so a second one shortens
+   * both rather than overflowing into the line above.
+   */
+  :global(.gutter-thread-marker-bar) {
+    flex: 0 1 0.75rem;
+    width: 3px;
+    min-height: 0.3125rem;
+    border-radius: 999px;
+    /* The same accent the bottom list's group label uses for its left rule:
+       in this app that colour already means "there is a comment thing here". */
+    background: var(--border-banner-accent);
+    opacity: 0.85;
+    transition: width 0.1s, opacity 0.1s;
+  }
+
+  :global(.gutter-thread-marker:hover .gutter-thread-marker-bar),
+  :global(.gutter-thread-marker:focus-visible .gutter-thread-marker-bar) {
+    width: 5px;
+    opacity: 1;
+  }
+
+  /* Revealed: still there, still the way back, visibly spent. */
+  :global(.gutter-thread-marker.is-revealed .gutter-thread-marker-bar) {
+    opacity: 0.45;
+  }
+
+  :global(.gutter-thread-marker:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    border-radius: 3px;
   }
 
   /* (Resolved-thread collapse styles live in ExistingThread.svelte) */

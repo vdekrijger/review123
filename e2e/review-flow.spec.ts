@@ -1767,14 +1767,25 @@ test('resolved-threads: excluded by default, but counted in the toolbar and one 
   // ...and the thread itself is gone from the diff
   await expect(page.locator('details.resolved-thread')).toHaveCount(0)
 
-  // In-place escape hatch at the location the thread was removed from
-  const note = page.getByTestId('resolved-hidden-note').first()
-  await expect(note).toContainText('1 resolved thread hidden \u2014 show')
-  await note.click()
+  // In-place escape hatch at the location the thread was removed from. Since
+  // #295 that is a marker in the line-number gutter rather than a band across
+  // the reading column: the thread is anchored at src/feature.ts RIGHT 2.
+  const marker = page.locator('[data-testid="hidden-threads-marker"][data-line="2"]')
+  await expect(marker).toHaveAttribute('aria-label', /1 resolved thread hidden/)
+  await marker.click()
   await expect(page.locator('details.resolved-thread')).toBeVisible({ timeout: 3_000 })
 
   // A local reveal does NOT flip the global preference
   await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+
+  // \u2026and it is reversible without touching that switch: the way back sits at
+  // the foot of the group the reveal opened.
+  const rehide = page.getByTestId('resolved-rehide').first()
+  await expect(rehide).toContainText('Hide 1 resolved thread again')
+  await rehide.click()
+  await expect(page.locator('details.resolved-thread')).toHaveCount(0)
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('resolved-hidden-count')).toContainText('1 resolved thread hidden')
 })
 
 test('resolved-threads: turning the switch off restores every resolved thread', async ({ page }) => {
@@ -1784,6 +1795,7 @@ test('resolved-threads: turning the switch off restores every resolved thread', 
   await expect(page.getByTestId('hide-resolved-toggle')).toHaveAttribute('aria-pressed', 'false')
   await expect(page.getByTestId('resolved-hidden-count')).toHaveCount(0)
   await expect(page.getByTestId('resolved-hidden-note')).toHaveCount(0)
+  await expect(page.getByTestId('hidden-threads-marker')).toHaveCount(0)
   await expect(page.locator('details.resolved-thread')).toBeVisible({ timeout: 3_000 })
 })
 
