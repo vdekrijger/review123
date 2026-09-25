@@ -563,6 +563,7 @@ describe('resolveTaskMode — deep review over the local bridge', () => {
       inferAgentic,
       files: true,
       search: true,
+      commits: true,
       fix: false,
       checkout: false,
       push: false,

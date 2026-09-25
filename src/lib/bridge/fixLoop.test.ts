@@ -169,6 +169,67 @@ describe('decideFixReadiness', () => {
     expect(decideFixReadiness(snapshot({ git: null }), PR_HEAD).reason).toBe('no-repo-state')
   })
 
+  // -------------------------------------------------------------------------
+  // CONTAINMENT, NOT EQUALITY — the rule this file exists to hold.
+  //
+  // `git worktree add … <sha>` reads the OBJECT STORE. Nothing about it needs
+  // the working tree to be sitting on that commit, so nothing about readiness
+  // does either. Before the containment probe, the equality test meant a user
+  // looking at twenty of their own pull requests could be offered the fix loop
+  // on at most one row — the feature shipped and was unreachable.
+  // -------------------------------------------------------------------------
+
+  it('IS READY on a checkout sitting somewhere else entirely, when the repo HAS the commit', () => {
+    const readiness = decideFixReadiness(
+      snapshot({
+        // Another branch, another commit, and a dirty tree for good measure.
+        git: { head: OTHER_HEAD, branch: 'main', dirty: true },
+        headPresent: true,
+      }),
+      PR_HEAD,
+    )
+    expect(readiness).toMatchObject({ ready: true, reason: 'ready', cli: 'claude' })
+  })
+
+  it('refuses SPECIFICALLY when the repo has never seen the commit, even on the right branch', () => {
+    const readiness = decideFixReadiness(
+      // Nothing is wrong with this checkout: clean, on its own branch. The
+      // commit simply is not in the object store, so there is nothing to build
+      // a worktree from — a different refusal from "you are somewhere else".
+      snapshot({ git: { head: OTHER_HEAD, branch: 'main', dirty: false }, headPresent: false }),
+      PR_HEAD,
+    )
+    expect(readiness).toMatchObject({ ready: false, reason: 'head-unfetched' })
+    const sentence = describeFixReadiness(readiness, PR_HEAD)
+    // It names the ONE command that fixes it, and the commit it is about.
+    expect(sentence).toContain('fetch')
+    expect(sentence).toContain(PR_HEAD.slice(0, 7))
+    // And it is NOT the old sentence, which was about where the checkout sits.
+    expect(sentence).not.toContain('too old')
+  })
+
+  it('refuses head-unfetched even when the checkout IS on the commit — the probe wins', () => {
+    // Belt and braces: a bridge that answered "absent" for the sha its own HEAD
+    // reports is self-contradictory, and the conservative read of a
+    // contradiction is the refusal. Equality must not sneak back in as an
+    // override.
+    const readiness = decideFixReadiness(snapshot({ headPresent: false }), PR_HEAD)
+    expect(readiness.reason).toBe('head-unfetched')
+  })
+
+  it('falls back to the OLD equality test when nobody could answer', () => {
+    // An older bridge has no `/v1/commits`, so `headPresent` is null. Behaviour
+    // must be byte-for-byte what it was: ready on the matching head…
+    expect(decideFixReadiness(snapshot({ headPresent: null }), PR_HEAD).reason).toBe('ready')
+    // …and head-mismatch anywhere else.
+    expect(
+      decideFixReadiness(
+        snapshot({ git: { head: OTHER_HEAD, branch: 'main', dirty: false }, headPresent: null }),
+        PR_HEAD,
+      ).reason,
+    ).toBe('head-mismatch')
+  })
+
   it('refuses a checkout on another commit, and names both shas so the user can act', () => {
     const readiness = decideFixReadiness(
       snapshot({ git: { head: OTHER_HEAD, branch: 'main', dirty: false } }),
@@ -179,13 +240,23 @@ describe('decideFixReadiness', () => {
     expect(sentence).toContain('main')
     expect(sentence).toContain(OTHER_HEAD.slice(0, 7))
     expect(sentence).toContain(PR_HEAD.slice(0, 7))
+    // head-mismatch is now the NARROW reason: it fires only where the bridge
+    // cannot answer the containment question, so the fix it names is an update.
+    expect(sentence).toContain('Update the bridge')
   })
 
   it.each<FixReadinessReason>([
-    'ready', 'no-bridge', 'write-disabled', 'no-cli', 'no-repo-state', 'head-mismatch',
+    'ready', 'no-bridge', 'write-disabled', 'no-cli', 'no-repo-state', 'head-unfetched', 'head-mismatch',
   ])('has a sentence for %s', (reason) => {
     const readiness = { ready: reason === 'ready', reason, cli: 'claude' as const, branch: 'x', bridgeHead: PR_HEAD }
     expect(describeFixReadiness(readiness, PR_HEAD).length).toBeGreaterThan(20)
+  })
+
+  it('gives head-unfetched and head-mismatch DIFFERENT sentences', () => {
+    const base = { ready: false, cli: null, branch: 'main', bridgeHead: OTHER_HEAD }
+    const unfetched = describeFixReadiness({ ...base, reason: 'head-unfetched' }, PR_HEAD)
+    const mismatch = describeFixReadiness({ ...base, reason: 'head-mismatch' }, PR_HEAD)
+    expect(unfetched).not.toBe(mismatch)
   })
 })
 

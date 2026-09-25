@@ -45,6 +45,7 @@ const ALL_READY: BridgeCapabilities = {
   inferAgentic: true,
   files: true,
   search: true,
+  commits: true,
   fix: false,
   checkout: false,
   push: false,
