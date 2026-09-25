@@ -42,6 +42,12 @@
  * that reports `truncated: true` and the count is a FLOOR, which the UI renders
  * as `100+` rather than as a wrong number.
  *
+ * THE SAME PAGE ANSWERS "OUT OF HOW MANY". The row shows `3/11 open`, and the
+ * denominator is that array's length — no second field, no second request. It
+ * inherits the truncation honesty exactly: past 100 threads BOTH halves are
+ * floors, so the UI stops showing a fraction rather than showing one whose two
+ * numbers it cannot stand behind.
+ *
  * MERGE STATE lives in a SECOND, SEPARATE query (fetchMergeStates). GitHub still
  * documents `PullRequest.mergeStateStatus` as requiring the merge-info preview
  * media type, and an unknown field is a VALIDATION error — which nulls `data`
@@ -94,7 +100,25 @@ export interface QueueSignal {
   ci: CiState | null
   /** Count of UNRESOLVED review THREADS (never comments). null when unknown. */
   unresolved: number | null
-  /** True when more threads exist than one page holds — `unresolved` is a floor. */
+  /**
+   * ALL review threads on this pull request, resolved and unresolved — the
+   * denominator of the `x/y` the row shows.
+   *
+   * It costs nothing: `reviewThreads(first: 100) { nodes { isResolved } }` is
+   * already the query, and the total is that array's length. There is no second
+   * request and no second field.
+   *
+   * IT IS A FLOOR WHENEVER `unresolvedTruncated` IS, and for the same reason —
+   * they come from the same page. That is why one flag covers both halves: a
+   * pull request with more than 100 threads has an unknown numerator AND an
+   * unknown denominator, and a fraction of two floors is not a fraction anybody
+   * can reason about. The UI shows the single floored count there instead.
+   */
+  threads: number | null
+  /**
+   * True when more threads exist than one page holds. BOTH `unresolved` and
+   * `threads` are then floors, never exact.
+   */
   unresolvedTruncated: boolean
   /** Diff size from the same query — replaces the per-row REST fetch. */
   size: { additions: number; deletions: number } | null
@@ -285,11 +309,18 @@ function parseRepoNode(node: RepoNode | null | undefined): ParsedNode | null {
 
   const threadNodes = pr.reviewThreads?.nodes
   let unresolved: number | null = null
+  let threads: number | null = null
   let unresolvedTruncated = false
   if (Array.isArray(threadNodes)) {
     // THREADS, not comments (#272). One conversation is one, however many
     // replies hang off it.
-    unresolved = threadNodes.filter((t) => t !== null && t.isResolved === false).length
+    const real = threadNodes.filter((t) => t !== null)
+    unresolved = real.filter((t) => t.isResolved === false).length
+    // The denominator: every thread on the page, resolved and unresolved. A
+    // node whose `isResolved` GitHub did not send still counts here — it is a
+    // conversation that exists, and leaving it out would make the numerator
+    // look like a larger share of the whole than it is.
+    threads = real.length
     unresolvedTruncated = pr.reviewThreads?.pageInfo?.hasNextPage === true
   }
 
@@ -313,6 +344,7 @@ function parseRepoNode(node: RepoNode | null | undefined): ParsedNode | null {
     signal: {
       ci,
       unresolved,
+      threads,
       unresolvedTruncated,
       size,
       base,

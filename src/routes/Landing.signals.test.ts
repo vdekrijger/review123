@@ -61,6 +61,7 @@ function signal(over: Partial<QueueSignal> = {}): QueueSignal {
   return {
     ci: null,
     unresolved: null,
+    threads: null,
     unresolvedTruncated: false,
     size: null,
     base: { kind: 'unknown' },
@@ -131,37 +132,53 @@ describe('queue row — CI state', () => {
 // ---------------------------------------------------------------------------
 
 describe('queue row — unresolved conversations', () => {
-  it('shows the count, with the full phrase on the title and in the accessible text', async () => {
+  it('shows x/y, because the numerator alone ranks nothing', async () => {
+    // "3 open" says the same thing on a review with three conversations and on
+    // one with thirty. These are two different rows to open.
     const it0 = item(1)
-    await renderQueue([it0], { [queueKey(it0)]: signal({ unresolved: 3 }) })
+    await renderQueue([it0], { [queueKey(it0)]: signal({ unresolved: 3, threads: 11 }) })
 
     const chip = await screen.findByTestId('queue-unresolved')
-    expect(chip).toHaveAttribute('title', '3 unresolved conversations')
-    expect(chip.textContent).toContain('3 unresolved conversations')
+    expect(chip.textContent).toContain('3/11 open')
+    // The word the numbers actually mean rides on the title and the accessible
+    // name, where there is room to read it in full — denominator included.
+    expect(chip).toHaveAttribute('title', '3 of 11 conversations unresolved')
+    expect(chip.textContent).toContain('3 of 11 conversations unresolved')
   })
 
-  it('says "conversation", singular, when there is one', async () => {
+  it('says "conversation", singular, when the whole PR has one', async () => {
     const it0 = item(1)
-    await renderQueue([it0], { [queueKey(it0)]: signal({ unresolved: 1 }) })
-    expect(await screen.findByTestId('queue-unresolved')).toHaveAttribute(
-      'title',
-      '1 unresolved conversation',
-    )
+    await renderQueue([it0], { [queueKey(it0)]: signal({ unresolved: 1, threads: 1 }) })
+    const chip = await screen.findByTestId('queue-unresolved')
+    expect(chip.textContent).toContain('1/1 open')
+    expect(chip).toHaveAttribute('title', '1 of 1 conversation unresolved')
   })
 
-  it('renders a truncated count as a floor rather than as a number it cannot stand behind', async () => {
+  it('DROPS the fraction when the page was truncated — two floors is not a fraction', async () => {
     const it0 = item(1)
     await renderQueue([it0], {
-      [queueKey(it0)]: signal({ unresolved: 100, unresolvedTruncated: true }),
+      [queueKey(it0)]: signal({ unresolved: 100, threads: 100, unresolvedTruncated: true }),
     })
     const chip = await screen.findByTestId('queue-unresolved')
+    // Not "100+/100+": both halves are floors past GitHub's page cap, and a
+    // reader would do arithmetic on the slash anyway.
+    expect(chip.textContent).toContain('100+ open')
+    expect(chip.textContent).not.toContain('/')
     expect(chip).toHaveAttribute('title', '100+ unresolved conversations')
     expect(chip.textContent).toContain('100 or more')
   })
 
+  it('drops the fraction when the denominator is unknown, rather than inventing one', async () => {
+    const it0 = item(1)
+    await renderQueue([it0], { [queueKey(it0)]: signal({ unresolved: 3, threads: null }) })
+    const chip = await screen.findByTestId('queue-unresolved')
+    expect(chip.textContent).toContain('3 open')
+    expect(chip.textContent).not.toContain('/')
+  })
+
   it.each([
-    ['zero unresolved', signal({ unresolved: 0 })],
-    ['an unanswerable row', signal({ unresolved: null })],
+    ['zero unresolved', signal({ unresolved: 0, threads: 4 })],
+    ['an unanswerable row', signal({ unresolved: null, threads: null })],
   ])('renders nothing for %s', async (_label, sig) => {
     const it0 = item(1)
     await renderQueue([it0], { [queueKey(it0)]: sig })

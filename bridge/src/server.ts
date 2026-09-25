@@ -23,6 +23,7 @@ import {
   defaultPush,
   defaultInfer,
   defaultInferStream,
+  defaultCommits,
   defaultRepoState,
   defaultRestore,
   defaultSearch,
@@ -79,6 +80,8 @@ export interface BridgeServerOptions {
   files?: HandlerContext['files']
   /** Overrides the real `/v1/search` worker. Tests only. */
   search?: HandlerContext['search']
+  /** Overrides the real `/v1/commits` containment probe. Tests only. */
+  commits?: HandlerContext['commits']
   /** Overrides the real `/v1/fix` worker. Tests only. */
   fix?: HandlerContext['fix']
   /** Overrides the real `/v1/ci-fix` worker. Tests only. */
@@ -132,6 +135,7 @@ export function createContext(opts: BridgeServerOptions): HandlerContext {
     // is re-run per health request, so installing `rg` does not need a bridge
     // restart to take effect.
     search: opts.search ?? defaultSearch(opts.realRoot, ripgrepProbe(deps)),
+    commits: opts.commits ?? defaultCommits(opts.realRoot),
     repoState: opts.repoState ?? defaultRepoState(opts.realRoot),
     stack: opts.stack ?? defaultStack(opts.realRoot, appUrl),
     checkout: opts.checkout ?? defaultCheckout(opts.realRoot),

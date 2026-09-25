@@ -66,6 +66,22 @@ export interface BridgeCapabilities {
   files: boolean
   search: boolean
   /**
+   * `POST /v1/commits` — whether this bridge can answer "is this commit in your
+   * object store?". A route-readiness boolean like `inferStream`, NOT a grant:
+   * the route reads ids that are already on disk, and no `--allow-*` flag turns
+   * it on or off.
+   *
+   * THE BROWSER MUST CHECK IT BEFORE READING AN ABSENCE AS AN ABSENCE. A bridge
+   * predating the route answers a plain 404, and a client that did not check
+   * would read that as "this commit is not here" for EVERY commit — which would
+   * turn the fix loop off entirely on an older bridge instead of leaving it
+   * exactly as it was. So `decideFixReadiness` falls back to the older HEAD
+   * equality test when this is false, and only trusts a probe when it is true.
+   *
+   * Absent reads as false — an older bridge, not a malformed one.
+   */
+  commits: boolean
+  /**
    * `/v1/fix` — the ONE route that writes. NOT a release-readiness flag like
    * its three siblings: it reports whether the bridge PROCESS was started with
    * `--allow-write`, which is the entire authorisation model for writing.
@@ -712,6 +728,49 @@ export function parseSearchResponse(value: unknown): BridgeSearchResponse | null
   return { ok: true, matches, truncated: raw['truncated'] }
 }
 
+// ---------------------------------------------------------------------------
+// `POST /v1/commits` — the containment probe. MIRROR of bridge/src/protocol.ts.
+// ---------------------------------------------------------------------------
+
+/** `POST /v1/commits`. */
+export const COMMITS_PATH = '/v1/commits'
+
+/**
+ * Commits one probe may ask about. The bridge refuses more; so do we, so a
+ * caller that grew a longer list finds out here rather than through a 400.
+ */
+export const MAX_COMMIT_PROBE_SHAS = 64
+
+/**
+ * Narrow an untrusted `/v1/commits` body.
+ *
+ * STRICT, and deliberately so. Every other parser in this file drops a bad
+ * entry and keeps the rest, because a partial search result is still useful.
+ * Here a malformed entry means the response is not one this build can reason
+ * about, and the consequence of getting it wrong is OFFERING A WRITE — the fix
+ * loop is gated on this answer. So a body that is not exactly the documented
+ * shape produces `null`, which the caller reads as "this probe told us nothing"
+ * and falls back to the stricter equality test.
+ *
+ * Entries that are not 40-hex are dropped rather than failing the whole
+ * response: a sha the client never asked about cannot make any commit it DID
+ * ask about look present, and the caller only ever looks up shas it sent.
+ */
+export function parseCommitsResponse(value: unknown): { present: string[] } | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+  if (raw['ok'] !== true) return null
+  const present = raw['present']
+  if (!Array.isArray(present)) return null
+  const shas: string[] = []
+  for (const entry of present) {
+    if (typeof entry !== 'string') continue
+    const sha = entry.toLowerCase()
+    if (SHA_RE.test(sha)) shas.push(sha)
+  }
+  return { present: shas }
+}
+
 /**
  * The per-route flags other modules ask `bridgeAvailable()` about.
  *
@@ -730,6 +789,7 @@ export type BridgeCapability =
   | 'inferAgentic'
   | 'files'
   | 'search'
+  | 'commits'
   | 'fix'
   | 'checkout'
   | 'push'
@@ -796,6 +856,12 @@ export function parseHealth(value: unknown): BridgeHealth | null {
   // false must mean here.
   const pushReady = capsRaw['push']
   if (pushReady !== undefined && typeof pushReady !== 'boolean') return null
+  // `commits` is additive the same way `inferStream` was. Absent means a bridge
+  // predating the containment probe, which is not malformed — it simply cannot
+  // answer the question, and a client that reads this as false falls back to
+  // the older HEAD-equality test instead of assuming every commit is missing.
+  const commitsReady = capsRaw['commits']
+  if (commitsReady !== undefined && typeof commitsReady !== 'boolean') return null
 
   return {
     ok: true,
@@ -808,6 +874,7 @@ export function parseHealth(value: unknown): BridgeHealth | null {
       inferAgentic: agenticReady === true,
       files: capsRaw['files'],
       search: capsRaw['search'],
+      commits: commitsReady === true,
       fix: fixReady === true,
       checkout: checkoutReady === true,
       push: pushReady === true,

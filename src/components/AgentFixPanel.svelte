@@ -56,6 +56,7 @@
     type FixLoopRound,
     type FixLoopStopReason,
   } from '../lib/bridge/fixLoop'
+  import { refreshLocalCommits } from '../lib/bridge/localCommits.svelte'
   import {
     botCommentToFinding,
     botRereaderPersona,
@@ -247,13 +248,26 @@
 
   // ---- The way out of a refusal --------------------------------------------
   //
-  // A refusal that names its reason and offers nothing is still a dead end.
-  // `head-mismatch` in particular refuses because the working tree is not where
-  // the findings are — and moving it there is a capability the user may already
-  // have granted (`--allow-checkout`), with its own prior-state, stash and
-  // restore handling. So the refusal offers it, ON THE SAME TERMS the top-bar
-  // panel does: the same readiness rule, the same trust rule, the same stash
-  // confirmation naming the files, and the same typed failures.
+  // A refusal that names its reason and offers nothing is still a dead end. The
+  // TWO head refusals are the ones with a way out, and `/v1/checkout` — fetch
+  // the ref, then move the tree — is the remedy for both, a different half of
+  // it each time:
+  //
+  //   head-unfetched — the repository does not HAVE the commit. The FETCH is
+  //                    the remedy; the move comes along with it.
+  //   head-mismatch  — now fires only where the bridge is too old to answer the
+  //                    containment question, so equality is the only test
+  //                    available. The MOVE is the remedy.
+  //
+  // Relaxing the gate to containment made the second one rare, which is exactly
+  // why the action moved to cover the first as well rather than being left
+  // attached to a branch almost nobody reaches.
+  //
+  // Moving the tree is a capability the user may already have granted
+  // (`--allow-checkout`), with its own prior-state, stash and restore handling.
+  // So the refusal offers it, ON THE SAME TERMS the top-bar panel does: the
+  // same readiness rule, the same trust rule, the same stash confirmation
+  // naming the files, and the same typed failures.
   //
   // `--allow-checkout` is a SEPARATE grant from `--allow-write`; neither implies
   // the other. With it absent there is no control here at all, only the sentence
@@ -292,6 +306,12 @@
       probed = true
       // `refreshStack` never rejects — it resolves to null on every failure.
       void refreshStack()
+      // And ask again whether the repository HAS this commit. `refresh` rather
+      // than `ensure` for the same reason the stack is re-read: the user may
+      // have fetched it in their own terminal since the queue last asked, and a
+      // cached "never fetched here" would be a refusal about a state that no
+      // longer exists. Never rejects.
+      void refreshLocalCommits([headSha])
     }
   })
 
@@ -1184,7 +1204,17 @@
            only possible at the user's own terminal say so and stop there,
            rather than growing a button that would lie. -->
       <div class="afx-wayout" data-testid="agent-fix-wayout" data-reason={readiness.reason}>
-        {#if readiness.reason === 'head-mismatch'}
+        {#if readiness.reason === 'head-mismatch' || readiness.reason === 'head-unfetched'}
+          <!-- BOTH HEAD REFUSALS SHARE THIS ACTION, and it is the right one for
+               each for a different reason. `/v1/checkout` FETCHES the ref and
+               then moves the tree: for `head-unfetched` the fetch is the whole
+               remedy, and for `head-mismatch` — which now fires only on a
+               bridge too old to answer the containment question — the move is.
+               So the button survives the relaxed gate instead of becoming code
+               nobody can reach, and its note says which of the two it is doing.
+               The one thing this panel never does is fetch behind the user's
+               back: the action is a button, and the sentence above it names the
+               command for anyone who would rather type it. -->
           {#if canOfferCheckout}
             <div class="afx-actions">
               <button
@@ -1195,12 +1225,16 @@
                 onclick={beginCheckout}
               >
                 {#if stackState.busy}<Spinner />{/if}
-                Bring my checkout to this PR
+                {readiness.reason === 'head-unfetched'
+                  ? 'Fetch this PR and check it out'
+                  : 'Bring my checkout to this PR'}
               </button>
               <span class="afx-note" data-testid="agent-fix-checkout-note">
                 {checkout.reason === 'tree-dirty'
                   ? `Your checkout has ${dirtyCount} uncommitted change${dirtyCount === 1 ? '' : 's'}. Nothing is touched until you choose to stash them.`
-                  : 'Moves your working tree onto this pull request. review123 records where you were, so the top bar can put it back.'}
+                  : readiness.reason === 'head-unfetched'
+                    ? 'Fetches this pull request from your remote, then moves your working tree onto it. review123 records where you were, so the top bar can put it back.'
+                    : 'Moves your working tree onto this pull request. review123 records where you were, so the top bar can put it back.'}
               </span>
             </div>
           {:else}

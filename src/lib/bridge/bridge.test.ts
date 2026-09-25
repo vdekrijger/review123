@@ -42,7 +42,7 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     ok: true,
     protocol: PROTOCOL_VERSION,
     root: 'review123',
-    capabilities: { inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false, push: false },
+    capabilities: { inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, commits: true, fix: false, checkout: false, push: false },
     git: { head: HEAD_SHA, branch: 'main', dirty: false },
     version: '0.1.0',
     ...overrides,
@@ -210,6 +210,7 @@ describe('connectBridge — user-initiated pairing', () => {
       inferAgentic: true,
       files: true,
       search: true,
+      commits: true,
       fix: false,
       checkout: false,
       push: false,
@@ -598,10 +599,35 @@ describe('parseHealth', () => {
       inferAgentic: false,
       files: false,
       search: false,
+      commits: false,
       fix: false,
       checkout: false,
       push: false,
     })
+  })
+
+  // The containment probe, read exactly like `infer` was — and with a
+  // consequence the other readiness flags do not have: a client that read an
+  // absent `commits` as TRUE would call a route that 404s and take the 404 for
+  // "your repository does not have that commit", turning the fix loop off for
+  // every pull request on an older bridge. False sends it back to the older
+  // HEAD-equality test instead, which is exactly what that bridge supports.
+  it('reads a MISSING commits flag as false, so a pre-containment bridge still pairs', () => {
+    const older = healthBody({
+      capabilities: { inference: ['claude'], infer: true, inferStream: true, files: true, search: true },
+    })
+    expect(parseHealth(older)?.capabilities.commits).toBe(false)
+  })
+
+  // ABSENT and MALFORMED are different, as they are for every sibling flag.
+  // Absent is an older bridge; a `commits` that is present but not a boolean is
+  // not a bridge this build can read at all, so the whole payload is refused
+  // rather than one field being guessed at.
+  it('refuses a payload whose commits flag is present but not a boolean', () => {
+    const odd = healthBody({
+      capabilities: { inference: [], files: true, search: true, commits: 'yes' },
+    })
+    expect(parseHealth(odd)).toBeNull()
   })
 
   // Route readiness, read exactly like `infer` was: an older bridge that has

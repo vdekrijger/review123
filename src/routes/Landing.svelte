@@ -17,6 +17,7 @@
   import { formatUsageLabel } from '../lib/ai/tokenCost'
   import { track } from '../lib/analytics/analytics'
   import { currentFixReadiness } from '../lib/bridge/fixLoop'
+  import { ensureLocalCommits } from '../lib/bridge/localCommits.svelte'
   import ProviderIcon from '../components/ProviderIcon.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import Spinner from '../components/Spinner.svelte'
@@ -312,6 +313,36 @@
       fromSignals[sizeKey(item)] = size
     }
     refreshQueueSizes(items, fromSignals)
+    probeLocalCommits(items, signals)
+  }
+
+  /**
+   * Ask the paired bridge which of these commits it already HAS.
+   *
+   * ONE REQUEST FOR THE WHOLE PAGE, fired once the signals land — because the
+   * signals are where `headOid` comes from, and there is nothing to ask about
+   * before them. Without it `canOfferCiFix` can only fall back to the old HEAD
+   * equality test, under which at most one row in the list could ever offer the
+   * control: a checkout sits on one commit at a time.
+   *
+   * ONLY THE USER'S OWN PRs are asked about, and only where CI is red. That is
+   * not an optimisation, it is the same rule `canOfferCiFix` applies — asking
+   * about a row that could never offer the control would spend the probe's
+   * 64-sha budget on rows that cannot use it, and on a long queue would push
+   * the ones that can off the end of the list.
+   *
+   * `ensureLocalCommits` never throws, never rejects and asks about each sha
+   * once, so re-running this on a re-render costs nothing.
+   */
+  function probeLocalCommits(items: QueueItem[], signals: Record<string, QueueSignal>): void {
+    const heads = items
+      .filter((i) => i.authorIsMe && i.ref.provider === 'github')
+      .map((i) => signals[sizeKey(i)])
+      .filter((s): s is QueueSignal => s?.ci === 'failing')
+      .map((s) => s.headOid)
+      .filter((sha): sha is string => typeof sha === 'string' && sha !== '')
+    if (heads.length === 0) return
+    void ensureLocalCommits(heads)
   }
 
   // ---- Effort gauge (rubric p.30-31: nothing at equal emphasis) -----------
@@ -539,11 +570,20 @@
    *   4. THERE IS A HEAD SHA. It is what the scratch worktree is created from
    *      and what the push is guarded against; without it there is no run.
    *   5. THE BRIDGE IS READY FOR THIS COMMIT — a paired, write-enabled bridge
-   *      with a CLI whose checkout is AT this PR's head. That last part is why
-   *      at most one row ever offers this: the panel's own readiness rule
-   *      refuses a checkout that is somewhere else, and a control that opens a
-   *      panel whose only content is that refusal is a control that fails.
-   *      With no bridge paired there is nothing here at all — the same rule
+   *      with a CLI, whose repository HAS this PR's head commit. Containment,
+   *      not equality: the scratch worktree is materialised from the object
+   *      store, so every row whose branch the user has ever pushed from this
+   *      machine qualifies, and the checkout can be sitting anywhere.
+   *
+   *      This used to require the checkout to be AT the head, which meant at
+   *      most ONE row in a queue could offer the control and realistically
+   *      none — the feature shipped and could not be reached. It is still the
+   *      strict question, for the reason it always was: a control that opens a
+   *      panel whose only content is a refusal is a control that fails.
+   *
+   *      On a bridge too old to answer the containment question the rule falls
+   *      back to the old equality test, so nothing regresses there. With no
+   *      bridge paired there is nothing here at all — the same rule
    *      AgentFixPanel follows, for the same reason.
    */
   function canOfferCiFix(item: QueueItem, signal: QueueSignal | undefined): boolean {
@@ -723,20 +763,44 @@
 
 {#snippet unresolvedCell(signal: QueueSignal | undefined)}
   {@const count = signal?.unresolved ?? 0}
+  {@const total = signal?.threads ?? null}
   {@const more = signal?.unresolvedTruncated === true}
+  <!--
+    A FRACTION, BECAUSE THE NUMERATOR ALONE RANKS NOTHING. "3 open" says the
+    same thing on a review with three conversations and on one with thirty: in
+    the first the author has read nothing, in the second they have worked
+    through twenty-seven. `3/3` and `3/30` are two different rows to open.
+
+    THE FRACTION IS SHOWN ONLY WHEN BOTH HALVES ARE EXACT. Past GitHub's
+    100-thread page both numbers are floors, and `29+/100+` is not a fraction —
+    it is two unknowns with a slash between them, and the reader would do
+    arithmetic on it anyway. So truncation falls back to the single floored
+    count this row has always shown there, which is a number it can stand
+    behind. `total` null is the same case for the same reason: the query could
+    not answer, so there is no denominator to claim.
+
+    The word stays "open" rather than "unresolved" (#287): at --text-xs the long
+    word costs ~12ch of a row seating eight columns, and the phrase the numbers
+    actually mean rides on the title and the accessible name, where it is read
+    in full — now including the denominator.
+  -->
+  {@const exact = !more && typeof total === 'number' && total >= count}
   <span class="queue-cell threads-cell">
     {#if count > 0}
-      <!-- "N open" rather than "N unresolved": at --text-xs the long word costs
-           ~12ch of a row that has six other columns to seat, and the phrase the
-           number actually means rides on the title and the accessible name,
-           where it is read in full. -->
       <span
         class="threads-chip"
         data-testid="queue-unresolved"
-        title="{count}{more ? '+' : ''} unresolved conversation{count === 1 && !more ? '' : 's'}"
+        data-total={exact ? total : null}
+        title={exact
+          ? `${count} of ${total} conversation${total === 1 ? '' : 's'} unresolved`
+          : `${count}${more ? '+' : ''} unresolved conversation${count === 1 && !more ? '' : 's'}`}
       >
-        <span aria-hidden="true">{count}{more ? '+' : ''} open</span>
-        <span class="sr-only">{count}{more ? ' or more' : ''} unresolved conversation{count === 1 && !more ? '' : 's'}</span>
+        <span aria-hidden="true">{exact ? `${count}/${total}` : `${count}${more ? '+' : ''}`} open</span>
+        <span class="sr-only">
+          {exact
+            ? `${count} of ${total} conversation${total === 1 ? '' : 's'} unresolved`
+            : `${count}${more ? ' or more' : ''} unresolved conversation${count === 1 && !more ? '' : 's'}`}
+        </span>
       </span>
     {/if}
   </span>
@@ -1246,10 +1310,18 @@
      e2e/queue-columns.spec.ts holds (the old layout's WORST row) — which is the
      width at which a row shows everything about a PR except which PR it is.
      62rem puts it back to ~357px. The hero keeps its own 40rem measure inside
-     (below), so the prose is untouched by any of this. */
+     (below), so the prose is untouched by any of this.
+
+     64rem, MEASURED THE SAME WAY, because the unresolved cell grew from 8ch to
+     12ch to seat the `x/y` fraction. At 62rem that took the title to 324px —
+     under the floor, and the spec said so. The 4ch had to come from somewhere,
+     and it comes from HERE rather than from the title: an extra 32px of card is
+     a card 3% wider, while 6px off the title floor is the row starting to hide
+     which PR it is, which is the one thing the floor exists to prevent. 64rem
+     puts the title at ~356px. */
   .landing.has-content {
     margin-top: var(--space-6);
-    max-width: 62rem;
+    max-width: 64rem;
   }
 
   .landing.has-content > h1,
@@ -1744,11 +1816,20 @@
   .ci-chip.ci-failing { color: var(--diff-del); }
   .ci-chip.ci-running { color: var(--legend-changed-color); }
 
+  /* 12ch, up from 8ch, for the widest EXACT thing this cell can hold:
+     "100/100 open". The truncated form it used to be sized for ("100+ open")
+     is 9ch and still fits inside it.
+
+     MEASURED, not estimated: the 4ch it costs come out of the card's own
+     padding, not out of the title — e2e/queue-columns.spec.ts holds the title
+     to a floor of 330px and it lands at ~345px with this. A cell that sized to
+     its content instead would put the next column at a different x on every
+     row, which is the whole reason every trailing measure here is fixed. */
   .threads-cell {
     display: flex;
     align-items: baseline;
     justify-content: flex-end;
-    min-width: 8ch;
+    min-width: 12ch;
   }
 
   /* Metadata ink, like the timestamp beside it. An unresolved conversation is

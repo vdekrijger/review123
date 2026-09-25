@@ -39,6 +39,7 @@
 import { classifyFetchFailure, requestSignals } from '../net/signals'
 import { deriveRepoRelation, type PrMeta, type PrRepoRelation } from '../github/types'
 import { bridgeAvailable, bridgeCredentials, bridgeState, noteRepoState } from './bridge.svelte'
+import { forgetAbsentCommits } from './localCommits.svelte'
 import {
   CHECKOUT_REQUEST_TIMEOUT_MS,
   bridgeUrl,
@@ -853,6 +854,13 @@ function applyOutcome(outcome: StackOutcome<BridgeStackAction>): StackOutcome<Br
   // top-bar indicator, the Inspect header and the fix panel describing the same
   // working tree — they all read this one value.
   noteRepoState(outcome.value.git)
+  // AND IT FETCHED. A checkout is the one thing in this app that changes what
+  // the object store HOLDS, so every cached "no, this repository does not have
+  // that commit" is now a claim nobody has re-checked. Dropping the noes (and
+  // only the noes — git does not lose commits) is what stops the fix panel
+  // still saying "never fetched here" about the very commit the user just
+  // brought down by pressing the button beside that sentence.
+  forgetAbsentCommits()
   holder.state = {
     git: outcome.value.git,
     dirtyPaths: [],

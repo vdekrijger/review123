@@ -55,27 +55,44 @@ export const BRIDGE_START_COMMAND =
   `node ${BRIDGE_LOCAL_PATH} --root . --allow-write --allow-checkout`
 
 /**
- * The same command plus `--allow-push`, named ONLY where pushing is what the
- * user is trying to do.
+ * The same command plus `--allow-push`. This is the line Settings → Local
+ * bridge documents, AT THE USER'S EXPLICIT REQUEST — they asked for the setup
+ * paste to grant all three, so one paste sets the bridge up for everything they
+ * use it for instead of sending them back to the terminal later.
  *
- * WHY PUSH IS NOT IN THE LINE ABOVE, AND SHOULD NOT BE.
+ * WHY PUSH IS STILL A MATERIALLY DIFFERENT GRANT.
  *
  * The argument for putting `--allow-write` and `--allow-checkout` in the
- * documented command is written out above it, and it is a good argument: the
- * flags defend the user against THIS APP, not against their own machine, so
- * leaving them out hardens nothing and just means the features silently do not
- * work.
+ * documented command is written out above, and it holds: those flags defend the
+ * user against THIS APP, not against their own machine, so leaving them out
+ * hardens nothing and just means the features silently do not work.
  *
- * `--allow-push` is different in the one way that matters. Both of those flags
- * authorise changes on the user's own machine that the user can undo. This one
- * authorises a change their whole team sees and that nobody can undo. A person
- * pasting a setup command is not, at that moment, deciding to let a web page
- * write to their remote — and a grant nobody consciously made is not a grant.
+ * `--allow-push` does not fit that argument, and the difference is not a
+ * technicality. Both of the other flags authorise changes on the user's own
+ * machine that the user can undo. This one authorises a change their whole team
+ * sees the moment it lands and that nothing review123 offers takes back. So
+ * omitting it genuinely WOULD harden something, which is exactly why it was
+ * absent here until the user decided otherwise — the conclusion changed because
+ * they chose, not because the reasoning was wrong.
  *
- * So the default paste stays local-only, and this string is shown at the one
- * place where the user has already decided they want to push and needs the
- * exact line to restart with. The feature does not silently not work: it says
- * what to type, right where the button would have been.
+ * WHAT THAT MEANS FOR THE TWO CONSTANTS. They stay two, and the choice of which
+ * one a surface names is the choice of which grant that surface is asking for:
+ *
+ *   Settings → Local bridge     → this one. Setup, all three grants, and the
+ *                                 panel carries its own note about the
+ *                                 difference rather than extending the
+ *                                 local-only argument over all three.
+ *   CiFixPanel's push refusal   → this one. Pushing is what the user is doing.
+ *   AgentFixPanel write-disabled → BRIDGE_START_COMMAND. That refusal is about
+ *                                 the FIX LOOP, which writes only in a scratch
+ *                                 worktree.
+ *   llm.ts's "not responding"   → BRIDGE_START_COMMAND. That message is about
+ *                                 INFERENCE.
+ *
+ * Naming a push grant in a message about inference, or about a worktree that
+ * never reaches a remote, would ask the user for something the situation does
+ * not need — so collapsing these into one constant would be a regression even
+ * though the two strings now differ by a single flag.
  */
 export const BRIDGE_START_COMMAND_WITH_PUSH = `${BRIDGE_START_COMMAND} --allow-push`
 

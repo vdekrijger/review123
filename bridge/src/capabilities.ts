@@ -108,6 +108,14 @@ export async function detectInferenceClis(deps: CapabilityDeps): Promise<string[
  * field and returns a good tool-less answer that a client would otherwise
  * mistake for a grounded one.
  *
+ * `commits` is a READINESS flag of the same kind as `inferAgentic`, and for the
+ * same reason: it says this build understands `POST /v1/commits`, the probe
+ * that answers "is this commit in the object store?". It has no `--allow-*`
+ * switch because what it enables is a `rev-parse` — reading ids that are
+ * already on disk. It is reported rather than inferred because an older bridge
+ * answers that route with a plain 404, and a client that did not check would
+ * read the 404 as "the commit is absent" for every commit in the queue.
+ *
  * `fix` IS DIFFERENT FROM ALL FOUR. It is not "true from the release that
  * implements the route" — it is `allowWrite`, i.e. whether the person at the
  * terminal started this process with `--allow-write`. The flag is the entire
@@ -145,6 +153,7 @@ export async function detectCapabilities(
     inferAgentic: true,
     files: true,
     search: true,
+    commits: true,
     fix: allowWrite,
     checkout: allowCheckout,
     push: allowPush,

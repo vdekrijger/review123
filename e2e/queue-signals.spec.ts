@@ -406,9 +406,13 @@ test('the unresolved count is of conversations, not of comments', async ({ page 
   await waitForSignals(page)
 
   // Row 201 is served four unresolved threads and one resolved one. The answer
-  // is four — not five, and not the number of comments in them.
+  // is four OUT OF FIVE — not five unresolved, and not the number of comments
+  // in them. The denominator counts the resolved one, which is the whole point
+  // of showing a fraction: "4 open" would read the same on a review nobody has
+  // touched as on one where four of five are still going.
   const chip = page.locator('.queue-item', { hasText: '#201' }).getByTestId('queue-unresolved')
-  await expect(chip).toHaveAttribute('title', '4 unresolved conversations')
+  await expect(chip).toHaveAttribute('title', '4 of 5 conversations unresolved')
+  await expect(chip).toContainText('4/5 open')
 })
 
 // ---------------------------------------------------------------------------

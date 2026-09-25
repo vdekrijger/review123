@@ -33,6 +33,7 @@
 
 import { classifyFetchFailure, requestSignals } from '../net/signals'
 import { bridgeAvailable, bridgeCredentials, bridgeInferenceClis, bridgeState } from './bridge.svelte'
+import { commitPresence } from './localCommits.svelte'
 import { stopReasonOutranksVerification } from '../ai/fixVerify'
 import {
   BRIDGE_CLIS,
@@ -123,16 +124,20 @@ export function describeFixEligibility(reason: FixEligibility): string {
 /**
  * Why the fix loop is (or is not) available right now.
  *
- * - `ready`          — paired, write-enabled, a CLI detected, and the checkout
- *                      is sitting on this PR's head.
+ * - `ready`          — paired, write-enabled, a CLI detected, and this PR's
+ *                      head is a commit the repository HAS.
  * - `no-bridge`      — nothing paired, or it is not running. The ordinary case.
  * - `write-disabled` — connected, but the bridge is read-only. Only the person
  *                      at the terminal can change that, with `--allow-write`.
  * - `no-cli`         — write-enabled, but no coding agent on PATH to run.
  * - `no-repo-state`  — its root is not a git repository (or git did not answer).
- * - `head-mismatch`  — the checkout is on a different commit. Fixing a PR's
- *                      findings against another branch's code would produce a
- *                      diff nobody asked for.
+ * - `head-unfetched` — the bridge ANSWERED, and it does not have this commit at
+ *                      all. A genuine refusal: there is nothing to make a
+ *                      worktree from until it is fetched.
+ * - `head-mismatch`  — NARROWER THAN IT USED TO BE. The bridge cannot answer
+ *                      the containment question (it predates `/v1/commits`), so
+ *                      the only test available is the old one: is the checkout
+ *                      sitting on this commit? It is not.
  */
 export type FixReadinessReason =
   | 'ready'
@@ -140,6 +145,7 @@ export type FixReadinessReason =
   | 'write-disabled'
   | 'no-cli'
   | 'no-repo-state'
+  | 'head-unfetched'
   | 'head-mismatch'
 
 export interface FixReadiness {
@@ -161,6 +167,18 @@ export interface FixSnapshot {
   /** `capabilities.inference` — CLIs detected on PATH. */
   clis: string[]
   git: { head: string; branch: string | null; dirty: boolean } | null
+  /**
+   * DOES THE REPOSITORY HAVE THIS PR'S HEAD COMMIT? — what `POST /v1/commits`
+   * said, and the field this whole rule now turns on.
+   *
+   * THREE STATES, AND COLLAPSING ANY TWO OF THEM IS A BUG:
+   *   true  — it has the commit. A worktree can be made from it.
+   *   false — it answered, and it does not. Nothing can be made from it.
+   *   null  — NOBODY ANSWERED: the probe has not landed, or the bridge predates
+   *           the route. Not "no", and the rule falls back to the old equality
+   *           test rather than inventing a refusal out of a missing answer.
+   */
+  headPresent?: boolean | null
   /**
    * The user's stored CLI choice, or null for "no preference". Injected like
    * every other input here so the rule stays pure and testable without storage.
@@ -253,11 +271,35 @@ export function writeFixCliPref(cli: BridgeCli | null): void {
 /**
  * THE READINESS RULE, as a pure function over a snapshot.
  *
- * The head comparison is the same one `decideGrounding` makes, and for the same
- * reason: the scratch worktree is created from the PR's head, so a checkout
- * that does not contain that commit cannot produce a fix for this PR. A DIRTY
- * tree is fine — the worktree is made from the COMMIT, not from the tree, so
- * the user's uncommitted work is neither used nor endangered.
+ * THE TEST IS CONTAINMENT, NOT EQUALITY, because containment is what the
+ * mechanism needs. `bridge/src/worktree.ts` creates the scratch worktree with
+ * `git worktree add … <headSha>`, which materialises the commit out of the
+ * LOCAL OBJECT STORE. It never reads the working tree and never asks which
+ * branch is checked out. So a repository that HAS the commit can produce a fix
+ * for this PR whatever its own HEAD is doing, and a DIRTY tree is fine — the
+ * worktree is made from the COMMIT, so the user's uncommitted work is neither
+ * used nor endangered.
+ *
+ * This used to compare `git.head` to `prHead` for equality, and the cost was
+ * that the feature was unreachable exactly where it was worth having: a user
+ * looking at twenty of their own pull requests, several red, could be offered
+ * the fix loop on AT MOST ONE ROW, because a checkout sits on one commit at a
+ * time. The docstring already said "does not CONTAIN that commit"; the code
+ * said something stricter.
+ *
+ * THE THREE-STATE FALLBACK IS THE CAREFUL PART. `headPresent === null` means
+ * nobody answered — an older bridge, or a probe still in flight — and it must
+ * not become a refusal. There the rule runs the OLD equality test, so an older
+ * bridge behaves exactly as it always did and a fresh page behaves as it did
+ * until the probe lands. `head-mismatch` therefore now means something narrower
+ * than it used to: "the only test available is equality, and it failed".
+ *
+ * `decideGrounding` makes the same comparison and is DELIBERATELY UNCHANGED.
+ * Reading a file at a ref is not the same capability as materialising a
+ * worktree: grounding serves whatever is on disk RIGHT NOW, and the only thing
+ * that makes those bytes the PR's bytes is the tree being on the PR's commit.
+ * Relaxing that one to containment would hand a reviewer `main`'s copy of a
+ * file and call it the pull request's.
  */
 export function decideFixReadiness(snapshot: FixSnapshot, prHead: string): FixReadiness {
   const base = {
@@ -270,7 +312,17 @@ export function decideFixReadiness(snapshot: FixSnapshot, prHead: string): FixRe
 
   const cli = preferredFixCli(snapshot.clis, snapshot.preferredCli ?? null)
   if (cli === null) return { ...base, ready: false, reason: 'no-cli' }
+  // Still required, and not made redundant by the probe: a root that is not a
+  // git repository has no object store to contain anything, and `no-repo-state`
+  // is a different sentence with a different fix from either head refusal.
   if (snapshot.git === null) return { ...base, ready: false, reason: 'no-repo-state' }
+
+  const present = snapshot.headPresent ?? null
+  if (present === true) return { ...base, ready: true, reason: 'ready', cli }
+  if (present === false) return { ...base, ready: false, reason: 'head-unfetched' }
+
+  // Nobody could answer. Fall back to the older, stricter test rather than to a
+  // guess in either direction.
   if (snapshot.git.head.toLowerCase() !== prHead.toLowerCase()) {
     return { ...base, ready: false, reason: 'head-mismatch' }
   }
@@ -295,13 +347,25 @@ export function describeFixReadiness(readiness: FixReadiness, prHead: string): s
       return 'The paired bridge found no claude or codex CLI on its PATH, so there is no agent to run.'
     case 'no-repo-state':
       return 'The paired bridge is not serving a git repository, so it cannot create the isolated worktree a fix needs.'
+    case 'head-unfetched':
+      // A DIFFERENT REFUSAL FROM head-mismatch, and it must stay different.
+      // This one is not about where the checkout is sitting — it would be
+      // exactly as true on a clean tree on the right branch. The repository
+      // simply does not have the commit, so it names the ONE command that puts
+      // it there. The panel offers to do it as well, where the bridge may.
+      return `Your repository does not have ${short(prHead)} — it has never been fetched here, so there is no commit to build the isolated worktree from. Run git fetch origin ${short(prHead)} in your checkout, or let review123 fetch it below.`
     case 'head-mismatch':
       // Names both commits and what each one IS — which is on disk, which was
       // reviewed. It no longer ends with "check it out": the panel offers that
       // as an action when the bridge may do it, and says which flag grants it
       // when it may not. An instruction with nothing to click was the whole
       // complaint.
-      return `Your checkout is on ${readiness.branch ?? 'another branch'} at ${short(readiness.bridgeHead)}; these findings were reviewed at ${short(prHead)}. Fixing them here would produce a diff against code they do not describe.`
+      //
+      // The last sentence is the NARROWED meaning. This reason now fires only
+      // on a bridge that cannot answer "do you have this commit?", so the fix
+      // that removes the restriction entirely is an update — and saying so is
+      // the difference between a dead end and a door.
+      return `Your checkout is on ${readiness.branch ?? 'another branch'} at ${short(readiness.bridgeHead)}; these findings were reviewed at ${short(prHead)}, and this bridge is too old to say whether it has that commit. Update the bridge and it can fix this pull request without moving your checkout at all.`
   }
 }
 
@@ -323,6 +387,12 @@ export function currentFixReadiness(
       writeEnabled: bridgeAvailable('fix'),
       clis: bridgeInferenceClis(),
       git: bridgeState.git,
+      // READ, NEVER FETCHED HERE. This getter is called from `$derived` bodies
+      // while rows render; it must not start a request. The surfaces that want
+      // an answer ask for one from an `$effect` (`ensureLocalCommits` /
+      // `refreshLocalCommits`), and until it lands this is null and the rule
+      // falls back to equality — i.e. to exactly the old behaviour.
+      headPresent: commitPresence(prHead),
       preferredCli,
     },
     prHead,

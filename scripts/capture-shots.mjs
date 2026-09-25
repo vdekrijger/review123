@@ -158,7 +158,10 @@ const QUEUE_NOW = new Date('2026-03-12T15:00:00.000Z')
  *   unresolved — 0 through 12, so the column has an empty case and a two-digit
  *                one. Every row is served one RESOLVED thread on top, which is
  *                what makes the shot evidence that the count is of threads and
- *                not of everything in the list.
+ *                not of everything in the list — and, since the row renders a
+ *                FRACTION, what puts a visible denominator in the picture:
+ *                `2/3`, `4/5`, `12/13`. The +1 is the whole reason the
+ *                numerator and denominator differ in the shot at all.
  *   merge      — 'BEHIND' (draws the Update control), 'DIRTY' (draws
  *                "conflicts", deliberately NOT a button) and 'CLEAN' (draws
  *                nothing). Only meaningful on `mine` rows, since that is the
@@ -167,12 +170,18 @@ const QUEUE_NOW = new Date('2026-03-12T15:00:00.000Z')
  * ONE ROW STATE IS DELIBERATELY NOT IN THESE SHOTS, and it is worth saying so
  * rather than leaving the next person to wonder whether they broke it. The
  * actions column's "Fix CI" control appears only when a bridge is PAIRED,
- * write-enabled, has a coding agent on PATH and is checked out at that exact
- * pull request's head — see canOfferCiFix in Landing.svelte. No shot pairs a
- * bridge, so no shot draws it, and `posthog-foss#91` (mine, FAILURE) is
+ * write-enabled, has a coding agent on PATH, and HAS that pull request's head
+ * commit in its object store — see canOfferCiFix in Landing.svelte. No shot
+ * pairs a bridge, so no shot draws it, and `posthog-foss#91` (mine, FAILURE) is
  * photographed exactly as a user without a bridge sees it. Shooting it would
  * mean faking a local process into a picture captioned "signed in and full",
  * which documents a state most readers never reach.
+ *
+ * (That last condition used to read "is checked out at that exact pull
+ * request's head", which is what made the control unreachable in practice — a
+ * checkout sits on one commit at a time. It is containment now, so several rows
+ * can offer it at once. It still takes a paired bridge, so these shots are
+ * unaffected either way.)
  *
  * `e2e/queue-columns.spec.ts` has a deliberately similar fixture and they are
  * NOT shared on purpose: that one MEASURES column alignment and is free to
