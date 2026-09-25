@@ -28,6 +28,7 @@
    * `decideFixReadiness` — the UI never reconstructs "why not" from a boolean.
    */
 
+  import type { Snippet } from 'svelte'
   import Spinner from './Spinner.svelte'
   import {
     FIX_LOOP_NOT_REVIEWED,
@@ -157,6 +158,38 @@
     onNoteHandoff?: ((draftKey: string, handoff: DraftHandoff) => void) | null
     /** Record that these notes were handed over. Never overwrites a decision. */
     onNotesSent?: ((draftKeys: string[]) => void) | null
+    /**
+     * WHERE THIS PANEL IS MOUNTED — the review step whose moment it serves.
+     *
+     * The Inspect step hands over findings while the reviewer is still reading;
+     * the Verdict step hands over a finished review. Same loop, same scratch
+     * worktree, same re-read — a different moment, and the three props below are
+     * the whole of the difference. Each defaults to exactly today's Inspect-step
+     * behaviour, so no caller that omits them changes.
+     *
+     * It is also the one thing analytics needs from this: whether the second
+     * entry point is used at all. An enum, never a count of anything private.
+     */
+    surface?: 'inspect' | 'verdict'
+    /**
+     * Whether to offer this pull request's REVIEW-BOT comments as extra input.
+     *
+     * On by default, which is the Inspect step. Reading a bot's findings is part
+     * of reading the change; on the Verdict step the reviewer has finished doing
+     * that, and spending two provider calls on a list they did not ask for is
+     * the trade botComments.ts already declines to make on mount.
+     */
+    offerBotComments?: boolean
+    /** The section heading. The default is the Inspect step's own wording. */
+    title?: string
+    /**
+     * The caller's own framing, rendered under the readiness sentence.
+     *
+     * A SNIPPET rather than a string because the sentences belong to the step
+     * that knows what the reviewer is in the middle of — this component should
+     * not carry prose about a grade it cannot see.
+     */
+    lead?: Snippet | null
   }
 
   let {
@@ -167,6 +200,10 @@
     draftNoteRefusals = [],
     onNoteHandoff = null,
     onNotesSent = null,
+    surface = 'inspect',
+    offerBotComments = true,
+    title = 'Fix with your agent',
+    lead = null,
   }: Props = $props()
 
   // ---- Which CLI runs it ---------------------------------------------------
@@ -560,7 +597,24 @@
    * latest round winning. That is what stops a round-1 green from outliving the
    * round-2 commit that replaced it: stale green is worse than no green.
    */
+  /**
+   * Whether THIS panel has dispatched anything at all.
+   *
+   * The fact is a claim about a run, so a panel that has not run must not make
+   * one. Publishing `not-run` on mount was harmless while there was one mount —
+   * `currentFixTestFact` answers `not-run` for an unpublished fact anyway — but
+   * the same panel now also mounts on the Verdict step, and a fresh mount
+   * announcing "nothing has been executed" would erase a real outcome the other
+   * mount published minutes earlier. Stale green is worse than no green; erasing
+   * a live red is worse still.
+   *
+   * Before the first dispatch this is behaviour-identical to publishing
+   * `not-run`, and every publish after it is unchanged.
+   */
+  let hasDispatched = $state(false)
+
   $effect(() => {
+    if (!hasDispatched) return
     noteFixTestFact(headSha, fixTestFactFor(allChanges))
   })
 
@@ -826,6 +880,11 @@
       findings: wire.length,
       cli: cliToRun,
       round,
+      // WHICH entry point sent it. An enum over two app-owned values: the whole
+      // question the Verdict-step handover asks is whether anyone hands over a
+      // finished review rather than findings mid-read, and the counts alone
+      // cannot tell the two apart.
+      surface,
       // How many of them were the reviewer's OWN notes. A count; the whole
       // question this feature asks is whether anyone sends their own notes at
       // all, and it is unanswerable if they are indistinguishable from a
@@ -902,6 +961,7 @@
     if (run.status === 'running') return
     if (wireFor(keys).length === 0) return
 
+    hasDispatched = true
     verdicts = {}
     verify = { status: 'idle' }
     expanded = new Set()
@@ -1106,10 +1166,16 @@
 {#if visible}
   <section class="agent-fix" data-testid="agent-fix-panel" data-ready={readiness.ready} bind:this={sectionEl}>
     <header class="afx-head">
-      <h3 class="afx-title">Fix with your agent</h3>
+      <h3 class="afx-title">{title}</h3>
       <p class="afx-readiness" data-testid="agent-fix-readiness" data-reason={readiness.reason}>
         {describeFixReadiness(readiness, headSha)}
       </p>
+      {#if lead}
+        <!-- The mounting step's own framing. Rendered whether or not the bridge
+             is ready: a refusal the reviewer can act on still needs to say what
+             the thing being refused would have done. -->
+        <div class="afx-lead" data-testid="agent-fix-lead">{@render lead()}</div>
+      {/if}
     </header>
 
     {#if !readiness.ready}
@@ -1389,7 +1455,12 @@
 
         <!-- REVIEW-BOT COMMENTS. Loaded on demand, ticked one by one, and
              always second: these are third-party claims, not this app's own
-             findings, and the panel never blurs the two. -->
+             findings, and the panel never blurs the two.
+             Offered only where reading the pull request's comments is part of
+             what the reviewer is doing. On the Verdict step it is not: they have
+             finished reading, and two provider calls for a list they did not ask
+             for is the trade botComments.ts already refuses to make on mount. -->
+        {#if offerBotComments}
         <div class="afx-bots" data-testid="agent-fix-bots" data-status={bots.status}>
           {#if bots.status === 'idle'}
             <button type="button" class="afx-link" data-testid="agent-fix-bots-load" onclick={loadBots}>
@@ -1460,6 +1531,7 @@
             {/if}
           {/if}
         </div>
+        {/if}
 
         {#if overCap}
           <p class="afx-warn" role="alert" data-testid="agent-fix-over-cap">
@@ -2238,6 +2310,14 @@
     flex: 1 1 18rem;
     color: var(--text-muted);
     font-size: 0.78rem;
+  }
+
+  /* The mounting step's own framing. On the scale, because a ratchet that only
+     governs the code written before it is not a ratchet. */
+  .afx-lead {
+    flex: 1 1 100%;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
   }
 
   .afx-select-head {

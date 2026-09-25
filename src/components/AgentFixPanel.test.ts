@@ -158,7 +158,11 @@ describe('AgentFixPanel analytics', () => {
     // many of the batch were the user's own words rather than a model's. It is
     // present at 0 rather than omitted, so "nobody sends their own notes" and
     // "this build does not report it" stay distinguishable.
-    expect(dispatched[0]).toEqual({ findings: 2, cli: 'claude', round: 1, notes: 0 })
+    // `surface` joined the payload when the Verdict step gained its own mount of
+    // this panel: WHICH entry point sent the batch, as a two-valued enum, so
+    // "handed over a finished review" and "sent findings mid-read" stay
+    // distinguishable. Still counts and enums, still nothing else.
+    expect(dispatched[0]).toEqual({ findings: 2, cli: 'claude', round: 1, notes: 0, surface: 'inspect' })
   })
 
   it('reports the outcome as counts + enums — no commit, intent, path or diff', async () => {
