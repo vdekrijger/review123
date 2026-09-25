@@ -565,6 +565,7 @@ describe('resolveTaskMode — deep review over the local bridge', () => {
       search: true,
       fix: false,
       checkout: false,
+      push: false,
     })
   }
 
