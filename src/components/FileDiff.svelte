@@ -1112,7 +1112,15 @@
       if (!lines.has(f.line)) continue
       entryAt(f.anchorSide === 'LEFT' ? oldFile : newFile, f.line).findings.push(f)
     }
+    // ONLY the threads that will actually be shown (#295). A hidden thread used
+    // to enter extendData so the note announcing it could render in its place —
+    // which is why a line whose threads were every one of them hidden still
+    // produced an extend ROW, in unified and (with the library's own
+    // same-height placeholder on the far side) in split. The count lives in the
+    // gutter marker now, so a fully hidden line contributes no entry, hence no
+    // row, hence nothing at all to the reading column.
     for (const t of anchoredThreads) {
+      if (hiddenReason(t) !== null) continue
       const map = t.root.side === 'LEFT' ? oldFile : newFile
       entryAt(map, t.root.line!).threads.push(t)
     }
@@ -1757,23 +1765,21 @@
             {/each}
           </div>
         {/if}
-        <!-- THE BANNER ROW EXISTS ONLY FOR THREADS THAT ARE ON SCREEN (#295).
-             It used to render whenever the line had threads AT ALL, so a line
-             whose threads were every one of them hidden still cost a
-             banner-tinted row of the reading column to say "2 resolved threads
-             hidden — show". Four of those through twenty lines is the
-             screenshot that started this. The count lives in the gutter marker
-             now (`gutterThreadMarkers`), which costs no row at all. -->
+        <!-- THE BANNER ROW EXISTS ONLY FOR THREADS THAT ARE ON SCREEN (#295):
+             `entry.threads` is already filtered to those, so a line whose
+             threads are every one of them hidden reaches neither this block nor
+             the extend row that would host it. It used to render whenever the
+             line had threads AT ALL, which is why four hidden groups through
+             twenty lines of the report's screenshot were four banner-tinted
+             bands across the reading column. The count lives in the gutter
+             marker now (`gutterThreadMarkers`), which costs no row at all. -->
         {#if entry?.threads?.length}
-          {@const shown = visibleThreads(entry.threads)}
-          {#if shown.length > 0}
-            <div class="inline-comment-threads" data-testid="inline-annotations" data-line={lineNumber} aria-label="Existing comment threads at line {lineNumber}">
-              {#each shown as thread (thread.root.id)}
-                <ExistingThread {thread} resolved={isThreadResolved(thread)} {onReply} />
-              {/each}
-              {@render rehideControls(entry.threads)}
-            </div>
-          {/if}
+          <div class="inline-comment-threads" data-testid="inline-annotations" data-line={lineNumber} aria-label="Existing comment threads at line {lineNumber}">
+            {#each entry.threads as thread (thread.root.id)}
+              <ExistingThread {thread} resolved={isThreadResolved(thread)} {onReply} />
+            {/each}
+            {@render rehideControls(entry.threads)}
+          </div>
         {/if}
       {/snippet}
     </DiffView>

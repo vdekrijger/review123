@@ -16,6 +16,14 @@
  *   - 9007  a bot finding the reviewer ANSWERED (9008) — inline at RIGHT 16
  *   - 9004  two resolved bot threads in the per-file "General" block
  *     9005
+ *   - 9010  a second bot thread, inline at RIGHT 19 — on a line that ALSO
+ *           carries a resolved thread (9011), so the bot filter's count has to
+ *           stay its own inside one gutter marker (#295)
+ *
+ * SINCE #295 the inline count is not a note in the code flow: it is a marker
+ * in @git-diff-view's own line-number cell, addressed by line and side. The
+ * per-file bottom list keeps its sentence, because it has no line to hang a
+ * marker on.
  *
  * WHY A REAL BROWSER for the last test: the disclosure labels inside a bot
  * comment are the author's words, and app.css's editorial `details > summary`
@@ -55,6 +63,17 @@ async function openInspect(
   await page.locator('.diff-tailwindcss-wrapper').first().waitFor({ timeout: 20_000 })
 }
 
+/**
+ * The gutter marker at one RIGHT line (#295). The hidden count left the code
+ * flow for @git-diff-view's own line-number cell, so "where the thread was
+ * removed from" is now addressed by line rather than by a note in a band.
+ */
+function botMarkerAtLine(page: Page, line: number) {
+  return page.locator(
+    `[data-testid="hidden-threads-marker"][data-line="${line}"][data-side="RIGHT"]`,
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Hidden by default, counted, one click from showing
 // ---------------------------------------------------------------------------
@@ -68,27 +87,30 @@ test('bot comments: excluded by default, counted in the toolbar, and revealed in
   await expect(toggle).toBeVisible({ timeout: 10_000 })
   await expect(toggle).toHaveAttribute('aria-pressed', 'true')
 
-  // Nothing hidden silently. One bot thread is hidden BY THE BOT FILTER: 9006.
-  // 9004 and 9005 are bot threads too, but they are also resolved, and the
-  // resolved filter claims them — so the two counts do not double up.
+  // Nothing hidden silently. Two bot threads are hidden BY THE BOT FILTER:
+  // 9006 and 9010. 9004 and 9005 are bot threads too, but they are also
+  // resolved, and the resolved filter claims them — so the counts do not
+  // double up.
   const botCount = page.getByTestId('bot-hidden-count')
-  await expect(botCount).toContainText('1 bot thread hidden')
-  await expect(page.getByTestId('resolved-hidden-count')).toContainText('3 resolved threads hidden')
+  await expect(botCount).toContainText('2 bot threads hidden')
+  await expect(page.getByTestId('resolved-hidden-count')).toContainText('5 resolved threads hidden')
 
   // The 200px comment is gone from the diff...
   await expect(page.getByText(FIRST_SECTION)).toHaveCount(0)
 
-  // ...and says so where it was, with a one-click reveal.
-  const note = page.getByTestId('bot-hidden-note').first()
-  await note.scrollIntoViewIfNeeded()
-  await expect(note).toContainText('1 bot thread hidden — show')
-  await note.click()
+  // ...and says so where it was — in the line-number gutter since #295, so the
+  // reading column is not broken by a band to say it. The count is in the
+  // marker's accessible name.
+  const marker = botMarkerAtLine(page, 22)
+  await marker.scrollIntoViewIfNeeded()
+  await expect(marker).toHaveAttribute('aria-label', /1 bot thread hidden/)
+  await marker.click()
 
   await expect(page.getByText(FIRST_SECTION).first()).toBeVisible({ timeout: 5_000 })
 
   // A local reveal does NOT flip the global preference.
   await expect(toggle).toHaveAttribute('aria-pressed', 'true')
-  await expect(botCount).toContainText('1 bot thread hidden')
+  await expect(botCount).toContainText('2 bot threads hidden')
 })
 
 test('bot comments: a finding the REVIEWER ANSWERED is never hidden', async ({ page }) => {
@@ -113,6 +135,10 @@ test('bot comments: turning the switch off restores every bot thread', async ({ 
   await expect(toggle).toHaveAttribute('aria-pressed', 'false')
   await expect(page.getByTestId('bot-hidden-count')).toHaveCount(0)
   await expect(page.getByTestId('bot-hidden-note')).toHaveCount(0)
+  // …and no gutter marker is left claiming a bot thread anywhere.
+  await expect(
+    page.locator('[data-testid="hidden-threads-marker"][data-reasons*="bot"]'),
+  ).toHaveCount(0)
   await expect(page.getByText(FIRST_SECTION).first()).toBeVisible({ timeout: 5_000 })
 })
 
@@ -121,14 +147,14 @@ test('bot comments: unticking "Hide resolved" hands its bot threads to the bot c
 }) => {
   await openInspect(page)
   await expect(page.getByTestId('hide-bots-toggle')).toBeVisible({ timeout: 10_000 })
-  await expect(page.getByTestId('bot-hidden-count')).toContainText('1 bot thread hidden')
+  await expect(page.getByTestId('bot-hidden-count')).toContainText('2 bot threads hidden')
 
   await page.getByTestId('hide-resolved-toggle').click()
   await expect(page.getByTestId('resolved-hidden-count')).toHaveCount(0)
 
   // 9004 and 9005 were counted as resolved; now the bot filter holds them. The
   // human resolved thread (9002) comes back; the bot ones stay gone.
-  await expect(page.getByTestId('bot-hidden-count')).toContainText('3 bot threads hidden')
+  await expect(page.getByTestId('bot-hidden-count')).toContainText('4 bot threads hidden')
   await expect(page.getByText('Should `signal` be required'.replace(/`/g, '')).first()).toBeVisible()
 })
 
@@ -139,14 +165,16 @@ for (const diffMode of ['unified', 'split'] as const) {
     await openInspect(page, { diffMode })
     await expect(page.getByTestId('hide-bots-toggle')).toBeVisible({ timeout: 10_000 })
 
-    // The hidden thread is anchored INSIDE a hunk, so its note renders inside
-    // the diff library's extend-row wrapper rather than in the bottom list.
-    const inlineNote = page.locator(
-      '.inline-comment-threads [data-testid="bot-hidden-note"]',
-    ).first()
-    await inlineNote.scrollIntoViewIfNeeded()
-    await expect(inlineNote).toBeVisible({ timeout: 10_000 })
-    await inlineNote.click()
+    // The hidden thread is anchored INSIDE a hunk, so its count rides in the
+    // library's own line-number cell rather than in the bottom list — and in
+    // split mode in the gutter of the side the thread is anchored to, which is
+    // the column its group opens in.
+    const marker = botMarkerAtLine(page, 22)
+    await marker.scrollIntoViewIfNeeded()
+    await expect(marker).toBeVisible({ timeout: 10_000 })
+    const cell = await marker.evaluate((el) => el.closest('td')!.className.split(' ')[0])
+    expect(cell).toBe(diffMode === 'split' ? 'diff-line-new-num' : 'diff-line-num')
+    await marker.click()
     await expect(page.getByText(FIRST_SECTION).first()).toBeVisible({ timeout: 5_000 })
   })
 }
@@ -159,9 +187,9 @@ test('a revealed bot comment shows content, drops the copy-paste prompt, and say
   page,
 }) => {
   await openInspect(page)
-  const note = page.getByTestId('bot-hidden-note').first()
-  await note.scrollIntoViewIfNeeded()
-  await note.click()
+  const marker = botMarkerAtLine(page, 22)
+  await marker.scrollIntoViewIfNeeded()
+  await marker.click()
 
   const first = page.getByText(FIRST_SECTION).first()
   await expect(first).toBeVisible({ timeout: 5_000 })
@@ -190,9 +218,9 @@ for (const theme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: theme })
     await openInspect(page, { theme })
 
-    const note = page.getByTestId('bot-hidden-note').first()
-    await note.scrollIntoViewIfNeeded()
-    await note.click()
+    const marker = botMarkerAtLine(page, 22)
+    await marker.scrollIntoViewIfNeeded()
+    await marker.click()
     await expect(page.getByText(FIRST_SECTION).first()).toBeVisible({ timeout: 5_000 })
 
     const summary = page.locator('.comment-body details > summary').first()
