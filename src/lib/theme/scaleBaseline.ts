@@ -27,7 +27,7 @@ export const SCALE_BASELINE: Record<string, ScaleCounts> = {
   'src/components/DiagramPanel.svelte': { emFont: 0, offScaleFont: 8, offScaleSpace: 17, offScaleWeight: 0 },
   'src/components/DraftLifecycleBanner.svelte': { emFont: 0, offScaleFont: 2, offScaleSpace: 7, offScaleWeight: 0 },
   'src/components/DraftThread.svelte': { emFont: 0, offScaleFont: 0, offScaleSpace: 7, offScaleWeight: 3 },
-  'src/components/ExistingThread.svelte': { emFont: 0, offScaleFont: 8, offScaleSpace: 14, offScaleWeight: 0 },
+  'src/components/ExistingThread.svelte': { emFont: 0, offScaleFont: 7, offScaleSpace: 12, offScaleWeight: 0 },
   'src/components/FileDiff.svelte': { emFont: 0, offScaleFont: 18, offScaleSpace: 53, offScaleWeight: 0 },
   'src/components/FileTree.svelte': { emFont: 0, offScaleFont: 8, offScaleSpace: 8, offScaleWeight: 1 },
   'src/components/GitHubSignInButton.svelte': { emFont: 0, offScaleFont: 1, offScaleSpace: 5, offScaleWeight: 1 },
