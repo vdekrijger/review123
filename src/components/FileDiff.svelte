@@ -1153,7 +1153,7 @@
   // the library's `.diff-line-extend-wrapper` is `sticky z-[1]` and traps
   // absolutely-positioned descendants, so "it is in the diff, therefore it is
   // trapped" was the thing to disprove. `td.diff-line-num` computes to
-  // `position: sticky; z-index: 1; overflow: visible; contain: none;
+  // `position: sticky` at layer 1, with `overflow: visible; contain: none;
   // transform: none; isolation: auto` — a containing block with nothing that
   // clips. An injected `position: absolute` child reports that very `td` as
   // its `offsetParent`, `document.elementFromPoint` at the child's centre

@@ -162,8 +162,15 @@ describe('FileDiff — resolved threads inline in the diff', () => {
   // RIGHT line 2 IS in the patch → the thread renders inline, not in the list.
   const anchoredResolved = comment({ id: 10, line: 2, body: 'inline-resolved-marker' })
 
-  async function renderInline(mode: 'unified' | 'split', resolvedIds = [10]) {
-    const r = render(FileDiff, {
+  // #295 moved the inline count OUT of the code flow: a line whose threads are
+  // all hidden no longer renders the banner block at all, and its count lives
+  // in the gutter marker. The marker's own behaviour is pinned in
+  // FileDiff.gutterthreads.test.ts; what belongs HERE is that the resolved
+  // filter still reaches the inline surface in both modes.
+  const markerSel = '[data-testid="hidden-threads-marker"]'
+
+  function renderInline(mode: 'unified' | 'split', resolvedIds = [10]) {
+    return render(FileDiff, {
       props: {
         file: modified,
         mode,
@@ -171,33 +178,45 @@ describe('FileDiff — resolved threads inline in the diff', () => {
         resolvedCommentIds: new Set(resolvedIds),
       },
     })
-    await vi.waitFor(() => {
-      expect(r.container.querySelector('.inline-comment-threads')).toBeInTheDocument()
-    })
-    return r
   }
 
   for (const mode of ['unified', 'split'] as const) {
-    it(`${mode}: hides the resolved thread and states the count in its place`, async () => {
-      const { container } = await renderInline(mode)
-      const inline = container.querySelector('.inline-comment-threads')!
-      expect(inline.textContent).not.toContain('inline-resolved-marker')
-      expect(inline.querySelector(noteSel)!.textContent).toContain('1 resolved thread hidden')
+    it(`${mode}: hides the resolved thread and states the count in the gutter`, async () => {
+      const { container } = renderInline(mode)
+      await vi.waitFor(() => {
+        expect(container.querySelector(markerSel)).toBeInTheDocument()
+      })
+      expect(container.textContent).not.toContain('inline-resolved-marker')
+      expect(container.querySelector(markerSel)!.getAttribute('aria-label')).toContain(
+        '1 resolved thread hidden',
+      )
+      // No banner row left in the reading column to say it.
+      expect(container.querySelector('.inline-comment-threads')).not.toBeInTheDocument()
     })
 
-    it(`${mode}: the inline note reveals the thread at its line`, async () => {
-      const { container } = await renderInline(mode)
-      await fireEvent.click(container.querySelector(`.inline-comment-threads ${noteSel}`)!)
+    it(`${mode}: the gutter marker reveals the thread at its line`, async () => {
+      const { container } = renderInline(mode)
+      await vi.waitFor(() => {
+        expect(container.querySelector(markerSel)).toBeInTheDocument()
+      })
+      await fireEvent.click(container.querySelector(markerSel)!)
+      await vi.waitFor(() => {
+        expect(container.querySelector('.inline-comment-threads')).toBeInTheDocument()
+      })
       const inline = container.querySelector('.inline-comment-threads')!
       expect(inline.textContent).toContain('inline-resolved-marker')
       expect(inline.querySelector('details.resolved-thread')).toBeInTheDocument()
     })
   }
 
-  it('an unresolved inline thread is untouched and draws no note', async () => {
-    const { container } = await renderInline('unified', [])
+  it('an unresolved inline thread is untouched and draws no marker', async () => {
+    const { container } = renderInline('unified', [])
+    await vi.waitFor(() => {
+      expect(container.querySelector('.inline-comment-threads')).toBeInTheDocument()
+    })
     const inline = container.querySelector('.inline-comment-threads')!
     expect(inline.textContent).toContain('inline-resolved-marker')
     expect(inline.querySelector(noteSel)).not.toBeInTheDocument()
+    expect(container.querySelector(markerSel)).not.toBeInTheDocument()
   })
 })
