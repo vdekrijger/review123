@@ -163,6 +163,16 @@ const QUEUE_NOW = new Date('2026-03-12T15:00:00.000Z')
  *                nothing). Only meaningful on `mine` rows, since that is the
  *                only subset whose base standing the page resolves.
  *
+ * ONE ROW STATE IS DELIBERATELY NOT IN THESE SHOTS, and it is worth saying so
+ * rather than leaving the next person to wonder whether they broke it. The
+ * actions column's "Fix CI" control appears only when a bridge is PAIRED,
+ * write-enabled, has a coding agent on PATH and is checked out at that exact
+ * pull request's head — see canOfferCiFix in Landing.svelte. No shot pairs a
+ * bridge, so no shot draws it, and `posthog-foss#91` (mine, FAILURE) is
+ * photographed exactly as a user without a bridge sees it. Shooting it would
+ * mean faking a local process into a picture captioned "signed in and full",
+ * which documents a state most readers never reach.
+ *
  * `e2e/queue-columns.spec.ts` has a deliberately similar fixture and they are
  * NOT shared on purpose: that one MEASURES column alignment and is free to
  * change its data whenever a tighter measurement wants different numbers, while
@@ -491,11 +501,26 @@ function queueExpectations() {
 async function settleQueueSignals(page, mode) {
   if (mode === 'empty') return
   for (const [testid, expected] of Object.entries(queueExpectations())) {
-    await page.waitForFunction(
-      ({ testid: id, n }) => document.querySelectorAll(`[data-testid="${id}"]`).length === n,
-      { testid, n: expected },
-      { timeout: 30_000 },
-    )
+    try {
+      await page.waitForFunction(
+        ({ testid: id, n }) => document.querySelectorAll(`[data-testid="${id}"]`).length === n,
+        { testid, n: expected },
+        { timeout: 30_000 },
+      )
+    } catch (err) {
+      // A bare "Timeout 30000ms exceeded" names neither the column that never
+      // landed nor how far off it was, and the fixture is the first place to
+      // look for both. Saying it costs one evaluate on a path that is already
+      // failing.
+      const actual = await page
+        .evaluate((id) => document.querySelectorAll(`[data-testid="${id}"]`).length, testid)
+        .catch(() => 'unknown')
+      throw new Error(
+        `queue shot: waited for ${expected} [data-testid="${testid}"], saw ${actual}. ` +
+          `Either the fixture and queueExpectations() disagree, or the page never finished ` +
+          `loading that column. (${err.message})`,
+      )
+    }
   }
 }
 
