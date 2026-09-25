@@ -180,6 +180,22 @@ function okSubmit(): Promise<SubmitOutcome> {
 }
 
 /**
+ * A submit spy with the real argument list, so `calls[0][3]` is typed as the
+ * drafts that were actually posted rather than as an empty tuple.
+ */
+function spySubmit() {
+  return vi.fn(
+    (
+      _ref: PrRef,
+      _verdict: string,
+      _body: string,
+      _drafts: Draft[],
+      _commitId: string,
+    ): Promise<SubmitOutcome> => Promise.resolve({ ok: true }),
+  )
+}
+
+/**
  * Render the step the way Review.svelte does, with an optional submit spy.
  * `commitId` is the PR head, which is what the fix readiness rule compares the
  * bridge's checkout against.
@@ -408,7 +424,7 @@ describe('what is handed over', () => {
 describe('sending and submitting stay separate acts', () => {
   it('posts nothing and clears nothing when the reviewer sends', async () => {
     await connectReadyBridge()
-    const submit = vi.fn(okSubmit)
+    const submit = spySubmit()
     const store = await storeWith([draft()])
     renderStep(store, { submitFn: submit })
 
@@ -427,7 +443,7 @@ describe('sending and submitting stay separate acts', () => {
 
   it('lets a reviewer send and then NOT submit, keeping every word', async () => {
     await connectReadyBridge()
-    const submit = vi.fn(okSubmit)
+    const submit = spySubmit()
     const store = await storeWith([draft()])
     renderStep(store, { submitFn: submit })
 
@@ -442,7 +458,7 @@ describe('sending and submitting stay separate acts', () => {
 
   it('submits the notes that are still in the review after a send', async () => {
     await connectReadyBridge()
-    const submit = vi.fn(okSubmit)
+    const submit = spySubmit()
     const store = await storeWith([draft(), draft({ line: 43, body: 'Name this properly.' })])
     renderStep(store, { submitFn: submit })
 
@@ -462,7 +478,7 @@ describe('sending and submitting stay separate acts', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Submit review' }))
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    const posted = submit.mock.calls[0]![3] as Draft[]
+    const posted = submit.mock.calls[0]![3]
     expect(posted).toHaveLength(1)
     expect(posted[0]!.line).toBe(43)
     // Submitting IS the end of the review, and only then are the drafts cleared
@@ -536,7 +552,7 @@ describe('it does not stand in for the reviewer’s own read', () => {
 describe('a run the reviewer stops', () => {
   it('keeps the review intact and does not report a failure', async () => {
     await connectReadyBridge()
-    const submit = vi.fn(okSubmit)
+    const submit = spySubmit()
     const store = await storeWith([draft()])
     fetchMock.mockImplementation((url: string, init: RequestInit) => {
       const target = String(url)
