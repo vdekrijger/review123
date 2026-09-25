@@ -356,6 +356,7 @@ test('deep review over the bridge needs NEITHER write grant', async ({ page }) =
         search: true,
         fix: false,
         checkout: false,
+        push: false,
       },
     }),
   )

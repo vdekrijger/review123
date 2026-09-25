@@ -32,7 +32,8 @@
    * no new plumbing.
    */
   import { track } from '../lib/analytics/analytics'
-  import { bridgeState } from '../lib/bridge/bridge.svelte'
+  import { bridgeAvailable, bridgeState } from '../lib/bridge/bridge.svelte'
+  import { BRIDGE_START_COMMAND_WITH_PUSH } from '../lib/bridge/install'
   import {
     currentFixReadiness,
     describeFixReadiness,
@@ -141,6 +142,15 @@
 
   const response = $derived(run.status === 'done' ? run.response : null)
   const commitToPush = $derived(response === null ? null : pushableCommit(response))
+  /**
+   * Whether the paired bridge may push at all.
+   *
+   * Read HERE rather than discovered on click, because a button that fails
+   * with "restart your bridge" after the user decided to push is a worse
+   * surface than a sentence that says so before they decide. The sentence
+   * carries the exact command, so the feature never silently does not work.
+   */
+  const pushGranted = $derived(bridgeAvailable('push'))
   const logsMissing = $derived(
     run.status === 'done' && run.evidence.length > 0 && run.evidence.every((e) => e.logUnavailable),
   )
@@ -441,15 +451,33 @@
         {/if}
 
         {#if commitToPush !== null && push.status === 'idle'}
-          <button
-            type="button"
-            class="cfx-go"
-            data-testid="ci-fix-push"
-            disabled={busy}
-            onclick={() => void preparePush()}
-          >
-            Push this to the pull request…
-          </button>
+          {#if pushGranted}
+            <button
+              type="button"
+              class="cfx-go"
+              data-testid="ci-fix-push"
+              disabled={busy}
+              onclick={() => void preparePush()}
+            >
+              Push this to the pull request…
+            </button>
+          {:else}
+            <!--
+              Not a disabled button. The grant is a third, separate one and the
+              user almost certainly has not typed it — so this says what it is
+              for and exactly what to run, rather than greying something out.
+            -->
+            <p class="cfx-note" data-testid="ci-fix-push-ungranted">
+              Your bridge may not write to a remote. Pushing is a separate grant from
+              <code class="cfx-sha">--allow-write</code>, because a push is visible to everyone
+              who can see the repository and cannot be undone. To allow it, restart the bridge with:
+            </p>
+            <pre class="cfx-command" data-testid="ci-fix-push-command">{BRIDGE_START_COMMAND_WITH_PUSH}</pre>
+            <p class="cfx-note">
+              Until then the commit is on the bridge’s scratch branch
+              <code class="cfx-sha">{response.branch}</code>, and you can cherry-pick it yourself.
+            </p>
+          {/if}
         {/if}
       {/if}
     {/if}
@@ -741,6 +769,18 @@
 
   .cfx-actions .cfx-link {
     margin: 0;
+  }
+
+  .cfx-command {
+    margin: var(--space-2) 0 0;
+    padding: var(--space-2);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    overflow-x: auto;
   }
 
   .cfx-progress {

@@ -103,11 +103,13 @@ describe('getPushTarget', () => {
     expect(await getPushTarget(PR)).toBeNull()
   })
 
-  it.each([
-    [{ head: { ref: '', sha: HEAD_SHA } }, 'an empty branch name'],
-    [{ head: { ref: 'x', sha: 'not-a-sha' } }, 'a sha that is not one'],
-    [{}, 'no head at all'],
-  ])('returns null for %j (%s)', async (body) => {
+  const unusableBodies: [string, Record<string, unknown>][] = [
+    ['an empty branch name', { head: { ref: '', sha: HEAD_SHA } }],
+    ['a sha that is not one', { head: { ref: 'x', sha: 'not-a-sha' } }],
+    ['no head at all', {}],
+  ]
+
+  it.each(unusableBodies)('returns null for %s', async (_label, body) => {
     fetchMock.mockResolvedValueOnce(jsonResponse(body))
     expect(await getPushTarget(PR)).toBeNull()
   })

@@ -54,5 +54,30 @@ export const BRIDGE_DOWNLOAD_COMMAND = `curl -fsSL ${BRIDGE_DOWNLOAD_URL} -o ${B
 export const BRIDGE_START_COMMAND =
   `node ${BRIDGE_LOCAL_PATH} --root . --allow-write --allow-checkout`
 
+/**
+ * The same command plus `--allow-push`, named ONLY where pushing is what the
+ * user is trying to do.
+ *
+ * WHY PUSH IS NOT IN THE LINE ABOVE, AND SHOULD NOT BE.
+ *
+ * The argument for putting `--allow-write` and `--allow-checkout` in the
+ * documented command is written out above it, and it is a good argument: the
+ * flags defend the user against THIS APP, not against their own machine, so
+ * leaving them out hardens nothing and just means the features silently do not
+ * work.
+ *
+ * `--allow-push` is different in the one way that matters. Both of those flags
+ * authorise changes on the user's own machine that the user can undo. This one
+ * authorises a change their whole team sees and that nobody can undo. A person
+ * pasting a setup command is not, at that moment, deciding to let a web page
+ * write to their remote — and a grant nobody consciously made is not a grant.
+ *
+ * So the default paste stays local-only, and this string is shown at the one
+ * place where the user has already decided they want to push and needs the
+ * exact line to restart with. The feature does not silently not work: it says
+ * what to type, right where the button would have been.
+ */
+export const BRIDGE_START_COMMAND_WITH_PUSH = `${BRIDGE_START_COMMAND} --allow-push`
+
 export const BRIDGE_REPO_URL = 'https://github.com/vdekrijger/review123'
 export const BRIDGE_README_URL = 'https://github.com/vdekrijger/review123/blob/main/bridge/README.md'

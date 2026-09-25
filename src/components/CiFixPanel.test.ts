@@ -348,6 +348,24 @@ describe('CiFixPanel — the failure reproduced', () => {
     expect(stop).toHaveTextContent(/nothing about it has been shown to work/i)
   })
 
+  // The push grant is a THIRD one the user almost certainly has not typed. A
+  // greyed-out button would leave them guessing; the panel says what it is for
+  // and prints the exact line, so the feature never silently does not work.
+  it('names the flag and the exact command when the bridge may not push', async () => {
+    _resetBridgeForTest()
+    await pair({ push: false })
+    queueGithubGathering()
+    fetchMock.mockResolvedValueOnce(jsonResponse(ciFixBody()))
+    mount()
+    await runIt()
+
+    expect(screen.queryByTestId('ci-fix-push')).toBeNull()
+    expect(screen.getByTestId('ci-fix-push-ungranted')).toHaveTextContent(/separate grant/i)
+    expect(screen.getByTestId('ci-fix-push-command')).toHaveTextContent('--allow-push')
+    // And a way to get the work out by hand, rather than a dead end.
+    expect(screen.getByTestId('ci-fix-panel')).toHaveTextContent(/cherry-pick it yourself/i)
+  })
+
   it('reports when GitHub would not give this browser the logs', async () => {
     queueGithubGathering()
     fetchMock.mockResolvedValueOnce(jsonResponse(ciFixBody()))
