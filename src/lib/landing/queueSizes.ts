@@ -16,6 +16,7 @@
 
 import { ghFetch } from '../github/client'
 import { getSettings } from '../settings/settings'
+import { queueKey } from '../provider/queue'
 import type { QueueItem, PrRefX } from '../provider/types'
 
 export interface DiffSize {
@@ -31,11 +32,15 @@ const DEFAULT_BATCH_SIZE = 4
  *  but only GitHub items are fetched). */
 const DEFAULT_CAP = 40
 
-/** Stable per-row key: "provider:owner/repo#number" (no updatedAt — UI-facing). */
-export function sizeKey(item: QueueItem): string {
-  const { provider, owner, repo, number } = item.ref
-  return `${provider}:${owner}/${repo}#${number}`
-}
+/**
+ * Stable per-row key: "provider:owner/repo#number" (no updatedAt — UI-facing).
+ *
+ * Re-exported from provider/queue under the name this module's callers already
+ * use. It is the SAME function, not a second implementation: the signals map and
+ * the sizes map are keyed by one another's keys and a divergence would silently
+ * put a PR's CI state on a different PR's row.
+ */
+export const sizeKey = queueKey
 
 function cacheKey(item: QueueItem): string {
   return `${CACHE_PREFIX}${sizeKey(item)}@${item.updatedAt}`
@@ -74,6 +79,20 @@ function writeCache(item: QueueItem, size: DiffSize): void {
   } catch {
     // sessionStorage unavailable/full — caching is best-effort
   }
+}
+
+/**
+ * Record a size this module did NOT fetch.
+ *
+ * The queue's GraphQL signals query returns `additions`/`deletions` for every
+ * row as a by-product of asking for CI state, so the REST fetch below has
+ * nothing left to do for those rows. Priming the same cache — rather than
+ * keeping a second one — is what makes `fetchMissingSizes` a no-op for them:
+ * it filters on `readCache(item) === null`, so a primed row is simply not
+ * pending, and the saving happens without a second code path.
+ */
+export function primeSize(item: QueueItem, size: DiffSize): void {
+  writeCache(item, size)
 }
 
 /**

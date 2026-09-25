@@ -12,6 +12,20 @@
 
 import type { ReviewProvider, QueueItem } from './types'
 
+/**
+ * THE key for every per-row map the landing queue keeps — diff sizes, CI and
+ * unresolved-conversation signals, in-flight prepare rows.
+ *
+ * It lives here, in the module that produces QueueItems, rather than in one of
+ * the consumers: two consumers each building "the same" key by hand is how they
+ * end up subtly different (one with the provider prefix, one without) and how a
+ * signal lands on the wrong row.
+ */
+export function queueKey(item: QueueItem): string {
+  const { provider, owner, repo, number } = item.ref
+  return `${provider}:${owner}/${repo}#${number}`
+}
+
 // In-memory session cache: provider id → QueueItem[]
 const _cache = new Map<string, QueueItem[]>()
 

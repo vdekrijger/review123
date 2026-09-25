@@ -16,6 +16,9 @@ import { getPrMeta, getPrFiles, getFileAtRef } from '../github/api'
 import { getCiSummary } from '../github/checks'
 import { getPrComments } from '../github/comments'
 import { getResolvedCommentIds } from '../github/threads'
+import { fetchQueueSignals, refKey, type QueueSignal } from '../github/queueSignals'
+import { updateBranch, type UpdateBranchOutcome } from '../github/updateBranch'
+import { queueKey } from './queue'
 import { getPrCommits } from '../github/commits'
 import { compareCommits } from '../github/compare'
 import { submitReview } from '../github/review'
@@ -457,6 +460,30 @@ export const githubProvider: ReviewProvider = {
     }
 
     return [...seen.values()]
+  },
+
+  // The whole queue's CI state, unresolved conversations, diff sizes and base
+  // standing in one GraphQL request per 20 rows (lib/github/queueSignals.ts).
+  // Re-keyed from the github lib's "owner/repo#number" to the provider-
+  // qualified queueKey the landing page's other per-row maps use.
+  async getQueueSignals(
+    items: readonly QueueItem[],
+    mergeStateItems: readonly QueueItem[] = [],
+  ): Promise<Record<string, QueueSignal>> {
+    const signals = await fetchQueueSignals(
+      items.map((i) => toRef(i.ref)),
+      mergeStateItems.map((i) => toRef(i.ref)),
+    )
+    const out: Record<string, QueueSignal> = {}
+    for (const item of items) {
+      const signal = signals.get(refKey(toRef(item.ref)))
+      if (signal) out[queueKey(item)] = signal
+    }
+    return out
+  },
+
+  updateBranch(ref: PrRefX, expectedHeadSha?: string | null): Promise<UpdateBranchOutcome> {
+    return updateBranch(toRef(ref), expectedHeadSha)
   },
 
   getViewerLogin(): Promise<string | null> {
