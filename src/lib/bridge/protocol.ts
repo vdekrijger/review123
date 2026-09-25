@@ -243,6 +243,30 @@ export type BridgeErrorCode =
   | 'moved-since'
   /** A checkout was sent without `acknowledgeUntrusted`. */
   | 'untrusted-unacknowledged'
+  /** `/v1/push` on a bridge started without `--allow-push`. */
+  | 'push-disabled'
+  /** The branch is the remote's default, or a name the bridge never pushes to. */
+  | 'protected-branch'
+  /** The remote's default branch could not be established. Fail closed. */
+  | 'default-branch-unknown'
+  /** No remote by that name is configured in the user's checkout. */
+  | 'remote-unknown'
+  /** The remote has no such branch, and this route never creates one. */
+  | 'branch-missing'
+  /** The commit to push is not in the user's local object store. */
+  | 'commit-unknown'
+  /** The remote branch is not where the request said it was. It moved. */
+  | 'remote-moved'
+  /** The push would not be a fast-forward. There is no force to fall back on. */
+  | 'not-fast-forward'
+  /** The remote branch is already at that commit. */
+  | 'nothing-to-push'
+  /** `git ls-remote` could not reach or read the remote. */
+  | 'remote-unreachable'
+  /** The remote itself refused — a protection rule, a hook, or permissions. */
+  | 'push-rejected'
+  /** The push could not be attempted at all. */
+  | 'push-failed'
 
 /** A parsed non-2xx bridge body. `code` is null when it was not one we know. */
 export interface BridgeErrorBody {
@@ -267,6 +291,12 @@ const KNOWN_ERROR_CODES: readonly string[] = [
   'cli-unavailable', 'cli-failed', 'write-disabled', 'worktree-failed', 'head-unknown',
   'checkout-disabled', 'tree-dirty', 'ref-unknown', 'checkout-failed', 'no-prior-state',
   'prior-gone', 'moved-since', 'untrusted-unacknowledged',
+  // The push family. Each one is a DIFFERENT sentence in the UI, so each has to
+  // survive parsing as itself — a code that fell through to null would collapse
+  // eleven distinct refusals into one unhelpful "HTTP 409".
+  'push-disabled', 'protected-branch', 'default-branch-unknown', 'remote-unknown',
+  'branch-missing', 'commit-unknown', 'remote-moved', 'not-fast-forward',
+  'nothing-to-push', 'remote-unreachable', 'push-rejected', 'push-failed',
 ]
 
 /**

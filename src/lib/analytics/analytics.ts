@@ -308,6 +308,48 @@ const EVENTS = {
   //   - 'duration_ms': elapsed ms (same convention as ai_task_completed).
   // Nothing about the findings, the code, the commits or the agent's words.
   bridge_fix_looped: ['stop', 'rounds', 'commits', 'still_open', 'unsoftened', 'duration_ms'],
+  // PRIVACY DECISION (the failing-CI flow): fired once per run of the CI-fix
+  // loop, when it settles. The one question this feature exists to answer is
+  // "how often does a CI failure actually reproduce on the developer's own
+  // machine", because the whole design — the round-zero gate, the refusal to
+  // let an agent touch anything it has not seen fail — rests on that number
+  // being neither 0% nor 100%. Counts and fixed enums only:
+  //   - 'reproduction': the BridgeCiReproduction enum ('reproduced',
+  //                     'not-reproduced', 'no-local-signal'). THE signal.
+  //   - 'jobs'        : integer count of failing jobs sent.
+  //   - 'logs_missing': integer count of those whose Actions log this browser
+  //                     could not read. The CORS question, as a number.
+  //   - 'cli'         : which local agent ('claude' | 'codex').
+  //   - 'outcome'     : 'done' | 'failed' | 'cancelled'.
+  //   - 'failure'     : the CiFixFailureKind enum — only when 'failed'.
+  //   - 'changes'     : integer count of commits handed back.
+  //   - 'stop_reason' : the BridgeFixStopReason enum.
+  //   - 'tests_green' : whether the LOCAL run passed after the change. A
+  //                     boolean about one command on one machine, and never
+  //                     reported anywhere as a statement about CI.
+  //   - 'duration_ms' : elapsed ms (same convention as ai_task_completed).
+  // Never a job name, a log line, a branch, a repo, a path or a commit.
+  bridge_ci_fix_settled: ['reproduction', 'jobs', 'logs_missing', 'cli', 'outcome', 'failure', 'changes', 'stop_reason', 'tests_green', 'duration_ms'],
+  // PRIVACY DECISION (the first remote write this tool performs): fired once
+  // per push ATTEMPT, after the user has confirmed it. This is the only
+  // operation in the product that cannot be undone, so the question it has to
+  // answer is "which refusals are people actually hitting" — a capability
+  // whose guarantees all fire constantly is mis-designed, and one whose
+  // guarantees never fire is not being exercised. Counts and fixed enums only:
+  //   - 'outcome'  : 'pushed' | 'refused' | 'cancelled'.
+  //   - 'failure'  : the PushFailureKind enum ('not-fast-forward',
+  //                  'protected-branch', 'remote-moved', 'tree-dirty', …) —
+  //                  present only when 'refused'. A classified cause, never
+  //                  the bridge's own detail text (which can quote git).
+  //   - 'commits'  : integer count of commits the push moved the branch by.
+  //   - 'confirmed': whether the user went through the confirmation (always
+  //                  true today; present so a future change that skipped it
+  //                  would show up rather than blend in).
+  //   - 'duration_ms': elapsed ms.
+  // THE BRANCH NAME, THE REMOTE, THE REPO AND BOTH SHAS ARE DISQUALIFIED BY
+  // DEFINITION and none of them is sent — a branch name alone can identify a
+  // private repository's work, and the shas identify the commits exactly.
+  bridge_push_settled: ['outcome', 'failure', 'commits', 'confirmed', 'duration_ms'],
   // PRIVACY DECISION (the reviewer's own drafted notes): fired once each time
   // the reviewer decides what happens to one of their own notes after handing
   // it to the fixing agent. ONE fixed enum and nothing else:

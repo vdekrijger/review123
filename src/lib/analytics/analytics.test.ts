@@ -193,6 +193,73 @@ describe('analytics privacy choke-point', () => {
     expect(capture.mock.calls[0][1]).toEqual({})
   })
 
+  it('bridge_ci_fix_settled carries the verdict and counts — NEVER a job name or a log', () => {
+    track('bridge_ci_fix_settled', {
+      reproduction: 'reproduced',
+      jobs: 2,
+      logs_missing: 1,
+      cli: 'claude',
+      outcome: 'done',
+      changes: 1,
+      stop_reason: 'all-addressed',
+      tests_green: true,
+      duration_ms: 4200,
+      // content that MUST be stripped by the choke-point:
+      job_name: 'test (ubuntu-latest)',
+      log: 'AssertionError: expected 1 to be 2',
+      branch: 'feat/secret-project',
+      repo: 'acme/secret',
+      commit: 'abc1234567890abcdef1234567890abcdef12345',
+      path: 'src/a.ts',
+    } as never)
+    const props = capture.mock.calls[0][1]
+    expect(props).toEqual({
+      reproduction: 'reproduced',
+      jobs: 2,
+      logs_missing: 1,
+      cli: 'claude',
+      outcome: 'done',
+      changes: 1,
+      stop_reason: 'all-addressed',
+      tests_green: true,
+      duration_ms: 4200,
+    })
+    for (const leak of ['job_name', 'log', 'branch', 'repo', 'commit', 'path']) {
+      expect(props).not.toHaveProperty(leak)
+    }
+  })
+
+  // The first remote write this product performs, so the rule is stricter than
+  // anywhere else: the branch name alone can identify a private repository's
+  // work, and the shas identify the commits exactly.
+  it('bridge_push_settled carries an outcome and a count — NEVER a destination', () => {
+    track('bridge_push_settled', {
+      outcome: 'refused',
+      failure: 'not-fast-forward',
+      commits: 0,
+      confirmed: true,
+      duration_ms: 812,
+      // content that MUST be stripped by the choke-point:
+      remote: 'origin',
+      branch: 'feat/secret-project',
+      repo: 'acme/secret',
+      before: 'abc1234567890abcdef1234567890abcdef12345',
+      after: '0123456789abcdef0123456789abcdef01234567',
+      message: 'GH006 Protected branch update failed',
+    } as never)
+    const props = capture.mock.calls[0][1]
+    expect(props).toEqual({
+      outcome: 'refused',
+      failure: 'not-fast-forward',
+      commits: 0,
+      confirmed: true,
+      duration_ms: 812,
+    })
+    for (const leak of ['remote', 'branch', 'repo', 'before', 'after', 'message']) {
+      expect(props).not.toHaveProperty(leak)
+    }
+  })
+
   it('unknown events are dropped entirely', () => {
     track('rogue_event' as never, {} as never)
     expect(capture).not.toHaveBeenCalled()

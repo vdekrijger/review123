@@ -306,23 +306,18 @@ export async function runBridgePush(
   }
 
   if (!response.ok) {
-    let parsed: { code: string | null; message: string } = { code: null, message: '' }
-    let body: unknown = null
+    let parsed = { code: null as string | null, message: '', dirtyPaths: [] as string[], dirtyCount: 0 }
     try {
-      body = await response.json()
-      parsed = parseBridgeError(body)
+      parsed = await response.json().then(parseBridgeError)
     } catch {
       /* a non-JSON body from something that is not our bridge */
     }
     const failure = pushFailureForStatus(response.status, parsed.code, parsed.message)
     // `tree-dirty` carries evidence. A refusal that names the files is one the
     // user can act on in seconds; one that does not is a puzzle.
-    if (failure.kind === 'tree-dirty' && typeof body === 'object' && body !== null) {
-      const raw = body as Record<string, unknown>
-      if (Array.isArray(raw['dirtyPaths'])) {
-        failure.dirtyPaths = raw['dirtyPaths'].filter((p): p is string => typeof p === 'string').slice(0, 100)
-      }
-      if (typeof raw['dirtyCount'] === 'number') failure.dirtyCount = raw['dirtyCount']
+    if (failure.kind === 'tree-dirty') {
+      failure.dirtyPaths = parsed.dirtyPaths
+      failure.dirtyCount = parsed.dirtyCount
     }
     return { ok: false, failure }
   }
