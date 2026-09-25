@@ -47,6 +47,8 @@
   import { getInspectSort, setInspectSort, type InspectSort } from '../lib/guide/sortPref'
   import { hunkAttentionPref, toggleHunkAttention } from '../lib/guide/hunkAttentionPref.svelte'
   import { resolvedThreadsPref, toggleHideResolvedThreads } from '../lib/guide/resolvedThreadsPref.svelte'
+  import { botThreadsPref, toggleHideBotThreads } from '../lib/guide/botThreadsPref.svelte'
+  import { isBotThread } from '../lib/guide/botThreads'
   import { createPhaseStore, partitionFilesByPhase, type ReviewPhase } from '../lib/guide/phase.svelte'
   import { pairStepTests } from '../lib/diff/symbolTests'
   import { isGeneratedFile, sortGeneratedLast } from '../lib/diff/generated'
@@ -673,10 +675,39 @@
   // (resolvedThreads capability false, getResolvedCommentIds returns an empty
   // Set) — the toolbar never offers a switch for a capability the provider
   // lacks. It is the same rule for a GitHub PR that simply has none resolved.
+  const prThreads = $derived(prComments.length === 0 ? [] : groupThreads(prComments))
+
   const resolvedThreadCount = $derived(
-    prComments.length === 0 || resolvedCommentIds.size === 0
+    resolvedCommentIds.size === 0
       ? 0
-      : groupThreads(prComments).filter((t) => resolvedCommentIds.has(t.root.id)).length,
+      : prThreads.filter((t) => resolvedCommentIds.has(t.root.id)).length,
+  )
+
+  // ---- Exclude review-bot threads (toolbar) -------------------------------
+  // The user's report: "these bot comments are quite noisy and distracting
+  // during a review with no way to hide or filter them out". Default HIDDEN,
+  // one click to reveal — the shape they picked out of three. Storage is the
+  // per-browser localStorage idiom (review123:hide-bot-comments), and, like
+  // hide-resolved, the hiding itself lives in FileDiff reading the same
+  // reactive preference, so Story mode follows with no extra wiring.
+  const hideBots = $derived(botThreadsPref.hidden)
+
+  // Threads this switch can act on: a bot root with no human reply
+  // (src/lib/guide/botThreads.ts). Gates the control the same way
+  // resolvedThreadCount does — zero → no button, no note — so a PR with no bot
+  // on it is never offered a filter for something it does not have.
+  const botThreadCount = $derived(prThreads.filter(isBotThread).length)
+
+  // What the switch is ACTUALLY hiding right now. A thread that is both
+  // resolved and a bot's is attributed to the resolved filter (FileDiff's
+  // hiddenReason decides that, and this mirrors it), so the two toolbar counts
+  // never claim the same thread twice and their sum is the truth.
+  const botHiddenCount = $derived(
+    hideBots
+      ? prThreads.filter(
+          (t) => isBotThread(t) && !(hideResolved && resolvedCommentIds.has(t.root.id)),
+        ).length
+      : 0,
   )
 
   // ---- Viewport thresholds ----
@@ -1795,6 +1826,17 @@
         onclick={() => track('hide_resolved_toggled', { enabled: toggleHideResolvedThreads() })}
       >Hide resolved</button>
     {/if}
+    <!-- Same gate: only when this PR actually HAS a bot thread to hide. -->
+    {#if botThreadCount > 0}
+      <button
+        class="btn view-toggle hide-bots-toggle"
+        class:btn-active={hideBots}
+        aria-pressed={hideBots}
+        data-testid="hide-bots-toggle"
+        title="Exclude comment threads a review bot wrote and nobody answered. A reading preference for this diff only — it never removes them from what the fixing agent can be sent. A bot comment you have replied to is a conversation and always stays. Nothing is hidden silently: the count is stated here and again wherever threads were removed, each one click from showing."
+        onclick={() => track('hide_bots_toggled', { enabled: toggleHideBotThreads() })}
+      >Hide bots</button>
+    {/if}
   </div>
   {#if hideWhitespace && whitespaceToggleEnabled && whitespaceOnlyCount > 0}
     <span class="ws-only-note" role="status">
@@ -1802,8 +1844,29 @@
     </span>
   {/if}
   {#if hideResolved && resolvedThreadCount > 0}
-    <span class="resolved-hidden-count" role="status" data-testid="resolved-hidden-count">
+    <span class="threads-hidden-count" role="status" data-testid="resolved-hidden-count">
       {resolvedThreadCount} resolved thread{resolvedThreadCount === 1 ? '' : 's'} hidden
+    </span>
+  {/if}
+  <!--
+    WHERE THE FIXING PANEL'S BOT COMMENTS COME FROM.
+
+    #285 makes review-bot comments candidates for the fixing agent, and that
+    list is built from the PULL REQUEST (loadBotComments → provider.getComments)
+    — not from what this diff chose to render. So with this switch on, the panel
+    below can offer bot findings that appear nowhere in the code above, and a
+    reader with no explanation would reasonably conclude the app was inventing
+    them. The second clause is that explanation, and it is the reason this note
+    says more than its resolved-thread sibling does.
+  -->
+  {#if botHiddenCount > 0}
+    <span
+      class="threads-hidden-count"
+      role="status"
+      data-testid="bot-hidden-count"
+      title="Hidden from this diff only. The fixing-agent panel builds its list from the pull request, not from the diff, so these threads are still there to be ticked and sent — which is why bot findings can appear in that panel and nowhere in the code above."
+    >
+      {botHiddenCount} bot thread{botHiddenCount === 1 ? '' : 's'} hidden — still fixable
     </span>
   {/if}
   {#if showRunButton}
@@ -2834,7 +2897,7 @@
 
   /* Companion receipt to the Hide-resolved switch — same shape as .ws-only-note
      (a toggle that removes content always states how much it removed). */
-  .resolved-hidden-count {
+  .threads-hidden-count {
     font-size: var(--text-xs);
     color: var(--text-muted);
     align-self: center;

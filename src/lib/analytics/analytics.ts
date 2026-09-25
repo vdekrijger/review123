@@ -183,6 +183,16 @@ const EVENTS = {
   // thread count, thread bodies, author logins, file paths, or repo identity —
   // a boolean cannot reconstruct a conversation.
   hide_resolved_toggled: ['enabled'],
+  // PRIVACY DECISION (hide bot comments): the Inspect toolbar can exclude
+  // review-bot comment threads from the diff. Carries only
+  //   - 'enabled' : boolean — the new state of the toggle.
+  // Modelled exactly on hide_resolved_toggled. BOTH directions matter: turning
+  // it back off says the reviewer wanted the bot findings in the diff after
+  // all, which is the only evidence that hiding-by-default was the wrong
+  // default. Never the thread count, comment bodies, the BOT'S OWN LOGIN, file
+  // paths, or repo identity — the vendor a team uses to review its code is a
+  // fact about that team, and a boolean cannot carry it.
+  hide_bots_toggled: ['enabled'],
   // Carries no content — fired when the user turns ON focus mode (any non-off).
   focus_mode_on: [],
   rail_expanded: [],
