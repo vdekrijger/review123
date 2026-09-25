@@ -211,6 +211,15 @@ const EVENTS = {
   // Fired when the user opens the bundled "Try a live demo" onboarding path from
   // the landing page. No props — it's a pure navigation signal.
   demo_opened: [],
+  // PRIVACY DECISION (queue "Update branch"): fired once per click on a queue
+  // row's Update control, when it settles. ONE fixed enum and nothing else:
+  //   - 'outcome' : 'updated' | 'conflict' | 'forbidden' | 'not-found' |
+  //                 'failed' — the UpdateBranchOutcome kinds.
+  // The repo, the owner, the PR number, the branch names, the head SHA and
+  // GitHub's own message are all disqualified by definition and none is sent.
+  // The mix is the whole measurement: an action that mostly answers 'conflict'
+  // is an action being offered where it cannot work.
+  queue_branch_updated: ['outcome'],
   // PRIVACY DECISION (deploy-preview surfacing): fired when the user opens a
   // detected deploy preview — in a new tab or the embedded panel. Carries only
   //   - 'method'        : 'tab' | 'panel' — fixed enum.

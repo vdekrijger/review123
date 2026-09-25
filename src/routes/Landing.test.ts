@@ -264,13 +264,17 @@ describe('Landing queue provider icons + per-repo grouping', () => {
     const { container } = render(Landing)
     await screen.findByText(/Your open PRs/i)
 
-    // Awaiting list (alpha, beta) → 2 headers; my-open-PRs list (mine) → 1 header
+    // My-open-PRs list (mine) → 1 header; awaiting list (alpha, beta) → 2.
+    // The OWN-PRs list is first: it is what the page is for, and it used to be
+    // second. The order is asserted here rather than left implicit because it
+    // is the whole point of the section-order change, not an accident of how
+    // the groups happen to be built.
     const headers = [...container.querySelectorAll('.repo-group-header')]
     expect(headers).toHaveLength(3)
     expect(headers.map((h) => h.textContent)).toEqual([
+      expect.stringContaining('org/mine'),
       expect.stringContaining('org/alpha'),
       expect.stringContaining('org/beta'),
-      expect.stringContaining('org/mine'),
     ])
     // The single-repo open-PRs row shows just "#3", not the repeated prefix
     expect(screen.getByText('#3')).toBeInTheDocument()

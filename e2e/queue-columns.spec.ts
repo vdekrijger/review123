@@ -35,23 +35,30 @@ interface Row {
   add: number
   del: number
   ageMin: number
+  /** Rollup state, or null for a PR with no checks configured (draws no mark). */
+  ci?: string | null
+  /** Unresolved review THREADS. 0 draws no chip. */
+  unresolved?: number
 }
 
+// The signal columns are as uneven as the rest of the fixture ON PURPOSE: a
+// present mark next to an absent one is exactly the case where a cell that
+// sizes to its content puts the next column somewhere new.
 const ROWS: Row[] = [
-  { repo: 'posthog', n: 21841, title: 'feat(surveys): allow multiple choice questions to be randomized', add: 216, del: 179, ageMin: 480 },
-  { repo: 'posthog', n: 21902, title: 'fix: flaky test', add: 4, del: 0, ageMin: 35 },
-  { repo: 'posthog', n: 20117, title: 'chore(deps): bump the whole frontend toolchain to the latest majors and regenerate lockfile', add: 883, del: 1131, ageMin: 4320 },
-  { repo: 'posthog', n: 21733, title: 'refactor(insights): extract the trends query runner', add: 66, del: 4, ageMin: 120 },
-  { repo: 'posthog', n: 21990, title: 'feat: add a new dashboard tile type', add: 41, del: 12, ageMin: 90 },
-  { repo: 'posthog-js', n: 1204, title: 'fix(autocapture): do not capture password inputs', add: 18, del: 7, ageMin: 300 },
-  { repo: 'posthog-js', n: 1211, title: 'feat: session recording canvas support behind a flag with a long descriptive title', add: 402, del: 88, ageMin: 1560 },
-  { repo: 'posthog-js', n: 1180, title: 'docs: readme', add: 6, del: 2, ageMin: 10080 },
-  { repo: 'posthog-foss', n: 88, title: 'build: pin node to 20', add: 9, del: 9, ageMin: 720 },
-  { repo: 'posthog-foss', n: 91, title: 'feat(api): expose the query endpoint to personal api keys with scoped permissions', add: 155, del: 43, ageMin: 45 },
-  { repo: 'posthog-foss', n: 95, title: 'test: cover the batch export retry path', add: 77, del: 21, ageMin: 240 },
-  { repo: 'plugin-server', n: 3301, title: 'perf: reduce kafka consumer allocations', add: 31, del: 118, ageMin: 1200 },
-  { repo: 'plugin-server', n: 3312, title: 'fix(ingestion): drop events with malformed distinct ids instead of dead-lettering them', add: 240, del: 64, ageMin: 15 },
-  { repo: 'plugin-server', n: 3290, title: 'chore: tidy imports', add: 12, del: 30, ageMin: 3000 },
+  { repo: 'posthog', n: 21841, title: 'feat(surveys): allow multiple choice questions to be randomized', add: 216, del: 179, ageMin: 480, ci: 'FAILURE', unresolved: 3 },
+  { repo: 'posthog', n: 21902, title: 'fix: flaky test', add: 4, del: 0, ageMin: 35, ci: 'SUCCESS', unresolved: 0 },
+  { repo: 'posthog', n: 20117, title: 'chore(deps): bump the whole frontend toolchain to the latest majors and regenerate lockfile', add: 883, del: 1131, ageMin: 4320, ci: 'SUCCESS', unresolved: 12 },
+  { repo: 'posthog', n: 21733, title: 'refactor(insights): extract the trends query runner', add: 66, del: 4, ageMin: 120, ci: 'PENDING', unresolved: 1 },
+  { repo: 'posthog', n: 21990, title: 'feat: add a new dashboard tile type', add: 41, del: 12, ageMin: 90, ci: null, unresolved: 0 },
+  { repo: 'posthog-js', n: 1204, title: 'fix(autocapture): do not capture password inputs', add: 18, del: 7, ageMin: 300, ci: 'SUCCESS', unresolved: 2 },
+  { repo: 'posthog-js', n: 1211, title: 'feat: session recording canvas support behind a flag with a long descriptive title', add: 402, del: 88, ageMin: 1560, ci: 'FAILURE', unresolved: 0 },
+  { repo: 'posthog-js', n: 1180, title: 'docs: readme', add: 6, del: 2, ageMin: 10080, ci: null, unresolved: 0 },
+  { repo: 'posthog-foss', n: 88, title: 'build: pin node to 20', add: 9, del: 9, ageMin: 720, ci: 'SUCCESS', unresolved: 0 },
+  { repo: 'posthog-foss', n: 91, title: 'feat(api): expose the query endpoint to personal api keys with scoped permissions', add: 155, del: 43, ageMin: 45, ci: 'PENDING', unresolved: 5 },
+  { repo: 'posthog-foss', n: 95, title: 'test: cover the batch export retry path', add: 77, del: 21, ageMin: 240, ci: 'SUCCESS', unresolved: 0 },
+  { repo: 'plugin-server', n: 3301, title: 'perf: reduce kafka consumer allocations', add: 31, del: 118, ageMin: 1200, ci: 'FAILURE', unresolved: 8 },
+  { repo: 'plugin-server', n: 3312, title: 'fix(ingestion): drop events with malformed distinct ids instead of dead-lettering them', add: 240, del: 64, ageMin: 15, ci: 'SUCCESS', unresolved: 0 },
+  { repo: 'plugin-server', n: 3290, title: 'chore: tidy imports', add: 12, del: 30, ageMin: 3000, ci: null, unresolved: 4 },
 ]
 
 async function seedQueue(page: Page) {
@@ -62,6 +69,39 @@ async function seedQueue(page: Page) {
   await page.route('**/api.github.com/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname
+
+    // The batched signals query — CI state, unresolved threads, diff size and
+    // base standing for the whole queue in one document. Without it the three
+    // signal columns would render empty and this file would measure the
+    // alignment of nothing.
+    if (path === '/graphql') {
+      const query = (JSON.parse(route.request().postData() ?? '{}') as { query?: string }).query ?? ''
+      const data: Record<string, unknown> = {}
+      for (const [, alias, repo, number] of query.matchAll(
+        /(p\d+): repository\(owner: "[^"]+", name: "([^"]+)"\)[\s\S]*?pullRequest\(number: (\d+)\)/g,
+      )) {
+        const row = ROWS.find((r) => r.repo === repo && String(r.n) === number)
+        if (!row) continue
+        data[alias] = {
+          viewerPermission: 'WRITE',
+          pullRequest: {
+            additions: row.add,
+            deletions: row.del,
+            mergeable: 'MERGEABLE',
+            headRefOid: `sha${row.n}`,
+            reviewThreads: {
+              pageInfo: { hasNextPage: false },
+              nodes: [
+                ...Array.from({ length: row.unresolved ?? 0 }, () => ({ isResolved: false })),
+                { isResolved: true },
+              ],
+            },
+            commits: { nodes: [{ commit: { statusCheckRollup: row.ci ? { state: row.ci } : null } }] },
+          },
+        }
+      }
+      return route.fulfill({ json: { data } })
+    }
 
     if (path === '/search/issues') {
       // `author:` is the "my open PRs" query — keep that group empty so the
@@ -123,9 +163,17 @@ async function columnLefts(page: Page, selector: string): Promise<number[]> {
   }, selector)
 }
 
+/** Rows whose signal actually DRAWS something — an absent mark is not late. */
+const CI_MARKS = ROWS.filter((r) => r.ci).length
+const UNRESOLVED_MARKS = ROWS.filter((r) => (r.unresolved ?? 0) > 0).length
+
 async function waitForAllSizes(page: Page) {
   await expect(page.getByText('Your review queue')).toBeVisible({ timeout: 10_000 })
   await expect(page.getByTestId('queue-size')).toHaveCount(ROWS.length, { timeout: 20_000 })
+  // The signals arrive on their own request, so a measurement taken before they
+  // land measures a narrower table than the one that ships.
+  await expect(page.getByTestId('queue-ci')).toHaveCount(CI_MARKS, { timeout: 20_000 })
+  await expect(page.getByTestId('queue-unresolved')).toHaveCount(UNRESOLVED_MARKS, { timeout: 20_000 })
 }
 
 test('every queue column lands on the same x across a 14-row, 4-repo queue', async ({ page }) => {
@@ -135,6 +183,12 @@ test('every queue column lands on the same x across a 14-row, 4-repo queue', asy
   await waitForAllSizes(page)
 
   for (const [label, selector] of [
+    // The three signal columns are measured by their CELL, not by the mark
+    // inside it: the cell is what reserves the width, and the whole reason it
+    // exists is that a row with no CI mark must not shift the row next to it.
+    ['ci state', '.ci-cell'],
+    ['unresolved count', '.threads-cell'],
+    ['base standing', '.base-cell'],
     ['diff-stat chip', '[data-testid="queue-size"]'],
     ['effort gauge', '.churn'],
     ['timestamp', '.queue-time'],

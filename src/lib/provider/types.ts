@@ -9,6 +9,8 @@
 // Re-export canonical model types from existing github lib
 export type { PrMeta, PrFile } from '../github/types'
 export type { CiSummary } from '../github/checks'
+export type { QueueSignal, CiState, BaseState } from '../github/queueSignals'
+export type { UpdateBranchOutcome, UpdateBranchFailure } from '../github/updateBranch'
 export type { PrComment } from '../github/comments'
 export type { PrCommit } from '../github/commits'
 export type { Verdict, SubmitOutcome } from '../github/review'
@@ -16,6 +18,8 @@ export type { ReplyOutcome } from '../github/replies'
 export type { PreviewDeployment } from '../preview/preview'
 
 import type { PrMeta, PrFile } from '../github/types'
+import type { QueueSignal } from '../github/queueSignals'
+import type { UpdateBranchOutcome } from '../github/updateBranch'
 import type { PreviewDeployment } from '../preview/preview'
 import type { CiSummary } from '../github/checks'
 import type { PrComment } from '../github/comments'
@@ -264,6 +268,45 @@ export interface ReviewProvider {
    * Returns [] when unauthenticated.
    */
   getMyQueue?(): Promise<QueueItem[]>
+
+  /**
+   * Annotate a whole queue at once: CI state, unresolved-conversation count,
+   * diff size and base-branch standing, keyed by queueKey(item).
+   *
+   * BATCHED BY CONTRACT, not by convention. The landing queue is ~35 rows; a
+   * per-row implementation of this would be the N+1 the interface exists to
+   * prevent, which is why it takes the whole list rather than one ref.
+   *
+   * `mergeStateItems` is the subset whose base standing the caller will act on
+   * (the viewer's own PRs). A provider may resolve base standing for those only.
+   *
+   * Rows the provider cannot answer for are simply ABSENT from the result —
+   * never a zero, never a guess. Implementations must not throw.
+   *
+   * Optional — capability by method presence (same pattern as getMyQueue, which
+   * it annotates). GitHub-only in v1; GitLab and Bitbucket omit it and their
+   * rows render no signals, exactly as they render no resolved-thread markers.
+   */
+  getQueueSignals?(
+    items: readonly QueueItem[],
+    mergeStateItems?: readonly QueueItem[],
+  ): Promise<Record<string, QueueSignal>>
+
+  /**
+   * Merge the PR's base branch into its head branch, on the provider's servers.
+   *
+   * No checkout and no local state: this works on a PR the user has never had
+   * on this machine. `expectedHeadSha` guards the race where someone pushed
+   * between the queue read and the click.
+   *
+   * Returns a typed outcome and never throws — a refusal (conflict, no push
+   * permission) is an answer the row renders, not an exception.
+   *
+   * Optional — capability by method presence. Callers must also check that the
+   * PR is actually behind before offering it: a button that is going to fail is
+   * worse than no button.
+   */
+  updateBranch?(ref: PrRefX, expectedHeadSha?: string | null): Promise<UpdateBranchOutcome>
 
   /**
    * Detect deploy-preview deployments (Vercel / Netlify / Cloudflare Pages …)

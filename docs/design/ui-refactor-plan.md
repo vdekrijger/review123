@@ -2073,10 +2073,18 @@ and `queue-empty-*` photograph the review queue — the surface the landing
 refactor rewrote, and the only one in the set whose content does not come from
 a committed in-app fixture. The script carries that fixture (twelve PRs over
 four repos, diffs from `+4 −0` to `+1183 −1902`) and serves it by faking the
-GitHub API at the network boundary. Three things had to be pinned that no other
-shot needs: a fixed wall clock, so `8h ago` is a constant; the diff stats, which
-the rows fetch after they render; and the shutter, held until every row has its
-size, because the effort gauge scales to the largest churn *currently* loaded.
+GitHub API at the network boundary — REST *and* GraphQL, since a row's CI state,
+unresolved-conversation count, diff size and base standing now all arrive in one
+batched GraphQL query. Three things had to be pinned that no other shot needs: a
+fixed wall clock, so `8h ago` is a constant; the row signals, which are fetched
+after the rows render; and the shutter, held until every one of them has landed.
+`settleQueueSignals` waits on a count per column — sizes, CI marks, unresolved
+counts, base controls — each derived from `QUEUE_ROWS` so it cannot drift from
+the fixture, and each counting *marks* rather than rows, because a PR with no CI
+configured correctly draws nothing and waiting for it would hang. The size count
+is the oldest of the four and still the subtlest: the effort gauge scales to the
+largest churn *currently* loaded, so a shot taken with ten of twelve sizes in
+hand draws ten bars against the wrong maximum.
 
 **The recipe.** Viewport 1440x1000 at `deviceScaleFactor: 1`; the full settings
 object written to `localStorage` before first paint, so no shot inherits a
