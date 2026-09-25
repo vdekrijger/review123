@@ -258,6 +258,14 @@ export const demoFiles: PrFile[] = [
  *     markdown link badge, the way review bots write them. The collapsed
  *     one-line summary has to strip those to plain text before truncating, or
  *     it shows sixty characters of tags and no words.
+ *   - THREE MORE HIDDEN GROUPS INSIDE ONE SHORT HUNK of src/search/useSearch.ts
+ *     (#295), because the report that moved the notice out of the code flow was
+ *     a screenshot of FOUR of them stacked through twenty lines. One group per
+ *     marker is not the complaint; a column of them is. And one of those lines
+ *     — RIGHT 19 — carries a RESOLVED thread and a BOT thread AT ONCE, the case
+ *     the gutter marker has to hold without blurring two filters into one
+ *     count: two bars, a label that states each reason's own count, and a
+ *     separate way back per reason once they are shown.
  *
  * Two DIFFERENT bot logins, because a real PR has them: the vendor name is not
  * what makes a comment a bot's, the `[bot]` suffix is (isReviewBotAuthor).
@@ -273,7 +281,10 @@ export const demoFiles: PrFile[] = [
  * src/search/useSearch.ts, RIGHT line 22 is the `if (err.name !== 'AbortError')
  * throw err` line and line 16 is `controllerRef.current?.abort()` — likewise
  * both in the patch, so the two new bot threads render INLINE where the noise
- * actually hurts, rather than in the bottom list.
+ * actually hurts, rather than in the bottom list. RIGHT 8 is
+ * `const controllerRef = useRef<AbortController | null>(null)` and RIGHT 19 is
+ * `fetchResults(query, controller.signal)`, both in the same hunk — which is
+ * what puts four hidden groups inside fifteen lines of one file.
  */
 export const demoComments: PrComment[] = [
   {
@@ -406,6 +417,47 @@ export const demoComments: PrComment[] = [
     side: 'RIGHT',
     inReplyTo: 9007,
   },
+  {
+    // ── The stack (#295) ──────────────────────────────────────────────────
+    // A FINISHED conversation at RIGHT 8. On its own it is unremarkable; its
+    // job is to be the first of four hidden groups inside one hunk, which is
+    // the shape the report was a screenshot of.
+    id: 9009,
+    author: 'demo-reviewer',
+    authorAvatar: null,
+    body: 'A ref rather than state here is right — re-rendering on every controller swap would re-run the effect.',
+    createdAt: '2024-05-02T09:35:00Z',
+    path: 'src/search/useSearch.ts',
+    line: 8,
+    side: 'RIGHT',
+    inReplyTo: null,
+  },
+  {
+    // TWO FILTERS ON ONE LINE, part 1: an unresolved BOT thread at RIGHT 19.
+    id: 9010,
+    author: 'demo-lint-bot[bot]',
+    authorAvatar: null,
+    body: '[**P3**](https://example.com/rules/p3) `fetchResults` is called without an `await` inside a `setTimeout` callback — the returned promise is handled, but a linter that cannot see the `.then()` chain will flag it.',
+    createdAt: '2024-05-02T09:36:00Z',
+    path: 'src/search/useSearch.ts',
+    line: 19,
+    side: 'RIGHT',
+    inReplyTo: null,
+  },
+  {
+    // TWO FILTERS ON ONE LINE, part 2: a RESOLVED HUMAN thread at the SAME
+    // line. Neither filter can claim both, so the marker at RIGHT 19 has to
+    // carry two counts the reader can act on separately.
+    id: 9011,
+    author: 'demo-dev',
+    authorAvatar: null,
+    body: 'Forwarding the signal here is the whole point of the change — confirmed against the api.ts side.',
+    createdAt: '2024-05-02T09:37:00Z',
+    path: 'src/search/useSearch.ts',
+    line: 19,
+    side: 'RIGHT',
+    inReplyTo: null,
+  },
 ]
 
 /**
@@ -413,16 +465,18 @@ export const demoComments: PrComment[] = [
  * provider.getResolvedCommentIds() returns (GitHub/GitLab; Bitbucket has no
  * resolved threads and returns an empty Set).
  *
- * Note 9003: a resolved thread's REPLIES are in the Set too. Three threads are
- * resolved here, not four, which is why the count shown in the UI is computed
+ * Note 9003: a resolved thread's REPLIES are in the Set too. Five threads are
+ * resolved here, not six, which is why the count shown in the UI is computed
  * from grouped threads rather than from this Set's size.
  *
- * 9006–9008 are deliberately ABSENT: the two new bot threads are open, so the
+ * 9006–9008 and 9010 are deliberately ABSENT: the bot threads are open, so the
  * demo shows the bot filter doing its own work rather than riding on the
  * resolved one. 9004 and 9005 are in both categories at once, which is the case
- * the two toolbar counts must not each claim.
+ * the two toolbar counts must not each claim. 9011 is resolved and 9010 is not,
+ * and they sit on the SAME line — which is the case one gutter marker must
+ * carry as two counts (#295).
  */
-export const demoResolvedCommentIds: Set<number> = new Set([9002, 9003, 9004, 9005])
+export const demoResolvedCommentIds: Set<number> = new Set([9002, 9003, 9004, 9005, 9009, 9011])
 
 /**
  * Canned Story-mode walkthrough (StoryOrderResult). The steps are already in
