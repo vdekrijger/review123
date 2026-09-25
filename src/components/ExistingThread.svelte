@@ -333,10 +333,16 @@
    *
    * CommentThread already resets text-transform and letter-spacing on
    * `.comment-body details summary`. It does NOT reset font-weight, so the
-   * global 600 was still landing on every disclosure a comment contains —
+   * global 600 was still landing on every disclosure a comment contains:
    * "Issue description", "Suggested fix" and whatever prose a summary carries
    * with them, all set semibold against the author's intent, and semibold at
    * --text-sm inside a 0.9rem body reads as a heading the author never wrote.
+   *
+   * MEASURED, not assumed. Delete the font-weight below and
+   * e2e/bot-comments.spec.ts reads 600 off a real bot comment's section label
+   * in BOTH themes; restore it and both read 400. The other two properties pass
+   * either way, which is how we know CommentThread's reset already covers them
+   * and the leak here was exactly one property wide.
    *
    * So: 400 here, and the summary's editorial padding tightened to one scale
    * step, because four of these stacked is a third of the height the
