@@ -102,7 +102,7 @@ describe('BridgeSection — never paired', () => {
   it('documents the command with BOTH grants, not a crippled one', () => {
     render(BridgeSection)
     expect(screen.getByTestId('bridge-install')).toHaveTextContent(
-      'node ~/review123-bridge.mjs --root . --allow-write --allow-checkout',
+      'node ~/review123-bridge.mjs --root . --allow-write --allow-checkout --allow-push',
     )
   })
 
@@ -114,12 +114,30 @@ describe('BridgeSection — never paired', () => {
     expect(note).toHaveTextContent(/scratch git worktree/i)
     expect(note).toHaveTextContent(/--allow-checkout/)
     expect(note).toHaveTextContent(/check\s+a pull request out/i)
+    expect(note).toHaveTextContent(/--allow-push/)
     expect(note).toHaveTextContent(/independent/i)
     // And the reason they exist: they defend the user against THIS WEBSITE,
     // not against themselves. Without this, someone "hardens" the documented
     // command back out and only turns the features off.
     expect(note).toHaveTextContent(/off/i)
     expect(note).toHaveTextContent(/compromised/i)
+  })
+
+  // --allow-push is NOT like the other two and the copy must not pretend it is.
+  // A scratch worktree and a checkout change the user's own machine reversibly;
+  // a push is seen by their team and cannot be withdrawn. So the "leaving them
+  // out hardens nothing" argument, which is true and load-bearing for the first
+  // two, is FALSE for the third — and saying it anyway would be the app talking
+  // someone into a grant by an argument that does not apply to it.
+  it('does not extend the "hardens nothing" argument to --allow-push', () => {
+    render(BridgeSection)
+    const push = screen.getByTestId('bridge-push-note')
+    expect(push).toHaveTextContent(/cannot be taken back|undo/i)
+    expect(push).toHaveTextContent(/harden/i)
+    // And the guarantees that make it survivable are stated where it is asked for.
+    expect(push).toHaveTextContent(/fast-forward/i)
+    expect(push).toHaveTextContent(/default branch/i)
+    expect(push).toHaveTextContent(/asks before/i)
   })
 
   it('still offers the clone route, and is honest that it is heavy', () => {

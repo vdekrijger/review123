@@ -28,7 +28,7 @@
     BRIDGE_DOWNLOAD_COMMAND,
     BRIDGE_README_URL,
     BRIDGE_REPO_URL,
-    BRIDGE_START_COMMAND,
+    BRIDGE_START_COMMAND_WITH_PUSH,
   } from '../../lib/bridge/install'
 
   let token = $state('')
@@ -278,17 +278,27 @@
         inside whichever repo you want to review. Needs Node 22+ and nothing else.
       </p>
       <pre class="cmd"><code>{BRIDGE_DOWNLOAD_COMMAND}
-{BRIDGE_START_COMMAND}</code></pre>
+{BRIDGE_START_COMMAND_WITH_PUSH}</code></pre>
       <p class="field-note" data-testid="bridge-flags-note">
-        <strong>The two flags are the point of typing this yourself.</strong>
+        <strong>The three flags are the point of typing this yourself.</strong>
         <code>--allow-write</code> lets review123 hand a finding to your local coding agent,
         which fixes it in a scratch git worktree; <code>--allow-checkout</code> lets it check
-        a pull request out in this working tree so your dev server serves it. They are
-        independent — neither turns on the other — and the bridge starts with both
-        <strong>off</strong> unless you type them. That is deliberate: a grant that only
-        exists on your command line still holds if this website is ever compromised, because
-        nothing we send can switch it on. They protect you from <em>us</em>, not from
-        yourself — so leaving them out doesn't harden anything, it just turns the features off.
+        a pull request out in this working tree so your dev server serves it;
+        <code>--allow-push</code> lets it move one of your pull request's branches forward
+        after a fix. They are independent — none turns on another — and the bridge starts
+        with all three <strong>off</strong> unless you type them. That is deliberate: a
+        grant that only exists on your command line still holds if this website is ever
+        compromised, because nothing we send can switch it on.
+      </p>
+      <p class="field-note" data-testid="bridge-push-note">
+        <strong>The first two protect you from <em>us</em>. The third also protects you
+        from yourself.</strong> A scratch worktree and a checkout change things on your
+        own machine that you can undo. A push is seen by everyone with read access and
+        cannot be taken back, so dropping <code>--allow-push</code> genuinely does harden
+        something — unlike the other two, where leaving it out only turns the feature off.
+        The bridge still refuses anything that is not a fast-forward, never force-pushes,
+        and will not touch your default branch; and review123 names the branch and both
+        commits and asks before every single push.
       </p>
       <p class="field-note" data-testid="bridge-permission-note">
         <strong>Your browser will ask once.</strong> Reaching a server on your own machine
