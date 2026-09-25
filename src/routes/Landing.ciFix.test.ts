@@ -199,6 +199,25 @@ describe('Landing — who is offered the CI-fix panel', () => {
 })
 
 // ---------------------------------------------------------------------------
+// The actions column reserves room for two controls, or for neither
+// ---------------------------------------------------------------------------
+
+describe('Landing — the actions column', () => {
+  it('widens for the whole list as soon as one row can offer the control', async () => {
+    const { container } = await renderOneRedRow()
+    await screen.findByTestId('queue-ci-fix')
+    expect(container.querySelector('.queue-list.ci-fix-column')).not.toBeNull()
+  })
+
+  it('stays at its old measure when no row can — nobody pays for a bridge they do not have', async () => {
+    readiness = { ...READY, ready: false, reason: 'no-bridge', cli: null }
+    const { container } = await renderOneRedRow()
+    expect(container.querySelector('.queue-list')).not.toBeNull()
+    expect(container.querySelector('.queue-list.ci-fix-column')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Where the CiSummary comes from, and what one render costs
 // ---------------------------------------------------------------------------
 

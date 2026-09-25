@@ -556,6 +556,28 @@
   }
 
   /**
+   * Whether the actions column must make room for a second control.
+   *
+   * #287's row is a TABLE ROW: every trailing column has a fixed measure so it
+   * lands at the same x on every row, and e2e/queue-columns.spec.ts holds that
+   * to half a pixel. A control that appears on one row and widens only that
+   * row's actions cell breaks exactly that — measured at 12.9px of drift on the
+   * active row at 1440px.
+   *
+   * So the column is widened for the WHOLE list as soon as any row in it can
+   * offer the control, which is the same "reserve the cell, not the content"
+   * rule the four signal cells follow. It is conditional rather than permanent
+   * because almost nobody has a bridge: charging every reader ~58px of title
+   * measure, forever, for an affordance that appears on at most one row and
+   * only for a bridge user, is the trade C5 exists to refuse.
+   */
+  const ciFixColumn = $derived(
+    queueItems.some(
+      (i) => canOfferCiFix(i, queueSignals[sizeKey(i)]) || ciFixRows[sizeKey(i)] !== undefined,
+    ),
+  )
+
+  /**
    * An id that survives being an id. `queueKey` is `github:org/repo#12`, which
    * is a legal HTML id but not a legal CSS selector without escaping — so the
    * one place the string becomes an attribute gets a sanitised form.
@@ -887,7 +909,7 @@
       <ProviderIcon provider={group.provider} size={12} label={PROVIDER_NAMES[group.provider]} />
       <span class="repo-group-name">{group.owner}/{group.repo}</span>
     </h4>
-    <ul class="queue-list grouped">
+    <ul class="queue-list grouped" class:ci-fix-column={ciFixColumn}>
       {#each group.items as item (item.ref.provider + item.ref.owner + item.ref.repo + item.ref.number)}
         <li class="queue-item">
           <button
@@ -1892,6 +1914,14 @@
     min-width: 8ch;
   }
 
+  /* Room for BOTH controls, on every row of a list where any row has two, so
+     the actions column lands at the same x whether or not this particular row
+     offers the fix. Sized for the wider label ("Hide CI") so opening the panel
+     cannot reflow the row either. */
+  .ci-fix-column .prepare-cell {
+    min-width: 16ch;
+  }
+
   /* Fix CI — the actions column's second control, in Prepare's register and
      ranked one tier below it: Prepare is the thing every row offers, this one
      appears on at most the single row your checkout is actually on. It borrows
@@ -2222,6 +2252,12 @@
     .size-cell,
     .queue-time,
     .prepare-cell,
+    /* Including the widened form: the whole point of the measures standing
+       down here is that the actions cell must not take the title's line, and a
+       16ch reservation would take twice as much of it. The two controls still
+       end at the same right edge as a lone Prepare, which is the alignment
+       this width actually promises. */
+    .ci-fix-column .prepare-cell,
     .ci-cell,
     .threads-cell,
     .base-cell,

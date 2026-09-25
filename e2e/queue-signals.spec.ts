@@ -309,6 +309,36 @@ test('a red queue still renders inside the same budget, panel offer and all', as
   expect(seen).toHaveLength(4)
 })
 
+test('the actions column still lands at one x, on the row with two controls too', async ({ page }) => {
+  const seen: Seen = []
+  await seedQueue(page, seen)
+  await pairBridge(page, sha(102))
+  await page.goto('/')
+  await waitForSignals(page)
+  await expect(page.getByTestId('queue-ci-fix')).toHaveCount(1, { timeout: 10_000 })
+
+  // #287's whole row design is a table: every trailing column at the same x on
+  // every row, held to half a pixel by e2e/queue-columns.spec.ts. A control that
+  // widened only its own row's actions cell broke that by 12.9px at 1440 —
+  // which is why the column is reserved for the list, not for the row.
+  const lefts = async () =>
+    page.locator('.prepare-cell').evaluateAll((els) =>
+      els.map((e) => Math.round(e.getBoundingClientRect().left * 10) / 10),
+    )
+
+  const closed = await lefts()
+  expect(closed.length).toBeGreaterThan(1)
+  expect(Math.max(...closed) - Math.min(...closed)).toBeLessThanOrEqual(0.5)
+
+  // And opening it does not move anything either: the measure is sized for the
+  // wider of the two labels, so "Fix CI" → "Hide CI" reflows nothing.
+  await page.locator('.queue-item', { hasText: '#102' }).getByTestId('queue-ci-fix').click()
+  await expect(page.getByTestId('ci-fix-panel')).toBeVisible({ timeout: 10_000 })
+  const open = await lefts()
+  expect(Math.max(...open) - Math.min(...open)).toBeLessThanOrEqual(0.5)
+  expect(Math.abs(open[0] - closed[0])).toBeLessThanOrEqual(0.5)
+})
+
 test('opening one panel fetches one summary, for that row’s head and no other', async ({ page }) => {
   const seen: Seen = []
   await seedQueue(page, seen)
