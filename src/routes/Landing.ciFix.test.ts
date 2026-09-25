@@ -234,7 +234,7 @@ describe('Landing — the CI summary is fetched on demand', () => {
     expect(screen.getByTestId('ci-fix-job-count')).toHaveTextContent('1 job failed')
   })
 
-  it('closes on a second click and does not refetch when reopened blind', async () => {
+  it('closes on a second click, taking the summary with it', async () => {
     await renderOneRedRow()
     const control = await screen.findByTestId('queue-ci-fix')
 
