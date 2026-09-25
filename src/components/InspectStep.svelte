@@ -655,6 +655,10 @@
   // preference — so Story mode's diffs follow the toggle with no extra wiring.
   const hunkAttentionOn = $derived(hunkAttentionPref.enabled)
 
+  // The PR's comments as threads, grouped ONCE. Both toolbar filters below
+  // count threads rather than comment ids, and neither wants its own pass.
+  const prThreads = $derived(prComments.length === 0 ? [] : groupThreads(prComments))
+
   // ---- Exclude resolved threads (toolbar) ---------------------------------
   // A resolved thread is a finished conversation; on a real PR the "General"
   // block can be eight of them deep and, even collapsed to one line each, they
@@ -675,8 +679,6 @@
   // (resolvedThreads capability false, getResolvedCommentIds returns an empty
   // Set) — the toolbar never offers a switch for a capability the provider
   // lacks. It is the same rule for a GitHub PR that simply has none resolved.
-  const prThreads = $derived(prComments.length === 0 ? [] : groupThreads(prComments))
-
   const resolvedThreadCount = $derived(
     resolvedCommentIds.size === 0
       ? 0
