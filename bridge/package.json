@@ -1,6 +1,6 @@
 {
   "name": "@review123/bridge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Optional local bridge for review123 — exposes a repo's files and the machine's Claude Code / Codex CLIs to https://review123.dev over 127.0.0.1 only.",
   "type": "module",

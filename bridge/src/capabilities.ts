@@ -115,6 +115,14 @@ export async function detectInferenceClis(deps: CapabilityDeps): Promise<string[
  * and nothing else. A build that hard-coded `fix: true` here would hand every
  * paired web origin a write button the user never granted.
  *
+ * `push` IS THE THIRD OF THESE, AND THE ONLY ONE WHOSE SUBJECT IS NOT THIS
+ * MACHINE. It reports `--allow-push`. The other two grants authorise changes
+ * the person who granted them can undo; this one authorises a change nobody can
+ * undo, because it is visible to everyone with read access the moment it lands.
+ * So it is read from a THIRD argument, and a process started with both of the
+ * others still reports `push: false`. Deriving it from either would hand
+ * somebody a remote-write capability as a side effect of wanting a local one.
+ *
  * `checkout` IS THE SAME KIND OF FLAG AS `fix`, AND A DIFFERENT ONE FROM IT.
  * It reports `--allow-checkout` — the grant to move the user's OWN working
  * tree — and it is read from a separate argument for a reason that is the
@@ -128,6 +136,7 @@ export async function detectCapabilities(
   deps: CapabilityDeps,
   allowWrite: boolean,
   allowCheckout: boolean,
+  allowPush: boolean,
 ): Promise<BridgeCapabilities> {
   return {
     inference: await detectInferenceClis(deps),
@@ -138,5 +147,6 @@ export async function detectCapabilities(
     search: true,
     fix: allowWrite,
     checkout: allowCheckout,
+    push: allowPush,
   }
 }

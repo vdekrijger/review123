@@ -76,60 +76,89 @@ describe('detectInferenceClis', () => {
 
 describe('detectCapabilities', () => {
   it('reports every read-only v1 route as READY — all three are implemented', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, false)
-    expect(caps).toEqual({ inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false })
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, false, false)
+    expect(caps).toEqual({ inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false, push: false })
   })
 
   it('reports search READY with nothing on PATH — the route falls back to a JS walk', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], []), false, false)
+    const caps = await detectCapabilities(stubDeps(['/bin'], []), false, false, false)
     expect(caps.search).toBe(true)
   })
 
   it('reports infer READY even with no CLI detected — readiness and detection are different questions', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], []), false, false)
-    expect(caps).toEqual({ inference: [], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false })
+    const caps = await detectCapabilities(stubDeps(['/bin'], []), false, false, false)
+    expect(caps).toEqual({ inference: [], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false, push: false })
   })
 
   // `fix` is NOT a release-readiness flag like its siblings: it is the
   // --allow-write flag itself. These two tests are the whole contract.
   it('reports fix FALSE without --allow-write, whatever else is installed', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude', '/bin/codex']), false, false)
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude', '/bin/codex']), false, false, false)
     expect(caps.fix).toBe(false)
   })
 
   it('reports fix TRUE only when the process was started with --allow-write', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), true, false)
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), true, false, false)
     expect(caps.fix).toBe(true)
   })
 
   it('reports fix TRUE even with no CLI detected — the flag is about authorisation, not tooling', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], []), true, false)
-    expect(caps).toEqual({ inference: [], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: true, checkout: false })
+    const caps = await detectCapabilities(stubDeps(['/bin'], []), true, false, false)
+    expect(caps).toEqual({ inference: [], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: true, checkout: false, push: false })
   })
 
   // `checkout` is the --allow-checkout flag, and the WHOLE point of it being a
   // separate flag is that neither grant can be read off the other. These four
   // assert that contract in both directions, explicitly.
   it('reports checkout FALSE without --allow-checkout', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, false)
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, false, false)
     expect(caps.checkout).toBe(false)
   })
 
   it('reports checkout TRUE only when the process was started with --allow-checkout', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, true)
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, true, false)
     expect(caps.checkout).toBe(true)
   })
 
   it('--allow-write alone does NOT enable checkout', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), true, false)
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), true, false, false)
     expect(caps.fix).toBe(true)
     expect(caps.checkout).toBe(false)
   })
 
   it('--allow-checkout alone does NOT enable fix', async () => {
-    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, true)
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, true, false)
     expect(caps.checkout).toBe(true)
     expect(caps.fix).toBe(false)
+  })
+
+  // `push` is the --allow-push flag, and it is the one grant whose effects
+  // other people can see. These assert the same both-directions contract as
+  // the four above — and then the case that actually matters: a bridge started
+  // with BOTH of the local grants still reports push false. Nobody gets remote
+  // write as a side effect of asking for something local.
+  it('reports push FALSE without --allow-push', async () => {
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, false, false)
+    expect(caps.push).toBe(false)
+  })
+
+  it('reports push TRUE only when the process was started with --allow-push', async () => {
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, false, true)
+    expect(caps.push).toBe(true)
+  })
+
+  it('--allow-write and --allow-checkout TOGETHER do NOT enable push', async () => {
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), true, true, false)
+    expect(caps.fix).toBe(true)
+    expect(caps.checkout).toBe(true)
+    expect(caps.push).toBe(false)
+  })
+
+  it('--allow-push alone enables NEITHER fix NOR checkout', async () => {
+    const caps = await detectCapabilities(stubDeps(['/bin'], ['/bin/claude']), false, false, true)
+    expect(caps.push).toBe(true)
+    expect(caps.fix).toBe(false)
+    expect(caps.checkout).toBe(false)
   })
 })
 

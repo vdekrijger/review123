@@ -136,12 +136,15 @@ Vercel deploy), which is a bad trade for a shorter command.
 It prints a banner with the pairing token:
 
 ```
-review123 bridge 0.3.0  ·  protocol v1
+review123 bridge 0.4.0  ·  protocol v1
 
   repo     /Users/you/code/your-repo
   listen   http://127.0.0.1:7321   (loopback only)
   CLIs     claude, codex
   origins  https://review123.dev  https://www.review123.dev  http://localhost:*  http://127.0.0.1:*
+  writes   ENABLED (--allow-write)
+  checkout ENABLED (--allow-checkout) — this bridge may switch your branch
+  push     disabled — nothing ever leaves this machine
 
   Paste this pairing token into review123 → Settings → Local bridge:
 
@@ -165,14 +168,17 @@ with Ctrl-C; the token dies with the process.
 | `--test-command <cmd>` | detected | What `/v1/fix` runs to check its own work, e.g. `"pnpm test"`. Split on spaces and run **without a shell** — shell syntax is refused, not silently half-run. |
 | `--no-tests` | — | Never run a test command during `/v1/fix`. |
 | `--allow-checkout` | **off** | Enables `POST /v1/checkout` and `POST /v1/restore`: review123 may check a pull request out **in this working tree**, so the dev server you already have running serves it. **Separate from `--allow-write`, which does not enable it.** A dirty tree is refused outright; moving uncommitted work needs a second explicit confirmation and uses `git stash push`. See [§8](#8-checking-a-pull-request-out-is-a-second-separate-grant). |
+| `--allow-push` | **off** | Enables `POST /v1/push`: review123 may move **one existing remote branch forward to one commit**, after you confirm the exact move. **The only thing this tool does that leaves your machine, and it cannot be undone.** Separate from both flags above; neither enables it. Fast-forward only — a push that would drop commits is refused, and there is no force anywhere in the protocol. Never the remote's default branch, and never a branch that does not already exist. Without it the route answers `403` and `capabilities.push` is `false`. See [§9](#9-pushing-is-a-third-grant-and-the-only-one-that-leaves-your-machine). |
 | `--app-url <url>` | detected | Where your dev server listens, e.g. `http://localhost:8010`. Must be a **loopback** address — the bridge opens a socket to it. |
 | `-h`, `--help` | — | Usage. |
 
 There is deliberately **no flag to change the bind address**, and **no request
 field, header or browser setting that can enable writing** — `--allow-write` is
 typed by the person at the terminal or it does not happen. The same is true of
-`--allow-checkout`, and the two are **independent in both directions**: neither
-implies the other.
+`--allow-checkout` and of `--allow-push`, and all three are **independent in
+every direction**: none implies another. In particular, a bridge started with
+`--allow-write --allow-checkout` still reports `capabilities.push: false` and
+still answers `403 push-disabled`.
 
 ---
 
@@ -520,15 +526,128 @@ the `Origin` check would not fire. The `Host` header still says `evil.test`, so
 the bridge requires a loopback `Host` (`127.0.0.1`, `localhost`, `[::1]`,
 optionally with the port it bound) and answers `403 forbidden-host` otherwise.
 
+### 9. Pushing is a third grant, and the only one that leaves your machine
+
+Everything in §7 and §8 is **reversible by the person who granted it**. A
+scratch worktree can be deleted. A checkout can be restored — that section's
+whole promise is that you can always get back.
+
+A push has no such promise available, and pretending otherwise would be the
+one dishonest sentence in this document. The instant it lands, everyone with
+read access to the repository can see it, CI may start on it, and a colleague
+may pull it. Nothing this bridge offers takes it back.
+
+So `--allow-push` is a **third flag**, off by default, implied by neither of
+the others and implying neither. Someone who wanted agent fixes, or wanted a
+pull request running under their dev server, must not discover that they also
+handed a web origin the ability to write to their team's remote.
+
+#### What it enforces
+
+The design question is not "how do we make pushing convenient". It is "what
+can this process actually *guarantee*, mechanically, without trusting the
+caller". That list is short, and the route enforces exactly it:
+
+| | |
+| --- | --- |
+| **Fast-forward only** | The commit must be a descendant of the remote branch's **current** tip, proven locally with `git merge-base --is-ancestor` before anything is sent. A fast-forward only ever *adds* commits, so no reachable commit can stop being reachable. This is a property of the graph, not of anyone's good intentions. |
+| **No force, ever** | Not "force defaults to off" — there is no request field, no argument and no code path that can produce `--force`, `--force-with-lease` or a `+` refspec. The protocol cannot express it, and `push.test.ts` greps the module to keep that true. |
+| **Never the default branch** | The remote's own default is read from the remote (`git ls-remote --symref … HEAD`) and refused by name, alongside a list of names the bridge refuses on sight (`main`, `master`, `trunk`, `develop`, `production`, …). If the default cannot be established, the push is **refused rather than guessed**. |
+| **The branch must already exist** | Creating a branch is a different act with different consequences. Folding it in would let one confirmation stand for two decisions. |
+| **One push per explicit request** | The request names the remote, the branch, the sha it believes the branch is at (`expectedRemoteSha`) and the sha it wants it to be at. All four come back in the response. No batching, and **no retry** — a push that failed is reported, never re-attempted, because "it probably did not land" is not something this route will assume. |
+| **A clean working tree** | Refused if your checkout has uncommitted changes. Not because a dirty tree could corrupt a push — it cannot, a push sends committed objects — but because you are confirming a move while looking at a checkout whose contents are not what would go out, and this is the one operation where "I thought that was included" cannot be taken back. |
+
+Every gate from §§1–6 still applies unchanged: loopback bind, pairing token on
+every request, exact-origin CORS, the `Host` anti-rebinding check, and realpath
+repo confinement.
+
+#### The guarantee it deliberately does NOT make
+
+The natural thing to want is *"only branches of pull requests I authored"*.
+**The bridge cannot do that, and does not pretend to.** It has no GitHub
+account, holds no token, and the branch name arrives from the caller. A check
+like that would read as a guarantee while resting entirely on the honesty of
+the thing it claims to guard against — which is worse than no check at all,
+because people would rely on it.
+
+Fast-forward-only is the property that holds no matter who asks. It is a
+weaker-sounding promise and a much stronger one.
+
+#### Every refusal keeps its own sentence
+
+`protected-branch`, `default-branch-unknown`, `remote-unknown`,
+`branch-missing`, `commit-unknown`, `tree-dirty`, `remote-moved`,
+`not-fast-forward`, `nothing-to-push`, `remote-unreachable`, `push-rejected`,
+`push-failed` — twelve codes, twelve sentences. Half of them are answered by a
+*different* action (fetch, commit your work, look again, ask an admin), and a
+user told only that "the push failed" will either give up or retry blindly.
+Blind retry is the wrong instinct for the one operation that can already have
+half happened.
+
+---
+
+### 10. Fixing a failing CI run, and the round-zero gate
+
+`POST /v1/ci-fix` runs on `--allow-write` — **not** `--allow-push`. It works
+in the same scratch worktree the fix loop uses, reuses the same loop, and
+commits there. Pushing what it made is a separate request with a separate
+grant and a separate confirmation.
+
+The interesting part is what happens *before* the agent starts.
+
+**CI failures do not always reproduce locally.** A different operating system,
+a service that only exists in the runner, a secret this machine has never
+seen, a test that fails one run in forty. Hand an agent "CI is red" plus a log
+it cannot reproduce and it will not say "I do not know" — it will produce a
+confident, plausible, entirely unverifiable diff. That is bad anywhere, and
+much worse here, because this flow is designed to end in a push.
+
+So before any agent runs, the bridge runs **your own test command**, in the
+scratch worktree, at the pull request's head, unchanged:
+
+| Baseline | Verdict | What happens |
+| --- | --- | --- |
+| **failed** | `reproduced` | There is a real local signal to work against and to re-check against. The fix loop runs exactly as it does for a review finding. |
+| **passed** | `not-reproduced` | **No agent is started.** No prompt, no edit, no commit — so there is nothing that *could* be pushed. You are told the truth and pointed at `--test-command`, because the usual cause is CI failing in a step (a build, a type-check, an end-to-end suite) your `test` script does not cover. |
+| anything else | `no-local-signal` | Same outcome, same reason: with no way to watch the failure stop, nothing here has earned the word *fix*. |
+
+This lives in the bridge rather than in the browser because **a check on the
+client is a check a client can skip**. This one cannot be, since the code that
+would create the commits is on the far side of it.
+
+The agent's prompt differs from the fix loop's in two ways that matter. A CI
+log is framed as **data** — it is written by tools, and an agent that read a
+log as instructions could be steered by anyone who can make CI print a line.
+And the ways of cheating are named and forbidden: deleting or skipping a test,
+weakening an assertion, swallowing an error, widening a timeout, marking
+something flaky. Every one of those produces a green run and a worse
+repository. Giving up honestly is offered as the better answer, because it is.
+
+**What a green local run still does not prove.** It is one command, on one
+machine, in one environment. Pushing makes CI run again, and what CI then
+reports is a *new result*, not a verdict. Nothing in this package's responses
+says otherwise, and the commit message the CI flow writes says so in the
+repository's permanent history.
+
+---
+
 ### What the bridge does NOT do
 
 - **Without `--allow-write`** it does not write to your repo at all, and the
   CLIs it runs cannot either: `claude` is started with no tools whatsoever,
   `codex` with a read-only sandbox.
 - **With `--allow-write`** it still never touches your working tree, your
-  branch, your index or your uncommitted work, and it never pushes. See
+  branch, your index or your uncommitted work, and **nothing leaves your
+  machine** — pushing needs its own flag. See
   [§7](#7-writing-is-opt-in-at-the-command-line) for exactly what it does
   write.
+- **Without `--allow-push`** nothing this bridge does ever reaches a remote,
+  whatever the other two flags are set to.
+- **With `--allow-push`** it may move one existing remote branch **forward**,
+  once per explicit request — and it can only ever do that: no force, no
+  branch creation, never the default branch, and a non-fast-forward is refused
+  rather than routed around. See
+  [§9](#9-pushing-is-a-third-grant-and-the-only-one-that-leaves-your-machine).
 - **With `--allow-checkout`** it may move your working tree — that is the
   point of the flag — but it never destroys anything doing so: a dirty tree is
   refused, work moves only via `git stash push` on a second explicit
@@ -1262,6 +1381,91 @@ specific `409`; without it the bridge refuses rather than guessing.
 **Caps.** 120 s for the fetch (the only network call in this package); 60 s per
 local git command; 100 dirty paths reported.
 
+### `POST /v1/ci-fix` — implemented, **`--allow-write` only**
+
+Hands a failing CI job to the local agent, in the fix loop, **behind the
+round-zero gate** described in [§10](#10-fixing-a-failing-ci-run-and-the-round-zero-gate).
+
+```jsonc
+{
+  "cli": "claude",
+  "headSha": "<40 hex>",       // the commit CI failed on
+  "failures": [                 // 1-5 jobs
+    { "id": "job:71", "name": "test (ubuntu-latest)", "log": "<= 20000 chars" }
+  ],
+  "maxRounds": 2                // optional; may only LOWER the cap
+}
+```
+
+`log` may be empty — a job whose log the client could not fetch is still a job
+that failed, and the baseline run is the signal that matters. Requiring one
+would push a client towards sending *something* rather than admitting it had
+nothing.
+
+The response is a `/v1/fix` response plus three fields:
+
+| Field | Meaning |
+| --- | --- |
+| `reproduction` | `reproduced` \| `not-reproduced` \| `no-local-signal`. **The field the whole route turns on.** |
+| `baseline` | The unmodified test run at the head — the evidence for `reproduction`. |
+| `headCommit` | The sha a `/v1/push` could carry, or `null`. Null whenever `reproduction` is not `reproduced`, structurally: no agent ran. |
+
+Note what the response does **not** contain: any claim that CI will now pass.
+The bridge ran one command on one machine.
+
+---
+
+### `POST /v1/push` — implemented, **`--allow-push` only**
+
+Moves **one existing remote branch forward to one commit**. See
+[§9](#9-pushing-is-a-third-grant-and-the-only-one-that-leaves-your-machine) for
+what it enforces and what it deliberately does not.
+
+```jsonc
+{
+  "remote": "origin",              // optional; a plain remote name
+  "branch": "feat/thing",          // a plain branch name, NEVER a refs/ path
+  "expectedRemoteSha": "<40 hex>", // where the branch is NOW
+  "sha": "<40 hex>"                // where it should be afterwards
+}
+```
+
+`expectedRemoteSha` is **required**. Without it a push is "put my commit
+there", which succeeds even when the branch is not where the user was looking
+when they confirmed. With it, the request states the whole plan — from this
+sha, to that sha — and a branch that moved in between is a `409 remote-moved`
+rather than a surprise.
+
+There is no `force` field, and adding one would be a protocol change, not a
+configuration change. That is the point.
+
+```jsonc
+{
+  "ok": true,
+  "remote": "origin",
+  "branch": "feat/thing",
+  "before": "<40 hex>",   // == expectedRemoteSha
+  "after": "<40 hex>",    // == sha
+  "commits": 2,
+  "durationMs": 1840
+}
+```
+
+**Refusals.** `403 push-disabled` (no flag) · `403 protected-branch` ·
+`409 default-branch-unknown` · `404 remote-unknown` · `404 branch-missing` ·
+`404 commit-unknown` · `409 tree-dirty` (with `dirtyPaths`) · `409 remote-moved` ·
+`409 not-fast-forward` · `409 nothing-to-push` · `502 remote-unreachable` ·
+`502 push-rejected` (git's own words) · `500 push-failed`.
+
+The checks run cheapest-and-most-absolute first, so a request that was never
+going to be allowed costs no network call and gets the *real* reason rather
+than whichever failure surfaced first.
+
+**Caps.** 60 s for the single `ls-remote`; 180 s for the push; 30 s for each
+local git command.
+
+---
+
 The canonical TypeScript source for all of the above is
 [`src/protocol.ts`](src/protocol.ts); the browser client mirrors it in
 `src/lib/bridge/protocol.ts`. **Change both together.**
@@ -1285,8 +1489,9 @@ typecheck, so CI covers it with no workflow change.
 ### The release bundle
 
 `pnpm bridge:bundle` (`scripts/bundle.mjs`) bundles `src/cli.ts` into one
-~31 KiB ESM file at `dist/bundle/bridge.mjs`. `dist/` is gitignored — the
-artifact is built, never committed.
+~160 KiB ESM file at `dist/bundle/bridge.mjs`. It is unminified, comments and
+all: a file people are asked to download and run ought to be readable. `dist/`
+is gitignored — the artifact is built, never committed.
 
 esbuild is pulled through `pnpm dlx` at a **pinned** version rather than added
 as a root devDependency. Only this script and the release workflow ever bundle,
@@ -1326,3 +1531,9 @@ gh release create bridge-v0.1.0 bridge/dist/bundle/bridge.mjs \
 Release notes must say what the README says above: the file binds loopback
 only, requires the pairing token, and grants `https://review123.dev` **read**
 access to the repo it is started in.
+
+Since `bridge-v0.4.0` they must also say that `--allow-push` exists, that it is
+**off unless typed**, and what it can and cannot do — a person deciding whether
+to download a binary that might write to their team's remote should not have to
+open the README to find that out. The workflow's generated notes carry that
+paragraph; a hand-cut release must too.

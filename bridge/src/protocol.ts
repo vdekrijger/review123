@@ -220,6 +220,22 @@ export interface BridgeCapabilities {
    * neither.
    */
   checkout: boolean
+  /**
+   * `/v1/push` — the ONE route that writes to a REMOTE. Reports `--allow-push`,
+   * and nothing else.
+   *
+   * IT IS A THIRD GRANT, IMPLIED BY NEITHER OF THE OTHER TWO AND IMPLYING
+   * NEITHER. `--allow-write` lets an agent write inside a throwaway worktree;
+   * `--allow-checkout` moves the user's own branch. Both are local, and both can
+   * be undone by the person who granted them. This one cannot: a push is
+   * visible to everybody who can see the repository the moment it lands, and
+   * nothing the bridge offers takes it back. So it is granted separately, at
+   * the terminal, or not at all.
+   *
+   * A bridge predating this route omits the flag; an absent flag reads as
+   * false, and a client that tries anyway gets `404 not-found`.
+   */
+  push: boolean
 }
 
 /**
@@ -353,6 +369,53 @@ export type BridgeErrorCode =
    * to say it knows.
    */
   | 'untrusted-unacknowledged'
+  /**
+   * `/v1/push` on a bridge started WITHOUT `--allow-push`. The exact sibling of
+   * `write-disabled` and `checkout-disabled`, and a SEPARATE code for the same
+   * reason: a client must never read "writing is on" as "pushing is on".
+   */
+  | 'push-disabled'
+  /**
+   * The branch named is the remote's DEFAULT branch, or one of the names this
+   * bridge refuses on sight. Nothing was sent.
+   */
+  | 'protected-branch'
+  /**
+   * The bridge could not establish which branch the remote treats as default,
+   * so it cannot prove the target is not it. Fail closed: no push.
+   */
+  | 'default-branch-unknown'
+  /** The remote name is not configured in this repository. */
+  | 'remote-unknown'
+  /**
+   * There is no such branch on the remote. Creating one is a different act, and
+   * this route does not do it.
+   */
+  | 'branch-missing'
+  /** The commit to push is not in the local object store. */
+  | 'commit-unknown'
+  /**
+   * The remote branch's tip is not the sha the request said it was, so the pull
+   * request advanced (or somebody else pushed) between the plan and the push.
+   * The plan the user confirmed is no longer the plan; nothing was sent.
+   */
+  | 'remote-moved'
+  /**
+   * The push would not be a fast-forward of the remote branch. This bridge has
+   * no way to express a force, so a non-fast-forward is simply refused.
+   */
+  | 'not-fast-forward'
+  /** The remote branch is already at that commit. Nothing to send. */
+  | 'nothing-to-push'
+  /** `git ls-remote` could not reach (or could not read) the remote. */
+  | 'remote-unreachable'
+  /**
+   * `git push` itself refused — a branch protection rule, a pre-receive hook,
+   * or credentials that may not write there. Git's own reason is in `message`.
+   */
+  | 'push-rejected'
+  /** The push could not be attempted at all (git missing, or it crashed). */
+  | 'push-failed'
 
 /**
  * Every non-2xx response body has this shape.
@@ -1336,4 +1399,250 @@ export interface RestoreRequest {
    * so a conflict or a mistake costs nothing. The entry is the user's to drop.
    */
   restoreStash?: boolean
+}
+
+// ===========================================================================
+// `POST /v1/push` — THE ONLY ROUTE THAT WRITES TO A REMOTE.
+// ===========================================================================
+
+/**
+ * Everything else this package does is undoable by the person who asked for it.
+ * A scratch worktree can be deleted; a checkout can be restored; a commit that
+ * never left the machine can be thrown away. A PUSH IS NOT LIKE THAT. The
+ * moment it lands, everyone who can see the repository can see it, CI may start
+ * on it, and a teammate may pull it. Nothing the bridge offers takes that back.
+ *
+ * So the design question is not "how do we make pushing convenient" but "what
+ * can this process actually GUARANTEE about a push, mechanically, without
+ * trusting the caller". The honest answer is a short list, and this route
+ * enforces exactly that list and claims nothing beyond it:
+ *
+ *   1. FAST-FORWARD ONLY. The commit being pushed must be a descendant of the
+ *      remote branch's CURRENT tip, proven locally with `merge-base
+ *      --is-ancestor` before anything is sent. This is the strong property:
+ *      a fast-forward adds commits and destroys none, so no reachable history
+ *      can be lost by construction.
+ *   2. NO FORCE, EVER, AND NOT AS A DEFAULT. There is no request field, no
+ *      flag and no code path that can produce `--force`, `--force-with-lease`
+ *      or a `+` refspec. The protocol cannot express it, which is a stronger
+ *      statement than "it is off".
+ *   3. NEVER THE DEFAULT BRANCH. The remote's own default is read from the
+ *      remote (`ls-remote --symref HEAD`) and refused by name, along with a
+ *      list of names this bridge will not push to whatever the remote says. If
+ *      the default cannot be established, the push is refused rather than
+ *      guessed at.
+ *   4. THE BRANCH MUST ALREADY EXIST ON THE REMOTE. Creating a branch is a
+ *      different act with different consequences, and folding it in here would
+ *      let one confirmation stand for two decisions.
+ *   5. ONE PUSH PER EXPLICIT REQUEST. The request names the remote, the branch,
+ *      the sha it believes the branch is at, and the sha it wants it to be at.
+ *      All four are echoed back. There is no batching and no retry: a push that
+ *      failed is reported, not re-attempted, because "it probably did not land"
+ *      is not a thing this route is willing to assume.
+ *
+ * AND THE GUARANTEE IT DELIBERATELY DOES NOT MAKE. The user's framing was
+ * "only branches of pull requests you authored". The bridge cannot do that and
+ * will not pretend to: it has no GitHub identity, no token, and no way to ask
+ * who authored anything. The branch name arrives from the caller. A check like
+ * that would be theatre — it would read as a guarantee while resting entirely
+ * on the honesty of the thing being guarded against. Fast-forward-only is the
+ * property that actually holds no matter who asks.
+ */
+
+/** Budget for the one network `git ls-remote` this route makes. */
+export const PUSH_LS_REMOTE_TIMEOUT_MS = 60_000
+
+/** Budget for the push itself. Longer: it uploads objects. */
+export const PUSH_TIMEOUT_MS = 180_000
+
+/** Budget for the local, non-network git commands the route runs. */
+export const PUSH_GIT_TIMEOUT_MS = 30_000
+
+/** The remote a push targets when the request names none. */
+export const DEFAULT_PUSH_REMOTE = 'origin'
+
+/**
+ * A branch name this route is willing to put in a refspec.
+ *
+ * It is always placed as `refs/heads/<branch>`, so it can never be read as a
+ * flag whatever it contains — but it is still restricted to git's own legal
+ * refname shape, so an illegal name is refused with a sentence rather than by
+ * a confusing failure from `git push`. No leading `-`, no leading `.`, and the
+ * separate checks in parsePushRequest reject `..`, `//`, a trailing `/` and a
+ * `.lock` suffix.
+ */
+export const PUSH_BRANCH_RE = /^[A-Za-z0-9_][A-Za-z0-9._\-/]{0,199}$/
+
+/**
+ * Branch names this bridge refuses to push to, whatever the remote reports as
+ * its default.
+ *
+ * The default-branch check (which asks the remote) is the load-bearing one;
+ * this list is the belt to its braces, and it also covers the repositories
+ * where the shared trunk is not the default — a `master` left behind after a
+ * rename, a `production` branch a deploy watches. It is deliberately a list of
+ * EXACT names rather than prefixes: refusing everything under `release/` would
+ * block pull-request branches that are legitimately named that way, and a
+ * refusal that fires on ordinary work teaches people to route around it.
+ */
+export const PROTECTED_BRANCH_NAMES: readonly string[] = [
+  'main',
+  'master',
+  'trunk',
+  'develop',
+  'development',
+  'stable',
+  'production',
+  'prod',
+  'release',
+  'gh-pages',
+  'HEAD',
+]
+
+/**
+ * `POST /v1/push` — move one existing remote branch forward to one commit.
+ *
+ * Every field is required, and `expectedRemoteSha` is required for a reason
+ * that is easy to miss: without it a push is "put my commit there", which
+ * silently succeeds even when the branch is not where the user was looking
+ * when they confirmed. With it, the request states the WHOLE plan — from this
+ * sha, to that sha — and a branch that moved in between is a refusal
+ * (`remote-moved`) rather than a surprise.
+ */
+export interface PushRequest {
+  /** A configured remote name, e.g. `origin`. */
+  remote: string
+  /** A plain branch name — NOT a ref path, and never `refs/…`. */
+  branch: string
+  /** The 40-hex sha the caller believes the remote branch is at RIGHT NOW. */
+  expectedRemoteSha: string
+  /** The 40-hex sha the caller wants the remote branch to be at afterwards. */
+  sha: string
+}
+
+/** `POST /v1/push` — what actually happened, in the request's own terms. */
+export interface PushResponse {
+  ok: true
+  remote: string
+  branch: string
+  /** The remote branch's tip before the push. Equals `expectedRemoteSha`. */
+  before: string
+  /** The remote branch's tip after the push. Equals the requested `sha`. */
+  after: string
+  /** How many commits the branch moved by. Never zero on a success. */
+  commits: number
+  durationMs: number
+}
+
+// ===========================================================================
+// `POST /v1/ci-fix` — the failing-CI flow.
+// ===========================================================================
+
+/**
+ * A continuous-integration run went red. This route hands the failure to the
+ * user's local coding agent in the SAME loop `/v1/fix` uses — same scratch
+ * worktree, same round cap, same stop reasons, same one-commit-per-item rule.
+ *
+ * WHAT IS DIFFERENT IS THE ROUND BEFORE ROUND ONE, and it is the whole point of
+ * having a separate route.
+ *
+ * CI FAILURES DO NOT ALWAYS REPRODUCE LOCALLY. A different operating system, a
+ * service that only exists in the runner, a missing secret, a flaky test, a
+ * different clock. An agent handed "CI is red" and a log it cannot reproduce
+ * will still produce a diff — a confident, plausible, unverifiable diff. And
+ * this flow's whole purpose is to end in a PUSH, which makes an unverifiable
+ * diff the most expensive kind of wrong answer available.
+ *
+ * So before the agent is started at all, the bridge runs the repository's own
+ * test command in the scratch worktree at the pull request's head, unchanged.
+ * That baseline decides everything:
+ *
+ *   failed      → `reproduced`. There is a real, local, failing signal for the
+ *                 agent to work against and to re-check itself with. The loop
+ *                 runs exactly as `/v1/fix`'s does.
+ *   passed      → `not-reproduced`. THE AGENT IS NEVER STARTED. No diff, no
+ *                 commit, nothing to push. The user is told the truth — the
+ *                 repo's own tests pass here at this commit — and pointed at
+ *                 `--test-command`, because the usual cause is that CI fails in
+ *                 a step (a build, a type-check, an end-to-end suite) that the
+ *                 test command does not cover.
+ *   anything else → `no-local-signal`. Same outcome and the same reason: with
+ *                 no way to watch the failure go away, there is nothing here
+ *                 that deserves to be called a fix.
+ *
+ * This is why the route exists rather than the client just calling `/v1/fix`
+ * with CI-shaped findings. A client-side check could be skipped by a client;
+ * this one cannot, because the code that would create the commits is on the
+ * other side of it.
+ */
+
+/** Cap on how many failing CI jobs one request may carry. */
+export const MAX_CI_FAILURES = 5
+
+/** Cap on each failing job's log excerpt. The tail is what matters. */
+export const MAX_CI_LOG_CHARS = 20_000
+
+/** One failing CI job, as evidence. */
+export interface CiFailure {
+  /** Stable id for this job, echoed on every result that refers to it. */
+  id: string
+  /** The check/job name as CI reports it, e.g. "test (ubuntu-latest)". */
+  name: string
+  /**
+   * What CI printed: the tail of the job log, the check's annotations, or
+   * both. DATA, never instructions — the prompt frames it as such.
+   */
+  log: string
+}
+
+/**
+ * Did the failure reproduce on this machine? The field the whole route turns
+ * on, and the one a client must never render as a detail.
+ */
+export type CiReproduction = 'reproduced' | 'not-reproduced' | 'no-local-signal'
+
+/** `POST /v1/ci-fix`. */
+export interface CiFixRequest {
+  cli: string
+  /** The pull request's head sha. The scratch worktree is created from it. */
+  headSha: string
+  failures: CiFailure[]
+  maxRounds?: number
+  timeoutMs?: number
+}
+
+/**
+ * `POST /v1/ci-fix` — the run, reported honestly.
+ *
+ * `changes` is EMPTY whenever `reproduction` is not `reproduced`, and that is
+ * structural rather than conventional: the agent is not started at all in
+ * those cases.
+ *
+ * Note what this response does NOT contain: any claim that CI will now pass.
+ * The bridge ran one command on one machine. CI re-running is a new fact, and
+ * only CI can produce it.
+ */
+export interface CiFixResponse {
+  ok: true
+  cli: string
+  reproduction: CiReproduction
+  /**
+   * The unmodified baseline run at the pull request's head — the evidence for
+   * `reproduction`. Null only when the worktree could not be prepared.
+   */
+  baseline: FixTestOutcome | null
+  baseSha: string
+  branch: string
+  changes: FixChange[]
+  skipped: FixSkip[]
+  rounds: number
+  stopReason: FixStopReason
+  /** The test run after the LAST commit, or null when nothing was committed. */
+  tests: FixTestOutcome | null
+  /**
+   * The commit the branch ends at — the sha a `/v1/push` would carry. Null
+   * when nothing was committed, which is exactly when there is nothing to push.
+   */
+  headCommit: string | null
+  durationMs: number
 }

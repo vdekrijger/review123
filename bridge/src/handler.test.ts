@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { CheckoutError } from './checkout.js'
+import { PushError } from './push.js'
 import {
   handleRequest,
   handleStreamRequest,
@@ -43,6 +44,11 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
     // SEPARATE default: a test that does not say `allowCheckout: true` is
     // asserting the behaviour of a bridge the user started without that flag.
     allowCheckout: false,
+    // AND SEPARATELY AGAIN, for the grant whose effects other people can see:
+    // a test that does not say `allowPush: true` is asserting the behaviour of
+    // a bridge that may not write to a remote. That is almost all of them, and
+    // it is the default a mistake should fall back to.
+    allowPush: false,
     capabilities: async () => ({
       inference: ['claude'],
       infer: true,
@@ -52,6 +58,7 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
       search: true,
       fix: false,
       checkout: false,
+      push: false,
     }),
     version: '0.1.0',
     // Default stubs: the handler's own tests never spawn a CLI, open a file or
@@ -75,6 +82,33 @@ function ctx(overrides: Partial<HandlerContext> = {}): HandlerContext {
       stopReason: 'all-addressed' as const,
       tests: null,
       durationMs: 5,
+    }),
+    ciFix: async () => ({
+      ok: true as const,
+      reproduction: 'reproduced' as const,
+      baseline: { status: 'failed' as const, command: 'pnpm test', durationMs: 20, output: 'stub red' },
+      baseSha: HEAD_SHA,
+      branch: 'review123/fix/1234567890ab',
+      changes: [],
+      skipped: [],
+      rounds: 1,
+      stopReason: 'all-addressed' as const,
+      tests: null,
+      headCommit: null,
+      durationMs: 5,
+    }),
+    // A stub that RESOLVES. Every push refusal in this file is asserted by
+    // making the gate refuse, or by throwing a PushError from an override —
+    // never by letting a real git command run, which is what keeps a test run
+    // structurally incapable of pushing anything anywhere.
+    push: async (req) => ({
+      ok: true as const,
+      remote: req.remote,
+      branch: req.branch,
+      before: req.expectedRemoteSha,
+      after: req.sha,
+      commits: 1,
+      durationMs: 7,
     }),
     repoState: async () => ({ head: HEAD_SHA, branch: 'main', dirty: false }),
     // Default stubs for the run-this-PR family. Like their siblings above, the
@@ -144,6 +178,7 @@ describe('GET /v1/health', () => {
         search: true,
         fix: false,
         checkout: false,
+        push: false,
       },
       git: { head: HEAD_SHA, branch: 'main', dirty: false },
       version: '0.1.0',
@@ -170,7 +205,7 @@ describe('GET /v1/health', () => {
 
   it('re-probes capabilities per request so a newly installed CLI shows up', async () => {
     let installed: string[] = []
-    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false }) })
+    const context = ctx({ capabilities: async () => ({ inference: installed, infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false, push: false }) })
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
       inference: [],
       infer: true,
@@ -180,6 +215,7 @@ describe('GET /v1/health', () => {
       search: true,
       fix: false,
       checkout: false,
+      push: false,
     })
     installed = ['codex']
     expect(parse((await handleRequest(req(), context)).body)['capabilities']).toEqual({
@@ -191,6 +227,7 @@ describe('GET /v1/health', () => {
       search: true,
       fix: false,
       checkout: false,
+      push: false,
     })
   })
 })
@@ -520,7 +557,7 @@ describe('POST /v1/infer', () => {
   it('503s a KNOWN cli that is not installed — checked before the worker runs', async () => {
     let spawnedAnyway = false
     const context = ctx({
-      capabilities: async () => ({ inference: [], infer: true, inferStream: true, inferAgentic: true, files: false, search: false, fix: false, checkout: false }),
+      capabilities: async () => ({ inference: [], infer: true, inferStream: true, inferAgentic: true, files: false, search: false, fix: false, checkout: false, push: false }),
       infer: async () => {
         spawnedAnyway = true
         return { ok: true as const, text: '', truncated: false, durationMs: 0 }
@@ -865,7 +902,7 @@ describe('POST /v1/fix — the other gates still apply', () => {
   it('refuses a CLI that is not installed, with 503 rather than a confusing 501', async () => {
     const res = await handleRequest(
       fixReq({ ...FIX_BODY, cli: 'codex' }),
-      ctx({ ...write, capabilities: async () => ({ inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: true, checkout: false }) }),
+      ctx({ ...write, capabilities: async () => ({ inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: true, checkout: false, push: false }) }),
     )
     expect(res.status).toBe(503)
     expect(parse(res.body)['error']).toBe('cli-unavailable')
@@ -1358,6 +1395,7 @@ describe('POST /v1/infer/stream — what is decided BEFORE the status line', () 
           search: true,
           fix: false,
           checkout: false,
+          push: false,
         }),
       }),
       c.sink,
@@ -1476,5 +1514,264 @@ describe('POST /v1/infer/stream — a client that went away', () => {
     )
     expect(finished).toBe(true)
     expect(c.ended).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// POST /v1/push — the one route that leaves the machine, and its own gate.
+// ---------------------------------------------------------------------------
+
+const PUSH_BODY = {
+  remote: 'origin',
+  branch: 'feat/thing',
+  expectedRemoteSha: HEAD_SHA,
+  sha: PR_SHA,
+}
+
+function pushReq(body: unknown = PUSH_BODY, overrides: Partial<BridgeRequest> = {}): BridgeRequest {
+  return req({
+    method: 'POST',
+    path: '/v1/push',
+    body: Buffer.from(JSON.stringify(body)),
+    ...overrides,
+  })
+}
+
+describe('POST /v1/push — the --allow-push gate', () => {
+  it('REFUSES with 403 push-disabled on a bridge started without --allow-push', async () => {
+    const res = await handleRequest(pushReq(), ctx())
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('push-disabled')
+    expect(parse(res.body)['message']).toContain('--allow-push')
+  })
+
+  // THE RULE THIS ROUTE EXISTS TO ENFORCE. The two local grants authorise
+  // things their owner can undo. This one does not, so neither of them — nor
+  // both together — may stand in for it.
+  it('is NOT enabled by --allow-write', async () => {
+    expect((await handleRequest(pushReq(), ctx({ allowWrite: true }))).status).toBe(403)
+  })
+
+  it('is NOT enabled by --allow-checkout', async () => {
+    expect((await handleRequest(pushReq(), ctx({ allowCheckout: true }))).status).toBe(403)
+  })
+
+  it('is NOT enabled by BOTH of them together', async () => {
+    const res = await handleRequest(pushReq(), ctx({ allowWrite: true, allowCheckout: true }))
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('push-disabled')
+  })
+
+  it('refuses BEFORE the worker runs — an ungranted bridge never reaches git', async () => {
+    let ran = false
+    const res = await handleRequest(
+      pushReq(),
+      ctx({
+        push: async () => {
+          ran = true
+          throw new Error('must never be reached')
+        },
+      }),
+    )
+    expect(res.status).toBe(403)
+    expect(ran).toBe(false)
+  })
+
+  it('refuses a MALFORMED body with 403 too — the gate is before parsing', async () => {
+    const res = await handleRequest(pushReq({ nonsense: true }), ctx())
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('push-disabled')
+  })
+
+  it('nothing in the REQUEST can turn pushing on', async () => {
+    for (const forged of [
+      { ...PUSH_BODY, allowPush: true },
+      { ...PUSH_BODY, capabilities: { push: true } },
+      { ...PUSH_BODY, force: true },
+    ]) {
+      expect((await handleRequest(pushReq(forged), ctx())).status).toBe(403)
+    }
+  })
+
+  it('answers 200 once the bridge WAS started with the flag, echoing the exact move', async () => {
+    const res = await handleRequest(pushReq(), ctx({ allowPush: true }))
+    expect(res.status).toBe(200)
+    const payload = parse(res.body)
+    expect(payload).toMatchObject({
+      ok: true,
+      remote: 'origin',
+      branch: 'feat/thing',
+      before: HEAD_SHA,
+      after: PR_SHA,
+    })
+  })
+})
+
+describe('POST /v1/push — the other gates still apply', () => {
+  const allow = { allowPush: true }
+
+  it('still requires the pairing token', async () => {
+    const res = await handleRequest(pushReq(PUSH_BODY, { headers: { authorization: undefined } }), ctx(allow))
+    expect(res.status).toBe(401)
+  })
+
+  it('still refuses an origin outside the allowlist', async () => {
+    const res = await handleRequest(pushReq(PUSH_BODY, { headers: { origin: 'https://evil.test' } }), ctx(allow))
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('forbidden-origin')
+  })
+
+  it('still refuses a rebound Host', async () => {
+    const res = await handleRequest(pushReq(PUSH_BODY, { headers: { host: 'evil.test' } }), ctx(allow))
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('forbidden-host')
+  })
+
+  it('answers 405 to a GET, so the route is never reported as missing', async () => {
+    const res = await handleRequest(req({ method: 'GET', path: '/v1/push' }), ctx(allow))
+    expect(res.status).toBe(405)
+  })
+
+  it('validates the body, and says which field is wrong', async () => {
+    const res = await handleRequest(pushReq({ ...PUSH_BODY, branch: 'refs/heads/x' }), ctx(allow))
+    expect(res.status).toBe(400)
+    expect(parse(res.body)['message']).toContain('plain branch name')
+  })
+})
+
+describe('POST /v1/push — every refusal keeps its own status and sentence', () => {
+  const allow = { allowPush: true }
+
+  it.each([
+    ['protected-branch', 403],
+    ['branch-missing', 404],
+    ['commit-unknown', 404],
+    ['remote-unknown', 404],
+    ['remote-moved', 409],
+    ['not-fast-forward', 409],
+    ['nothing-to-push', 409],
+    ['default-branch-unknown', 409],
+    ['remote-unreachable', 502],
+    ['push-rejected', 502],
+    ['push-failed', 500],
+  ] as const)('renders %s as HTTP %i with the worker’s own words', async (kind, status) => {
+    const res = await handleRequest(
+      pushReq(PUSH_BODY, {}),
+      ctx({
+        ...allow,
+        push: async () => {
+          throw new PushError(kind, `a sentence about ${kind}`)
+        },
+      }),
+    )
+    expect(res.status).toBe(status)
+    expect(parse(res.body)['error']).toBe(kind)
+    expect(parse(res.body)['message']).toBe(`a sentence about ${kind}`)
+  })
+
+  it('carries the dirty paths on tree-dirty, so the user sees what is in the way', async () => {
+    const res = await handleRequest(
+      pushReq(PUSH_BODY, {}),
+      ctx({
+        ...allow,
+        push: async () => {
+          throw new PushError('tree-dirty', 'uncommitted changes', {
+            dirty: true,
+            paths: ['src/wip.ts'],
+            count: 1,
+          })
+        },
+      }),
+    )
+    expect(res.status).toBe(409)
+    expect(parse(res.body)['dirtyPaths']).toEqual(['src/wip.ts'])
+    expect(parse(res.body)['dirtyCount']).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// POST /v1/ci-fix — writes in a worktree, pushes nothing.
+// ---------------------------------------------------------------------------
+
+const CI_FIX_BODY = {
+  cli: 'claude',
+  headSha: HEAD_SHA,
+  failures: [{ id: 'job-1', name: 'test (ubuntu-latest)', log: 'FAIL src/a.test.ts' }],
+}
+
+function ciFixReq(body: unknown = CI_FIX_BODY, overrides: Partial<BridgeRequest> = {}): BridgeRequest {
+  return req({
+    method: 'POST',
+    path: '/v1/ci-fix',
+    body: Buffer.from(JSON.stringify(body)),
+    ...overrides,
+  })
+}
+
+describe('POST /v1/ci-fix', () => {
+  it('is gated on --allow-write, because that is what it actually does', async () => {
+    const res = await handleRequest(ciFixReq(), ctx())
+    expect(res.status).toBe(403)
+    expect(parse(res.body)['error']).toBe('write-disabled')
+  })
+
+  // It commits in a scratch worktree and stops. Pushing what it made is a
+  // separate request with a separate grant, so requiring --allow-push here
+  // would describe the route as doing something it does not do.
+  it('does NOT require --allow-push — it never reaches a remote', async () => {
+    const res = await handleRequest(ciFixReq(), ctx({ allowWrite: true }))
+    expect(res.status).toBe(200)
+  })
+
+  it('reports the reproduction verdict and the sha a push could carry', async () => {
+    const res = await handleRequest(ciFixReq(), ctx({ allowWrite: true }))
+    const payload = parse(res.body)
+    expect(payload['reproduction']).toBe('reproduced')
+    expect(payload).toHaveProperty('baseline')
+    expect(payload).toHaveProperty('headCommit')
+  })
+
+  it('reports a run that never started an agent, with nothing to push', async () => {
+    const res = await handleRequest(
+      ciFixReq(),
+      ctx({
+        allowWrite: true,
+        ciFix: async () => ({
+          ok: true as const,
+          reproduction: 'not-reproduced' as const,
+          baseline: { status: 'passed' as const, command: 'pnpm test', durationMs: 9, output: '' },
+          baseSha: HEAD_SHA,
+          branch: 'review123/fix/1234567890ab',
+          changes: [],
+          skipped: [],
+          rounds: 0,
+          stopReason: 'all-addressed' as const,
+          tests: null,
+          headCommit: null,
+          durationMs: 9,
+        }),
+      }),
+    )
+    const payload = parse(res.body)
+    expect(payload['reproduction']).toBe('not-reproduced')
+    expect(payload['changes']).toEqual([])
+    expect(payload['headCommit']).toBeNull()
+  })
+
+  it('validates the body, and says which field is wrong', async () => {
+    const res = await handleRequest(ciFixReq({ ...CI_FIX_BODY, failures: [] }), ctx({ allowWrite: true }))
+    expect(res.status).toBe(400)
+    expect(parse(res.body)['message']).toContain('non-empty array')
+  })
+
+  it('refuses a CLI that is not installed, with 503', async () => {
+    const res = await handleRequest(ciFixReq({ ...CI_FIX_BODY, cli: 'codex' }), ctx({ allowWrite: true }))
+    expect(res.status).toBe(503)
+    expect(parse(res.body)['error']).toBe('cli-unavailable')
+  })
+
+  it('answers 405 to a GET, so the route is never reported as missing', async () => {
+    const res = await handleRequest(req({ method: 'GET', path: '/v1/ci-fix' }), ctx({ allowWrite: true }))
+    expect(res.status).toBe(405)
   })
 })

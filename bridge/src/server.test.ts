@@ -94,9 +94,10 @@ describe('GET /v1/health over HTTP', () => {
     expect(body['ok']).toBe(true)
     expect(body['protocol']).toBe(PROTOCOL_VERSION)
     expect(body['root']).toBe(root.split('/').pop())
-    // `fix: false` because this server was built without `allowWrite`, and
-    // `checkout: false` because it was built without `allowCheckout` — the
-    // health document reports each flag, never a hard-coded readiness boolean.
+    // `fix: false` because this server was built without `allowWrite`,
+    // `checkout: false` because it was built without `allowCheckout`, and
+    // `push: false` because it was built without `allowPush` — the health
+    // document reports each flag, never a hard-coded readiness boolean.
     expect(body['capabilities']).toEqual({
       inference: [],
       infer: true,
@@ -106,6 +107,7 @@ describe('GET /v1/health over HTTP', () => {
       search: true,
       fix: false,
       checkout: false,
+      push: false,
     })
     expect(body['git']).toEqual({ head: 'a'.repeat(40), branch: 'main', dirty: false })
   })

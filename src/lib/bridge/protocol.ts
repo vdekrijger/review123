@@ -89,6 +89,20 @@ export interface BridgeCapabilities {
    * from one flag to the other. Absent or non-boolean reads as `false`.
    */
   checkout: boolean
+  /**
+   * `/v1/push` — the ONE route that writes to a REMOTE. Reports the bridge's
+   * `--allow-push` flag, and nothing else.
+   *
+   * A THIRD GRANT, and the browser must treat it as one. `fix` authorises
+   * writing in a throwaway worktree and `checkout` authorises moving a branch
+   * that was recorded first; both are local and both can be undone by the
+   * person who granted them. This one cannot be undone by anyone. So no code
+   * here may fall back from either of the other two to this, and anything other
+   * than a literal `true` reads as false — for a capability that writes where
+   * other people can see it, "unknown" must never render as the permissive
+   * answer.
+   */
+  push: boolean
 }
 
 /** The CLIs the bridge knows how to drive. Mirrors bridge/src/capabilities.ts. */
@@ -229,6 +243,30 @@ export type BridgeErrorCode =
   | 'moved-since'
   /** A checkout was sent without `acknowledgeUntrusted`. */
   | 'untrusted-unacknowledged'
+  /** `/v1/push` on a bridge started without `--allow-push`. */
+  | 'push-disabled'
+  /** The branch is the remote's default, or a name the bridge never pushes to. */
+  | 'protected-branch'
+  /** The remote's default branch could not be established. Fail closed. */
+  | 'default-branch-unknown'
+  /** No remote by that name is configured in the user's checkout. */
+  | 'remote-unknown'
+  /** The remote has no such branch, and this route never creates one. */
+  | 'branch-missing'
+  /** The commit to push is not in the user's local object store. */
+  | 'commit-unknown'
+  /** The remote branch is not where the request said it was. It moved. */
+  | 'remote-moved'
+  /** The push would not be a fast-forward. There is no force to fall back on. */
+  | 'not-fast-forward'
+  /** The remote branch is already at that commit. */
+  | 'nothing-to-push'
+  /** `git ls-remote` could not reach or read the remote. */
+  | 'remote-unreachable'
+  /** The remote itself refused — a protection rule, a hook, or permissions. */
+  | 'push-rejected'
+  /** The push could not be attempted at all. */
+  | 'push-failed'
 
 /** A parsed non-2xx bridge body. `code` is null when it was not one we know. */
 export interface BridgeErrorBody {
@@ -253,6 +291,12 @@ const KNOWN_ERROR_CODES: readonly string[] = [
   'cli-unavailable', 'cli-failed', 'write-disabled', 'worktree-failed', 'head-unknown',
   'checkout-disabled', 'tree-dirty', 'ref-unknown', 'checkout-failed', 'no-prior-state',
   'prior-gone', 'moved-since', 'untrusted-unacknowledged',
+  // The push family. Each one is a DIFFERENT sentence in the UI, so each has to
+  // survive parsing as itself — a code that fell through to null would collapse
+  // eleven distinct refusals into one unhelpful "HTTP 409".
+  'push-disabled', 'protected-branch', 'default-branch-unknown', 'remote-unknown',
+  'branch-missing', 'commit-unknown', 'remote-moved', 'not-fast-forward',
+  'nothing-to-push', 'remote-unreachable', 'push-rejected', 'push-failed',
 ]
 
 /**
@@ -688,6 +732,7 @@ export type BridgeCapability =
   | 'search'
   | 'fix'
   | 'checkout'
+  | 'push'
 
 /** The loopback URL for a bridge route. Always 127.0.0.1 — never `localhost`. */
 export function bridgeUrl(port: number, path: string): string {
@@ -745,6 +790,12 @@ export function parseHealth(value: unknown): BridgeHealth | null {
   // other than a literal `true` must read as false.
   const checkoutReady = capsRaw['checkout']
   if (checkoutReady !== undefined && typeof checkoutReady !== 'boolean') return null
+  // `push` is additive the same way, and read with MORE care than any of them:
+  // it authorises the only thing the bridge does that other people can see.
+  // Absent means an older bridge that has no such route, which is exactly what
+  // false must mean here.
+  const pushReady = capsRaw['push']
+  if (pushReady !== undefined && typeof pushReady !== 'boolean') return null
 
   return {
     ok: true,
@@ -759,6 +810,7 @@ export function parseHealth(value: unknown): BridgeHealth | null {
       search: capsRaw['search'],
       fix: fixReady === true,
       checkout: checkoutReady === true,
+      push: pushReady === true,
     },
     git: parseGitState(raw['git']),
     version: sanitizeLabel(raw['version'], 40),
@@ -1224,5 +1276,159 @@ export function parseStackAction(value: unknown): BridgeStackAction | null {
     prior: parseStackPrior(raw['prior']),
     stash: parseStackStash(raw['stash']),
     app: parseStackApp(raw['app']),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// `POST /v1/push` — THE ONLY ROUTE THAT LEAVES THE MACHINE.
+// MIRROR of bridge/src/protocol.ts and bridge/src/push.ts.
+// ---------------------------------------------------------------------------
+
+/**
+ * Budget for one push. Uploading objects over a slow link is slower than any
+ * other request this app makes to the bridge, and a push cut short is the one
+ * failure where "try again" is not obviously safe advice.
+ */
+export const PUSH_REQUEST_TIMEOUT_MS = 4 * 60 * 1000
+
+/** The remote a push targets when nothing says otherwise. */
+export const DEFAULT_PUSH_REMOTE = 'origin'
+
+/**
+ * `POST /v1/push`.
+ *
+ * `expectedRemoteSha` is what makes this a MOVE rather than a placement. The
+ * confirmation the user reads names it; the bridge refuses if the branch is no
+ * longer there. Without it, a branch that advanced between the confirmation and
+ * the click would be pushed over anyway — which is exactly the case where the
+ * user would want to be asked again.
+ */
+export interface BridgePushRequest {
+  remote: string
+  branch: string
+  expectedRemoteSha: string
+  sha: string
+}
+
+/** What the bridge says it did, in the request's own terms. */
+export interface BridgePushResponse {
+  ok: true
+  remote: string
+  branch: string
+  before: string
+  after: string
+  commits: number
+  durationMs: number
+}
+
+/**
+ * Narrow an untrusted `/v1/push` body.
+ *
+ * Both shas are REQUIRED and must be real shas. A success that cannot say
+ * where the branch ended up is not a success this app is willing to render —
+ * the whole value of the response is that the user can check it against what
+ * they confirmed.
+ */
+export function parsePushResponse(value: unknown): BridgePushResponse | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+  if (raw['ok'] !== true) return null
+  const before = asSha(raw['before'])
+  const after = asSha(raw['after'])
+  if (before === null || after === null) return null
+  if (typeof raw['remote'] !== 'string' || typeof raw['branch'] !== 'string') return null
+  return {
+    ok: true,
+    remote: sanitizeLabel(raw['remote'], 100),
+    branch: sanitizeLabel(raw['branch'], 200),
+    before,
+    after,
+    commits: typeof raw['commits'] === 'number' && raw['commits'] >= 0 ? raw['commits'] : 0,
+    durationMs: typeof raw['durationMs'] === 'number' ? raw['durationMs'] : 0,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// `POST /v1/ci-fix` — the failing-CI flow. MIRROR of bridge/src/ciFix.ts.
+// ---------------------------------------------------------------------------
+
+/** Matches the bridge's cap; a client that sent more would be told off anyway. */
+export const MAX_CI_FAILURES = 5
+
+/** Matches the bridge's cap. The TAIL of a log is what carries the failure. */
+export const MAX_CI_LOG_CHARS = 20_000
+
+/** One failing CI job, as evidence for the agent. */
+export interface BridgeCiFailure {
+  id: string
+  name: string
+  log: string
+}
+
+export interface BridgeCiFixRequest {
+  cli: BridgeCli
+  headSha: string
+  failures: BridgeCiFailure[]
+  maxRounds?: number
+}
+
+/**
+ * Did the failure reproduce on the user's machine?
+ *
+ * THE FIELD THE WHOLE FLOW TURNS ON. Anything other than `reproduced` means the
+ * bridge never started an agent, so there are no changes and nothing to push —
+ * and the UI must say that, not bury it.
+ */
+export type BridgeCiReproduction = 'reproduced' | 'not-reproduced' | 'no-local-signal'
+
+export interface BridgeCiFixResponse {
+  ok: true
+  cli: string
+  reproduction: BridgeCiReproduction
+  baseline: BridgeFixTestOutcome | null
+  baseSha: string
+  branch: string
+  changes: BridgeFixChange[]
+  skipped: BridgeFixSkip[]
+  rounds: number
+  stopReason: BridgeFixStopReason
+  tests: BridgeFixTestOutcome | null
+  /** The sha a push would carry. Null when nothing was committed. */
+  headCommit: string | null
+  durationMs: number
+}
+
+const CI_REPRODUCTIONS: readonly string[] = ['reproduced', 'not-reproduced', 'no-local-signal']
+
+/**
+ * Narrow an untrusted `/v1/ci-fix` body.
+ *
+ * Built on `parseFixResponse` because the shared part of the document IS a fix
+ * response — same changes, same skips, same stop reasons, because it is the
+ * same loop. What is added here is the round-zero verdict.
+ *
+ * An unreadable `reproduction` becomes `no-local-signal`, never `reproduced`.
+ * That is the same rule `parseFixTests` applies to an unknown status and
+ * `parseGitState` applies to `dirty`: the value we could not read must be the
+ * one that offers the user LESS, not more. Reading it as `reproduced` would
+ * enable a push button on the strength of a field nobody could parse.
+ */
+export function parseCiFixResponse(value: unknown): BridgeCiFixResponse | null {
+  const base = parseFixResponse(value)
+  if (base === null) return null
+  const raw = value as Record<string, unknown>
+  const reproduction = raw['reproduction']
+  const headCommit = asSha(raw['headCommit'])
+
+  return {
+    ...base,
+    reproduction: (typeof reproduction === 'string' && CI_REPRODUCTIONS.includes(reproduction)
+      ? reproduction
+      : 'no-local-signal') as BridgeCiReproduction,
+    baseline: parseFixTests(raw['baseline']),
+    // Never invented, and never taken from the changes array by this parser:
+    // the bridge decides which commit a push may carry, and a client that
+    // guessed would be guessing about the one irreversible operation here.
+    headCommit,
   }
 }

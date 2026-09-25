@@ -42,7 +42,7 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     ok: true,
     protocol: PROTOCOL_VERSION,
     root: 'review123',
-    capabilities: { inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false },
+    capabilities: { inference: ['claude'], infer: true, inferStream: true, inferAgentic: true, files: true, search: true, fix: false, checkout: false, push: false },
     git: { head: HEAD_SHA, branch: 'main', dirty: false },
     version: '0.1.0',
     ...overrides,
@@ -199,7 +199,7 @@ describe('connectBridge — user-initiated pairing', () => {
 
     expect(ok).toBe(true)
     expect(bridgeState.status).toBe('connected')
-    // `fix: false` and `checkout: false` — this fixture's bridge grants
+    // `fix`, `checkout` and `push` all false — this fixture's bridge grants
     // neither, which is the default and the only state a browser can observe
     // unless the person at the terminal typed --allow-write or
     // --allow-checkout themselves.
@@ -212,6 +212,7 @@ describe('connectBridge — user-initiated pairing', () => {
       search: true,
       fix: false,
       checkout: false,
+      push: false,
     })
     expect(bridgeState.git).toEqual({ head: HEAD_SHA, branch: 'main', dirty: false })
     expect(bridgeState.version).toBe('0.1.0')
@@ -599,6 +600,7 @@ describe('parseHealth', () => {
       search: false,
       fix: false,
       checkout: false,
+      push: false,
     })
   })
 

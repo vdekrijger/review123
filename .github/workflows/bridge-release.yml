@@ -84,9 +84,13 @@ jobs:
 
           Run it inside the repo you want to serve. It binds `127.0.0.1` only and requires the pairing token it prints on every request.
 
-          The two flags are **off** in the code and must be typed to take effect: `--allow-write` enables the fix loop (a scratch git worktree, never your checkout) and `--allow-checkout` lets review123 check a PR out in your working tree. They are independent, and they live on the command line so the grant still holds if review123.dev is ever compromised — nothing the site sends can switch them on. Drop them for a strictly read-only bridge.
+          Every capability flag is **off** in the code and must be typed to take effect. They are independent — none implies another — and they live on the command line so the grant still holds if review123.dev is ever compromised: nothing the site sends can switch one on. Drop them all for a strictly read-only bridge.
 
-          **While it runs it grants https://review123.dev read access to that repo**, to anyone holding that token. It never writes to the repo and never reads outside it; the token dies with the process. The full security model is in [bridge/README.md](https://github.com/REPO_SLUG/blob/main/bridge/README.md).
+          - `--allow-write` — the fix loop, in a scratch git worktree, never your checkout.
+          - `--allow-checkout` — lets review123 check a PR out in your working tree.
+          - `--allow-push` — **the only flag that lets anything leave your machine, and a push cannot be undone.** It is NOT in the line above; add it deliberately or not at all. It permits exactly one thing: moving an **existing** remote branch **forward** to one commit, after you confirm the exact move. Fast-forward only — a push that would make any commit unreachable is refused, and there is no force anywhere in the protocol. Never the remote's default branch, and it never creates a branch. It cannot check who authored a pull request (the bridge has no GitHub account) and does not claim to.
+
+          **While it runs it grants https://review123.dev read access to that repo**, to anyone holding that token. Without `--allow-push` nothing it does ever reaches a remote; the token dies with the process. The full security model is in [bridge/README.md](https://github.com/REPO_SLUG/blob/main/bridge/README.md).
           NOTES
           sed -i "s|REPO_SLUG|$REPO|g" /tmp/bridge-notes.md
           gh release create "$TAG" bridge/dist/bundle/bridge.mjs \
